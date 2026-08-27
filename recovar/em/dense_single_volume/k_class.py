@@ -764,6 +764,11 @@ def _local_layout_for_class(
 ) -> LocalHypothesisLayout:
     if class_local_rotation_log_prior is None:
         return local_layout
+    # Preserve local_layout.rotation_log_priors_flat's own dtype (float64
+    # under double-precision scoring) rather than hardcoding float32 --
+    # this field is being replaced in place, so forcing a fixed dtype here
+    # would silently downgrade the layout bucket_local_hypothesis_layout
+    # was built to preserve.
     class_prior = np.asarray(
         _select_required_class_value(
             class_local_rotation_log_prior,
@@ -771,7 +776,7 @@ def _local_layout_for_class(
             n_classes,
             "class_local_rotation_log_prior",
         ),
-        dtype=np.float32,
+        dtype=np.asarray(local_layout.rotation_log_priors_flat).dtype,
     ).reshape(-1)
     if class_prior.shape != local_layout.rotation_log_priors_flat.shape:
         raise ValueError(
@@ -918,11 +923,13 @@ def _infer_healpix_order_from_rotation_count(n_rot: int) -> int:
     raise ValueError(f"Cannot infer RELION HEALPix order from {n_rot} rotations")
 
 
-def _rotation_prior_with_class_log_prior(rotation_log_prior, class_log_prior: float, n_rot: int):
+def _rotation_prior_with_class_log_prior(
+    rotation_log_prior, class_log_prior: float, n_rot: int, *, dtype: np.dtype = np.float32
+):
     if rotation_log_prior is None:
-        return np.full(int(n_rot), float(class_log_prior), dtype=np.float32)
-    prior = np.asarray(rotation_log_prior, dtype=np.float32)
-    return prior + np.asarray(float(class_log_prior), dtype=np.float32)
+        return np.full(int(n_rot), float(class_log_prior), dtype=dtype)
+    prior = np.asarray(rotation_log_prior, dtype=dtype)
+    return prior + np.asarray(float(class_log_prior), dtype=dtype)
 
 
 def _sparse_pose_ids_to_fine_grid(hard_assignment, best_rotation_ids, n_fine_trans: int) -> np.ndarray:
@@ -982,7 +989,12 @@ def _run_sparse_k_class_adaptive_pass2(
             )
         else:
             rot_prior = base_engine_kwargs.get("rotation_log_prior")
-        return _rotation_prior_with_class_log_prior(rot_prior, float(class_log_priors[class_index]), n_rot_coarse)
+        return _rotation_prior_with_class_log_prior(
+            rot_prior,
+            float(class_log_priors[class_index]),
+            n_rot_coarse,
+            dtype=(np.float64 if base_engine_kwargs.get("use_float64_scoring") else np.float32),
+        )
 
     common = dict(
         nside_level=healpix_order,
@@ -1318,8 +1330,9 @@ def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats |
             raise ValueError(f"Cannot aggregate mixed missing/present noise field {name}")
         return jnp.sum(jnp.stack([jnp.asarray(value) for value in values], axis=0), axis=0)
 
+    summed_sigma2_noise = _sum_field("wsum_sigma2_noise")
     return make_noise_stats(
-        wsum_sigma2_noise=_sum_field("wsum_sigma2_noise"),
+        wsum_sigma2_noise=summed_sigma2_noise,
         wsum_img_power=_sum_field("wsum_img_power"),
         wsum_sigma2_offset=sum(float(stats.wsum_sigma2_offset) for stats in noise_stats),
         sumw=sum(float(stats.sumw) for stats in noise_stats),
@@ -1328,6 +1341,12 @@ def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats |
         wsum_norm_correction=_sum_field("wsum_norm_correction"),
         wsum_scale_correction_xa=_sum_field("wsum_scale_correction_xa"),
         wsum_scale_correction_aa=_sum_field("wsum_scale_correction_aa"),
+        # make_noise_stats defaults array_dtype=jnp.float32; the per-class
+        # noise_stats[i] arrays already carry whatever dtype their own
+        # producer correctly chose (float64 under double-precision scoring),
+        # and _sum_field's plain jnp.sum preserves it -- derive from that
+        # instead of silently narrowing the aggregate back down.
+        array_dtype=(np.float32 if summed_sigma2_noise is None else summed_sigma2_noise.dtype),
     )
 
 
@@ -1433,6 +1452,17 @@ def _assemble_result(
     mstep_full_half_axis: int | None = None,
     mstep_accumulator_shape: tuple[int, int, int] | None = None,
 ) -> KClassEMResult:
+    # Derive the output dtype from the per-class stats' own precision rather
+    # than hardcoding float32: threading an explicit dtype/precision_policy
+    # parameter through this function's several callers (each several
+    # layers removed from iteration_loop.py's precision switches) would be
+    # invasive, and per_class_stats[i].best_log_score_per_image already
+    # carries whatever dtype its own caller correctly chose (float64 under
+    # double-precision scoring) -- forcing float32 here discards that
+    # upstream precision at this universal per-image aggregation step.
+    output_dtype = (
+        np.asarray(per_class_stats[0].best_log_score_per_image).dtype if per_class_stats else np.float32
+    )
     global_log_evidence = _logsumexp_np(class_log_evidence, axis=0).astype(np.float64)
     # Guard against -inf - (-inf) = NaN when an entire (image, class) had all
     # poses masked out (e.g., RELION firstiter_cc_pass2_only_best_coarse where
@@ -1484,7 +1514,11 @@ def _assemble_result(
         best_log_score_per_image=global_best_scores,
         max_posterior_per_image=joint_pmax,
         rotation_posterior_sums=rotation_posterior_sums,
-        image_dtype=jnp.float32,
+        image_dtype=output_dtype,
+        # make_relion_stats defaults rotation_dtype=jnp.float32; override with
+        # rotation_posterior_sums' own (already correctly precision-derived)
+        # dtype instead of silently narrowing it back down.
+        rotation_dtype=rotation_posterior_sums.dtype,
     )
     best_pose_rotations = _selected_by_class(per_class_best_pose_rotations, class_assignments)
     best_pose_translations = _selected_by_class(per_class_best_pose_translations, class_assignments)
@@ -1521,8 +1555,8 @@ def _assemble_result(
         per_class_hard_assignments=jnp.asarray(per_class_hard_assignments, dtype=jnp.int32),
         class_assignments=jnp.asarray(class_assignments, dtype=jnp.int32),
         pose_assignments=jnp.asarray(pose_assignments, dtype=jnp.int32),
-        class_responsibilities=jnp.asarray(class_responsibilities, dtype=jnp.float32),
-        class_posterior_sums=jnp.asarray(class_posterior_sums, dtype=jnp.float32),
+        class_responsibilities=jnp.asarray(class_responsibilities, dtype=output_dtype),
+        class_posterior_sums=jnp.asarray(class_posterior_sums, dtype=output_dtype),
         stats=stats,
         per_class_stats=per_class_stats,
         noise_stats=noise_stats,
@@ -1540,7 +1574,7 @@ def _assemble_result(
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
         profile_summary=profile_summary_out,
-        class_mstep_posterior_sums=jnp.asarray(class_mstep_posterior_sums, dtype=jnp.float32),
+        class_mstep_posterior_sums=jnp.asarray(class_mstep_posterior_sums, dtype=output_dtype),
         mstep_full_half_axis=mstep_full_half_axis,
         mstep_accumulator_shape=mstep_accumulator_shape,
     )

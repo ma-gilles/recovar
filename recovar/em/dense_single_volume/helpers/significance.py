@@ -1822,6 +1822,10 @@ def _compute_k_class_significance_batched(
     score_mode = str(score_mode)
     if score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
+    # RELION's pdf_orientation/pdf_offset priors and score/evidence/Pmax
+    # outputs are RFLOAT (double), never narrowed -- derive from the
+    # caller's own use_float64_scoring instead of hardcoding float32.
+    score_real_dtype = np.float64 if use_float64_scoring else np.float32
     means_array = jnp.asarray(means)
     if means_array.ndim != 2:
         raise ValueError(f"means must have shape (n_classes, volume_size), got {means_array.shape}")
@@ -2118,7 +2122,7 @@ def _compute_k_class_significance_batched(
 
     rotation_log_prior_padded = None
     if rotation_log_prior is not None:
-        prior = np.asarray(rotation_log_prior, dtype=np.float32)
+        prior = np.asarray(rotation_log_prior, dtype=score_real_dtype)
         if prior.ndim == 1:
             if prior.shape != (n_rot,):
                 raise ValueError(f"rotation_log_prior must have shape ({n_rot},), got {prior.shape}")
@@ -2331,24 +2335,24 @@ def _compute_k_class_significance_batched(
     significant_sample_indices = [[None] * n_images for _ in range(n_classes)] if collect_significance else None
     normalization_log_z = np.empty(n_images, dtype=np.float64)
     normalization_log_evidence = np.empty(n_images, dtype=np.float64)
-    log_evidence = np.empty(n_images, dtype=np.float32)
-    best_log_score = np.empty(n_images, dtype=np.float32)
-    max_posterior = np.empty(n_images, dtype=np.float32)
+    log_evidence = np.empty(n_images, dtype=score_real_dtype)
+    best_log_score = np.empty(n_images, dtype=score_real_dtype)
+    max_posterior = np.empty(n_images, dtype=score_real_dtype)
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
     class_best_log_score = (
-        np.empty((n_classes, n_images), dtype=np.float32) if return_class_best else None
+        np.empty((n_classes, n_images), dtype=score_real_dtype) if return_class_best else None
     )
     class_second_best_log_score = (
-        np.empty((n_classes, n_images), dtype=np.float32) if return_class_second else None
+        np.empty((n_classes, n_images), dtype=score_real_dtype) if return_class_second else None
     )
     # Diagnostic-only native scores before the large, class-common image
     # normalization offset.  The offset is useful for absolute log evidence,
     # but adding it before a float32 cast can erase class and pose margins.
     class_best_offset_free_log_score = (
-        np.empty((n_classes, n_images), dtype=np.float32) if return_class_best else None
+        np.empty((n_classes, n_images), dtype=score_real_dtype) if return_class_best else None
     )
     class_second_best_offset_free_log_score = (
-        np.empty((n_classes, n_images), dtype=np.float32) if return_class_second else None
+        np.empty((n_classes, n_images), dtype=score_real_dtype) if return_class_second else None
     )
     class_hard_assignment = (
         np.empty((n_classes, n_images), dtype=np.int32) if return_class_best else None
@@ -2383,6 +2387,7 @@ def _compute_k_class_significance_batched(
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
+            dtype=score_real_dtype,
         )
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied and not relion_cuda_preprocess:
@@ -2475,7 +2480,9 @@ def _compute_k_class_significance_batched(
                 ctf2_half_score = ctf2_half_score * (batch_scale**2)[:, None]
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
-            shifted_half = shifted_half * tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
+            shifted_half = shifted_half * tiled_half_image_phase_factors(
+                image_shape, batch_shifts, n_trans, dtype=batch_shifts.dtype
+            )
             if coarse_gaussian_sincosf_enabled:
                 coarse_gaussian_unshifted_score_weighted = (
                     coarse_gaussian_unshifted_score_weighted
@@ -2483,6 +2490,7 @@ def _compute_k_class_significance_batched(
                         image_shape,
                         batch_shifts,
                         1,
+                        dtype=batch_shifts.dtype,
                     )
                 )
         if score_mode == "normalized_cc":
@@ -2701,14 +2709,14 @@ def _compute_k_class_significance_batched(
             _fused_max_r_static = projection_kwargs.get("max_r", None) if use_window else None
             _fused_window_indices = window_indices if use_window else jnp.zeros(0, dtype=jnp.int32)
             if translation_log_prior is None:
-                _fused_trans_lp_per_image = jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
+                _fused_trans_lp_per_image = jnp.zeros((batch_size, n_trans), dtype=score_real_dtype)
             elif translation_log_prior.ndim == 1:
                 _fused_trans_lp_per_image = jnp.broadcast_to(
-                    jnp.asarray(batch_translation_log_prior, dtype=jnp.float32),
+                    jnp.asarray(batch_translation_log_prior, dtype=score_real_dtype),
                     (batch_size, n_trans),
                 )
             else:
-                _fused_trans_lp_per_image = jnp.asarray(batch_translation_log_prior, dtype=jnp.float32)
+                _fused_trans_lp_per_image = jnp.asarray(batch_translation_log_prior, dtype=score_real_dtype)
 
         for class_index, mean_for_proj in enumerate(means_for_proj):
             class_max = jnp.full(batch_size, -jnp.inf)
@@ -2720,9 +2728,11 @@ def _compute_k_class_significance_batched(
                 if use_fused_pass1:
                     valid_count = jnp.asarray(min(rotation_block_size, n_rot - r0), dtype=jnp.int32)
                     if rotation_log_prior_padded is None:
-                        rot_lp_block = jnp.zeros(rotation_block_size, dtype=jnp.float32)
+                        rot_lp_block = jnp.zeros(rotation_block_size, dtype=score_real_dtype)
                     else:
-                        rot_lp_block = jnp.asarray(rotation_log_prior_padded[class_index, r0:r1], dtype=jnp.float32)
+                        rot_lp_block = jnp.asarray(
+                            rotation_log_prior_padded[class_index, r0:r1], dtype=score_real_dtype
+                        )
                     scores, class_max, class_sum, global_max, global_sum = _fused_score_priors_logsumexp_block(
                         mean_for_proj,
                         rotations_padded[r0:r1],
@@ -3044,9 +3054,9 @@ def _compute_k_class_significance_batched(
         best_score_np = np.asarray(best_score_batch, dtype=np.float64)
         normalization_log_z[start_idx:end_idx] = global_log_z_np
         normalization_log_evidence[start_idx:end_idx] = global_log_z_np + log_score_offset
-        log_evidence[start_idx:end_idx] = normalization_log_evidence[start_idx:end_idx].astype(np.float32)
-        best_log_score[start_idx:end_idx] = (best_score_np + log_score_offset).astype(np.float32)
-        max_posterior[start_idx:end_idx] = np.exp(best_score_np - global_log_z_np).astype(np.float32)
+        log_evidence[start_idx:end_idx] = normalization_log_evidence[start_idx:end_idx]
+        best_log_score[start_idx:end_idx] = best_score_np + log_score_offset
+        max_posterior[start_idx:end_idx] = np.exp(best_score_np - global_log_z_np)
         for class_index, class_log_z in enumerate(class_log_z_values):
             class_log_evidence[class_index, start_idx:end_idx] = (
                 np.asarray(class_log_z, dtype=np.float64) + log_score_offset

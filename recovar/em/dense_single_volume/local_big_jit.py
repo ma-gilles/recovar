@@ -870,8 +870,13 @@ def run_local_bucket_big_jit(
             ctf2_over_nv_recon = ctf2_over_nv_recon * (batch_scale**2)[:, None]
 
     if apply_fourier_pre_shift:
+        # fourier_pre_shifts already carries precision_policy.score_real_dtype
+        # (set by its caller); pass it through instead of letting these
+        # helpers silently narrow it back to their own float32 default.
         if use_window:
-            pre_shift_phases = half_image_phase_factors(image_shape, fourier_pre_shifts)
+            pre_shift_phases = half_image_phase_factors(
+                image_shape, fourier_pre_shifts, dtype=fourier_pre_shifts.dtype
+            )
             score_phase_expanded = jnp.repeat(pre_shift_phases[:, window_indices], n_trans, axis=0)
             shifted_score = shifted_score * score_phase_expanded
             if not score_only:
@@ -880,7 +885,9 @@ def run_local_bucket_big_jit(
                 if materialize_shifted_noise:
                     shifted_noise = shifted_noise * recon_phase_expanded
         else:
-            phase_expanded = tiled_half_image_phase_factors(image_shape, fourier_pre_shifts, n_trans)
+            phase_expanded = tiled_half_image_phase_factors(
+                image_shape, fourier_pre_shifts, n_trans, dtype=fourier_pre_shifts.dtype
+            )
             shifted_half = shifted_half * phase_expanded
             if not score_only:
                 shifted_recon_half = shifted_recon_half * phase_expanded
@@ -1348,8 +1355,8 @@ def run_local_bucket_big_jit(
             )
             scale_xa_per_image = jnp.where(valid_image_mask, scale_xa_per_image, 0.0)
             scale_aa_per_image = jnp.where(valid_image_mask, scale_aa_per_image, 0.0)
-            noise_scale_xa = noise_scale_xa.at[group_ids].add(scale_xa_per_image)
-            noise_scale_aa = noise_scale_aa.at[group_ids].add(scale_aa_per_image)
+            noise_scale_xa = noise_scale_xa.at[group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
+            noise_scale_aa = noise_scale_aa.at[group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
         noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
         bucket_norm_correction = batch_img_power_per_image + _compute_norm_residual_per_image(
             proj_for_noise,

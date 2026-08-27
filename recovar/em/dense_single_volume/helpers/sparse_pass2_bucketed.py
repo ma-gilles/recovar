@@ -4325,10 +4325,17 @@ def _compute_noise_block_and_norm_residual_from_flat_rows(
     xa_per_row = jnp.sum(noise_variance_half[None, :] * cross_terms.real, axis=1)
 
     block_noise = a2 - 2.0 * xa
-    noise_shells = bin_shell_values_jax(block_noise.astype(jnp.float32), shell_indices, shell_count)
+    # No explicit dtype cast: preserve whatever real dtype the inputs
+    # naturally promote to (float64 under double-precision scoring), same
+    # as compute_noise_block/compute_norm_residual_per_image. The zero-init
+    # container below must match residual_per_row's dtype exactly --
+    # jnp .at[].add() requires an exact dtype match, unlike plain addition.
+    noise_shells = bin_shell_values_jax(block_noise, shell_indices, shell_count)
 
-    residual_per_row = (a2_per_row - 2.0 * xa_per_row).astype(jnp.float32)
-    norm_residual = jnp.zeros(int(batch_size), dtype=jnp.float32).at[flat_image_indices].add(residual_per_row)
+    residual_per_row = a2_per_row - 2.0 * xa_per_row
+    norm_residual = jnp.zeros(int(batch_size), dtype=residual_per_row.dtype).at[flat_image_indices].add(
+        residual_per_row
+    )
     return noise_shells, norm_residual
 
 
@@ -4357,10 +4364,12 @@ def _compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
     residual_terms = a2_terms - 2.0 * xa_terms
 
     block_noise = jnp.sum(residual_terms, axis=0)
-    noise_shells = bin_shell_values_jax(block_noise.astype(jnp.float32), shell_indices, shell_count)
+    noise_shells = bin_shell_values_jax(block_noise, shell_indices, shell_count)
 
-    residual_per_row = jnp.sum(residual_terms, axis=1).astype(jnp.float32)
-    norm_residual = jnp.zeros(int(batch_size), dtype=jnp.float32).at[flat_image_indices].add(residual_per_row)
+    residual_per_row = jnp.sum(residual_terms, axis=1)
+    norm_residual = jnp.zeros(int(batch_size), dtype=residual_per_row.dtype).at[flat_image_indices].add(
+        residual_per_row
+    )
     return noise_shells, norm_residual
 
 
@@ -4954,8 +4963,8 @@ def _compute_norm_residual_per_image_from_flat_rows(
     cross_terms = jnp.where(summed_masked != 0.0, proj_half * jnp.conj(summed_masked), 0.0)
     xa_terms = noise_variance_half[None, :] * cross_terms.real
     xa_per_row = jnp.sum(xa_terms, axis=1)
-    residual_per_row = (a2_per_row - 2.0 * xa_per_row).astype(jnp.float32)
-    return jnp.zeros(int(batch_size), dtype=jnp.float32).at[flat_image_indices].add(residual_per_row)
+    residual_per_row = a2_per_row - 2.0 * xa_per_row
+    return jnp.zeros(int(batch_size), dtype=residual_per_row.dtype).at[flat_image_indices].add(residual_per_row)
 
 
 def _flat_block_row_bytes(flat_block) -> int:
@@ -10012,6 +10021,7 @@ def _prepare_bucket_io(
         image_corrections=image_corrections,
         scale_corrections=scale_corrections,
         image_pre_shifts=image_pre_shifts,
+        dtype=(np.float64 if use_float64_scoring else np.float32),
     )
     real_space_pre_shift_applied = integer_pre_shifts is not None
     if real_space_pre_shift_applied and not relion_cuda_preprocess:
@@ -10177,7 +10187,7 @@ def _prepare_bucket_io(
     # Per-image pre-centering: phase shift in Fourier space after scalar corrections.
     if image_pre_shifts is not None and not real_space_pre_shift_applied:
         batch_shifts = jnp.asarray(np.asarray(image_pre_shifts)[np.asarray(image_indices)])
-        phase_factors = half_image_phase_factors(image_shape, batch_shifts)
+        phase_factors = half_image_phase_factors(image_shape, batch_shifts, dtype=batch_shifts.dtype)
         if not score_only:
             score_weighted_half = score_weighted_half * phase_factors
             recon_weighted_half = recon_weighted_half * phase_factors

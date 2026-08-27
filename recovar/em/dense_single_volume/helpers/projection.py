@@ -594,6 +594,11 @@ def compute_norm_residual_per_image(
     This is the same ``A2 - 2*XA`` contribution as :func:`compute_noise_block`,
     but summed per image instead of binned over shells.  The caller adds the
     image-power term once per image.
+
+    Like ``compute_noise_block``, keeps whatever real dtype the inputs
+    naturally promote to -- no explicit float32 cast, which used to
+    truncate this per-image residual before the caller's own accumulation
+    even when the inputs were already float64 (double-precision scoring).
     """
 
     ctf_has_mass = ctf_probs != 0.0
@@ -604,7 +609,7 @@ def compute_norm_residual_per_image(
     cross_terms = jnp.where(summed_masked != 0.0, proj_half * jnp.conj(summed_masked), 0.0)
     xa_terms = noise_variance_half[None, None, :] * cross_terms.real
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2))
-    return (a2_per_image - 2.0 * xa_per_image).astype(jnp.float32)
+    return a2_per_image - 2.0 * xa_per_image
 
 
 @jax.jit
@@ -623,6 +628,9 @@ def compute_scale_correction_terms_per_image(
     ``compute_norm_residual_per_image``.  The current E-step tensors already
     include the old group scale in ``XA`` and ``AA``; RELION's scale update
     accumulators divide those factors back out before summing by group.
+
+    Like ``compute_noise_block``/``compute_norm_residual_per_image``, keeps
+    the inputs' own natural real dtype -- no explicit float32 cast.
     """
 
     safe_scale = jnp.maximum(jnp.asarray(old_scale, dtype=proj_abs2_half.real.dtype), 1e-30)
@@ -641,7 +649,7 @@ def compute_scale_correction_terms_per_image(
     cross_terms = jnp.where(cross_has_mass, proj_half * jnp.conj(summed_masked), 0.0)
     xa_terms = noise_variance_half[None, None, :] * cross_terms.real
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2)) / safe_scale
-    return xa_per_image.astype(jnp.float32), aa_per_image.astype(jnp.float32)
+    return xa_per_image, aa_per_image
 
 
 def relion_scale_correction_pixel_mask(data_vs_prior, shell_indices, *, n_shells=None):

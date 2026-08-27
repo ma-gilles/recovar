@@ -300,8 +300,19 @@ def prepare_batch_preprocess_operands(
     image_corrections=None,
     scale_corrections=None,
     image_pre_shifts=None,
+    dtype: np.dtype = np.float32,
 ):
-    """Select typed per-image operands for host or strict CUDA preprocessing."""
+    """Select typed per-image operands for host or strict CUDA preprocessing.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64`` --
+    these are RELION's per-image group-scale/normalization correction
+    factors (RFLOAT, never narrowed), multiplied directly into the
+    CTF^2/noise weighting used by both pass-1 and pass-2 scoring. The
+    ``relion_cuda``-backend branch below is unaffected: it's a real CUDA
+    FFI kernel input, hardware-locked to float32 independent of this
+    ``dtype``.
+    """
 
     from .image_shifts import integer_pre_shifts_or_none
 
@@ -316,12 +327,12 @@ def prepare_batch_preprocess_operands(
         integer_pre_shifts = np.zeros((batch_size, 2), dtype=np.int32)
 
     batch_scale_np = (
-        np.asarray(scale_corrections)[image_indices_np].astype(np.float32, copy=False)
+        np.asarray(scale_corrections)[image_indices_np].astype(dtype, copy=False)
         if scale_corrections is not None
-        else np.ones(batch_size, dtype=np.float32)
+        else np.ones(batch_size, dtype=dtype)
     )
     batch_corr_np = (
-        np.asarray(image_corrections)[image_indices_np].astype(np.float32, copy=False)
+        np.asarray(image_corrections)[image_indices_np].astype(dtype, copy=False)
         if image_corrections is not None
         else None
     )
