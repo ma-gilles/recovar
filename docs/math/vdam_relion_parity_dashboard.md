@@ -50,7 +50,7 @@ SHA-256 values.
 | GF47 reverse float32 order | panel `13026879`, audit `13026880` terminal | reference is inside its fresh native floor, but post-second-moment error is **2.90--3.57x** the floor; no promotion |
 | GF47 native `Igrad2` oracle | panel `13027533` terminal | second moment becomes exact, but reference changes only to **1.03x / 0.72x** its native floor; not the dominant missing operation |
 | GF47 H100 SM-strided float32 | panel `13028122` terminal | post-second-moment ratio improves to **1.56--1.68x** from **2.75--3.10x**; reference is **0.961--0.963x** its native floor |
-| Next qualification | full GF47 task `13028369_2` (`13028371`) | running on recorded GPU index 2 / UUID `GPU-6222...`; score remains unchanged pending 201 checkpoints and audit |
+| Live GF47 SM132 boundary | full task `13028369_2` (`13028371`) has crossed iteration 99 on recorded GPU index 2 / UUID `GPU-6222...` | particles pass @58 and @59 (repairing the serial run's one-particle miss); schedule passes @59 but still fails @58 as a cross-repeat mixture; score remains unchanged pending all 201 checkpoints and the sealed audit |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -68,7 +68,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 02:05 ET**
+Last scientific update: **2026-08-27 02:22 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -96,7 +96,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | a 132-SM-strided float32 order cuts the post-second-moment floor ratio about 44% while preserving reference parity | panel `13028122` passes the bounded promotion gate; full task `13028369_2` is running on the original frozen GPU | no score change until the complete 0--200 map/state/schedule audit passes |
+| 1 | GF47 repeatability starts @1 | a 132-SM-strided float32 order cuts the post-second-moment floor ratio about 44% while preserving reference parity | full task `13028369_2` repairs the serial particle split @58 and passes particle/schedule @59, but its live calibrated audit still finds a whole-native-schedule failure @58 | no score change; let 0--200 finish, seal every gate, then localize the now-narrower schedule boundary |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -235,7 +235,16 @@ the accepted native panel. Pre-science attempts `13028205`, `13028298`,
 override and three wrong GPU UUIDs; array tasks 1 and 3 also rejected wrong
 UUIDs in seconds, and pending tasks 4--8 were canceled as soon as task 2
 acquired the target. They are infrastructure gates, not parity results. The
-frozen score remains 2/20 until the full audit passes.
+run has crossed iteration 99. A calibrated non-scoring live audit at iterations
+58--59 shows a genuine boundary improvement: every active particle now matches
+at least one native state at both checkpoints, including the particle that the
+serial trajectory missed at 58, and the complete schedule matches native repeat
+1 at 59. Iteration 58 still matches no *single complete* native schedule. Its
+offset-change value (`2.878784465`) matches repeat 4 (`2.878784`), while the
+rotation/translation accuracy fields miss all four native schedules; matching
+individual fields across different repeats is not accepted. This is an early
+failure localization, not a scoring audit. The frozen score remains 2/20 until
+all 201 checkpoints and the automatic sealed audit are terminal.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
@@ -625,7 +634,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | H100 SM-strided panel `13028122` improves the leading residual and passes the bounded promotion gate; full task `13028369_2` is running on the frozen GPU | complete 201 checkpoints and pass unchanged map, particle, and schedule audits before any score change |
+| 1 | Close GF47 repeatability before another trajectory | H100 SM-strided panel `13028122` improves the leading residual; full task `13028369_2` has crossed iteration 99 and repairs particle parity @58/@59, but live schedule parity still fails @58 | finish all 201 checkpoints and the unchanged automatic audit; then repair the sealed first boundary without changing the gate |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
