@@ -605,7 +605,11 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology not in {"captured_block_start", "captured_block_grid"}:
+    if topology not in {
+        "captured_block_start",
+        "captured_block_grid",
+        "captured_native_grid",
+    }:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
     chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
@@ -636,7 +640,11 @@ def _relion_vdam_worker_lanes_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology in {"captured_block_start", "captured_block_grid"}:
+    if topology in {
+        "captured_block_start",
+        "captured_block_grid",
+        "captured_native_grid",
+    }:
         if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
             return None
     if topology in {
@@ -667,13 +675,67 @@ def _relion_vdam_worker_lanes_for_images(
         )
     if topology == "single":
         owners = np.zeros_like(owners)
-    elif topology not in {"captured", "captured_block_start", "captured_block_grid"}:
+    elif topology not in {
+        "captured",
+        "captured_block_start",
+        "captured_block_grid",
+        "captured_native_grid",
+    }:
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
-            "'single_rotation_sm132', 'captured_block_start', or 'captured_block_grid'"
+            "'single_rotation_sm132', 'captured_block_start', "
+            "'captured_block_grid', or 'captured_native_grid'"
         )
     return owners.astype(np.int32, copy=False)
+
+
+def _relion_vdam_native_grid_counts_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    rotation_count: int,
+    valid_rotation_counts,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Return sealed native per-particle grid sizes for the exact-grid replay."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology != "captured_native_grid":
+        return None
+    orders = _relion_vdam_block_start_orders_for_images(
+        experiment_dataset,
+        image_indices,
+        rotation_count=rotation_count,
+        valid_rotation_counts=valid_rotation_counts,
+        debug_iteration=debug_iteration,
+    )
+    if orders is None:
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    _, dataset_particles, captured_orders = _load_relion_vdam_block_start_orders(
+        schedule_path,
+        chronology_path,
+    )
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("native-grid replay image index is outside the traced dataset")
+    counts = np.asarray(
+        [captured_orders[int(index)].size for index in original_indices.tolist()],
+        dtype=np.int32,
+    )
+    if counts.shape != np.asarray(image_indices).shape:
+        raise ValueError("native-grid replay counts have an invalid shape")
+    if np.any(counts <= 0) or np.any(counts > rotation_count):
+        raise ValueError("native-grid replay count is outside the candidate bucket")
+    return counts
 
 
 def _relion_vdam_candidate_trace_ids_for_images(experiment_dataset, image_indices):
@@ -702,6 +764,7 @@ def _maybe_write_vdam_candidate_block_map(
     reconstruction_contributing_mask,
     local_rotation_ids,
     reconstruction_group_ids,
+    candidate_launch_counts=None,
     debug_iteration: int | None,
 ) -> None:
     """Append the exact compact-row to native-local-row mapping for one bucket."""
@@ -756,6 +819,20 @@ def _maybe_write_vdam_candidate_block_map(
         raise ValueError("candidate block-map local rotation IDs must match the particle axis")
     if np.any(particle_ids < 0):
         raise ValueError("candidate block-map particle IDs must be nonnegative")
+    if candidate_launch_counts is None:
+        candidate_launch_counts = np.full(
+            particle_count,
+            candidate_count,
+            dtype=np.int64,
+        )
+    else:
+        candidate_launch_counts = np.asarray(candidate_launch_counts, dtype=np.int64)
+        if candidate_launch_counts.shape != (particle_count,):
+            raise ValueError("candidate block-map launch counts must match particles")
+        if np.any(candidate_launch_counts <= 0) or np.any(
+            candidate_launch_counts > candidate_count
+        ):
+            raise ValueError("candidate block-map launch count is outside the packed grid")
     if np.any(pack_mask & ((take_indices < 0) | (take_indices >= local_rotation_ids.shape[1]))):
         raise ValueError("candidate block-map valid native rows are out of range")
     if reconstruction_group_ids is None:
@@ -815,6 +892,11 @@ def _maybe_write_vdam_candidate_block_map(
             np.uint32(0),
         )
     )
+    launched = (
+        np.arange(candidate_count, dtype=np.int64)[None, :]
+        < candidate_launch_counts[:, None]
+    ).ravel()
+    records = records[launched]
 
     output_path = Path(path_text).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1106,6 +1188,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     reverse_rotation_replay=False,
     rotation_replay_stride=0,
     rotation_replay_order=None,
+    rotation_replay_counts=None,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -1195,6 +1278,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 reverse_rotation_replay=reverse_rotation_replay,
                 rotation_replay_stride=rotation_replay_stride,
                 rotation_replay_order=rotation_replay_order,
+                rotation_replay_counts=rotation_replay_counts,
             )
         )
     return Ft_y, Ft_ctf
@@ -5202,6 +5286,28 @@ def run_local_em_exact(
                     experiment_dataset,
                     unpadded_bucket.image_indices,
                 )
+                block_start_order = _relion_vdam_block_start_orders_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    rotation_count=packed_mstep_rotations_np.shape[1],
+                    valid_rotation_counts=np.sum(
+                        reconstruction_pack_mask_np,
+                        axis=1,
+                        dtype=np.int64,
+                    ),
+                    debug_iteration=debug_iteration,
+                )
+                native_grid_counts = _relion_vdam_native_grid_counts_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    rotation_count=packed_mstep_rotations_np.shape[1],
+                    valid_rotation_counts=np.sum(
+                        reconstruction_pack_mask_np,
+                        axis=1,
+                        dtype=np.int64,
+                    ),
+                    debug_iteration=debug_iteration,
+                )
                 _maybe_write_vdam_candidate_block_map(
                     particle_ids=candidate_trace_ids,
                     reconstruction_take_indices=reconstruction_take_indices,
@@ -5222,17 +5328,7 @@ def run_local_em_exact(
                         if bucket_reconstruction_group_ids is None
                         else bucket_reconstruction_group_ids[:unpadded_batch_size]
                     ),
-                    debug_iteration=debug_iteration,
-                )
-                block_start_order = _relion_vdam_block_start_orders_for_images(
-                    experiment_dataset,
-                    unpadded_bucket.image_indices,
-                    rotation_count=packed_mstep_rotations_np.shape[1],
-                    valid_rotation_counts=np.sum(
-                        reconstruction_pack_mask_np,
-                        axis=1,
-                        dtype=np.int64,
-                    ),
+                    candidate_launch_counts=native_grid_counts,
                     debug_iteration=debug_iteration,
                 )
                 Ft_y, Ft_ctf = _accumulate_relion_vdam_physical_particle_grid(
@@ -5271,6 +5367,7 @@ def run_local_em_exact(
                     reverse_rotation_replay=_relion_vdam_reverse_rotation_replay(),
                     rotation_replay_stride=_relion_vdam_rotation_replay_stride(),
                     rotation_replay_order=block_start_order,
+                    rotation_replay_counts=native_grid_counts,
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)

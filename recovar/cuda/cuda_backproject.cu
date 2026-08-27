@@ -4970,6 +4970,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const int32_t* worker_lane_ids,
     const int32_t* particle_trace_ids,
     const int32_t* rotation_replay_order,
+    const int32_t* rotation_replay_counts,
     float* data_real_volume,
     float* data_imag_volume,
     float* weight_volume,
@@ -5025,6 +5026,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int32_t* worker_lanes_host = nullptr;
     int32_t* particle_trace_ids_host = nullptr;
     int32_t* rotation_replay_order_host = nullptr;
+    int32_t* rotation_replay_counts_host = nullptr;
     VdamCandidateBlockTraceRecord* candidate_trace_records[
         kRelionVdamWorkerStreams] = {};
     VdamCandidateBlockTraceWriter* candidate_trace_writer =
@@ -5237,6 +5239,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 static_cast<size_t>(n_particles * rotation_count) * sizeof(int32_t));
             if (err != cudaSuccess) goto cleanup;
         }
+        err = cudaMallocHost(
+            reinterpret_cast<void**>(&rotation_replay_counts_host),
+            static_cast<size_t>(n_particles) * sizeof(int32_t));
+        if (err != cudaSuccess) goto cleanup;
         err = cudaMemcpyAsync(
             reconstruction_groups_host,
             reconstruction_group_ids,
@@ -5271,6 +5277,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 stream);
             if (err != cudaSuccess) goto cleanup;
         }
+        err = cudaMemcpyAsync(
+            rotation_replay_counts_host,
+            rotation_replay_counts,
+            static_cast<size_t>(n_particles) * sizeof(int32_t),
+            cudaMemcpyDeviceToHost,
+            stream);
+        if (err != cudaSuccess) goto cleanup;
         err = cudaStreamSynchronize(stream);
         if (err != cudaSuccess) goto cleanup;
         for (int64_t particle = 0; particle < n_particles; ++particle)
@@ -5288,6 +5301,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 goto cleanup;
             }
             if (candidate_trace_requested && particle_trace_ids_host[particle] < 0)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            if (rotation_replay_counts_host[particle] <= 0 ||
+                rotation_replay_counts_host[particle] > rotation_count)
             {
                 err = cudaErrorInvalidValue;
                 goto cleanup;
@@ -5355,16 +5374,18 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 static_cast<int64_t>(reconstruction_groups_host[particle]) *
                 accumulator_stride;
             std::uint64_t trace_launch_sequence = 0;
+            const int64_t particle_rotation_count =
+                rotation_replay_counts_host[particle];
             if (candidate_trace_requested)
             {
                 if (!candidate_trace_writer->reserve(
-                        static_cast<std::uint64_t>(rotation_count),
+                        static_cast<std::uint64_t>(particle_rotation_count),
                         &trace_launch_sequence))
                     return cudaErrorInvalidValue;
                 const cudaError_t clear_error = cudaMemsetAsync(
                     candidate_trace_records[lane],
                     0,
-                    static_cast<size_t>(rotation_count) *
+                    static_cast<size_t>(particle_rotation_count) *
                         sizeof(VdamCandidateBlockTraceRecord),
                     particle_streams[lane]);
                 if (clear_error != cudaSuccess) return clear_error;
@@ -5405,7 +5426,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     }
                     rotation_offset = logical_lane + lane_wave * stride;
                 }
-                const int64_t grid_rotations = serial_rotation_replay ? 1 : rotation_count;
+                const int64_t grid_rotations = serial_rotation_replay
+                    ? 1
+                    : particle_rotation_count;
                 relion_vdam_native_sgd_f32_kernel<Accumulator><<<
                     grid_rotations, 128, 0, particle_streams[lane]>>>(
                     projector,
@@ -5458,17 +5481,17 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     cudaStreamSynchronize(particle_streams[lane]);
                 if (trace_error != cudaSuccess) return trace_error;
                 std::vector<VdamCandidateBlockTraceRecord> host_records(
-                    static_cast<size_t>(rotation_count));
+                    static_cast<size_t>(particle_rotation_count));
                 trace_error = cudaMemcpy(
                     host_records.data(),
                     candidate_trace_records[lane],
-                    static_cast<size_t>(rotation_count) *
+                    static_cast<size_t>(particle_rotation_count) *
                         sizeof(VdamCandidateBlockTraceRecord),
                     cudaMemcpyDeviceToHost);
                 if (trace_error != cudaSuccess) return trace_error;
                 if (!candidate_trace_writer->append(
                         host_records.data(),
-                        static_cast<std::uint64_t>(rotation_count)))
+                        static_cast<std::uint64_t>(particle_rotation_count)))
                     return cudaErrorInvalidValue;
             }
             return cudaSuccess;
@@ -5587,6 +5610,7 @@ cleanup:
     if (worker_lanes_host) cudaFreeHost(worker_lanes_host);
     if (particle_trace_ids_host) cudaFreeHost(particle_trace_ids_host);
     if (rotation_replay_order_host) cudaFreeHost(rotation_replay_order_host);
+    if (rotation_replay_counts_host) cudaFreeHost(rotation_replay_counts_host);
     for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
         if (candidate_trace_records[lane]) cudaFree(candidate_trace_records[lane]);
     if (data_real_volume_f64) cudaFree(data_real_volume_f64);
@@ -8646,6 +8670,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     ffi::AnyBuffer worker_lane_ids,
     ffi::AnyBuffer particle_trace_ids,
     ffi::AnyBuffer rotation_replay_order,
+    ffi::AnyBuffer rotation_replay_counts,
     ffi::AnyBuffer data_real_volume_in,
     ffi::AnyBuffer data_imag_volume_in,
     ffi::AnyBuffer weight_volume_in,
@@ -8670,6 +8695,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         worker_lane_ids.element_type() != ffi::DataType::S32 ||
         particle_trace_ids.element_type() != ffi::DataType::S32 ||
         rotation_replay_order.element_type() != ffi::DataType::S32 ||
+        rotation_replay_counts.element_type() != ffi::DataType::S32 ||
         weight_volume_in.element_type() != ffi::DataType::F32 ||
         weight_volume_out->element_type() != ffi::DataType::F32 ||
         denominator_sum->element_type() != ffi::DataType::F32)
@@ -8705,6 +8731,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const auto worker_lane_dims = worker_lane_ids.dimensions();
     const auto particle_trace_dims = particle_trace_ids.dimensions();
     const auto rotation_replay_order_dims = rotation_replay_order.dimensions();
+    const auto rotation_replay_count_dims = rotation_replay_counts.dimensions();
     const auto denominator_dims = denominator_sum->dimensions();
     const int64_t pixel_count = image_h * image_w;
     if (projector_dims.size() != 3 || projector_dims[0] <= 0 ||
@@ -8728,6 +8755,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         rotation_replay_order_dims.size() != 2 ||
         rotation_replay_order_dims[0] != image_dims[0] ||
         rotation_replay_order_dims[1] != posterior_dims[1] ||
+        rotation_replay_count_dims.size() != 1 ||
+        rotation_replay_count_dims[0] != image_dims[0] ||
         denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
         denominator_dims[1] != posterior_dims[1] || denominator_dims[2] != pixel_count)
         return ffi::Error::InvalidArgument(
@@ -8771,6 +8800,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<const int32_t*>(worker_lane_ids.untyped_data()),
         static_cast<const int32_t*>(particle_trace_ids.untyped_data()),
         static_cast<const int32_t*>(rotation_replay_order.untyped_data()),
+        static_cast<const int32_t*>(rotation_replay_counts.untyped_data()),
         static_cast<float*>(data_real_volume_out->untyped_data()),
         static_cast<float*>(data_imag_volume_out->untyped_data()),
         static_cast<float*>(weight_volume_out->untyped_data()),
@@ -8814,6 +8844,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("float64_accumulator_replay")
         .Attr<int64_t>("reverse_rotation_replay")
         .Attr<int64_t>("rotation_replay_stride")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

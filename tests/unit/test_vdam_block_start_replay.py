@@ -144,6 +144,22 @@ def test_captured_block_grid_keeps_concurrent_launches(tmp_path, monkeypatch):
     )
 
 
+def test_captured_native_grid_returns_exact_per_particle_counts(tmp_path, monkeypatch):
+    schedule, chronology = _write_inputs(tmp_path)
+    _configure(monkeypatch, schedule, chronology, topology="captured_native_grid")
+
+    counts = local_em_engine._relion_vdam_native_grid_counts_for_images(
+        _Dataset(),
+        np.asarray([1, 0], dtype=np.int64),
+        rotation_count=5,
+        valid_rotation_counts=np.asarray([3, 3]),
+        debug_iteration=1,
+    )
+    np.testing.assert_array_equal(counts, np.asarray([3, 3], dtype=np.int32))
+    assert local_em_engine._relion_vdam_block_start_replay_active(debug_iteration=1)
+    assert not local_em_engine._relion_vdam_captured_block_serial_replay()
+
+
 def test_block_start_replay_rejects_a_different_rotation_bucket(tmp_path, monkeypatch):
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology)

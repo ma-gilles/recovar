@@ -94,7 +94,8 @@ if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   test "${WORKER_TRACE_REPLAY}" = 1
   test "${TARGET_ITERATION}" -eq 1
   test "${WORKER_REPLAY_TOPOLOGY}" = captured -o \
-    "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid
   test "${CANDIDATE_BLOCK_TRACE_CAPACITY}" -ge 1
 fi
 if [[ "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 1 ]]; then
@@ -111,9 +112,11 @@ fi
 if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
   test "${BLOCK_TRACE_CAPTURE}" = 1
   test "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start -o \
-    "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid
 elif [[ "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start || \
-        "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid ]]; then
+        "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid || \
+        "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid ]]; then
   echo "captured block topology requires native block tracing in the same arm" >&2
   exit 2
 fi

@@ -112,6 +112,8 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "captured_rotation_replay" in projector_launcher
     assert "captured_rotation_replay && !serial_rotation_replay" in projector_launcher
     assert "rotation_replay_order + particle * rotation_count" in projector_launcher
+    assert "rotation_replay_counts_host[particle]" in projector_launcher
+    assert "particle_rotation_count" in projector_launcher
     assert "if (captured_rotation_replay && serial_rotation_replay)" in projector_launcher
     assert "captured_rotation_replay != 0 && serial_rotation_replay == 0" not in source
     assert "seen[rotation] = 1" in projector_launcher
@@ -156,6 +158,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "rotation_replay_stride=np.int64(rotation_replay_stride)" in projector_wrapper
     assert "worker_lane_ids" in projector_wrapper
     assert "rotation_replay_order" in projector_wrapper
+    assert "rotation_replay_counts" in projector_wrapper
     assert "particle_trace_ids" in projector_wrapper
 
     engine_source = inspect.getsource(local_em_engine.run_local_em_exact)
@@ -780,9 +783,24 @@ def test_relion_vdam_captured_rotation_order_matches_reverse_replay(
             rotation_replay_order=jnp.asarray([[1, 0]], dtype=jnp.int32),
             **options,
         )
-        jax.block_until_ready((reverse, captured))
+        single_common = common[:5] + (common[5].at[:, 0, :].set(0.0),) + common[6:]
+        full_zero_padded = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *single_common,
+            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+        )
+        exact_native_grid = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *single_common,
+            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+            rotation_replay_order=jnp.asarray([[1, 0]], dtype=jnp.int32),
+            rotation_replay_counts=jnp.asarray([1], dtype=jnp.int32),
+        )
+        jax.block_until_ready(
+            (reverse, captured, full_zero_padded, exact_native_grid)
+        )
 
     for expected, actual in zip(reverse, captured, strict=True):
+        np.testing.assert_array_equal(actual, expected)
+    for expected, actual in zip(full_zero_padded, exact_native_grid, strict=True):
         np.testing.assert_array_equal(actual, expected)
 
 
