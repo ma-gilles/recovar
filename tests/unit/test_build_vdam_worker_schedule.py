@@ -179,7 +179,7 @@ def test_v2_schedule_can_also_serialize_rotations(tmp_path, monkeypatch):
     class Dataset:
         @staticmethod
         def original_image_indices_from_local(image_indices):
-            return np.asarray([71], dtype=np.int64)
+            raise AssertionError("single_rotation must not join later subsets to iteration 1")
 
     monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV, str(schedule))
     monkeypatch.setenv(
@@ -188,9 +188,9 @@ def test_v2_schedule_can_also_serialize_rotations(tmp_path, monkeypatch):
     )
     local_em_engine._load_relion_vdam_worker_schedule.cache_clear()
     lanes = local_em_engine._relion_vdam_worker_lanes_for_images(
-        Dataset(), np.asarray([0], dtype=np.int64)
+        Dataset(), np.asarray([0, 1, 2], dtype=np.int64)
     )
-    np.testing.assert_array_equal(lanes, np.zeros(1, dtype=np.int32))
+    np.testing.assert_array_equal(lanes, np.zeros(3, dtype=np.int32))
     assert local_em_engine._relion_vdam_serial_rotation_replay()
 
 

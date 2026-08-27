@@ -418,6 +418,16 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
     if not path:
         return None
     owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology == "single_rotation":
+        # This diagnostic intentionally discards captured owners and serializes
+        # every particle and orientation block.  The v2 trace still gets fully
+        # schema-validated above, but later VDAM iterations may select particles
+        # that were not present in the iteration-1 trace.
+        return np.zeros(np.asarray(image_indices).shape, dtype=np.int32)
     original_indices = np.asarray(
         experiment_dataset.original_image_indices_from_local(image_indices),
         dtype=np.int64,
@@ -433,11 +443,7 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
             "VDAM worker replay is missing selected stack indices "
             f"{missing[:8].tolist()}"
         )
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
-    if topology in {"single", "single_rotation"}:
+    if topology == "single":
         owners = np.zeros_like(owners)
     elif topology != "captured":
         raise ValueError(
