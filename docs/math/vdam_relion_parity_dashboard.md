@@ -25,11 +25,23 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 reduction-mode panel `13020545`; GF38 full audit `13018631`; GF53 final audit `12999424_53`: all terminal |
-| Latest focused discriminator | GF47 same-H100 panel rejects both generic EM reduction toggles; source audit confirms the active VDAM direct kernel already matches RELION's sequential-translation/fused-scatter topology |
+| Latest qualification | GF47 exact worker-owner replay `13023005`; reduction-mode panel `13020545`; GF38 full audit `13018631`: all terminal |
+| Latest focused discriminator | Exact native stack-ID/worker ownership and every per-worker particle chain were replayed; this does not improve GF47, leaving concurrent eight-host-worker launch timing as the only untested scheduling distinction |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
-Last scientific update: **2026-08-26 22:38 ET**
+#### Frozen case checkboxes
+
+A check means the complete strict map, particle-state, and pre-divergence
+schedule contract passes. Runtime remains open for every row.
+
+|  |  |  |  |  |
+|---|---|---|---|---|
+| [ ] GF43 | [x] GF44 | [x] GF45 | [ ] GF46 | [ ] GF47 |
+| [ ] GF48 | [ ] GF49 | [ ] GF50 | [ ] GF51 | [ ] GF52 |
+| [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
+| [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
+
+Last scientific update: **2026-08-26 23:34 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -57,7 +69,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; iteration-1 map rel-L2 is `2.47e-7`, then Pmax splits @2 and a pose splits @34 | job `13020545` plus source audit localizes the next test to native dynamic worker/stream scheduling versus RECOVAR's static `particle % 8` lanes | none until the iteration-1 update is repeatable and a 0--200 audit passes |
+| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; exact owner replay preserves all eight native per-worker chains but does not improve raw BPref or reconstruction | job `13023005` closes owner identity/order; concurrent eight-host-worker issue is now the final scheduling discriminator before the post-BPref momentum boundary | none until the iteration-1 update is repeatable and a 0--200 audit passes |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -76,6 +88,26 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+GF47 exact worker-owner replay `13023005` completed successfully in 39 seconds
+on one H100 from local unpushed RECOVAR commit `be58f92d7` and instrumented
+RELION source `2359a63b`. Trace-v2 records both RELION's internal particle ID
+and the zero-based stack-image ID; its 200 stack IDs match RECOVAR's selected
+set exactly. Every one of the eight per-worker particle sequences also matches
+RECOVAR's replay sequence exactly. The sealed trace and schedule SHA-256 values
+are `d8608c5db639...` and `5b51f8add792...`. Despite that exact ownership and
+within-worker order, replay does not improve the paired iteration-1 boundary:
+raw half-0 BPref data relative-L2 is `9.60e-6`, weight is `2.22e-6`,
+`mom1_noise_power` is `1.78e-5`, and the reconstructed reference is
+`1.81e-6`. Those values are outside or at the worse edge of the two production
+controls (`7.18--8.97e-6`, `1.62--1.77e-6`, `4.84--7.76e-6`, and
+`1.54--1.56e-6`, respectively). Static ownership/stream-chain mismatch is
+therefore rejected. RELION still launches those exact chains from eight
+concurrent CPU workers, while RECOVAR issued them from one controller thread;
+that host-issue concurrency is the next and last scheduling discriminator.
+No score is promoted. The failed four-second predecessor `13022326` is an
+instrumentation-only schema rejection before RECOVAR science and is not a
+parity outcome.
 
 GF47 same-H100 reduction-mode panel `13020545` completed in 217 seconds from
 local unpushed source `bdef96dcc`. Each of production, fused/block topology,
