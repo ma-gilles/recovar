@@ -47,6 +47,7 @@ SHA-256 values.
 | Latest short boundary | materialized-order + native-epilogue panel `13038186` completed both exact frozen seed-29 arms in 90 s | exact `GPU-6222...`; reference **passes** at `0.978x / 0.967x`, earning full-trajectory qualification but not a score change |
 | Latest full qualification | science `13038307` completed all 201 checkpoints; audit `13040047` is terminal fail-closed | first failures: schedule @58, particle @61, map @80; runtime **7.79x** native; score remains **2/20** |
 | First-particle cause | exact it61 capture `13042355`; H100 operand replay `13043203` completed | **iteration-start map state**, not support, priors, image preprocessing, projector construction, noise weighting, or posterior math |
+| Reference-clamp discriminator | exact-H100 task `13044790_2` / science step `13045526` completed 61 checkpoints in 377 s | **0 particle failures through it61**; all 61 replayed maps bitwise exact; operative schedule fields match |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -87,7 +88,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 11:09 ET**
+Last scientific update: **2026-08-27 11:43 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -115,7 +116,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 inherited map state before particle @61 | exact it61 support, rotations, masks, and priors match; replacing only the reference projection reproduces the winner reversal | capture `13042355` + replay `13043203`: RELION margin `+0.000427`, RECOVAR margin `-0.016907`; source is the it60 map | none; trace the map discrepancy to the earliest reconstruction/update boundary before another 0--200 run |
+| 1 | GF47 reconstruction/update substage | clamping only post-M-step references to native repeat 1 keeps all particles and operative schedule fields on that trajectory through it61 | exact-H100 `13044790_2` / `13045526`: 61/61 maps bitwise exact, zero divergent particles, target 604 returns to native pose | none; split raw BPref, moment state, and reconstructGrad at the late pre-failure M-step |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -134,6 +135,32 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+The inherited-map diagnosis now survives a trajectory-level intervention.
+Local science commit `76ce63d7e` adds a fail-closed diagnostic that replaces
+only each post-M-step reference from an explicit native-map template; all
+RECOVAR E-step, posterior, particle, sampling, momentum, noise, and controller
+state remains live. Exact-physical-H100 task `13044790_2` (science step
+`13045526`) completed iterations 1--61 in 377 seconds. All 61 replayed map
+arrays are bitwise equal to sealed native repeat 1, and the particle audit has
+**zero divergent particles at every checkpoint**. Minimum pose and translation
+match fractions are both `1.0`; at iteration 61 their maximum errors are only
+`9.96e-6` degrees and `7.07e-6` Angstrom. The failed target
+`604@particles.128.mrcs` returns to the native pose
+`(28.248272, 65.322480, 116.388917)` with Pmax `0.493008`.
+
+Every operative sampling field matches through iteration 61. The generic
+sampling audit reports only the known inactive iteration-1 accuracy fields;
+current size/resolution, Healpix order, offset range/step, optimal-offset
+change, perturbation, update decision, prior mode, and translation topology
+have no mismatch. Three additional same-state, same-H100 native continuations
+also choose the same target pose; the candidate pose is not a missing sample
+from the original four-repeat envelope. Particle, sampling, and fused-capture
+SHA-256 values are `0e2037c782f7...`, `6d2d53585437...`, and
+`c3211dd8559d...`. This closes the causal branch to the reconstruction-produced
+reference trajectory. The next bounded work splits raw BPref accumulation,
+gradient moments, and `reconstructGrad` at the latest pre-failure M-step. The
+frozen score remains **2/20** and no acceptance rule changed.
 
 The first GF47 particle failure now has a closed score-level explanation.
 Exact same-physical-H100 job `13042355` continued sealed native repeat 1 and
