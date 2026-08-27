@@ -63,6 +63,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     import inspect
 
     from recovar import cuda_backproject
+    from recovar.em.dense_single_volume import local_em_engine
 
     source = (
         Path(__file__).resolve().parents[2]
@@ -143,6 +144,10 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "rotation_replay_stride=np.int64(rotation_replay_stride)" in projector_wrapper
     assert "worker_lane_ids" in projector_wrapper
     assert "rotation_replay_order" in projector_wrapper
+
+    engine_source = inspect.getsource(local_em_engine.run_local_em_exact)
+    assert "Native launches every row in its padded significant-" in engine_source
+    assert "_build_reconstruction_pack_indices(" in engine_source
 
 
 @pytest.mark.gpu

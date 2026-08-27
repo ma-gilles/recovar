@@ -495,24 +495,14 @@ def _relion_vdam_block_start_orders_for_images(
 ) -> np.ndarray | None:
     """Resolve captured native block-start order for its exact traced iteration."""
 
-    topology = os.environ.get(
-        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured",
-    ).strip().lower()
-    if topology != "captured_block_start":
+    if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
         return None
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
     chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
-    if not schedule_path or not chronology_path:
-        raise ValueError(
-            "captured_block_start requires sealed worker schedule and block chronology NPZs"
-        )
-    trace_iteration, dataset_particles, orders = _load_relion_vdam_block_start_orders(
+    _, dataset_particles, orders = _load_relion_vdam_block_start_orders(
         schedule_path,
         chronology_path,
     )
-    if debug_iteration is None or int(debug_iteration) != trace_iteration:
-        return None
     original_indices = np.asarray(
         experiment_dataset.original_image_indices_from_local(image_indices),
         dtype=np.int64,
@@ -530,9 +520,48 @@ def _relion_vdam_block_start_orders_for_images(
             "captured block replay is missing selected stack indices "
             f"{missing[:8].tolist()}"
         )
-    if any(order.size != rotation_count for order in selected_orders):
-        raise ValueError("captured block replay rotation count differs from the current bucket")
-    return np.stack(selected_orders, axis=0).astype(np.int32, copy=False)
+    if any(order.size > rotation_count for order in selected_orders):
+        native_counts = sorted({int(order.size) for order in selected_orders})
+        raise ValueError(
+            "captured block replay native rotation count exceeds the current bucket: "
+            f"native={native_counts} candidate={rotation_count}"
+        )
+    expanded_orders = []
+    for order in selected_orders:
+        # RECOVAR's static bucket can be larger than RELION's per-particle
+        # eight-row-padded launch. Rows beyond the native launch carry zero
+        # posterior; append them after the complete measured native order.
+        if order.size < rotation_count:
+            order = np.concatenate(
+                (
+                    order,
+                    np.arange(order.size, rotation_count, dtype=np.int32),
+                )
+            )
+        expanded_orders.append(order)
+    return np.stack(expanded_orders, axis=0).astype(np.int32, copy=False)
+
+
+def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bool:
+    """Return whether this call is the exact iteration represented by the seal."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology != "captured_block_start":
+        return False
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    if not schedule_path or not chronology_path:
+        raise ValueError(
+            "captured_block_start requires sealed worker schedule and block chronology NPZs"
+        )
+    trace_iteration, _, _ = _load_relion_vdam_block_start_orders(
+        schedule_path,
+        chronology_path,
+    )
+    return debug_iteration is not None and int(debug_iteration) == trace_iteration
 
 
 def _relion_vdam_worker_lanes_for_images(
@@ -552,11 +581,7 @@ def _relion_vdam_worker_lanes_for_images(
         "captured",
     ).strip().lower()
     if topology == "captured_block_start":
-        chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
-        if not chronology_path:
-            raise ValueError("captured_block_start requires a sealed block chronology NPZ")
-        trace_iteration, _, _ = _load_relion_vdam_block_start_orders(path, chronology_path)
-        if debug_iteration is None or int(debug_iteration) != trace_iteration:
+        if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
             return None
     if topology in {
         "single_rotation",
@@ -4586,17 +4611,36 @@ def run_local_em_exact(
                 packed_flat_rotations = None
             elif return_source_vdam_operands:
                 probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
-                (
-                    reconstruction_take_indices,
-                    reconstruction_pack_mask_np,
-                    _,
-                    reconstruction_row_count,
-                ) = _build_nonzero_reconstruction_pack_indices(
-                    reconstruction_rotation_mask_np,
-                    local_mask_np,
-                    probs_sum_t_np,
-                    rotation_block_size,
-                )
+                if _relion_vdam_block_start_replay_active(
+                    debug_iteration=debug_iteration
+                ):
+                    # Native launches every row in its padded significant-
+                    # orientation grid, including rows whose posterior is zero.
+                    # The production optimization below removes those no-op
+                    # blocks; retain them only for exact captured chronology
+                    # replay so native row IDs and launch timing remain aligned.
+                    (
+                        reconstruction_take_indices,
+                        reconstruction_pack_mask_np,
+                        _,
+                        reconstruction_row_count,
+                    ) = _build_reconstruction_pack_indices(
+                        reconstruction_rotation_mask_np,
+                        local_mask_np,
+                        rotation_block_size,
+                    )
+                else:
+                    (
+                        reconstruction_take_indices,
+                        reconstruction_pack_mask_np,
+                        _,
+                        reconstruction_row_count,
+                    ) = _build_nonzero_reconstruction_pack_indices(
+                        reconstruction_rotation_mask_np,
+                        local_mask_np,
+                        probs_sum_t_np,
+                        rotation_block_size,
+                    )
                 reconstruction_take_indices_jnp = jnp.asarray(
                     reconstruction_take_indices,
                     dtype=jnp.int32,

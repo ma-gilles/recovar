@@ -93,6 +93,10 @@ def test_block_start_replay_is_confined_to_the_traced_iteration(tmp_path, monkey
         )
         is None
     )
+    assert not local_em_engine._relion_vdam_block_start_replay_active(
+        debug_iteration=2
+    )
+    assert local_em_engine._relion_vdam_block_start_replay_active(debug_iteration=1)
     assert (
         local_em_engine._relion_vdam_worker_lanes_for_images(
             _Dataset(),
@@ -107,7 +111,7 @@ def test_block_start_replay_rejects_a_different_rotation_bucket(tmp_path, monkey
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology)
 
-    with pytest.raises(ValueError, match="rotation count differs"):
+    with pytest.raises(ValueError, match="native rotation count exceeds"):
         local_em_engine._relion_vdam_block_start_orders_for_images(
             _Dataset(),
             np.asarray([0], dtype=np.int64),
@@ -137,3 +141,49 @@ def test_block_start_replay_rejects_nonbijective_orientations(tmp_path, monkeypa
             rotation_count=3,
             debug_iteration=1,
         )
+
+
+def test_captured_replay_preserves_zero_posterior_native_grid_rows():
+    significant = np.asarray([[True, True, True, True]], dtype=bool)
+    local = np.asarray([[True, True, True, True]], dtype=bool)
+    posterior_sum = np.asarray([[1.0, 0.0, 2.0, 0.0]], dtype=np.float64)
+
+    full_indices, full_mask, _, _ = local_em_engine._build_reconstruction_pack_indices(
+        significant,
+        local,
+        4,
+    )
+    sparse_indices, sparse_mask, _, _ = (
+        local_em_engine._build_nonzero_reconstruction_pack_indices(
+            significant,
+            local,
+            posterior_sum,
+            4,
+        )
+    )
+    assert full_indices.shape == sparse_indices.shape == (1, 16)
+    np.testing.assert_array_equal(full_indices[0, :4], np.asarray([0, 1, 2, 3]))
+    np.testing.assert_array_equal(full_mask[0, :4], np.ones(4, dtype=bool))
+    np.testing.assert_array_equal(sparse_indices[0, :4], np.asarray([0, 2, 0, 0]))
+    np.testing.assert_array_equal(
+        sparse_mask[0, :4],
+        np.asarray([True, True, False, False]),
+    )
+    assert not np.any(full_mask[0, 4:])
+    assert not np.any(sparse_mask[0, 4:])
+
+
+def test_block_start_replay_appends_static_bucket_padding(tmp_path, monkeypatch):
+    schedule, chronology = _write_inputs(tmp_path)
+    _configure(monkeypatch, schedule, chronology)
+
+    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+        _Dataset(),
+        np.asarray([0], dtype=np.int64),
+        rotation_count=5,
+        debug_iteration=1,
+    )
+    np.testing.assert_array_equal(
+        orders,
+        np.asarray([[1, 2, 0, 3, 4]], dtype=np.int32),
+    )
