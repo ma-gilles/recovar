@@ -22,6 +22,9 @@ VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY
 VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER"
 VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_BIN"
 VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER"
+VDAM_NATIVE_BPREF_DATA_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_BPREF_DATA_REPLAY_BIN"
+VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_BPREF_WEIGHT_REPLAY_BIN"
+VDAM_NATIVE_BPREF_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_BPREF_REPLAY_ITER"
 
 
 def _get_bindings():
@@ -127,6 +130,69 @@ def _read_native_complex_replay(path: Path, *, expected_shape: tuple[int, ...]) 
     return replay
 
 
+def _read_native_real_replay(path: Path, *, expected_shape: tuple[int, ...]) -> np.ndarray:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with path.open("rb") as stream:
+        shape = np.fromfile(stream, dtype=np.int64, count=3)
+        replay = np.fromfile(stream, dtype=np.float64)
+    if shape.size != 3 or np.any(shape <= 0):
+        raise ValueError(f"{path}: invalid three-int64 shape header")
+    value_count = int(np.prod(shape, dtype=np.int64))
+    if replay.size != value_count:
+        raise ValueError(f"{path}: expected {value_count} float64 values, got {replay.size}")
+    replay = replay.reshape(tuple(int(value) for value in shape))
+    if replay.shape != expected_shape:
+        raise ValueError(f"{path}: replay shape {replay.shape} does not match {expected_shape}")
+    if not np.all(np.isfinite(replay)):
+        raise ValueError(f"{path}: replay contains non-finite values")
+    return replay
+
+
+def _maybe_replay_native_bpref_accumulators(
+    accum_h0: VdamAccumulator,
+    accum_h1: VdamAccumulator | None,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> tuple[VdamAccumulator, VdamAccumulator | None]:
+    """Replay paired native raw BPref buffers for causal diagnosis."""
+
+    data_template = os.environ.get(VDAM_NATIVE_BPREF_DATA_REPLAY_ENV, "").strip()
+    weight_template = os.environ.get(VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV, "").strip()
+    if bool(data_template) != bool(weight_template):
+        raise ValueError("native BPref replay requires both data and weight templates")
+    if not data_template or not _replay_iteration_selected(
+        VDAM_NATIVE_BPREF_REPLAY_ITER_ENV, iteration
+    ):
+        return accum_h0, accum_h1
+
+    outputs = []
+    accumulators = (accum_h0,) if accum_h1 is None else (accum_h0, accum_h1)
+    for halfset, accumulator in enumerate(accumulators):
+        fields = {
+            "iteration": int(iteration),
+            "class_idx": int(class_idx),
+            "halfset": halfset,
+            "half_suffix": "" if halfset == 0 else "_h",
+        }
+        data_path = Path(data_template.format(**fields))
+        weight_path = Path(weight_template.format(**fields))
+        outputs.append(
+            replace(
+                accumulator,
+                data=_read_native_complex_replay(
+                    data_path, expected_shape=np.asarray(accumulator.data).shape
+                ),
+                weight=_read_native_real_replay(
+                    weight_path, expected_shape=np.asarray(accumulator.weight).shape
+                ),
+            )
+        )
+    replay_h1 = None if accum_h1 is None else outputs[1]
+    return outputs[0], replay_h1
+
+
 def _maybe_replay_native_first_moments(
     computed_h0: np.ndarray,
     computed_h1: np.ndarray | None,
@@ -209,6 +275,12 @@ def vdam_m_step_single_class(
         raise ValueError("pseudo_halfsets=True requires accum_h1")
     if not state.pseudo_halfsets and accum_h1 is not None:
         raise ValueError("pseudo_halfsets=False must have accum_h1=None")
+    accum_h0, accum_h1 = _maybe_replay_native_bpref_accumulators(
+        accum_h0,
+        accum_h1,
+        iteration=int(getattr(state, "iter", 0)),
+        class_idx=k,
+    )
     if not _has_relion_reconstruction_weight(state, k, accum_h0):
         return state
 

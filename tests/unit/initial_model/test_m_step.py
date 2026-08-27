@@ -164,6 +164,48 @@ def test_native_first_moment_replay_supports_all_iterations_and_halfsets(
         np.testing.assert_array_equal(replay_h1, expected[iteration, 1])
 
 
+def test_native_bpref_replay_supports_all_iterations_and_halfsets(tmp_path, monkeypatch):
+    shape = (3, 4, 5)
+    accumulators = tuple(
+        VdamAccumulator(
+            data=np.zeros(shape, dtype=np.complex128),
+            weight=np.zeros(shape, dtype=np.float64),
+            class_idx=0,
+            halfset_idx=halfset,
+        )
+        for halfset in (0, 1)
+    )
+    data_template = tmp_path / "native_bpref_data_it{iteration}{half_suffix}.bin"
+    weight_template = tmp_path / "native_bpref_weight_it{iteration}{half_suffix}.bin"
+    expected = {}
+    for iteration in (1, 2):
+        for halfset, suffix in enumerate(("", "_h")):
+            data = np.full(shape, iteration + 10j * (halfset + 1))
+            weight = np.full(shape, iteration + 100 * (halfset + 1), dtype=np.float64)
+            expected[iteration, halfset] = (data, weight)
+            with (tmp_path / f"native_bpref_data_it{iteration}{suffix}.bin").open(
+                "wb"
+            ) as stream:
+                np.asarray(shape, dtype=np.int64).tofile(stream)
+                data.reshape(-1).view(np.float64).tofile(stream)
+            with (tmp_path / f"native_bpref_weight_it{iteration}{suffix}.bin").open(
+                "wb"
+            ) as stream:
+                np.asarray(shape, dtype=np.int64).tofile(stream)
+                weight.tofile(stream)
+
+    monkeypatch.setenv(m_step.VDAM_NATIVE_BPREF_DATA_REPLAY_ENV, str(data_template))
+    monkeypatch.setenv(m_step.VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV, str(weight_template))
+    monkeypatch.setenv(m_step.VDAM_NATIVE_BPREF_REPLAY_ITER_ENV, "all")
+    for iteration in (1, 2):
+        replay_h0, replay_h1 = m_step._maybe_replay_native_bpref_accumulators(
+            *accumulators, iteration=iteration, class_idx=0
+        )
+        for halfset, replay in enumerate((replay_h0, replay_h1)):
+            np.testing.assert_array_equal(replay.data, expected[iteration, halfset][0])
+            np.testing.assert_array_equal(replay.weight, expected[iteration, halfset][1])
+
+
 def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch):
     ori = 16
     state = initialise_denovo_state(
