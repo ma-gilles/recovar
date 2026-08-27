@@ -9,6 +9,7 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -358,6 +359,43 @@ RELION_VDAM_WORKER_SCHEDULE_ENV = "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
 RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY"
 RELION_VDAM_BLOCK_CHRONOLOGY_ENV = "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ"
 VDAM_CANDIDATE_BLOCK_TRACE_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE"
+VDAM_CANDIDATE_BLOCK_MAP_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP"
+VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_ITER"
+VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPACITY"
+VDAM_CANDIDATE_BLOCK_MAP_MAGIC = b"RECOVAR_VDAMBM1\0"
+VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE = np.dtype(
+    [
+        ("magic", "S16"),
+        ("schema_version", "<u4"),
+        ("header_size", "<u4"),
+        ("record_size", "<u4"),
+        ("iteration", "<u4"),
+        ("record_count", "<u8"),
+        ("capacity", "<u8"),
+        ("reserved0", "<u8"),
+        ("reserved1", "<u8"),
+    ]
+)
+VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE = np.dtype(
+    [
+        ("particle_id", "<i8"),
+        ("candidate_orientation_row", "<u4"),
+        ("native_orientation_row", "<u4"),
+        ("global_rotation_id", "<i4"),
+        ("class_id", "<i4"),
+        ("reconstruction_group_id", "<i4"),
+        ("iteration", "<u4"),
+        ("flags", "<u4"),
+        ("reserved", "<u4"),
+    ]
+)
+VDAM_CANDIDATE_BLOCK_MAP_VALID = np.uint32(1 << 0)
+VDAM_CANDIDATE_BLOCK_MAP_INVALID_ROW = np.iinfo(np.uint32).max
+if (
+    VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize != 64
+    or VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize != 40
+):
+    raise RuntimeError("VDAM candidate block-map binary schema has an invalid item size")
 DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
 DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
@@ -653,6 +691,168 @@ def _relion_vdam_candidate_trace_ids_for_images(experiment_dataset, image_indice
     ):
         raise ValueError("candidate block trace stack index is outside int32 range")
     return original_indices.astype(np.int32, copy=False)
+
+
+def _maybe_write_vdam_candidate_block_map(
+    *,
+    particle_ids,
+    reconstruction_take_indices,
+    reconstruction_pack_mask,
+    local_rotation_ids,
+    reconstruction_group_ids,
+    debug_iteration: int | None,
+) -> None:
+    """Append the exact compact-row to native-local-row mapping for one bucket."""
+
+    path_text = os.environ.get(VDAM_CANDIDATE_BLOCK_MAP_ENV, "").strip()
+    if not path_text:
+        return
+    if not os.environ.get(VDAM_CANDIDATE_BLOCK_TRACE_ENV, "").strip():
+        raise ValueError("candidate block-map capture requires passive block tracing")
+    iteration_text = os.environ.get(
+        VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV,
+        "",
+    ).strip()
+    if not iteration_text:
+        raise ValueError("candidate block-map capture requires an explicit iteration")
+    try:
+        target_iteration = int(iteration_text)
+    except ValueError as exc:
+        raise ValueError("candidate block-map iteration must be an integer") from exc
+    if target_iteration <= 0:
+        raise ValueError("candidate block-map iteration must be positive")
+    if debug_iteration is None or int(debug_iteration) != target_iteration:
+        return
+    capacity_text = os.environ.get(
+        VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV,
+        "1000000",
+    ).strip()
+    try:
+        capacity = int(capacity_text)
+    except ValueError as exc:
+        raise ValueError("candidate block-map capacity must be an integer") from exc
+    if capacity <= 0:
+        raise ValueError("candidate block-map capacity must be positive")
+
+    particle_ids = np.asarray(particle_ids, dtype=np.int64)
+    take_indices = np.asarray(reconstruction_take_indices, dtype=np.int64)
+    pack_mask = np.asarray(reconstruction_pack_mask, dtype=bool)
+    local_rotation_ids = np.asarray(local_rotation_ids, dtype=np.int64)
+    if take_indices.ndim != 2 or pack_mask.shape != take_indices.shape:
+        raise ValueError("candidate block-map packed row arrays must have matching rank-two shapes")
+    particle_count, candidate_count = take_indices.shape
+    if particle_ids.shape != (particle_count,):
+        raise ValueError("candidate block-map particle IDs must match the packed particle axis")
+    if local_rotation_ids.ndim != 2 or local_rotation_ids.shape[0] != particle_count:
+        raise ValueError("candidate block-map local rotation IDs must match the particle axis")
+    if np.any(particle_ids < 0):
+        raise ValueError("candidate block-map particle IDs must be nonnegative")
+    if np.any(pack_mask & ((take_indices < 0) | (take_indices >= local_rotation_ids.shape[1]))):
+        raise ValueError("candidate block-map valid native rows are out of range")
+    if reconstruction_group_ids is None:
+        reconstruction_group_ids = np.zeros((particle_count,), dtype=np.int32)
+    else:
+        reconstruction_group_ids = np.asarray(reconstruction_group_ids, dtype=np.int64)
+        if reconstruction_group_ids.shape != (particle_count,):
+            raise ValueError("candidate block-map reconstruction groups must match particles")
+        if np.any(
+            (reconstruction_group_ids < np.iinfo(np.int32).min)
+            | (reconstruction_group_ids > np.iinfo(np.int32).max)
+        ):
+            raise ValueError("candidate block-map reconstruction group is outside int32")
+
+    safe_take_indices = np.where(pack_mask, take_indices, 0)
+    global_rotation_ids = np.take_along_axis(
+        local_rotation_ids,
+        safe_take_indices,
+        axis=1,
+    )
+    if np.any(pack_mask & ((global_rotation_ids < 0) | (global_rotation_ids > np.iinfo(np.int32).max))):
+        raise ValueError("candidate block-map global rotation ID is outside int32")
+    records = np.zeros(
+        particle_count * candidate_count,
+        dtype=VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE,
+    )
+    records["particle_id"] = np.repeat(particle_ids, candidate_count)
+    records["candidate_orientation_row"] = np.tile(
+        np.arange(candidate_count, dtype=np.uint32),
+        particle_count,
+    )
+    records["native_orientation_row"] = np.where(
+        pack_mask,
+        take_indices,
+        VDAM_CANDIDATE_BLOCK_MAP_INVALID_ROW,
+    ).astype(np.uint32, copy=False).ravel()
+    records["global_rotation_id"] = np.where(
+        pack_mask,
+        global_rotation_ids,
+        -1,
+    ).astype(np.int32, copy=False).ravel()
+    records["class_id"] = 0
+    records["reconstruction_group_id"] = np.repeat(
+        reconstruction_group_ids.astype(np.int32, copy=False),
+        candidate_count,
+    )
+    records["iteration"] = np.uint32(target_iteration)
+    records["flags"] = np.where(
+        pack_mask.ravel(),
+        VDAM_CANDIDATE_BLOCK_MAP_VALID,
+        np.uint32(0),
+    )
+
+    output_path = Path(path_text).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        with output_path.open("rb") as stream:
+            header_payload = stream.read(VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize)
+        if len(header_payload) != VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize:
+            raise ValueError("candidate block-map file has a truncated header")
+        header = np.frombuffer(
+            header_payload,
+            dtype=VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE,
+            count=1,
+        ).copy()
+        row = header[0]
+        if bytes(row["magic"]) != VDAM_CANDIDATE_BLOCK_MAP_MAGIC.rstrip(b"\0"):
+            raise ValueError("candidate block-map file has invalid magic")
+        if (
+            int(row["schema_version"]) != 1
+            or int(row["header_size"]) != VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
+            or int(row["record_size"]) != VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
+            or int(row["iteration"]) != target_iteration
+            or int(row["capacity"]) != capacity
+            or int(row["reserved0"]) != 0
+            or int(row["reserved1"]) != 0
+        ):
+            raise ValueError("candidate block-map header does not match this capture")
+        old_count = int(row["record_count"])
+        expected_size = (
+            VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
+            + old_count * VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
+        )
+        if output_path.stat().st_size != expected_size:
+            raise ValueError("candidate block-map file is truncated or has trailing bytes")
+    else:
+        header = np.zeros(1, dtype=VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE)
+        header["magic"] = VDAM_CANDIDATE_BLOCK_MAP_MAGIC
+        header["schema_version"] = 1
+        header["header_size"] = VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
+        header["record_size"] = VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
+        header["iteration"] = target_iteration
+        header["capacity"] = capacity
+        output_path.write_bytes(header.tobytes())
+        old_count = 0
+    new_count = old_count + int(records.size)
+    if new_count > capacity:
+        raise ValueError("candidate block-map capture exceeds its declared capacity")
+    with output_path.open("r+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        stream.write(records.tobytes())
+        stream.flush()
+        header["record_count"] = new_count
+        stream.seek(0)
+        stream.write(header.tobytes())
+        stream.flush()
 
 
 def _relion_vdam_serial_rotation_replay() -> bool:
@@ -4971,6 +5171,22 @@ def run_local_em_exact(
                 ):
                     raise RuntimeError("source VDAM physical operands were not packed")
                 adjoint_t0 = time.time()
+                candidate_trace_ids = _relion_vdam_candidate_trace_ids_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                )
+                _maybe_write_vdam_candidate_block_map(
+                    particle_ids=candidate_trace_ids,
+                    reconstruction_take_indices=reconstruction_take_indices,
+                    reconstruction_pack_mask=reconstruction_pack_mask_np,
+                    local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
+                    reconstruction_group_ids=(
+                        None
+                        if bucket_reconstruction_group_ids is None
+                        else bucket_reconstruction_group_ids[:unpadded_batch_size]
+                    ),
+                    debug_iteration=debug_iteration,
+                )
                 block_start_order = _relion_vdam_block_start_orders_for_images(
                     experiment_dataset,
                     unpadded_bucket.image_indices,
@@ -5007,10 +5223,7 @@ def run_local_em_exact(
                         unpadded_bucket.image_indices,
                         debug_iteration=debug_iteration,
                     ),
-                    particle_trace_ids=_relion_vdam_candidate_trace_ids_for_images(
-                        experiment_dataset,
-                        unpadded_bucket.image_indices,
-                    ),
+                    particle_trace_ids=candidate_trace_ids,
                     serial_rotation_replay=(
                         _relion_vdam_serial_rotation_replay()
                         or block_start_order is not None

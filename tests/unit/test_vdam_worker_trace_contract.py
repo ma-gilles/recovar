@@ -80,3 +80,17 @@ def test_native_block_capture_is_independent_of_serial_replay_topology():
     assert 'if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then' in runner
     assert 'if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then' in runner
     assert 'test "${BLOCK_TRACE_CAPTURE}" = 1' in runner
+
+
+def test_fullschedule_boundary_seals_candidate_to_native_block_map():
+    runner = (ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+    required = [
+        "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPTURE",
+        "export RECOVAR_VDAM_CANDIDATE_BLOCK_MAP=${CANDIDATE_BLOCK_MAP}",
+        "scripts.build_vdam_candidate_block_map",
+        '--candidate-chronology "${CANDIDATE_BLOCK_CHRONOLOGY}"',
+        '--native-chronology "${BLOCK_CHRONOLOGY}"',
+        '--worker-schedule "${WORKER_SCHEDULE}"',
+    ]
+    for text in required:
+        assert text in runner
