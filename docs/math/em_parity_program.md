@@ -29848,3 +29848,12 @@ supported PPref representation.  Ruff, the focused provenance unit suite,
 `fa67d15e6abdf98f4c17d668703047ff14908464816781a1eb4253cb939c6124`;
 launcher SHA-256 is
 `33da1fbc3c868809e714532f208e78389ef9d2b445df3531fd80025125ba9b69`.
+
+The scheduler records parent job `13046857` as `FAILED 1:0`, but this is a
+post-science wrapper failure rather than a RELION failure.  Its
+`relion_refine_mpi` step completed `0:0` after `01:11:47` and wrote all capture
+artifacts.  The parent then failed while launching
+`audit_relion_control_reproducibility.py`: that audit imported RECOVAR from an
+unbound Python environment and raised `ModuleNotFoundError: recovar`.  The
+direct Iref/PPref analyses above used the completed immutable capture and
+passed their own provenance gates; no scientific rerun is required.
