@@ -73,6 +73,12 @@ mkdir -p "$(dirname "${REPORT}")"
 "${PIXI_PY}" -m scripts.analyze_vdam_mstep_repeat_panel \
   --arm-a "${PANEL_ROOT}/a" --arm-b "${PANEL_ROOT}/b" \
   --iteration "${TARGET_ITERATION}" --output-json "${REPORT}"
+if [[ "${RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPTURE:-0}" = 1 ]]; then
+  "${PIXI_PY}" -m scripts.analyze_vdam_mapped_block_chronology \
+    --panel-root "${PANEL_ROOT}" \
+    --output-json "${PANEL_ROOT}/analysis/mapped_block_chronology_panel.json"
+  test -s "${PANEL_ROOT}/analysis/mapped_block_chronology_panel.json"
+fi
 
 test -s "${REPORT}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
@@ -80,6 +86,7 @@ test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${RECOVAR_CUDA_LIB_SOURCE}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 sha256sum "${REPORT}" \
   "${REPO_ROOT}/scripts/analyze_vdam_mstep_repeat_panel.py" \
+  "${REPO_ROOT}/scripts/analyze_vdam_mapped_block_chronology.py" \
   "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_repeat_panel.sbatch" \
   > "${PANEL_ROOT}/analysis/evidence.sha256"
