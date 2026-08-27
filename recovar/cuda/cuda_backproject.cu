@@ -39,6 +39,7 @@
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -4976,6 +4977,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const int32_t* particle_trace_ids,
     const int32_t* rotation_replay_order,
     const int32_t* rotation_replay_counts,
+    const int32_t* particle_start_offsets_ns,
     float* data_real_volume,
     float* data_imag_volume,
     float* weight_volume,
@@ -5003,6 +5005,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     bool reverse_rotation_replay,
     int rotation_replay_stride,
     bool native_trace_shape_replay,
+    bool captured_particle_timing_replay,
     bool candidate_trace_active)
 {
     const int padded_max_r = static_cast<int>(floorf(
@@ -5034,6 +5037,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int32_t* particle_trace_ids_host = nullptr;
     int32_t* rotation_replay_order_host = nullptr;
     int32_t* rotation_replay_counts_host = nullptr;
+    int32_t* particle_start_offsets_ns_host = nullptr;
     VdamCandidateBlockTraceRecord* candidate_trace_records = nullptr;
     VdamCandidateBlockTraceWriter* candidate_trace_writer =
         &vdam_candidate_block_trace_writer();
@@ -5048,7 +5052,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     double* weight_volume_f64 = nullptr;
     if ((candidate_trace_requested && !candidate_trace_writer->healthy()) ||
         (candidate_trace_requested && native_trace_shape_replay) ||
-        (device_trace_requested && serial_rotation_replay))
+        (device_trace_requested && serial_rotation_replay) ||
+        (captured_particle_timing_replay && parallel_worker_replay))
         return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
@@ -5253,6 +5258,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&rotation_replay_counts_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
         if (err != cudaSuccess) goto cleanup;
+        if (captured_particle_timing_replay)
+        {
+            err = cudaMallocHost(
+                reinterpret_cast<void**>(&particle_start_offsets_ns_host),
+                static_cast<size_t>(n_particles) * sizeof(int32_t));
+            if (err != cudaSuccess) goto cleanup;
+        }
         err = cudaMemcpyAsync(
             reconstruction_groups_host,
             reconstruction_group_ids,
@@ -5294,6 +5306,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             cudaMemcpyDeviceToHost,
             stream);
         if (err != cudaSuccess) goto cleanup;
+        if (captured_particle_timing_replay)
+        {
+            err = cudaMemcpyAsync(
+                particle_start_offsets_ns_host,
+                particle_start_offsets_ns,
+                static_cast<size_t>(n_particles) * sizeof(int32_t),
+                cudaMemcpyDeviceToHost,
+                stream);
+            if (err != cudaSuccess) goto cleanup;
+        }
         err = cudaStreamSynchronize(stream);
         if (err != cudaSuccess) goto cleanup;
         for (int64_t particle = 0; particle < n_particles; ++particle)
@@ -5317,6 +5339,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             }
             if (rotation_replay_counts_host[particle] <= 0 ||
                 rotation_replay_counts_host[particle] > rotation_count)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            if (captured_particle_timing_replay &&
+                particle_start_offsets_ns_host[particle] < 0)
             {
                 err = cudaErrorInvalidValue;
                 goto cleanup;
@@ -5557,6 +5585,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         else
         {
             bool lane_started[kRelionVdamWorkerStreams] = {};
+            const auto particle_timing_epoch = std::chrono::steady_clock::now();
             for (int64_t particle = 0; particle < n_particles; ++particle)
             {
                 const int lane = worker_lanes_host[particle];
@@ -5564,6 +5593,20 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 {
                     err = cudaStreamSynchronize(particle_streams[lane]);
                     if (err != cudaSuccess) goto cleanup;
+                }
+                if (captured_particle_timing_replay)
+                {
+                    // Pace host launches with the native first-block offsets.
+                    // Waiting here avoids consuming SMs with delay kernels and
+                    // keeps particle operands, owners, and launch order fixed.
+                    const auto target = particle_timing_epoch +
+                        std::chrono::nanoseconds(
+                            particle_start_offsets_ns_host[particle]);
+                    constexpr auto spin_guard = std::chrono::microseconds(50);
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now + spin_guard < target)
+                        std::this_thread::sleep_until(target - spin_guard);
+                    while (std::chrono::steady_clock::now() < target) {}
                 }
                 err = launch_particle(particle, lane);
                 if (err != cudaSuccess) goto cleanup;
@@ -5650,6 +5693,7 @@ cleanup:
     if (particle_trace_ids_host) cudaFreeHost(particle_trace_ids_host);
     if (rotation_replay_order_host) cudaFreeHost(rotation_replay_order_host);
     if (rotation_replay_counts_host) cudaFreeHost(rotation_replay_counts_host);
+    if (particle_start_offsets_ns_host) cudaFreeHost(particle_start_offsets_ns_host);
     if (candidate_trace_records) cudaFree(candidate_trace_records);
     if (data_real_volume_f64) cudaFree(data_real_volume_f64);
     if (data_imag_volume_f64) cudaFree(data_imag_volume_f64);
@@ -8697,6 +8741,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t reverse_rotation_replay,
     int64_t rotation_replay_stride,
     int64_t native_trace_shape_replay,
+    int64_t captured_particle_timing_replay,
     int64_t candidate_trace_active,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
@@ -8711,6 +8756,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     ffi::AnyBuffer particle_trace_ids,
     ffi::AnyBuffer rotation_replay_order,
     ffi::AnyBuffer rotation_replay_counts,
+    ffi::AnyBuffer particle_start_offsets_ns,
     ffi::AnyBuffer data_real_volume_in,
     ffi::AnyBuffer data_imag_volume_in,
     ffi::AnyBuffer weight_volume_in,
@@ -8736,6 +8782,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         particle_trace_ids.element_type() != ffi::DataType::S32 ||
         rotation_replay_order.element_type() != ffi::DataType::S32 ||
         rotation_replay_counts.element_type() != ffi::DataType::S32 ||
+        particle_start_offsets_ns.element_type() != ffi::DataType::S32 ||
         weight_volume_in.element_type() != ffi::DataType::F32 ||
         weight_volume_out->element_type() != ffi::DataType::F32 ||
         denominator_sum->element_type() != ffi::DataType::F32)
@@ -8752,10 +8799,13 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         (float64_accumulator_replay != 0 && float64_accumulator_replay != 1) ||
         (reverse_rotation_replay != 0 && reverse_rotation_replay != 1) ||
         (native_trace_shape_replay != 0 && native_trace_shape_replay != 1) ||
+        (captured_particle_timing_replay != 0 &&
+         captured_particle_timing_replay != 1) ||
         (candidate_trace_active != 0 && candidate_trace_active != 1) ||
         rotation_replay_stride < 0 ||
         (captured_rotation_replay != 0 && reverse_rotation_replay != 0) ||
         (captured_rotation_replay != 0 && rotation_replay_stride != 0) ||
+        (captured_particle_timing_replay != 0 && parallel_worker_replay != 0) ||
         (rotation_replay_stride > 0 && serial_rotation_replay == 0) ||
         (rotation_replay_stride > 0 && reverse_rotation_replay != 0))
         return ffi::Error::InvalidArgument(
@@ -8774,6 +8824,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const auto particle_trace_dims = particle_trace_ids.dimensions();
     const auto rotation_replay_order_dims = rotation_replay_order.dimensions();
     const auto rotation_replay_count_dims = rotation_replay_counts.dimensions();
+    const auto particle_start_offset_dims = particle_start_offsets_ns.dimensions();
     const auto denominator_dims = denominator_sum->dimensions();
     const int64_t pixel_count = image_h * image_w;
     if (projector_dims.size() != 3 || projector_dims[0] <= 0 ||
@@ -8799,6 +8850,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         rotation_replay_order_dims[1] != posterior_dims[1] ||
         rotation_replay_count_dims.size() != 1 ||
         rotation_replay_count_dims[0] != image_dims[0] ||
+        particle_start_offset_dims.size() != 1 ||
+        particle_start_offset_dims[0] != image_dims[0] ||
         denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
         denominator_dims[1] != posterior_dims[1] || denominator_dims[2] != pixel_count)
         return ffi::Error::InvalidArgument(
@@ -8843,6 +8896,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<const int32_t*>(particle_trace_ids.untyped_data()),
         static_cast<const int32_t*>(rotation_replay_order.untyped_data()),
         static_cast<const int32_t*>(rotation_replay_counts.untyped_data()),
+        static_cast<const int32_t*>(particle_start_offsets_ns.untyped_data()),
         static_cast<float*>(data_real_volume_out->untyped_data()),
         static_cast<float*>(data_imag_volume_out->untyped_data()),
         static_cast<float*>(weight_volume_out->untyped_data()),
@@ -8860,6 +8914,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         reverse_rotation_replay != 0,
         static_cast<int>(rotation_replay_stride),
         native_trace_shape_replay != 0,
+        captured_particle_timing_replay != 0,
         candidate_trace_active != 0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
@@ -8889,7 +8944,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("reverse_rotation_replay")
         .Attr<int64_t>("rotation_replay_stride")
         .Attr<int64_t>("native_trace_shape_replay")
+        .Attr<int64_t>("captured_particle_timing_replay")
         .Attr<int64_t>("candidate_trace_active")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

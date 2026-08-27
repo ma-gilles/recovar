@@ -52,14 +52,16 @@ if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
     test "$(sha256sum "${VDAM_WORKER_SCHEDULE_NPZ}" | awk '{print $1}')" = \
         "${EXPECTED_WORKER_SCHEDULE_SHA256}"
     case "${VDAM_WORKER_REPLAY_TOPOLOGY}" in
-        captured|single|single_rotation|single_rotation_f64|single_rotation_reverse|single_rotation_sm132|captured_block_start|captured_block_grid|captured_native_grid|captured_native_count|captured_native_trace_shape|captured_native_grid_trace_shape|materialized_native_grid_trace_shape) ;;
+        captured|single|single_rotation|single_rotation_f64|single_rotation_reverse|single_rotation_sm132|captured_particle_issue|captured_particle_timing|captured_block_start|captured_block_grid|captured_native_grid|captured_native_count|captured_native_trace_shape|captured_native_grid_trace_shape|materialized_native_grid_trace_shape) ;;
         *) echo "unsupported worker replay topology: ${VDAM_WORKER_REPLAY_TOPOLOGY}" >&2; exit 2 ;;
     esac
 elif [[ -n "${VDAM_WORKER_REPLAY_TOPOLOGY}" || -n "${EXPECTED_WORKER_SCHEDULE_SHA256}" ]]; then
     echo "worker replay topology/hash requires VDAM_WORKER_SCHEDULE_NPZ" >&2
     exit 2
 fi
-if [[ "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_block_start" || \
+if [[ "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_particle_issue" || \
+      "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_particle_timing" || \
+      "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_block_start" || \
       "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_block_grid" || \
       "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_native_grid" || \
       "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_native_count" || \

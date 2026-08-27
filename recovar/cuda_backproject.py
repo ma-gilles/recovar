@@ -1737,7 +1737,7 @@ def relion_vdam_mstep_fused_x_half(
 
 @functools.partial(
     jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 20, 21, 22, 23, 24, 25, 26),
+    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27),
 )
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
@@ -1760,6 +1760,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     particle_trace_ids: jax.Array | None = None,
     rotation_replay_order: jax.Array | None = None,
     rotation_replay_counts: jax.Array | None = None,
+    particle_start_offsets_ns: jax.Array | None = None,
     serial_rotation_replay: bool = False,
     float64_accumulator_replay: bool = False,
     reverse_rotation_replay: bool = False,
@@ -1875,6 +1876,15 @@ def relion_vdam_mstep_fused_projector_x_half(
             raise TypeError("rotation_replay_counts must be int32")
         if rotation_replay_counts.shape != (n_particles,):
             raise ValueError("rotation_replay_counts must match the particle axis")
+    captured_particle_timing_replay = particle_start_offsets_ns is not None
+    if particle_start_offsets_ns is None:
+        particle_start_offsets_ns = jnp.zeros((n_particles,), dtype=jnp.int32)
+    else:
+        particle_start_offsets_ns = jnp.asarray(particle_start_offsets_ns)
+        if particle_start_offsets_ns.dtype != jnp.int32:
+            raise TypeError("particle_start_offsets_ns must be int32")
+        if particle_start_offsets_ns.shape != (n_particles,):
+            raise ValueError("particle_start_offsets_ns must match the particle axis")
     _ensure_ffi()
 
     dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
@@ -1916,7 +1926,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
         _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
         output_types,
-        input_output_aliases={13: 0, 14: 1, 15: 2},
+        input_output_aliases={14: 0, 15: 1, 16: 2},
         vmap_method="sequential",
     )(
         projector_full,
@@ -1932,6 +1942,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         particle_trace_ids,
         rotation_replay_order,
         rotation_replay_counts,
+        particle_start_offsets_ns,
         data_real_volume,
         data_imag_volume,
         weight_volume,
@@ -1953,6 +1964,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         reverse_rotation_replay=np.int64(reverse_rotation_replay),
         rotation_replay_stride=np.int64(rotation_replay_stride),
         native_trace_shape_replay=np.int64(native_trace_shape_replay),
+        captured_particle_timing_replay=np.int64(captured_particle_timing_replay),
         candidate_trace_active=np.int64(candidate_trace_active),
     )
     fused_data = jax.lax.complex(fused_real, fused_imag)

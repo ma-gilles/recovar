@@ -142,6 +142,10 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "VdamCandidateBlockTraceRecord* candidate_trace_records = nullptr" in projector_launcher
     assert "candidate_trace_records + particle * rotation_count" in projector_launcher
     assert "Keep tracing passive" in projector_launcher
+    assert "particle_start_offsets_ns_host" in projector_launcher
+    assert "particle_timing_epoch" in projector_launcher
+    assert "std::this_thread::sleep_until(target - spin_guard)" in projector_launcher
+    assert "captured_particle_timing_replay && parallel_worker_replay" in projector_launcher
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
@@ -165,6 +169,8 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "worker_lane_ids" in projector_wrapper
     assert "rotation_replay_order" in projector_wrapper
     assert "rotation_replay_counts" in projector_wrapper
+    assert "particle_start_offsets_ns" in projector_wrapper
+    assert "captured_particle_timing_replay=np.int64" in projector_wrapper
     assert "particle_trace_ids" in projector_wrapper
     assert "candidate_trace_active=np.int64(candidate_trace_active)" in projector_wrapper
 

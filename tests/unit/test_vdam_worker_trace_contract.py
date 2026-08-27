@@ -71,6 +71,7 @@ def test_fullschedule_boundary_can_seal_passive_candidate_block_chronology():
         "scripts.analyze_vdam_particle_issue_chronology",
         "--native-chronology \"${REPLAY_BLOCK_CHRONOLOGY}\"",
         '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue',
+        '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing',
         'test "${WORKER_REPLAY_TOPOLOGY}" = captured',
     ]
     for text in required:

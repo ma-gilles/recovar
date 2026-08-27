@@ -617,6 +617,61 @@ def _load_relion_vdam_particle_issue_ranks(
     return schedule_iteration, dataset_particles, issue_rank_by_stack_index
 
 
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_particle_start_offsets_ns(
+    worker_schedule_path: str,
+    chronology_path: str,
+) -> tuple[int, int, np.ndarray]:
+    """Join native first-block timestamps to dense stack-index offsets."""
+
+    trace_iteration, dataset_particles, issue_ranks = (
+        _load_relion_vdam_particle_issue_ranks(
+            worker_schedule_path,
+            chronology_path,
+        )
+    )
+    with np.load(worker_schedule_path, allow_pickle=False) as schedule:
+        internal_ids = np.asarray(
+            schedule["internal_particle_id_by_sorted_position"], dtype=np.int64
+        )
+        stack_indices = np.asarray(
+            schedule["stack_index_by_sorted_position"], dtype=np.int64
+        )
+    with np.load(chronology_path, allow_pickle=False) as chronology:
+        records = np.asarray(chronology["records"])
+    if records.dtype.names is None or "block_start_globaltimer" not in records.dtype.names:
+        raise ValueError("captured particle timing chronology has no block-start timestamps")
+
+    starts_by_issue_rank = np.empty(internal_ids.size, dtype=np.uint64)
+    stack_by_issue_rank = np.empty(internal_ids.size, dtype=np.int64)
+    for internal_id, stack_index in zip(internal_ids.tolist(), stack_indices.tolist()):
+        rows = records[records["particle_id"] == internal_id]
+        starts = rows["block_start_globaltimer"]
+        starts = starts[starts > 0]
+        if starts.size == 0:
+            raise ValueError("captured particle timing has no valid block start")
+        issue_rank = int(issue_ranks[int(stack_index)])
+        starts_by_issue_rank[issue_rank] = np.min(starts)
+        stack_by_issue_rank[issue_rank] = int(stack_index)
+
+    # NVIDIA's %globaltimer timestamps are nanoseconds.  The first native
+    # launch is also the earliest launch in the sealed trace; retain the tiny
+    # measured cross-stream inversions rather than changing their identities.
+    first_start = int(starts_by_issue_rank[0])
+    offsets_by_issue_rank = np.asarray(
+        [int(start) - first_start for start in starts_by_issue_rank],
+        dtype=np.int64,
+    )
+    if np.any(offsets_by_issue_rank < 0):
+        raise ValueError("captured particle timing precedes the first launch")
+    if np.any(offsets_by_issue_rank > np.iinfo(np.int32).max):
+        raise ValueError("captured particle timing exceeds the int32 nanosecond range")
+    offsets_by_stack_index = np.full(dataset_particles, -1, dtype=np.int32)
+    offsets_by_stack_index[stack_by_issue_rank] = offsets_by_issue_rank.astype(np.int32)
+    offsets_by_stack_index.setflags(write=False)
+    return trace_iteration, dataset_particles, offsets_by_stack_index
+
+
 def _relion_vdam_particle_issue_order_for_images(
     experiment_dataset,
     image_indices,
@@ -629,7 +684,7 @@ def _relion_vdam_particle_issue_order_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology != "captured_particle_issue":
+    if topology not in {"captured_particle_issue", "captured_particle_timing"}:
         return None
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
     chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
@@ -660,6 +715,49 @@ def _relion_vdam_particle_issue_order_for_images(
     if np.unique(selected_ranks).size != selected_ranks.size:
         raise ValueError("captured particle issue ranks are not unique")
     return np.argsort(selected_ranks, kind="stable").astype(np.int32, copy=False)
+
+
+def _relion_vdam_particle_start_offsets_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Return native first-block offsets for the exact sealed iteration."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology != "captured_particle_timing":
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    if not schedule_path or not chronology_path:
+        raise ValueError(
+            "captured particle timing requires sealed worker schedule and chronology NPZs"
+        )
+    trace_iteration, dataset_particles, offsets = (
+        _load_relion_vdam_particle_start_offsets_ns(schedule_path, chronology_path)
+    )
+    if debug_iteration is None or int(debug_iteration) != trace_iteration:
+        return None
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("captured particle timing image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("captured particle timing image index is outside the traced dataset")
+    selected_offsets = offsets[original_indices]
+    if np.any(selected_offsets < 0):
+        missing = original_indices[selected_offsets < 0]
+        raise ValueError(
+            "captured particle timing is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    return selected_offsets.astype(np.int32, copy=False)
 
 
 def _relion_vdam_block_start_orders_for_images(
@@ -810,6 +908,7 @@ def _relion_vdam_worker_lanes_for_images(
     owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
     if topology in {
         "captured_particle_issue",
+        "captured_particle_timing",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -818,7 +917,7 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_native_grid_trace_shape",
         "materialized_native_grid_trace_shape",
     }:
-        if topology == "captured_particle_issue":
+        if topology in {"captured_particle_issue", "captured_particle_timing"}:
             if (
                 _relion_vdam_particle_issue_order_for_images(
                     experiment_dataset,
@@ -863,6 +962,7 @@ def _relion_vdam_worker_lanes_for_images(
     elif topology not in {
         "captured",
         "captured_particle_issue",
+        "captured_particle_timing",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -875,6 +975,7 @@ def _relion_vdam_worker_lanes_for_images(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
             "'single_rotation_sm132', 'captured_particle_issue', 'captured_block_start', "
+            "'captured_particle_timing', "
             "'captured_block_grid', 'captured_native_grid', or "
             "'captured_native_count', 'captured_native_trace_shape', or "
             "'captured_native_grid_trace_shape', or "
@@ -1474,6 +1575,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     rotation_replay_stride=0,
     rotation_replay_order=None,
     rotation_replay_counts=None,
+    particle_start_offsets_ns=None,
     native_trace_shape_replay=False,
     materialized_rotation_replay=False,
     particle_replay_order=None,
@@ -1563,6 +1665,12 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 particle_replay_order,
                 axis=0,
             )
+        if particle_start_offsets_ns is not None:
+            particle_start_offsets_ns = jnp.take(
+                jnp.asarray(particle_start_offsets_ns, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
     posterior_over_weight_norm = jnp.where(
         row_mask[..., None],
         posterior_over_weight_norm,
@@ -1643,6 +1751,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 rotation_replay_stride=rotation_replay_stride,
                 rotation_replay_order=rotation_replay_order,
                 rotation_replay_counts=rotation_replay_counts,
+                particle_start_offsets_ns=particle_start_offsets_ns,
                 native_trace_shape_replay=native_trace_shape_replay,
                 parallel_worker_replay=(
                     False if particle_replay_order is not None else None
@@ -5683,6 +5792,13 @@ def run_local_em_exact(
                     unpadded_bucket.image_indices,
                     debug_iteration=debug_iteration,
                 )
+                particle_start_offsets_ns = (
+                    _relion_vdam_particle_start_offsets_for_images(
+                        experiment_dataset,
+                        unpadded_bucket.image_indices,
+                        debug_iteration=debug_iteration,
+                    )
+                )
                 if _relion_vdam_identity_native_grid_replay():
                     # RELION launches physical block IDs directly.  Preserve its
                     # sealed per-particle grid cardinality without translating
@@ -5748,6 +5864,7 @@ def run_local_em_exact(
                     rotation_replay_stride=_relion_vdam_rotation_replay_stride(),
                     rotation_replay_order=block_start_order,
                     rotation_replay_counts=native_grid_counts,
+                    particle_start_offsets_ns=particle_start_offsets_ns,
                     native_trace_shape_replay=(
                         _relion_vdam_native_trace_shape_replay(
                             debug_iteration=debug_iteration

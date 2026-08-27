@@ -24,6 +24,7 @@ def _clear_worker_replay(monkeypatch):
     )
     local_em_engine._load_relion_vdam_worker_schedule.cache_clear()
     local_em_engine._load_relion_vdam_particle_issue_ranks.cache_clear()
+    local_em_engine._load_relion_vdam_particle_start_offsets_ns.cache_clear()
 
 
 class _IndexDataset:
@@ -58,15 +59,17 @@ def _write_particle_issue_seals(tmp_path, *, launch_sequences=(2, 0, 1)):
             ("launch_sequence", "<u8"),
             ("particle_id", "<i8"),
             ("worker_id", "<i4"),
+            ("block_start_globaltimer", "<u8"),
         ],
     )
     for position, (internal_id, owner, launch_sequence) in enumerate(
         zip(internal_ids, owners, launch_sequences)
     ):
-        records[2 * position : 2 * position + 2] = (
-            launch_sequence,
-            internal_id,
-            owner,
+        records["launch_sequence"][2 * position : 2 * position + 2] = launch_sequence
+        records["particle_id"][2 * position : 2 * position + 2] = internal_id
+        records["worker_id"][2 * position : 2 * position + 2] = owner
+        records["block_start_globaltimer"][2 * position : 2 * position + 2] = (
+            1_000 + launch_sequence * 250
         )
     np.savez(
         chronology_path,
@@ -79,10 +82,16 @@ def _write_particle_issue_seals(tmp_path, *, launch_sequences=(2, 0, 1)):
     return schedule_path, chronology_path
 
 
-def _enable_particle_issue_replay(monkeypatch, schedule_path, chronology_path):
+def _enable_particle_issue_replay(
+    monkeypatch,
+    schedule_path,
+    chronology_path,
+    *,
+    topology="captured_particle_issue",
+):
     monkeypatch.setenv(
         local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured_particle_issue",
+        topology,
     )
     monkeypatch.setenv(
         local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV,
@@ -249,6 +258,75 @@ def test_captured_particle_issue_replay_joins_stack_ids_and_orders_bucket(
     np.testing.assert_array_equal(owners, np.asarray([2, 0, 1], dtype=np.int32))
 
 
+def test_captured_particle_timing_joins_native_offsets_and_issue_order(
+    monkeypatch,
+    tmp_path,
+):
+    _clear_worker_replay(monkeypatch)
+    schedule_path, chronology_path = _write_particle_issue_seals(tmp_path)
+    _enable_particle_issue_replay(
+        monkeypatch,
+        schedule_path,
+        chronology_path,
+        topology="captured_particle_timing",
+    )
+    dataset = _IndexDataset([4, 1, 7])
+
+    offsets = local_em_engine._relion_vdam_particle_start_offsets_for_images(
+        dataset,
+        np.arange(3, dtype=np.int64),
+        debug_iteration=58,
+    )
+    order = local_em_engine._relion_vdam_particle_issue_order_for_images(
+        dataset,
+        np.arange(3, dtype=np.int64),
+        debug_iteration=58,
+    )
+
+    np.testing.assert_array_equal(offsets, np.asarray([500, 0, 250], dtype=np.int32))
+    np.testing.assert_array_equal(order, np.asarray([1, 2, 0], dtype=np.int32))
+    assert (
+        local_em_engine._relion_vdam_particle_start_offsets_for_images(
+            dataset,
+            np.arange(3, dtype=np.int64),
+            debug_iteration=57,
+        )
+        is None
+    )
+
+
+def test_captured_particle_timing_rejects_start_before_first_launch(
+    monkeypatch,
+    tmp_path,
+):
+    _clear_worker_replay(monkeypatch)
+    schedule_path, chronology_path = _write_particle_issue_seals(tmp_path)
+    with np.load(chronology_path, allow_pickle=False) as sealed:
+        records = np.asarray(sealed["records"]).copy()
+    records["block_start_globaltimer"][records["launch_sequence"] == 1] = 999
+    np.savez(
+        chronology_path,
+        schema_version=np.asarray(1),
+        iteration=np.asarray(58),
+        n_particles=np.asarray(3),
+        n_threads=np.asarray(8),
+        records=records,
+    )
+    _enable_particle_issue_replay(
+        monkeypatch,
+        schedule_path,
+        chronology_path,
+        topology="captured_particle_timing",
+    )
+
+    with pytest.raises(ValueError, match="precedes the first launch"):
+        local_em_engine._relion_vdam_particle_start_offsets_for_images(
+            _IndexDataset([4, 1, 7]),
+            np.arange(3, dtype=np.int64),
+            debug_iteration=58,
+        )
+
+
 def test_captured_particle_issue_replay_only_targets_sealed_iteration(
     monkeypatch,
     tmp_path,
@@ -327,6 +405,7 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
         captured["workers"] = np.asarray(kwargs["worker_lane_ids"])
         captured["trace_ids"] = np.asarray(kwargs["particle_trace_ids"])
         captured["rotation_counts"] = np.asarray(kwargs["rotation_replay_counts"])
+        captured["start_offsets"] = np.asarray(kwargs["particle_start_offsets_ns"])
         captured["parallel"] = kwargs["parallel_worker_replay"]
         return args[0], args[1], None
 
@@ -364,6 +443,7 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
         worker_lane_ids=np.asarray([4, 5, 6], dtype=np.int32),
         particle_trace_ids=np.asarray([100, 200, 300], dtype=np.int32),
         rotation_replay_counts=np.asarray([11, 22, 33], dtype=np.int32),
+        particle_start_offsets_ns=np.asarray([100, 200, 300], dtype=np.int32),
         particle_replay_order=np.asarray([1, 2, 0], dtype=np.int32),
     )
 
@@ -377,6 +457,7 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
     np.testing.assert_array_equal(captured["workers"], [5, 6, 4])
     np.testing.assert_array_equal(captured["trace_ids"], [200, 300, 100])
     np.testing.assert_array_equal(captured["rotation_counts"], [22, 33, 11])
+    np.testing.assert_array_equal(captured["start_offsets"], [200, 300, 100])
     assert captured["parallel"] is False
 
 
