@@ -1737,7 +1737,7 @@ def relion_vdam_mstep_fused_x_half(
 
 @functools.partial(
     jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 20, 21, 22, 23, 24),
+    static_argnums=(10, 11, 12, 13, 14, 20, 21, 22, 23, 24, 25),
 )
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
@@ -1765,6 +1765,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     reverse_rotation_replay: bool = False,
     rotation_replay_stride: int = 0,
     native_trace_shape_replay: bool = False,
+    parallel_worker_replay: bool | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Project, form residuals, and scatter VDAM rows in one native launch."""
 
@@ -1828,7 +1829,11 @@ def relion_vdam_mstep_fused_projector_x_half(
         if data_volume.shape != weight_volume.shape or data_volume.shape[0] <= 0:
             raise ValueError("grouped VDAM accumulators must have matching nonempty shapes")
         reconstruction_group_count = int(data_volume.shape[0])
-    parallel_worker_replay = worker_lane_ids is not None
+    captured_worker_lanes = worker_lane_ids is not None
+    if parallel_worker_replay is None:
+        parallel_worker_replay = captured_worker_lanes
+    else:
+        parallel_worker_replay = bool(parallel_worker_replay)
     if worker_lane_ids is None:
         worker_lane_ids = jnp.arange(n_particles, dtype=jnp.int32) % 8
     else:

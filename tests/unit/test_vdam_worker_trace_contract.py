@@ -37,9 +37,9 @@ def test_fullschedule_boundary_can_replay_the_same_native_worker_trace():
     required = [
         "RELION_VDAM_WORKER_TRACE_REPLAY",
         "export RELION_VDAM_WORKER_LOG=${WORKER_TRACE}",
-        "export RELION_VDAM_WORKER_TRACE_ITER=1",
+        "export RELION_VDAM_WORKER_TRACE_ITER=${WORKER_TRACE_ITERATION}",
         "scripts.build_vdam_worker_schedule",
-        "export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${WORKER_SCHEDULE}",
+        "export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${CANDIDATE_WORKER_SCHEDULE}",
     ]
     for text in required:
         assert text in runner
@@ -53,7 +53,7 @@ def test_fullschedule_boundary_seals_and_replays_each_native_block_chronology():
         "export RELION_VDAM_BLOCK_TRACE_ITER=1",
         "scripts.build_vdam_block_chronology",
         "captured block topology requires native block tracing in the same arm",
-        "export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${BLOCK_CHRONOLOGY}",
+        "export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${CANDIDATE_BLOCK_CHRONOLOGY}",
         "export RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY=${WORKER_REPLAY_TOPOLOGY}",
     ]
     for text in required:

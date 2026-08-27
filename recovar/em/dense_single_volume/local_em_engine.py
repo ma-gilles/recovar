@@ -528,6 +528,139 @@ def _load_relion_vdam_block_start_orders(
     return schedule_iteration, dataset_particles, tuple(orders)
 
 
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_particle_issue_ranks(
+    worker_schedule_path: str,
+    chronology_path: str,
+) -> tuple[int, int, np.ndarray]:
+    """Join native launch sequence to a dense stack-index issue-rank map."""
+
+    with np.load(worker_schedule_path, allow_pickle=False) as schedule:
+        schedule_schema = int(np.asarray(schedule["schema_version"]).item())
+        schedule_iteration = int(np.asarray(schedule["iteration"]).item())
+        dataset_particles = int(np.asarray(schedule["dataset_particles"]).item())
+        n_threads = int(np.asarray(schedule["n_threads"]).item())
+        internal_ids = np.asarray(
+            schedule["internal_particle_id_by_sorted_position"], dtype=np.int64
+        )
+        stack_indices = np.asarray(
+            schedule["stack_index_by_sorted_position"], dtype=np.int64
+        )
+        owners = np.asarray(
+            schedule["owner_by_sorted_position"], dtype=np.int64
+        )
+    with np.load(chronology_path, allow_pickle=False) as chronology:
+        chronology_schema = int(np.asarray(chronology["schema_version"]).item())
+        chronology_iteration = int(np.asarray(chronology["iteration"]).item())
+        chronology_particles = int(np.asarray(chronology["n_particles"]).item())
+        chronology_threads = int(np.asarray(chronology["n_threads"]).item())
+        records = np.asarray(chronology["records"])
+    if schedule_schema != 2 or chronology_schema != 1:
+        raise ValueError("captured particle issue replay requires worker v2 and chronology v1")
+    if schedule_iteration != chronology_iteration:
+        raise ValueError("worker schedule and particle chronology iterations differ")
+    if (
+        dataset_particles <= 0
+        or chronology_particles != internal_ids.size
+        or n_threads != RELION_VDAM_WORKER_STREAM_COUNT
+        or chronology_threads != n_threads
+    ):
+        raise ValueError("captured particle issue replay topology differs")
+    if (
+        internal_ids.ndim != 1
+        or stack_indices.shape != internal_ids.shape
+        or owners.shape != internal_ids.shape
+        or np.unique(internal_ids).size != internal_ids.size
+        or np.unique(stack_indices).size != stack_indices.size
+        or np.any(stack_indices < 0)
+        or np.any(stack_indices >= dataset_particles)
+        or np.any(owners < 0)
+        or np.any(owners >= n_threads)
+    ):
+        raise ValueError("captured particle issue replay join keys are invalid")
+    required_fields = {"launch_sequence", "particle_id", "worker_id"}
+    if records.ndim != 1 or records.dtype.names is None or not required_fields.issubset(
+        records.dtype.names
+    ):
+        raise ValueError("captured particle issue chronology has an invalid schema")
+    if not np.array_equal(np.unique(records["particle_id"]), np.sort(internal_ids)):
+        raise ValueError("captured particle issue internal particle IDs differ")
+
+    stack_by_internal = {
+        int(internal_id): int(stack_index)
+        for internal_id, stack_index in zip(internal_ids.tolist(), stack_indices.tolist())
+    }
+    owner_by_internal = {
+        int(internal_id): int(owner)
+        for internal_id, owner in zip(internal_ids.tolist(), owners.tolist())
+    }
+    issue_rank_by_stack_index = np.full(dataset_particles, -1, dtype=np.int32)
+    seen_launch_sequences: list[int] = []
+    for internal_id in internal_ids.tolist():
+        rows = records[records["particle_id"] == internal_id]
+        launch_sequences = np.unique(rows["launch_sequence"])
+        worker_ids = np.unique(rows["worker_id"])
+        if launch_sequences.size != 1 or worker_ids.size != 1:
+            raise ValueError("captured particle issue launch identity is not unique")
+        if int(worker_ids[0]) != owner_by_internal[int(internal_id)]:
+            raise ValueError("captured particle issue worker owner differs from schedule")
+        launch_sequence = int(launch_sequences[0])
+        seen_launch_sequences.append(launch_sequence)
+        issue_rank_by_stack_index[stack_by_internal[int(internal_id)]] = launch_sequence
+    if not np.array_equal(
+        np.sort(np.asarray(seen_launch_sequences, dtype=np.int64)),
+        np.arange(internal_ids.size, dtype=np.int64),
+    ):
+        raise ValueError("captured particle issue launch sequences are not a bijection")
+    issue_rank_by_stack_index.setflags(write=False)
+    return schedule_iteration, dataset_particles, issue_rank_by_stack_index
+
+
+def _relion_vdam_particle_issue_order_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Return the current particles ordered by native global launch sequence."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology != "captured_particle_issue":
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    if not schedule_path or not chronology_path:
+        raise ValueError(
+            "captured particle issue replay requires sealed worker schedule and chronology NPZs"
+        )
+    trace_iteration, dataset_particles, issue_ranks = (
+        _load_relion_vdam_particle_issue_ranks(schedule_path, chronology_path)
+    )
+    if debug_iteration is None or int(debug_iteration) != trace_iteration:
+        return None
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("captured particle issue image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("captured particle issue image index is outside the traced dataset")
+    selected_ranks = issue_ranks[original_indices]
+    if np.any(selected_ranks < 0):
+        missing = original_indices[selected_ranks < 0]
+        raise ValueError(
+            "captured particle issue replay is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    if np.unique(selected_ranks).size != selected_ranks.size:
+        raise ValueError("captured particle issue ranks are not unique")
+    return np.argsort(selected_ranks, kind="stable").astype(np.int32, copy=False)
+
+
 def _relion_vdam_block_start_orders_for_images(
     experiment_dataset,
     image_indices,
@@ -675,6 +808,7 @@ def _relion_vdam_worker_lanes_for_images(
         return None
     owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
     if topology in {
+        "captured_particle_issue",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -683,7 +817,19 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_native_grid_trace_shape",
         "materialized_native_grid_trace_shape",
     }:
-        if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
+        if topology == "captured_particle_issue":
+            if (
+                _relion_vdam_particle_issue_order_for_images(
+                    experiment_dataset,
+                    image_indices,
+                    debug_iteration=debug_iteration,
+                )
+                is None
+            ):
+                return None
+        elif not _relion_vdam_block_start_replay_active(
+            debug_iteration=debug_iteration
+        ):
             return None
     if topology in {
         "single_rotation",
@@ -715,6 +861,7 @@ def _relion_vdam_worker_lanes_for_images(
         owners = np.zeros_like(owners)
     elif topology not in {
         "captured",
+        "captured_particle_issue",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -726,7 +873,7 @@ def _relion_vdam_worker_lanes_for_images(
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
-            "'single_rotation_sm132', 'captured_block_start', "
+            "'single_rotation_sm132', 'captured_particle_issue', 'captured_block_start', "
             "'captured_block_grid', 'captured_native_grid', or "
             "'captured_native_count', 'captured_native_trace_shape', or "
             "'captured_native_grid_trace_shape', or "
@@ -1303,6 +1450,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     rotation_replay_counts=None,
     native_trace_shape_replay=False,
     materialized_rotation_replay=False,
+    particle_replay_order=None,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -1337,6 +1485,56 @@ def _accumulate_relion_vdam_physical_particle_grid(
         if reconstruction_group_ids.shape != (particle_count,):
             raise ValueError(
                 "RELION VDAM reconstruction groups must match the particle axis"
+            )
+    if particle_replay_order is not None:
+        particle_replay_order = np.asarray(particle_replay_order, dtype=np.int32)
+        if particle_replay_order.shape != (particle_count,) or not np.array_equal(
+            np.sort(particle_replay_order),
+            np.arange(particle_count, dtype=np.int32),
+        ):
+            raise ValueError("VDAM particle replay order must be a particle-axis bijection")
+        images = jnp.take(images, particle_replay_order, axis=0)
+        ctf = jnp.take(ctf, particle_replay_order, axis=0)
+        minvsigma2 = jnp.take(minvsigma2, particle_replay_order, axis=0)
+        posterior_over_weight_norm = jnp.take(
+            posterior_over_weight_norm, particle_replay_order, axis=0
+        )
+        reference = jnp.take(reference, particle_replay_order, axis=0)
+        rotations = jnp.take(rotations, particle_replay_order, axis=0)
+        row_mask = jnp.take(row_mask, particle_replay_order, axis=0)
+        if scoring_rotations is not None:
+            scoring_rotations = jnp.take(
+                jnp.asarray(scoring_rotations, dtype=jnp.float32),
+                particle_replay_order,
+                axis=0,
+            )
+        if reconstruction_group_ids is not None:
+            reconstruction_group_ids = jnp.take(
+                reconstruction_group_ids, particle_replay_order, axis=0
+            )
+        if worker_lane_ids is not None:
+            worker_lane_ids = jnp.take(
+                jnp.asarray(worker_lane_ids, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+        if particle_trace_ids is not None:
+            particle_trace_ids = jnp.take(
+                jnp.asarray(particle_trace_ids, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+        if rotation_replay_order is not None:
+            rotation_replay_order = jnp.take(
+                jnp.asarray(rotation_replay_order, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+        if rotation_replay_counts is not None:
+            rotation_replay_counts = jnp.take(
+                jnp.asarray(rotation_replay_counts, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
             )
     posterior_over_weight_norm = jnp.where(
         row_mask[..., None],
@@ -1419,6 +1617,9 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 rotation_replay_order=rotation_replay_order,
                 rotation_replay_counts=rotation_replay_counts,
                 native_trace_shape_replay=native_trace_shape_replay,
+                parallel_worker_replay=(
+                    False if particle_replay_order is not None else None
+                ),
             )
         )
     return Ft_y, Ft_ctf
@@ -5448,6 +5649,11 @@ def run_local_em_exact(
                     ),
                     debug_iteration=debug_iteration,
                 )
+                particle_issue_order = _relion_vdam_particle_issue_order_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    debug_iteration=debug_iteration,
+                )
                 if _relion_vdam_identity_native_grid_replay():
                     # RELION launches physical block IDs directly.  Preserve its
                     # sealed per-particle grid cardinality without translating
@@ -5523,6 +5729,7 @@ def run_local_em_exact(
                             debug_iteration=debug_iteration
                         )
                     ),
+                    particle_replay_order=particle_issue_order,
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
