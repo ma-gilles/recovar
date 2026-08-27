@@ -53,6 +53,7 @@ IREF_REPLAY_TEMPLATE=${RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE:-}
 REPLAY_NATIVE_REFERENCES=${VDAM_REPLAY_NATIVE_REFERENCES:-0}
 GPU_RELEASE_MAX_USED_MIB=${VDAM_GPU_RELEASE_MAX_USED_MIB:-1024}
 GPU_RELEASE_TIMEOUT_S=${VDAM_GPU_RELEASE_TIMEOUT_S:-120}
+BOUNDARY_XLA_MEM_FRACTION=${VDAM_XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}
 NATIVE_SECOND_MOMENT_REPLAY=${VDAM_NATIVE_SECOND_MOMENT_REPLAY:-0}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
@@ -100,6 +101,10 @@ test "${NATIVE_SECOND_MOMENT_REPLAY}" = 0 -o "${NATIVE_SECOND_MOMENT_REPLAY}" = 
 test "${REPLAY_NATIVE_REFERENCES}" = 0 -o "${REPLAY_NATIVE_REFERENCES}" = 1
 test "${GPU_RELEASE_MAX_USED_MIB}" -ge 0
 test "${GPU_RELEASE_TIMEOUT_S}" -ge 1
+case "${BOUNDARY_XLA_MEM_FRACTION}" in
+  0.[0-9]*|1.0) ;;
+  *) echo "VDAM_XLA_PYTHON_CLIENT_MEM_FRACTION must be in (0, 1]" >&2; exit 2 ;;
+esac
 if [[ "${REPLAY_NATIVE_REFERENCES}" = 1 ]]; then
   test -z "${IREF_REPLAY_TEMPLATE}"
   IREF_REPLAY_TEMPLATE=${RELION_OUTPUT}/run_it{iteration:03d}_class{k:03d}.mrc
@@ -219,6 +224,7 @@ unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export XLA_PYTHON_CLIENT_MEM_FRACTION=${BOUNDARY_XLA_MEM_FRACTION}
 export CUDA_LAUNCH_BLOCKING=0
 export TMPDIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
@@ -623,8 +629,8 @@ fi
 if [[ -n "${EXTERNAL_BLOCK_CHRONOLOGY}" ]]; then
   sha256sum "${EXTERNAL_BLOCK_CHRONOLOGY}" >> "${PROVENANCE}/static_inputs.sha256"
 fi
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
-  "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_GPU_UUID}" "${gpu_used_mib}" \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"xla_python_client_mem_fraction":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+  "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_GPU_UUID}" "${gpu_used_mib}" "${BOUNDARY_XLA_MEM_FRACTION}" \
   "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
