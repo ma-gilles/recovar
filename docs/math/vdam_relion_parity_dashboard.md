@@ -22,8 +22,8 @@ Frozen case-definition SHA-256:
 | What still fails? | The aggregate production raw-BPref CUDA accumulator at iteration 58. The latest state-aligned repeat has **0/3,000** selected-state divergences, so this is no longer confounded by pose/translation drift. |
 | What is now closed? | Stable stack 2707 has exact posterior support; native inverse noise is captured; translated `Fimg * CTF / sigma2` matches at **`1.06e-7`**, `CTF^2 / sigma2` at **`7.17e-8`**, and the complete same-posterior per-particle BPref volume at **`1.05e-7`** relative L2. The isolated native-GPU `AccBackprojector` comparison also closes particle scatter: data/weight relative L2 are **`5.43e-6 / 5.42e-6`** at the live-posterior floor. |
 | What did that change diagnostically? | Particle identity, topology, preprocessing, translation phase, CTF/noise weighting, effective per-particle row generation, and isolated CUDA scatter are rejected as the aggregate failure. The first unclosed production operation is now shared multi-particle accumulation. |
-| What is the active theory? | Multi-particle CUDA atomic arrival/accumulation order remains the leading cause, but generic eight-thread concurrency is rejected: iteration-scoped round-robin workers worsen all four raw data/weight errors by about **12--13%**. RELION's measured dynamic particle-to-worker ownership and resulting arrival pattern are now the narrower target. |
-| What is next? | Capture RELION's complete 3,000-particle worker ownership at iteration 58 and replay those exact owners only at iteration 58; keep the same-physical-H100 qualification queued while running the paired discriminator on an available H100. |
+| What is the active theory? | Multi-particle CUDA atomic arrival remains the leading cause, but neither generic concurrency nor exact worker identity is sufficient. Native block tracing shows that host launch sequence predicts first device admission at **`0.999994`** rank correlation; replaying that captured global particle order improves raw data/weight error by **1.9--14.2%**, but does not collapse it to the isolated-particle floor. The remaining narrow axis is cross-stream launch spacing/device overlap, not particle membership or per-worker order. |
+| What is next? | Capture the candidate chronology under global particle-order replay and compare it directly with the sealed native chronology. Use that to discriminate launch spacing/device overlap from fused-kernel resource/instruction shape before any 0--200 qualification. |
 | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No tolerance, denominator, or acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -76,6 +76,9 @@ SHA-256 values.
 | Isolated native particle accumulator | diagnostic H100 `13063621` completed in 406 s; analyzer `13063960` completed in 8 s | 3,000/3,000 states match; RECOVAR inline versus zeroed native-GPU particle BPref closes at data/weight relative L2 `5.43e-6 / 5.42e-6` with cosine `0.999999999985`; isolated scatter is closed and shared multi-particle accumulation is the first open production operation |
 | Eight-thread round-robin discriminator | full-trajectory `13064681_0`, iteration-scoped `13064951_1`, and fixed-map `13065180_0` all completed in 381--384 s | enabling round-robin from iteration 1 changes the incoming trajectory; target-only replay with exact maps keeps 3,000/3,000 poses/translations but worsens raw data/weight relative L2 by about 12--13% in both halves, rejecting generic concurrency as the correction |
 | Exact dynamic-worker discriminator | local science `a608d4eb9`; 34 focused tests pass; exact-H20g1 `13065579` queued behind a four-GPU reservation and available-H100 `13065713` queued | capture all native iteration-58 owner assignments, validate the schedule, and replay it only at iteration 58; no score impact until a complete trajectory passes |
+| Exact dynamic-worker discriminator | available-H100 job `13065789` completed in 382 s with 200 selected particles, eight workers, and 25 particles per worker | 3,000/3,000 states match, but raw data/weight relative L2 remain `8.28e-6 / 7.75e-6` and `2.91e-6 / 2.70e-6`; exact owner identity is rejected as sufficient |
+| Native iteration-58 block chronology | job `13065992` completed in 379 s; 200 launches, 5,720 blocks, all 132 SMs, and eight 25-particle worker chains sealed | host launch sequence predicts first block start / first atomic order at rank correlation `0.999994 / 0.999992`; particle ID itself is only `0.0523`, making measured global issue order the next causal axis |
+| Captured global particle-issue replay | local science `deea2f427`; 68 focused tests pass; paired H100 job `13066700` completed in 390 s | 3,000/3,000 states match at iterations 57/58. Raw data becomes `7.14e-6 / 7.60e-6` and weight `2.50e-6 / 2.52e-6`: a **1.9--14.2%** improvement over exact-owner replay, but still above the isolated-particle floor; order alone is not sufficient and is not promoted |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -135,7 +138,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-27 17:47 ET**
+Last scientific update: **2026-08-27 18:35 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -163,7 +166,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 production BPref accumulation boundary @58 | state-aligned operands and isolated native scatter are closed; target-only round-robin host workers uniformly worsen raw data/weight error by about 12--13% | capture and replay RELION's exact dynamic iteration-58 worker owners; exact-H20g1 and available-H100 jobs are queued | none yet; promote only a robust aggregate correction, then rerun 0--200 |
+| 1 | GF47 production BPref accumulation boundary @58 | state-aligned operands and isolated native scatter are closed; generic concurrency, exact worker ownership, and captured global particle order are each insufficient | trace candidate device admission under captured global issue order, then discriminate cross-stream spacing/overlap from fused-kernel resource shape | none yet; promote only a robust aggregate correction, then rerun 0--200 |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
