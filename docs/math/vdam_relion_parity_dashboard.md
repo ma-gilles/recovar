@@ -44,7 +44,7 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
-| Latest closed boundary | GF47 passive mapped block panel `13033223` completed both same-H100 arms in 80 s | **27,221/27,221** contributing rows biject exactly; global start/atomic rank is `0.9972--0.9975`, but within-particle rank is only `0.15--0.41`; no promotion or long run |
+| Latest closed boundary | GF47 concurrent native-grid panel `13033864` completed both same-H100 arms in 80 s | exact **51,888/51,888** native logical rows and **27,221/27,221** contributors, but reference is `1.185x / 1.224x` and post-second moment `2.304x / 1.879x` the native floor; rejected, no long run |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
 | GF47 reverse float32 order | panel `13026879`, audit `13026880` terminal | reference is inside its fresh native floor, but post-second-moment error is **2.90--3.57x** the floor; no promotion |
@@ -56,6 +56,9 @@ SHA-256 values.
 | GF47 captured block-start replay | H100 CUDA gate `13031919` passes 18/18; same-arm panel `13032413` completes in 80 s | **not promoted**: mixed reference ratios `1.760x / 0.908x`; candidate-kernel chronology is the next discriminator |
 | GF47 passive candidate chronology | H100 gate `13032739` passes 22/22; panels `13032901` and `13033223` complete in 78/80 s | 199,168 candidate blocks versus 51,888 native; both contain exactly 27,221 contributing blocks, matched for all 200 particles |
 | GF47 mapped logical chronology | map seals and analyzer pass in both `13033223` arms | all 27,221 atomics biject; global order is close, but per-particle start/first-atomic rank is only `0.149--0.170` / `0.397--0.406`; test native order inside one concurrent grid next |
+| GF47 concurrent native-grid replay | final H100 gate `13033838` passes 23/23; panel `13033864` completes in 80 s | exact full native logical grid and contributor bijections, yet reconstructed-reference and post-second-moment gates fail; static logical permutation is rejected |
+| GF47 physical scheduler repeat | sealed from both `13033864` arms | median physical start-order repeat is only `0.319` with p10 `-0.100`; median contributing physical-index overlap is `0.328`; a reusable static scheduler permutation is rejected |
+| GF47 exact-native-cardinality replay | local science head `bf968e904`; H100 CUDA/FFI gate `13034888` submitted | removes 152,912 extra physical padding blocks while retaining native logical order and contributors; non-scoring until the focused gate and repeat panel finish |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -73,7 +76,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 06:09 ET**
+Last scientific update: **2026-08-27 07:11 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -101,7 +104,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | mapped panel proves identical contributing work and nearly aligned global dispatch, but exposes poor within-particle block order | panel `13033223`: 27,221-row bijection; global rank `0.9972--0.9975`; per-particle start/atomic rank `0.149--0.170` / `0.397--0.406`; reference ratios `1.006x / 1.593x` | no score change; permute logical rows inside one concurrent grid, retain native padding/prefix guards, then repeat the bounded gate |
+| 1 | GF47 repeatability starts @1 | exact native logical rows and contributors are now proved; static concurrent permutation still misses the native atomic schedule | panel `13033864`: 51,888 logical and 27,221 contributor bijections; reference `1.185x / 1.224x`; post-second `2.304x / 1.879x`; physical start repeat median only `0.319` | no score change; remove 152,912 extra physical padding blocks and launch each particle at its sealed native grid cardinality, then repeat the bounded gate |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -375,11 +378,52 @@ repeat-panel SHA-256 values are `25bc30a8ea74...`, `95b826d2dc39...`,
 `5ffe63c259fe...`, and `6a2697717136...`. No 0--200 run was submitted and the
 frozen score remains 2/20.
 
-The next bounded discriminator keeps one concurrent grid per particle and
-permutes its logical rows by the sealed native block-start order. It retains
-the full native-grid prefix and padding guards; it does not repeat the rejected
-serial one-block launch. Only a fresh repeat panel that beats the unchanged
-SM132/native-floor gate can advance to the fixed 201-checkpoint trajectory.
+The concurrent-grid discriminator is now terminal. CUDA gates `13033534` and
+`13033737` passed 23/23 focused tests while two science submissions failed
+closed before producing parity evidence: `13033678` exposed an obsolete FFI
+geometry guard, and `13033769` exposed a double application of the captured
+row offset. Neither failed submission is counted as a numerical result. Final
+H100 gate `13033838` passed **23/23** tests from local unpushed head
+`cdc4fb9d7`; qualified CUDA SHA-256 is `fccff56db4f7...`.
+
+Same-H100 panel `13033864` then completed both arms in 80 seconds. Its v2 map
+seals all **204,800** physical candidate blocks: **51,888** map bijectively to
+the complete native logical grid, including **27,221** contributing and
+**24,667** atomic-free native rows; the remaining **152,912** candidate blocks
+are proven padding. This closes row identity and cardinality of mathematical
+contributors, but not execution chronology. Reconstructed-reference errors
+are **1.185x / 1.224x** the paired native floor and post-second-moment errors
+are **2.304x / 1.879x**. Raw data, weight, and first-moment ratios straddle the
+floor (`0.913x--1.098x`). The mechanism therefore fails the unchanged short
+promotion gate, no 0--200 run was submitted, and the frozen score remains
+2/20. Repeat-report, mapped chronology, map-A, and map-B SHA-256 values are
+`9bcb6779853a...`, `a8a620b24346...`, `2ec174ac5661...`, and
+`0f032803333a...`.
+
+The physical scheduler audit rules out precomputing one inverse permutation.
+When physical block IDs are recovered from append-order trace records and
+timestamp ties retain midranks, the two candidate arms have median block-start
+rank correlation only **0.319** (p10 **-0.100**, p90 **0.981**). The median
+Jaccard overlap of physical IDs assigned contributing logical rows is only
+**0.328**, and their first-atomic repeat correlation is **0.178**. Thus the
+remaining error is dynamic launch/SM scheduling, not a missing logical row or
+a reusable static block order.
+
+The next bounded discriminator removes the **152,912** extra physical padding
+blocks and launches each particle with its sealed native grid cardinality
+while retaining the exact native logical-row permutation, worker ownership,
+and one concurrent grid per particle. This tests the remaining launch-wave
+topology without changing any contributing operand or arithmetic. Only a
+fresh repeat panel that beats the unchanged native-floor gate can advance to
+the fixed 201-checkpoint trajectory.
+
+Local unpushed head `bf968e904` implements that discriminator as the opt-in
+`captured_native_grid` topology. It threads a fail-closed per-particle launch
+count through the JAX/CUDA FFI, trims trace and logical-map records to the
+actually launched grid, and leaves the default production topology unchanged.
+Focused CPU/source checks pass **16/16** plus **4/4** scheduler-analyzer tests;
+H100 CUDA/FFI qualification job `13034888` is submitted. This is live,
+non-scoring evidence and no science panel has yet been claimed from it.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
@@ -769,7 +813,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | mapped panel `13033223` proves all 27,221 contributing rows biject; global order is `0.9972--0.9975`, but within-particle order is only `0.15--0.41`; reference ratios remain `1.006x / 1.593x` | permute mapped logical rows inside one concurrent grid, beat the unchanged short gate, then rerun all 201 checkpoints |
+| 1 | Close GF47 repeatability before another trajectory | concurrent panel `13033864` proves all 51,888 native logical rows and 27,221 contributors biject, but reference is `1.185x / 1.224x` and post-second moment `2.304x / 1.879x`; static physical start replay is not repeatable | launch the sealed per-particle native grid cardinality without 152,912 extra padding blocks, beat the unchanged short gate, then rerun all 201 checkpoints |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
