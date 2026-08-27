@@ -127,6 +127,7 @@ def validate_capture(
     first_atomic = records["first_atomic_globaltimer"]
     end = records["block_end_globaltimer"]
     _require(np.all(start > 0), "block-start timestamps must be nonzero")
+    _require(np.all(first_atomic > 0), "first-atomic timestamps must be nonzero")
     _require(np.all(first_atomic >= start), "first-atomic timestamp precedes block start")
     _require(np.all(end >= first_atomic), "block-end timestamp precedes first atomic")
 
