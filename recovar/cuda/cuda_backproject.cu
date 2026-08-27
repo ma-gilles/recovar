@@ -4769,7 +4769,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int reconstruction_group_count,
     bool parallel_worker_replay,
     bool serial_rotation_replay,
-    bool float64_accumulator_replay)
+    bool float64_accumulator_replay,
+    bool reverse_rotation_replay)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -5057,7 +5058,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
             {
-                const int64_t rotation_offset = serial_rotation_replay ? launch : 0;
+                const int64_t rotation_offset = serial_rotation_replay
+                    ? (reverse_rotation_replay ? rotation_count - 1 - launch : launch)
+                    : 0;
                 const int64_t grid_rotations = serial_rotation_replay ? 1 : rotation_count;
                 relion_vdam_native_sgd_f32_kernel<Accumulator><<<
                     grid_rotations, 128, 0, particle_streams[lane]>>>(
@@ -8251,6 +8254,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t parallel_worker_replay,
     int64_t serial_rotation_replay,
     int64_t float64_accumulator_replay,
+    int64_t reverse_rotation_replay,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -8295,7 +8299,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         reconstruction_group_count <= 0 ||
         (parallel_worker_replay != 0 && parallel_worker_replay != 1) ||
         (serial_rotation_replay != 0 && serial_rotation_replay != 1) ||
-        (float64_accumulator_replay != 0 && float64_accumulator_replay != 1))
+        (float64_accumulator_replay != 0 && float64_accumulator_replay != 1) ||
+        (reverse_rotation_replay != 0 && reverse_rotation_replay != 1))
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid geometry");
 
@@ -8380,7 +8385,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<int>(reconstruction_group_count),
         parallel_worker_replay != 0,
         serial_rotation_replay != 0,
-        float64_accumulator_replay != 0);
+        float64_accumulator_replay != 0,
+        reverse_rotation_replay != 0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8405,6 +8411,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("parallel_worker_replay")
         .Attr<int64_t>("serial_rotation_replay")
         .Attr<int64_t>("float64_accumulator_replay")
+        .Attr<int64_t>("reverse_rotation_replay")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

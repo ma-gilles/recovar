@@ -200,6 +200,13 @@ def test_v2_schedule_can_also_serialize_rotations(tmp_path, monkeypatch):
     assert local_em_engine._relion_vdam_serial_rotation_replay()
     assert local_em_engine._relion_vdam_float64_accumulator_replay()
 
+    monkeypatch.setenv(
+        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "single_rotation_reverse",
+    )
+    assert local_em_engine._relion_vdam_serial_rotation_replay()
+    assert local_em_engine._relion_vdam_reverse_rotation_replay()
+
 
 def test_worker_trace_rejects_duplicate_sorted_position(tmp_path):
     trace = tmp_path / "workers.tsv"
