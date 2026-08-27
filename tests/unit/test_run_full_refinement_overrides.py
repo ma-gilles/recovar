@@ -40,6 +40,7 @@ from scripts.run_full_refinement import (
     _fixed_diagnostic_source_paths,
     _format_replay_mean_for_log,
     _k1_relion_live_initial_noise_enabled,
+    _load_final_manifest_replay,
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
     _load_initial_noise_cache,
@@ -87,6 +88,23 @@ def test_full_refinement_supports_stop_after_bpref_contribution_dump():
     assert "requested pass-2 boundary" in source
 
 
+def test_final_only_summary_accepts_zero_numbered_iterations(capsys):
+    run_full_refinement._print_refinement_summary(
+        {
+            "current_sizes": [],
+            "pixel_resolutions": [],
+            "wall_times": [],
+            "significant_counts": [],
+        },
+        total_time=12.5,
+        image_size=384,
+        voxel_size=1.5,
+    )
+    output = capsys.readouterr().out
+    assert "Total wall time: 12.5s" in output
+    assert "Numbered iterations: 0 (final-only diagnostic completed)" in output
+
+
 def test_full_refinement_supports_stop_after_pass2_operand_dump():
     source = RUN_FULL_REFINEMENT.read_text()
     assert "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET" in source
@@ -123,6 +141,90 @@ def test_fresh_auto_refine_particle_order_excludes_kclass_and_replays():
     assert not _use_fresh_auto_refine_particle_order(args, object())
 
 
+def _write_final_manifest_replay_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    manifest_dir = tmp_path / "intermediates"
+    manifest_dir.mkdir()
+    row_counts = (2, 3)
+    for half, row_count in enumerate(row_counts):
+        np.savez(
+            manifest_dir / f"manifest_final_half{half}.npz",
+            effective_rotations=np.eye(3, dtype=np.float32)[None, ...],
+            current_translations=np.zeros((1, 2), dtype=np.float32),
+            rotation_log_prior=np.asarray([], dtype=np.float64),
+            translation_log_prior=np.zeros((row_count, 1), dtype=np.float64),
+            translation_prior_centers=np.zeros((row_count, 2), dtype=np.float64),
+            image_corrections=np.arange(row_count, dtype=np.float64) + 1.0,
+            scale_corrections=np.ones(row_count, dtype=np.float64),
+            image_pre_shifts=np.zeros((row_count, 2), dtype=np.float32),
+            absolute_previous_translations=np.zeros((row_count, 2), dtype=np.float32),
+            mean_vol_ft=np.full(64, half + 1, dtype=np.complex128),
+            mean_variance=np.arange(64, dtype=np.float32),
+            noise_variance=np.ones(64, dtype=np.float32) * (half + 1),
+            current_size=np.int32(8),
+            half_spectrum_scoring=np.bool_(True),
+            use_float64_scoring=np.bool_(False),
+            use_float64_projections=np.bool_(False),
+            projection_padding_factor=np.int32(2),
+            reconstruction_padding_factor=np.int32(2),
+            score_with_masked_images=np.bool_(True),
+            perturbation_instance=np.float64(0.25),
+            perturbation_factor=np.float64(0.5),
+            perturbation_applied=np.bool_(True),
+            perturbation_relion_iteration=np.int32(3),
+            local_search=np.bool_(True),
+            iteration=np.int32(-1),
+            half_index=np.int32(half),
+        )
+    results_path = tmp_path / "refinement_results.npz"
+    np.savez(
+        results_path,
+        git_commit=np.asarray("a" * 40),
+        git_dirty_count=np.int64(0),
+        current_sizes=np.asarray([6, 6], dtype=np.int64),
+        healpix_order_trajectory=np.asarray([4, 5], dtype=np.int32),
+        ave_Pmax_trajectory=np.asarray([0.2, 0.3], dtype=np.float64),
+        sigma_offset_per_half_trajectory=np.asarray(
+            [[2.0, 2.1], [3.0, 3.1]],
+            dtype=object,
+        ),
+        tau2_fudge=np.float64(1.0),
+        best_rotation_eulers_iter_001_half0=np.zeros((2, 3), dtype=np.float32),
+        best_rotation_eulers_iter_001_half1=np.zeros((3, 3), dtype=np.float32),
+        best_translations_iter_001_half0=np.zeros((2, 2), dtype=np.float32),
+        best_translations_iter_001_half1=np.zeros((3, 2), dtype=np.float32),
+        noise_radial_per_half_iter_001=np.ones((2, 5), dtype=np.float64),
+        fsc_iter_001=np.linspace(1.0, 0.1, 5, dtype=np.float32),
+    )
+    return manifest_dir, results_path
+
+
+def test_final_manifest_replay_loads_exact_numbered_boundary(tmp_path: Path):
+    manifest_dir, results_path = _write_final_manifest_replay_fixture(tmp_path)
+
+    replay = _load_final_manifest_replay(manifest_dir, results_path)
+
+    assert replay.completed_relion_iteration == 2
+    assert replay.current_size == 6
+    assert replay.healpix_order == 5
+    assert replay.ave_pmax == pytest.approx(0.3)
+    assert replay.translation_sigma_angstrom_per_half == pytest.approx((3.0, 3.1))
+    assert replay.manifest_sha256[0] != replay.manifest_sha256[1]
+    np.testing.assert_array_equal(replay.means[0], np.ones(64, dtype=np.complex128))
+
+
+def test_final_manifest_replay_rejects_disagreeing_shared_state(tmp_path: Path):
+    manifest_dir, results_path = _write_final_manifest_replay_fixture(tmp_path)
+    half1_path = manifest_dir / "manifest_final_half1.npz"
+    with np.load(half1_path, allow_pickle=False) as archive:
+        payload = {key: np.asarray(archive[key]) for key in archive.files}
+    payload["mean_variance"] = payload["mean_variance"].copy()
+    payload["mean_variance"][3] += 1.0
+    np.savez(half1_path, **payload)
+
+    with pytest.raises(ValueError, match="shared field mean_variance"):
+        _load_final_manifest_replay(manifest_dir, results_path)
+
+
 def test_state_swap_diagnostic_can_preserve_fresh_auto_refine_particle_order():
     args = SimpleNamespace(
         n_classes=1,
@@ -139,6 +241,18 @@ def test_state_swap_diagnostic_can_preserve_fresh_auto_refine_particle_order():
     args.state_swap_variant = None
     with pytest.raises(ValueError, match="complete state-swap replay diagnostic"):
         _use_fresh_auto_refine_particle_order(args, None, environ=env)
+
+
+def test_final_manifest_replay_reconstructs_fresh_physical_particle_order():
+    args = SimpleNamespace(
+        n_classes=1,
+        init_relion_iteration=15,
+        perturb_replay_relion_dir=None,
+        diagnostic_final_manifest_dir="/sealed/final",
+    )
+
+    assert _use_fresh_auto_refine_particle_order(args, None)
+    assert not _use_fresh_auto_refine_particle_order(args, object())
 
 
 @pytest.mark.parametrize("token", ["1", "true", "YES", "on"])
@@ -381,6 +495,40 @@ def test_frozen_scoring_state_negative_overwrite_regression():
     changed_tau2["mean_variance"][0] = np.float32(2.0)
     with pytest.raises(RuntimeError, match="mean_variance was overwritten"):
         _assert_frozen_scoring_state_unchanged(expected, changed_tau2)
+
+
+def test_final_only_scoring_state_seals_absent_direction_priors():
+    half_inputs = SimpleNamespace(
+        previous_best_rotation_eulers=[np.zeros((1, 3)), np.zeros((1, 3))],
+        previous_best_translations=[np.zeros((1, 2)), np.zeros((1, 2))],
+        image_corrections=[np.ones(1), np.ones(1)],
+        scale_corrections=[np.ones(1), np.ones(1)],
+    )
+    kwargs = {
+        "means": [np.zeros(8), np.zeros(8)],
+        "mean_variance": np.ones(8),
+        "relion_half_inputs": half_inputs,
+        "noise_variance_per_half": [np.ones(4), np.ones(4)],
+        "current_sigma_offset_angstrom_per_half": [2.0, 2.0],
+        "global_direction_prior_per_half": [None, None],
+        "allow_missing_direction_prior": True,
+    }
+
+    expected = _frozen_scoring_state_arrays(**kwargs)
+    assert not expected["direction_prior.half1.is_present"]
+    assert not expected["direction_prior.half2.is_present"]
+    _assert_frozen_scoring_state_unchanged(
+        expected,
+        _frozen_scoring_state_arrays(**kwargs),
+    )
+
+    changed = dict(kwargs)
+    changed["global_direction_prior_per_half"] = [np.ones(12) / 12.0, None]
+    with pytest.raises(RuntimeError, match="Frozen scoring-state fields changed"):
+        _assert_frozen_scoring_state_unchanged(
+            expected,
+            _frozen_scoring_state_arrays(**changed),
+        )
 
 
 def test_unequal_half_tau2_is_dispatched_without_collapsing():

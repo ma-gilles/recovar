@@ -56,6 +56,7 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     _norm_inputs,
+    prepare_batch_preprocess_operands,
     process_half_image,
     resolve_image_mask_for_half_preprocess,
 )
@@ -185,7 +186,10 @@ def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
 
 
 def _exact_local_bpref_contribution_capture_active(
-    *, current_size: int | None, debug_iteration: int | None
+    *,
+    current_size: int | None,
+    debug_iteration: int | None,
+    allow_missing_current_size: bool = False,
 ) -> bool:
     """Return whether this exact-local half is the explicitly targeted boundary."""
 
@@ -205,7 +209,10 @@ def _exact_local_bpref_contribution_capture_active(
         return False
     if context_half != int(target_half):
         return False
-    if current_size is None or int(current_size) != int(target_current_size):
+    if current_size is None:
+        if not allow_missing_current_size:
+            return False
+    elif int(current_size) != int(target_current_size):
         return False
     if debug_iteration is not None and context_iteration != int(debug_iteration):
         return False
@@ -286,6 +293,7 @@ EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GROUPS_ENV = "RECOVAR_EXACT_LOCAL_RELION
 LOCAL_SCORE_DUMP_FORCE_SPLIT_ENV = "RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT"
 LOCAL_SCORE_DUMP_OPERANDS_ENV = "RECOVAR_LOCAL_SCORE_DUMP_OPERANDS"
 LOCAL_SCORE_DUMP_TARGET_ONLY_ENV = "RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY"
+BPREF_CONTRIBUTION_TARGET_ONLY_ENV = "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY"
 EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS"
 EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
@@ -299,6 +307,62 @@ _VISIBLE_GPU_MEMORY_BYTES_CACHE: int | None = None
 # hybrid path. This path still packs rows before backprojection; the cap only
 # guards the temporary fused summed/ctf tensor outputs.
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
+
+
+def _bpref_contribution_target_only_original_indices(
+    *,
+    capture_active: bool,
+    environ=None,
+) -> set[int]:
+    """Return the one-particle target for a terminating contribution probe."""
+
+    env = os.environ if environ is None else environ
+    target_only = str(env.get(BPREF_CONTRIBUTION_TARGET_ONLY_ENV, "")).strip().lower()
+    if not capture_active or target_only not in _TRUE_ENV_VALUES:
+        return set()
+    if env.get("RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET") != "1":
+        raise RuntimeError(
+            f"{BPREF_CONTRIBUTION_TARGET_ONLY_ENV}=1 requires "
+            "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET=1"
+        )
+    raw_targets = str(
+        env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES", "")
+    ).strip()
+    try:
+        targets = {
+            int(value.strip()) for value in raw_targets.split(",") if value.strip()
+        }
+    except ValueError as exc:
+        raise ValueError(
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES must be integers"
+        ) from exc
+    if len(targets) != 1:
+        raise RuntimeError(
+            f"{BPREF_CONTRIBUTION_TARGET_ONLY_ENV}=1 requires exactly one "
+            "original particle index"
+        )
+    return targets
+
+
+def _target_only_bucket_filter_enabled(
+    *,
+    score_only: bool,
+    bpref_contribution_target_only: bool,
+    target_original_indices: set[int],
+    environ=None,
+) -> bool:
+    """Return whether a terminating diagnostic may prune to target buckets."""
+
+    env = os.environ if environ is None else environ
+    score_dump_target_only = (
+        str(env.get(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV, "")).strip().lower()
+        in _TRUE_ENV_VALUES
+    )
+    return bool(
+        (score_only or bpref_contribution_target_only)
+        and target_original_indices
+        and (score_dump_target_only or bpref_contribution_target_only)
+    )
 
 
 def _local_mstep_rotations(bucket: LocalBucketSpec) -> np.ndarray:
@@ -1616,6 +1680,8 @@ def _prepare_local_exact_bucket(
     score_with_masked_images: bool,
     relion_score_translation_angles=None,
     image_pre_shifts=None,
+    image_corrections=None,
+    scale_corrections=None,
     processed_half_cache: _LocalProcessedHalfCache | None = None,
     timer: dict[str, float] | None = None,
     synchronize_profile: bool = False,
@@ -1632,10 +1698,34 @@ def _prepare_local_exact_bucket(
 
     integer_t0 = time.time()
     real_space_pre_shift_applied = False
+    relion_cuda_preprocess = False
+    relion_preprocess_kwargs = None
+    if processed_half_cache is None:
+        (
+            relion_cuda_preprocess,
+            integer_pre_shifts,
+            _batch_corr_np,
+            _batch_scale_np,
+            relion_preprocess_kwargs,
+        ) = prepare_batch_preprocess_operands(
+            experiment_dataset,
+            batch,
+            image_indices,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+        )
+    else:
+        integer_pre_shifts = integer_pre_shifts_or_none(
+            image_pre_shifts,
+            image_indices,
+            batch=batch,
+        )
     if processed_half_cache is None or not processed_half_cache.integer_pre_shifts_applied:
-        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices, batch=batch)
-        if integer_pre_shifts is not None:
+        if integer_pre_shifts is not None and not relion_cuda_preprocess:
             batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
+            real_space_pre_shift_applied = True
+        elif relion_cuda_preprocess:
             real_space_pre_shift_applied = True
     else:
         integer_pre_shifts = None
@@ -1663,6 +1753,7 @@ def _prepare_local_exact_bucket(
             experiment_dataset,
             batch,
             apply_image_mask,
+            relion_preprocess_kwargs=relion_preprocess_kwargs,
         )
 
     ctf_t0 = time.time()
@@ -2024,6 +2115,18 @@ def run_local_em_exact(
         and current_size_matches_request(debug_noise_dump_current_sizes, current_size)
         and iteration_matches_request(debug_noise_dump_iterations, debug_iteration)
     )
+    bpref_target_only_requested = (
+        str(os.environ.get(BPREF_CONTRIBUTION_TARGET_ONLY_ENV, "")).strip().lower()
+        in _TRUE_ENV_VALUES
+    )
+    bpref_contribution_target_scope_active = _exact_local_bpref_contribution_capture_active(
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+        # The score-only local parent pass uses ``None`` to mean full pixel
+        # support.  A terminating one-particle BPref probe may still prune that
+        # pass after iteration and half have matched the explicit dump scope.
+        allow_missing_current_size=bool(score_only and bpref_target_only_requested),
+    )
     bpref_contribution_capture_active = _exact_local_bpref_contribution_capture_for_call(
         current_size=current_size,
         debug_iteration=debug_iteration,
@@ -2362,15 +2465,21 @@ def run_local_em_exact(
         debug_target_only_targets.update(debug_score_dump_targets)
     if debug_fused_posterior_dump_filter_matches:
         debug_target_only_targets.update(debug_fused_posterior_dump_targets)
-    debug_score_dump_target_only = bool(
-        score_only
-        and debug_target_only_targets
-        # ``score_only`` also implements the science-critical local parent
-        # pass that supplies pass-2 support.  Filtering it merely because a
-        # dump target is configured makes the diagnostic change refinement
-        # results.  Keep target-only execution as an explicit opt-in for
-        # standalone diagnostics.
-        and _env_flag(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV)
+    contribution_target_only_targets = _bpref_contribution_target_only_original_indices(
+        capture_active=bpref_contribution_target_scope_active,
+    )
+    bpref_contribution_target_only = bool(contribution_target_only_targets)
+    if bpref_contribution_target_only:
+        debug_target_only_targets.update(contribution_target_only_targets)
+    # ``score_only`` also implements the science-critical local parent pass
+    # that supplies pass-2 support.  Filtering it merely because a dump target
+    # is configured makes the diagnostic change refinement results.  The
+    # terminating BPref probe is itself an explicit target-only opt-in, so it
+    # must not require the separate score-dump opt-in as well.
+    debug_score_dump_target_only = _target_only_bucket_filter_enabled(
+        score_only=score_only,
+        bpref_contribution_target_only=bpref_contribution_target_only,
+        target_original_indices=debug_target_only_targets,
     )
     debug_target_only_original_bucket_count = len(bucket_specs)
     debug_target_only_original_image_count = int(
@@ -2390,14 +2499,18 @@ def run_local_em_exact(
         )
         target_only_images = int(sum(int(bucket.image_indices.shape[0]) for bucket in bucket_specs))
         logger.info(
-            "Exact local debug target-only: keeping %d/%d buckets and %d/%d images "
-            "for requested original ids %s; unset %s to retain the full score-only computation",
+            "Exact local diagnostic target-only: keeping %d/%d buckets and %d/%d images "
+            "for requested original ids %s; unset %s to retain the full computation",
             len(bucket_specs),
             debug_target_only_original_bucket_count,
             target_only_images,
             debug_target_only_original_image_count,
             sorted(int(target) for target in debug_target_only_targets),
-            LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
+            (
+                BPREF_CONTRIBUTION_TARGET_ONLY_ENV
+                if bpref_contribution_target_only
+                else LOCAL_SCORE_DUMP_TARGET_ONLY_ENV
+            ),
         )
     if bucket_specs:
         bucket_rotation_counts = np.asarray(
@@ -3800,6 +3913,8 @@ def run_local_em_exact(
             score_with_masked_images,
             relion_score_translation_angles=relion_score_translation_angles,
             image_pre_shifts=image_pre_shifts,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
             processed_half_cache=processed_half_cache,
             timer=preprocess_profile if return_profile else None,
             synchronize_profile=return_profile,

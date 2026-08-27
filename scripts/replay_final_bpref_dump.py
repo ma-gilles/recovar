@@ -81,6 +81,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--compare-relion-boundary-spectra",
+        action="store_true",
+        help=(
+            "Require and compare _tau2.bin, _sigma2.bin, _data_vs_prior.bin, "
+            "_fsc.bin, and _fourier_coverage.bin at --relion-bpref-prefix."
+        ),
+    )
+    parser.add_argument(
         "--relion-tau2-bin",
         type=Path,
         help="Optional RELION length-prefixed tau2 spectrum. Replaces the RECOVAR-derived tau2.",
@@ -135,6 +143,62 @@ def read_relion_spectrum(path: Path) -> np.ndarray:
     return values
 
 
+def compare_relion_boundary_spectra(
+    dump: Any,
+    prefix: Path,
+    *,
+    grid_size: int,
+) -> dict[str, Any]:
+    """Compare native RELION updateSSNRarrays outputs with RECOVAR equivalents."""
+
+    required_dump_keys = {
+        "tau2": "tau2_prior_shells",
+        "sigma2": "tau2_sigma2_shells",
+        "data_vs_prior": "tau2_ssnr_shells",
+        "fsc": "fsc_shells",
+    }
+    missing = [key for key in required_dump_keys.values() if key not in dump]
+    if missing:
+        raise ValueError(f"RECOVAR final BPref dump is missing spectrum fields: {missing}")
+
+    native = {
+        name: read_relion_spectrum(Path(f"{prefix}_{name}.bin"))
+        for name in (*required_dump_keys, "fourier_coverage")
+    }
+    n4 = float(int(grid_size) ** 4)
+    converted_native = {
+        "tau2": native["tau2"] * n4,
+        "sigma2": native["sigma2"] * n4,
+        "data_vs_prior": native["data_vs_prior"],
+        "fsc": native["fsc"],
+    }
+    comparisons = {
+        name: streaming_field_metrics(
+            np.asarray(dump[dump_key], dtype=np.float64).reshape(-1),
+            np.asarray(converted_native[name], dtype=np.float64).reshape(-1),
+        )
+        for name, dump_key in required_dump_keys.items()
+    }
+    coverage = np.asarray(native["fourier_coverage"], dtype=np.float64).reshape(-1)
+    if coverage.size == 0 or not np.all(np.isfinite(coverage)):
+        raise ValueError("native RELION Fourier-coverage spectrum is empty or non-finite")
+    return {
+        "policy": (
+            "streamed float64 comparison; native RELION tau2/sigma2 multiplied by N^4; "
+            "data-vs-prior and FSC are dimensionless"
+        ),
+        "grid_size": int(grid_size),
+        "native_to_recovar_tau2_sigma2_scale": n4,
+        "comparisons": comparisons,
+        "native_fourier_coverage": {
+            "element_count": int(coverage.size),
+            "minimum": float(np.min(coverage)),
+            "maximum": float(np.max(coverage)),
+            "mean": float(np.mean(coverage)),
+        },
+    }
+
+
 def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     a = np.asarray(lhs, dtype=np.float64).reshape(-1)
     b = np.asarray(rhs, dtype=np.float64).reshape(-1)
@@ -146,6 +210,80 @@ def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     if denom <= 0.0 or not math.isfinite(denom):
         return float("nan")
     return float(np.dot(a, b) / denom)
+
+
+def streaming_field_metrics(
+    source: np.ndarray,
+    target: np.ndarray,
+    *,
+    chunk_size: int = 1 << 20,
+) -> dict[str, Any]:
+    """Compare large real or complex fields without materializing a full residual."""
+
+    source_flat = np.asarray(source).reshape(-1)
+    target_flat = np.asarray(target).reshape(-1)
+    if source_flat.shape != target_flat.shape or source_flat.size == 0:
+        raise ValueError(
+            f"field topology mismatch: source={source_flat.shape}, target={target_flat.shape}"
+        )
+    if int(chunk_size) <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    work_dtype = (
+        np.complex128
+        if np.iscomplexobj(source_flat) or np.iscomplexobj(target_flat)
+        else np.float64
+    )
+    source_energy = 0.0
+    target_energy = 0.0
+    source_target_inner_real = 0.0
+    residual_energy = 0.0
+    maximum_absolute_residual = 0.0
+    mismatch_count = 0
+    first_mismatch_flat_index: int | None = None
+    for start in range(0, source_flat.size, int(chunk_size)):
+        stop = min(start + int(chunk_size), source_flat.size)
+        source_chunk = np.asarray(source_flat[start:stop], dtype=work_dtype)
+        target_chunk = np.asarray(target_flat[start:stop], dtype=work_dtype)
+        if not np.all(np.isfinite(source_chunk)) or not np.all(np.isfinite(target_chunk)):
+            raise ValueError(f"field contains non-finite values in flat range [{start}, {stop})")
+        residual = source_chunk - target_chunk
+        source_energy += float(np.vdot(source_chunk, source_chunk).real)
+        target_energy += float(np.vdot(target_chunk, target_chunk).real)
+        source_target_inner_real += float(np.vdot(source_chunk, target_chunk).real)
+        residual_energy += float(np.vdot(residual, residual).real)
+        if residual.size:
+            maximum_absolute_residual = max(
+                maximum_absolute_residual,
+                float(np.max(np.abs(residual))),
+            )
+        unequal = source_chunk != target_chunk
+        chunk_mismatch_count = int(np.count_nonzero(unequal))
+        if chunk_mismatch_count and first_mismatch_flat_index is None:
+            first_mismatch_flat_index = start + int(np.flatnonzero(unequal)[0])
+        mismatch_count += chunk_mismatch_count
+
+    if source_energy <= 0.0 or target_energy <= 0.0:
+        raise ValueError("field comparison requires nonzero source and target energy")
+    least_squares_scale = source_target_inner_real / source_energy
+    scaled_residual_energy = max(
+        least_squares_scale * least_squares_scale * source_energy
+        - 2.0 * least_squares_scale * source_target_inner_real
+        + target_energy,
+        0.0,
+    )
+    return {
+        "element_count": int(source_flat.size),
+        "exact_equal": mismatch_count == 0,
+        "mismatch_count": mismatch_count,
+        "first_mismatch_flat_index": first_mismatch_flat_index,
+        "maximum_absolute_residual": maximum_absolute_residual,
+        "relative_l2": float(math.sqrt(residual_energy / target_energy)),
+        "source_to_target_least_squares_scale": float(least_squares_scale),
+        "relative_l2_after_scale": float(
+            math.sqrt(scaled_residual_energy / target_energy)
+        ),
+    }
 
 
 def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
@@ -253,6 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
 
+    from recovar.core import fourier_transform_utils
     from recovar.em.dense_single_volume.helpers import half_volume_mstep
     from recovar.reconstruction import regularization, relion_functions
     from recovar.utils import helpers
@@ -310,6 +449,8 @@ def main(argv: list[str] | None = None) -> int:
         reconstruction_Ft_ctf = np.asarray(dump["Ft_ctf"])
         reconstruction_Ft_y = np.asarray(dump["Ft_y"])
         accumulator_source = "recovar_dump"
+        accumulator_comparison = None
+        spectrum_comparison = None
         if args.relion_bpref_prefix is not None:
             prefix = args.relion_bpref_prefix.resolve()
             relion_data = read_relion_bpref_array(
@@ -336,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
                     relion_data.reshape(-1),
                     mstep_accumulator_shape,
                 )
-                / (-(n**2))
+                / (n**2)
             )
             reconstruction_Ft_ctf = (
                 half_volume_mstep.relion_x_half_volume_to_native_half(
@@ -345,7 +486,31 @@ def main(argv: list[str] | None = None) -> int:
                 ).real
                 / (n**4)
             )
+            accumulator_comparison = {
+                "policy": (
+                    "streamed float64/complex128 comparison after RELION-to-RECOVAR "
+                    "layout and unit conversion"
+                ),
+                "source": "recovar_joined_accumulator",
+                "target": "native_relion_joined_accumulator",
+                "numerator": streaming_field_metrics(
+                    dump["Ft_y"], reconstruction_Ft_y
+                ),
+                "denominator": streaming_field_metrics(
+                    dump["Ft_ctf"], reconstruction_Ft_ctf
+                ),
+            }
             accumulator_source = str(prefix)
+            if args.compare_relion_boundary_spectra:
+                spectrum_comparison = compare_relion_boundary_spectra(
+                    dump,
+                    prefix,
+                    grid_size=int(volume_shape[0]),
+                )
+        elif args.compare_relion_boundary_spectra:
+            raise ValueError(
+                "--compare-relion-boundary-spectra requires --relion-bpref-prefix"
+            )
 
         reconstruction_tau = final_tau
         reconstruction_tau_is_1d = False
@@ -360,7 +525,12 @@ def main(argv: list[str] | None = None) -> int:
             reconstruction_tau_is_1d = True
             tau2_source = str(args.relion_tau2_bin.resolve())
 
-        replay_map = relion_functions.post_process_from_filter_v2(
+        # Match the production output path exactly.  The final refinement keeps
+        # the reconstruction in Fourier space, then run_full_refinement applies
+        # get_idft3 immediately before writing the MRC.  Returning real space
+        # directly takes a different large-grid FFT path and is not an inert
+        # replay at box 384.
+        replay_map_ft = relion_functions.post_process_from_filter_v2(
             reconstruction_Ft_ctf,
             reconstruction_Ft_y,
             volume_shape,
@@ -375,11 +545,13 @@ def main(argv: list[str] | None = None) -> int:
             gridding_padding_factor=projection_padding_factor,
             minres_map=int(args.minres_map),
             current_size=current_size,
-            return_real_space=True,
+            return_real_space=False,
             accumulator_volume_shape=mstep_accumulator_shape,
             tau_is_1d=reconstruction_tau_is_1d,
         )
-
+        replay_map = fourier_transform_utils.get_idft3(
+            replay_map_ft.reshape(volume_shape)
+        ).real
         replay_map_np = np.asarray(replay_map, dtype=np.float32).reshape(volume_shape)
         summary: dict[str, Any] = {
             "dump": str(dump_path),
@@ -408,6 +580,10 @@ def main(argv: list[str] | None = None) -> int:
             "tau2_avg_weight_shells_tail": _tail(tau_details["avg_weight_shells"]),
             "tau2_shell_count_tail": _tail(tau_details["shell_count"]),
         }
+        if accumulator_comparison is not None:
+            summary["accumulator_comparison"] = accumulator_comparison
+        if spectrum_comparison is not None:
+            summary["spectrum_comparison"] = spectrum_comparison
         if "tau2_prior_shells" in dump:
             dumped_tau = np.asarray(dump["tau2_prior_shells"], dtype=np.float64)
             replay_tau = np.asarray(tau_details["prior_shells"], dtype=np.float64)

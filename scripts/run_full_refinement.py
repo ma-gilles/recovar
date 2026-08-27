@@ -919,6 +919,244 @@ class NativeGroupLayout(NamedTuple):
     source: str
 
 
+class FinalManifestReplay(NamedTuple):
+    """Sealed inputs for a diagnostic final-only K=1 replay."""
+
+    manifest_paths: tuple[Path, Path]
+    manifest_sha256: tuple[str, str]
+    source_results_path: Path
+    source_results_sha256: str
+    source_git_commit: str
+    completed_relion_iteration: int
+    current_size: int
+    healpix_order: int
+    fsc: np.ndarray
+    ave_pmax: float
+    means: tuple[np.ndarray, np.ndarray]
+    mean_variance: np.ndarray
+    noise_variance: tuple[np.ndarray, np.ndarray]
+    noise_radial_per_half: np.ndarray
+    image_corrections: tuple[np.ndarray, np.ndarray]
+    scale_corrections: tuple[np.ndarray, np.ndarray]
+    previous_best_translations: tuple[np.ndarray, np.ndarray]
+    previous_best_rotation_eulers: tuple[np.ndarray, np.ndarray]
+    translation_sigma_angstrom_per_half: tuple[float, float]
+    tau2_fudge: float
+
+
+_FINAL_MANIFEST_REQUIRED_FIELDS = frozenset(
+    {
+        "effective_rotations",
+        "current_translations",
+        "rotation_log_prior",
+        "translation_log_prior",
+        "translation_prior_centers",
+        "image_corrections",
+        "scale_corrections",
+        "image_pre_shifts",
+        "absolute_previous_translations",
+        "mean_vol_ft",
+        "mean_variance",
+        "noise_variance",
+        "current_size",
+        "half_spectrum_scoring",
+        "use_float64_scoring",
+        "use_float64_projections",
+        "projection_padding_factor",
+        "reconstruction_padding_factor",
+        "score_with_masked_images",
+        "perturbation_instance",
+        "perturbation_factor",
+        "perturbation_applied",
+        "perturbation_relion_iteration",
+        "local_search",
+        "iteration",
+        "half_index",
+    }
+)
+
+
+def _load_final_manifest_replay(
+    manifest_dir: str | Path,
+    source_results: str | Path,
+) -> FinalManifestReplay:
+    """Load and cross-check a final-only replay boundary without inference."""
+
+    manifest_dir = Path(manifest_dir).expanduser().resolve()
+    source_results_path = Path(source_results).expanduser().resolve()
+    manifest_paths = tuple(
+        manifest_dir / f"manifest_final_half{half}.npz" for half in range(2)
+    )
+    missing_paths = [path for path in (*manifest_paths, source_results_path) if not path.is_file()]
+    if missing_paths:
+        raise ValueError(
+            "diagnostic final-manifest replay inputs are missing: "
+            + ", ".join(str(path) for path in missing_paths)
+        )
+
+    payloads: list[dict[str, np.ndarray]] = []
+    for expected_half, path in enumerate(manifest_paths):
+        with np.load(path, allow_pickle=False) as archive:
+            missing = sorted(_FINAL_MANIFEST_REQUIRED_FIELDS - set(archive.files))
+            if missing:
+                raise ValueError(f"{path} is missing final-manifest fields: {missing}")
+            payload = {field: np.asarray(archive[field]) for field in _FINAL_MANIFEST_REQUIRED_FIELDS}
+        observed_half = int(payload["half_index"].item())
+        if observed_half != expected_half:
+            raise ValueError(
+                f"{path} has half_index={observed_half}; expected {expected_half}"
+            )
+        if int(payload["iteration"].item()) != -1:
+            raise ValueError(f"{path} is not a final-pass manifest")
+        for flag in ("half_spectrum_scoring", "score_with_masked_images", "local_search"):
+            if not bool(payload[flag].item()):
+                raise ValueError(f"{path} requires {flag}=true for this replay")
+        payloads.append(payload)
+
+    shared_fields = (
+        "effective_rotations",
+        "current_translations",
+        "mean_variance",
+        "current_size",
+        "use_float64_scoring",
+        "use_float64_projections",
+        "projection_padding_factor",
+        "reconstruction_padding_factor",
+        "perturbation_instance",
+        "perturbation_factor",
+        "perturbation_applied",
+        "perturbation_relion_iteration",
+    )
+    for field in shared_fields:
+        if not np.array_equal(payloads[0][field], payloads[1][field]):
+            raise ValueError(f"final manifests disagree in shared field {field}")
+    for half, payload in enumerate(payloads, start=1):
+        if payload["rotation_log_prior"].size != 0:
+            raise ValueError(
+                "diagnostic final-manifest replay currently requires an empty "
+                f"direction prior; half {half} has rotation_log_prior shape "
+                f"{payload['rotation_log_prior'].shape}"
+            )
+
+    with np.load(source_results_path, allow_pickle=True) as results:
+        required_results = {
+            "git_commit",
+            "git_dirty_count",
+            "current_sizes",
+            "healpix_order_trajectory",
+            "sigma_offset_per_half_trajectory",
+            "ave_Pmax_trajectory",
+            "tau2_fudge",
+        }
+        missing_results = sorted(required_results - set(results.files))
+        if missing_results:
+            raise ValueError(
+                f"{source_results_path} is missing replay fields: {missing_results}"
+            )
+        if int(np.asarray(results["git_dirty_count"]).item()) != 0:
+            raise ValueError("diagnostic final-manifest source results came from a dirty worktree")
+        source_git_commit = str(np.asarray(results["git_commit"]).item())
+        if re.fullmatch(r"[0-9a-f]{40}", source_git_commit) is None:
+            raise ValueError("diagnostic final-manifest source git commit is invalid")
+        current_sizes = np.asarray(results["current_sizes"], dtype=np.int64)
+        healpix_orders = np.asarray(results["healpix_order_trajectory"], dtype=np.int64)
+        if current_sizes.ndim != 1 or current_sizes.size == 0:
+            raise ValueError("diagnostic final-manifest source has no numbered iterations")
+        if healpix_orders.shape != current_sizes.shape:
+            raise ValueError("diagnostic final-manifest source sampling trajectory is misaligned")
+        completed_relion_iteration = int(current_sizes.size)
+        pose_label = f"{completed_relion_iteration - 1:03d}"
+        euler_keys = tuple(
+            f"best_rotation_eulers_iter_{pose_label}_half{half}" for half in range(2)
+        )
+        translation_keys = tuple(
+            f"best_translations_iter_{pose_label}_half{half}" for half in range(2)
+        )
+        noise_key = f"noise_radial_per_half_iter_{pose_label}"
+        fsc_key = f"fsc_iter_{pose_label}"
+        missing_dynamic = [
+            key
+            for key in (*euler_keys, *translation_keys, noise_key, fsc_key)
+            if key not in results.files
+        ]
+        if missing_dynamic:
+            raise ValueError(
+                f"{source_results_path} is missing last-numbered fields: {missing_dynamic}"
+            )
+        previous_best_rotation_eulers = tuple(
+            np.asarray(results[key], dtype=np.float32) for key in euler_keys
+        )
+        previous_best_translations = tuple(
+            np.asarray(results[key], dtype=np.float32) for key in translation_keys
+        )
+        noise_radial_per_half = np.asarray(results[noise_key], dtype=np.float64)
+        fsc = np.asarray(results[fsc_key], dtype=np.float32)
+        ave_pmax_trajectory = np.asarray(results["ave_Pmax_trajectory"], dtype=np.float64)
+        if ave_pmax_trajectory.shape != current_sizes.shape:
+            raise ValueError("diagnostic final-manifest Pmax trajectory is misaligned")
+        sigma_history = np.asarray(
+            results["sigma_offset_per_half_trajectory"].tolist(),
+            dtype=np.float64,
+        )
+        if sigma_history.shape != (completed_relion_iteration, 2):
+            raise ValueError("diagnostic final-manifest translation-sigma trajectory is misaligned")
+        translation_sigma_angstrom_per_half = tuple(float(value) for value in sigma_history[-1])
+        tau2_fudge = float(np.asarray(results["tau2_fudge"]).item())
+
+    for half in range(2):
+        row_count = int(payloads[half]["image_corrections"].shape[0])
+        aligned_fields = {
+            "scale_corrections": payloads[half]["scale_corrections"],
+            "absolute_previous_translations": payloads[half]["absolute_previous_translations"],
+            "previous_best_rotation_eulers": previous_best_rotation_eulers[half],
+            "source_previous_best_translations": previous_best_translations[half],
+        }
+        for field, value in aligned_fields.items():
+            if value.shape[0] != row_count:
+                raise ValueError(
+                    f"half {half + 1} {field} has {value.shape[0]} rows; expected {row_count}"
+                )
+        if not np.array_equal(
+            payloads[half]["absolute_previous_translations"],
+            previous_best_translations[half],
+        ):
+            raise ValueError(
+                f"half {half + 1} manifest translations do not match source results"
+            )
+
+    final_relion_iteration = int(payloads[0]["perturbation_relion_iteration"].item())
+    if final_relion_iteration != completed_relion_iteration + 1:
+        raise ValueError(
+            "final manifest perturbation iteration is not immediately after the numbered source: "
+            f"final={final_relion_iteration} numbered={completed_relion_iteration}"
+        )
+    if noise_radial_per_half.shape != (2, int(payloads[0]["current_size"].item()) // 2 + 1):
+        raise ValueError("diagnostic final-manifest radial noise shape is inconsistent")
+
+    return FinalManifestReplay(
+        manifest_paths=manifest_paths,
+        manifest_sha256=tuple(_sha256_file(path) for path in manifest_paths),
+        source_results_path=source_results_path,
+        source_results_sha256=_sha256_file(source_results_path),
+        source_git_commit=source_git_commit,
+        completed_relion_iteration=completed_relion_iteration,
+        current_size=int(current_sizes[-1]),
+        healpix_order=int(healpix_orders[-1]),
+        fsc=fsc,
+        ave_pmax=float(ave_pmax_trajectory[-1]),
+        means=tuple(payload["mean_vol_ft"] for payload in payloads),
+        mean_variance=payloads[0]["mean_variance"],
+        noise_variance=tuple(payload["noise_variance"] for payload in payloads),
+        noise_radial_per_half=noise_radial_per_half,
+        image_corrections=tuple(payload["image_corrections"] for payload in payloads),
+        scale_corrections=tuple(payload["scale_corrections"] for payload in payloads),
+        previous_best_translations=previous_best_translations,
+        previous_best_rotation_eulers=previous_best_rotation_eulers,
+        translation_sigma_angstrom_per_half=translation_sigma_angstrom_per_half,
+        tau2_fudge=tau2_fudge,
+    )
+
+
 def _relion_image_identity(name, *, label: str) -> tuple[int, str]:
     """Return the exact ``(<1-based index>, <stack>)`` RELION image identity."""
 
@@ -1389,13 +1627,21 @@ def _use_fresh_auto_refine_particle_order(
             f"{_STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER_ENV}=1 requires a complete "
             "state-swap replay diagnostic"
         )
+    diagnostic_final_manifest_replay = bool(
+        getattr(args, "diagnostic_final_manifest_dir", None)
+    )
     return (
         int(args.n_classes) == 1
-        and int(args.init_relion_iteration) == 0
         and frozen_boundary is None
         and (
-            args.perturb_replay_relion_dir is None
-            or force_state_swap_order
+            diagnostic_final_manifest_replay
+            or (
+                int(args.init_relion_iteration) == 0
+                and (
+                    args.perturb_replay_relion_dir is None
+                    or force_state_swap_order
+                )
+            )
         )
     )
 
@@ -2607,6 +2853,26 @@ def main():
         ),
     )
     parser.add_argument(
+        "--diagnostic-final-manifest-dir",
+        default=None,
+        help=(
+            "Diagnostic K=1 final-only replay: load manifest_final_half{0,1}.npz "
+            "from this directory and run only the joined all-data pass. Requires "
+            "--diagnostic-final-source-results, --max_iter 0, the matching "
+            "--init_relion_iteration/--healpix_order, and "
+            "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=1."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic-final-source-results",
+        default=None,
+        help=(
+            "Clean refinement_results.npz that owns the numbered pose, noise, "
+            "translation-sigma, and sampling boundary paired with "
+            "--diagnostic-final-manifest-dir."
+        ),
+    )
+    parser.add_argument(
         "--perturb-replay-restart-state-iterations",
         default="",
         help=(
@@ -3057,6 +3323,80 @@ def main():
         max_iter=args.max_iter,
     )
 
+    final_manifest_replay = None
+    final_manifest_args = (
+        args.diagnostic_final_manifest_dir,
+        args.diagnostic_final_source_results,
+    )
+    if any(value is not None for value in final_manifest_args):
+        if not all(value is not None for value in final_manifest_args):
+            raise SystemExit(
+                "--diagnostic-final-manifest-dir and "
+                "--diagnostic-final-source-results are required together"
+            )
+        if int(args.n_classes) != 1:
+            raise SystemExit("diagnostic final-manifest replay is K=1-only")
+        if int(args.max_iter) != 0:
+            raise SystemExit("diagnostic final-manifest replay requires --max_iter 0")
+        if int(args.init_relion_iteration) <= 0:
+            raise SystemExit(
+                "diagnostic final-manifest replay requires a positive "
+                "--init_relion_iteration"
+            )
+        if args.relion_half_sets is None:
+            raise SystemExit(
+                "diagnostic final-manifest replay requires --relion_half_sets"
+            )
+        if any(
+            value is not None
+            for value in (
+                args.frozen_boundary_dir,
+                args.final_replay_relion_dir,
+                args.init_volume,
+                args.init_noise_from_npz,
+                args.init_previous_best_poses_npz,
+            )
+        ) or bool(args.apply_initial_lowpass):
+            raise SystemExit(
+                "diagnostic final-manifest replay cannot be combined with frozen, "
+                "RELION final-oracle, initial-volume/noise/pose, or low-pass overrides"
+            )
+        final_after_max = os.environ.get(
+            "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER",
+            "",
+        ).strip().lower()
+        if final_after_max not in {"1", "true", "yes", "on"}:
+            raise SystemExit(
+                "diagnostic final-manifest replay requires "
+                "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=1"
+            )
+        try:
+            final_manifest_replay = _load_final_manifest_replay(
+                args.diagnostic_final_manifest_dir,
+                args.diagnostic_final_source_results,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid diagnostic final-manifest replay: {exc}") from exc
+        if int(args.init_relion_iteration) != final_manifest_replay.completed_relion_iteration:
+            raise SystemExit(
+                "--init_relion_iteration does not match diagnostic final-manifest source: "
+                f"cli={args.init_relion_iteration}, "
+                f"source={final_manifest_replay.completed_relion_iteration}"
+            )
+        if int(args.healpix_order) != final_manifest_replay.healpix_order:
+            raise SystemExit(
+                "--healpix_order does not match diagnostic final-manifest source: "
+                f"cli={args.healpix_order}, source={final_manifest_replay.healpix_order}"
+            )
+        logger.warning(
+            "Diagnostic final-manifest replay loaded: manifests=%s source_results=%s "
+            "source_git=%s completed_relion_iteration=%d",
+            [str(path) for path in final_manifest_replay.manifest_paths],
+            final_manifest_replay.source_results_path,
+            final_manifest_replay.source_git_commit,
+            final_manifest_replay.completed_relion_iteration,
+        )
+
     frozen_boundary = None
     fixed_diagnostic_source_paths = None
     if args.frozen_boundary_dir is not None:
@@ -3401,7 +3741,30 @@ def main():
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
     logger.info("Half-sets: %d + %d images", ds_half1.n_units, ds_half2.n_units)
-    if frozen_boundary is not None:
+    if final_manifest_replay is not None:
+        expected_volume_size = int(np.prod(ds.volume_shape))
+        if any(mean.shape != (expected_volume_size,) for mean in final_manifest_replay.means):
+            raise SystemExit(
+                "Diagnostic final-manifest mean shape does not match the active dataset: "
+                f"means={[mean.shape for mean in final_manifest_replay.means]}, "
+                f"expected={(expected_volume_size,)}"
+            )
+        init_vol_ft = np.stack(final_manifest_replay.means, axis=0)
+        init_vol_real = np.empty((0,), dtype=np.float32)
+        init_reference_path = os.path.join(args.data_dir, "reference_init.mrc")
+        relion_model_pixel_size = _read_relion_mrc_model_pixel_size(init_reference_path)
+        if not np.isfinite(relion_model_pixel_size) or relion_model_pixel_size <= 0.0:
+            raise SystemExit(
+                "Diagnostic final-manifest replay could not recover the original model "
+                f"pixel size from {init_reference_path}"
+            )
+        logger.info(
+            "Diagnostic final-only per-half Fourier references loaded from %s; "
+            "model_pixel_size=%.9g A/px",
+            [str(path) for path in final_manifest_replay.manifest_paths],
+            relion_model_pixel_size,
+        )
+    elif frozen_boundary is not None:
         live_names_per_half = (
             np.asarray(our_names[half1_idx], dtype=str),
             np.asarray(our_names[half2_idx], dtype=str),
@@ -3785,7 +4148,26 @@ def main():
         )
     init_reference_real_for_projector = None
 
-    if frozen_boundary is not None:
+    if final_manifest_replay is not None:
+        expected_image_size = int(np.prod(ds.image_shape))
+        if any(
+            noise.shape != (expected_image_size,)
+            for noise in final_manifest_replay.noise_variance
+        ):
+            raise SystemExit(
+                "Diagnostic final-manifest noise shape does not match the active dataset: "
+                f"noise={[noise.shape for noise in final_manifest_replay.noise_variance]}, "
+                f"expected={(expected_image_size,)}"
+            )
+        noise_variance = np.stack(final_manifest_replay.noise_variance, axis=0)
+        initial_noise_radial = np.mean(
+            final_manifest_replay.noise_radial_per_half,
+            axis=0,
+        )
+        logger.info(
+            "Diagnostic final-only per-half noise loaded from sealed manifests"
+        )
+    elif frozen_boundary is not None:
         if frozen_boundary.volume_shape != tuple(int(value) for value in ds.volume_shape):
             raise SystemExit(
                 "Frozen-boundary volume_shape does not match the active dataset: "
@@ -4013,18 +4395,22 @@ def main():
     # tau2 trajectories from the per-class FSCs once the loop starts.
     from recovar.reconstruction.regularization import average_over_shells
 
-    if frozen_boundary is not None:
-        init_PS_source = jnp.asarray(merged_init_ft)
-    elif args.n_classes > 1:
-        init_PS_source = jnp.asarray(per_class_ft[0])
+    if final_manifest_replay is not None:
+        mean_variance = jnp.asarray(final_manifest_replay.mean_variance)
+        logger.info("Diagnostic final-only tau2 loaded from sealed manifests")
     else:
-        init_PS_source = jnp.asarray(init_vol_ft)
-    init_PS = average_over_shells(jnp.abs(init_PS_source) ** 2, ds.volume_shape)
-    from recovar import utils
+        if frozen_boundary is not None:
+            init_PS_source = jnp.asarray(merged_init_ft)
+        elif args.n_classes > 1:
+            init_PS_source = jnp.asarray(per_class_ft[0])
+        else:
+            init_PS_source = jnp.asarray(init_vol_ft)
+        init_PS = average_over_shells(jnp.abs(init_PS_source) ** 2, ds.volume_shape)
+        from recovar import utils
 
-    init_prior = utils.make_radial_image(init_PS, ds.volume_shape, extend_last_frequency=True)
-    # Scale by a factor to provide regularization without being too strong
-    mean_variance = jnp.asarray(init_prior * 0.5 + jnp.max(init_prior) * 1e-4)
+        init_prior = utils.make_radial_image(init_PS, ds.volume_shape, extend_last_frequency=True)
+        # Scale by a factor to provide regularization without being too strong
+        mean_variance = jnp.asarray(init_prior * 0.5 + jnp.max(init_prior) * 1e-4)
 
     # ---- STRICT-PARITY: --relion_init_dir override of bootstrapped iter-0 state ----
     # When set, replace the image-bootstrap sigma2_noise + power-spectrum-bootstrap
@@ -4089,7 +4475,11 @@ def main():
             np.asarray(relion_fresh_initial_noise_source_rows, dtype=np.int64)[:5].tolist(),
             np.asarray(relion_live_initial_sigma2[:5]),
         )
-    if args.relion_init_dir is not None and frozen_boundary is None:
+    if (
+        args.relion_init_dir is not None
+        and frozen_boundary is None
+        and final_manifest_replay is None
+    ):
         import re as _re
         from pathlib import Path as _Path
 
@@ -4213,9 +4603,13 @@ def main():
     # Compute initial current_size from init_resolution, unless an atomic
     # frozen boundary owns the numbered-iteration schedule.
     init_current_size = (
-        int(frozen_boundary.current_size)
-        if frozen_boundary is not None
-        else max(32, int(2 * ds.voxel_size * ds.grid_size / args.init_resolution))
+        int(final_manifest_replay.current_size)
+        if final_manifest_replay is not None
+        else (
+            int(frozen_boundary.current_size)
+            if frozen_boundary is not None
+            else max(32, int(2 * ds.voxel_size * ds.grid_size / args.init_resolution))
+        )
     )
     logger.info("Initial current_size from resolution %.1f A: %d pixels", args.init_resolution, init_current_size)
 
@@ -4478,6 +4872,14 @@ def main():
         args.tau2_fudge,
         relion_init_tau2_fudge,
     )
+    if (
+        final_manifest_replay is not None
+        and float(effective_tau2_fudge) != float(final_manifest_replay.tau2_fudge)
+    ):
+        raise SystemExit(
+            "Diagnostic final-manifest tau2_fudge mismatch: "
+            f"runtime={effective_tau2_fudge} source={final_manifest_replay.tau2_fudge}"
+        )
     logger.info("Using tau2_fudge=%.3f (%s)", float(effective_tau2_fudge), tau2_fudge_source)
 
     t_start = time.time()
@@ -4551,7 +4953,21 @@ def main():
         " (explicit)" if args.perturb_seed is not None else " (from --seed)",
     )
     init_previous_best_poses = None
-    if frozen_boundary is not None:
+    if final_manifest_replay is not None:
+        init_previous_best_poses = {
+            "iteration": f"{final_manifest_replay.completed_relion_iteration - 1:03d}",
+            "previous_best_rotation_eulers": list(
+                final_manifest_replay.previous_best_rotation_eulers
+            ),
+            "previous_best_translations": list(
+                final_manifest_replay.previous_best_translations
+            ),
+        }
+        logger.info(
+            "Diagnostic final-only previous poses loaded from %s",
+            final_manifest_replay.source_results_path,
+        )
+    elif frozen_boundary is not None:
         init_previous_best_poses = {
             "iteration": f"{frozen_boundary.completed_relion_iteration - 1:03d}",
             "previous_best_rotation_eulers": list(
@@ -4609,8 +5025,16 @@ def main():
         relion_current_sizes=oracle_current_sizes,
         relion_healpix_orders=oracle_healpix_orders,
         init_current_size=init_current_size,
-        init_fsc=None if frozen_boundary is None else frozen_boundary.fsc,
-        init_ave_Pmax=None if frozen_boundary is None else frozen_boundary.ave_pmax,
+        init_fsc=(
+            final_manifest_replay.fsc
+            if final_manifest_replay is not None
+            else (None if frozen_boundary is None else frozen_boundary.fsc)
+        ),
+        init_ave_Pmax=(
+            final_manifest_replay.ave_pmax
+            if final_manifest_replay is not None
+            else (None if frozen_boundary is None else frozen_boundary.ave_pmax)
+        ),
         init_has_high_fsc_at_limit=(
             None if frozen_boundary is None else frozen_boundary.has_high_fsc_at_limit
         ),
@@ -4627,12 +5051,16 @@ def main():
         **_refine_sampling_kwargs(args, init_healpix_order),
         max_healpix_order=effective_max_healpix_order,
         init_translation_sigma_angstrom=(
-            frozen_boundary.translation_sigma_angstrom_per_half
-            if frozen_boundary is not None
+            final_manifest_replay.translation_sigma_angstrom_per_half
+            if final_manifest_replay is not None
             else (
-                relion_init_sigma_offset_angstrom
-                if relion_init_sigma_offset_angstrom is not None
-                else args.offset_sigma_angstrom
+                frozen_boundary.translation_sigma_angstrom_per_half
+                if frozen_boundary is not None
+                else (
+                    relion_init_sigma_offset_angstrom
+                    if relion_init_sigma_offset_angstrom is not None
+                    else args.offset_sigma_angstrom
+                )
             )
         ),
         particle_diameter_ang=particle_diameter_ang,
@@ -4688,15 +5116,21 @@ def main():
             else init_previous_best_poses["previous_best_rotation_eulers"]
         ),
         init_image_corrections=(
-            None if frozen_boundary is None else frozen_boundary.image_corrections
+            final_manifest_replay.image_corrections
+            if final_manifest_replay is not None
+            else (None if frozen_boundary is None else frozen_boundary.image_corrections)
         ),
         init_scale_corrections=(
-            None if frozen_boundary is None else frozen_boundary.scale_corrections
+            final_manifest_replay.scale_corrections
+            if final_manifest_replay is not None
+            else (None if frozen_boundary is None else frozen_boundary.scale_corrections)
         ),
         init_direction_prior=(
             None if frozen_boundary is None else frozen_boundary.direction_prior_per_half
         ),
-        assert_initial_scoring_state_immutable=frozen_boundary is not None,
+        assert_initial_scoring_state_immutable=(
+            frozen_boundary is not None or final_manifest_replay is not None
+        ),
         preserve_initial_direction_prior=frozen_boundary is not None,
         skip_final_iteration=bool(args.skip_final_iteration),
         save_intermediates_dir=args.save_intermediates_dir,
@@ -4728,6 +5162,7 @@ def main():
         ),
         preserve_bpref_particle_order=use_fresh_auto_refine_order,
         state_swap_probe=state_swap_probe,
+        diagnostic_final_only=final_manifest_replay is not None,
     )
 
     validate_state_swap_probe_application(
@@ -4900,6 +5335,38 @@ def main():
         ),
         "frozen_boundary_completed_relion_iteration": np.int64(
             -1 if frozen_boundary is None else frozen_boundary.completed_relion_iteration
+        ),
+        "diagnostic_final_manifest_paths": np.asarray(
+            []
+            if final_manifest_replay is None
+            else [str(path) for path in final_manifest_replay.manifest_paths],
+            dtype=np.str_,
+        ),
+        "diagnostic_final_manifest_sha256": np.asarray(
+            []
+            if final_manifest_replay is None
+            else final_manifest_replay.manifest_sha256,
+            dtype=np.str_,
+        ),
+        "diagnostic_final_source_results_path": np.asarray(
+            ""
+            if final_manifest_replay is None
+            else str(final_manifest_replay.source_results_path)
+        ),
+        "diagnostic_final_source_results_sha256": np.asarray(
+            ""
+            if final_manifest_replay is None
+            else final_manifest_replay.source_results_sha256
+        ),
+        "diagnostic_final_source_git_commit": np.asarray(
+            ""
+            if final_manifest_replay is None
+            else final_manifest_replay.source_git_commit
+        ),
+        "diagnostic_final_source_completed_relion_iteration": np.int64(
+            -1
+            if final_manifest_replay is None
+            else final_manifest_replay.completed_relion_iteration
         ),
         "state_swap_probe_target_relion_iteration": np.int64(
             -1
@@ -5494,7 +5961,17 @@ def main():
                     )
                 logger.info("Saved %d per-class merged final volumes", args.n_classes)
 
-    # ---- Print summary ----
+    _print_refinement_summary(
+        result,
+        total_time=total_time,
+        image_size=ds.image_shape[0],
+        voxel_size=ds.voxel_size,
+    )
+
+
+def _print_refinement_summary(result, *, total_time, image_size, voxel_size):
+    """Print numbered-iteration metrics, including valid final-only replays."""
+
     print("\n" + "=" * 70)
     print("REFINEMENT SUMMARY")
     print("=" * 70)
@@ -5507,7 +5984,7 @@ def main():
     for i in range(len(result["current_sizes"])):
         cs = result["current_sizes"][i]
         pr = result["pixel_resolutions"][i]
-        res_a = _shell_index_to_resolution_angstrom(pr, ds.image_shape[0], ds.voxel_size)
+        res_a = _shell_index_to_resolution_angstrom(pr, image_size, voxel_size)
         wt = result["wall_times"][i]
         line = f"{i + 1:4d}  {cs:8d}  {pr:8.1f}  {res_a:8.2f}  {wt:8.1f}"
         if result["significant_counts"][i] is not None:
@@ -5517,12 +5994,15 @@ def main():
 
     print("-" * 70)
     print(f"Total wall time: {total_time:.1f}s")
-    print(f"Final current_size: {result['current_sizes'][-1]}")
-    print(f"Final pixel resolution: {result['pixel_resolutions'][-1]:.1f}")
-    print(
-        "Final resolution: "
-        f"{_shell_index_to_resolution_angstrom(result['pixel_resolutions'][-1], ds.image_shape[0], ds.voxel_size):.2f} A"
-    )
+    if result["current_sizes"]:
+        print(f"Final current_size: {result['current_sizes'][-1]}")
+        print(f"Final pixel resolution: {result['pixel_resolutions'][-1]:.1f}")
+        print(
+            "Final resolution: "
+            f"{_shell_index_to_resolution_angstrom(result['pixel_resolutions'][-1], image_size, voxel_size):.2f} A"
+        )
+    else:
+        print("Numbered iterations: 0 (final-only diagnostic completed)")
     print("=" * 70)
 
 

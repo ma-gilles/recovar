@@ -396,6 +396,24 @@ def test_bpref_order_scope_is_dormant_when_preservation_is_disabled():
     )
 
 
+def test_final_manifest_replay_can_reconstruct_imported_physical_order():
+    kwargs = {
+        "preserve_bpref_particle_order": True,
+        "n_classes": 1,
+        "init_relion_iteration": 15,
+        "perturb_replay_relion_dir": None,
+        "replay_iteration_overrides": None,
+        "sealed_sampling_state": None,
+        "sealed_scoring_context": None,
+        "allow_final_manifest_replay": True,
+    }
+    _validate_bpref_particle_order_scope(**kwargs)
+
+    invalid = dict(kwargs, init_relion_iteration=0)
+    with pytest.raises(ValueError, match="requires an imported iteration"):
+        _validate_bpref_particle_order_scope(**invalid)
+
+
 def test_state_swap_fresh_k1_bpref_order_scope_requires_complete_unsealed_replay():
     kwargs = {
         "preserve_bpref_particle_order": True,

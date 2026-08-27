@@ -752,6 +752,15 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
             current_size=50,
             debug_iteration=7,
         )
+        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+            current_size=None,
+            debug_iteration=7,
+        )
+        assert local_em_engine._exact_local_bpref_contribution_capture_active(
+            current_size=None,
+            debug_iteration=7,
+            allow_missing_current_size=True,
+        )
         assert not local_em_engine._exact_local_bpref_contribution_capture_for_call(
             current_size=50,
             debug_iteration=7,
@@ -811,15 +820,123 @@ def test_clear_dump_context_marks_contribution_and_native_dumps_inactive():
     }
 
 
-def test_iteration_loop_clears_dump_context_before_every_final_exit_or_half():
+def test_iteration_loop_scopes_dump_context_before_every_final_exit_or_half():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     final_decision = source.index("should_run_final_iteration =")
-    final_loop = source.index("for k in range(2):", source.index("final_outs = PerHalfOutputs.empty()"))
+    final_loop = source.index(
+        "for k in _final_bpref_contribution_half_indices():",
+        source.index("final_outs = PerHalfOutputs.empty()"),
+    )
 
     assert source.rfind("clear_bpref_contribution_dump_context()", 0, final_decision) >= 0
-    assert "clear_bpref_contribution_dump_context()" in source[
+    assert "_set_bpref_contribution_context_for_final_half(" in source[
         final_loop : source.index("final_half_t0", final_loop)
     ]
+
+
+def test_final_bpref_contribution_context_is_explicit_and_half_scoped(monkeypatch):
+    sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+    assert not iteration_loop._set_bpref_contribution_context_for_final_half(
+        iteration=16,
+        half=1,
+        environ={},
+    )
+    assert sparse_pass2_bucketed._bpref_contribution_context == {
+        "iteration": -1,
+        "half": -1,
+    }
+
+    env = {
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR": "/tmp/contributions",
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION": "16",
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF": "2",
+    }
+    assert not iteration_loop._set_bpref_contribution_context_for_final_half(
+        iteration=16,
+        half=1,
+        environ=env,
+    )
+    assert iteration_loop._set_bpref_contribution_context_for_final_half(
+        iteration=16,
+        half=2,
+        environ=env,
+    )
+    assert sparse_pass2_bucketed._bpref_contribution_context == {
+        "iteration": 16,
+        "half": 2,
+    }
+    sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+
+
+def test_bpref_contribution_target_only_requires_one_terminating_target():
+    helper = local_em_engine._bpref_contribution_target_only_original_indices
+    assert helper(capture_active=False, environ={}) == set()
+    assert helper(
+        capture_active=True,
+        environ={
+            "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY": "1",
+            "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET": "1",
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES": "7",
+        },
+    ) == {7}
+    with pytest.raises(RuntimeError, match="STOP_AFTER_TARGET=1"):
+        helper(
+            capture_active=True,
+            environ={
+                "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY": "1",
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES": "7",
+            },
+        )
+    with pytest.raises(RuntimeError, match="exactly one"):
+        helper(
+            capture_active=True,
+            environ={
+                "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY": "1",
+                "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET": "1",
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES": "7,8",
+            },
+        )
+
+
+def test_bpref_target_only_prunes_score_only_without_score_dump_flag():
+    helper = local_em_engine._target_only_bucket_filter_enabled
+    assert helper(
+        score_only=True,
+        bpref_contribution_target_only=True,
+        target_original_indices={7},
+        environ={},
+    )
+    assert not helper(
+        score_only=True,
+        bpref_contribution_target_only=False,
+        target_original_indices={7},
+        environ={},
+    )
+    assert helper(
+        score_only=True,
+        bpref_contribution_target_only=False,
+        target_original_indices={7},
+        environ={"RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY": "1"},
+    )
+
+
+def test_final_bpref_target_only_enters_only_requested_half():
+    assert iteration_loop._final_bpref_contribution_half_indices({}) == (0, 1)
+    env = {
+        "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY": "1",
+        "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET": "1",
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR": "/tmp/contributions",
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF": "2",
+    }
+    assert iteration_loop._final_bpref_contribution_half_indices(env) == (1,)
+    with pytest.raises(RuntimeError, match="STOP_AFTER_TARGET=1"):
+        iteration_loop._final_bpref_contribution_half_indices(
+            {
+                "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY": "1",
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR": "/tmp/contributions",
+                "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF": "1",
+            }
+        )
 
 
 def test_bucketed_source_has_no_unscoped_capture_branches():

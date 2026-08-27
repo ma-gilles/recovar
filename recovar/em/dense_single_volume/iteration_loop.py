@@ -374,6 +374,74 @@ def _bpref_device_signature_active_for_numbered_half(
         return False
     return int(iteration) == target_iteration and int(half) == target_half
 
+
+def _set_bpref_contribution_context_for_final_half(
+    *,
+    iteration: int,
+    half: int,
+    environ=None,
+) -> bool:
+    """Activate an explicitly targeted final-all-data contribution capture.
+
+    Final-all-data work normally clears the numbered-half diagnostic context.
+    A sealed-boundary replay may instead request one exact final iteration and
+    half.  Keep that exception fail-closed and scoped to contribution dumps;
+    ordinary refinement and device-signature capture remain inactive here.
+    """
+
+    env = os.environ if environ is None else environ
+    _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
+    if not str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "")).strip():
+        return False
+    raw_iteration = str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "")).strip()
+    raw_half = str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "")).strip()
+    if not raw_iteration or not raw_half:
+        raise RuntimeError(
+            "Final BPref contribution capture requires explicit positive "
+            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION and half 1 or 2"
+        )
+    try:
+        target_iteration = int(raw_iteration)
+        target_half = int(raw_half)
+    except ValueError as exc:
+        raise ValueError("Final BPref contribution iteration/half targets must be integers") from exc
+    if target_iteration <= 0 or target_half not in {1, 2}:
+        raise ValueError("Final BPref contribution capture requires iteration > 0 and half 1 or 2")
+    if int(iteration) <= 0 or int(half) not in {1, 2}:
+        raise ValueError("Final BPref contribution context requires iteration > 0 and half 1 or 2")
+    if int(iteration) != target_iteration or int(half) != target_half:
+        return False
+    _sparse_pass2_diagnostics.set_bpref_contribution_dump_context(
+        iteration=int(iteration),
+        half=int(half),
+    )
+    return True
+
+
+def _final_bpref_contribution_half_indices(environ=None) -> tuple[int, ...]:
+    """Return the sole final half for an explicitly terminating target probe."""
+
+    env = os.environ if environ is None else environ
+    target_only = str(env.get("RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY", "")).strip().lower()
+    if target_only not in {"1", "true", "yes", "on"}:
+        return (0, 1)
+    if str(env.get("RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET", "")).strip() != "1":
+        raise RuntimeError(
+            "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY=1 requires "
+            "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET=1"
+        )
+    if not str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "")).strip():
+        raise RuntimeError(
+            "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY=1 requires a contribution dump directory"
+        )
+    try:
+        target_half = int(str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "")).strip())
+    except ValueError as exc:
+        raise ValueError("Final target-only BPref half must be 1 or 2") from exc
+    if target_half not in {1, 2}:
+        raise ValueError("Final target-only BPref half must be 1 or 2")
+    return (target_half - 1,)
+
 logger = logging.getLogger(__name__)
 
 # RELION parses ``--adaptive_fraction 0.999`` through ``textToFloat`` and
@@ -742,6 +810,7 @@ def _validate_bpref_particle_order_scope(
     sealed_scoring_context,
     allow_replayed_bpref_particle_order: bool = False,
     allow_state_swap_fresh_bpref_particle_order: bool = False,
+    allow_final_manifest_replay: bool = False,
 ) -> None:
     """Fail closed unless RELION physical order starts an unsealed fresh K=1 run."""
 
@@ -749,6 +818,16 @@ def _validate_bpref_particle_order_scope(
         return
     if int(n_classes) != 1:
         raise ValueError("RELION BPref particle-order preservation is K=1-only")
+    if allow_final_manifest_replay:
+        if int(init_relion_iteration) <= 0:
+            raise ValueError(
+                "final-manifest BPref particle-order preservation requires an imported iteration"
+            )
+        if sealed_sampling_state is not None or sealed_scoring_context is not None:
+            raise ValueError(
+                "final-manifest BPref particle-order preservation cannot alter a sealed boundary"
+            )
+        return
     if allow_state_swap_fresh_bpref_particle_order:
         if int(init_relion_iteration) != 0:
             raise ValueError(
@@ -3878,6 +3957,7 @@ def _frozen_scoring_state_arrays(
     experiment_datasets=None,
     sealed_sampling_state=None,
     sealed_scoring_context=None,
+    allow_missing_direction_prior: bool = False,
 ):
     """Materialize every K=1 scoring primitive owned by a frozen restart."""
 
@@ -3897,6 +3977,13 @@ def _frozen_scoring_state_arrays(
                 f"Frozen scoring-state ownership requires two {field_name} arrays"
             )
         for half_index, value in enumerate(values):
+            if field_name == "direction_prior" and allow_missing_direction_prior:
+                arrays[f"{field_name}.half{half_index + 1}.is_present"] = np.asarray(
+                    value is not None,
+                    dtype=np.bool_,
+                )
+                if value is None:
+                    continue
             if value is None:
                 raise RuntimeError(
                     "Frozen scoring-state ownership requires "
@@ -4630,6 +4717,7 @@ def refine_single_volume(
     use_per_half_mean_variance=False,
     preserve_bpref_particle_order=False,
     allow_replayed_bpref_particle_order=False,
+    diagnostic_final_only=False,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
@@ -4923,6 +5011,7 @@ def refine_single_volume(
         use_per_half_mean_variance=use_per_half_mean_variance,
         preserve_bpref_particle_order=preserve_bpref_particle_order,
         allow_replayed_bpref_particle_order=allow_replayed_bpref_particle_order,
+        diagnostic_final_only=diagnostic_final_only,
     )
 
 
@@ -5032,6 +5121,7 @@ def _run_relion_iteration_loop(
     use_per_half_mean_variance=False,
     preserve_bpref_particle_order=False,
     allow_replayed_bpref_particle_order=False,
+    diagnostic_final_only=False,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -5121,6 +5211,7 @@ def _run_relion_iteration_loop(
         sealed_scoring_context=sealed_scoring_context,
         allow_replayed_bpref_particle_order=allow_replayed_bpref_particle_order,
         allow_state_swap_fresh_bpref_particle_order=state_swap_probe is not None,
+        allow_final_manifest_replay=diagnostic_final_only,
     )
     source_faithful_spectrum_norm = _fresh_k1_spectrum_norm_default(
         preserve_bpref_particle_order=preserve_bpref_particle_order,
@@ -5190,6 +5281,8 @@ def _run_relion_iteration_loop(
 
     # --- Initialize RefinementState ---
     # Corresponds to RELION's initialiseSamplingVectors + initialLowPassFilterReferences
+    if diagnostic_final_only and int(max_iter) != 0:
+        raise ValueError("diagnostic final-only replay requires max_iter=0")
     state = RefinementState(
         iteration=0,
         healpix_order=init_healpix_order,
@@ -5201,6 +5294,10 @@ def _run_relion_iteration_loop(
         current_resolution=float("inf"),
         voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         particle_diameter_angstrom=float(particle_diameter_ang or 0.0),
+        do_local_search=bool(
+            diagnostic_final_only
+            and int(init_healpix_order) >= int(auto_local_healpix_order)
+        ),
     )
     # RELION's convergence counters are not initialized against an infinite
     # previous resolution.  They resume from the previous optimiser/model STAR
@@ -5983,14 +6080,8 @@ def _run_relion_iteration_loop(
     replay_saved_healpix_order = (
         None if native_sampling_boundary else int(state.healpix_order)
     )
-    frozen_initial_scoring_state = None
-    frozen_initial_scoring_state_sha256 = None
-    if assert_initial_scoring_state_immutable:
-        if k_class_enabled:
-            raise RuntimeError(
-                "Frozen scoring-state immutability assertion currently supports K=1 only"
-            )
-        frozen_initial_scoring_state = _frozen_scoring_state_arrays(
+    def _current_frozen_scoring_state_arrays():
+        return _frozen_scoring_state_arrays(
             means=means,
             mean_variance=mean_variance,
             mean_variance_per_half=(
@@ -6003,7 +6094,17 @@ def _run_relion_iteration_loop(
             experiment_datasets=experiment_datasets,
             sealed_sampling_state=sealed_sampling_state,
             sealed_scoring_context=sealed_scoring_context,
+            allow_missing_direction_prior=diagnostic_final_only,
         )
+
+    frozen_initial_scoring_state = None
+    frozen_initial_scoring_state_sha256 = None
+    if assert_initial_scoring_state_immutable:
+        if k_class_enabled:
+            raise RuntimeError(
+                "Frozen scoring-state immutability assertion currently supports K=1 only"
+            )
+        frozen_initial_scoring_state = _current_frozen_scoring_state_arrays()
     while (force_max_iter_after_convergence or not state.has_converged) and iteration < max_iter:
         # RELION checks convergence at the top of iteration n from the
         # completed n-1 statistics and the fine-enough decision latched during
@@ -6476,20 +6577,7 @@ def _run_relion_iteration_loop(
         if frozen_initial_scoring_state is not None and iteration == 0:
             frozen_initial_scoring_state_sha256 = _assert_frozen_scoring_state_unchanged(
                 frozen_initial_scoring_state,
-                _frozen_scoring_state_arrays(
-                    means=means,
-                    mean_variance=mean_variance,
-                    mean_variance_per_half=(
-                        mean_variance_per_half if use_per_half_mean_variance else None
-                    ),
-                    relion_half_inputs=relion_half_inputs,
-                    noise_variance_per_half=noise_variance_per_half,
-                    current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
-                    global_direction_prior_per_half=global_direction_prior_per_half,
-                    experiment_datasets=experiment_datasets,
-                    sealed_sampling_state=sealed_sampling_state,
-                    sealed_scoring_context=sealed_scoring_context,
-                ),
+                _current_frozen_scoring_state_arrays(),
             )
             logger.info(
                 "Frozen scoring-state ownership verified immediately before physical iteration %d scoring",
@@ -9476,6 +9564,18 @@ def _run_relion_iteration_loop(
     # return path or RELION's unnumbered final all-data pass.
     _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
 
+    if (
+        frozen_initial_scoring_state is not None
+        and frozen_initial_scoring_state_sha256 is None
+    ):
+        frozen_initial_scoring_state_sha256 = _assert_frozen_scoring_state_unchanged(
+            frozen_initial_scoring_state,
+            _current_frozen_scoring_state_arrays(),
+        )
+        logger.info(
+            "Frozen scoring-state ownership verified immediately before final-only scoring"
+        )
+
     # RELION can enter final all-data only when checkConvergence() ran at the
     # top of a permitted loop iteration.  If the last numbered iteration
     # merely makes the state convergence-ready, ``iter <= nr_iter`` ends and
@@ -10339,14 +10439,20 @@ def _run_relion_iteration_loop(
         pass_index=2,
     )
     final_outs = PerHalfOutputs.empty()
-    for k in range(2):
-        _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
+    for k in _final_bpref_contribution_half_indices():
+        final_bpref_contribution_capture_active = (
+            _set_bpref_contribution_context_for_final_half(
+                iteration=final_sampling_relion_iteration,
+                half=k + 1,
+            )
+        )
         final_half_t0 = time.time()
         logger.info(
-            "BPREF_DEVICE_SIGNATURE_ACTIVATION iteration=%d half=%d "
-            "final_all_data=true active=false",
-            iteration + 1,
+            "BPREF_FINAL_CONTRIBUTION_ACTIVATION iteration=%d half=%d "
+            "final_all_data=true active=%s",
+            final_sampling_relion_iteration,
             k + 1,
+            str(final_bpref_contribution_capture_active).lower(),
         )
         logger.info(
             "RELION final all-data half-%d start: images=%d current_size=%d "

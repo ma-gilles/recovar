@@ -81,3 +81,78 @@ def test_read_relion_spectrum_reads_length_header(tmp_path):
     loaded = replay_final_bpref_dump.read_relion_spectrum(path)
 
     np.testing.assert_array_equal(loaded, values)
+
+
+def test_streaming_field_metrics_reports_exact_equality_across_chunks():
+    values = np.arange(12, dtype=np.float64).reshape(3, 4)
+
+    metrics = replay_final_bpref_dump.streaming_field_metrics(
+        values,
+        values.copy(),
+        chunk_size=5,
+    )
+
+    assert metrics == {
+        "element_count": 12,
+        "exact_equal": True,
+        "mismatch_count": 0,
+        "first_mismatch_flat_index": None,
+        "maximum_absolute_residual": 0.0,
+        "relative_l2": 0.0,
+        "source_to_target_least_squares_scale": 1.0,
+        "relative_l2_after_scale": 0.0,
+    }
+
+
+def test_streaming_field_metrics_separates_scale_from_structural_residual():
+    source = np.asarray([1.0 + 2.0j, -3.0 + 1.0j, 2.0 - 4.0j])
+    target = 2.5 * source
+
+    metrics = replay_final_bpref_dump.streaming_field_metrics(
+        source,
+        target,
+        chunk_size=2,
+    )
+
+    assert metrics["exact_equal"] is False
+    assert metrics["mismatch_count"] == source.size
+    assert metrics["first_mismatch_flat_index"] == 0
+    np.testing.assert_allclose(metrics["source_to_target_least_squares_scale"], 2.5)
+    np.testing.assert_allclose(metrics["relative_l2"], 0.6)
+    np.testing.assert_allclose(metrics["relative_l2_after_scale"], 0.0, atol=1e-15)
+
+
+def test_compare_relion_boundary_spectra_applies_native_frame_scale(tmp_path):
+    prefix = tmp_path / "mstep"
+    grid_size = 4
+    n4 = float(grid_size**4)
+    native = {
+        "tau2": np.asarray([1.0, 2.0, 3.0]),
+        "sigma2": np.asarray([4.0, 5.0, 6.0]),
+        "data_vs_prior": np.asarray([7.0, 8.0, 9.0]),
+        "fsc": np.asarray([0.9, 0.8, 0.7]),
+        "fourier_coverage": np.asarray([0.1, 0.2, 0.3]),
+    }
+    for name, values in native.items():
+        with (tmp_path / f"mstep_{name}.bin").open("wb") as stream:
+            stream.write(struct.pack("q", values.size))
+            values.tofile(stream)
+    dump = {
+        "tau2_prior_shells": native["tau2"] * n4,
+        "tau2_sigma2_shells": native["sigma2"] * n4,
+        "tau2_ssnr_shells": native["data_vs_prior"],
+        "fsc_shells": native["fsc"],
+    }
+
+    report = replay_final_bpref_dump.compare_relion_boundary_spectra(
+        dump,
+        prefix,
+        grid_size=grid_size,
+    )
+
+    assert report["native_to_recovar_tau2_sigma2_scale"] == n4
+    assert all(
+        row["exact_equal"]
+        for row in report["comparisons"].values()
+    )
+    assert report["native_fourier_coverage"]["element_count"] == 3
