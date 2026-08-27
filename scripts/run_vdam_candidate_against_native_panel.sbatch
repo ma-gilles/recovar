@@ -31,6 +31,8 @@ VDAM_DEFER_AUDIT=${VDAM_DEFER_AUDIT:-1}
 VDAM_WORKER_SCHEDULE_NPZ=${VDAM_WORKER_SCHEDULE_NPZ:-}
 VDAM_WORKER_REPLAY_TOPOLOGY=${VDAM_WORKER_REPLAY_TOPOLOGY:-}
 EXPECTED_WORKER_SCHEDULE_SHA256=${EXPECTED_WORKER_SCHEDULE_SHA256:-}
+VDAM_BLOCK_CHRONOLOGY_NPZ=${VDAM_BLOCK_CHRONOLOGY_NPZ:-}
+EXPECTED_BLOCK_CHRONOLOGY_SHA256=${EXPECTED_BLOCK_CHRONOLOGY_SHA256:-}
 RECOVAR_CUDA_LIB_PATH=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
 CANDIDATE_ROOT=${OUTPUT_ROOT}/${CASE_ID}
 RECOVAR_DIR=${CANDIDATE_ROOT}/recovar
@@ -50,11 +52,20 @@ if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
     test "$(sha256sum "${VDAM_WORKER_SCHEDULE_NPZ}" | awk '{print $1}')" = \
         "${EXPECTED_WORKER_SCHEDULE_SHA256}"
     case "${VDAM_WORKER_REPLAY_TOPOLOGY}" in
-        captured|single|single_rotation|single_rotation_f64|single_rotation_reverse|single_rotation_sm132) ;;
-        *) echo "worker replay topology must be captured, single, single_rotation, single_rotation_f64, single_rotation_reverse, or single_rotation_sm132" >&2; exit 2 ;;
+        captured|single|single_rotation|single_rotation_f64|single_rotation_reverse|single_rotation_sm132|captured_block_start) ;;
+        *) echo "unsupported worker replay topology: ${VDAM_WORKER_REPLAY_TOPOLOGY}" >&2; exit 2 ;;
     esac
 elif [[ -n "${VDAM_WORKER_REPLAY_TOPOLOGY}" || -n "${EXPECTED_WORKER_SCHEDULE_SHA256}" ]]; then
     echo "worker replay topology/hash requires VDAM_WORKER_SCHEDULE_NPZ" >&2
+    exit 2
+fi
+if [[ "${VDAM_WORKER_REPLAY_TOPOLOGY}" == "captured_block_start" ]]; then
+    test -s "${VDAM_BLOCK_CHRONOLOGY_NPZ}"
+    test -n "${EXPECTED_BLOCK_CHRONOLOGY_SHA256}"
+    test "$(sha256sum "${VDAM_BLOCK_CHRONOLOGY_NPZ}" | awk '{print $1}')" = \
+        "${EXPECTED_BLOCK_CHRONOLOGY_SHA256}"
+elif [[ -n "${VDAM_BLOCK_CHRONOLOGY_NPZ}" || -n "${EXPECTED_BLOCK_CHRONOLOGY_SHA256}" ]]; then
+    echo "block chronology is only valid with captured_block_start" >&2
     exit 2
 fi
 test -f "${PANEL_ROOT}/SAFE_TO_DELETE"
@@ -132,6 +143,9 @@ if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
     export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${VDAM_WORKER_SCHEDULE_NPZ}
     export RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY=${VDAM_WORKER_REPLAY_TOPOLOGY}
 fi
+if [[ -n "${VDAM_BLOCK_CHRONOLOGY_NPZ}" ]]; then
+    export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${VDAM_BLOCK_CHRONOLOGY_NPZ}
+fi
 export JAX_COMPILATION_CACHE_DIR=${OUTPUT_ROOT}/jax_compilation_cache
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0.01
 export TMPDIR=${CANDIDATE_ROOT}/runtime/${SLURM_JOB_ID}/tmp
@@ -205,6 +219,9 @@ sha256sum "${RECOVAR_CUDA_LIB}" "${RELION_BIND_MATCHES[0]}" "${VDAM_SCORECARD}" 
     > "${PROVENANCE_DIR}/input_sha256.txt"
 if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
     sha256sum "${VDAM_WORKER_SCHEDULE_NPZ}" >> "${PROVENANCE_DIR}/input_sha256.txt"
+fi
+if [[ -n "${VDAM_BLOCK_CHRONOLOGY_NPZ}" ]]; then
+    sha256sum "${VDAM_BLOCK_CHRONOLOGY_NPZ}" >> "${PROVENANCE_DIR}/input_sha256.txt"
 fi
 nvidia-smi -q > "${PROVENANCE_DIR}/nvidia_smi.txt"
 printf '%q ' "${RECOVAR_COMMAND[@]}" > "${PROVENANCE_DIR}/recovar_command.sh"

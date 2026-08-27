@@ -103,6 +103,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "grid_rotations, 128, 0, particle_streams[lane]" in projector_launcher
     assert "serial_rotation_replay ? rotation_count : 1" in projector_launcher
     assert "reverse_rotation_replay ? rotation_count - 1 - launch : launch" in projector_launcher
+    assert "rotation_replay_order_host[" in projector_launcher
+    assert "captured_rotation_replay" in projector_launcher
+    assert "seen[rotation] = 1" in projector_launcher
     assert "logical_lane + lane_wave * stride" in projector_launcher
     assert "rotation_offset * translation_count" in projector_launcher
     assert "relion_vdam_denominator_after_sgd_f32_kernel<<<" in projector_launcher
@@ -133,11 +136,13 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "jnp.arange(n_particles, dtype=jnp.int32) % 8" in projector_wrapper
     assert "parallel_worker_replay = worker_lane_ids is not None" in projector_wrapper
     assert "parallel_worker_replay=np.int64(parallel_worker_replay)" in projector_wrapper
+    assert "captured_rotation_replay=np.int64(captured_rotation_replay)" in projector_wrapper
     assert "serial_rotation_replay=np.int64(serial_rotation_replay)" in projector_wrapper
     assert "float64_accumulator_replay=np.int64(float64_accumulator_replay)" in projector_wrapper
     assert "reverse_rotation_replay=np.int64(reverse_rotation_replay)" in projector_wrapper
     assert "rotation_replay_stride=np.int64(rotation_replay_stride)" in projector_wrapper
     assert "worker_lane_ids" in projector_wrapper
+    assert "rotation_replay_order" in projector_wrapper
 
 
 @pytest.mark.gpu
@@ -701,6 +706,66 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
     for first, second in zip(f64_a, f64_b, strict=True):
         np.testing.assert_array_equal(first, second)
         assert np.all(np.isfinite(np.asarray(first)))
+
+
+@pytest.mark.gpu
+def test_relion_vdam_captured_rotation_order_matches_reverse_replay(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    image_shape = (8, 8)
+    volume_shape = (11, 11, 11)
+    half_width = image_shape[1] // 2 + 1
+    pixel_indices = np.arange(image_shape[0] * half_width, dtype=np.int32)
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    rng = np.random.default_rng(9031)
+    images = (
+        rng.normal(size=(1, pixel_indices.size))
+        + 1j * rng.normal(size=(1, pixel_indices.size))
+    ).astype(np.complex64)
+    common = (
+        jnp.zeros((volume_size,), dtype=jnp.complex64),
+        jnp.zeros((volume_size,), dtype=jnp.float32),
+        jnp.asarray(images),
+        jnp.asarray(rng.uniform(0.25, 1.25, size=images.shape), dtype=jnp.float32),
+        jnp.asarray(rng.uniform(0.5, 2.0, size=images.shape), dtype=jnp.float32),
+        jnp.asarray(rng.uniform(0.0, 0.5, size=(1, 2, 3)), dtype=jnp.float32),
+        jnp.asarray([[0.0, 0.0], [0.01, -0.02], [-0.03, 0.015]], dtype=jnp.float32),
+        jnp.asarray(pixel_indices),
+        jnp.zeros((11, 11, 11), dtype=jnp.complex64),
+        jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (1, 2, 3, 3)),
+        image_shape,
+        volume_shape,
+        4.0,
+        4,
+        1,
+    )
+    options = {
+        "worker_lane_ids": jnp.zeros((1,), dtype=jnp.int32),
+        "serial_rotation_replay": True,
+    }
+
+    with jax.default_device(gpu_device):
+        reverse = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            reverse_rotation_replay=True,
+            **options,
+        )
+        captured = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            rotation_replay_order=jnp.asarray([[1, 0]], dtype=jnp.int32),
+            **options,
+        )
+        jax.block_until_ready((reverse, captured))
+
+    for expected, actual in zip(reverse, captured, strict=True):
+        np.testing.assert_array_equal(actual, expected)
 
 
 @pytest.mark.gpu

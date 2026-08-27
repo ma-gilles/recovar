@@ -1735,7 +1735,7 @@ def relion_vdam_mstep_fused_x_half(
     return fused_data, fused_weight, compact_denominator
 
 
-@functools.partial(jax.jit, static_argnums=(10, 11, 12, 13, 14, 17, 18, 19, 20))
+@functools.partial(jax.jit, static_argnums=(10, 11, 12, 13, 14, 18, 19, 20, 21))
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
     weight_volume: jax.Array,
@@ -1754,6 +1754,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     projection_padding_factor: int,
     reconstruction_group_ids: jax.Array | None = None,
     worker_lane_ids: jax.Array | None = None,
+    rotation_replay_order: jax.Array | None = None,
     serial_rotation_replay: bool = False,
     float64_accumulator_replay: bool = False,
     reverse_rotation_replay: bool = False,
@@ -1830,6 +1831,18 @@ def relion_vdam_mstep_fused_projector_x_half(
             raise TypeError("worker_lane_ids must be int32")
         if worker_lane_ids.shape != (n_particles,):
             raise ValueError("worker_lane_ids must match the particle axis")
+    captured_rotation_replay = rotation_replay_order is not None
+    if rotation_replay_order is None:
+        rotation_replay_order = jnp.broadcast_to(
+            jnp.arange(n_rotations, dtype=jnp.int32),
+            (n_particles, n_rotations),
+        )
+    else:
+        rotation_replay_order = jnp.asarray(rotation_replay_order)
+        if rotation_replay_order.dtype != jnp.int32:
+            raise TypeError("rotation_replay_order must be int32")
+        if rotation_replay_order.shape != (n_particles, n_rotations):
+            raise ValueError("rotation_replay_order must match particle/rotation axes")
     _ensure_ffi()
 
     dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
@@ -1871,7 +1884,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
         _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
         output_types,
-        input_output_aliases={10: 0, 11: 1, 12: 2},
+        input_output_aliases={11: 0, 12: 1, 13: 2},
         vmap_method="sequential",
     )(
         projector_full,
@@ -1884,6 +1897,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         rot6,
         reconstruction_group_ids,
         worker_lane_ids,
+        rotation_replay_order,
         data_real_volume,
         data_imag_volume,
         weight_volume,
@@ -1899,6 +1913,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         projection_padding_factor=np.int64(projection_padding_factor),
         reconstruction_group_count=np.int64(reconstruction_group_count),
         parallel_worker_replay=np.int64(parallel_worker_replay),
+        captured_rotation_replay=np.int64(captured_rotation_replay),
         serial_rotation_replay=np.int64(serial_rotation_replay),
         float64_accumulator_replay=np.int64(float64_accumulator_replay),
         reverse_rotation_replay=np.int64(reverse_rotation_replay),

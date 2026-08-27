@@ -45,6 +45,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <vector>
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
@@ -4747,6 +4748,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const float* rot,
     const int32_t* reconstruction_group_ids,
     const int32_t* worker_lane_ids,
+    const int32_t* rotation_replay_order,
     float* data_real_volume,
     float* data_imag_volume,
     float* weight_volume,
@@ -4768,6 +4770,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int projection_padding_factor,
     int reconstruction_group_count,
     bool parallel_worker_replay,
+    bool captured_rotation_replay,
     bool serial_rotation_replay,
     bool float64_accumulator_replay,
     bool reverse_rotation_replay,
@@ -4799,6 +4802,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaEvent_t particle_inputs_ready = nullptr;
     int32_t* reconstruction_groups_host = nullptr;
     int32_t* worker_lanes_host = nullptr;
+    int32_t* rotation_replay_order_host = nullptr;
     double* data_real_volume_f64 = nullptr;
     double* data_imag_volume_f64 = nullptr;
     double* weight_volume_f64 = nullptr;
@@ -4979,6 +4983,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&worker_lanes_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
         if (err != cudaSuccess) goto cleanup;
+        if (captured_rotation_replay)
+        {
+            err = cudaMallocHost(
+                reinterpret_cast<void**>(&rotation_replay_order_host),
+                static_cast<size_t>(n_particles * rotation_count) * sizeof(int32_t));
+            if (err != cudaSuccess) goto cleanup;
+        }
         err = cudaMemcpyAsync(
             reconstruction_groups_host,
             reconstruction_group_ids,
@@ -4993,6 +5004,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             cudaMemcpyDeviceToHost,
             stream);
         if (err != cudaSuccess) goto cleanup;
+        if (captured_rotation_replay)
+        {
+            err = cudaMemcpyAsync(
+                rotation_replay_order_host,
+                rotation_replay_order,
+                static_cast<size_t>(n_particles * rotation_count) * sizeof(int32_t),
+                cudaMemcpyDeviceToHost,
+                stream);
+            if (err != cudaSuccess) goto cleanup;
+        }
         err = cudaStreamSynchronize(stream);
         if (err != cudaSuccess) goto cleanup;
         for (int64_t particle = 0; particle < n_particles; ++particle)
@@ -5008,6 +5029,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             {
                 err = cudaErrorInvalidValue;
                 goto cleanup;
+            }
+            if (captured_rotation_replay)
+            {
+                std::vector<unsigned char> seen(static_cast<size_t>(rotation_count), 0);
+                for (int64_t launch = 0; launch < rotation_count; ++launch)
+                {
+                    const int32_t rotation = rotation_replay_order_host[
+                        particle * rotation_count + launch];
+                    if (rotation < 0 || rotation >= rotation_count || seen[rotation])
+                    {
+                        err = cudaErrorInvalidValue;
+                        goto cleanup;
+                    }
+                    seen[rotation] = 1;
+                }
             }
         }
 
@@ -5062,6 +5098,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 int64_t rotation_offset = serial_rotation_replay
                     ? (reverse_rotation_replay ? rotation_count - 1 - launch : launch)
                     : 0;
+                if (captured_rotation_replay)
+                    rotation_offset = rotation_replay_order_host[
+                        particle * rotation_count + launch];
                 if (serial_rotation_replay && rotation_replay_stride > 0)
                 {
                     // Approximate a native fixed-SM work queue: each logical
@@ -5240,6 +5279,7 @@ cleanup:
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
     if (reconstruction_groups_host) cudaFreeHost(reconstruction_groups_host);
     if (worker_lanes_host) cudaFreeHost(worker_lanes_host);
+    if (rotation_replay_order_host) cudaFreeHost(rotation_replay_order_host);
     if (data_real_volume_f64) cudaFree(data_real_volume_f64);
     if (data_imag_volume_f64) cudaFree(data_imag_volume_f64);
     if (weight_volume_f64) cudaFree(weight_volume_f64);
@@ -8280,6 +8320,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t projection_padding_factor,
     int64_t reconstruction_group_count,
     int64_t parallel_worker_replay,
+    int64_t captured_rotation_replay,
     int64_t serial_rotation_replay,
     int64_t float64_accumulator_replay,
     int64_t reverse_rotation_replay,
@@ -8294,6 +8335,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     ffi::AnyBuffer rot,
     ffi::AnyBuffer reconstruction_group_ids,
     ffi::AnyBuffer worker_lane_ids,
+    ffi::AnyBuffer rotation_replay_order,
     ffi::AnyBuffer data_real_volume_in,
     ffi::AnyBuffer data_imag_volume_in,
     ffi::AnyBuffer weight_volume_in,
@@ -8316,6 +8358,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         rot.element_type() != ffi::DataType::F32 ||
         reconstruction_group_ids.element_type() != ffi::DataType::S32 ||
         worker_lane_ids.element_type() != ffi::DataType::S32 ||
+        rotation_replay_order.element_type() != ffi::DataType::S32 ||
         weight_volume_in.element_type() != ffi::DataType::F32 ||
         weight_volume_out->element_type() != ffi::DataType::F32 ||
         denominator_sum->element_type() != ffi::DataType::F32)
@@ -8327,10 +8370,14 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         projector_max_r <= 0 || projection_padding_factor <= 0 ||
         reconstruction_group_count <= 0 ||
         (parallel_worker_replay != 0 && parallel_worker_replay != 1) ||
+        (captured_rotation_replay != 0 && captured_rotation_replay != 1) ||
         (serial_rotation_replay != 0 && serial_rotation_replay != 1) ||
         (float64_accumulator_replay != 0 && float64_accumulator_replay != 1) ||
         (reverse_rotation_replay != 0 && reverse_rotation_replay != 1) ||
         rotation_replay_stride < 0 ||
+        (captured_rotation_replay != 0 && serial_rotation_replay == 0) ||
+        (captured_rotation_replay != 0 && reverse_rotation_replay != 0) ||
+        (captured_rotation_replay != 0 && rotation_replay_stride != 0) ||
         (rotation_replay_stride > 0 && serial_rotation_replay == 0) ||
         (rotation_replay_stride > 0 && reverse_rotation_replay != 0))
         return ffi::Error::InvalidArgument(
@@ -8346,6 +8393,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const auto rot_dims = rot.dimensions();
     const auto reconstruction_group_dims = reconstruction_group_ids.dimensions();
     const auto worker_lane_dims = worker_lane_ids.dimensions();
+    const auto rotation_replay_order_dims = rotation_replay_order.dimensions();
     const auto denominator_dims = denominator_sum->dimensions();
     const int64_t pixel_count = image_h * image_w;
     if (projector_dims.size() != 3 || projector_dims[0] <= 0 ||
@@ -8364,6 +8412,9 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         reconstruction_group_dims[0] != image_dims[0] ||
         worker_lane_dims.size() != 1 ||
         worker_lane_dims[0] != image_dims[0] ||
+        rotation_replay_order_dims.size() != 2 ||
+        rotation_replay_order_dims[0] != image_dims[0] ||
+        rotation_replay_order_dims[1] != posterior_dims[1] ||
         denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
         denominator_dims[1] != posterior_dims[1] || denominator_dims[2] != pixel_count)
         return ffi::Error::InvalidArgument(
@@ -8405,6 +8456,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<const float*>(rot.untyped_data()),
         static_cast<const int32_t*>(reconstruction_group_ids.untyped_data()),
         static_cast<const int32_t*>(worker_lane_ids.untyped_data()),
+        static_cast<const int32_t*>(rotation_replay_order.untyped_data()),
         static_cast<float*>(data_real_volume_out->untyped_data()),
         static_cast<float*>(data_imag_volume_out->untyped_data()),
         static_cast<float*>(weight_volume_out->untyped_data()),
@@ -8416,6 +8468,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<int>(projection_padding_factor),
         static_cast<int>(reconstruction_group_count),
         parallel_worker_replay != 0,
+        captured_rotation_replay != 0,
         serial_rotation_replay != 0,
         float64_accumulator_replay != 0,
         reverse_rotation_replay != 0,
@@ -8442,10 +8495,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("projection_padding_factor")
         .Attr<int64_t>("reconstruction_group_count")
         .Attr<int64_t>("parallel_worker_replay")
+        .Attr<int64_t>("captured_rotation_replay")
         .Attr<int64_t>("serial_rotation_replay")
         .Attr<int64_t>("float64_accumulator_replay")
         .Attr<int64_t>("reverse_rotation_replay")
         .Attr<int64_t>("rotation_replay_stride")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

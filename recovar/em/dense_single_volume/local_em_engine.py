@@ -356,6 +356,7 @@ EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
 RELION_VDAM_WORKER_SCHEDULE_ENV = "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
 RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY"
+RELION_VDAM_BLOCK_CHRONOLOGY_ENV = "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ"
 DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
 DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
@@ -411,7 +412,135 @@ def _load_relion_vdam_worker_schedule(path: str) -> np.ndarray:
     return owner_by_stack_index
 
 
-def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_block_start_orders(
+    worker_schedule_path: str,
+    chronology_path: str,
+) -> tuple[int, int, tuple[np.ndarray | None, ...]]:
+    """Join a sealed native block chronology to zero-based stack-image IDs."""
+
+    with np.load(worker_schedule_path, allow_pickle=False) as schedule:
+        schedule_schema = int(np.asarray(schedule["schema_version"]).item())
+        schedule_iteration = int(np.asarray(schedule["iteration"]).item())
+        dataset_particles = int(np.asarray(schedule["dataset_particles"]).item())
+        internal_ids = np.asarray(
+            schedule["internal_particle_id_by_sorted_position"], dtype=np.int64
+        )
+        stack_indices = np.asarray(
+            schedule["stack_index_by_sorted_position"], dtype=np.int64
+        )
+    with np.load(chronology_path, allow_pickle=False) as chronology:
+        chronology_schema = int(np.asarray(chronology["schema_version"]).item())
+        chronology_iteration = int(np.asarray(chronology["iteration"]).item())
+        chronology_particles = int(np.asarray(chronology["n_particles"]).item())
+        records = np.asarray(chronology["records"])
+    if schedule_schema != 2 or chronology_schema != 1:
+        raise ValueError("captured block replay requires worker v2 and chronology v1")
+    if schedule_iteration != chronology_iteration:
+        raise ValueError("worker schedule and block chronology iterations differ")
+    if dataset_particles <= 0 or chronology_particles != internal_ids.size:
+        raise ValueError("captured block replay particle counts differ")
+    if (
+        internal_ids.ndim != 1
+        or stack_indices.shape != internal_ids.shape
+        or np.unique(internal_ids).size != internal_ids.size
+        or np.unique(stack_indices).size != stack_indices.size
+        or np.any(stack_indices < 0)
+        or np.any(stack_indices >= dataset_particles)
+    ):
+        raise ValueError("captured block replay join keys are invalid")
+    required_fields = {
+        "particle_id",
+        "block_start_globaltimer",
+        "orientation_row",
+        "image_count",
+    }
+    if records.ndim != 1 or records.dtype.names is None or not required_fields.issubset(
+        records.dtype.names
+    ):
+        raise ValueError("captured block replay records have an invalid schema")
+    if not np.array_equal(np.unique(records["particle_id"]), np.sort(internal_ids)):
+        raise ValueError("captured block replay internal particle IDs differ")
+
+    stack_by_internal = {
+        int(internal_id): int(stack_index)
+        for internal_id, stack_index in zip(internal_ids.tolist(), stack_indices.tolist())
+    }
+    orders: list[np.ndarray | None] = [None] * dataset_particles
+    for internal_id in internal_ids.tolist():
+        rows = records[records["particle_id"] == internal_id]
+        image_counts = np.unique(rows["image_count"])
+        if image_counts.size != 1:
+            raise ValueError("captured block replay launch image counts differ")
+        image_count = int(image_counts[0])
+        if rows.size != image_count or not np.array_equal(
+            np.sort(rows["orientation_row"]),
+            np.arange(image_count, dtype=rows["orientation_row"].dtype),
+        ):
+            raise ValueError("captured block replay orientation rows are not a bijection")
+        order = rows[
+            np.lexsort((rows["orientation_row"], rows["block_start_globaltimer"]))
+        ]["orientation_row"].astype(np.int32, copy=True)
+        order.setflags(write=False)
+        orders[stack_by_internal[int(internal_id)]] = order
+    return schedule_iteration, dataset_particles, tuple(orders)
+
+
+def _relion_vdam_block_start_orders_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    rotation_count: int,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Resolve captured native block-start order for its exact traced iteration."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology != "captured_block_start":
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    if not schedule_path or not chronology_path:
+        raise ValueError(
+            "captured_block_start requires sealed worker schedule and block chronology NPZs"
+        )
+    trace_iteration, dataset_particles, orders = _load_relion_vdam_block_start_orders(
+        schedule_path,
+        chronology_path,
+    )
+    if debug_iteration is None or int(debug_iteration) != trace_iteration:
+        return None
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("captured block replay image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("captured block replay image index is outside the traced dataset")
+    selected_orders = [orders[int(index)] for index in original_indices.tolist()]
+    if any(order is None for order in selected_orders):
+        missing = original_indices[
+            np.asarray([order is None for order in selected_orders], dtype=bool)
+        ]
+        raise ValueError(
+            "captured block replay is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    if any(order.size != rotation_count for order in selected_orders):
+        raise ValueError("captured block replay rotation count differs from the current bucket")
+    return np.stack(selected_orders, axis=0).astype(np.int32, copy=False)
+
+
+def _relion_vdam_worker_lanes_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None = None,
+):
     """Resolve optional native worker owners into the current physical bucket order."""
 
     path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -422,6 +551,13 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
+    if topology == "captured_block_start":
+        chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+        if not chronology_path:
+            raise ValueError("captured_block_start requires a sealed block chronology NPZ")
+        trace_iteration, _, _ = _load_relion_vdam_block_start_orders(path, chronology_path)
+        if debug_iteration is None or int(debug_iteration) != trace_iteration:
+            return None
     if topology in {
         "single_rotation",
         "single_rotation_f64",
@@ -450,11 +586,11 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
         )
     if topology == "single":
         owners = np.zeros_like(owners)
-    elif topology != "captured":
+    elif topology not in {"captured", "captured_block_start"}:
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
-            "or 'single_rotation_sm132'"
+            "'single_rotation_sm132', or 'captured_block_start'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -681,6 +817,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     float64_accumulator_replay=False,
     reverse_rotation_replay=False,
     rotation_replay_stride=0,
+    rotation_replay_order=None,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -768,6 +905,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 float64_accumulator_replay=float64_accumulator_replay,
                 reverse_rotation_replay=reverse_rotation_replay,
                 rotation_replay_stride=rotation_replay_stride,
+                rotation_replay_order=rotation_replay_order,
             )
         )
     return Ft_y, Ft_ctf
@@ -4752,6 +4890,12 @@ def run_local_em_exact(
                 ):
                     raise RuntimeError("source VDAM physical operands were not packed")
                 adjoint_t0 = time.time()
+                block_start_order = _relion_vdam_block_start_orders_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    rotation_count=packed_mstep_rotations_np.shape[1],
+                    debug_iteration=debug_iteration,
+                )
                 Ft_y, Ft_ctf = _accumulate_relion_vdam_physical_particle_grid(
                     packed_source_vdam_images,
                     packed_source_vdam_ctf,
@@ -4775,13 +4919,18 @@ def run_local_em_exact(
                     worker_lane_ids=_relion_vdam_worker_lanes_for_images(
                         experiment_dataset,
                         unpadded_bucket.image_indices,
+                        debug_iteration=debug_iteration,
                     ),
-                    serial_rotation_replay=_relion_vdam_serial_rotation_replay(),
+                    serial_rotation_replay=(
+                        _relion_vdam_serial_rotation_replay()
+                        or block_start_order is not None
+                    ),
                     float64_accumulator_replay=(
                         _relion_vdam_float64_accumulator_replay()
                     ),
                     reverse_rotation_replay=_relion_vdam_reverse_rotation_replay(),
                     rotation_replay_stride=_relion_vdam_rotation_replay_stride(),
+                    rotation_replay_order=block_start_order,
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
