@@ -25,7 +25,11 @@ def integer_pre_shifts_or_none(image_pre_shifts, image_indices, *, batch=None, a
             batch_ndim = np.asarray(batch).ndim
         if batch_ndim != 3:
             return None
-    shifts = np.asarray(image_pre_shifts, dtype=np.float32)[np.asarray(image_indices)]
+    # Preserve image_pre_shifts' own dtype rather than forcing float32: a
+    # float32 round-trip here can flip the np.allclose(atol=1e-6) integral
+    # classification below near the tolerance boundary when the caller
+    # already holds float64 shifts (double-precision scoring).
+    shifts = np.asarray(image_pre_shifts)[np.asarray(image_indices)]
     if shifts.size == 0:
         return shifts.astype(np.int32).reshape(0, 2)
     rounded = np.rint(shifts)
@@ -76,15 +80,21 @@ def apply_relion_integer_pre_shifts(batch, integer_shifts):
     return out
 
 
-def half_image_phase_factors(image_shape, shifts):
-    """Return packed-half Fourier phase factors for per-image pre-shifts."""
+def half_image_phase_factors(image_shape, shifts, *, dtype: np.dtype = jnp.float32):
+    """Return packed-half Fourier phase factors for per-image pre-shifts.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64`` --
+    RELION's host pre-shift offsets are RFLOAT, never narrowed, and forcing
+    float32 here would defeat the ``Precision.HIGHEST`` matmul below.
+    """
 
     lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
         image_shape,
         voxel_size=1,
         scaled=True,
     )
-    shifts = jnp.asarray(shifts, dtype=jnp.float32)
+    shifts = jnp.asarray(shifts, dtype=dtype)
     phase_arg = jnp.matmul(
         lattice_half,
         shifts.T,
@@ -93,11 +103,11 @@ def half_image_phase_factors(image_shape, shifts):
     return jnp.exp(-2j * jnp.pi * phase_arg).T
 
 
-def tiled_half_image_phase_factors(image_shape, shifts, n_trans: int):
+def tiled_half_image_phase_factors(image_shape, shifts, n_trans: int, *, dtype: np.dtype = jnp.float32):
     """Return phase factors expanded across translation-tiled image rows."""
 
     return jnp.repeat(
-        half_image_phase_factors(image_shape, shifts),
+        half_image_phase_factors(image_shape, shifts, dtype=dtype),
         int(n_trans),
         axis=0,
     )
