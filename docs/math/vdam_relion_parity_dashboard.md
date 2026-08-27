@@ -20,7 +20,15 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 > Runtime, K>1, real-data, and final CLI/GUI qualification follow only after
 > the K=1 0--200 suite has no unexplained failures.
 
-Last scientific update: **2026-08-26 20:13 ET**
+| Executive readout | Current evidence |
+|---|---|
+| Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/19 |
+| Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
+| Earliest active science blockers | GF46 coarse cutoff @4; GF47 particle posterior @58; GF53 final matrix audit |
+| Live qualification | GF47 exact boundary capture `13017324`; GF38 immutable 0--200 `13017334`; GF53 audit `12999424_53` |
+| Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
+
+Last scientific update: **2026-08-26 20:47 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -36,9 +44,9 @@ full/long suite** is being run for this campaign.
 | Frozen K=1 v3 quality | **2/20 pass**, 19/20 evaluated | 20/20 accepted with no unexplained case |
 | Frozen K=1 v3 production | **20/20 complete**; only GF53 audit running | 20/20 science artifacts sealed; all audits terminal |
 | Earlier 0--200 expansion | **6/15 accepted**, 9 classified failures; GF42 remains outside the sealed count | Every failure repaired and requalified |
-| First causal production fix | **151x lower iteration-1 map error**, but full GF38 still fails schedule @3, state @27, map @60; focused guards 12/12 | Classify the remaining controller/state boundary on composed head |
-| Checkpoint-state fix | GF47 iteration-2 pose match **93.8% -> 100%** in sealed replay; focused guards 2/2 | Complete immutable composed 0--200 trajectory and audit |
-| Controller-precision fix | GF47 iteration-10 calibrated controller envelope passes all four native repeats; focused guards 6/6 | Complete immutable composed 0--200 trajectory and audit |
+| First causal production fix | **151x lower iteration-1 map error**; composed GF38 iteration-3 controller now passes 4/4 native repeats; focused guards 12/12 | Promote fresh immutable 0--200 trajectory and classify the former state @27/map @60 boundaries |
+| Checkpoint-state fix | GF47 iteration-2 pose match **93.8% -> 100%** in sealed replay; focused guards 2/2 | Close the replacement trajectory's first particle split @58 |
+| Controller-precision fix | GF47 iteration-10 controller passes 4/4 native repeats; composed trajectory delays schedule failure to 59 | Capture and repair the particle-2411 posterior boundary @58 |
 | Runtime | **0/19 comparable**; current range **5.89--11.58x RELION** | Comparable same-H100 wall time |
 | K>1 / real data | Existing short K=2/K=4 panels pass; final campaign deliberately deferred | Requalify after K=1 closes |
 | CLI / GUI | Unified backend/default contract exists | Final defaults and important controls requalified |
@@ -54,6 +62,20 @@ full/long suite** is being run for this campaign.
 | Comparable runtime | **0** | **19** | **1** | 5.89--11.58x RELION |
 
 ### Latest change
+
+GF38's composed-head iteration-3 discriminator `13014075_3` is terminal and
+passes the complete active controller envelope against all four native
+repeats. The formerly failing `optimal_offset_change` moved from
+`3.303406559990986` to `3.303406454212302`; RELION serializes `3.303406`, so
+the error is now `4.5421e-7`, inside the unchanged `5.1e-7` gate. Current
+resolution/size, Healpix order, translation topology, offset range/step,
+orientational-prior mode, and perturbation all pass. The only mismatch is
+`nr_iter_without_resolution_gain`, which is diagnostic-only at this boundary
+and cannot affect the active decision. The sealed report SHA-256 is
+`e18cfa5b556b3ef86409d5e5c48d19e25e1c3c552fd94012838133b6e17b7545`.
+This closes the short controller discriminator without promoting the older
+0--200 trajectory; the next GF38 gate is a fresh immutable composed-head
+trajectory and full audit.
 
 GF47's apparent first particle-state split at iteration 2 is now localized to
 checkpoint serialization, not the E-step. RECOVAR and RELION select the exact
@@ -91,7 +113,14 @@ candidate-envelope audit `13015426` is now terminal and does **not** accept the
 replacement: map first fails at iteration 77, particle state at 58, and
 schedule at 59. This is a substantial delay from the original schedule miss at
 iteration 10 and confirms both fixes are active, but it is not a parity pass;
-no replacement score is promoted.
+no replacement score is promoted. The first state split is one selected
+particle, `2411@particles.128.mrcs` (source row 2410), which chooses a
+different orientation while retaining the exact native translation. Its
+RELION internal identity has been reconstructed and checked through every
+sealed subset permutation as `part_id=1570`. Exact native/candidate
+iteration-58 capture array `13017324` is submitted against that internal ID on
+the original physical H100; the earlier stack-index-only capture is rejected
+because it produced no native score artifact.
 
 GF46's iteration-4 particle split is now causally localized. On the 3,200
 native-supported fine hypotheses, centered score relative-L2 is
@@ -115,6 +144,15 @@ attempts `13015679`/`13015770`/`13015922`/`13015995`/`13016022` all exited
 before science (head-SHA or frozen-GPU misses); none are counted as parity
 outcomes. Strict production gates remain unchanged.
 
+Follow-up projector/reduction analysis `13016764` is terminal. Replaying the
+captured RECOVAR projector reproduces production centered `diff2` within
+`3.8147e-6` maximum, while native versus RECOVAR production differs by up to
+`1.2398e-5` (p95 `5.2452e-6`). A fused native-texture projector intervention
+does not change the rank-100/101 gap or support. The remaining defect is thus
+localized to exact coarse score accumulation/rounding rather than the sampled
+geometry, posterior rule, or texture interpolation. No tie relaxation is
+being introduced.
+
 The first exact production defect remains repaired locally at unpushed commit
 `6387ff7c9`: the oversampling-zero big-JIT preserves RELION's retained coarse
 posterior mass. Exact-H100 iteration-1 evidence improves posterior relative-L2
@@ -128,12 +166,19 @@ differs by only `5.60e-7` from RELION's serialized value, just outside the
 unchanged `5.1e-7` gate. A short composed-head discriminator is queued as
 `13014075`; no tolerance has been changed.
 
+That short discriminator is now terminal and closes the schedule boundary:
+`13014075_3` passes every active iteration-3 controller field against all four
+native repeats. Because the earlier 0--200 run predates the composed
+metadata-precision correction, its iteration-27 state and iteration-60 map
+failures are not promoted as failures of the composed head. A new immutable
+0--200 qualification is required.
+
 ### What is still failing
 
 | Failure class | Current evidence | Next closure gate |
 |---|---|---|
-| Map/particle parity | GF43, GF46, GF48--GF58 and GF61 include classified map/state failures; GF49 and GF59 each pass one primary gate but fail another; GF47 composed repair is auditing | classify earliest boundary and repair without changing gates |
-| Controller topology | GF47 precision repair is requalifying; GF48/GF52/GF56/GF62 and repaired GF38 still miss strict schedule gates | reproduce RELION schedule decisions exactly |
+| Map/particle parity | GF43, GF46, GF48--GF58 and GF61 include classified map/state failures; GF49 and GF59 each pass one primary gate but fail another; composed GF47 now first splits at particle 2411 / iteration 58 | classify earliest boundary and repair without changing gates |
+| Controller topology | GF38 iteration-3 is closed on the composed head; GF47 now first misses at 59 after its particle split; GF48/GF52/GF56/GF62 retain frozen strict failures | reproduce RELION schedule decisions exactly and requalify full trajectories |
 | Runtime | every audited v3 case is 5.89--11.58x slower | profile only after a repaired trajectory passes end to end |
 | Coverage | 19/20 v3 cases audited; all 20 science trajectories complete; only GF53 auditing | finish the final dependent audit |
 
@@ -264,9 +309,9 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Classify the next GF47 boundary after composed repair | immutable head `0a001923e`; audit `13015426` terminal: map @77, particle @58, schedule @59 | localize iteration 58 before another 0--200 promotion |
+| 1 | Classify the next GF47 boundary after composed repair | particle `2411@...`, source row 2410, verified RELION `part_id=1570`; exact capture array `13017324` submitted on the original H100 | identify the first posterior/support/score difference at iteration 58 before another 0--200 promotion |
 | 2 | Close GF46 coarse score-spacing residual | local head `a8af8b28a`; focused guards 6/6; exact-H100 discriminator `13016080` terminal but still one particle outside native support | restore the native rank-100/101 score gap, then exact iteration-4 support/state and full 0--200 audit |
-| 3 | Classify remaining GF38 controller boundary | 0--200 audit `13010186` failed at schedule 3/state 27/map 60; composed-head discriminator `13014075` queued | decide precision serialization versus a scientific controller mismatch |
+| 3 | Promote repaired GF38 | composed-head task `13014075_3` passes every active iteration-3 controller field against 4/4 native repeats; immutable 0--200 array `13017334` submitted | fresh trajectory must pass schedule/state/map audits |
 | 4 | Finish v3 matrix | 20/20 science complete; GF53 audit running; 19/20 terminal | every row terminal and sealed |
 | 5 | Seeded GF29 / GF43 / GF45 calibrated audits | GF29 and GF45 pass; GF43 fails only map at 146 | retain exact accepted/failed outcomes |
 | 6 | GF41 authoritative re-audit | `12999430` terminal: map pass, particle fail | retain as classified repair target |
