@@ -155,11 +155,16 @@ if match is None:
     raise SystemExit("continued sampling STAR lacks the perturbation field")
 observed = float(match.group(1))
 expected = float(sys.argv[2])
-# RELION serializes this internal value with six digits after the decimal.
-if abs(observed - expected) > 5.01e-7:
+# MetaDataTable::getValueToString uses %12.5f for negative doubles and
+# %12.6f for non-negative doubles.  Verify that exact serialized value while
+# retaining the full-precision perturbation in the live RELION process.
+serialized_expected = float(format(expected, ".5f" if expected < 0.0 else ".6f"))
+if observed != serialized_expected:
     raise SystemExit(
-        "serialized perturbation differs from the forced full-precision value: "
-        f"observed={observed:.9g} expected={expected:.17g}"
+        "serialized perturbation differs from RELION's representation of the "
+        "forced full-precision value: "
+        f"observed={observed:.9g} expected={serialized_expected:.9g} "
+        f"live={expected:.17g}"
     )
 PY
   (
