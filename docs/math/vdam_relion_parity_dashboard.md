@@ -25,7 +25,7 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 serial-orientation panel `13024626` is terminal; frozen 0--200 promotion job `13025432` is running beyond iteration 2 on the original native-envelope GPU |
+| Latest qualification | GF47 frozen serial-orientation job `13025432` is running beyond iteration 59 on the original native-envelope GPU and has crossed the former iteration-58 butterfly |
 | Latest focused discriminator | Serializing the 576 within-particle orientation blocks improves repeat spread **4.7x raw / 4.9x weight / 86x noise moment / 11.9x reconstructed map**; orientation-block atomic interleaving is the first positively identified repeatability source |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
@@ -41,7 +41,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 00:30 ET**
+Last scientific update: **2026-08-27 00:37 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -69,7 +69,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; serial orientation-block scatter is the first intervention to make every measured accumulator/update layer substantially more repeatable | frozen candidate `13025432` is running beyond iteration 2 on the original native-envelope physical GPU; automatic full trajectory audit follows science | none until the 0--200 quality/state/schedule audit passes |
+| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; serial orientation-block scatter is the first intervention to make every measured accumulator/update layer substantially more repeatable | frozen candidate `13025432` has crossed the old iteration-58 butterfly; maps at 57/58/59 use only 1.15%/1.96%/2.60% of the native repeat diameter | none until the 0--200 quality/state/schedule audit passes |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -125,6 +125,12 @@ every later particle to lane 0, so local commit `ad0573df5` still validates
 the trace schema but no longer requires later subsets to join to iteration-1
 IDs. Focused schedule tests pass, and replacement `13025432` has crossed the
 previous iteration-2 stop. This is harness qualification, not a parity score.
+It has also crossed the former iteration-58 numerical butterfly: direct map
+relative-L2 at iterations 57, 58, and 59 is respectively `0.000296`,
+`0.000522`, and `0.000710`, versus native repeat diameters `0.0258`, `0.0266`,
+and `0.0273`. Those are 1.15%, 1.96%, and 2.60% of the native envelope.
+This live partial check is diagnostic-only; the automatic sealed audit still
+controls promotion.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
