@@ -46,6 +46,7 @@ SHA-256 values.
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
 | Latest short boundary | materialized-order + native-epilogue panel `13038186` completed both exact frozen seed-29 arms in 90 s | exact `GPU-6222...`; reference **passes** at `0.978x / 0.967x`, earning full-trajectory qualification but not a score change |
 | Latest full qualification | science `13038307` completed all 201 checkpoints; audit `13040047` is terminal fail-closed | first failures: schedule @58, particle @61, map @80; runtime **7.79x** native; score remains **2/20** |
+| First-particle cause | exact it61 capture `13042355`; H100 operand replay `13043203` completed | **iteration-start map state**, not support, priors, image preprocessing, projector construction, noise weighting, or posterior math |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -86,7 +87,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 10:27 ET**
+Last scientific update: **2026-08-27 11:09 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -114,7 +115,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 schedule combination @58 | materialized order plus native trace epilogue passes the two-arm exact-GPU reference gate and extends full map parity through iteration 79 | full `13038307` / audit `13040047`: schedule @58, particle @61, map @80 | none; isolate the iteration-58 whole-vector schedule miss before another 0--200 run |
+| 1 | GF47 inherited map state before particle @61 | exact it61 support, rotations, masks, and priors match; replacing only the reference projection reproduces the winner reversal | capture `13042355` + replay `13043203`: RELION margin `+0.000427`, RECOVAR margin `-0.016907`; source is the it60 map | none; trace the map discrepancy to the earliest reconstruction/update boundary before another 0--200 run |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -133,6 +134,29 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+The first GF47 particle failure now has a closed score-level explanation.
+Exact same-physical-H100 job `13042355` continued sealed native repeat 1 and
+replayed the RECOVAR prefix through iteration 61 for
+`604@particles.128.mrcs`. All 32 fine candidates, their rotation matrices,
+reconstruction masks, and centered orientation/translation priors match.
+RELION ranks keys `(0, 121)` and `(2, 121)` with a top-two log-odds margin of
+only `+0.000427`; RECOVAR reverses that margin to `-0.016907`. The posterior
+change is therefore caused by the raw fine score, not candidate selection or
+normalization.
+
+Pinned H100 operand-substitution replay `13043203` then isolated that raw-score
+difference. Substituting RECOVAR's reference projection into the native replay
+changes the same top-two margin by `+0.018005`; substituting RECOVAR's image
+changes it by exactly zero, and substituting RECOVAR's weight changes it by
+only `-0.000671`. Rebuilding the projector from the sealed native it60 map is
+bitwise exact to the native frozen texture, while rebuilding from the RECOVAR
+it60 map reproduces the RECOVAR capture to `4.84e-9` relative L2. The first
+open causal boundary is therefore the **iteration-start map state**. Fine
+support, priors, image preprocessing, projector construction, score topology,
+noise weighting, and posterior math are closed for this failure. The fused
+posterior and operand reports have SHA-256 values `a8807cf6c8b7...` and
+`6c9d7fed74cf...`. No acceptance threshold or frozen score changed.
 
 The exact frozen GF47 materialized-order/native-epilogue trajectory is now
 terminal. Science job `13038307` produced all 201 checkpoints in 2,330 seconds
