@@ -16,6 +16,7 @@ set -euo pipefail
 
 : "${RELION_SOURCE:?set the isolated RELION block-trace source worktree}"
 : "${RELION_BUILD_ROOT:?set a disposable build/provenance root}"
+: "${RELION_LOCAL_BUILD_ROOT:?set a unique node-local build root under /tmp}"
 : "${EXPECTED_RELION_BASE:?pin the uninstrumented RELION source commit}"
 : "${EXPECTED_RELION_HEAD:?pin the block-trace source commit}"
 
@@ -24,6 +25,10 @@ test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = "${EXPECTED_RELION_HEAD}"
 test "$(git -C "${RELION_SOURCE}" merge-base "${EXPECTED_RELION_BASE}" HEAD)" = \
     "${EXPECTED_RELION_BASE}"
 test -z "$(git -C "${RELION_SOURCE}" status --porcelain=v1 --untracked-files=no)"
+case "${RELION_LOCAL_BUILD_ROOT}" in
+    /tmp/*) ;;
+    *) echo "RELION_LOCAL_BUILD_ROOT must be under /tmp" >&2; exit 2 ;;
+esac
 
 source /etc/profile.d/modules.sh
 set +u
@@ -31,7 +36,8 @@ module purge
 module load relion/5.0.1/gcc-11.5.0-gpu
 set -u
 
-BUILD=${RELION_BUILD_ROOT}/build
+BUILD=${RELION_LOCAL_BUILD_ROOT}/${SLURM_JOB_ID}
+QUALIFIED_BUILD=${RELION_BUILD_ROOT}/build
 PROVENANCE=${RELION_BUILD_ROOT}/provenance
 MPI_WRAPPER_ROOT=/scratch/gpfs/GILLES/mg6942/relion_runtime_build/openmpi_cuda126_gcc
 MPI_LIBRARY_ROOT=${MPI_WRAPPER_ROOT}/lib64
@@ -41,7 +47,8 @@ export CUDA_LIB_PATH=${CUDA_MATH_TARGET}
 export CUDA_INC_PATH=${CUDA_HEADER_OVERLAY}
 export FFTW_INCLUDE=/scratch/gpfs/GILLES/mg6942/relion/external/fftw/include
 export FFTW_LIB=/scratch/gpfs/GILLES/mg6942/relion/external/fftw/lib
-mkdir -p "${BUILD}" "${PROVENANCE}"
+test ! -e "${BUILD}"
+mkdir -p "${BUILD}" "${QUALIFIED_BUILD}/bin" "${PROVENANCE}"
 
 git -C "${RELION_SOURCE}" show --stat --oneline HEAD \
     > "${PROVENANCE}/source_head.txt"
@@ -85,8 +92,9 @@ test -s "${PROVENANCE}/block_trace.patch"
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 /usr/bin/cmake --build "${BUILD}" --target refine --parallel "${SLURM_CPUS_PER_TASK}"
 
-BINARY=${BUILD}/bin/relion_refine
-test -x "${BINARY}"
+BINARY=${QUALIFIED_BUILD}/bin/relion_refine
+test -x "${BUILD}/bin/relion_refine"
+install -m 755 "${BUILD}/bin/relion_refine" "${BINARY}"
 strings "${BINARY}" | grep -Fx RELION_VDAM_WORKER_LOG_SCHEMA_V2 \
     > "${PROVENANCE}/worker_schema_marker.txt"
 strings "${BINARY}" | grep -Fx RELION_VDAM_BLOCK_TRACE_SCHEMA_V1 \

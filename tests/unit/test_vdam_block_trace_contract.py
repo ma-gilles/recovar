@@ -8,6 +8,11 @@ def test_relion_block_trace_build_seals_the_complete_patch_and_both_schemas():
     build = (ROOT / "scripts/build_relion_vdam_block_trace.sbatch").read_text()
     required = [
         "EXPECTED_RELION_BASE",
+        "RELION_LOCAL_BUILD_ROOT",
+        'case "${RELION_LOCAL_BUILD_ROOT}" in',
+        "/tmp/*",
+        "QUALIFIED_BUILD=${RELION_BUILD_ROOT}/build",
+        'install -m 755 "${BUILD}/bin/relion_refine" "${BINARY}"',
         'diff "${EXPECTED_RELION_BASE}"..HEAD',
         "src/acc/cuda/cuda_kernels/BP.cuh",
         "src/acc/cuda/vdam_block_trace.h",
