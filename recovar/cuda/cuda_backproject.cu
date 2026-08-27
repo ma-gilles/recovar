@@ -38,10 +38,14 @@
 
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -49,6 +53,177 @@
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
+
+struct VdamCandidateBlockTraceHeader
+{
+    char magic[16];
+    std::uint32_t schema_version;
+    std::uint32_t header_size;
+    std::uint32_t record_size;
+    std::uint32_t iteration;
+    std::uint64_t record_count;
+    std::uint64_t capacity;
+    std::uint64_t reserved0;
+    std::uint64_t reserved1;
+};
+
+struct VdamCandidateBlockTraceRecord
+{
+    std::uint64_t launch_sequence;
+    std::int64_t particle_id;
+    std::uint64_t block_start_globaltimer;
+    std::uint64_t first_atomic_globaltimer;
+    std::uint64_t block_end_globaltimer;
+    std::uint32_t orientation_row;
+    std::int32_t worker_id;
+    std::int32_t class_id;
+    std::uint32_t sm_id;
+    std::uint32_t image_count;
+    std::uint32_t iteration;
+    std::uint32_t flags;
+    std::uint32_t reserved;
+};
+
+static_assert(sizeof(VdamCandidateBlockTraceHeader) == 64,
+              "candidate VDAM block trace header must be 64 bytes");
+static_assert(sizeof(VdamCandidateBlockTraceRecord) == 72,
+              "candidate VDAM block trace record must be 72 bytes");
+
+class VdamCandidateBlockTraceWriter
+{
+public:
+    bool requested()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        initialize_locked();
+        return requested_;
+    }
+
+    bool healthy()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        initialize_locked();
+        return !requested_ || healthy_;
+    }
+
+    std::uint32_t iteration()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        initialize_locked();
+        return header_.iteration;
+    }
+
+    bool reserve(std::uint64_t record_count, std::uint64_t* launch_sequence)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        initialize_locked();
+        if (!requested_ || !healthy_ || record_count == 0 ||
+            reserved_records_ > header_.capacity ||
+            record_count > header_.capacity - reserved_records_)
+            return false;
+        *launch_sequence = next_launch_++;
+        reserved_records_ += record_count;
+        return true;
+    }
+
+    bool append(const VdamCandidateBlockTraceRecord* records, std::uint64_t record_count)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!requested_ || !healthy_ || records == nullptr || record_count == 0)
+            return false;
+        output_.seekp(0, std::ios::end);
+        output_.write(
+            reinterpret_cast<const char*>(records),
+            static_cast<std::streamsize>(record_count * sizeof(*records)));
+        written_records_ += record_count;
+        header_.record_count = written_records_;
+        output_.seekp(0, std::ios::beg);
+        output_.write(reinterpret_cast<const char*>(&header_), sizeof(header_));
+        output_.flush();
+        healthy_ = static_cast<bool>(output_);
+        return healthy_;
+    }
+
+private:
+    void initialize_locked()
+    {
+        if (initialized_) return;
+        initialized_ = true;
+        const char* path = std::getenv("RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE");
+        if (path == nullptr || path[0] == '\0') return;
+        requested_ = true;
+        const char* iteration_text =
+            std::getenv("RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER");
+        const char* capacity_text =
+            std::getenv("RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPACITY");
+        if (iteration_text == nullptr || iteration_text[0] == '\0') return;
+        errno = 0;
+        char* iteration_end = nullptr;
+        const unsigned long iteration =
+            std::strtoul(iteration_text, &iteration_end, 10);
+        if (errno != 0 || iteration_end == iteration_text || *iteration_end != '\0' ||
+            iteration == 0 || iteration > std::numeric_limits<std::uint32_t>::max())
+            return;
+        std::uint64_t capacity = 1000000;
+        if (capacity_text != nullptr && capacity_text[0] != '\0')
+        {
+            errno = 0;
+            char* capacity_end = nullptr;
+            const unsigned long long parsed =
+                std::strtoull(capacity_text, &capacity_end, 10);
+            if (errno != 0 || capacity_end == capacity_text || *capacity_end != '\0' ||
+                parsed == 0)
+                return;
+            capacity = static_cast<std::uint64_t>(parsed);
+        }
+        const char magic[16] = {
+            'R', 'E', 'L', 'I', 'O', 'N', '_', 'V', 'D', 'A', 'M', '_', 'B', 'T', '1', '\0'};
+        std::memcpy(header_.magic, magic, sizeof(magic));
+        header_.schema_version = 1;
+        header_.header_size = sizeof(header_);
+        header_.record_size = sizeof(VdamCandidateBlockTraceRecord);
+        header_.iteration = static_cast<std::uint32_t>(iteration);
+        header_.record_count = 0;
+        header_.capacity = capacity;
+        header_.reserved0 = 0;
+        header_.reserved1 = 0;
+        output_.open(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+        if (!output_) return;
+        output_.write(reinterpret_cast<const char*>(&header_), sizeof(header_));
+        output_.flush();
+        healthy_ = static_cast<bool>(output_);
+    }
+
+    std::mutex mutex_;
+    bool initialized_ = false;
+    bool requested_ = false;
+    bool healthy_ = false;
+    std::fstream output_;
+    VdamCandidateBlockTraceHeader header_ = {};
+    std::uint64_t next_launch_ = 0;
+    std::uint64_t reserved_records_ = 0;
+    std::uint64_t written_records_ = 0;
+};
+
+static VdamCandidateBlockTraceWriter& vdam_candidate_block_trace_writer()
+{
+    static VdamCandidateBlockTraceWriter writer;
+    return writer;
+}
+
+static __device__ __forceinline__ std::uint64_t vdam_candidate_globaltimer()
+{
+    std::uint64_t value;
+    asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(value));
+    return value;
+}
+
+static __device__ __forceinline__ std::uint32_t vdam_candidate_smid()
+{
+    std::uint32_t value;
+    asm volatile("mov.u32 %0, %%smid;" : "=r"(value));
+    return value;
+}
 
 /* ================================================================== */
 /*                     Type helpers                                    */
@@ -4348,10 +4523,33 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     unsigned model_x,
     unsigned model_y,
     int model_init_y,
-    int model_init_z)
+    int model_init_z,
+    VdamCandidateBlockTraceRecord* trace_records,
+    std::uint64_t trace_launch_sequence,
+    std::int64_t trace_particle_id,
+    std::int32_t trace_worker_id,
+    std::uint32_t trace_iteration)
 {
     unsigned tid = threadIdx.x;
     unsigned image = blockIdx.x;
+    VdamCandidateBlockTraceRecord* trace_record =
+        trace_records == nullptr ? nullptr : trace_records + image;
+    if (trace_record != nullptr && tid == 0)
+    {
+        trace_record->launch_sequence = trace_launch_sequence;
+        trace_record->particle_id = trace_particle_id;
+        trace_record->block_start_globaltimer = vdam_candidate_globaltimer();
+        trace_record->first_atomic_globaltimer = 0;
+        trace_record->block_end_globaltimer = 0;
+        trace_record->orientation_row = image;
+        trace_record->worker_id = trace_worker_id;
+        trace_record->class_id = 0;
+        trace_record->sm_id = vdam_candidate_smid();
+        trace_record->image_count = gridDim.x;
+        trace_record->iteration = trace_iteration;
+        trace_record->flags = std::uint32_t(1U << 2);
+        trace_record->reserved = 0;
+    }
     int image_y_half = image_y / 2;
     int max_r2_volume = max_r2 * padding_factor * padding_factor;
     __shared__ float shared_eulers[9];
@@ -4452,6 +4650,14 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
               static_cast<Accumulator>((COEFFICIENT) * Fweight))
 
             float dd000 = mfz * mfy * mfx;
+            if (trace_record != nullptr)
+            {
+                atomicCAS(
+                    reinterpret_cast<unsigned long long*>(
+                        &trace_record->first_atomic_globaltimer),
+                    0ULL,
+                    static_cast<unsigned long long>(vdam_candidate_globaltimer()));
+            }
             RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);
             float dd001 = mfz * mfy * fx;
             RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x1, dd001);
@@ -4468,6 +4674,16 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
             float dd111 = fz * fy * fx;
             RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);
 #undef RELION_VDAM_NATIVE_ATOMIC_TRIPLET
+        }
+    }
+    if (trace_record != nullptr)
+    {
+        __syncthreads();
+        if (tid == 0)
+        {
+            trace_record->block_end_globaltimer = vdam_candidate_globaltimer();
+            if (trace_record->first_atomic_globaltimer == 0)
+                trace_record->flags |= std::uint32_t(1U << 3);
         }
     }
 }
@@ -4748,6 +4964,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const float* rot,
     const int32_t* reconstruction_group_ids,
     const int32_t* worker_lane_ids,
+    const int32_t* particle_trace_ids,
     const int32_t* rotation_replay_order,
     float* data_real_volume,
     float* data_imag_volume,
@@ -4802,10 +5019,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaEvent_t particle_inputs_ready = nullptr;
     int32_t* reconstruction_groups_host = nullptr;
     int32_t* worker_lanes_host = nullptr;
+    int32_t* particle_trace_ids_host = nullptr;
     int32_t* rotation_replay_order_host = nullptr;
+    VdamCandidateBlockTraceRecord* candidate_trace_records[
+        kRelionVdamWorkerStreams] = {};
+    VdamCandidateBlockTraceWriter* candidate_trace_writer =
+        &vdam_candidate_block_trace_writer();
+    const bool candidate_trace_requested = candidate_trace_writer->requested();
+    const std::uint32_t candidate_trace_iteration =
+        candidate_trace_writer->iteration();
     double* data_real_volume_f64 = nullptr;
     double* data_imag_volume_f64 = nullptr;
     double* weight_volume_f64 = nullptr;
+    if (!candidate_trace_writer->healthy() ||
+        (candidate_trace_requested && serial_rotation_replay))
+        return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
         static_cast<size_t>(texture_voxels) * sizeof(float));
@@ -4983,6 +5211,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&worker_lanes_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
         if (err != cudaSuccess) goto cleanup;
+        if (candidate_trace_requested)
+        {
+            err = cudaMallocHost(
+                reinterpret_cast<void**>(&particle_trace_ids_host),
+                static_cast<size_t>(n_particles) * sizeof(int32_t));
+            if (err != cudaSuccess) goto cleanup;
+            for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
+            {
+                err = cudaMalloc(
+                    reinterpret_cast<void**>(&candidate_trace_records[lane]),
+                    static_cast<size_t>(rotation_count) *
+                        sizeof(VdamCandidateBlockTraceRecord));
+                if (err != cudaSuccess) goto cleanup;
+            }
+        }
         if (captured_rotation_replay)
         {
             err = cudaMallocHost(
@@ -5004,6 +5247,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             cudaMemcpyDeviceToHost,
             stream);
         if (err != cudaSuccess) goto cleanup;
+        if (candidate_trace_requested)
+        {
+            err = cudaMemcpyAsync(
+                particle_trace_ids_host,
+                particle_trace_ids,
+                static_cast<size_t>(n_particles) * sizeof(int32_t),
+                cudaMemcpyDeviceToHost,
+                stream);
+            if (err != cudaSuccess) goto cleanup;
+        }
         if (captured_rotation_replay)
         {
             err = cudaMemcpyAsync(
@@ -5026,6 +5279,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             }
             if (worker_lanes_host[particle] < 0 ||
                 worker_lanes_host[particle] >= kRelionVdamWorkerStreams)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            if (candidate_trace_requested && particle_trace_ids_host[particle] < 0)
             {
                 err = cudaErrorInvalidValue;
                 goto cleanup;
@@ -5092,6 +5350,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             const int64_t accumulator_offset =
                 static_cast<int64_t>(reconstruction_groups_host[particle]) *
                 accumulator_stride;
+            std::uint64_t trace_launch_sequence = 0;
+            if (candidate_trace_requested)
+            {
+                if (!candidate_trace_writer->reserve(
+                        static_cast<std::uint64_t>(rotation_count),
+                        &trace_launch_sequence))
+                    return cudaErrorInvalidValue;
+                const cudaError_t clear_error = cudaMemsetAsync(
+                    candidate_trace_records[lane],
+                    0,
+                    static_cast<size_t>(rotation_count) *
+                        sizeof(VdamCandidateBlockTraceRecord),
+                    particle_streams[lane]);
+                if (clear_error != cudaSuccess) return clear_error;
+            }
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
             {
@@ -5161,9 +5434,35 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     static_cast<unsigned>(model_x),
                     static_cast<unsigned>(model_y),
                     model_init_y,
-                    model_init_z);
+                    model_init_z,
+                    candidate_trace_requested ? candidate_trace_records[lane] : nullptr,
+                    trace_launch_sequence,
+                    candidate_trace_requested
+                        ? static_cast<std::int64_t>(particle_trace_ids_host[particle])
+                        : 0,
+                    static_cast<std::int32_t>(lane),
+                    candidate_trace_iteration);
                 const cudaError_t launch_error = cudaGetLastError();
                 if (launch_error != cudaSuccess) return launch_error;
+            }
+            if (candidate_trace_requested)
+            {
+                cudaError_t trace_error =
+                    cudaStreamSynchronize(particle_streams[lane]);
+                if (trace_error != cudaSuccess) return trace_error;
+                std::vector<VdamCandidateBlockTraceRecord> host_records(
+                    static_cast<size_t>(rotation_count));
+                trace_error = cudaMemcpy(
+                    host_records.data(),
+                    candidate_trace_records[lane],
+                    static_cast<size_t>(rotation_count) *
+                        sizeof(VdamCandidateBlockTraceRecord),
+                    cudaMemcpyDeviceToHost);
+                if (trace_error != cudaSuccess) return trace_error;
+                if (!candidate_trace_writer->append(
+                        host_records.data(),
+                        static_cast<std::uint64_t>(rotation_count)))
+                    return cudaErrorInvalidValue;
             }
             return cudaSuccess;
         };
@@ -5279,7 +5578,10 @@ cleanup:
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
     if (reconstruction_groups_host) cudaFreeHost(reconstruction_groups_host);
     if (worker_lanes_host) cudaFreeHost(worker_lanes_host);
+    if (particle_trace_ids_host) cudaFreeHost(particle_trace_ids_host);
     if (rotation_replay_order_host) cudaFreeHost(rotation_replay_order_host);
+    for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
+        if (candidate_trace_records[lane]) cudaFree(candidate_trace_records[lane]);
     if (data_real_volume_f64) cudaFree(data_real_volume_f64);
     if (data_imag_volume_f64) cudaFree(data_imag_volume_f64);
     if (weight_volume_f64) cudaFree(weight_volume_f64);
@@ -8335,6 +8637,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     ffi::AnyBuffer rot,
     ffi::AnyBuffer reconstruction_group_ids,
     ffi::AnyBuffer worker_lane_ids,
+    ffi::AnyBuffer particle_trace_ids,
     ffi::AnyBuffer rotation_replay_order,
     ffi::AnyBuffer data_real_volume_in,
     ffi::AnyBuffer data_imag_volume_in,
@@ -8358,6 +8661,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         rot.element_type() != ffi::DataType::F32 ||
         reconstruction_group_ids.element_type() != ffi::DataType::S32 ||
         worker_lane_ids.element_type() != ffi::DataType::S32 ||
+        particle_trace_ids.element_type() != ffi::DataType::S32 ||
         rotation_replay_order.element_type() != ffi::DataType::S32 ||
         weight_volume_in.element_type() != ffi::DataType::F32 ||
         weight_volume_out->element_type() != ffi::DataType::F32 ||
@@ -8393,6 +8697,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const auto rot_dims = rot.dimensions();
     const auto reconstruction_group_dims = reconstruction_group_ids.dimensions();
     const auto worker_lane_dims = worker_lane_ids.dimensions();
+    const auto particle_trace_dims = particle_trace_ids.dimensions();
     const auto rotation_replay_order_dims = rotation_replay_order.dimensions();
     const auto denominator_dims = denominator_sum->dimensions();
     const int64_t pixel_count = image_h * image_w;
@@ -8412,6 +8717,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         reconstruction_group_dims[0] != image_dims[0] ||
         worker_lane_dims.size() != 1 ||
         worker_lane_dims[0] != image_dims[0] ||
+        particle_trace_dims.size() != 1 ||
+        particle_trace_dims[0] != image_dims[0] ||
         rotation_replay_order_dims.size() != 2 ||
         rotation_replay_order_dims[0] != image_dims[0] ||
         rotation_replay_order_dims[1] != posterior_dims[1] ||
@@ -8456,6 +8763,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<const float*>(rot.untyped_data()),
         static_cast<const int32_t*>(reconstruction_group_ids.untyped_data()),
         static_cast<const int32_t*>(worker_lane_ids.untyped_data()),
+        static_cast<const int32_t*>(particle_trace_ids.untyped_data()),
         static_cast<const int32_t*>(rotation_replay_order.untyped_data()),
         static_cast<float*>(data_real_volume_out->untyped_data()),
         static_cast<float*>(data_imag_volume_out->untyped_data()),
@@ -8500,6 +8808,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("float64_accumulator_replay")
         .Attr<int64_t>("reverse_rotation_replay")
         .Attr<int64_t>("rotation_replay_stride")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

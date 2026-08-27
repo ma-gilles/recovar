@@ -206,3 +206,28 @@ def test_block_start_replay_rejects_a_nonprefix_local_grid(tmp_path, monkeypatch
             valid_rotation_counts=np.asarray([12]),
             debug_iteration=1,
         )
+
+
+def test_candidate_block_trace_uses_stable_stack_indices(monkeypatch):
+    class Dataset:
+        @staticmethod
+        def original_image_indices_from_local(image_indices):
+            lookup = np.asarray([901, 17, 402], dtype=np.int64)
+            return lookup[np.asarray(image_indices)]
+
+    assert (
+        local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+            Dataset(),
+            np.asarray([0, 1], dtype=np.int64),
+        )
+        is None
+    )
+    monkeypatch.setenv(
+        local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV,
+        "/tmp/candidate-trace.bin",
+    )
+    trace_ids = local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+        Dataset(),
+        np.asarray([2, 0], dtype=np.int64),
+    )
+    np.testing.assert_array_equal(trace_ids, np.asarray([402, 901], dtype=np.int32))

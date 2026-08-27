@@ -122,6 +122,10 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "data_real_volume_f64" in projector_launcher
     assert "relion_vdam_cast_accumulator_kernel<double, float>" in projector_launcher
     assert "relion_vdam_cast_accumulator_kernel<float, double>" in projector_launcher
+    assert "VdamCandidateBlockTraceRecord" in source
+    assert "vdam_candidate_globaltimer" in source
+    assert "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE" in source
+    assert "candidate_trace_writer->append" in projector_launcher
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper
@@ -144,6 +148,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "rotation_replay_stride=np.int64(rotation_replay_stride)" in projector_wrapper
     assert "worker_lane_ids" in projector_wrapper
     assert "rotation_replay_order" in projector_wrapper
+    assert "particle_trace_ids" in projector_wrapper
 
     engine_source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "Native launches every row in its padded significant-" in engine_source

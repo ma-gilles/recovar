@@ -357,6 +357,7 @@ EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
 RELION_VDAM_WORKER_SCHEDULE_ENV = "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
 RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY"
 RELION_VDAM_BLOCK_CHRONOLOGY_ENV = "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ"
+VDAM_CANDIDATE_BLOCK_TRACE_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE"
 DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
 DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
@@ -636,6 +637,24 @@ def _relion_vdam_worker_lanes_for_images(
     return owners.astype(np.int32, copy=False)
 
 
+def _relion_vdam_candidate_trace_ids_for_images(experiment_dataset, image_indices):
+    """Return stable stack IDs only when passive candidate tracing is requested."""
+
+    if not os.environ.get(VDAM_CANDIDATE_BLOCK_TRACE_ENV, "").strip():
+        return None
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("candidate block trace image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(
+        original_indices > np.iinfo(np.int32).max
+    ):
+        raise ValueError("candidate block trace stack index is outside int32 range")
+    return original_indices.astype(np.int32, copy=False)
+
+
 def _relion_vdam_serial_rotation_replay() -> bool:
     """Return whether the opt-in worker replay also serializes rotations."""
 
@@ -854,6 +873,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     max_r,
     reconstruction_group_ids=None,
     worker_lane_ids=None,
+    particle_trace_ids=None,
     serial_rotation_replay=False,
     float64_accumulator_replay=False,
     reverse_rotation_replay=False,
@@ -942,6 +962,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 int(projection_padding_factor),
                 reconstruction_group_ids=reconstruction_group_ids,
                 worker_lane_ids=worker_lane_ids,
+                particle_trace_ids=particle_trace_ids,
                 serial_rotation_replay=serial_rotation_replay,
                 float64_accumulator_replay=float64_accumulator_replay,
                 reverse_rotation_replay=reverse_rotation_replay,
@@ -4985,6 +5006,10 @@ def run_local_em_exact(
                         experiment_dataset,
                         unpadded_bucket.image_indices,
                         debug_iteration=debug_iteration,
+                    ),
+                    particle_trace_ids=_relion_vdam_candidate_trace_ids_for_images(
+                        experiment_dataset,
+                        unpadded_bucket.image_indices,
                     ),
                     serial_rotation_replay=(
                         _relion_vdam_serial_rotation_replay()

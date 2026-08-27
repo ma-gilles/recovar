@@ -1735,7 +1735,7 @@ def relion_vdam_mstep_fused_x_half(
     return fused_data, fused_weight, compact_denominator
 
 
-@functools.partial(jax.jit, static_argnums=(10, 11, 12, 13, 14, 18, 19, 20, 21))
+@functools.partial(jax.jit, static_argnums=(10, 11, 12, 13, 14, 19, 20, 21, 22))
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
     weight_volume: jax.Array,
@@ -1754,6 +1754,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     projection_padding_factor: int,
     reconstruction_group_ids: jax.Array | None = None,
     worker_lane_ids: jax.Array | None = None,
+    particle_trace_ids: jax.Array | None = None,
     rotation_replay_order: jax.Array | None = None,
     serial_rotation_replay: bool = False,
     float64_accumulator_replay: bool = False,
@@ -1831,6 +1832,14 @@ def relion_vdam_mstep_fused_projector_x_half(
             raise TypeError("worker_lane_ids must be int32")
         if worker_lane_ids.shape != (n_particles,):
             raise ValueError("worker_lane_ids must match the particle axis")
+    if particle_trace_ids is None:
+        particle_trace_ids = jnp.arange(n_particles, dtype=jnp.int32)
+    else:
+        particle_trace_ids = jnp.asarray(particle_trace_ids)
+        if particle_trace_ids.dtype != jnp.int32:
+            raise TypeError("particle_trace_ids must be int32")
+        if particle_trace_ids.shape != (n_particles,):
+            raise ValueError("particle_trace_ids must match the particle axis")
     captured_rotation_replay = rotation_replay_order is not None
     if rotation_replay_order is None:
         rotation_replay_order = jnp.broadcast_to(
@@ -1884,7 +1893,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
         _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
         output_types,
-        input_output_aliases={11: 0, 12: 1, 13: 2},
+        input_output_aliases={12: 0, 13: 1, 14: 2},
         vmap_method="sequential",
     )(
         projector_full,
@@ -1897,6 +1906,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         rot6,
         reconstruction_group_ids,
         worker_lane_ids,
+        particle_trace_ids,
         rotation_replay_order,
         data_real_volume,
         data_imag_volume,
