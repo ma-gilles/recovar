@@ -27,6 +27,7 @@ PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 TARGET_ITERATION=${TARGET_ITERATION:-1}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 RELION_THREADS=${RELION_THREADS:-8}
+TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
 REPORT=${PANEL_ROOT}/analysis/mstep_repeat_panel.json
 
 test -f "${PANEL_ROOT}/SAFE_TO_DELETE"
@@ -36,7 +37,16 @@ test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${RECOVAR_CUDA_LIB_SOURCE}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test -z "$(find "${PANEL_ROOT}" -mindepth 1 ! -name SAFE_TO_DELETE -print -quit)"
 
-gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+mapfile -t visible_gpu_uuids < <(nvidia-smi --query-gpu=uuid --format=csv,noheader)
+if (( ${#visible_gpu_uuids[@]} != 1 )); then
+  echo "expected exactly one visible physical GPU, found ${#visible_gpu_uuids[@]}" >&2
+  exit 2
+fi
+gpu_uuid_before=${visible_gpu_uuids[0]//[[:space:]]/}
+if [[ -n "${TARGET_GPU_UUID}" && "${gpu_uuid_before}" != "${TARGET_GPU_UUID}" ]]; then
+  echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${gpu_uuid_before}" >&2
+  exit 75
+fi
 for arm in a b; do
   arm_root=${PANEL_ROOT}/${arm}
   mkdir -p "${arm_root}"
