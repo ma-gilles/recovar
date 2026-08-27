@@ -15849,3 +15849,30 @@ prioritized backlog of ~120 further sites are in
   `rot_angles`/`tilt_angles` as `std::vector<RFLOAT>`) appears to contradict
   this. Left unresolved and Euler-angle sites left untouched this session
   pending either the missing justification or a correction.
+
+### 2026-08-27 continuation: local_em_engine.py (largest P0 item) fixed;
+### GPU/RELION parity check blocked by cluster resources this session
+
+8 more files fixed (`local_em_engine.py`, `local_big_jit.py`, `k_class.py`,
+`significance.py`, `preprocessing.py`, `image_shifts.py`, `projection.py`,
+`sparse_pass2_bucketed.py`) -- `local_em_engine.py` was the P0 backlog's
+largest single remaining item. Full detail in
+`docs/math/relion_parity_agent_notes.md`'s 2026-08-27 entry, including a
+real JAX scatter-add dtype-mismatch bug this round's own testing caught
+and fixed (several `array.at[idx].add(value)` calls needed an explicit
+`value.astype(target.dtype)` once an upstream forced-float32 cast was
+correctly removed -- `.at[].add()` requires an exact dtype match, unlike
+plain `+`/assignment).
+
+**GPU/RELION parity still not obtained.** Four CPU-only Slurm attempts (up
+to 300G requested) all hit `OUT_OF_MEMORY` at the same point regardless of
+allocation size -- likely `recovar.utils.helpers.get_gpu_memory_total`'s
+CPU-mode fallback reading the physical node's total RAM via
+`psutil.virtual_memory().available` rather than any cgroup-limited amount,
+which may be worth its own bug report/fix independent of this audit. A GPU
+job queued but stayed `PENDING` on `QOSMaxCpuPerUserLimit` (this account
+already had several other jobs running); not pursued further this session.
+**No FSC/RELION-comparison quality claim is made for this round's fixes
+(or the prior round's) -- only CPU-regression-clean, individually
+RELION-source-justified.** This remains the mandatory first step of any
+follow-up session before further fixing, per the validation ladder.

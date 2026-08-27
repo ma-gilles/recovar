@@ -13553,3 +13553,192 @@ default run) -- same bug pattern, lower urgency:**
    question above: extend it to follow caller dtype, or explicitly accept
    the algebraic path as the double-precision default and document that
    choice.
+
+## 2026-08-27 double-precision float32-forcing audit, round 2: local_em_engine.py
+## (the P0 backlog's largest item) plus more of significance.py/k_class.py/
+## preprocessing.py/image_shifts.py/projection.py -- one genuine scatter-dtype
+## bug found and fixed via CPU regression testing; GPU/RELION parity check
+## blocked by cluster resource limits this session, not attempted to completion
+
+Continuation of the 2026-08-26 "(continued 3)" entry's P0 backlog, same
+"prioritize + backlog" scope. 8 more source files fixed this round:
+
+- **`local_em_engine.py`** (the P0 backlog's largest single item, the
+  default exact-local per-iteration engine): noise sigma2/tau2 accumulator
+  inits now derive from `precision_policy.score_real_dtype` instead of
+  hardcoding float32 (noise_sigma2_offset/sumw, noise_wsum/img_power/
+  norm_correction/a2/xa/scale_xa/scale_aa, disabled_noise_* placeholders,
+  per-block chunked accumulators in both the big-JIT-deferred and plain
+  noise branches); `_local_mstep_rotations`/`_reorder_bucket_to_indices`
+  now preserve source dtype instead of forcing float32 (pure select/reorder
+  steps, same reasoning as the already-fixed `_decode_dense_best_pose_
+  details`); `_pad_local_big_jit_image_axis` now derives each padded
+  container's dtype from the corresponding source array (`pad_axis`/
+  `np.pad` already preserves dtype -- only the subsequent `.astype(np.
+  float32)` calls were forcing it back down); the big-JIT arg-prep block
+  (image/scale corrections, fourier pre-shifts, translation-sqdist) now
+  uses `precision_policy.score_real_dtype`, matching the sibling
+  `normalization_log_z_arg`/`normalization_log_evidence_arg` right next to
+  it; `_postprocess_local_bucket`'s score/posterior/best-pose output no
+  longer force-narrows before scatter into the (now correctly-typed) output
+  buffers.
+- **`k_class.py`**: `_assemble_result` (the universal per-image score/
+  evidence/posterior/class-responsibility aggregator for both K=1 and K>1)
+  now derives its output dtype from `per_class_stats[0].best_log_score_
+  per_image`'s own dtype instead of hardcoding float32 -- threading an
+  explicit parameter through this function's several under-instrumented
+  callers would have been invasive, and the inputs already carry the
+  correct precision once their own producers are fixed; also fixed
+  `make_relion_stats`'s `rotation_dtype` argument at this call site (that
+  helper's own default is `jnp.float32`, silently overriding an otherwise-
+  correct `rotation_posterior_sums`). `_sum_noise_stats` now derives
+  `array_dtype` from the summed `wsum_sigma2_noise` field instead of
+  relying on `make_noise_stats`'s hardcoded float32 default.
+  `_local_layout_for_class` and `_rotation_prior_with_class_log_prior`
+  (K=1/K>1 default local-search and sparse-pass2 prior paths) fixed the
+  same way.
+- **`significance.py`**: `_compute_k_class_significance_batched` (the live
+  pass-1 entry point) gained a local `score_real_dtype` derived from its
+  own `use_float64_scoring` parameter, applied to the rotation/translation
+  log-prior padding, the per-image score/evidence/Pmax/class-best-score
+  output buffers (previously hardcoded float32 despite a comment two lines
+  above claiming they were "kept in float64 like dense run_em"), the
+  fused-pass1 (`RECOVAR_PASS1_FUSED=1`) branch's prior blocks, and the
+  final write site (removed a redundant `.astype(np.float32)` now that the
+  destination buffers are correctly typed -- the write already
+  auto-narrows/widens to whatever the buffer's own dtype is).
+- **`preprocessing.py:prepare_batch_preprocess_operands`**: added a `dtype`
+  param for `batch_scale_np`/`batch_corr_np` (RELION per-image scale/
+  normalization correction factors); threaded through its one live call
+  site inside `sparse_pass2_bucketed.py:_prepare_bucket_io` (`np.float64
+  if use_float64_scoring else np.float32`) and the live
+  `_compute_k_class_significance_batched` call site (`score_real_dtype`).
+  The `relion_cuda`-backend branch is untouched -- a real CUDA FFI kernel
+  input, hardware-locked to float32 independent of this switch.
+- **`image_shifts.py`**: `integer_pre_shifts_or_none` now preserves the
+  input's own dtype (a pure validation/comparison step; forcing float32
+  before the `np.allclose(atol=1e-6)` integral check risked flipping the
+  classification for a caller holding float64 shifts).
+  `half_image_phase_factors`/`tiled_half_image_phase_factors` gained a
+  `dtype` param (previously hardcoded `jnp.float32`, defeating the
+  `Precision.HIGHEST` matmul inside); threaded `dtype=<shifts>.dtype`
+  through all four live call sites (`local_big_jit.py` x2,
+  `local_em_engine.py`, `significance.py` x2,
+  `sparse_pass2_bucketed.py:_prepare_bucket_io`).
+- **`projection.py`**: `compute_norm_residual_per_image`/
+  `compute_scale_correction_terms_per_image` no longer force-cast their
+  return value to float32 -- the exact same "keep whatever real dtype the
+  inputs naturally promote to" fix already applied to their sibling
+  `compute_noise_block` (whose own docstring explains why forcing float32
+  here compounds error across the M-step's running accumulation), just not
+  previously applied to these two per-image twins.
+
+### A real bug found and fixed via CPU regression testing: JAX scatter-add
+### dtype mismatch
+
+Removing `compute_norm_residual_per_image`'s forced float32 cast (above)
+let its return value flow through at whatever dtype its inputs naturally
+promote to. `pixi run test-em-fast-guard` still passed (16/16) but produced
+two new `FutureWarning`s: `test_run_local_em_exact_default_path_matches_
+debug_split_path` and `test_run_local_em_exact_big_jit_bucket_matches_
+debug_split` -- *"scatter inputs have incompatible types: cannot safely
+cast value from dtype=float64 to dtype=float32 ... In future JAX releases
+this will result in an error."* Root cause: several `array.at[idx].add(
+value)` scatter-add call sites in `local_em_engine.py`/`local_big_jit.py`/
+`sparse_pass2_bucketed.py` combine a noise/norm-correction/scale-correction
+per-image value with a target array -- and unlike plain `+`/assignment
+(which promote/cast automatically), JAX's `.at[].add()` requires an *exact*
+dtype match between the scatter target and the value, even in *default*
+(non-double-precision) mode, because one of the natural-promotion inputs
+feeding these functions is apparently float64 by default already (not
+because of `precision_policy`, for some independent reason not yet
+identified). Fixed at every such site by explicitly casting the added
+value to the destination array's own dtype
+(`value.astype(target.dtype)`) -- the correct fix is for the *destination*
+(governed by `precision_policy`/the array's own construction) to decide the
+final precision, not for the scatter machinery to reject a value with
+higher natural precision. Sites fixed:
+`local_em_engine.py`'s three `noise_norm_correction.at[...].add(...)` and
+six `noise_scale_xa`/`noise_scale_aa.at[...].add(...)` calls,
+`local_big_jit.py`'s two `noise_scale_xa`/`noise_scale_aa.at[...].add(...)`
+calls, and `sparse_pass2_bucketed.py`'s three
+`_compute_noise_block_and_norm_residual_from_flat_rows(_residual_terms)`/
+`_compute_norm_residual_per_image_from_flat_rows` zero-init-then-scatter
+patterns (now sized from `residual_per_row.dtype` instead of hardcoded
+`jnp.float32`). Verified via `pytest ... -W error::FutureWarning` on the
+two originally-warning tests (now pass cleanly) and confirmed a `noise_
+total`/`norm_total` sibling pair using plain `+` accumulation (not `.at[]
+.add()`) at `sparse_pass2_bucketed.py` lines ~4461/7765 does **not** need
+the same fix (plain addition promotes safely; only `.at[].add()`'s
+strict-match requirement is the hazard). This is exactly the kind of latent
+bug this audit's "full rigor" mandate exists to catch -- worth remembering
+as a checklist item for any future dtype-threading fix in this codebase:
+after loosening a hardcoded cast, grep the consumer chain for `.at[...]
+.add(`/`.at[...].set(` and verify the destination's dtype won't now
+mismatch.
+
+### Testing this round
+
+- `pixi run test-em-fast-guard`: 16/16 passed (before and after the scatter
+  fix; the scatter bug only surfaced as `FutureWarning`s, not failures,
+  until deliberately promoted to errors for verification).
+- `tests/unit/test_run_local_em_exact_default_path_matches_debug_split_path`
+  and `..._big_jit_bucket_matches_debug_split`, run with
+  `-W error::FutureWarning`: both pass cleanly after the scatter-dtype fix
+  (both would fail/warn before it).
+- `tests/unit/test_refine_relion_mode.py` (356 tests), full run compared
+  against a `git stash`-clean baseline of just this round's 8 files, run
+  twice independently: **64 failed, 291 passed, 1 skipped in both runs,
+  byte-identical `FAILED` line sets** (confirmed via `diff` of the sorted
+  lists, zero output both times). All 64 shared failures are the same
+  pre-existing `libfftw3.so.3` environment gap documented in the prior
+  entry, unrelated to this round's changes. **Zero regressions.**
+
+### GPU/RELION parity check: attempted, not completed this session --
+### environment/resource limitation, not a code concern
+
+Per this file's own prior entry and `recovar/em/CLAUDE.md`'s validation
+ladder, an actual RELION-compared run is the mandatory next rung before
+further trusting these fixes. Attempted using the locally-available
+`relion_em_test_double_seeded/` RELION oracle (a pinned igg_1d K=1
+`--firstiter_cc` run at healpix_order=3, `--random_seed 1783599264`,
+version `5.1.0-commit-1126dd`, input `/home/ry295/pi_data/igg_1d/images/
+snr0.01/downsample_L128/snr0.01.star`) via
+`scripts/run_multi_iter_parity.py --iter 0 --max_iter 1` -- this
+environment has no local GPU (`nvidia-smi`: "No devices were found"), and
+this specific fixture/oracle pairing is **not** the Princeton
+`/scratch/gpfs/GILLES/...` fixture the script's own docstring and root
+`CLAUDE.md`'s canonical example assume; that filesystem is not mounted
+here. Four attempts on CPU-only Slurm allocations (`day` partition, then
+`bigmem`, then a memory-budget-capped wrapper via `recovar.utils.helpers.
+set_gpu_memory_limit()`) all hit `OUT_OF_MEMORY` at the identical point
+(right after "Sparse pass-2 bucket group start") regardless of how much
+memory was requested (64G, 300G, 48G-with-a-24G-planner-cap, 180G) --
+`MaxRSS` scaled roughly proportional to whatever was requested each time,
+strongly suggesting this cluster's cgroups do not virtualize `/proc/
+meminfo` for `psutil`, so `recovar.utils.helpers.get_gpu_memory_total`'s
+CPU-mode "half of available RAM" auto-detection reads the physical node's
+full RAM regardless of the Slurm allocation, and *something* downstream
+of that estimate (not just the batch planner, since the explicit cap
+didn't fully prevent it) still scales with it. Notably, the double-
+precision and float32-control runs died identically both times they were
+compared side-by-side, confirming this is a general CPU-batching memory
+issue, **not** specific to double precision or to this round's code
+changes. A GPU job was submitted (`gpu_devel` partition) but stayed
+`PENDING` on `QOSMaxCpuPerUserLimit` -- this account already has several
+other running Slurm jobs (an `interact` session, several `pi_lederman`
+jobs, an OOD desktop, a VS Code tunnel) consuming the account's CPU quota;
+cancelling any of them to free capacity was out of scope for this session
+(they may be the user's own active work) and cancelling my own queued job
+was the correct action. **Recommendation for next session**: either
+request GPU access at a time this account's other jobs have quota
+headroom, or investigate/report the CPU-batching memory-detection issue
+above as a separate, real (if unrelated to precision) infrastructure bug
+worth its own fix (`recovar.utils.helpers.get_gpu_memory_total`'s
+`psutil.virtual_memory().available`-based CPU fallback appears unsafe on
+cgroup-limited shared nodes). Until a GPU/RELION-compared run succeeds,
+**no claim is made that this session's fixes improve or preserve FSC/
+quality against RELION** -- only that they introduce zero CPU-testable
+regressions and are individually justified against RELION source, per the
+Numeric And Quality Contract's own standard that "not measured" is not
+"same."
