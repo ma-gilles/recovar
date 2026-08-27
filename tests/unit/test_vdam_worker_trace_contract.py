@@ -43,3 +43,18 @@ def test_fullschedule_boundary_can_replay_the_same_native_worker_trace():
     ]
     for text in required:
         assert text in runner
+
+
+def test_fullschedule_boundary_seals_and_replays_each_native_block_chronology():
+    runner = (ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+    required = [
+        "RELION_VDAM_BLOCK_TRACE_REPLAY",
+        "export RELION_VDAM_BLOCK_TRACE=${BLOCK_TRACE}",
+        "export RELION_VDAM_BLOCK_TRACE_ITER=1",
+        "scripts.build_vdam_block_chronology",
+        "captured_block_start requires native block tracing in the same arm",
+        "export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${BLOCK_CHRONOLOGY}",
+        "export RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY=${WORKER_REPLAY_TOPOLOGY}",
+    ]
+    for text in required:
+        assert text in runner

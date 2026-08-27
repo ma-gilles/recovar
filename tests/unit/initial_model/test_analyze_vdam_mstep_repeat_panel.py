@@ -90,6 +90,8 @@ def test_repeat_panel_runner_pins_same_gpu_and_nested_capture_contract():
         "scripts.analyze_vdam_mstep_repeat_panel",
         'status --porcelain=v1 --untracked-files=no',
         'sha256sum "${REPORT}"',
+        "RELION_VDAM_BLOCK_TRACE_REPLAY",
+        "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY",
     )
     missing = [token for token in required if token not in runner]
     assert not missing, f"M-step repeat panel lost provenance/same-GPU gates: {missing}"

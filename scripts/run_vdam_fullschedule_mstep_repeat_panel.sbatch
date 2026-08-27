@@ -54,6 +54,11 @@ for arm in a b; do
     TARGET_ITERATION="${TARGET_ITERATION}" \
     NR_ITER_SCHEDULE="${NR_ITER_SCHEDULE}" \
     RELION_THREADS="${RELION_THREADS}" \
+    RELION_VDAM_WORKER_TRACE_REPLAY="${RELION_VDAM_WORKER_TRACE_REPLAY:-0}" \
+    RELION_VDAM_BLOCK_TRACE_REPLAY="${RELION_VDAM_BLOCK_TRACE_REPLAY:-0}" \
+    RELION_VDAM_BLOCK_TRACE_CAPACITY="${RELION_VDAM_BLOCK_TRACE_CAPACITY:-1000000}" \
+    RELION_VDAM_BLOCK_TRACE_SM_COUNT="${RELION_VDAM_BLOCK_TRACE_SM_COUNT:-132}" \
+    RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY="${RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY:-captured}" \
     bash "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch"
   test -f "${arm_root}/RUN_SUCCESS_${SLURM_JOB_ID}"
   test "$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')" = "${gpu_uuid_before}"
