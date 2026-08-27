@@ -54,6 +54,7 @@ SHA-256 values.
 | Late M-step operand boundary | exact-H100 task `13047664_1` / internal job `13047681` completed through it60 in 404 s | **0 particle failures through it60**; incoming `Igrad2` is the leading open state at `1.606e-3` relative L2, versus `2.88e-6--8.57e-6` for fresh raw BPref terms |
 | Native `Igrad2` oracle at it60 | exact-H100 task `13048344_1` completed through it60 in 403 s | post-second moment becomes bitwise exact and reference error falls **262.0x**, from `1.038e-4` control to `3.963e-7`; diagnostic-only |
 | Trajectory-wide native `Igrad2` oracle | exact-H100 task `13049505_1` completed 60 live-map iterations in 409 s | sampled map gate **passes** at minimum FSC-AUC `0.999999999900`; strict particle/schedule state still first departs @34, so no promotion |
+| Trajectory-wide native `Igrad1 + Igrad2` oracle | exact-H100 task `13051779_1` / internal job `13051846` completed 60 live-map iterations in 427 s | all carried/post moment buffers and noise power are bitwise exact; reference error falls to `1.613e-8` and sampled maps pass at `0.999999999972`, but one particle/schedule choice departs @44; raw BPref is now the first non-exact stage |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -96,7 +97,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 13:09 ET**
+Last scientific update: **2026-08-27 13:41 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -124,7 +125,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 accumulated moment state | trajectory-wide native `Igrad2` replay makes the second moment exact and keeps live maps at minimum sampled FSC-AUC `0.999999999900` through it60 | exact-H100 `13049505_1`: it60 live input/output maps are `2.068e-6 / 2.485e-6` relative L2, but one paired particle and `optimal_offset_change` depart @34 | none; replay both first moments with `Igrad2`, then reduce the residual raw-score/map error below the close-tie state boundary |
+| 1 | GF47 raw BPref accumulation | trajectory-wide native `Igrad1 + Igrad2` replay makes every carried/post moment and noise-power buffer bitwise exact; the it60 reconstructed reference closes to `1.613e-8` relative L2 and sampled maps pass at minimum FSC-AUC `0.999999999972` | exact-H100 `13051779_1` / `13051846`: the first particle and operative schedule departure moves from @34 to @44; raw data/weight accumulators remain `2.72e-6--8.30e-6` relative L2 and are the first non-exact M-step stage | none; replay the native raw BPref trajectory, then repair the accumulator execution/precision path rather than the moment or reconstruction code |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -143,6 +144,33 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+The complete gradient-moment trajectory is now closed, leaving raw BPref as
+the first non-exact causal boundary. Local science commit `e7f30119a` adds a
+fail-closed paired native `Igrad1` replay for both pseudo-halfsets and composes
+it with the already qualified `Igrad2` replay. Exact-H100 array task
+`13051779_1` (internal Slurm job `13051846`) completed 60 live-map iterations
+in 427 seconds on `GPU-6222...`; native RELION stopped exactly at iteration 60
+and the RECOVAR handoff recorded 0 MiB GPU use.
+
+At iteration 60, incoming and post-update `Igrad1` for both halfsets,
+`Igrad2`, and `mom1_noise_power` are all bitwise exact. The paired reference
+entering reconstruction is `1.635e-8` relative L2 from RELION and the output
+is `1.613e-8`, compared with `2.485e-6` for the `Igrad2`-only trajectory.
+Sampled checkpoints 1, 4, 8, 16, 32, 58, and 60 all pass, with minimum
+FSC-AUC **`0.999999999972`** and class-assignment accuracy `1.0`.
+
+Strict state is still not exact: one neighboring pose/translation decision
+first differs at iteration 44, and `optimal_offset_change` first differs at
+the same checkpoint. This is ten iterations later than the `Igrad2`-only
+oracle. All other operative schedule fields remain matched. The first
+non-exact iteration-60 M-step operands are now raw BPref data/weights at
+`2.72e-6--8.30e-6` relative L2; their post-reweight data remains
+`9.14e-6--1.01e-5`. This closes the moment, noise-power, and reconstruction
+implementations for the residual and makes trajectory-wide raw BPref replay
+the next discriminator. M-step, sampled-map, particle, and sampling report
+SHA-256 values are `db50b145c6fd...`, `4c5db6168396...`,
+`536f3fdbbdcb...`, and `3187579d7400...`. The score remains **2/20**.
 
 The second-moment diagnosis now survives a live-map trajectory intervention,
 but it is not sufficient for strict state parity. Local science commit
