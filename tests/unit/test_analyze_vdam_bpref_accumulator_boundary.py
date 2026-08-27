@@ -11,11 +11,33 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 from scripts.analyze_vdam_bpref_accumulator_boundary import (
     _geometry,
     _inline_projector_replays,
+    _production_names,
     _rank_particle_sources,
     _to_relion_bpref_frame,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("half", "iteration", "expected_native"),
+    [
+        (1, 1, ("pipe_it1_c0_bp_data_pre_reweight.bin", "pipe_it1_c0_bp_weight.bin")),
+        (1, 58, ("pipe_it58_c0_bp_data_pre_reweight.bin", "pipe_it58_c0_bp_weight.bin")),
+        (2, 58, ("pipe_it58_c0_bp_data_h_pre_reweight.bin", "pipe_it58_c0_bp_weight_h.bin")),
+    ],
+)
+def test_production_names_select_requested_iteration(half, iteration, expected_native):
+    names = _production_names(half, iteration=iteration)
+
+    assert names[:2] == expected_native
+
+
+@pytest.mark.unit
+def test_production_names_reject_nonpositive_iteration():
+    with pytest.raises(ValueError, match="iteration must be positive"):
+        _production_names(1, iteration=0)
 
 
 @pytest.mark.unit

@@ -703,6 +703,7 @@ if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
       --native-directory "${NATIVE_MSTEP}" \
       --recovar-directory "${RECOVAR_MSTEP}" \
       --half "${BPREF_CONTRIBUTION_HALF}" \
+      --iteration "${TARGET_ITERATION}" \
       "${BPREF_ANALYZER_GROUP_ARGS[@]}" \
       --output-json "${ANALYSIS}/bpref_accumulator_boundary.json"
   )

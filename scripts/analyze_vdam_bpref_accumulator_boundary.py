@@ -30,18 +30,20 @@ else:
 SCHEMA = "recovar.vdam_bpref_accumulator_boundary.v1"
 
 
-def _production_names(half: int) -> tuple[str, str, str, str]:
+def _production_names(half: int, *, iteration: int = 1) -> tuple[str, str, str, str]:
+    if iteration < 1:
+        raise ValueError(f"iteration must be positive, got {iteration}")
     if half == 1:
         return (
-            "pipe_it1_c0_bp_data_pre_reweight.bin",
-            "pipe_it1_c0_bp_weight.bin",
+            f"pipe_it{iteration}_c0_bp_data_pre_reweight.bin",
+            f"pipe_it{iteration}_c0_bp_weight.bin",
             "accum_h0_data.npy",
             "accum_h0_weight.npy",
         )
     if half == 2:
         return (
-            "pipe_it1_c0_bp_data_h_pre_reweight.bin",
-            "pipe_it1_c0_bp_weight_h.bin",
+            f"pipe_it{iteration}_c0_bp_data_h_pre_reweight.bin",
+            f"pipe_it{iteration}_c0_bp_weight_h.bin",
             "accum_h1_data.npy",
             "accum_h1_weight.npy",
         )
@@ -225,6 +227,7 @@ def analyze(
     recovar_directory: Path,
     *,
     half: int,
+    iteration: int = 1,
     reconstruction_group: int | None = None,
 ) -> dict[str, object]:
     bundle = load_bpref_contribution_bundle(contribution_paths)
@@ -236,7 +239,7 @@ def analyze(
             "InitialModel reconstruction groups are zero-based and must equal half - 1"
         )
     native_data_name, native_weight_name, candidate_data_name, candidate_weight_name = (
-        _production_names(half)
+        _production_names(half, iteration=iteration)
     )
     native = BPrefAccumulatorReplay(
         data=_read_relion_array(Path(native_directory) / native_data_name, complex_values=True),
@@ -330,6 +333,7 @@ def analyze(
     return {
         "schema": SCHEMA,
         "status": "complete",
+        "iteration": int(iteration),
         "half": int(half),
         "capture_context_half": boundary_half,
         "reconstruction_group": (
@@ -351,6 +355,7 @@ def main() -> None:
     parser.add_argument("--native-directory", required=True, type=Path)
     parser.add_argument("--recovar-directory", required=True, type=Path)
     parser.add_argument("--half", required=True, type=int, choices=(1, 2))
+    parser.add_argument("--iteration", type=int, default=1)
     parser.add_argument("--reconstruction-group", type=int)
     parser.add_argument("--output-json", required=True, type=Path)
     args = parser.parse_args()
@@ -359,6 +364,7 @@ def main() -> None:
         args.native_directory,
         args.recovar_directory,
         half=args.half,
+        iteration=args.iteration,
         reconstruction_group=args.reconstruction_group,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
