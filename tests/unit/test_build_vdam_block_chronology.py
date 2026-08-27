@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from scripts.build_vdam_block_chronology import (
+    FLAG_NO_ATOMIC,
     HEADER_DTYPE,
     MAGIC,
     RECORD_DTYPE,
@@ -115,3 +116,24 @@ def test_block_chronology_rejects_incomplete_launch(tmp_path):
             n_classes=1,
             sm_count=132,
         )
+
+
+@pytest.mark.unit
+def test_block_chronology_seals_explicit_atomic_free_blocks(tmp_path):
+    capture = tmp_path / "trace.bin"
+    records = _records()
+    records["first_atomic_globaltimer"][0] = 0
+    records["flags"][0] |= FLAG_NO_ATOMIC
+    _write_capture(capture, records)
+    header, loaded = load_capture(capture)
+    result = validate_capture(
+        header,
+        loaded,
+        iteration=1,
+        n_particles=2,
+        n_threads=8,
+        n_classes=1,
+        sm_count=132,
+    )
+    assert result["atomic_free_indices"].tolist() == [0]
+    assert 0 not in result["first_atomic_order"].tolist()

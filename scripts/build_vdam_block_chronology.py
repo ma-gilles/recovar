@@ -42,6 +42,11 @@ RECORD_DTYPE = np.dtype(
         ("reserved", "<u4"),
     ]
 )
+FLAG_DATA3D = np.uint32(1 << 0)
+FLAG_CTF_PREMULTIPLIED = np.uint32(1 << 1)
+FLAG_SGD = np.uint32(1 << 2)
+FLAG_NO_ATOMIC = np.uint32(1 << 3)
+KNOWN_FLAGS = FLAG_DATA3D | FLAG_CTF_PREMULTIPLIED | FLAG_SGD | FLAG_NO_ATOMIC
 
 if HEADER_DTYPE.itemsize != 64 or RECORD_DTYPE.itemsize != 72:
     raise RuntimeError("VDAM block chronology binary schema has an invalid item size")
@@ -126,10 +131,23 @@ def validate_capture(
     start = records["block_start_globaltimer"]
     first_atomic = records["first_atomic_globaltimer"]
     end = records["block_end_globaltimer"]
+    flags = records["flags"]
+    atomic_free = (flags & FLAG_NO_ATOMIC) != 0
+    _require(np.all((flags & FLAG_SGD) != 0), "records must identify the SGD kernel")
+    _require(np.all((flags & ~KNOWN_FLAGS) == 0), "record flags contain unknown bits")
     _require(np.all(start > 0), "block-start timestamps must be nonzero")
-    _require(np.all(first_atomic > 0), "first-atomic timestamps must be nonzero")
-    _require(np.all(first_atomic >= start), "first-atomic timestamp precedes block start")
-    _require(np.all(end >= first_atomic), "block-end timestamp precedes first atomic")
+    _require(
+        np.array_equal(first_atomic == 0, atomic_free),
+        "zero first-atomic timestamps must exactly match atomic-free flags",
+    )
+    _require(
+        np.all(first_atomic[~atomic_free] >= start[~atomic_free]),
+        "first-atomic timestamp precedes block start",
+    )
+    _require(
+        np.all(end[~atomic_free] >= first_atomic[~atomic_free]),
+        "block-end timestamp precedes first atomic",
+    )
 
     launch_ids = np.unique(records["launch_sequence"])
     _require(
@@ -140,11 +158,15 @@ def validate_capture(
     particle_class_keys: set[tuple[int, int]] = set()
     for launch_sequence in launch_ids.tolist():
         rows = records[records["launch_sequence"] == launch_sequence]
-        for name in ("particle_id", "worker_id", "class_id", "image_count", "iteration", "flags"):
+        for name in ("particle_id", "worker_id", "class_id", "image_count", "iteration"):
             _require(
                 np.unique(rows[name]).size == 1,
                 f"launch {launch_sequence} has inconsistent {name}",
             )
+        _require(
+            np.unique(rows["flags"] & ~FLAG_NO_ATOMIC).size == 1,
+            f"launch {launch_sequence} has inconsistent base flags",
+        )
         image_count = int(rows["image_count"][0])
         _require(rows.size == image_count, f"launch {launch_sequence} is incomplete")
         _require(
@@ -164,8 +186,11 @@ def validate_capture(
                 "worker_id": int(rows["worker_id"][0]),
                 "class_id": key[1],
                 "image_count": image_count,
+                "atomic_free_count": int(np.sum((rows["flags"] & FLAG_NO_ATOMIC) != 0)),
                 "first_start_globaltimer": int(np.min(rows["block_start_globaltimer"])),
-                "first_atomic_globaltimer": int(np.min(rows["first_atomic_globaltimer"])),
+                "first_atomic_globaltimer": int(
+                    np.min(rows["first_atomic_globaltimer"][rows["first_atomic_globaltimer"] > 0])
+                ) if np.any(rows["first_atomic_globaltimer"] > 0) else 0,
                 "last_end_globaltimer": int(np.max(rows["block_end_globaltimer"])),
             }
         )
@@ -176,9 +201,16 @@ def validate_capture(
         len(particle_class_keys) == n_particles * n_classes,
         "capture does not contain exactly one launch per particle and class",
     )
-    first_atomic_order = np.lexsort(
-        (records["orientation_row"], records["launch_sequence"], first_atomic)
-    ).astype(np.int64)
+    atomic_indices = np.flatnonzero(~atomic_free)
+    first_atomic_order = atomic_indices[
+        np.lexsort(
+            (
+                records["orientation_row"][atomic_indices],
+                records["launch_sequence"][atomic_indices],
+                first_atomic[atomic_indices],
+            )
+        )
+    ].astype(np.int64)
     block_start_order = np.lexsort(
         (records["orientation_row"], records["launch_sequence"], start)
     ).astype(np.int64)
@@ -186,6 +218,7 @@ def validate_capture(
         "launch_count": int(launch_ids.size),
         "particle_ids": particle_ids.astype(np.int64),
         "first_atomic_order": first_atomic_order,
+        "atomic_free_indices": np.flatnonzero(atomic_free).astype(np.int64),
         "block_start_order": block_start_order,
         "launch_summaries": launch_summaries,
         "sm_ids": np.unique(records["sm_id"]).astype(np.int64),
@@ -234,6 +267,7 @@ def main() -> None:
         source_capture_sha256=np.asarray(capture_sha256),
         records=records,
         first_atomic_order=result["first_atomic_order"],
+        atomic_free_indices=result["atomic_free_indices"],
         block_start_order=result["block_start_order"],
     )
     report = {
@@ -250,6 +284,7 @@ def main() -> None:
         "sm_count": args.sm_count,
         "observed_sm_count": int(np.asarray(result["sm_ids"]).size),
         "observed_sm_ids": np.asarray(result["sm_ids"]).tolist(),
+        "atomic_free_block_count": int(np.asarray(result["atomic_free_indices"]).size),
         "launches": result["launch_summaries"],
         "output_npz": str(output_npz),
     }
