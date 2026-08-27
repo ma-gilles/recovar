@@ -25,8 +25,8 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 exact worker-owner replay `13023005`; reduction-mode panel `13020545`; GF38 full audit `13018631`: all terminal |
-| Latest focused discriminator | Exact native stack-ID/worker ownership and every per-worker particle chain were replayed; this does not improve GF47, leaving concurrent eight-host-worker launch timing as the only untested scheduling distinction |
+| Latest qualification | GF47 same-H100 owner/concurrency panel `13024070`; exact-owner replay `13023005`; GF38 full audit `13018631`: all terminal |
+| Latest focused discriminator | Exact owner replay plus eight concurrent host issuers worsens RECOVAR reference repeat spread **5.5x**; all task/stream scheduling hypotheses are rejected and the next boundary is post-BPref amplification/deterministic direct-kernel accumulation |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
 #### Frozen case checkboxes
@@ -41,7 +41,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-26 23:34 ET**
+Last scientific update: **2026-08-26 23:42 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -69,7 +69,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; exact owner replay preserves all eight native per-worker chains but does not improve raw BPref or reconstruction | job `13023005` closes owner identity/order; concurrent eight-host-worker issue is now the final scheduling discriminator before the post-BPref momentum boundary | none until the iteration-1 update is repeatable and a 0--200 audit passes |
+| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; exact owner and concurrent-worker replay both remain inside native arithmetic spread but materially worsen RECOVAR repeatability | panel `13024070` rejects the final scheduling discriminator; next isolate deterministic direct-kernel BPref accumulation versus post-BPref moment/reconstruction amplification | none until the iteration-1 update is repeatable and a 0--200 audit passes |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -88,6 +88,25 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
+in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
+two exact-owner replays with eight concurrent host issuers ran on GPU
+`GPU-9f98ccbf...`. The default cross-engine raw half-0 BPref data errors are
+`8.19e-6` and `9.10e-6` against a `9.09e-6` paired native-repeat floor; its
+reconstructed-reference errors are `1.66e-6` and `1.80e-6` against a
+`1.98e-6` native floor. The owner/concurrency replay remains within that native
+floor at the reference (`1.71e-6`, `1.83e-6` versus `1.94e-6`) but is much less
+repeatable: RECOVAR reconstructed-reference repeat spread grows from
+`1.64e-7` to `8.99e-7` (**5.49x**), raw BPref-data spread grows from
+`1.93e-7` to `6.46e-7` (**3.35x**), BPref-weight spread grows from `9.83e-8`
+to `3.35e-7` (**3.41x**), and `mom1_noise_power` spread grows from `4.93e-7`
+to `1.25e-5` (**25.3x**). Concurrent owner replay is therefore rejected as a
+production fix, and the scheduler branch is closed. The next bounded work is
+VDAM-specific deterministic direct-kernel accumulation followed by the
+post-BPref momentum/reconstruction amplifier. Report SHA-256 values are
+`eca6f5e5667f...` (control) and `325347e3b87d...` (replay). No score is
+promoted.
 
 GF47 exact worker-owner replay `13023005` completed successfully in 39 seconds
 on one H100 from local unpushed RECOVAR commit `be58f92d7` and instrumented
