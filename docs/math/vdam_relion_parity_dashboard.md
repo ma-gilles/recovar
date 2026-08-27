@@ -25,11 +25,11 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 divergent repeat `13018955`; GF38 full audit `13018631`; GF53 final audit `12999424_53`: all terminal |
-| Live focused discriminator | GF47 production vs fused/block vs sequential+fused/block, paired repeats on one H100: job `13020545` running from local source `bdef96dcc` |
+| Latest qualification | GF47 reduction-mode panel `13020545`; GF38 full audit `13018631`; GF53 final audit `12999424_53`: all terminal |
+| Latest focused discriminator | GF47 production vs fused/block vs sequential+fused/block completed on one H100; both EM scatter arms are rejected |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
-Last scientific update: **2026-08-26 22:22 ET**
+Last scientific update: **2026-08-26 22:26 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -57,7 +57,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; iteration-1 map rel-L2 is `2.47e-7`, then Pmax splits @2 and a pose splits @34 | paired production/fused-block/sequential-fused-block discriminator `13020545` is running on one H100 | none until the iteration-1 reduction is repeatable and a 0--200 audit passes |
+| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; iteration-1 map rel-L2 is `2.47e-7`, then Pmax splits @2 and a pose splits @34 | job `13020545` rejects both reused EM scatter modes; hypothesis-level translation/orientation scatter is next | none until the iteration-1 reduction is repeatable and a 0--200 audit passes |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -76,6 +76,21 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+GF47 same-H100 reduction-mode panel `13020545` completed in 217 seconds from
+local unpushed source `bdef96dcc`. Each of production, fused/block topology,
+and sequential-translation plus fused/block topology ran twice, with a fresh
+native RELION iteration-1 control for every repeat. Production reproduces the
+boundary: its reconstructed reference differs between repeats at relative-L2
+`2.5452e-7`. Fused/block increases that spread to `3.7124e-7`, and adding
+sequential translation reduction increases it to `7.2414e-7`; neither arm
+improves the cross-engine accumulator envelope consistently. Both reused EM
+arms are therefore rejected. They still reduce translations into one row per
+orientation before the fused CUDA scatter, so the next causal implementation
+boundary is RELION's orientation-by-translation hypothesis stream rather than
+another toggle of the reduced-row scatter. The sealed report SHA-256 values
+are `fceae7f316d0...` (production), `ef7abe8b86a8...` (fused/block), and
+`a435ed456c7f...` (sequential/fused/block). No score is promoted.
 
 GF38's composed-head iteration-3 discriminator `13014075_3` is terminal and
 passes the complete active controller envelope against all four native
@@ -403,7 +418,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | valid repeat pair is exact at iteration 0; first aggregate/map split is iteration 1; Pmax splits @2 and pose @40 | reuse the EM accumulator/reduction machinery to make the iteration-1 update stay inside native repeatability, then requalify 0--200 |
+| 1 | Close GF47 repeatability before another trajectory | job `13020545` rejects reduced-row fused/block and sequential/fused/block; both worsen reference repeat spread | preserve RELION's orientation-by-translation hypothesis stream through fused scatter, then requalify iteration 0--2 and 0--200 |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
