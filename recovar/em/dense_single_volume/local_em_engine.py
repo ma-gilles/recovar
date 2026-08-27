@@ -390,6 +390,7 @@ VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE = np.dtype(
     ]
 )
 VDAM_CANDIDATE_BLOCK_MAP_VALID = np.uint32(1 << 0)
+VDAM_CANDIDATE_BLOCK_MAP_CONTRIBUTING = np.uint32(1 << 1)
 VDAM_CANDIDATE_BLOCK_MAP_INVALID_ROW = np.iinfo(np.uint32).max
 if (
     VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize != 64
@@ -698,6 +699,7 @@ def _maybe_write_vdam_candidate_block_map(
     particle_ids,
     reconstruction_take_indices,
     reconstruction_pack_mask,
+    reconstruction_contributing_mask,
     local_rotation_ids,
     reconstruction_group_ids,
     debug_iteration: int | None,
@@ -737,9 +739,16 @@ def _maybe_write_vdam_candidate_block_map(
     particle_ids = np.asarray(particle_ids, dtype=np.int64)
     take_indices = np.asarray(reconstruction_take_indices, dtype=np.int64)
     pack_mask = np.asarray(reconstruction_pack_mask, dtype=bool)
+    contributing_mask = np.asarray(reconstruction_contributing_mask, dtype=bool)
     local_rotation_ids = np.asarray(local_rotation_ids, dtype=np.int64)
-    if take_indices.ndim != 2 or pack_mask.shape != take_indices.shape:
+    if (
+        take_indices.ndim != 2
+        or pack_mask.shape != take_indices.shape
+        or contributing_mask.shape != take_indices.shape
+    ):
         raise ValueError("candidate block-map packed row arrays must have matching rank-two shapes")
+    if np.any(contributing_mask & ~pack_mask):
+        raise ValueError("candidate block-map contributing rows must be valid logical rows")
     particle_count, candidate_count = take_indices.shape
     if particle_ids.shape != (particle_count,):
         raise ValueError("candidate block-map particle IDs must match the packed particle axis")
@@ -794,10 +803,17 @@ def _maybe_write_vdam_candidate_block_map(
         candidate_count,
     )
     records["iteration"] = np.uint32(target_iteration)
-    records["flags"] = np.where(
-        pack_mask.ravel(),
-        VDAM_CANDIDATE_BLOCK_MAP_VALID,
-        np.uint32(0),
+    records["flags"] = (
+        np.where(
+            pack_mask.ravel(),
+            VDAM_CANDIDATE_BLOCK_MAP_VALID,
+            np.uint32(0),
+        )
+        | np.where(
+            contributing_mask.ravel(),
+            VDAM_CANDIDATE_BLOCK_MAP_CONTRIBUTING,
+            np.uint32(0),
+        )
     )
 
     output_path = Path(path_text).expanduser().resolve()
@@ -816,7 +832,7 @@ def _maybe_write_vdam_candidate_block_map(
         if bytes(row["magic"]) != VDAM_CANDIDATE_BLOCK_MAP_MAGIC.rstrip(b"\0"):
             raise ValueError("candidate block-map file has invalid magic")
         if (
-            int(row["schema_version"]) != 1
+            int(row["schema_version"]) != 2
             or int(row["header_size"]) != VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
             or int(row["record_size"]) != VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
             or int(row["iteration"]) != target_iteration
@@ -835,7 +851,7 @@ def _maybe_write_vdam_candidate_block_map(
     else:
         header = np.zeros(1, dtype=VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE)
         header["magic"] = VDAM_CANDIDATE_BLOCK_MAP_MAGIC
-        header["schema_version"] = 1
+        header["schema_version"] = 2
         header["header_size"] = VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
         header["record_size"] = VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
         header["iteration"] = target_iteration
@@ -5190,6 +5206,16 @@ def run_local_em_exact(
                     particle_ids=candidate_trace_ids,
                     reconstruction_take_indices=reconstruction_take_indices,
                     reconstruction_pack_mask=reconstruction_pack_mask_np,
+                    reconstruction_contributing_mask=(
+                        np.take_along_axis(
+                            reconstruction_rotation_mask_np
+                            & local_mask_np
+                            & (probs_sum_t_np > 0.0),
+                            reconstruction_take_indices,
+                            axis=1,
+                        )
+                        & reconstruction_pack_mask_np
+                    ),
                     local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
                     reconstruction_group_ids=(
                         None

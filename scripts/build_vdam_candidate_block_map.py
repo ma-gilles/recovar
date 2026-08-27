@@ -38,7 +38,7 @@ RECORD_DTYPE = np.dtype(
     ]
 )
 MAP_VALID = np.uint32(1 << 0)
-MAP_KNOWN_FLAGS = MAP_VALID
+MAP_CONTRIBUTING = np.uint32(1 << 1)
 INVALID_ROW = np.iinfo(np.uint32).max
 BLOCK_NO_ATOMIC = np.uint32(1 << 3)
 
@@ -69,7 +69,7 @@ def load_map(path: Path) -> tuple[dict[str, int], np.ndarray]:
         for name in HEADER_DTYPE.names
         if name != "magic"
     }
-    _require(header["schema_version"] == 1, "block-map schema version must be one")
+    _require(header["schema_version"] in {1, 2}, "block-map schema version must be one or two")
     _require(header["header_size"] == HEADER_DTYPE.itemsize, "block-map header size mismatch")
     _require(header["record_size"] == RECORD_DTYPE.itemsize, "block-map record size mismatch")
     _require(header["record_count"] > 0, "block map contains zero records")
@@ -126,8 +126,16 @@ def validate_map(
     _require(np.all(map_records["particle_id"] >= 0), "block-map particle IDs must be nonnegative")
     _require(np.all(map_records["class_id"] == 0), "K=1 block-map class IDs must be zero")
     _require(np.all(map_records["reserved"] == 0), "block-map record reserved fields must be zero")
-    _require(np.all((map_records["flags"] & ~MAP_KNOWN_FLAGS) == 0), "block-map flags are unknown")
+    schema_version = int(header.get("schema_version", 1))
+    known_flags = MAP_VALID if schema_version == 1 else MAP_VALID | MAP_CONTRIBUTING
+    _require(np.all((map_records["flags"] & ~known_flags) == 0), "block-map flags are unknown")
     valid = (map_records["flags"] & MAP_VALID) != 0
+    contributing = (
+        valid
+        if schema_version == 1
+        else (map_records["flags"] & MAP_CONTRIBUTING) != 0
+    )
+    _require(np.all(~contributing | valid), "contributing block-map rows must be valid")
     _require(
         np.all(map_records["native_orientation_row"][~valid] == INVALID_ROW),
         "invalid candidate rows must use the native-row sentinel",
@@ -177,7 +185,15 @@ def validate_map(
         ) == 0
         map_row = map_records[map_index]
         map_valid = bool(int(map_row["flags"]) & int(MAP_VALID))
-        _require(candidate_atomic == map_valid, "candidate atomic flags disagree with the compact-row map")
+        map_contributing = (
+            map_valid
+            if schema_version == 1
+            else bool(int(map_row["flags"]) & int(MAP_CONTRIBUTING))
+        )
+        _require(
+            candidate_atomic == map_contributing,
+            "candidate atomic flags disagree with the compact-row map",
+        )
         if not map_valid:
             continue
         native_key = (candidate_key[0], int(map_row["native_orientation_row"]))
@@ -188,7 +204,10 @@ def validate_map(
         native_atomic = (
             int(native_records["flags"][native_index]) & int(BLOCK_NO_ATOMIC)
         ) == 0
-        _require(native_atomic, "candidate atomic row maps to a native atomic-free row")
+        _require(
+            native_atomic == map_contributing,
+            "mapped candidate/native contributing flags disagree",
+        )
         candidate_to_native[candidate_index] = native_index
         native_to_candidate[native_index] = candidate_index
 
@@ -203,13 +222,15 @@ def validate_map(
         "candidate atomic rows are missing native mappings",
     )
     _require(
-        native_atomic_indices.size == candidate_atomic_indices.size == int(np.sum(valid)),
+        native_atomic_indices.size == candidate_atomic_indices.size == int(np.sum(contributing)),
         "mapped atomic cardinalities differ",
     )
     return {
         "particle_count": int(particles.size),
         "map_record_count": int(map_records.size),
-        "mapped_atomic_count": int(np.sum(valid)),
+        "mapped_logical_count": int(np.sum(valid)),
+        "mapped_atomic_count": int(np.sum(contributing)),
+        "mapped_atomic_free_count": int(np.sum(valid & ~contributing)),
         "candidate_padding_count": int(np.sum(~valid)),
         "native_atomic_free_count": int(native_records.size - native_atomic_indices.size),
         "candidate_atomic_free_count": int(candidate_records.size - candidate_atomic_indices.size),
@@ -266,7 +287,7 @@ def main() -> None:
     }
     np.savez_compressed(
         output_npz,
-        schema_version=np.int64(1),
+        schema_version=np.int64(header["schema_version"]),
         iteration=np.int64(args.iteration),
         n_particles=np.int64(args.n_particles),
         map_records=map_records,
@@ -275,12 +296,14 @@ def main() -> None:
         **{key: np.asarray(value) for key, value in hashes.items()},
     )
     report = {
-        "schema": "recovar.vdam_candidate_block_map.v1",
+        "schema": f"recovar.vdam_candidate_block_map.v{header['schema_version']}",
         "result": "pass",
         "iteration": args.iteration,
         "particle_count": result["particle_count"],
         "map_record_count": result["map_record_count"],
+        "mapped_logical_count": result["mapped_logical_count"],
         "mapped_atomic_count": result["mapped_atomic_count"],
+        "mapped_atomic_free_count": result["mapped_atomic_free_count"],
         "candidate_padding_count": result["candidate_padding_count"],
         "native_atomic_free_count": result["native_atomic_free_count"],
         "candidate_atomic_free_count": result["candidate_atomic_free_count"],

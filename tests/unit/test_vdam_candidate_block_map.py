@@ -17,6 +17,9 @@ def test_candidate_block_map_writer_appends_exact_physical_rows(tmp_path, monkey
         particle_ids=np.array([10, 20], dtype=np.int32),
         reconstruction_take_indices=np.array([[2, 0, 0], [1, 3, 0]], dtype=np.int32),
         reconstruction_pack_mask=np.array([[True, False, False], [True, True, False]]),
+        reconstruction_contributing_mask=np.array(
+            [[True, False, False], [True, False, False]]
+        ),
         local_rotation_ids=np.array([[100, 101, 102, 103], [200, 201, 202, 203]], dtype=np.int32),
         reconstruction_group_ids=np.array([0, 1], dtype=np.int32),
         debug_iteration=1,
@@ -25,12 +28,14 @@ def test_candidate_block_map_writer_appends_exact_physical_rows(tmp_path, monkey
         particle_ids=np.array([30], dtype=np.int32),
         reconstruction_take_indices=np.array([[0, 1]], dtype=np.int32),
         reconstruction_pack_mask=np.array([[True, False]]),
+        reconstruction_contributing_mask=np.array([[True, False]]),
         local_rotation_ids=np.array([[300, 301]], dtype=np.int32),
         reconstruction_group_ids=None,
         debug_iteration=1,
     )
 
     header, records = load_map(output)
+    assert header["schema_version"] == 2
     assert header["record_count"] == 8
     assert records["particle_id"].tolist() == [10, 10, 10, 20, 20, 20, 30, 30]
     assert records["candidate_orientation_row"].tolist() == [0, 1, 2, 0, 1, 2, 0, 1]
@@ -38,6 +43,7 @@ def test_candidate_block_map_writer_appends_exact_physical_rows(tmp_path, monkey
     assert records["global_rotation_id"].tolist() == [102, -1, -1, 201, 203, -1, 300, -1]
     assert records["reconstruction_group_id"].tolist() == [0, 0, 0, 1, 1, 1, 0, 0]
     assert (records["flags"] != 0).tolist() == [True, False, False, True, True, False, True, False]
+    assert records["flags"].tolist() == [3, 0, 0, 3, 1, 0, 3, 0]
 
 
 def test_candidate_block_map_writer_ignores_non_target_iteration(tmp_path, monkeypatch):
@@ -49,6 +55,7 @@ def test_candidate_block_map_writer_ignores_non_target_iteration(tmp_path, monke
         particle_ids=np.array([10], dtype=np.int32),
         reconstruction_take_indices=np.array([[0]], dtype=np.int32),
         reconstruction_pack_mask=np.array([[True]]),
+        reconstruction_contributing_mask=np.array([[True]]),
         local_rotation_ids=np.array([[100]], dtype=np.int32),
         reconstruction_group_ids=None,
         debug_iteration=1,

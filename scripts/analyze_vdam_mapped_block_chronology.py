@@ -67,12 +67,18 @@ def analyze_arm(arm_root: Path) -> tuple[dict[str, object], dict[tuple[int, int]
     candidate_iteration, candidate = _load_records(candidate_path, label="candidate chronology")
     _require(candidate_iteration == iteration, "native and candidate chronology iterations differ")
     with np.load(map_path, allow_pickle=False) as sealed:
-        _require(int(sealed["schema_version"]) == 1, "candidate block-map schema mismatch")
+        _require(
+            int(sealed["schema_version"]) in {1, 2},
+            "candidate block-map schema mismatch",
+        )
         _require(int(sealed["iteration"]) == iteration, "candidate block-map iteration mismatch")
         candidate_to_native = np.asarray(sealed["candidate_to_native"], dtype=np.int64)
     _require(candidate_to_native.shape == (candidate.size,), "candidate-to-native map shape mismatch")
     native_id_map = _load_native_id_map(schedule_path, iteration=iteration)
-    candidate_indices = np.flatnonzero(candidate_to_native >= 0)
+    candidate_indices = np.flatnonzero(
+        (candidate_to_native >= 0)
+        & ((candidate["flags"] & BLOCK_NO_ATOMIC) == 0)
+    )
     native_indices = candidate_to_native[candidate_indices]
     _require(np.unique(native_indices).size == native_indices.size, "mapped native indices are not unique")
     _require(np.all(native_indices < native.size), "mapped native index is out of range")
