@@ -51,6 +51,8 @@ EXPECTED_BLOCK_CHRONOLOGY_SHA256=${EXPECTED_BLOCK_CHRONOLOGY_SHA256:-}
 TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
 IREF_REPLAY_TEMPLATE=${RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE:-}
 REPLAY_NATIVE_REFERENCES=${VDAM_REPLAY_NATIVE_REFERENCES:-0}
+GPU_RELEASE_MAX_USED_MIB=${VDAM_GPU_RELEASE_MAX_USED_MIB:-1024}
+GPU_RELEASE_TIMEOUT_S=${VDAM_GPU_RELEASE_TIMEOUT_S:-120}
 NATIVE_SECOND_MOMENT_REPLAY=${VDAM_NATIVE_SECOND_MOMENT_REPLAY:-0}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
@@ -96,6 +98,8 @@ test "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 0 -o "${CANDIDATE_BLOCK_TRACE_CAPTURE}
 test "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 0 -o "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 1
 test "${NATIVE_SECOND_MOMENT_REPLAY}" = 0 -o "${NATIVE_SECOND_MOMENT_REPLAY}" = 1
 test "${REPLAY_NATIVE_REFERENCES}" = 0 -o "${REPLAY_NATIVE_REFERENCES}" = 1
+test "${GPU_RELEASE_MAX_USED_MIB}" -ge 0
+test "${GPU_RELEASE_TIMEOUT_S}" -ge 1
 if [[ "${REPLAY_NATIVE_REFERENCES}" = 1 ]]; then
   test -z "${IREF_REPLAY_TEMPLATE}"
   IREF_REPLAY_TEMPLATE=${RELION_OUTPUT}/run_it{iteration:03d}_class{k:03d}.mrc
@@ -325,6 +329,25 @@ set +e
 wait "${relion_pid}"
 set -e
 touch "${OUTPUT_ROOT}/NATIVE_STOPPED_AFTER_IT${target_tag}"
+
+# scancel returns as soon as the Slurm step terminates, which can precede CUDA
+# context teardown.  Starting JAX in that window can inherit too little free
+# HBM and fail before the first E-step.  Require the physical GPU to return to
+# an idle-memory envelope before launching the candidate in this allocation.
+gpu_memory_released=0
+for _release_poll in $(seq 1 "${GPU_RELEASE_TIMEOUT_S}"); do
+  gpu_used_mib=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits \
+    | head -n 1 | tr -d '[:space:]')
+  if [[ "${gpu_used_mib}" =~ ^[0-9]+$ ]] && \
+      (( gpu_used_mib <= GPU_RELEASE_MAX_USED_MIB )); then
+    gpu_memory_released=1
+    break
+  fi
+  sleep 1
+done
+test "${gpu_memory_released}" -eq 1
+printf '%s\n' "${gpu_used_mib}" > "${PROVENANCE}/gpu_used_mib_before_recovar.txt"
+nvidia-smi -q > "${PROVENANCE}/nvidia_smi_before_recovar.txt"
 
 if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
   test -s "${WORKER_TRACE}"
@@ -600,8 +623,8 @@ fi
 if [[ -n "${EXTERNAL_BLOCK_CHRONOLOGY}" ]]; then
   sha256sum "${EXTERNAL_BLOCK_CHRONOLOGY}" >> "${PROVENANCE}/static_inputs.sha256"
 fi
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
-  "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_GPU_UUID}" \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+  "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_GPU_UUID}" "${gpu_used_mib}" \
   "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
