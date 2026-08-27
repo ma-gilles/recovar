@@ -20,6 +20,8 @@ XMIPP_EQUAL_ACCURACY: float = 1e-6
 RELION_DEFAULT_GRAD_MIN_RESOL_ANGSTROM: float = 20.0
 VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_BIN"
 VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER"
+VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_BIN"
+VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER"
 
 
 def _get_bindings():
@@ -90,6 +92,74 @@ def _has_relion_reconstruction_weight(state: InitialModelState, k: int, accum_h0
     return float(np.sum(np.asarray(accum_h0.weight, dtype=np.float64))) > XMIPP_EQUAL_ACCURACY
 
 
+def _replay_iteration_selected(env_name: str, iteration: int) -> bool:
+    """Return whether an integer/``all`` diagnostic selector matches."""
+
+    replay_iteration_value = os.environ.get(env_name, "1").strip()
+    replay_all_iterations = replay_iteration_value.lower() in {"all", "*"}
+    try:
+        replay_iteration = None if replay_all_iterations else int(replay_iteration_value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{env_name} must be an integer or 'all'"
+        ) from exc
+    return replay_iteration is None or int(iteration) == replay_iteration
+
+
+def _read_native_complex_replay(path: Path, *, expected_shape: tuple[int, ...]) -> np.ndarray:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with path.open("rb") as stream:
+        shape = np.fromfile(stream, dtype=np.int64, count=3)
+        values = np.fromfile(stream, dtype=np.float64)
+    if shape.size != 3 or np.any(shape <= 0):
+        raise ValueError(f"{path}: invalid three-int64 shape header")
+    value_count = int(np.prod(shape, dtype=np.int64))
+    if values.size != 2 * value_count:
+        raise ValueError(
+            f"{path}: expected {2 * value_count} float64 components, got {values.size}"
+        )
+    replay = values.view(np.complex128).reshape(tuple(int(value) for value in shape))
+    if replay.shape != expected_shape:
+        raise ValueError(f"{path}: replay shape {replay.shape} does not match {expected_shape}")
+    if not np.all(np.isfinite(replay)):
+        raise ValueError(f"{path}: replay contains non-finite values")
+    return replay
+
+
+def _maybe_replay_native_first_moments(
+    computed_h0: np.ndarray,
+    computed_h1: np.ndarray | None,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Replay paired native ``Igrad1_post`` buffers for causal diagnosis."""
+
+    replay_template = os.environ.get(VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV, "").strip()
+    if not replay_template or not _replay_iteration_selected(
+        VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV, iteration
+    ):
+        return computed_h0, computed_h1
+
+    outputs = []
+    computed_values = (computed_h0,) if computed_h1 is None else (computed_h0, computed_h1)
+    for halfset, computed in enumerate(computed_values):
+        path = Path(
+            replay_template.format(
+                iteration=int(iteration),
+                class_idx=int(class_idx),
+                halfset=halfset,
+                half_suffix="" if halfset == 0 else "_h",
+            )
+        )
+        outputs.append(
+            _read_native_complex_replay(path, expected_shape=np.asarray(computed).shape)
+        )
+    replay_h1 = None if computed_h1 is None else outputs[1]
+    return outputs[0], replay_h1
+
+
 def _maybe_replay_native_second_moment(
     computed: np.ndarray,
     *,
@@ -105,45 +175,16 @@ def _maybe_replay_native_second_moment(
     """
 
     replay_template = os.environ.get(VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, "").strip()
-    if not replay_template:
-        return computed
-    replay_iteration_value = os.environ.get(
-        VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "1"
-    ).strip()
-    replay_all_iterations = replay_iteration_value.lower() in {"all", "*"}
-    try:
-        replay_iteration = None if replay_all_iterations else int(replay_iteration_value)
-    except ValueError as exc:
-        raise ValueError(
-            f"{VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV} must be an integer or 'all'"
-        ) from exc
-    if replay_iteration is not None and int(iteration) != replay_iteration:
+    if not replay_template or not _replay_iteration_selected(
+        VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, iteration
+    ):
         return computed
 
     replay_path = Path(
         replay_template.format(iteration=int(iteration), class_idx=int(class_idx))
     )
-    if not replay_path.is_file():
-        raise FileNotFoundError(replay_path)
-    with replay_path.open("rb") as stream:
-        shape = np.fromfile(stream, dtype=np.int64, count=3)
-        values = np.fromfile(stream, dtype=np.float64)
-    if shape.size != 3 or np.any(shape <= 0):
-        raise ValueError(f"{replay_path}: invalid three-int64 shape header")
-    value_count = int(np.prod(shape, dtype=np.int64))
-    if values.size != 2 * value_count:
-        raise ValueError(
-            f"{replay_path}: expected {2 * value_count} float64 components, got {values.size}"
-        )
-    replay = values.view(np.complex128).reshape(tuple(int(value) for value in shape))
     computed = np.asarray(computed)
-    if replay.shape != computed.shape:
-        raise ValueError(
-            f"{replay_path}: replay shape {replay.shape} does not match {computed.shape}"
-        )
-    if not np.all(np.isfinite(replay)):
-        raise ValueError(f"{replay_path}: replay contains non-finite values")
-    return replay
+    return _read_native_complex_replay(replay_path, expected_shape=computed.shape)
 
 
 def vdam_m_step_single_class(
@@ -244,6 +285,15 @@ def vdam_m_step_single_class(
                 **{"lambda": mu_first},
             )
         )
+    replay_h0, replay_h1 = _maybe_replay_native_first_moments(
+        new_Igrad1[slot_h0],
+        new_Igrad1[slot_h1] if state.pseudo_halfsets else None,
+        iteration=int(getattr(state, "iter", 0)),
+        class_idx=k,
+    )
+    new_Igrad1[slot_h0] = replay_h0
+    if state.pseudo_halfsets:
+        new_Igrad1[slot_h1] = replay_h1
     _dump("m1_h0_post", new_Igrad1[slot_h0])
     if state.pseudo_halfsets:
         _dump("m1_h1_post", new_Igrad1[slot_h1])

@@ -140,6 +140,30 @@ def test_native_second_moment_replay_is_explicit_iteration_gated_and_exact(tmp_p
         )
 
 
+def test_native_first_moment_replay_supports_all_iterations_and_halfsets(
+    tmp_path, monkeypatch
+):
+    computed = np.zeros((3, 4, 5), dtype=np.complex128)
+    template = tmp_path / "native_m1_it{iteration}{half_suffix}.bin"
+    expected = {}
+    for iteration in (1, 2):
+        for halfset, suffix in enumerate(("", "_h")):
+            replay = np.full(computed.shape, iteration + 10j * (halfset + 1))
+            expected[iteration, halfset] = replay
+            with (tmp_path / f"native_m1_it{iteration}{suffix}.bin").open("wb") as stream:
+                np.asarray(replay.shape, dtype=np.int64).tofile(stream)
+                replay.reshape(-1).view(np.float64).tofile(stream)
+
+    monkeypatch.setenv(m_step.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV, str(template))
+    monkeypatch.setenv(m_step.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV, "all")
+    for iteration in (1, 2):
+        replay_h0, replay_h1 = m_step._maybe_replay_native_first_moments(
+            computed, computed, iteration=iteration, class_idx=0
+        )
+        np.testing.assert_array_equal(replay_h0, expected[iteration, 0])
+        np.testing.assert_array_equal(replay_h1, expected[iteration, 1])
+
+
 def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch):
     ori = 16
     state = initialise_denovo_state(
