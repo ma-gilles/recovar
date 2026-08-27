@@ -103,6 +103,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "grid_rotations, 128, 0, particle_streams[lane]" in projector_launcher
     assert "serial_rotation_replay ? rotation_count : 1" in projector_launcher
     assert "reverse_rotation_replay ? rotation_count - 1 - launch : launch" in projector_launcher
+    assert "logical_lane + lane_wave * stride" in projector_launcher
     assert "rotation_offset * translation_count" in projector_launcher
     assert "relion_vdam_denominator_after_sgd_f32_kernel<<<" in projector_launcher
     assert "constexpr int kRelionVdamWorkerStreams = 8" in projector_launcher
@@ -135,6 +136,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "serial_rotation_replay=np.int64(serial_rotation_replay)" in projector_wrapper
     assert "float64_accumulator_replay=np.int64(float64_accumulator_replay)" in projector_wrapper
     assert "reverse_rotation_replay=np.int64(reverse_rotation_replay)" in projector_wrapper
+    assert "rotation_replay_stride=np.int64(rotation_replay_stride)" in projector_wrapper
     assert "worker_lane_ids" in projector_wrapper
 
 

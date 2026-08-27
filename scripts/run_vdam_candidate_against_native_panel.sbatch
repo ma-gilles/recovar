@@ -50,8 +50,8 @@ if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
     test "$(sha256sum "${VDAM_WORKER_SCHEDULE_NPZ}" | awk '{print $1}')" = \
         "${EXPECTED_WORKER_SCHEDULE_SHA256}"
     case "${VDAM_WORKER_REPLAY_TOPOLOGY}" in
-        captured|single|single_rotation|single_rotation_f64|single_rotation_reverse) ;;
-        *) echo "worker replay topology must be captured, single, single_rotation, single_rotation_f64, or single_rotation_reverse" >&2; exit 2 ;;
+        captured|single|single_rotation|single_rotation_f64|single_rotation_reverse|single_rotation_sm132) ;;
+        *) echo "worker replay topology must be captured, single, single_rotation, single_rotation_f64, single_rotation_reverse, or single_rotation_sm132" >&2; exit 2 ;;
     esac
 elif [[ -n "${VDAM_WORKER_REPLAY_TOPOLOGY}" || -n "${EXPECTED_WORKER_SCHEDULE_SHA256}" ]]; then
     echo "worker replay topology/hash requires VDAM_WORKER_SCHEDULE_NPZ" >&2

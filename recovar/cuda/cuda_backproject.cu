@@ -4770,7 +4770,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     bool parallel_worker_replay,
     bool serial_rotation_replay,
     bool float64_accumulator_replay,
-    bool reverse_rotation_replay)
+    bool reverse_rotation_replay,
+    int rotation_replay_stride)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -5058,9 +5059,36 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
             {
-                const int64_t rotation_offset = serial_rotation_replay
+                int64_t rotation_offset = serial_rotation_replay
                     ? (reverse_rotation_replay ? rotation_count - 1 - launch : launch)
                     : 0;
+                if (serial_rotation_replay && rotation_replay_stride > 0)
+                {
+                    // Approximate a native fixed-SM work queue: each logical
+                    // SM consumes block indices sm, sm + stride, ... before
+                    // the next logical SM is serialized.  The mapping covers
+                    // every rotation exactly once even for a partial tail.
+                    const int64_t stride = std::min<int64_t>(
+                        rotation_replay_stride, rotation_count);
+                    const int64_t short_count = rotation_count / stride;
+                    const int64_t long_lanes = rotation_count % stride;
+                    const int64_t long_launch_count =
+                        long_lanes * (short_count + 1);
+                    int64_t logical_lane;
+                    int64_t lane_wave;
+                    if (launch < long_launch_count)
+                    {
+                        logical_lane = launch / (short_count + 1);
+                        lane_wave = launch % (short_count + 1);
+                    }
+                    else
+                    {
+                        const int64_t short_launch = launch - long_launch_count;
+                        logical_lane = long_lanes + short_launch / short_count;
+                        lane_wave = short_launch % short_count;
+                    }
+                    rotation_offset = logical_lane + lane_wave * stride;
+                }
                 const int64_t grid_rotations = serial_rotation_replay ? 1 : rotation_count;
                 relion_vdam_native_sgd_f32_kernel<Accumulator><<<
                     grid_rotations, 128, 0, particle_streams[lane]>>>(
@@ -8255,6 +8283,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t serial_rotation_replay,
     int64_t float64_accumulator_replay,
     int64_t reverse_rotation_replay,
+    int64_t rotation_replay_stride,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -8300,7 +8329,10 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         (parallel_worker_replay != 0 && parallel_worker_replay != 1) ||
         (serial_rotation_replay != 0 && serial_rotation_replay != 1) ||
         (float64_accumulator_replay != 0 && float64_accumulator_replay != 1) ||
-        (reverse_rotation_replay != 0 && reverse_rotation_replay != 1))
+        (reverse_rotation_replay != 0 && reverse_rotation_replay != 1) ||
+        rotation_replay_stride < 0 ||
+        (rotation_replay_stride > 0 && serial_rotation_replay == 0) ||
+        (rotation_replay_stride > 0 && reverse_rotation_replay != 0))
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid geometry");
 
@@ -8386,7 +8418,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         parallel_worker_replay != 0,
         serial_rotation_replay != 0,
         float64_accumulator_replay != 0,
-        reverse_rotation_replay != 0);
+        reverse_rotation_replay != 0,
+        static_cast<int>(rotation_replay_stride));
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8412,6 +8445,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("serial_rotation_replay")
         .Attr<int64_t>("float64_accumulator_replay")
         .Attr<int64_t>("reverse_rotation_replay")
+        .Attr<int64_t>("rotation_replay_stride")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

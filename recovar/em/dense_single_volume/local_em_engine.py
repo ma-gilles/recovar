@@ -422,7 +422,12 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology in {"single_rotation", "single_rotation_f64", "single_rotation_reverse"}:
+    if topology in {
+        "single_rotation",
+        "single_rotation_f64",
+        "single_rotation_reverse",
+        "single_rotation_sm132",
+    }:
         # This diagnostic intentionally discards captured owners and serializes
         # every particle and orientation block.  The v2 trace still gets fully
         # schema-validated above, but later VDAM iterations may select particles
@@ -448,7 +453,8 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
     elif topology != "captured":
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
-            "'single_rotation', 'single_rotation_f64', or 'single_rotation_reverse'"
+            "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
+            "or 'single_rotation_sm132'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -465,6 +471,7 @@ def _relion_vdam_serial_rotation_replay() -> bool:
         "single_rotation",
         "single_rotation_f64",
         "single_rotation_reverse",
+        "single_rotation_sm132",
     }
 
 
@@ -488,6 +495,17 @@ def _relion_vdam_reverse_rotation_replay() -> bool:
         "captured",
     ).strip().lower()
     return bool(path) and topology == "single_rotation_reverse"
+
+
+def _relion_vdam_rotation_replay_stride() -> int:
+    """Return the logical native-SM stride for serialized orientation blocks."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return 132 if path and topology == "single_rotation_sm132" else 0
 
 
 def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_targets: set[int] | None) -> bool:
@@ -662,6 +680,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     serial_rotation_replay=False,
     float64_accumulator_replay=False,
     reverse_rotation_replay=False,
+    rotation_replay_stride=0,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -748,6 +767,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 serial_rotation_replay=serial_rotation_replay,
                 float64_accumulator_replay=float64_accumulator_replay,
                 reverse_rotation_replay=reverse_rotation_replay,
+                rotation_replay_stride=rotation_replay_stride,
             )
         )
     return Ft_y, Ft_ctf
@@ -4761,6 +4781,7 @@ def run_local_em_exact(
                         _relion_vdam_float64_accumulator_replay()
                     ),
                     reverse_rotation_replay=_relion_vdam_reverse_rotation_replay(),
+                    rotation_replay_stride=_relion_vdam_rotation_replay_stride(),
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)

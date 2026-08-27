@@ -24,6 +24,7 @@ def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     assert "EXPECTED_WORKER_SCHEDULE_SHA256" in source
     assert "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ" in source
     assert "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY" in source
+    assert "single_rotation_sm132" in source
     assert source.index('case "${variable_name}" in RECOVAR_*) unset') < source.index(
         "export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
     )
