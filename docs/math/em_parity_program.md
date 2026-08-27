@@ -29857,3 +29857,32 @@ artifacts.  The parent then failed while launching
 unbound Python environment and raised `ModuleNotFoundError: recovar`.  The
 direct Iref/PPref analyses above used the completed immutable capture and
 passed their own provenance gates; no scientific rerun is required.
+
+## 2026-08-27 13:25 EDT — sealed final-manifest discriminator is ready
+
+The current case-10 last-numbered particle state is materially closer to
+RELION than the previous native-reused-output terminal candidate.  At physical
+iteration 15, the fraction of poses within `0.01` degree improves from
+`0.91238` to `0.96370`, significant-support-count mismatches decrease from
+`54539` to `31067`, and Pmax RMSE decreases from
+`0.005801841202460599` to `0.002943799698437222`.  These are exact
+source-ID-aligned diagnostics; the frozen terminal FSC gate remains the
+authority.
+
+Commit `ab79368c14097ef54f88777b87e3c0a6f8fb63d0` adds a fail-closed CPU
+launcher for comparing every saved final-pass manifest field against the known
+passing exact-RELION iteration-15 replay.  Historical self-test job `13051716`
+completed `0:0` in 31 seconds and reproduced the prior aligned report exactly:
+SHA-256
+`9e6c79217517d11c75dbf0fd188f65319746e28b1706c4a53bb52c1affa73b88`,
+including physical-to-source gather hashes
+`64083e49a91979224e19a791e21354ba87dc246c054d44ccd4191d0db204d044`
+and `289d74785613ae042fe8bd0a36e6d40062f476775191d32f9964946bd7ee2ac3`.
+The self-test root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_final_manifest_oracle_launcher_selftest_ab79368c_20260827T1325ET`
+and contains `SAFE_TO_DELETE`; the matching runtime root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/em_k1_final_manifest_oracle_launcher_selftest_ab79368c_20260827T1325ET`.
+
+Case-10 producer `13035323` remains active in the half-1 final Nyquist M-step;
+case-5 completed physical iteration 7 and entered iteration 8.  No terminal
+scorecard value changes until the fail-closed final FSC auditor completes.
