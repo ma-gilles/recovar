@@ -20,7 +20,7 @@ Frozen case-definition SHA-256:
 | Closed boundary | RELION's VDAM sigmoid uses 32-bit `float` locals; matching that contract removes the inherited reconstruction residue |
 | Exact-H100 evidence | iteration 1 task `13054825_2`; iteration 60 task `13054923_2`; focused tests **101 passed** in job `13054781` |
 | 60-iteration raw-BPref oracle | reference input/output relative L2 **`2.527e-15 / 2.460e-15`**; sampled FSC-AUC **`1.0`**; zero particle divergences; every operative schedule field matches |
-| Score impact | diagnostic-only, so frozen score remains **2/20**; no-oracle production discriminator `13056615` is running |
+| Score impact | diagnostic-only, so frozen score remains **2/20**; no-oracle `13056615_2` still first splits particle/schedule state at iteration 58 |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
 checked case means that its complete map, particle-state, and pre-divergence
@@ -64,6 +64,7 @@ SHA-256 values.
 | Trajectory-wide native `Igrad1 + Igrad2` oracle | exact-H100 task `13051779_1` / internal job `13051846` completed 60 live-map iterations in 427 s | all carried/post moment buffers and noise power are bitwise exact; reference error falls to `1.613e-8` and sampled maps pass at `0.999999999972`, but one particle/schedule choice departs @44; raw BPref is now the first non-exact stage |
 | Trajectory-wide native raw-BPref oracle | exact-H100 task `13052694_1` / internal job `13052695` completed 60 live-map iterations in 430 s | raw data/weights and every downstream M-step operand become bitwise exact without moment/reference replay; an inherited `1.635e-8` reference residue remains and one paired translation departs @34; fresh paired RELION also leaves the old four-repeat state envelope, so no promotion |
 | RELION float schedule precision | local science `7324440e2`; exact-H100 iteration-1 task `13054825_2` and iteration-60 task `13054923_2` / internal job `13054925` completed | matching RELION's float `x/a/b/scale` removes the reconstruction residue: it60 reference input/output are `2.527e-15 / 2.460e-15`; sampled FSC-AUC and assignment are `1.0`, with zero particle or operative-schedule divergences through 60; diagnostic-only, score unchanged |
+| Float-schedule production discriminator | exact-H100 task `13056615_2` / internal job `13056622` completed 60 no-oracle iterations in 402 s; audit `13056914` completed | sampled maps still pass through 60 at minimum FSC-AUC `0.999997662`, but two particle states first split @58 and operative `optimal_offset_change` / `offset_range` split @58 / @60; it60 raw-BPref avalanche confirms accumulation order is the remaining production boundary |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -123,7 +124,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-27 14:48 ET**
+Last scientific update: **2026-08-27 14:56 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -151,7 +152,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 production raw-BPref accumulation | the inherited-reference and reconstruction boundary is closed: RELION float schedule precision reduces it60 reference input/output to `2.527e-15 / 2.460e-15`; sampled FSC-AUC/assignment are `1.0`, with zero particle and operative-schedule divergences through 60 under raw-BPref replay | local `7324440e2`; exact-H100 tasks `13054825_2` and `13054923_2`; no-oracle production discriminator `13056615` is running | none yet; measure the production trajectory, then return to the already localized CUDA raw-accumulation/reduction-order boundary |
+| 1 | GF47 production raw-BPref accumulation @58 | the inherited-reference and reconstruction boundary is closed: under raw-BPref replay, it60 references are `2.527e-15 / 2.460e-15`, FSC-AUC/assignment are `1.0`, and particle/operative schedule state has zero divergences | no-oracle exact-H100 `13056615_2` / `13056622` still passes sampled maps through 60 (`0.999997662`) but first splits particles 2411 and 2707 plus `optimal_offset_change` @58; `offset_range` follows @60 | none yet; close the already localized CUDA raw-accumulation/reduction-order boundary at the iteration-58 score pair, then rerun 0--200 |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -191,8 +192,21 @@ iterations, and every operative schedule field matches. Only inactive
 accuracy placeholders differ from iteration 1. M-step, map, particle, and
 sampling SHA-256 values are `e8bcf79e5378...`, `a177dfe30d8a...`,
 `fa8af2a7aa58...`, and `5171c389de7a...`. This is a causal oracle rather than
-a frozen scoring run, so the score remains **2/20**. Production no-oracle
-discriminator `13056615` is running before a fresh 0--200 qualification.
+a frozen scoring run, so the score remains **2/20**.
+
+The corresponding no-oracle production task `13056615_2` (internal job
+`13056622`) completed 60 iterations in 402 seconds. Sampled maps still pass
+through iteration 60 at minimum FSC-AUC `0.999997662`, but paired particle
+state first splits at iteration 58 for particles 2411 and 2707. Operative
+`optimal_offset_change` splits at the same checkpoint and `offset_range`
+follows at iteration 60. By iteration 60 the two raw-BPref data halves have
+amplified to `8.404e-2 / 7.817e-3` relative L2 and the output reference to
+`1.894e-3`; the raw-replay arm makes those operands exact and the reference
+`2.460e-15`. Production M-step, map, particle, and sampling SHA-256 values are
+`f249dad471d7...`, `53c1c09177f4...`, `bf1a4803134b...`, and
+`0ddaeb5e1b8a...`. This leaves the already localized CUDA raw-accumulation
+order at the iteration-58 close-score pair as the first production boundary;
+a fresh 0--200 scoring qualification waits for that repair.
 
 Before the float-schedule fix, raw BPref was sufficient to close the entire
 downstream M-step state, but a smaller inherited reference-map residue
