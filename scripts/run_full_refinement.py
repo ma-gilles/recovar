@@ -3639,6 +3639,29 @@ def main():
     # at low frequencies.
     from recovar.utils.helpers import load_mrc as _load_mrc
 
+    # RELION's Image<RFLOAT>::read() widens a reference MRC (on-disk float32)
+    # to RFLOAT (double, in our ACC_DOUBLE_PRECISION oracle build) as part of
+    # the read itself (src/ml_model.cpp:MlModel::readImages -> Iref.push_back
+    # (img()), where Iref is std::vector<MultidimArray<RFLOAT>>). Every
+    # downstream step -- including the FFT that builds Projector::data
+    # (MultidimArray<Complex>, Complex = tComplex<RFLOAT>) -- then runs at
+    # that same double precision. Match that here instead of narrowing to
+    # float32/complex64 immediately after the (inherently float32-on-disk)
+    # MRC read, which would otherwise defeat RECOVAR_USE_FLOAT64_PROJECTIONS
+    # no matter how carefully every later cast is fixed (a "narrow-then-
+    # widen" bug: DensePrecisionPolicy.cast_projection_volume, gated on this
+    # same flag, cannot recover precision already lost here). Gated on
+    # RECOVAR_USE_FLOAT64_PROJECTIONS specifically (not also
+    # _SCORING/_dense_global_scoring_dtype's OR) to match
+    # projection_complex_dtype's own condition exactly and avoid forcing an
+    # unrequested precision/memory cost on the projection path when a
+    # caller wants float64 scoring without float64 projections.
+    _init_volume_use_float64 = bool(
+        os.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    _init_volume_dtype = np.float64 if _init_volume_use_float64 else np.float32
+    _init_volume_complex_dtype = np.complex128 if _init_volume_use_float64 else np.complex64
+
     # RELION's ``initialLowPassFilterReferences`` (ml_optimiser.cpp:3556) low-
     # pass-filters mymodel.Iref in place at startup, gated only on
     # ``ini_high > 0`` (not on ``--firstiter_cc``). With ``--apply-initial-
@@ -3690,10 +3713,10 @@ def main():
                 f"boundary={frozen_boundary.volume_shape}, dataset={tuple(ds.volume_shape)}"
             )
         init_vol_ft = np.stack(frozen_boundary.means, axis=0)
-        merged_init_ft = np.mean(init_vol_ft.astype(np.complex128), axis=0).astype(np.complex64)
+        merged_init_ft = np.mean(init_vol_ft.astype(np.complex128), axis=0).astype(_init_volume_complex_dtype)
         init_vol_real = np.asarray(
             ftu.get_idft3(jnp.asarray(merged_init_ft).reshape(ds.volume_shape)).real,
-            dtype=np.float32,
+            dtype=_init_volume_dtype,
         )
         logger.info(
             "Initial per-half Fourier volumes loaded from frozen boundary %s",
@@ -3701,7 +3724,7 @@ def main():
         )
     elif args.n_classes == 1:
         init_mrc_path = args.init_volume or os.path.join(args.data_dir, "reference_init.mrc")
-        init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
+        init_vol_real = _load_mrc(init_mrc_path).astype(_init_volume_dtype)
         assert init_vol_real.shape == ds.volume_shape, (
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
@@ -3711,14 +3734,14 @@ def main():
             )
             if _use_initial_projector_real:
                 init_reference_real_for_projector = filtered_real
-            init_vol_real = filtered_real.astype(np.float32, copy=False)
+            init_vol_real = filtered_real.astype(_init_volume_dtype, copy=False)
             logger.info(
                 "Applied RELION initialLowPassFilterReferences to init reference: ini_high=%.2f A, fmask_edge=%d shells",
                 _ini_high_for_lowpass, _RELION_FMASK_EDGE,
             )
         elif _use_initial_projector_real:
             init_reference_real_for_projector = np.asarray(init_vol_real, dtype=np.float64)
-        init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
+        init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(_init_volume_complex_dtype).reshape(-1)
         logger.info("Initial volume loaded from %s: shape=%s", init_mrc_path, init_vol_real.shape)
     else:
         if args.init_class_volumes:
@@ -3732,7 +3755,7 @@ def main():
         per_class_ft = []
         per_class_real_for_projector = []
         for k, p in enumerate(class_paths):
-            vol_real = _load_mrc(p).astype(np.float32)
+            vol_real = _load_mrc(p).astype(_init_volume_dtype)
             assert vol_real.shape == ds.volume_shape, (
                 f"Class {k + 1} volume shape mismatch at {p}: {vol_real.shape} vs {ds.volume_shape}"
             )
@@ -3742,10 +3765,10 @@ def main():
                 )
                 if _use_initial_projector_real:
                     per_class_real_for_projector.append(filtered_real)
-                vol_real = filtered_real.astype(np.float32, copy=False)
+                vol_real = filtered_real.astype(_init_volume_dtype, copy=False)
             elif _use_initial_projector_real:
                 per_class_real_for_projector.append(np.asarray(vol_real, dtype=np.float64))
-            vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
+            vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(_init_volume_complex_dtype).reshape(-1)
             per_class_ft.append(vol_ft)
             logger.info("Class %d initial volume loaded from %s", k + 1, p)
         if _ini_high_for_lowpass is not None:
@@ -3763,7 +3786,7 @@ def main():
             )
         # For downstream init_PS estimation, use class-1 as the representative
         # (K-class noise/prior bootstrap currently uses a single spectrum).
-        init_vol_real = _load_mrc(class_paths[0]).astype(np.float32)
+        init_vol_real = _load_mrc(class_paths[0]).astype(_init_volume_dtype)
 
     # ---- Set up rotation and translation grids ----
     from recovar.em.sampling import get_relion_rotation_grid, get_translation_grid
