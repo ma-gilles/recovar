@@ -759,14 +759,18 @@ def _relion_vdam_identity_native_grid_replay() -> bool:
     return topology in {"captured_native_count", "captured_native_trace_shape"}
 
 
-def _relion_vdam_native_trace_shape_replay() -> bool:
-    """Return whether the CUDA kernel should retain native trace instructions."""
+def _relion_vdam_native_trace_shape_replay(
+    *, debug_iteration: int | None
+) -> bool:
+    """Retain native trace instructions only at the sealed trace iteration."""
 
     topology = os.environ.get(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    return topology == "captured_native_trace_shape"
+    return topology == "captured_native_trace_shape" and (
+        _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration)
+    )
 
 
 def _relion_vdam_candidate_trace_ids_for_images(experiment_dataset, image_indices):
@@ -5407,7 +5411,9 @@ def run_local_em_exact(
                     rotation_replay_order=block_start_order,
                     rotation_replay_counts=native_grid_counts,
                     native_trace_shape_replay=(
-                        _relion_vdam_native_trace_shape_replay()
+                        _relion_vdam_native_trace_shape_replay(
+                            debug_iteration=debug_iteration
+                        )
                     ),
                 )
                 if return_profile:
