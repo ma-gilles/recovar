@@ -15,6 +15,13 @@ Frozen case-definition SHA-256:
 |---|---:|---:|---:|---:|---:|
 | GUI/default, iterations 0--200 | **2/20** | **5/20** | **6/20** | **13/20** | **20/20** |
 
+| Latest decisive result | Readout |
+|---|---|
+| Closed boundary | RELION's VDAM sigmoid uses 32-bit `float` locals; matching that contract removes the inherited reconstruction residue |
+| Exact-H100 evidence | iteration 1 task `13054825_2`; iteration 60 task `13054923_2`; focused tests **101 passed** in job `13054781` |
+| 60-iteration raw-BPref oracle | reference input/output relative L2 **`2.527e-15 / 2.460e-15`**; sampled FSC-AUC **`1.0`**; zero particle divergences; every operative schedule field matches |
+| Score impact | diagnostic-only, so frozen score remains **2/20**; no-oracle production discriminator `13056615` is running |
+
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
 checked case means that its complete map, particle-state, and pre-divergence
 schedule contract passed; unchecked cases remain in the denominator. No
@@ -56,6 +63,7 @@ SHA-256 values.
 | Trajectory-wide native `Igrad2` oracle | exact-H100 task `13049505_1` completed 60 live-map iterations in 409 s | sampled map gate **passes** at minimum FSC-AUC `0.999999999900`; strict particle/schedule state still first departs @34, so no promotion |
 | Trajectory-wide native `Igrad1 + Igrad2` oracle | exact-H100 task `13051779_1` / internal job `13051846` completed 60 live-map iterations in 427 s | all carried/post moment buffers and noise power are bitwise exact; reference error falls to `1.613e-8` and sampled maps pass at `0.999999999972`, but one particle/schedule choice departs @44; raw BPref is now the first non-exact stage |
 | Trajectory-wide native raw-BPref oracle | exact-H100 task `13052694_1` / internal job `13052695` completed 60 live-map iterations in 430 s | raw data/weights and every downstream M-step operand become bitwise exact without moment/reference replay; an inherited `1.635e-8` reference residue remains and one paired translation departs @34; fresh paired RELION also leaves the old four-repeat state envelope, so no promotion |
+| RELION float schedule precision | local science `7324440e2`; exact-H100 iteration-1 task `13054825_2` and iteration-60 task `13054923_2` / internal job `13054925` completed | matching RELION's float `x/a/b/scale` removes the reconstruction residue: it60 reference input/output are `2.527e-15 / 2.460e-15`; sampled FSC-AUC and assignment are `1.0`, with zero particle or operative-schedule divergences through 60; diagnostic-only, score unchanged |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -86,19 +94,36 @@ SHA-256 values.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
 > real-data, and final CLI/GUI qualification follow K=1 closure.
 
-#### Frozen case checkboxes
+#### Frozen K=1 case matrix
 
-A check means the complete strict map, particle-state, and pre-divergence
-schedule contract passes. Runtime remains open for every row.
+This mirrors the supplied-map EM scorecard: every fixed case stays visible,
+including failures. A checked row passes map, particle-state, and
+pre-divergence schedule gates; runtime remains open for every row.
 
-|  |  |  |  |  |
-|---|---|---|---|---|
-| [ ] GF43 | [x] GF44 | [x] GF45 | [ ] GF46 | [ ] GF47 |
-| [ ] GF48 | [ ] GF49 | [ ] GF50 | [ ] GF51 | [ ] GF52 |
-| [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
-| [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
+| Done | Case | Seed | Distribution / stress | Map | Particle | Schedule | Runtime | Overall |
+|---|---|---:|---|---|---|---|---:|---|
+| [ ] | GF43 | 29 | baseline, uniform, white noise | fail @146 | pass | pass | 7.88x | **FAIL: map/runtime** |
+| [x] | GF44 | 29 | anisotropic, outliers, high noise | pass | pass | pass | 8.03x | **QUALITY PASS; runtime open** |
+| [x] | GF45 | 29 | Kent, outliers, high noise | pass | pass | pass | 9.33x | **QUALITY PASS; runtime open** |
+| [ ] | GF46 | 29 | anisotropic, severe outliers, radial/high noise | fail @20 | fail @4 | pass | 9.40x | **FAIL** |
+| [ ] | GF47 | 29 | extreme outliers, uniform, white noise | pass | pass | fail @10 | 6.42x | **FAIL: controller/runtime** |
+| [ ] | GF48 | 29 | very-high noise, uniform, white noise | fail @45 | fail @30 | fail @10 | 6.84x | **FAIL** |
+| [ ] | GF49 | 29 | low noise, uniform | fail @115 | pass | pass | 11.07x | **FAIL: map/runtime** |
+| [ ] | GF50 | 29 | low noise, Kent | fail @41 | fail @40 | pass | 11.58x | **FAIL** |
+| [ ] | GF51 | 29 | no CTF, radial noise | fail @74 | fail @39 | pass | 5.89x | **FAIL** |
+| [ ] | GF52 | 29 | Kent, junk particles, translations | fail @40 | fail @40 | fail @40 | 8.20x | **FAIL** |
+| [ ] | GF53 | 29 | high resolution, radial noise | fail @44 | fail @40 | pass | 4.91x | **FAIL** |
+| [ ] | GF54 | 29 | midscale, Kent, radial noise | fail @45 | fail @30 | pass | 7.81x | **FAIL** |
+| [ ] | GF55 | 101 | anisotropic, outliers, high noise | fail @46 | fail @40 | pass | 7.98x | **FAIL** |
+| [ ] | GF56 | 101 | Kent, outliers, high noise | fail @45 | fail @29 | fail @30 | 6.92x | **FAIL** |
+| [ ] | GF57 | 101 | anisotropic, severe outliers, radial/high noise | fail @44 | fail @11 | pass | 10.40x | **FAIL** |
+| [ ] | GF58 | 101 | extreme outliers, uniform, white noise | fail @94 | fail @48 | pass | 6.60x | **FAIL** |
+| [ ] | GF59 | 101 | very-high noise, uniform, white noise | pass | fail @30 | pass | 6.86x | **FAIL: particle/runtime** |
+| [ ] | GF60 | 101 | low noise, uniform | fail @42 | fail @40 | fail @20 | 8.73x | **FAIL** |
+| [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
+| [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-27 14:05 ET**
+Last scientific update: **2026-08-27 14:48 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -126,7 +151,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 inherited reference map | raw-BPref-only replay makes raw data/weights, reweighting, both first moments, second moment, noise power, and post-momenta data bitwise exact at it60; sampled maps pass at minimum FSC-AUC `0.999999999972` | exact-H100 `13052694_1` / `13052695`: incoming/output reference remains `1.635e-8 / 1.613e-8` relative L2 and one paired translation departs @34; current paired RELION itself is outside the old four-repeat state envelope by it58 with the same unmatched identities/counts | none; capture the raw-replay reconstruction boundary at iteration 1, then split initialization/frame conversion from recurrent `reconstructGrad` arithmetic |
+| 1 | GF47 production raw-BPref accumulation | the inherited-reference and reconstruction boundary is closed: RELION float schedule precision reduces it60 reference input/output to `2.527e-15 / 2.460e-15`; sampled FSC-AUC/assignment are `1.0`, with zero particle and operative-schedule divergences through 60 under raw-BPref replay | local `7324440e2`; exact-H100 tasks `13054825_2` and `13054923_2`; no-oracle production discriminator `13056615` is running | none yet; measure the production trajectory, then return to the already localized CUDA raw-accumulation/reduction-order boundary |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -146,8 +171,32 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 ### Latest change
 
-Raw BPref is sufficient to close the entire downstream M-step state, but a
-smaller inherited reference-map residue remains. Local science commit
+The inherited reference-map residue is closed to compiler last bits. RELION's
+`updateStepSize()` stores `x`, `a`, `b`, and the sigmoid `scale` as 32-bit
+`float`; RECOVAR had preserved the sigmoid scale in binary64. Local science
+commit `7324440e2` reproduces the native rounding boundary in the Python
+schedule and RELION parity helper. Focused Slurm job `13054781` passes
+**101/101** relevant schedule/binding tests; two unrelated pre-existing LOC
+budget checks were deliberately excluded, and no generic RECOVAR suite ran.
+
+On the exact physical H100, iteration-1 task `13054825_2` makes every captured
+input bitwise exact and reduces reconstructed-reference relative L2 from
+`6.238e-9` to `3.098e-16`. The trajectory-wide raw-BPref oracle then completes
+60 iterations in task `13054923_2` (internal job `13054925`, 407 seconds).
+At iteration 60 every raw/downstream M-step operand is bitwise exact; the
+incoming and outgoing references are only `2.527e-15` and `2.460e-15` from
+paired RELION. Sampled FSC-AUC and assignment accuracy are both **`1.0`**,
+particle audit finds zero pose/translation divergences through all 60
+iterations, and every operative schedule field matches. Only inactive
+accuracy placeholders differ from iteration 1. M-step, map, particle, and
+sampling SHA-256 values are `e8bcf79e5378...`, `a177dfe30d8a...`,
+`fa8af2a7aa58...`, and `5171c389de7a...`. This is a causal oracle rather than
+a frozen scoring run, so the score remains **2/20**. Production no-oracle
+discriminator `13056615` is running before a fresh 0--200 qualification.
+
+Before the float-schedule fix, raw BPref was sufficient to close the entire
+downstream M-step state, but a smaller inherited reference-map residue
+remained. Local science commit
 `9459a205b` adds fail-closed complex-data and real-weight replay for both
 pseudo-halfsets. Exact-H100 task `13052694_1` (internal job `13052695`)
 completed 60 live-map iterations in 430 seconds on `GPU-6222...`; neither
