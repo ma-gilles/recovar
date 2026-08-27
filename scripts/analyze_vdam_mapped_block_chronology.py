@@ -39,6 +39,104 @@ def _correlation(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.corrcoef(left, right)[0, 1])
 
 
+def _summary(values: list[float]) -> dict[str, float]:
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    _require(finite.size > 0, "scheduler metric has no finite values")
+    return {
+        "mean": float(np.mean(finite)),
+        "median": float(np.median(finite)),
+        "p10": float(np.quantile(finite, 0.1)),
+        "p90": float(np.quantile(finite, 0.9)),
+    }
+
+
+def _midranks(values: np.ndarray) -> np.ndarray:
+    """Rank timestamps without inventing an order inside timer ties."""
+
+    order = np.argsort(values, kind="stable")
+    sorted_values = values[order]
+    starts = np.r_[0, np.flatnonzero(sorted_values[1:] != sorted_values[:-1]) + 1]
+    stops = np.r_[starts[1:], values.size]
+    ranks = np.empty(values.size, dtype=np.float64)
+    for start, stop in zip(starts.tolist(), stops.tolist(), strict=True):
+        ranks[order[start:stop]] = (start + stop - 1) / 2
+    return ranks
+
+
+def _candidate_physical_schedules(
+    records: np.ndarray,
+) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    """Recover physical block-ID schedules from append-order trace records."""
+
+    schedules: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+    for launch_sequence in np.unique(records["launch_sequence"]):
+        rows = records[records["launch_sequence"] == launch_sequence]
+        particle_ids = np.unique(rows["particle_id"])
+        image_counts = np.unique(rows["image_count"])
+        _require(particle_ids.size == 1, "candidate launch has multiple particles")
+        _require(image_counts.size == 1, "candidate launch image counts differ")
+        _require(rows.size == int(image_counts[0]), "candidate launch is incomplete")
+        particle_id = int(particle_ids[0])
+        _require(particle_id not in schedules, "candidate particle has multiple launches")
+        physical_ids = np.arange(rows.size, dtype=np.int64)
+        start_rank = _midranks(rows["block_start_globaltimer"])
+        atomic = (rows["flags"] & BLOCK_NO_ATOMIC) == 0
+        schedules[particle_id] = (
+            start_rank,
+            atomic,
+            rows["first_atomic_globaltimer"].astype(np.uint64, copy=True),
+            rows["sm_id"].astype(np.int64, copy=True),
+        )
+    return schedules
+
+
+def _analyze_candidate_physical_repeat(
+    records_a: np.ndarray,
+    records_b: np.ndarray,
+) -> dict[str, object]:
+    """Measure whether one captured physical start permutation can be reused."""
+
+    schedules_a = _candidate_physical_schedules(records_a)
+    schedules_b = _candidate_physical_schedules(records_b)
+    _require(schedules_a.keys() == schedules_b.keys(), "candidate particles differ across arms")
+    physical_to_start_a: list[float] = []
+    physical_to_start_b: list[float] = []
+    start_repeat: list[float] = []
+    atomic_jaccard: list[float] = []
+    atomic_repeat: list[float] = []
+    sm_exact: list[float] = []
+    sm_correlation: list[float] = []
+    for particle_id in sorted(schedules_a):
+        start_a, atomic_a, first_atomic_a, sm_a = schedules_a[particle_id]
+        start_b, atomic_b, first_atomic_b, sm_b = schedules_b[particle_id]
+        _require(start_a.shape == start_b.shape, "candidate launch sizes differ across arms")
+        physical_ids = np.arange(start_a.size, dtype=np.int64)
+        physical_to_start_a.append(_correlation(physical_ids, start_a))
+        physical_to_start_b.append(_correlation(physical_ids, start_b))
+        start_repeat.append(_correlation(start_a, start_b))
+        shared_atomic = atomic_a & atomic_b
+        atomic_union = atomic_a | atomic_b
+        atomic_jaccard.append(float(np.sum(shared_atomic) / np.sum(atomic_union)))
+        if np.sum(shared_atomic) > 1:
+            shared_ids = physical_ids[shared_atomic]
+            first_rank_a = _midranks(first_atomic_a[shared_atomic])
+            first_rank_b = _midranks(first_atomic_b[shared_atomic])
+            atomic_repeat.append(_correlation(first_rank_a, first_rank_b))
+        sm_exact.append(float(np.mean(sm_a == sm_b)))
+        sm_correlation.append(_correlation(sm_a, sm_b))
+    return {
+        "particle_count": len(schedules_a),
+        "physical_id_to_start_rank_arm_a": _summary(physical_to_start_a),
+        "physical_id_to_start_rank_arm_b": _summary(physical_to_start_b),
+        "start_rank_repeat": _summary(start_repeat),
+        "contributing_physical_index_jaccard": _summary(atomic_jaccard),
+        "first_atomic_rank_repeat_on_shared_physical_indices": _summary(atomic_repeat),
+        "sm_id_exact_repeat": _summary(sm_exact),
+        "sm_id_correlation_repeat": _summary(sm_correlation),
+    }
+
+
 def _load_records(path: Path, *, label: str) -> tuple[int, np.ndarray]:
     with np.load(path, allow_pickle=False) as sealed:
         _require(int(sealed["schema_version"]) == 1, f"{label} schema mismatch")
@@ -226,12 +324,24 @@ def analyze_panel(panel_root: Path) -> dict[str, object]:
         "native_sm_id_exact_fraction": float(np.mean(values_a[:, 4] == values_b[:, 4])),
         "candidate_sm_id_exact_fraction": float(np.mean(values_a[:, 5] == values_b[:, 5])),
     }
+    _, candidate_a = _load_records(
+        panel_root / "a" / "analysis" / "recovar_block_chronology_it001.npz",
+        label="candidate chronology arm A",
+    )
+    _, candidate_b = _load_records(
+        panel_root / "b" / "analysis" / "recovar_block_chronology_it001.npz",
+        label="candidate chronology arm B",
+    )
     return {
         "schema": "recovar.vdam_mapped_block_chronology_panel.v1",
         "status": "complete",
         "arm_a": arm_a,
         "arm_b": arm_b,
         "repeat": repeat,
+        "candidate_physical_schedule": _analyze_candidate_physical_repeat(
+            candidate_a,
+            candidate_b,
+        ),
     }
 
 
