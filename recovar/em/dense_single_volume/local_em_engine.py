@@ -610,6 +610,7 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         "captured_block_grid",
         "captured_native_grid",
         "captured_native_count",
+        "captured_native_trace_shape",
     }:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -646,6 +647,7 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_block_grid",
         "captured_native_grid",
         "captured_native_count",
+        "captured_native_trace_shape",
     }:
         if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
             return None
@@ -683,13 +685,14 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_block_grid",
         "captured_native_grid",
         "captured_native_count",
+        "captured_native_trace_shape",
     }:
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
             "'single_rotation_sm132', 'captured_block_start', "
             "'captured_block_grid', 'captured_native_grid', or "
-            "'captured_native_count'"
+            "'captured_native_count', or 'captured_native_trace_shape'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -708,7 +711,11 @@ def _relion_vdam_native_grid_counts_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology not in {"captured_native_grid", "captured_native_count"}:
+    if topology not in {
+        "captured_native_grid",
+        "captured_native_count",
+        "captured_native_trace_shape",
+    }:
         return None
     orders = _relion_vdam_block_start_orders_for_images(
         experiment_dataset,
@@ -749,7 +756,17 @@ def _relion_vdam_identity_native_grid_replay() -> bool:
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    return topology == "captured_native_count"
+    return topology in {"captured_native_count", "captured_native_trace_shape"}
+
+
+def _relion_vdam_native_trace_shape_replay() -> bool:
+    """Return whether the CUDA kernel should retain native trace instructions."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return topology == "captured_native_trace_shape"
 
 
 def _relion_vdam_candidate_trace_ids_for_images(experiment_dataset, image_indices):
@@ -1203,6 +1220,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     rotation_replay_stride=0,
     rotation_replay_order=None,
     rotation_replay_counts=None,
+    native_trace_shape_replay=False,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -1293,6 +1311,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 rotation_replay_stride=rotation_replay_stride,
                 rotation_replay_order=rotation_replay_order,
                 rotation_replay_counts=rotation_replay_counts,
+                native_trace_shape_replay=native_trace_shape_replay,
             )
         )
     return Ft_y, Ft_ctf
@@ -5387,6 +5406,9 @@ def run_local_em_exact(
                     rotation_replay_stride=_relion_vdam_rotation_replay_stride(),
                     rotation_replay_order=block_start_order,
                     rotation_replay_counts=native_grid_counts,
+                    native_trace_shape_replay=(
+                        _relion_vdam_native_trace_shape_replay()
+                    ),
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
