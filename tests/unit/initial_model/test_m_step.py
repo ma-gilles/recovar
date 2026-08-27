@@ -206,6 +206,29 @@ def test_native_bpref_replay_supports_all_iterations_and_halfsets(tmp_path, monk
             np.testing.assert_array_equal(replay.weight, expected[iteration, halfset][1])
 
 
+def test_native_reference_input_replay_is_explicit_iteration_gated_and_exact(
+    tmp_path, monkeypatch
+):
+    computed = np.zeros((3, 4, 5), dtype=np.float64)
+    replay = np.arange(computed.size, dtype=np.float64).reshape(computed.shape)
+    replay_path = tmp_path / "native_iref_before.bin"
+    with replay_path.open("wb") as stream:
+        np.asarray(replay.shape, dtype=np.int64).tofile(stream)
+        replay.tofile(stream)
+
+    monkeypatch.setenv(m_step.VDAM_NATIVE_IREF_INPUT_REPLAY_ENV, str(replay_path))
+    monkeypatch.setenv(m_step.VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV, "2")
+    assert m_step._maybe_replay_native_reference_input(
+        computed, iteration=1, class_idx=0
+    ) is computed
+    np.testing.assert_array_equal(
+        m_step._maybe_replay_native_reference_input(
+            computed, iteration=2, class_idx=0
+        ),
+        replay,
+    )
+
+
 def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch):
     ori = 16
     state = initialise_denovo_state(

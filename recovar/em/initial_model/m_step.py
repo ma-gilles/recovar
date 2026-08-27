@@ -25,6 +25,8 @@ VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REP
 VDAM_NATIVE_BPREF_DATA_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_BPREF_DATA_REPLAY_BIN"
 VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_BPREF_WEIGHT_REPLAY_BIN"
 VDAM_NATIVE_BPREF_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_BPREF_REPLAY_ITER"
+VDAM_NATIVE_IREF_INPUT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_BIN"
+VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_ITER"
 
 
 def _get_bindings():
@@ -191,6 +193,26 @@ def _maybe_replay_native_bpref_accumulators(
         )
     replay_h1 = None if accum_h1 is None else outputs[1]
     return outputs[0], replay_h1
+
+
+def _maybe_replay_native_reference_input(
+    computed: np.ndarray,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> np.ndarray:
+    """Replay native ``Iref_before`` immediately before reconstruction."""
+
+    replay_template = os.environ.get(VDAM_NATIVE_IREF_INPUT_REPLAY_ENV, "").strip()
+    if not replay_template or not _replay_iteration_selected(
+        VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV, iteration
+    ):
+        return computed
+    replay_path = Path(
+        replay_template.format(iteration=int(iteration), class_idx=int(class_idx))
+    )
+    computed = np.asarray(computed)
+    return _read_native_real_replay(replay_path, expected_shape=computed.shape)
 
 
 def _maybe_replay_native_first_moments(
@@ -446,6 +468,11 @@ def vdam_m_step_single_class(
     from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
 
     iref_relion_in = recovar_volume_to_relion(np.asarray(state.Iref[k]))
+    iref_relion_in = _maybe_replay_native_reference_input(
+        iref_relion_in,
+        iteration=int(getattr(state, "iter", 0)),
+        class_idx=k,
+    )
     _dump("iref_relion_in", iref_relion_in)
     effective_stepsize = float(grad_current_stepsize) * (
         1.0 - np.exp(-float(3 * state.K + 10) * float(np.asarray(state.pdf_class)[k]))
