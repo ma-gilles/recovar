@@ -25,6 +25,7 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 TARGET_ITERATION=${TARGET_ITERATION:-2}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 RELION_THREADS=${RELION_THREADS:-8}
+RANDOM_SEED=${RANDOM_SEED:-0}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
 BPREF_CONTRIBUTION_CAPTURE_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF:-${BPREF_CONTRIBUTION_HALF}}
@@ -139,7 +140,7 @@ RELION_COMMAND=(
   --grad_write_iter 1 --i particles.star --ctf --K 1 --sym C1
   --flatten_solvent --zero_mask --dont_combine_weights_via_disc --pool 3 --pad 1
   --particle_diameter 200 --oversampling 1 --healpix_order 1 --offset_range 6.0
-  --offset_step 2.0 --auto_sampling --tau2_fudge 4.0 --random_seed 0 --j "${RELION_THREADS}" --gpu 0
+  --offset_step 2.0 --auto_sampling --tau2_fudge 4.0 --random_seed "${RANDOM_SEED}" --j "${RELION_THREADS}" --gpu 0
 )
 printf '%q ' "${RELION_COMMAND[@]}" > "${PROVENANCE}/relion_command.sh"
 printf '\n' >> "${PROVENANCE}/relion_command.sh"
@@ -272,7 +273,7 @@ RECOVAR_COMMAND=(
   --sym C1
   --do_run_C1 1
   --particle_diameter 200
-  --random_seed 0
+  --random_seed "${RANDOM_SEED}"
   --healpix_order 1
   --oversampling 1
   --offset_range 6
@@ -345,9 +346,9 @@ sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${DATA_DIR}/particles.star" \
   "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
   > "${PROVENANCE}/run.json"
