@@ -28,6 +28,7 @@ from recovar.em.initial_model.m_step import (
     VdamAccumulator,
     _grad_min_resol_shell_from_state,
     _has_relion_reconstruction_weight,
+    _maybe_replay_native_second_moment,
     vdam_m_step,
     vdam_m_step_single_class,
 )
@@ -98,6 +99,29 @@ def test_relion_weight_guard_keeps_tiny_nonzero_class_support():
 
     accumulator.weight.flat[0] = 0.5 * m_step.XMIPP_EQUAL_ACCURACY
     assert not _has_relion_reconstruction_weight(state, 0, accumulator)
+
+
+def test_native_second_moment_replay_is_explicit_iteration_gated_and_exact(tmp_path, monkeypatch):
+    computed = np.zeros((3, 4, 5), dtype=np.complex128)
+    replay = (
+        np.arange(computed.size, dtype=np.float64).reshape(computed.shape)
+        + 1j * np.ones(computed.shape, dtype=np.float64)
+    )
+    replay_path = tmp_path / "native_m2.bin"
+    with replay_path.open("wb") as stream:
+        np.asarray(replay.shape, dtype=np.int64).tofile(stream)
+        replay.reshape(-1).view(np.float64).tofile(stream)
+
+    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, str(replay_path))
+    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "2")
+
+    assert _maybe_replay_native_second_moment(
+        computed, iteration=1, class_idx=0
+    ) is computed
+    np.testing.assert_array_equal(
+        _maybe_replay_native_second_moment(computed, iteration=2, class_idx=0),
+        replay,
+    )
 
 
 def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch):

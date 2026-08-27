@@ -7,7 +7,9 @@ applyMomenta, updateSSNRarrays, reconstructGrad.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -16,6 +18,8 @@ from .state import InitialModelState, half_slot_index
 
 XMIPP_EQUAL_ACCURACY: float = 1e-6
 RELION_DEFAULT_GRAD_MIN_RESOL_ANGSTROM: float = 20.0
+VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_BIN"
+VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER"
 
 
 def _get_bindings():
@@ -86,6 +90,57 @@ def _has_relion_reconstruction_weight(state: InitialModelState, k: int, accum_h0
     return float(np.sum(np.asarray(accum_h0.weight, dtype=np.float64))) > XMIPP_EQUAL_ACCURACY
 
 
+def _maybe_replay_native_second_moment(
+    computed: np.ndarray,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> np.ndarray:
+    """Replay one paired native ``Igrad2_post`` dump for causal diagnosis.
+
+    This is an explicit, fail-closed oracle discriminator. It is inactive by
+    default and is not a production parity mechanism. The path may contain
+    ``{iteration}`` and ``{class_idx}`` placeholders.
+    """
+
+    replay_template = os.environ.get(VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, "").strip()
+    if not replay_template:
+        return computed
+    try:
+        replay_iteration = int(os.environ.get(VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "1"))
+    except ValueError as exc:
+        raise ValueError(
+            f"{VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV} must be an integer"
+        ) from exc
+    if int(iteration) != replay_iteration:
+        return computed
+
+    replay_path = Path(
+        replay_template.format(iteration=int(iteration), class_idx=int(class_idx))
+    )
+    if not replay_path.is_file():
+        raise FileNotFoundError(replay_path)
+    with replay_path.open("rb") as stream:
+        shape = np.fromfile(stream, dtype=np.int64, count=3)
+        values = np.fromfile(stream, dtype=np.float64)
+    if shape.size != 3 or np.any(shape <= 0):
+        raise ValueError(f"{replay_path}: invalid three-int64 shape header")
+    value_count = int(np.prod(shape, dtype=np.int64))
+    if values.size != 2 * value_count:
+        raise ValueError(
+            f"{replay_path}: expected {2 * value_count} float64 components, got {values.size}"
+        )
+    replay = values.view(np.complex128).reshape(tuple(int(value) for value in shape))
+    computed = np.asarray(computed)
+    if replay.shape != computed.shape:
+        raise ValueError(
+            f"{replay_path}: replay shape {replay.shape} does not match {computed.shape}"
+        )
+    if not np.all(np.isfinite(replay)):
+        raise ValueError(f"{replay_path}: replay contains non-finite values")
+    return replay
+
+
 def vdam_m_step_single_class(
     state: InitialModelState,
     k: int,
@@ -118,11 +173,9 @@ def vdam_m_step_single_class(
     # backprojector.h:335/343 EMA defaults
     mu_first, mu_second = 0.9, 0.999
 
-    import os as _os
-
-    _dump_dir = _os.environ.get("RECOVAR_MSTEP_DUMP_DIR")
+    _dump_dir = os.environ.get("RECOVAR_MSTEP_DUMP_DIR")
     _do_dump = _dump_dir is not None and int(getattr(state, "iter", 0)) == int(
-        _os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1")
+        os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1")
     )
     _dump_prefix = f"c{k}_" if state.K > 1 else ""
 
@@ -193,7 +246,7 @@ def vdam_m_step_single_class(
     # Step 4. getSecondMoment (uses both halfset accumulators)
     new_Igrad2 = state.Igrad2.copy()
     if state.pseudo_halfsets:
-        new_Igrad2[k] = np.asarray(
+        computed_Igrad2 = np.asarray(
             bind.vdam_second_moment(
                 data_h0,
                 data_h1,
@@ -205,6 +258,12 @@ def vdam_m_step_single_class(
                 **{"lambda": mu_second},
             )
         )
+        new_Igrad2[k] = _maybe_replay_native_second_moment(
+            computed_Igrad2,
+            iteration=int(getattr(state, "iter", 0)),
+            class_idx=k,
+        )
+        _dump("m2_computed_before_replay", computed_Igrad2)
         _dump("m2_post", new_Igrad2[k])
 
     # Step 5. applyMomenta. Non-halfset: pass m1 twice to trigger do_half=false.
