@@ -29886,3 +29886,74 @@ and contains `SAFE_TO_DELETE`; the matching runtime root is
 Case-10 producer `13035323` remains active in the half-1 final Nyquist M-step;
 case-5 completed physical iteration 7 and entered iteration 8.  No terminal
 scorecard value changes until the fail-closed final FSC auditor completes.
+
+## 2026-08-27 14:52 EDT — case-10 failure is merged-only and outside the numbered radius
+
+Case-10 producer `13035323` completed `0:0` after `06:52:49`, including all
+15 numbered iterations and the converged final all-data pass.  The complete
+trajectory audit `13035498` intentionally exited `2:0` on the unchanged frozen
+scientific gate, not on infrastructure.  All numbered iterations pass; at
+physical iteration 15 the merged signed cross-engine FSC-AUC is
+`0.9999935882711906` and the merged GT delta is
+`-1.2941717360132055e-6`.
+
+The final individual unfiltered products pass: half 1 is
+`0.9958012689179558` and half 2 is `0.9959421891271095`.  The explicit merged
+product remains red at `0.9938826608356854`, a deficit of
+`0.0011173391643146` from the `0.995` gate.  Its merged GT delta is positive
+at `+0.0001483004003628302`.  The authoritative trajectory report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET/analysis/terminal_fsc.json`
+(SHA-256
+`8dfa5c37320e3d2033a36da754b99b9a33fa6a693e4d61d505645ab201aa78eb`).
+The frozen score therefore remains `31/34`.
+
+Two independent sealed audits localize this final-only failure.  Job
+`13054882` shows that the simple average of RECOVAR's two final unfiltered
+halves passes cross-engine FSC-AUC at `0.9959066958132646`, while only the
+nonlinear explicit joined product fails.  Its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET/analysis_final_merge_boundary/merge_boundary.json`
+(SHA-256
+`fa90a12e385fd001a08786cb768ba8ec5dbea5ecfdf19eb0558a89f53d178a99`).
+The final-manifest oracle audit `13054596` also shows broad movement toward the
+known passing exact-RELION iteration-15 boundary in references, prior centers,
+image corrections, scale corrections, noise, and variance.  Its report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET/analysis_final_manifest_oracle/manifest_ab.json`
+(SHA-256
+`2815196b5d6c843e84d878a22da62eead0e2de591085816728d3bfb3787ce056`).
+
+The shell-deficit analyzer now fail-closed classifies the newly observed
+merged-only pattern.  Within the last-numbered radius 34, final half-1,
+half-2, and merged FSC-AUC are `0.9990384385173124`,
+`0.9989920258304885`, and `0.9984112404046941`.  Outside radius 34, the two
+halves still pass at `0.9951164830411687` and `0.9952970313629331`, but the
+explicit merged product fails at `0.9929246920807031`.  Of the merged final
+FSC-AUC deficit, `95.4653%` lies outside the numbered radius, and the final
+merged deficit is amplified `954.09x` relative to iteration 15.  The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET/analysis_final_grid_deficit/final_grid_deficit.json`
+(SHA-256
+`c6a01148c61e808d14b734dca4b0fc2110edd962001e602dcb6631b6f953e713`).
+This moves the first material case-10 failure to the final joined
+FSC/tau2/reconstruction product and disfavors both the final scorer and the
+individual half M-steps as the dominant defect.
+
+Case-5 read-only jobs `13054906` and `13054907` completed `0:0` at the first
+post-order-4 checkpoint.  Iterations 9 through 11 remain green; merged
+cross-engine FSC-AUC is `0.9999817215107047`, `0.9999784608341409`, and
+`0.9999734457559254`.  The trajectory report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_terminal_current_b39_20260827T0732ET/analysis_live_it9_1435ET/fsc.json`
+(SHA-256
+`1efe1e61973911ec6eed211b3f01b94ac09a89866fafcd1751c3215d9c987416`).
+Between physical iterations 6 and 9, Pmax RMSE changes only from
+`0.017219927631558735` to `0.017861414921565167`, but support-count mismatches
+increase from `2472` to `7244`; pose agreement within `0.01` degree decreases
+from `99.573%` to `98.025%`, and translation agreement within `0.01` Angstrom
+decreases from `99.274%` to `97.732%`.  The particle report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case05_terminal_current_b39_20260827T0732ET/analysis/live_particle_state_it9_v2_1435ET/particle_state.json`
+(SHA-256
+`1d629d9351f1effb87650497fae190767b6d55207f610a65b277ef63441c109f`).
+The order-4 controller transition is therefore an amplifier of pre-existing
+soft-posterior/support drift, not the root cause.
+
+The focused shell analyzer tests pass (`5 passed`), Ruff passes, and
+`git diff --check` passes.  Case-4 and case-5 terminal producers `13035321`
+and `13035322` remain active and have not been modified or reprioritized.

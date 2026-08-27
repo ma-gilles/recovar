@@ -30,6 +30,10 @@ OUTSIDE_RADIUS_FSC_AUC_MAX = 0.995
 CLASSIFICATION = (
     "final_full_grid_fsc_deficit_is_over_95pct_outside_last_numbered_radius"
 )
+MERGED_ONLY_CLASSIFICATION = (
+    "final_full_grid_fsc_deficit_is_over_95pct_outside_last_numbered_radius_"
+    "and_only_the_explicit_merged_product_fails_outside_radius"
+)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -197,14 +201,23 @@ def build_report(
         all(row["active_radius_fsc_auc_gate_passed"] for row in products.values()),
         "one or more final products fail FSC-AUC inside the numbered radius",
     )
-    _require(
-        all(row["outside_radius_fsc_auc_gate_failed"] for row in products.values()),
-        "one or more final products do not fail FSC-AUC outside the numbered radius",
-    )
+    outside_radius_failures = {
+        product: bool(row["outside_radius_fsc_auc_gate_failed"])
+        for product, row in products.items()
+    }
+    if all(outside_radius_failures.values()):
+        classification = CLASSIFICATION
+    elif outside_radius_failures == {"half1": False, "half2": False, "merged": True}:
+        classification = MERGED_ONLY_CLASSIFICATION
+    else:
+        raise ValueError(
+            "final products have an unsupported outside-radius FSC-AUC gate pattern: "
+            f"{outside_radius_failures}"
+        )
     return {
         "schema": SCHEMA,
         "status": "pass",
-        "classification": CLASSIFICATION,
+        "classification": classification,
         "metric_policy": (
             "signed shellwise FSC and normalized non-DC FSC-AUC; exact trapezoid-defect "
             "partition; no correlation; diagnostic only and not a fixed-scorecard promotion"

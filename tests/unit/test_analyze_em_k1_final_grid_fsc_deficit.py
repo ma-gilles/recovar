@@ -8,6 +8,7 @@ import pytest
 
 from scripts.analyze_em_k1_final_grid_fsc_deficit import (
     CLASSIFICATION,
+    MERGED_ONLY_CLASSIFICATION,
     build_report,
     normalized_non_dc_fsc_auc,
     partition_fsc_deficit,
@@ -34,6 +35,7 @@ def _inputs(
     tmp_path: Path,
     *,
     outside_dominated: bool = True,
+    merged_only_failure: bool = False,
     trajectory_schema: str = "em_k1_fsc_trajectory_audit_v2",
 ) -> tuple[Path, Path]:
     numbered_curve = np.ones(21)
@@ -49,16 +51,21 @@ def _inputs(
     numbered_row = {"relion_iteration": 7, "cross_engine": {}}
     final_row = {"cross_engine": {}}
     for product in ("half1", "half2", "merged"):
+        product_final_curve = final_curve
+        if merged_only_failure and product != "merged":
+            product_final_curve = np.ones(21)
+            product_final_curve[1:5] -= 1.0e-4
+            product_final_curve[5:] -= 0.004
         numbered_key = f"it007_cross_{product}"
         final_key = f"final_cross_{product}"
         arrays[numbered_key] = numbered_curve
-        arrays[final_key] = final_curve
+        arrays[final_key] = product_final_curve
         numbered_row["cross_engine"][product] = {
             "fsc_auc": normalized_non_dc_fsc_auc(numbered_curve),
             "shellwise_key": numbered_key,
         }
         final_row["cross_engine"][product] = {
-            "fsc_auc": normalized_non_dc_fsc_auc(final_curve),
+            "fsc_auc": normalized_non_dc_fsc_auc(product_final_curve),
             "shellwise_key": final_key,
         }
     trajectory_path = tmp_path / "trajectory.json"
@@ -106,6 +113,21 @@ def test_build_report_accepts_v3_trajectory_schema(tmp_path: Path) -> None:
     )
 
     assert report["status"] == "pass"
+
+
+def test_build_report_classifies_merged_only_outside_radius_failure(tmp_path: Path) -> None:
+    trajectory, shellwise = _inputs(tmp_path, merged_only_failure=True)
+    report = build_report(
+        trajectory_json=trajectory,
+        shellwise_npz=shellwise,
+        relion_iteration=7,
+        last_numbered_current_size=8,
+    )
+
+    assert report["classification"] == MERGED_ONLY_CLASSIFICATION
+    assert not report["products"]["half1"]["outside_radius_fsc_auc_gate_failed"]
+    assert not report["products"]["half2"]["outside_radius_fsc_auc_gate_failed"]
+    assert report["products"]["merged"]["outside_radius_fsc_auc_gate_failed"]
 
 
 def test_build_report_fails_closed_for_inside_radius_deficit(tmp_path: Path) -> None:
