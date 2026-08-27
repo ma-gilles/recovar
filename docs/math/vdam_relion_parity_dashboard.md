@@ -44,7 +44,7 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
-| Latest closed boundary | GF47 native-count identity-grid target-GPU panel `13035899` completed both arms in 77 s | exact frozen GPU `GPU-6222...`; reference `1.668x / 1.346x`, so no promotion or long run |
+| Latest closed boundary | GF47 matched-CUDA/PTX target-GPU panel `13036273` completed both arms in 77 s | exact frozen GPU `GPU-6222...`; reference improves to `1.439x / 1.221x`, but no promotion or long run |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
 | GF47 reverse float32 order | panel `13026879`, audit `13026880` terminal | reference is inside its fresh native floor, but post-second-moment error is **2.90--3.57x** the floor; no promotion |
@@ -64,7 +64,8 @@ SHA-256 values.
 | GF47 compile-time SGD specialization | H100 gate `13035150` passes 24/24; all specializations compile at 40 registers | non-target panel `13035208` passes reference at `0.666x / 0.668x`, but target-GPU `13035456` fails at `1.353x / 1.272x`; not robust |
 | GF47 exact physical identity grid | local `1459edb1c`; H100 gate `13035817` passes 25/25; exact-GPU panel `13035899` completes | every raw data/weight half is inside the native-repeat magnitude, but reference is `1.668x / 1.346x` and post-second is `1.182x / 1.888x`; row indirection rejected |
 | GF47 native per-worker issue order | sealed trace comparison | all eight worker chains are already exact, with zero inversions; this axis is closed |
-| GF47 CUDA toolchain / device code | qualification next | RELION: CUDA 12.6, `sm_80` cubin + `compute_80` PTX JIT on H100; RECOVAR: CUDA 13.1 native `sm_90` cubin, no PTX |
+| GF47 CUDA toolchain / device code | gate `13036222` passes 25/25; exact-GPU panel `13036273` completes | CUDA-12.6/PTX matching improves reference to `1.439x / 1.221x` and post-second to `1.052x / 0.196x`, but compiler target alone is insufficient |
+| GF47 native trace instruction shape | implementation next | fresh native short arms execute block-timer/trace instructions; untraced candidate removes them at compile time, leaving 40/48 versus 40/36 register/shared footprint |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -82,7 +83,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 08:05 ET**
+Last scientific update: **2026-08-27 08:15 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -110,7 +111,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | native count, identity rows, worker chains, and register occupancy are matched; device code generation is not | `13035899`: raw halves inside floor, reference `1.668x / 1.346x`; RELION is CUDA-12.6 `compute_80` PTX-JIT, RECOVAR is CUDA-13.1 `sm_90` SASS | no score change; compile RECOVAR with RELION's CUDA/toolchain/target contract, then require a two-arm pass on frozen `GPU-6222...` |
+| 1 | GF47 repeatability starts @1 | native count, identity rows, worker chains, compiler, and PTX target are matched; trace instruction shape is not | `13036222`: 25/25 and 40/36; exact target `13036273`: reference `1.439x / 1.221x`, post-second `1.052x / 0.196x`; native kernel is 40/48 with active trace path | no score change; match native trace/timer instruction shape without host capture overhead, then require the same exact-GPU gate |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -536,6 +537,28 @@ bounded control builds RECOVAR with CUDA 12.6 and the same `sm_80` plus
 `compute_80` fatbinary contract, audits its selected resources, and applies
 the unchanged exact-GPU two-arm gate before any 0--200 run.
 
+Local commit `3d23f803d` parameterizes and seals the gate compiler and target.
+CUDA-12.6 qualification `13036222` passes **25/25** in 63 seconds, emits the
+same `sm_80` cubin plus `compute_80` PTX route as RELION, and qualifies CUDA
+SHA-256 `92d4a12751f4...`. The candidate identity specialization changes to
+**40 registers / 36 B shared**, removing the CUDA-13.1 1,024-byte overhead and
+approaching native **40 / 48**. UUID guards `13036272` and `13036274` exit 75
+on wrong GPUs; `13036273` runs both arms on exact `GPU-6222c402...` in 77 s.
+
+The compiler/JIT match is beneficial but not a repair. Reconstructed-reference
+ratios improve from `1.668x / 1.346x` to **1.439x / 1.221x**. Post-second
+moment improves to **1.052x / 0.196x**, while raw data/weight ratios span
+`1.018x`--`1.355x`. Both reference arms still fail, so no trajectory is
+submitted. Report SHA-256 is `77d45023b5bc...`.
+
+The residual 12-byte shared-memory/source-shape difference is explained by the
+instrumented native kernel: the fresh native arms execute timer/trace writes
+and a shared first-atomic claim, whereas the untraced candidate compiles that
+path away. The next bounded control preserves native counts, identity rows,
+worker chains, CUDA 12.6, and PTX JIT while executing the native trace
+instruction shape into device-only scratch. It omits candidate host copies and
+append overhead, so it tests the kernel instruction/scheduling effect alone.
+
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
 two exact-owner replays with eight concurrent host issuers ran on GPU
@@ -924,7 +947,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | identity-grid `13035899` puts every raw half inside the native magnitude; all eight worker issue chains are already exact; compiler/device-code path still differs | build RECOVAR with RELION's CUDA-12.6 `sm_80` + `compute_80` PTX contract; pass two arms on `GPU-6222...` before any 201-checkpoint run |
+| 1 | Close GF47 repeatability before another trajectory | CUDA-12.6/PTX `13036273` improves reference to `1.439x / 1.221x`, but native executes trace/timer code and candidate compiles it out | match native trace instruction shape in device-only scratch; pass two arms on `GPU-6222...` before any 201-checkpoint run |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
