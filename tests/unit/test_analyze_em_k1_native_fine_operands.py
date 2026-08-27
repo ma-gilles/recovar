@@ -8,10 +8,32 @@ from scripts.analyze_em_k1_native_fine_operands import (
     _infer_float32_common_addend,
     _score_unit_factors,
     _tree_sum,
+    _validate_alternate_reference_layout,
     _winner_boundary,
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_alternate_reference_contract_does_not_require_same_candidate_mask():
+    rotations = np.eye(3, dtype=np.float32)[None]
+    window = np.asarray([3, 5], dtype=np.int32)
+    primary = {
+        "rotations": rotations,
+        "window_indices": window,
+        "candidate_mask": np.asarray([[True, False]]),
+    }
+    alternate = {
+        "rotations": rotations.copy(),
+        "window_indices": window.copy(),
+        "candidate_mask": np.asarray([[False, True]]),
+    }
+
+    _validate_alternate_reference_layout(primary, alternate)
+
+    alternate["window_indices"] = np.asarray([3, 6], dtype=np.int32)
+    with pytest.raises(ValueError, match="different window_indices"):
+        _validate_alternate_reference_layout(primary, alternate)
 
 
 def test_tree_sum_matches_relion_lane_order():

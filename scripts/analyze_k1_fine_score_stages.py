@@ -49,6 +49,7 @@ else:
 REPORT_SCHEMA = "recovar.em.k1_fine_score_stages.v1"
 STAGES = (
     "candidate_tuple_presence",
+    "raw_diff2",
     "preprior_score_finite",
     "preprior_score_centered",
     "orientation_log_prior",
@@ -244,6 +245,14 @@ def analyze(
     with np.load(recovar_capture, allow_pickle=False) as archive:
         dense_preprior = archive["scores_pre_prior"]
         recovar_preprior = np.asarray(dense_preprior[mapped_rotation, mapped_translation], dtype=np.float32)
+        recovar_raw = (
+            np.asarray(
+                archive["raw_operand_raw_diff2"][mapped_rotation, mapped_translation],
+                dtype=np.float32,
+            )
+            if "raw_operand_raw_diff2" in archive.files
+            else None
+        )
         del dense_preprior
     finite_score = np.isfinite(recovar_preprior)
     preprior_finite_equal = bool(np.all(finite_score))
@@ -413,6 +422,8 @@ def analyze(
         ),
         "normalized_posterior": _metric(native_posterior[comparable], recovar_posterior[comparable]),
     }
+    if recovar_raw is not None:
+        comparisons["raw_diff2"] = _metric(native_raw[comparable], recovar_raw[comparable])
     stage_exact = {
         "candidate_tuple_presence": candidate_set_equal,
         "preprior_score_finite": preprior_finite_equal,
@@ -424,7 +435,10 @@ def analyze(
         "significant_support": support_exact,
         "hard_winner": winner_exact,
     }
-    first_unequal = next((stage for stage in STAGES if not stage_exact[stage]), "all_stages_exact")
+    stages = tuple(stage for stage in STAGES if stage != "raw_diff2" or recovar_raw is not None)
+    if recovar_raw is not None:
+        stage_exact["raw_diff2"] = comparisons["raw_diff2"]["exact_equal"]
+    first_unequal = next((stage for stage in stages if not stage_exact[stage]), "all_stages_exact")
 
     native_rank = np.argsort(-native_combined, kind="stable")[:top_count]
     recovar_rank = np.argsort(-recovar_combined, kind="stable")[:top_count]
@@ -500,7 +514,8 @@ def analyze(
             "recovar_total_probability_mass": recovar_total_probability_mass,
             "posterior_algorithm_decomposition": posterior_algorithm_decomposition,
         },
-        "stage_order": list(STAGES),
+        "raw_diff2_capture_available": recovar_raw is not None,
+        "stage_order": list(stages),
         "stage_exact": stage_exact,
         "first_exact_unequal_boundary": first_unequal,
         "first_mismatch": {
@@ -512,6 +527,15 @@ def analyze(
                     "recovar_rotation_row": int(tuple_keys[missing_tuple[0], 0]),
                     "recovar_translation_row": int(tuple_keys[missing_tuple[0], 1]),
                 }
+            ),
+            "raw_diff2": (
+                None
+                if recovar_raw is None
+                else _first_mismatch_record(
+                    native_raw[comparable],
+                    recovar_raw[comparable],
+                    tuple_keys=comparable_keys,
+                )
             ),
             "preprior_score_finite": (
                 None

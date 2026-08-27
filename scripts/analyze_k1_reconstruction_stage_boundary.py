@@ -331,6 +331,9 @@ def main() -> None:
             np.asarray(numerator * valid.astype(numerator.real.dtype)), accumulator_side
         ) * (-n2)
         native_numerator = native_divided * native_denominator
+        native_decenter_support = _public_full_to_relion_half(
+            valid.reshape(accumulator_shape), accumulator_side
+        ).astype(bool)
 
         live_tau_replay = None
         live_tau_float64_ablation = None
@@ -417,13 +420,29 @@ def main() -> None:
                 "bpref_numerator_decentered": _metrics(
                     rec_numerator_native, native_numerator
                 ),
+                "bpref_numerator_decentered_sign_aligned": _metrics(
+                    -rec_numerator_native, native_numerator
+                ),
                 "fweight_decentered": _metrics(rec_weight_native, native_weight),
                 "wiener_denominator_after_floor": _metrics(
                     rec_denominator_native, native_denominator
                 ),
+                "wiener_denominator_on_decenter_support": _metrics(
+                    rec_denominator_native[native_decenter_support],
+                    native_denominator[native_decenter_support],
+                ),
                 "fconv_divided": _metrics(rec_divided_native, native_divided),
+                "fconv_divided_sign_aligned": _metrics(
+                    -rec_divided_native, native_divided
+                ),
                 "volume_before_gridding": _metrics(before_np, native_before),
+                "volume_before_gridding_sign_aligned": _metrics(
+                    -before_np, native_before
+                ),
                 "volume_after_gridding": _metrics(after_np, native_after),
+                "volume_after_gridding_sign_aligned": _metrics(
+                    -after_np, native_after
+                ),
             },
             "float32_rounded_tau_replay": {
                 "wiener_denominator_after_floor": _metrics(

@@ -79,6 +79,20 @@ def _score_unit_factors(score_units: str, full_image_size: int) -> tuple[np.floa
     raise ValueError(f"unsupported score units: {score_units!r}")
 
 
+def _validate_alternate_reference_layout(
+    primary: dict[str, np.ndarray],
+    alternate: dict[str, np.ndarray],
+) -> None:
+    """Require the coordinate axes used to index an alternate reference panel."""
+
+    # The alternate arm contributes only its dense per-rotation reference
+    # panel. Its particle-specific candidate mask may legitimately differ
+    # after a coarse-parent intervention.
+    for name in ("rotations", "window_indices"):
+        if not np.array_equal(primary[name], alternate[name]):
+            raise ValueError(f"alternate reference has different {name}")
+
+
 def _winner_boundary(
     *,
     native_raw_cost: np.ndarray,
@@ -255,9 +269,7 @@ def analyze(
     if alternate_reference_npz is not None:
         with np.load(alternate_reference_npz, allow_pickle=False) as payload:
             alternate = {name: np.array(payload[name]) for name in payload.files}
-        for name in ("rotations", "candidate_mask", "window_indices"):
-            if not np.array_equal(rec[name], alternate[name]):
-                raise ValueError(f"alternate reference has different {name}")
+        _validate_alternate_reference_layout(rec, alternate)
         alternate_reference = alternate["proj_half"]
 
     native_eulers = _flat_memmap(dump_dir / "pass1_class0_fine_eulers.bin").reshape(-1, 3, 3)

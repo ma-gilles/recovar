@@ -20,6 +20,8 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_cuda_fine_diff2_min,
+    _relion_cuda_fine_diff2_to_scores,
     _relion_cuda_fine_pixel_weights,
     _relion_translation_angles_f32,
 )
@@ -30,7 +32,6 @@ from recovar.utils import helpers
 from scripts.analyze_k1_fine_score_boundary import _rotation_map, _translation_map
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-
 
 SCHEMA = "recovar.em.k1_native_texture_fine_counterfactual.v1"
 
@@ -74,6 +75,37 @@ def _center_cost(cost: np.ndarray) -> np.ndarray:
     return np.subtract(np.min(cost), cost, dtype=np.float32)
 
 
+def _pmax_from_raw_diff2(
+    raw_diff2: np.ndarray,
+    rotation_log_prior: np.ndarray,
+    translation_log_prior: np.ndarray,
+    candidate_mask: np.ndarray,
+) -> float:
+    """Replay the production XFLOAT score conversion and float64 softmax."""
+
+    raw = jnp.asarray(raw_diff2[None, ...], dtype=jnp.float32)
+    mask = jnp.asarray(candidate_mask[None, ...], dtype=bool)
+    minimum = _relion_cuda_fine_diff2_min(raw, mask)
+    scores = np.asarray(
+        _relion_cuda_fine_diff2_to_scores(
+            raw,
+            jnp.asarray(rotation_log_prior[None, :, None], dtype=jnp.float32),
+            jnp.asarray(translation_log_prior[None, None, :], dtype=jnp.float32),
+            mask,
+            min_diff2=minimum,
+        )[0],
+        dtype=np.float64,
+    )
+    finite = np.isfinite(scores)
+    _require(np.any(finite), "fine posterior has no finite candidates")
+    maximum = float(np.max(scores[finite]))
+    weights = np.zeros_like(scores, dtype=np.float64)
+    weights[finite] = np.exp(scores[finite] - maximum)
+    normalization = float(np.sum(weights, dtype=np.float64))
+    _require(np.isfinite(normalization) and normalization > 0.0, "invalid fine posterior mass")
+    return float(np.max(weights) / normalization)
+
+
 def analyze(
     *,
     recovar_capture: Path,
@@ -91,7 +123,7 @@ def analyze(
     with np.load(recovar_capture, allow_pickle=False) as archive:
         capture = {name: np.asarray(archive[name]) for name in archive.files}
     current_size = int(capture["current_size"])
-    _require(int(capture["half"]) == 1, "the focused counterfactual expects half 1")
+    _require(int(capture["half"]) in (1, 2), "captured half must be 1 or 2")
     _require(int(capture["original_index"]) + 1 == fine.stack_index, "particle identity changed")
 
     rotations = np.asarray(capture["rotations"], dtype=np.float32)
@@ -152,7 +184,10 @@ def analyze(
         dtype=np.complex64,
     )
 
-    image = np.asarray(capture["direct_score_input"], dtype=np.complex64)[None, :]
+    image_scale = np.float32(physical_image_size * physical_image_size)
+    image = (
+        np.asarray(capture["direct_score_input"], dtype=np.complex64) / image_scale
+    )[None, :]
     corr = np.asarray(capture["raw_operand_corr_img_score"], dtype=np.float32)
     half_weights = np.asarray(capture["raw_operand_half_weights"], dtype=np.float32)
     weights = np.asarray(
@@ -269,6 +304,43 @@ def analyze(
         np.ascontiguousarray(rotations.transpose(0, 2, 1))
     )
     current_raw = np.asarray(capture["raw_operand_raw_diff2"], dtype=np.float32)
+    fused_preshifted_raw = np.asarray(
+        cuda_backproject.relion_fine_diff2_rectangular_f32(
+            jnp.asarray(capture["raw_operand_proj_half"][None, ...], dtype=jnp.complex64),
+            jnp.asarray(capture["raw_operand_shifted_corrected"][None, ...], dtype=jnp.complex64),
+            jnp.asarray(weights, dtype=jnp.float32),
+            jnp.asarray(lookup, dtype=jnp.int32),
+        )
+    )[0]
+    fused_preshifted_raw = np.add(
+        fused_preshifted_raw,
+        initial_diff2[0],
+        dtype=np.float32,
+    )
+
+    # Counterfactual for the immediately preceding production implementation:
+    # keep the algebraically equivalent normalized-FFT image/reference/corr_img
+    # operands instead of consuming RELION's native-unit corr_img directly.
+    normalized_weights = np.asarray(
+        _relion_cuda_fine_pixel_weights(
+            jnp.asarray(capture["ctf2_over_nv_score"], dtype=jnp.float32),
+            jnp.asarray(capture["half_weights"], dtype=jnp.float32),
+        ),
+        dtype=np.float32,
+    )[None, :]
+    normalized_unit_raw = np.asarray(
+        cuda_backproject.relion_fine_diff2_rectangular_f32(
+            jnp.asarray(capture["proj_half"][None, ...], dtype=jnp.complex64),
+            jnp.asarray(capture["shifted_corrected"][None, ...], dtype=jnp.complex64),
+            jnp.asarray(normalized_weights, dtype=jnp.float32),
+            jnp.asarray(lookup, dtype=jnp.int32),
+        )
+    )[0]
+    normalized_unit_raw = np.add(
+        normalized_unit_raw,
+        initial_diff2[0],
+        dtype=np.float32,
+    )
     fused_preprojected_raw = np.asarray(
         cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
             jnp.asarray(capture["raw_operand_proj_half"][None, ...], dtype=jnp.complex64),
@@ -288,6 +360,12 @@ def analyze(
     fused_preprojected_aligned = fused_preprojected_raw[
         mapped_rotation, mapped_translation
     ]
+    fused_preshifted_aligned = fused_preshifted_raw[
+        mapped_rotation, mapped_translation
+    ]
+    normalized_unit_aligned = normalized_unit_raw[
+        mapped_rotation, mapped_translation
+    ]
     texture_direct_aligned = texture_raw_direct[mapped_rotation, mapped_translation]
     texture_transposed_aligned = texture_raw_transposed[
         mapped_rotation, mapped_translation
@@ -298,6 +376,10 @@ def analyze(
     texture_transposed_centered = _center_cost(texture_transposed_aligned)
     native_centered = _center_cost(native_raw)
     current_metric = _metric(native_centered, current_centered)
+    normalized_unit_metric = _metric(
+        native_centered,
+        _center_cost(normalized_unit_aligned),
+    )
     texture_direct_metric = _metric(native_centered, texture_direct_centered)
     texture_transposed_metric = _metric(native_centered, texture_transposed_centered)
     current_l2 = float(current_metric["relative_l2_over_reference"])
@@ -364,9 +446,22 @@ def analyze(
         },
         "comparisons": {
             "current_preprojected_vs_native": current_metric,
+            "previous_normalized_units_vs_native": normalized_unit_metric,
+            "previous_normalized_units_vs_current_native_units_raw": _metric(
+                current_aligned,
+                normalized_unit_aligned,
+            ),
             "fused_preprojected_vs_native": _metric(
                 native_centered,
                 _center_cost(fused_preprojected_aligned),
+            ),
+            "fused_preshifted_vs_native": _metric(
+                native_centered,
+                _center_cost(fused_preshifted_aligned),
+            ),
+            "fused_preshifted_vs_current_raw": _metric(
+                current_aligned,
+                fused_preshifted_aligned,
             ),
             "fused_preprojected_vs_current_raw": _metric(
                 current_aligned,
@@ -376,6 +471,23 @@ def analyze(
             "native_texture_transposed_rotation_vs_native": texture_transposed_metric,
             "native_texture_transposed_vs_current_preprojected_raw": _metric(
                 current_aligned, texture_transposed_aligned
+            ),
+        },
+        "posterior_counterfactual": {
+            "current_native_units_pmax": _pmax_from_raw_diff2(
+                current_raw,
+                np.asarray(capture["rotation_log_prior"], dtype=np.float32),
+                np.asarray(capture["translation_log_prior"], dtype=np.float32),
+                np.asarray(capture["candidate_mask"], dtype=bool),
+            ),
+            "previous_normalized_units_pmax": _pmax_from_raw_diff2(
+                normalized_unit_raw,
+                np.asarray(capture["rotation_log_prior"], dtype=np.float32),
+                np.asarray(capture["translation_log_prior"], dtype=np.float32),
+                np.asarray(capture["candidate_mask"], dtype=bool),
+            ),
+            "captured_current_probability_max": float(
+                np.max(np.asarray(capture["probs"], dtype=np.float64))
             ),
         },
         "improvement": {

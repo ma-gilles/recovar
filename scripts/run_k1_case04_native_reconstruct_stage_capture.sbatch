@@ -9,7 +9,7 @@
 #SBATCH --ntasks=3
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=500G
-#SBATCH --time=01:00:00
+#SBATCH --time=01:30:00
 
 set -euo pipefail
 : "${RUN_ROOT:?RUN_ROOT is required}"
@@ -19,13 +19,18 @@ set -euo pipefail
 
 ROOT=${RUN_ROOT}
 RUNTIME=${RUNTIME_ROOT}
-REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820
+REPO=${REPO_OVERRIDE:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_test_gpu_binding_v2_20260820}
 SOURCE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
-CASE=${SOURCE_ROOT}/cases/4_high_noise_100k_g256_white_noise3_bf80
+CASE=${CASE_SOURCE:-${SOURCE_ROOT}/cases/4_high_noise_100k_g256_white_noise3_bf80}
+CASE_NAME=${CASE_NAME:-4_high_noise_100k_g256_white_noise3_bf80}
+SEED=${SEED:-1704}
+AUTO_ITER_MAX=${AUTO_ITER_MAX:-2}
+POOL=${POOL:-3}
+THREADS=${THREADS:-4}
 DATA=${CASE}/data
 CONTROL=${CASE}/relion_ref
 PYTHON=${REPO}/.pixi/envs/default/bin/python
-LAUNCHER=${REPO}/scripts/run_k1_case04_native_reconstruct_stage_capture.sbatch
+LAUNCHER=${LAUNCHER_OVERRIDE:-${REPO}/scripts/run_k1_case04_native_reconstruct_stage_capture.sbatch}
 RELION_SOURCE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_case26_wavg_pixel_source_20260810
 RELION_BINARY=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k1_case26_wavg_pixel_build_20260810/bin/relion_refine_mpi
 RELION_RUNTIME=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717
@@ -39,9 +44,11 @@ test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${RELION_SOURCE}" rev-parse HEAD)" = ed53c60d83125902c456b7fc5461c78c3966b306
 test "$(git -C "${RELION_SOURCE}" diff --binary | sha256sum | awk '{print $1}')" = 60ba0c44004a323f231a59e051a5f444e6d94641bc628ce6b094cb1357d043ea
 test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = 235052e48ccf843df48392c8e2b4f0d634b7dcedf7be27b88eb1cff746c07201
-test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = 0a90714711cdf0a1820d46fa82460d828b87e1ecbd2e49de645170863546ac98
-test "$(sha256sum "${DATA}/reference_init_relion.mrc" | awk '{print $1}')" = beffccd2b5b9e4dba765751b2e8e7933229deb70e65061de97a486264066dec9
+test "$(sha256sum "${DATA}/particles.star" | awk '{print $1}')" = "${EXPECTED_DATA_STAR_SHA256:-0a90714711cdf0a1820d46fa82460d828b87e1ecbd2e49de645170863546ac98}"
+test "$(sha256sum "${DATA}/reference_init_relion.mrc" | awk '{print $1}')" = "${EXPECTED_REFERENCE_SHA256:-beffccd2b5b9e4dba765751b2e8e7933229deb70e65061de97a486264066dec9}"
 test "$(stat -Lc %s "${DATA}/particles.256.mrcs")" = 26214401024
+case "${AUTO_ITER_MAX}" in 1|2) ;; *) echo "AUTO_ITER_MAX must be 1 or 2" >&2; exit 2 ;; esac
+test "${POOL}" -gt 0 -a "${THREADS}" -gt 0
 test -z "$(find "${DUMP_DIR}" "${RELION_OUT}" -mindepth 1 -print -quit)"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
@@ -79,8 +86,8 @@ command=(srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none "${RELION_BINARY}"
   --auto_refine --split_random_halves --particle_diameter 200 --ini_high 30
   --firstiter_cc --ctf --flatten_solvent --zero_mask --low_resol_join_halves 40
   --norm --scale --healpix_order 3 --offset_range 3.0 --offset_step 1.0
-  --oversampling 1 --pad 2 --random_seed 1704 --auto_iter_max 2
-  --pool 3 --gpu 0:0:0 --j 4)
+  --oversampling 1 --pad 2 --random_seed "${SEED}" --auto_iter_max "${AUTO_ITER_MAX}"
+  --pool "${POOL}" --gpu 0:0:0 --j "${THREADS}")
 printf '%q ' "${command[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 start_epoch=$(date +%s)
@@ -121,8 +128,10 @@ for path in sorted(dump_dir.glob("*.bin")):
 assert len(records) == 14
 Path(sys.argv[2]).write_text(json.dumps({"schema": "relion.reconstruct.stages.v1", "records": records}, indent=2) + "\n")
 PY
+audit_iterations=(1)
+if test "${AUTO_ITER_MAX}" -ge 2; then audit_iterations+=(2); fi
 "${PYTHON}" /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case7_factor_recovar_187a9f60_20260808T1100ET/checkout/scripts/audit_relion_control_reproducibility.py \
-    --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations 1 2 \
+    --control-dir "${CONTROL}" --candidate-dir "${RELION_OUT}" --iterations "${audit_iterations[@]}" \
     --map-fsc-auc-threshold 0.999999 \
     --output-json "${ANALYSIS}/RELION_CAPTURE_INERTNESS.json" \
     --output-markdown "${ANALYSIS}/RELION_CAPTURE_INERTNESS.md"
@@ -134,5 +143,7 @@ assert all(item["map_stable"] for item in report["iterations"])
 assert all(item["selected_topology_exact"] for item in report["iterations"])
 PY
 find "${DUMP_DIR}" "${RELION_OUT}" "${ANALYSIS}" -type f -print0 | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
-printf '{"job_id":"%s","wall_s":%d,"reconstruct_call":0}\n' "${SLURM_JOB_ID}" "${wall_s}" > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+printf '{"job_id":"%s","case":"%s","wall_s":%d,"reconstruct_call":0,"auto_iter_max":%d,"pool":%d,"threads":%d,"seed":%d}\n' \
+    "${SLURM_JOB_ID}" "${CASE_NAME}" "${wall_s}" "${AUTO_ITER_MAX}" "${POOL}" "${THREADS}" "${SEED}" \
+    > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/SUCCESS_${SLURM_JOB_ID}"

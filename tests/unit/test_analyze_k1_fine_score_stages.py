@@ -56,6 +56,9 @@ def test_complete_stage_comparison_closes_on_additively_shifted_scores(tmp_path:
     probs[0, 0] = 2.0 / 3.0
     probs[1, 1] = 1.0 / 3.0
     reconstruction_mask = np.asarray([[True, False], [False, False]])
+    raw_diff2 = np.full((2, 2), np.nan, dtype=np.float32)
+    raw_diff2[0, 0] = 10.0
+    raw_diff2[1, 1] = 11.0
     capture = tmp_path / "pass2.npz"
     np.savez(
         capture,
@@ -68,6 +71,7 @@ def test_complete_stage_comparison_closes_on_additively_shifted_scores(tmp_path:
         scores_with_prior=scores_with_prior,
         probs=probs,
         reconstruction_mask=reconstruction_mask,
+        raw_operand_raw_diff2=raw_diff2,
     )
 
     report = analyzer.analyze(
@@ -114,6 +118,32 @@ def test_complete_stage_comparison_closes_on_additively_shifted_scores(tmp_path:
         },
     ]
 
+    raw_diff2[1, 1] = 11.25
+    np.savez(
+        capture,
+        rotations=recovar_rotations,
+        fine_translations=recovar_translations,
+        candidate_mask=candidate_mask,
+        scores_pre_prior=scores_pre_prior,
+        rotation_log_prior=np.zeros(2, dtype=np.float32),
+        translation_log_prior=np.zeros(2, dtype=np.float32),
+        scores_with_prior=scores_with_prior,
+        probs=probs,
+        reconstruction_mask=reconstruction_mask,
+        raw_operand_raw_diff2=raw_diff2,
+    )
+    raw_report = analyzer.analyze(
+        native_factor=tmp_path / "factor.bin",
+        native_fine_score=tmp_path / "score.bin",
+        recovar_capture=capture,
+        physical_image_size=128,
+        top_count=2,
+    )
+    assert raw_report["first_exact_unequal_boundary"] == "raw_diff2"
+    assert raw_report["first_mismatch"]["raw_diff2"]["recovar_rotation_row"] == 1
+    assert raw_report["first_mismatch"]["raw_diff2"]["recovar_translation_row"] == 1
+    raw_diff2[1, 1] = 11.0
+
     candidate_mask[0, 1] = True
     scores_pre_prior[0, 1] = 88.0
     scores_with_prior[0, 1] = 88.0
@@ -131,6 +161,7 @@ def test_complete_stage_comparison_closes_on_additively_shifted_scores(tmp_path:
         reconstruction_mask=reconstruction_mask,
         oversampled_rot_indices=np.asarray([10, 11], dtype=np.int64),
         parent_map=np.asarray([4, 5], dtype=np.int32),
+        raw_operand_raw_diff2=raw_diff2,
     )
 
     extra_report = analyzer.analyze(
