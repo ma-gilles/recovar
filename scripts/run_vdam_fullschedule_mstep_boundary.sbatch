@@ -32,6 +32,7 @@ NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 RELION_THREADS=${RELION_THREADS:-8}
 RANDOM_SEED=${RANDOM_SEED:-0}
 WORKER_TRACE_REPLAY=${RELION_VDAM_WORKER_TRACE_REPLAY:-0}
+WORKER_TRACE_ITERATION=${RELION_VDAM_WORKER_TRACE_ITERATION:-1}
 WORKER_TRACE_PARTICLES=${RELION_VDAM_WORKER_TRACE_PARTICLES:-200}
 WORKER_TRACE_DATASET_PARTICLES=${RELION_VDAM_WORKER_TRACE_DATASET_PARTICLES:-3000}
 WORKER_TRACE_POOL_SIZE=${RELION_VDAM_WORKER_TRACE_POOL_SIZE:-24}
@@ -181,7 +182,11 @@ elif [[ -n "${EXPECTED_BLOCK_CHRONOLOGY_SHA256}" ]]; then
   exit 2
 fi
 if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
-  test "${TARGET_ITERATION}" -eq 1
+  test "${WORKER_TRACE_ITERATION}" -ge 1
+  test "${WORKER_TRACE_ITERATION}" -le "${TARGET_ITERATION}"
+  if [[ -n "${WORKER_REPLAY_ITERATION}" ]]; then
+    test "${WORKER_REPLAY_ITERATION}" -eq "${WORKER_TRACE_ITERATION}"
+  fi
   test "${RELION_THREADS}" -eq 8
   test "${WORKER_TRACE_PARTICLES}" -ge 1
   test "${WORKER_TRACE_DATASET_PARTICLES}" -ge "${WORKER_TRACE_PARTICLES}"
@@ -190,6 +195,7 @@ fi
 if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   test "${WORKER_TRACE_REPLAY}" = 1
   test "${TARGET_ITERATION}" -eq 1
+  test "${WORKER_TRACE_ITERATION}" -eq 1
   test "${WORKER_REPLAY_TOPOLOGY}" = captured -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid -o \
@@ -207,6 +213,7 @@ fi
 if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   test "${WORKER_TRACE_REPLAY}" = 1
   test "${TARGET_ITERATION}" -eq 1
+  test "${WORKER_TRACE_ITERATION}" -eq 1
   test "${BLOCK_TRACE_CAPACITY}" -ge 1
   test "${BLOCK_TRACE_SM_COUNT}" -ge 1
 fi
@@ -326,7 +333,7 @@ export RELION_ACC_DUMP_ITER=${TARGET_ITERATION}
 export RELION_ACC_DUMP_VERBOSE=0
 if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
   export RELION_VDAM_WORKER_LOG=${WORKER_TRACE}
-  export RELION_VDAM_WORKER_TRACE_ITER=1
+  export RELION_VDAM_WORKER_TRACE_ITER=${WORKER_TRACE_ITERATION}
 fi
 if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   export RELION_VDAM_BLOCK_TRACE=${BLOCK_TRACE}
@@ -417,7 +424,7 @@ if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
   (
     cd "${REPO_ROOT}"
     "${PIXI_PY}" -m scripts.build_vdam_worker_schedule \
-      --trace "${WORKER_TRACE}" --iteration 1 \
+      --trace "${WORKER_TRACE}" --iteration "${WORKER_TRACE_ITERATION}" \
       --n-particles "${WORKER_TRACE_PARTICLES}" \
       --dataset-particles "${WORKER_TRACE_DATASET_PARTICLES}" \
       --n-threads "${RELION_THREADS}" --pool-size "${WORKER_TRACE_POOL_SIZE}" \
@@ -790,9 +797,9 @@ fi
 if [[ -n "${EXTERNAL_BLOCK_CHRONOLOGY}" ]]; then
   sha256sum "${EXTERNAL_BLOCK_CHRONOLOGY}" >> "${PROVENANCE}/static_inputs.sha256"
 fi
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"xla_python_client_mem_fraction":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","worker_replay_iteration":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"native_second_moment_replay_all":%d,"native_first_moment_replay":%d,"native_first_moment_replay_all":%d,"native_bpref_replay":%d,"native_bpref_replay_all":%d,"native_iref_input_replay":%d,"native_iref_input_replay_all":%d,"preprocess_part_id":%d,"preprocess_stack_index":"%s","bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"xla_python_client_mem_fraction":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"worker_trace_iteration":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","worker_replay_iteration":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"native_second_moment_replay_all":%d,"native_first_moment_replay":%d,"native_first_moment_replay_all":%d,"native_bpref_replay":%d,"native_bpref_replay_all":%d,"native_iref_input_replay":%d,"native_iref_input_replay_all":%d,"preprocess_part_id":%d,"preprocess_stack_index":"%s","bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_GPU_UUID}" "${gpu_used_mib}" "${BOUNDARY_XLA_MEM_FRACTION}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${WORKER_REPLAY_ITERATION}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" "${NATIVE_FIRST_MOMENT_REPLAY}" "${NATIVE_FIRST_MOMENT_REPLAY_ALL}" "${NATIVE_BPREF_REPLAY}" "${NATIVE_BPREF_REPLAY_ALL}" "${NATIVE_IREF_INPUT_REPLAY}" "${NATIVE_IREF_INPUT_REPLAY_ALL}" "${PART_ID}" "${STACK_INDEX}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${WORKER_TRACE_ITERATION}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${WORKER_REPLAY_ITERATION}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" "${NATIVE_FIRST_MOMENT_REPLAY}" "${NATIVE_FIRST_MOMENT_REPLAY_ALL}" "${NATIVE_BPREF_REPLAY}" "${NATIVE_BPREF_REPLAY_ALL}" "${NATIVE_IREF_INPUT_REPLAY}" "${NATIVE_IREF_INPUT_REPLAY_ALL}" "${PART_ID}" "${STACK_INDEX}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
   > "${PROVENANCE}/run.json"

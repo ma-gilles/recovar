@@ -643,28 +643,28 @@ def _relion_vdam_worker_lanes_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
+    replay_iteration_raw = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_ITER_ENV,
+        "",
+    ).strip()
+    if replay_iteration_raw and (topology == "round_robin" or path):
+        try:
+            replay_iteration = int(replay_iteration_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "VDAM worker replay iteration must be a positive integer"
+            ) from exc
+        if replay_iteration <= 0:
+            raise ValueError(
+                "VDAM worker replay iteration must be a positive integer"
+            )
+        if debug_iteration is None or int(debug_iteration) != replay_iteration:
+            return None
     if topology == "round_robin":
         if path:
             raise ValueError(
                 "round-robin VDAM worker replay cannot also use a captured schedule"
             )
-        replay_iteration_raw = os.environ.get(
-            RELION_VDAM_WORKER_REPLAY_ITER_ENV,
-            "",
-        ).strip()
-        if replay_iteration_raw:
-            try:
-                replay_iteration = int(replay_iteration_raw)
-            except ValueError as exc:
-                raise ValueError(
-                    "VDAM worker replay iteration must be a positive integer"
-                ) from exc
-            if replay_iteration <= 0:
-                raise ValueError(
-                    "VDAM worker replay iteration must be a positive integer"
-                )
-            if debug_iteration is None or int(debug_iteration) != replay_iteration:
-                return None
         image_indices_array = np.asarray(image_indices)
         return (
             np.arange(image_indices_array.size, dtype=np.int32)

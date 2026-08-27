@@ -128,3 +128,25 @@ def test_round_robin_vdam_worker_topology_rejects_captured_schedule(monkeypatch)
             object(),
             np.arange(8, dtype=np.int64),
         )
+
+
+def test_captured_vdam_worker_topology_can_skip_non_target_iteration(monkeypatch):
+    _clear_worker_replay(monkeypatch)
+    monkeypatch.setenv(
+        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    )
+    monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_REPLAY_ITER_ENV, "58")
+    monkeypatch.setenv(
+        local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV,
+        "/tmp/must-not-be-read-before-target.npz",
+    )
+
+    assert (
+        local_em_engine._relion_vdam_worker_lanes_for_images(
+            object(),
+            np.arange(8, dtype=np.int64),
+            debug_iteration=57,
+        )
+        is None
+    )
