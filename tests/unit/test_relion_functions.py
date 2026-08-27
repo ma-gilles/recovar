@@ -208,6 +208,51 @@ def test_projection_padding_host_path_matches_device_path(monkeypatch):
     )
 
 
+def test_pad_volume_for_projection_host_preserves_double_precision():
+    """The host-side projection-padding fallback must not narrow-then-widen.
+
+    RELION's Projector::data/Iref are RFLOAT (double, in our
+    ACC_DOUBLE_PRECISION oracle build) end to end -- this padding step sits
+    directly in the per-iteration projection path
+    (pad_volume_for_projection, taken whenever projection_padding_factor >
+    1), so an unconditional complex64 cast here would defeat
+    RECOVAR_USE_FLOAT64_PROJECTIONS no matter how carefully every other
+    site is fixed. Regression for that narrow-then-widen bug.
+    """
+    volume_shape = (8, 8, 8)
+    rng = np.random.default_rng(7)
+    real64 = rng.standard_normal(volume_shape)
+    ft64 = np.fft.fftshift(np.fft.fftn(np.fft.fftshift(real64)))
+    ft32 = ft64.astype(np.complex64)
+
+    padded64, _ = rf._pad_volume_for_projection_host(ft64, volume_shape, 2)
+    padded32, _ = rf._pad_volume_for_projection_host(ft32, volume_shape, 2)
+    padded64_grid, _ = rf._pad_volume_for_projection_host(
+        ft64, volume_shape, 2, do_gridding_correction=True, current_size=6
+    )
+    padded32_grid, _ = rf._pad_volume_for_projection_host(
+        ft32, volume_shape, 2, do_gridding_correction=True, current_size=6
+    )
+
+    assert np.asarray(padded64).dtype == np.complex128
+    assert np.asarray(padded32).dtype == np.complex64
+    assert np.asarray(padded64_grid).dtype == np.complex128
+    assert np.asarray(padded32_grid).dtype == np.complex64
+
+    # A float64 reference computed independently of the function under test.
+    N = volume_shape[0]
+    vol_real_ref = np.fft.ifftshift(np.fft.ifftn(np.fft.ifftshift(ft64.reshape(volume_shape))))
+    pad_amount = N
+    pb, pa = pad_amount // 2, pad_amount - pad_amount // 2
+    vol_real_ref_padded = np.pad(vol_real_ref, [(pb, pa)] * 3, mode="constant")
+    ref = np.fft.fftshift(np.fft.fftn(np.fft.fftshift(vol_real_ref_padded)))
+
+    err64 = np.abs(np.asarray(padded64).reshape(ref.shape) - ref).max()
+    err32 = np.abs(np.asarray(padded32).reshape(ref.shape).astype(np.complex128) - ref).max()
+    assert err64 < 1e-9, f"double-precision host path lost precision: max abs error {err64}"
+    assert err64 < err32, "double-precision input should be far more accurate than float32 input"
+
+
 def test_post_process_current_size_includes_exact_relion_decenter_boundary_full_and_half():
     import recovar.core.fourier_transform_utils as ftu
 
