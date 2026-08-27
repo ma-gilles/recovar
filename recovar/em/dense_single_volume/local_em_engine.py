@@ -491,6 +491,7 @@ def _relion_vdam_block_start_orders_for_images(
     image_indices,
     *,
     rotation_count: int,
+    valid_rotation_counts,
     debug_iteration: int | None,
 ) -> np.ndarray | None:
     """Resolve captured native block-start order for its exact traced iteration."""
@@ -519,6 +520,21 @@ def _relion_vdam_block_start_orders_for_images(
         raise ValueError(
             "captured block replay is missing selected stack indices "
             f"{missing[:8].tolist()}"
+        )
+    valid_rotation_counts = np.asarray(valid_rotation_counts, dtype=np.int64)
+    if valid_rotation_counts.shape != original_indices.shape:
+        raise ValueError("captured block replay valid-row counts have an invalid shape")
+    native_counts_array = np.asarray(
+        [order.size for order in selected_orders],
+        dtype=np.int64,
+    )
+    if np.any(valid_rotation_counts <= 0) or np.any(
+        native_counts_array < valid_rotation_counts
+    ) or np.any(native_counts_array - valid_rotation_counts >= 8):
+        raise ValueError(
+            "captured block replay cannot prove a native-grid prefix: "
+            f"native={np.unique(native_counts_array).tolist()} "
+            f"valid={np.unique(valid_rotation_counts).tolist()}"
         )
     if any(order.size > rotation_count for order in selected_orders):
         native_counts = sorted({int(order.size) for order in selected_orders})
@@ -4625,7 +4641,7 @@ def run_local_em_exact(
                         _,
                         reconstruction_row_count,
                     ) = _build_reconstruction_pack_indices(
-                        reconstruction_rotation_mask_np,
+                        local_mask_np,
                         local_mask_np,
                         rotation_block_size,
                     )
@@ -4938,6 +4954,11 @@ def run_local_em_exact(
                     experiment_dataset,
                     unpadded_bucket.image_indices,
                     rotation_count=packed_mstep_rotations_np.shape[1],
+                    valid_rotation_counts=np.sum(
+                        reconstruction_pack_mask_np,
+                        axis=1,
+                        dtype=np.int64,
+                    ),
                     debug_iteration=debug_iteration,
                 )
                 Ft_y, Ft_ctf = _accumulate_relion_vdam_physical_particle_grid(

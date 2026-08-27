@@ -66,6 +66,7 @@ def test_block_start_replay_joins_native_particle_ids_to_stack_indices(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=3,
+        valid_rotation_counts=np.asarray([3, 3]),
         debug_iteration=1,
     )
     np.testing.assert_array_equal(
@@ -89,6 +90,7 @@ def test_block_start_replay_is_confined_to_the_traced_iteration(tmp_path, monkey
             _Dataset(),
             np.asarray([0, 1], dtype=np.int64),
             rotation_count=3,
+            valid_rotation_counts=np.asarray([3, 3]),
             debug_iteration=2,
         )
         is None
@@ -116,6 +118,7 @@ def test_block_start_replay_rejects_a_different_rotation_bucket(tmp_path, monkey
             _Dataset(),
             np.asarray([0], dtype=np.int64),
             rotation_count=2,
+            valid_rotation_counts=np.asarray([2]),
             debug_iteration=1,
         )
 
@@ -139,6 +142,7 @@ def test_block_start_replay_rejects_nonbijective_orientations(tmp_path, monkeypa
             _Dataset(),
             np.asarray([0], dtype=np.int64),
             rotation_count=3,
+            valid_rotation_counts=np.asarray([3]),
             debug_iteration=1,
         )
 
@@ -181,9 +185,24 @@ def test_block_start_replay_appends_static_bucket_padding(tmp_path, monkeypatch)
         _Dataset(),
         np.asarray([0], dtype=np.int64),
         rotation_count=5,
+        valid_rotation_counts=np.asarray([3]),
         debug_iteration=1,
     )
     np.testing.assert_array_equal(
         orders,
         np.asarray([[1, 2, 0, 3, 4]], dtype=np.int32),
     )
+
+
+def test_block_start_replay_rejects_a_nonprefix_local_grid(tmp_path, monkeypatch):
+    schedule, chronology = _write_inputs(tmp_path)
+    _configure(monkeypatch, schedule, chronology)
+
+    with pytest.raises(ValueError, match="cannot prove a native-grid prefix"):
+        local_em_engine._relion_vdam_block_start_orders_for_images(
+            _Dataset(),
+            np.asarray([0], dtype=np.int64),
+            rotation_count=16,
+            valid_rotation_counts=np.asarray([12]),
+            debug_iteration=1,
+        )
