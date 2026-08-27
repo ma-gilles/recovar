@@ -55,6 +55,7 @@ SHA-256 values.
 | Native `Igrad2` oracle at it60 | exact-H100 task `13048344_1` completed through it60 in 403 s | post-second moment becomes bitwise exact and reference error falls **262.0x**, from `1.038e-4` control to `3.963e-7`; diagnostic-only |
 | Trajectory-wide native `Igrad2` oracle | exact-H100 task `13049505_1` completed 60 live-map iterations in 409 s | sampled map gate **passes** at minimum FSC-AUC `0.999999999900`; strict particle/schedule state still first departs @34, so no promotion |
 | Trajectory-wide native `Igrad1 + Igrad2` oracle | exact-H100 task `13051779_1` / internal job `13051846` completed 60 live-map iterations in 427 s | all carried/post moment buffers and noise power are bitwise exact; reference error falls to `1.613e-8` and sampled maps pass at `0.999999999972`, but one particle/schedule choice departs @44; raw BPref is now the first non-exact stage |
+| Trajectory-wide native raw-BPref oracle | exact-H100 task `13052694_1` / internal job `13052695` completed 60 live-map iterations in 430 s | raw data/weights and every downstream M-step operand become bitwise exact without moment/reference replay; an inherited `1.635e-8` reference residue remains and one paired translation departs @34; fresh paired RELION also leaves the old four-repeat state envelope, so no promotion |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -97,7 +98,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 13:41 ET**
+Last scientific update: **2026-08-27 14:05 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -125,7 +126,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 raw BPref accumulation | trajectory-wide native `Igrad1 + Igrad2` replay makes every carried/post moment and noise-power buffer bitwise exact; the it60 reconstructed reference closes to `1.613e-8` relative L2 and sampled maps pass at minimum FSC-AUC `0.999999999972` | exact-H100 `13051779_1` / `13051846`: the first particle and operative schedule departure moves from @34 to @44; raw data/weight accumulators remain `2.72e-6--8.30e-6` relative L2 and are the first non-exact M-step stage | none; replay the native raw BPref trajectory, then repair the accumulator execution/precision path rather than the moment or reconstruction code |
+| 1 | GF47 inherited reference map | raw-BPref-only replay makes raw data/weights, reweighting, both first moments, second moment, noise power, and post-momenta data bitwise exact at it60; sampled maps pass at minimum FSC-AUC `0.999999999972` | exact-H100 `13052694_1` / `13052695`: incoming/output reference remains `1.635e-8 / 1.613e-8` relative L2 and one paired translation departs @34; current paired RELION itself is outside the old four-repeat state envelope by it58 with the same unmatched identities/counts | none; capture the raw-replay reconstruction boundary at iteration 1, then split initialization/frame conversion from recurrent `reconstructGrad` arithmetic |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -144,6 +145,36 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+Raw BPref is sufficient to close the entire downstream M-step state, but a
+smaller inherited reference-map residue remains. Local science commit
+`9459a205b` adds fail-closed complex-data and real-weight replay for both
+pseudo-halfsets. Exact-H100 task `13052694_1` (internal job `13052695`)
+completed 60 live-map iterations in 430 seconds on `GPU-6222...`; neither
+first/second moments nor references were replayed.
+
+At iteration 60, raw BPref data and weights, post-reweight data, incoming and
+post-update first moments, incoming and post-update second moment,
+`mom1_noise_power`, and post-`applyMomenta` data are all bitwise exact. The
+only non-exact M-step stage is the reference entering reconstruction at
+`1.635e-8` relative L2; reconstruction preserves rather than amplifies it at
+`1.613e-8`. Sampled checkpoints through iteration 60 pass at minimum FSC-AUC
+**`0.999999999972`** and class-assignment accuracy `1.0`.
+
+One paired 1.5-Angstrom translation still departs at iteration 34, with
+`optimal_offset_change` changing at the same checkpoint. A sampled comparison
+against the original four native repeats accepts the candidate particle state
+through iteration 44 and finds two unmatched active particles at iterations
+58 and 60. Crucially, the freshly paired RELION trajectory itself has the
+same two unmatched identities and identical per-repeat mismatch counts at
+both checkpoints; its schedule also enters a mode absent from the old panel.
+The old four-repeat envelope therefore does not span current native
+nondeterminism and cannot turn this diagnostic into a score change. The next
+bounded capture is iteration 1, which will split the `1.6e-8` residue between
+initialization/frame conversion and recurrent `reconstructGrad` arithmetic.
+M-step, sampled-map, particle, sampling, and sampled-envelope SHA-256 values
+are `9b7e6d7a2fb2...`, `33a3a8073e57...`, `43040f4c040b...`,
+`10e6c662bafc...`, and `aafc6544cc8f...`. The score remains **2/20**.
 
 The complete gradient-moment trajectory is now closed, leaving raw BPref as
 the first non-exact causal boundary. Local science commit `e7f30119a` adds a
