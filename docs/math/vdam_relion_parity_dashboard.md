@@ -26,9 +26,10 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
 | Latest qualification | GF47 divergent repeat `13018955`; GF38 full audit `13018631`; GF53 final audit `12999424_53`: all terminal |
+| Live focused discriminator | GF47 production vs fused/block vs sequential+fused/block, paired repeats on one H100: job `13020545` running from local source `bdef96dcc` |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
-Last scientific update: **2026-08-26 21:50 ET**
+Last scientific update: **2026-08-26 22:22 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -56,7 +57,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; iteration-1 map rel-L2 is `2.47e-7`, then Pmax splits @2 and a pose splits @34 | valid native-pose and divergent-pose modes captured on the same H100 | none until the iteration-1 reduction is repeatable and a 0--200 audit passes |
+| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; iteration-1 map rel-L2 is `2.47e-7`, then Pmax splits @2 and a pose splits @34 | paired production/fused-block/sequential-fused-block discriminator `13020545` is running on one H100 | none until the iteration-1 reduction is repeatable and a 0--200 audit passes |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
