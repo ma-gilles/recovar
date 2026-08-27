@@ -8686,7 +8686,6 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         (float64_accumulator_replay != 0 && float64_accumulator_replay != 1) ||
         (reverse_rotation_replay != 0 && reverse_rotation_replay != 1) ||
         rotation_replay_stride < 0 ||
-        (captured_rotation_replay != 0 && serial_rotation_replay == 0) ||
         (captured_rotation_replay != 0 && reverse_rotation_replay != 0) ||
         (captured_rotation_replay != 0 && rotation_replay_stride != 0) ||
         (rotation_replay_stride > 0 && serial_rotation_replay == 0) ||

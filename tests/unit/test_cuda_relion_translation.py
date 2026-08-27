@@ -112,6 +112,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "captured_rotation_replay" in projector_launcher
     assert "captured_rotation_replay && !serial_rotation_replay" in projector_launcher
     assert "rotation_replay_order + particle * rotation_count" in projector_launcher
+    assert "captured_rotation_replay != 0 && serial_rotation_replay == 0" not in source
     assert "seen[rotation] = 1" in projector_launcher
     assert "logical_lane + lane_wave * stride" in projector_launcher
     assert "rotation_offset * translation_count" in projector_launcher
