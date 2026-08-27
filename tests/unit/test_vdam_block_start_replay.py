@@ -239,6 +239,47 @@ def test_captured_native_grid_trace_shape_keeps_captured_rows(
     )
 
 
+def test_materialized_native_grid_replay_gathers_rows_before_identity_launch(
+    tmp_path, monkeypatch
+):
+    schedule, chronology = _write_inputs(tmp_path)
+    _configure(
+        monkeypatch,
+        schedule,
+        chronology,
+        topology="materialized_native_grid_trace_shape",
+    )
+
+    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+        _Dataset(),
+        np.asarray([1, 0], dtype=np.int64),
+        rotation_count=3,
+        valid_rotation_counts=np.asarray([3, 3]),
+        debug_iteration=1,
+    )
+    values = np.arange(2 * 3 * 2, dtype=np.float32).reshape(2, 3, 2)
+    expected = np.take_along_axis(
+        values,
+        np.broadcast_to(orders[..., None], values.shape),
+        axis=1,
+    )
+    actual = local_em_engine._materialize_relion_vdam_rotation_rows(
+        values,
+        orders,
+    )
+    np.testing.assert_array_equal(np.asarray(actual), expected)
+    assert local_em_engine._relion_vdam_materialized_native_grid_replay(
+        debug_iteration=1
+    )
+    assert not local_em_engine._relion_vdam_materialized_native_grid_replay(
+        debug_iteration=2
+    )
+    assert local_em_engine._relion_vdam_native_trace_shape_replay(
+        debug_iteration=1
+    )
+    assert not local_em_engine._relion_vdam_identity_native_grid_replay()
+
+
 def test_native_trace_first_atomic_precedes_interpolation_registers():
     source = (
         Path(__file__).resolve().parents[2]

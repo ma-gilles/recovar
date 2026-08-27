@@ -612,6 +612,7 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         "captured_native_count",
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
     }:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -650,6 +651,7 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_native_count",
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
     }:
         if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
             return None
@@ -689,6 +691,7 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_native_count",
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
     }:
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
@@ -696,7 +699,8 @@ def _relion_vdam_worker_lanes_for_images(
             "'single_rotation_sm132', 'captured_block_start', "
             "'captured_block_grid', 'captured_native_grid', or "
             "'captured_native_count', 'captured_native_trace_shape', or "
-            "'captured_native_grid_trace_shape'"
+            "'captured_native_grid_trace_shape', or "
+            "'materialized_native_grid_trace_shape'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -720,6 +724,7 @@ def _relion_vdam_native_grid_counts_for_images(
         "captured_native_count",
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
     }:
         return None
     orders = _relion_vdam_block_start_orders_for_images(
@@ -764,6 +769,20 @@ def _relion_vdam_identity_native_grid_replay() -> bool:
     return topology in {"captured_native_count", "captured_native_trace_shape"}
 
 
+def _relion_vdam_materialized_native_grid_replay(
+    *, debug_iteration: int | None
+) -> bool:
+    """Materialize captured logical rows before the native identity-grid launch."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return topology == "materialized_native_grid_trace_shape" and (
+        _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration)
+    )
+
+
 def _relion_vdam_native_trace_shape_replay(
     *, debug_iteration: int | None
 ) -> bool:
@@ -776,8 +795,28 @@ def _relion_vdam_native_trace_shape_replay(
     return topology in {
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
     } and (
         _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration)
+    )
+
+
+def _materialize_relion_vdam_rotation_rows(value, replay_order):
+    """Gather logical rotation rows into their captured physical block order."""
+
+    value = jnp.asarray(value)
+    replay_order = jnp.asarray(replay_order, dtype=jnp.int32)
+    if value.ndim < 2 or value.shape[:2] != replay_order.shape:
+        raise ValueError(
+            "materialized VDAM operand must match the particle/rotation order axes"
+        )
+    index = replay_order.reshape(
+        replay_order.shape + (1,) * (value.ndim - replay_order.ndim)
+    )
+    return jnp.take_along_axis(
+        value,
+        jnp.broadcast_to(index, value.shape),
+        axis=1,
     )
 
 
@@ -1233,6 +1272,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     rotation_replay_order=None,
     rotation_replay_counts=None,
     native_trace_shape_replay=False,
+    materialized_rotation_replay=False,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -1273,6 +1313,31 @@ def _accumulate_relion_vdam_physical_particle_grid(
         posterior_over_weight_norm,
         0.0,
     )
+    if materialized_rotation_replay:
+        if rotation_replay_order is None:
+            raise ValueError("materialized VDAM replay requires a captured row order")
+        replay_order = jnp.asarray(rotation_replay_order, dtype=jnp.int32)
+        if replay_order.shape != (particle_count, rotation_count):
+            raise ValueError("materialized VDAM row order must match particle/rotation axes")
+        posterior_over_weight_norm = _materialize_relion_vdam_rotation_rows(
+            posterior_over_weight_norm,
+            replay_order,
+        )
+        reference = _materialize_relion_vdam_rotation_rows(
+            reference,
+            replay_order,
+        )
+        rotations = _materialize_relion_vdam_rotation_rows(
+            rotations,
+            replay_order,
+        )
+        if scoring_rotations is not None:
+            scoring_rotations = jnp.asarray(scoring_rotations, dtype=jnp.float32)
+            scoring_rotations = _materialize_relion_vdam_rotation_rows(
+                scoring_rotations,
+                replay_order,
+            )
+        rotation_replay_order = None
 
     from recovar import cuda_backproject
 
@@ -5420,6 +5485,11 @@ def run_local_em_exact(
                     rotation_replay_counts=native_grid_counts,
                     native_trace_shape_replay=(
                         _relion_vdam_native_trace_shape_replay(
+                            debug_iteration=debug_iteration
+                        )
+                    ),
+                    materialized_rotation_replay=(
+                        _relion_vdam_materialized_native_grid_replay(
                             debug_iteration=debug_iteration
                         )
                     ),

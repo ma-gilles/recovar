@@ -31,6 +31,7 @@ def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     assert "captured_native_count" in source
     assert "captured_native_trace_shape" in source
     assert "captured_native_grid_trace_shape" in source
+    assert "materialized_native_grid_trace_shape" in source
     assert "VDAM_BLOCK_CHRONOLOGY_NPZ" in source
     assert "EXPECTED_BLOCK_CHRONOLOGY_SHA256" in source
     assert "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ" in source
