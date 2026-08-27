@@ -25,8 +25,8 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 frozen serial-orientation job `13025432` is running beyond iteration 59 on the original native-envelope GPU and has crossed the former iteration-58 butterfly |
-| Latest focused discriminator | Serializing the 576 within-particle orientation blocks improves repeat spread **4.7x raw / 4.9x weight / 86x noise moment / 11.9x reconstructed map**; orientation-block atomic interleaving is the first positively identified repeatability source |
+| Latest qualification | GF47 frozen serial-orientation job `13025432` is running beyond iteration 96; partial iteration-58 particle audit is terminal and fails one particle |
+| Latest focused discriminator | Serial orientation ordering fixes accumulator repeatability and keeps maps inside the native envelope, but deterministically retains the old divergent pose for particle 2411; repeatability alone is insufficient |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
 #### Frozen case checkboxes
@@ -41,7 +41,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 00:37 ET**
+Last scientific update: **2026-08-27 00:45 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -69,7 +69,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; serial orientation-block scatter is the first intervention to make every measured accumulator/update layer substantially more repeatable | frozen candidate `13025432` has crossed the old iteration-58 butterfly; maps at 57/58/59 use only 1.15%/1.96%/2.60% of the native repeat diameter | none until the 0--200 quality/state/schedule audit passes |
+| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; serial orientation-block scatter repairs repeat spread but does not change the deterministic trajectory branch | iteration-58 partial audit: 199/200 active particles match the four-run native state envelope; `2411@particles.128.mrcs` retains the old divergent orientation with the exact native translation | no promotion; finish the run, then return to the systematic post-second-moment/trajectory-input boundary |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -131,6 +131,18 @@ relative-L2 at iterations 57, 58, and 59 is respectively `0.000296`,
 and `0.0273`. Those are 1.15%, 1.96%, and 2.60% of the native envelope.
 This live partial check is diagnostic-only; the automatic sealed audit still
 controls promotion.
+
+The matching partial particle audit is now decisive and prevents promotion.
+At iteration 58, 199/200 active particles match at least one of the four
+native states, but `2411@particles.128.mrcs` matches none. The candidate
+orientation is `(-140.184378, 99.449195, 161.165527)` with Pmax `0.214351`;
+all four native repeats select `(-143.051050, 101.809809, 161.281477)` with
+Pmax spanning `0.127128--0.257153`. Translation is exactly the same
+`(0.536160, -3.713840)` on both sides. This reproduces the older divergent
+mode exactly: deterministic serial orientation-block ordering repairs
+repeatability but does not repair the stable trajectory branch. Job
+`13025432` continues to iteration 200 to seal later map and schedule evidence,
+but it cannot change the frozen score.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
