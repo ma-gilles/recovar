@@ -1162,14 +1162,23 @@ def bucket_local_hypothesis_layout(
     unify_bucket_sizes: bool | None = None,
     large_bucket_quantum: int | None = None,
 ) -> list[LocalBucketSpec]:
-    """Bucket images by exact local-rotation count for static-shape execution."""
+    """Bucket images by exact local-rotation count for static-shape execution.
+
+    Preserves ``layout``'s own array dtypes throughout rather than forcing
+    float32: ``layout`` was built by ``build_local_hypothesis_layout``/
+    ``build_local_adaptive_pass2_hypothesis_layout``, which already thread a
+    caller-controlled ``dtype`` (float64 under double-precision scoring).
+    Forcing float32 here -- on the hot bucket-padding path -- would silently
+    discard that upstream precision before every JIT scoring call.
+    """
 
     image_batch_size = int(max(1, image_batch_size))
     max_hypotheses_per_microbatch = int(max(1, max_hypotheses_per_microbatch))
+    rotations_dtype = np.asarray(layout.rotations_flat).dtype
     mstep_rotations_flat = (
-        np.asarray(layout.rotations_flat, dtype=np.float32)
+        np.asarray(layout.rotations_flat, dtype=rotations_dtype)
         if layout.mstep_rotations_flat is None
-        else np.asarray(layout.mstep_rotations_flat, dtype=np.float32)
+        else np.asarray(layout.mstep_rotations_flat)
     )
     if mstep_rotations_flat.shape != np.asarray(layout.rotations_flat).shape:
         raise ValueError(
@@ -1213,12 +1222,17 @@ def bucket_local_hypothesis_layout(
             actual_counts = layout.rotation_counts[image_indices].astype(np.int32, copy=False)
             batch_size = int(image_indices.shape[0])
             padded_rotations = np.broadcast_to(
-                np.eye(3, dtype=np.float32),
+                np.eye(3, dtype=rotations_dtype),
                 (batch_size, int(bucket_size), 3, 3),
             ).copy()
-            padded_mstep_rotations = padded_rotations.copy()
+            padded_mstep_rotations = np.broadcast_to(
+                np.eye(3, dtype=mstep_rotations_flat.dtype),
+                (batch_size, int(bucket_size), 3, 3),
+            ).copy()
             padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
-            padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.float32)
+            padded_log_prior = np.full(
+                (batch_size, int(bucket_size)), -1e30, dtype=np.asarray(layout.rotation_log_priors_flat).dtype
+            )
             padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
             padded_posterior_ids = (
                 None
@@ -1258,7 +1272,7 @@ def bucket_local_hypothesis_layout(
                     local_rotations=padded_rotations,
                     local_rotation_log_prior=padded_log_prior,
                     local_rotation_mask=padded_mask,
-                    translation_log_prior=np.asarray(layout.translation_log_priors[image_indices], dtype=np.float32),
+                    translation_log_prior=np.asarray(layout.translation_log_priors[image_indices]),
                     local_mstep_rotations=padded_mstep_rotations,
                     local_rotation_posterior_ids=padded_posterior_ids,
                     local_sample_mask=padded_sample_mask,

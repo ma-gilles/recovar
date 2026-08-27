@@ -881,7 +881,17 @@ def _selected_by_class(per_class_values, class_assignments: np.ndarray):
 
 
 def _decode_dense_best_pose_details(hard_assignment, rotations: np.ndarray, translations: np.ndarray):
-    """Decode dense flat pose IDs into the pose fields expected by RELION state."""
+    """Decode dense flat pose IDs into the pose fields expected by RELION state.
+
+    Preserves ``rotations``/``translations``' own dtype rather than forcing
+    float32: this is a pure select/index step (no new arithmetic), and both
+    inputs already carry whatever precision the caller's rotation-grid/
+    translation-grid construction chose (float64 under
+    ``_dense_global_scoring_dtype()``/``precision_policy``). Forcing float32
+    here would silently discard that upstream precision -- RELION's own
+    ``exp_metadata``/``EMDL_ORIENT_ORIGIN_X/Y_ANGSTROM`` state is never
+    narrowed (see the ``iteration_loop.py`` pose-state comment).
+    """
 
     hard_np = np.asarray(hard_assignment, dtype=np.int64)
     n_trans = int(np.asarray(translations).shape[0])
@@ -889,11 +899,11 @@ def _decode_dense_best_pose_details(hard_assignment, rotations: np.ndarray, tran
         raise ValueError("translations must contain at least one pose")
     rot_idx = hard_np // n_trans
     trans_idx = hard_np % n_trans
-    rotations_np = np.asarray(rotations, dtype=np.float32)
-    translations_np = np.asarray(translations, dtype=np.float32)
+    rotations_np = np.asarray(rotations)
+    translations_np = np.asarray(translations)
     return (
-        jnp.asarray(rotations_np[rot_idx], dtype=jnp.float32),
-        jnp.asarray(translations_np[trans_idx], dtype=jnp.float32),
+        jnp.asarray(rotations_np[rot_idx]),
+        jnp.asarray(translations_np[trans_idx]),
         jnp.asarray(rot_idx, dtype=jnp.int32),
     )
 

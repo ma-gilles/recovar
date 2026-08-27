@@ -962,6 +962,7 @@ def run_em(
         n_rot=n_rot,
         n_trans=n_trans,
         n_rot_padded=n_rot_padded,
+        dtype=precision_policy.score_real_dtype,
     )
     if score_constraints.rotation_prior_minmax is not None:
         logger.info(
