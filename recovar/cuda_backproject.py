@@ -1735,7 +1735,7 @@ def relion_vdam_mstep_fused_x_half(
     return fused_data, fused_weight, compact_denominator
 
 
-@functools.partial(jax.jit, static_argnums=(10, 11, 12, 13, 14))
+@functools.partial(jax.jit, static_argnums=(10, 11, 12, 13, 14, 17))
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
     weight_volume: jax.Array,
@@ -1754,6 +1754,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     projection_padding_factor: int,
     reconstruction_group_ids: jax.Array | None = None,
     worker_lane_ids: jax.Array | None = None,
+    serial_rotation_replay: bool = False,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Project, form residuals, and scatter VDAM rows in one native launch."""
 
@@ -1895,6 +1896,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         projection_padding_factor=np.int64(projection_padding_factor),
         reconstruction_group_count=np.int64(reconstruction_group_count),
         parallel_worker_replay=np.int64(parallel_worker_replay),
+        serial_rotation_replay=np.int64(serial_rotation_replay),
     )
     fused_data = jax.lax.complex(fused_real, fused_imag)
     full_h, full_w = map(int, image_shape)

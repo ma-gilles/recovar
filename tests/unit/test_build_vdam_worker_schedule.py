@@ -165,6 +165,35 @@ def test_v2_schedule_can_serialize_all_particles_on_one_worker(tmp_path, monkeyp
     np.testing.assert_array_equal(lanes, np.zeros(3, dtype=np.int32))
 
 
+def test_v2_schedule_can_also_serialize_rotations(tmp_path, monkeypatch):
+    schedule = tmp_path / "schedule.npz"
+    np.savez_compressed(
+        schedule,
+        schema_version=np.int64(2),
+        dataset_particles=np.int64(100),
+        n_threads=np.int64(8),
+        stack_index_by_sorted_position=np.asarray([71], dtype=np.int64),
+        owner_by_sorted_position=np.asarray([6], dtype=np.int64),
+    )
+
+    class Dataset:
+        @staticmethod
+        def original_image_indices_from_local(image_indices):
+            return np.asarray([71], dtype=np.int64)
+
+    monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV, str(schedule))
+    monkeypatch.setenv(
+        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "single_rotation",
+    )
+    local_em_engine._load_relion_vdam_worker_schedule.cache_clear()
+    lanes = local_em_engine._relion_vdam_worker_lanes_for_images(
+        Dataset(), np.asarray([0], dtype=np.int64)
+    )
+    np.testing.assert_array_equal(lanes, np.zeros(1, dtype=np.int32))
+    assert local_em_engine._relion_vdam_serial_rotation_replay()
+
+
 def test_worker_trace_rejects_duplicate_sorted_position(tmp_path):
     trace = tmp_path / "workers.tsv"
     _write_trace(trace)

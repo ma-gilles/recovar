@@ -4755,7 +4755,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int projector_max_r,
     int projection_padding_factor,
     int reconstruction_group_count,
-    bool parallel_worker_replay)
+    bool parallel_worker_replay,
+    bool serial_rotation_replay)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -5004,37 +5005,48 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             const int64_t accumulator_offset =
                 static_cast<int64_t>(reconstruction_groups_host[particle]) *
                 accumulator_stride;
-            relion_vdam_native_sgd_f32_kernel<<<
-                rotation_count, 128, 0, particle_streams[lane]>>>(
-                projector,
-                image_real + particle * image_stride,
-                image_imag + particle * image_stride,
-                translation_x,
-                translation_y,
-                nullptr,
-                const_cast<float*>(
-                    posterior_over_weight_norm + particle * posterior_stride),
-                const_cast<float*>(minvsigma2 + particle * image_stride),
-                const_cast<float*>(ctf + particle * image_stride),
-                static_cast<unsigned long>(translation_count),
-                significant_weight,
-                weight_norm,
-                const_cast<float*>(projector_eulers + particle * euler_stride),
-                data_real_volume + accumulator_offset,
-                data_imag_volume + accumulator_offset,
-                weight_volume + accumulator_offset,
-                static_cast<int>(sqrtf(max_r2) + 0.5f),
-                static_cast<int>(max_r2),
-                static_cast<float>(upsampling),
-                static_cast<unsigned>(image_w),
-                static_cast<unsigned>(image_h),
-                1,
-                static_cast<unsigned>(pixel_count),
-                static_cast<unsigned>(model_x),
-                static_cast<unsigned>(model_y),
-                model_init_y,
-                model_init_z);
-            return cudaGetLastError();
+            const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
+            for (int64_t launch = 0; launch < launch_count; ++launch)
+            {
+                const int64_t rotation_offset = serial_rotation_replay ? launch : 0;
+                const int64_t grid_rotations = serial_rotation_replay ? 1 : rotation_count;
+                relion_vdam_native_sgd_f32_kernel<<<
+                    grid_rotations, 128, 0, particle_streams[lane]>>>(
+                    projector,
+                    image_real + particle * image_stride,
+                    image_imag + particle * image_stride,
+                    translation_x,
+                    translation_y,
+                    nullptr,
+                    const_cast<float*>(
+                        posterior_over_weight_norm + particle * posterior_stride +
+                        rotation_offset * translation_count),
+                    const_cast<float*>(minvsigma2 + particle * image_stride),
+                    const_cast<float*>(ctf + particle * image_stride),
+                    static_cast<unsigned long>(translation_count),
+                    significant_weight,
+                    weight_norm,
+                    const_cast<float*>(
+                        projector_eulers + particle * euler_stride +
+                        rotation_offset * 9),
+                    data_real_volume + accumulator_offset,
+                    data_imag_volume + accumulator_offset,
+                    weight_volume + accumulator_offset,
+                    static_cast<int>(sqrtf(max_r2) + 0.5f),
+                    static_cast<int>(max_r2),
+                    static_cast<float>(upsampling),
+                    static_cast<unsigned>(image_w),
+                    static_cast<unsigned>(image_h),
+                    1,
+                    static_cast<unsigned>(pixel_count),
+                    static_cast<unsigned>(model_x),
+                    static_cast<unsigned>(model_y),
+                    model_init_y,
+                    model_init_z);
+                const cudaError_t launch_error = cudaGetLastError();
+                if (launch_error != cudaSuccess) return launch_error;
+            }
+            return cudaSuccess;
         };
         if (parallel_worker_replay)
         {
@@ -8161,6 +8173,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t projection_padding_factor,
     int64_t reconstruction_group_count,
     int64_t parallel_worker_replay,
+    int64_t serial_rotation_replay,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -8203,7 +8216,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         upsampling <= 0 || max_r2_x4 < 0 || physical_image_size <= 0 ||
         projector_max_r <= 0 || projection_padding_factor <= 0 ||
         reconstruction_group_count <= 0 ||
-        (parallel_worker_replay != 0 && parallel_worker_replay != 1))
+        (parallel_worker_replay != 0 && parallel_worker_replay != 1) ||
+        (serial_rotation_replay != 0 && serial_rotation_replay != 1))
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid geometry");
 
@@ -8286,7 +8300,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<int>(projector_max_r),
         static_cast<int>(projection_padding_factor),
         static_cast<int>(reconstruction_group_count),
-        parallel_worker_replay != 0);
+        parallel_worker_replay != 0,
+        serial_rotation_replay != 0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8309,6 +8324,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("projection_padding_factor")
         .Attr<int64_t>("reconstruction_group_count")
         .Attr<int64_t>("parallel_worker_replay")
+        .Attr<int64_t>("serial_rotation_replay")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

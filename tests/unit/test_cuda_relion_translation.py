@@ -100,7 +100,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
     )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
     assert "relion_vdam_native_sgd_f32_kernel<<<" in projector_launcher
-    assert "rotation_count, 128, 0, particle_streams[lane]" in projector_launcher
+    assert "grid_rotations, 128, 0, particle_streams[lane]" in projector_launcher
+    assert "serial_rotation_replay ? rotation_count : 1" in projector_launcher
+    assert "rotation_offset * translation_count" in projector_launcher
     assert "relion_vdam_denominator_after_sgd_f32_kernel<<<" in projector_launcher
     assert "constexpr int kRelionVdamWorkerStreams = 8" in projector_launcher
     assert "const int lane = worker_lanes_host[particle]" in projector_launcher
@@ -126,6 +128,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "jnp.arange(n_particles, dtype=jnp.int32) % 8" in projector_wrapper
     assert "parallel_worker_replay = worker_lane_ids is not None" in projector_wrapper
     assert "parallel_worker_replay=np.int64(parallel_worker_replay)" in projector_wrapper
+    assert "serial_rotation_replay=np.int64(serial_rotation_replay)" in projector_wrapper
     assert "worker_lane_ids" in projector_wrapper
 
 

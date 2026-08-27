@@ -437,13 +437,25 @@ def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology == "single":
+    if topology in {"single", "single_rotation"}:
         owners = np.zeros_like(owners)
     elif topology != "captured":
         raise ValueError(
-            "VDAM worker replay topology must be 'captured' or 'single'"
+            "VDAM worker replay topology must be 'captured', 'single', or "
+            "'single_rotation'"
         )
     return owners.astype(np.int32, copy=False)
+
+
+def _relion_vdam_serial_rotation_replay() -> bool:
+    """Return whether the opt-in worker replay also serializes rotations."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return bool(path) and topology == "single_rotation"
 
 
 def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_targets: set[int] | None) -> bool:
@@ -615,6 +627,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     max_r,
     reconstruction_group_ids=None,
     worker_lane_ids=None,
+    serial_rotation_replay=False,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -698,6 +711,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 int(projection_padding_factor),
                 reconstruction_group_ids=reconstruction_group_ids,
                 worker_lane_ids=worker_lane_ids,
+                serial_rotation_replay=serial_rotation_replay,
             )
         )
     return Ft_y, Ft_ctf
@@ -4706,6 +4720,7 @@ def run_local_em_exact(
                         experiment_dataset,
                         unpadded_bucket.image_indices,
                     ),
+                    serial_rotation_replay=_relion_vdam_serial_rotation_replay(),
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
