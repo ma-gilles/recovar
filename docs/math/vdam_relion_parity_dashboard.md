@@ -52,6 +52,7 @@ SHA-256 values.
 | GF47 H100 SM-strided float32 | panel `13028122` terminal | post-second-moment ratio improves to **1.56--1.68x** from **2.75--3.10x**; reference is **0.961--0.963x** its native floor |
 | GF47 SM132 full qualification | science `13028371` completed 201 checkpoints; audit `13029112` is terminal fail-closed | first failures: schedule @58, particle @61, map @80; runtime **9.23x** native; score unchanged |
 | GF47 iteration-58 score capture | exact-GPU job `13029200` completed from the same immutable head/binary | native-4 mode beats the native-1 runner-up by `0.002014`, entirely in raw data score; posterior/tie-break semantics are rejected |
+| GF47 native H100 block chronology | build `13031123`, exact-GPU science/audit `13031189` terminal pass | 51,888 blocks / 200 launches / all 132 SMs sealed; measured start order predicts first atomics at `0.999914` rank correlation while SM132 is only `0.046226` |
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
@@ -69,7 +70,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 03:17 ET**
+Last scientific update: **2026-08-27 04:31 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -97,7 +98,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | a 132-SM-strided float32 order cuts the post-second-moment floor ratio about 44% while preserving reference parity | sealed task `13028371` moves particle failure 58 -> 61 and map failure 79 -> 80, but moves schedule failure 59 -> 58; score capture `13029200` localizes the transition to incoming-map data score | no score change; capture/replay real H100 block chronology, then rerun the fixed 0--200 gate |
+| 1 | GF47 repeatability starts @1 | SM132 improves but does not reproduce hardware order; passive exact-GPU chronology is now sealed and inert | job `13031189`: 27,221 accumulating + 24,667 atomic-free blocks, all 132 SMs; native start-vs-first-atomic rank correlation `0.999914`, SM132-vs-native only `0.046226` | no score change; implement captured start-order replay, pass a bounded repeat panel, then rerun the fixed 0--200 gate |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -268,6 +269,49 @@ epsilon tie-break is therefore rejected. Fused, local-score, and coarse-capture
 SHA-256 values are `272f6f04fe40...`, `284c819b43a0...`, and
 `ef98e6702817...`. The next bounded discriminator is passive native H100
 orientation-block chronology followed by replay, not a posterior-rule change.
+
+That passive H100 discriminator is now sealed. Isolated RELION source head
+`b115ff523` records, for every iteration-1 SGD orientation block, launch
+sequence, internal particle, worker/class, orientation row, SM ID, block start,
+first real atomic, block end, and an explicit atomic-free flag. The buffer is
+allocated on the main thread before OpenMP launch and written only after every
+device bundle synchronizes. RECOVAR validator head `84159acfd` rejects wrong
+magic/version/size, truncation or trailing bytes, missing launches, invalid
+workers/classes/SMs, incomplete orientation bijections, impossible timestamp
+order, unknown flags, and zero first-atomic timestamps unless the post-barrier
+atomic-free flag proves that the block accumulated nothing. Focused validator
+and orchestration guards pass **11/11**; no generic RECOVAR suite was run.
+
+The first trace build `13030554` compiled and sealed the schema. Exact-GPU job
+`13030681` then completed 201 checkpoints and proved the instrumentation inert
+at iteration 1 (FSC-AUC `0.999999999948`, exact poses/translations), but its
+validator correctly rejected 24,667 legitimate blocks without a pass-0
+atomic. Corrected job `13031011` was stopped after the live validator proved
+those blocks can remain atomic-free across all passes. These are fail-closed
+instrumentation outcomes, not parity failures. The final schema marks that
+state explicitly. Node-local build job `13031123` reduced CMake generation
+from roughly seven minutes on GPFS to **0.3 s** and completed the full build in
+94 s. Qualified executable SHA-256 is `e9b6fe53b66f...`.
+
+Final exact-physical-H100 job `13031189` completed all 201 native checkpoints
+and every automatic audit in 328 s (`wall_s=317` for RELION itself, **1.06x**
+the 299.1-second native median). The capture seals **51,888** records from
+exactly 200 particle launches, all eight workers, and SM IDs 0--131. Of these,
+27,221 blocks perform real atomics and 24,667 are explicitly atomic-free.
+Iteration-1 map FSC-AUC is `0.999999999947`; all 3,000 poses and translations
+match exactly; maximum Pmax difference is `1.7e-5`. Raw trace, sealed NPZ,
+map audit, particle audit, and worker schedule SHA-256 values are
+`d155936e868c...`, `1b99fb3c9db8...`, `15054ef9ba2b...`,
+`4e10f32a0e4d...`, and `aeab283d529b...`.
+
+The chronology rejects the SM132 heuristic decisively. Within-particle native
+first-atomic order has weighted rank correlation only `0.046226` with SM132
+and only `0.86698%` exact positions. Measured block-start order, however,
+predicts global first-atomic order at rank correlation `0.9999138`. The next
+bounded implementation therefore joins captured internal particle IDs through
+the sealed worker trace and replays measured block-start order. It does not
+widen a tolerance, change posterior selection, or promote the score before a
+fresh repeat panel and unchanged 0--200 audit pass.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
@@ -657,7 +701,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 repeatability before another trajectory | SM132 full job `13028371` / audit `13029112` are terminal: schedule @58, particle @61, map @80, **9.23x** runtime; score capture `13029200` rejects posterior tie-breaking and targets incoming-map arithmetic | capture/replay real H100 orientation-block chronology, pass a bounded repeat panel, then rerun all 201 unchanged checkpoints |
+| 1 | Close GF47 repeatability before another trajectory | SM132 full job `13028371` / audit `13029112` fail schedule @58, particle @61, map @80; passive block chronology build `13031123` and exact-GPU job `13031189` are sealed, inert, and identify measured start order | implement captured start-order replay, pass a bounded repeat panel, then rerun all 201 unchanged checkpoints |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
