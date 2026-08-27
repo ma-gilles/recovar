@@ -50,6 +50,7 @@ SHA-256 values.
 | Reference-clamp discriminator | exact-H100 task `13044790_2` / science step `13045526` completed 61 checkpoints in 377 s | **0 particle failures through it61**; all 61 replayed maps bitwise exact; operative schedule fields match |
 | Late M-step operand boundary | exact-H100 task `13047664_1` / internal job `13047681` completed through it60 in 404 s | **0 particle failures through it60**; incoming `Igrad2` is the leading open state at `1.606e-3` relative L2, versus `2.88e-6--8.57e-6` for fresh raw BPref terms |
 | Native `Igrad2` oracle at it60 | exact-H100 task `13048344_1` completed through it60 in 403 s | post-second moment becomes bitwise exact and reference error falls **262.0x**, from `1.038e-4` control to `3.963e-7`; diagnostic-only |
+| Trajectory-wide native `Igrad2` oracle | exact-H100 task `13049505_1` completed 60 live-map iterations in 409 s | sampled map gate **passes** at minimum FSC-AUC `0.999999999900`; strict particle/schedule state still first departs @34, so no promotion |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -90,7 +91,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 12:41 ET**
+Last scientific update: **2026-08-27 13:09 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -118,7 +119,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 accumulated second moment | paired native-map control keeps 3,000/3,000 particles and every operative schedule field aligned through it60; an independent it60 oracle makes only `Igrad2_post` exact | control `13047664_1`: reference `1.038e-4`; oracle `13048344_1`: **`3.963e-7`**, a **262.0x / 99.62%** reduction with all other RECOVAR M-step operands live | none; build a same-native trajectory-wide `Igrad2` discriminator, then repair its earliest accumulation boundary before another 0--200 run |
+| 1 | GF47 accumulated moment state | trajectory-wide native `Igrad2` replay makes the second moment exact and keeps live maps at minimum sampled FSC-AUC `0.999999999900` through it60 | exact-H100 `13049505_1`: it60 live input/output maps are `2.068e-6 / 2.485e-6` relative L2, but one paired particle and `optimal_offset_change` depart @34 | none; replay both first moments with `Igrad2`, then reduce the residual raw-score/map error below the close-tie state boundary |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -137,6 +138,29 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+The second-moment diagnosis now survives a live-map trajectory intervention,
+but it is not sufficient for strict state parity. Local science commit
+`4f7a7cfdc` adds a fail-closed templated replay mode that captures native
+`Igrad2_post` at every M-step and replays only that buffer in RECOVAR.
+Exact-H100 task `13049505_1` completed iterations 1--60 in 409 seconds with
+**no native reference-map replay**. `Igrad2` is bitwise exact throughout. At
+iteration 60 the live candidate reference entering and leaving reconstruction
+is only `2.068e-6` and `2.485e-6` relative L2 from paired RELION. The sampled
+map gate passes at every checkpoint (1, 4, 8, 16, 32, 58, 60), with minimum
+FSC-AUC **`0.999999999900`** and class assignment `1.0`.
+
+Strict state remains open. Against the paired native run, one 1.5-Angstrom
+translation choice first differs at iteration 34 and makes
+`optimal_offset_change` depart at the same checkpoint; a four-repeat
+diagnostic has unmatched close-tie particle states by iteration 38. At
+iteration 60 the carried first moments are still `1.21e-5--1.26e-5` relative
+L2 from native even though the second moment is exact. Thus trajectory-wide
+`Igrad2` replay closes the dominant map-quality error, while the residual
+first-moment/raw-score path is still large enough to change brittle particle
+decisions. M-step, particle, sampling, and sampled-map report SHA-256 values
+are `b59f55608d78...`, `397801edd0dc...`, `013a98856e59...`, and
+`6f2c71afaf87...`. The score remains **2/20**.
 
 The leading late M-step operand now passes a one-variable causal oracle.
 Exact-H100 task `13048344_1` repeated the native-map-clamped iteration-60
