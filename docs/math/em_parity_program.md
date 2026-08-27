@@ -15799,3 +15799,53 @@ the controller schedule is unchanged. Six one-count support residuals remain
 support-threshold capture rather than a complete case-22 run. The frozen
 complete-case score remains `28/34` strict, `32/34` topology, `34/34`
 evaluated; K=4 remains parked.
+
+## 2026-08-26/27 double-precision float32/complex64-forcing audit (`double_parity` branch)
+
+Separate track from the K=1 case-22 chain above: a user-directed audit of
+`recovar/em/` for places that hardcode `float32`/`complex64` regardless of
+`RECOVAR_USE_FLOAT64_SCORING`/`RECOVAR_USE_FLOAT64_PROJECTIONS`, cross-checked
+against RELION's own `ACC_DOUBLE_PRECISION` C++/CUDA source (newly available
+this session at `/gpfs/gibbs/project/lederman/ry295/relion`, branch
+`recovar_em_patch`). Full detail, RELION ground-truth findings, and a
+prioritized backlog of ~120 further sites are in
+`docs/math/relion_parity_agent_notes.md`'s 2026-08-26 "(continued 3)" entry
+-- summary here per this file's own update contract:
+
+- **Fixed and CPU-tested** (9 source files): cross-iteration pose/translation
+  state recurrence (the highest-impact category -- confirmed via RELION's
+  `exp_metadata`/`EMDL_DOUBLE`, never narrowed, but recovar was flooring it to
+  float32 every iteration), direction/translation-prior upstream narrowing,
+  `DenseScoreConstraints`, the local-search hot-path bucket-packing function
+  (`local_layout.py:bucket_local_hypothesis_layout`, was defeating all
+  upstream local-search double-precision threading), and
+  `mean_helpers.py:update_relion_norm_scale_corrections`.
+- **Not yet run**: the GPU fast parity tier
+  (`pixi run test-em-parity-fast`) and any FSC/quality gate against this
+  fix batch -- this is the mandatory next step before claiming the fixes are
+  quality-neutral-or-positive, and before any further fixing in this track.
+  Per the validation ladder, `pixi run test-em-fast-guard` (16/16) and four
+  directly-relevant CPU unit-test files were run instead as the cheap rung;
+  GPU parity was explicitly deferred per the user's "prioritize + backlog"
+  scope decision for this large a sweep.
+- **Backlog** (not yet fixed, prioritized P0/P1/P2 with file:line citations
+  in the notes entry): `local_em_engine.py` (largest remaining item, dozens
+  of sites in the default exact-local engine), the `sparse_pass2_bucketed.py`
+  "RELION-GPU exact diff2 (Gaussian)" scoring family (same bug class as the
+  already-fixed CC scorer, commit `8fc84499`, but currently only reachable
+  when `use_float64_scoring=False` so not itself corrupting double-precision
+  runs today -- open policy question: extend it or accept the algebraic path
+  as the double-precision default), the sparse pass-2 translation/prior
+  chain, remaining `local_layout.py` functions, `preprocessing.py`,
+  `image_shifts.py`, `projection.py`, `k_class.py:_assemble_result`,
+  `significance.py` output buffers, and `iteration_loop.py`'s
+  `current_translations` per-iteration scoring grid (flagged high-impact but
+  needs adjudication first -- a comment in that code offers a possible
+  intentional rationale for the asymmetry with `current_rotations`).
+- **Open question, not resolved**: an existing docstring in
+  `relion_metadata.py:_relion_rotation_grid_float32` claims RELION Euler
+  angles are always float32; RELION source read this session
+  (`EMDL_DOUBLE`/`std::vector<double>` MetaDataTable storage,
+  `rot_angles`/`tilt_angles` as `std::vector<RFLOAT>`) appears to contradict
+  this. Left unresolved and Euler-angle sites left untouched this session
+  pending either the missing justification or a correction.
