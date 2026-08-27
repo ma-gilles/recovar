@@ -205,6 +205,21 @@ def _match_rotations(native: np.ndarray, recovar: np.ndarray, tolerance: float) 
     return mapping
 
 
+def _positive_rotation_mask(probabilities: np.ndarray) -> np.ndarray:
+    """Select native rotations that can contribute to StoreWavg.
+
+    RELION retains zero-posterior orientations in the StoreWavg orientation
+    table.  They have no BPref contribution and need not exist in RECOVAR's
+    compact active-rotation table.
+    """
+
+    probabilities = np.asarray(probabilities, dtype=np.float32)
+    _require(probabilities.ndim == 2, "native posterior topology changed")
+    mask = np.any(probabilities > np.float32(0.0), axis=1)
+    _require(np.any(mask), "native StoreWavg capture has no positive-posterior rotations")
+    return mask
+
+
 def _select_recovar_particle_rows(
     recovar: dict[str, np.ndarray], original_index: int | None
 ) -> tuple[int, np.ndarray]:
@@ -545,7 +560,10 @@ def analyze(
             "production score dump particle identity differs from contribution capture",
         )
 
-    rotations = np.asarray(native["rotations"], dtype=np.float32)
+    native_probabilities_all = np.asarray(native["probabilities"], dtype=np.float32)
+    positive_rotation_mask = _positive_rotation_mask(native_probabilities_all)
+    native_probabilities = native_probabilities_all[positive_rotation_mask]
+    rotations = np.asarray(native["rotations"], dtype=np.float32)[positive_rotation_mask]
     recovar_rotations = (
         np.asarray(score_dump["local_rotation_matrices"], dtype=np.float32)
         if score_dump is not None
@@ -579,9 +597,9 @@ def analyze(
         active_rotation_rows
     ][rotation_map]
     posterior_comparisons = {
-        "fine_posterior_current": _posterior_metric(native["probabilities"], current_posterior),
+        "fine_posterior_current": _posterior_metric(native_probabilities, current_posterior),
         "fine_posterior_relion_f32_replay": _posterior_metric(
-            native["probabilities"], replay_posterior
+            native_probabilities, replay_posterior
         ),
     }
     if posterior_only:
@@ -595,6 +613,10 @@ def analyze(
                 "physical_image_size": physical_image_size,
                 "current_size": current_size,
                 "orientation_count": int(native["orientation_count"]),
+                "positive_orientation_count": int(np.count_nonzero(positive_rotation_mask)),
+                "zero_posterior_orientation_count": int(
+                    positive_rotation_mask.size - np.count_nonzero(positive_rotation_mask)
+                ),
                 "translation_count": int(native["translation_count"]),
             },
             "comparisons": posterior_comparisons,
@@ -645,7 +667,7 @@ def analyze(
     )
     projections = np.asarray(jax.block_until_ready(projections), dtype=np.complex64)
     native_data, native_weight = _native_gradient_rows(
-        native["probabilities"],
+        native_probabilities,
         translated,
         projections,
         native_ctf,
@@ -777,6 +799,10 @@ def analyze(
             "physical_image_size": physical_image_size,
             "current_size": current_size,
             "orientation_count": int(native["orientation_count"]),
+            "positive_orientation_count": int(np.count_nonzero(positive_rotation_mask)),
+            "zero_posterior_orientation_count": int(
+                positive_rotation_mask.size - np.count_nonzero(positive_rotation_mask)
+            ),
             "translation_count": int(native["translation_count"]),
             "retained_mass": float(native["retained_mass"]),
             "reconstruction_padding_factor": padding_factor,

@@ -12,6 +12,7 @@ from scripts.analyze_vdam_storewavg_boundary import (
     _metric,
     _native_gradient_rows,
     _posterior_metric,
+    _positive_rotation_mask,
     _production_score_gradient_rows,
     _restore_storewavg_inverse_noise_dc,
     _scatter_relion_rows,
@@ -49,6 +50,20 @@ def test_match_rotations_is_tolerance_bounded_and_one_to_one():
     np.testing.assert_array_equal(_match_rotations(native, recovar, 1.0e-6), np.asarray([1, 0]))
     with pytest.raises(ValueError, match="absent"):
         _match_rotations(native, recovar, 1.0e-8)
+
+
+def test_positive_rotation_mask_ignores_native_zero_posterior_padding():
+    probabilities = np.asarray(
+        [[0.0, 0.0], [0.25, 0.0], [0.0, 0.75], [0.0, 0.0]],
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_equal(
+        _positive_rotation_mask(probabilities),
+        np.asarray([False, True, True, False]),
+    )
+    with pytest.raises(ValueError, match="no positive-posterior rotations"):
+        _positive_rotation_mask(np.zeros((2, 3), dtype=np.float32))
 
 
 def test_native_gradient_rows_replays_relion_residual_formula():
