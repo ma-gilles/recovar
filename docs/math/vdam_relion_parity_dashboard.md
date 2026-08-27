@@ -25,7 +25,7 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 serial-orientation panel `13024626` is terminal; frozen 0--200 promotion job `13024925` is queued against the existing four-run native envelope |
+| Latest qualification | GF47 serial-orientation panel `13024626` is terminal; frozen 0--200 promotion job `13025193` is running on the original native-envelope GPU |
 | Latest focused discriminator | Serializing the 576 within-particle orientation blocks improves repeat spread **4.7x raw / 4.9x weight / 86x noise moment / 11.9x reconstructed map**; orientation-block atomic interleaving is the first positively identified repeatability source |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
@@ -41,7 +41,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 00:08 ET**
+Last scientific update: **2026-08-27 00:20 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -69,7 +69,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; serial orientation-block scatter is the first intervention to make every measured accumulator/update layer substantially more repeatable | frozen candidate `13024925` is queued on the original native-envelope node/GPU; automatic full trajectory audit follows science | none until the 0--200 quality/state/schedule audit passes |
+| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; serial orientation-block scatter is the first intervention to make every measured accumulator/update layer substantially more repeatable | frozen candidate `13025193` is running on the original native-envelope physical GPU; automatic full trajectory audit follows science | none until the 0--200 quality/state/schedule audit passes |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -103,15 +103,19 @@ atomic interleaving drives the repeatability failure. A systematic
 post-second-moment mismatch remains (`2.75--3.10x` the native envelope), so
 the short panel does not change the score.
 
-Frozen 0--200 candidate job `13024925` is queued from local unpushed head
+Frozen 0--200 candidate job `13025193` is running from local unpushed head
 `57e3e7e72` against the existing four-run GF47 native envelope. It is pinned
-to the original node and physical GPU, qualified CUDA digest `c39994b6e42a...`,
+to the original node and physical GPU, the frozen v3 scorecard, qualified CUDA digest `c39994b6e42a...`,
 RELION binding digest `fcbb2a8356c2...`, and worker-schedule digest
 `fedf84049b0b...`. The runner now fail-closes on those controls, explicitly
 restores the diagnostic topology after its environment scrub, and submits the
 full map/state/schedule envelope audit automatically after science. No generic
 RECOVAR full or long suite is involved. No score will be promoted unless the
-complete 0--200 audit passes.
+complete 0--200 audit passes. Placement attempts `13024925`, `13024949`,
+`13024950`, `13025040`, and `13025075` exited 75 before science on nonmatching
+GPUs; `13025129` reached the correct GPU but rejected the older default
+scorecard before science. They are infrastructure/provenance gates, not parity
+outcomes.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
