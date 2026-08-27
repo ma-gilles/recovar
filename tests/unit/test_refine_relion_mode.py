@@ -12618,6 +12618,7 @@ class TestRelionModeSmokeTest:
 
         events = []
         reconstruct_calls = []
+        solvent_mask_radii = []
 
         def fake_reconstruct(*_args, **kwargs):
             reconstruct_calls.append(kwargs)
@@ -12635,10 +12636,20 @@ class TestRelionModeSmokeTest:
             events.append("flatten_dft")
             return jnp.asarray(volume_real, dtype=jnp.complex64)
 
+        def fake_raised_cosine_mask(volume_shape, *, radius, radius_p, offset):
+            del offset
+            solvent_mask_radii.append((radius, radius_p))
+            return jnp.ones(volume_shape, dtype=jnp.float64)
+
         monkeypatch.setattr(mean_helpers_module, "_reconstruct_volume_eager", fake_reconstruct)
         monkeypatch.setattr(mean_helpers_module, "_apply_relion_initial_lowpass_filter", fake_lowpass)
         monkeypatch.setattr(mean_helpers_module.fourier_transform_utils, "get_idft3", fake_idft3)
         monkeypatch.setattr(mean_helpers_module.fourier_transform_utils, "get_dft3", fake_dft3)
+        monkeypatch.setattr(
+            mean_helpers_module.mask,
+            "raised_cosine_mask",
+            fake_raised_cosine_mask,
+        )
 
         means = [None, None]
         mean_helpers_module._reconstruct_and_postprocess_means(
@@ -12657,13 +12668,13 @@ class TestRelionModeSmokeTest:
             cs=8,
             iteration=0,
             grid_size=8,
-            cryo=SimpleNamespace(voxel_size=1.0),
+            cryo=SimpleNamespace(voxel_size=np.float32(2.125)),
             volume_shape=VOLUME_SHAPE,
             tau2_fudge=1.0,
             padding_factor=1,
             projection_padding_factor=1,
             relion_minres_map=1,
-            particle_diameter_ang=4.0,
+            particle_diameter_ang=200.0,
             relion_firstiter_cc_this_iter=True,
             relion_firstiter_ini_high_angstrom=30.0,
             relion_width_mask_edge=5,
@@ -12673,6 +12684,11 @@ class TestRelionModeSmokeTest:
         assert events[:3] == ["lowpass", "flatten_idft", "flatten_dft"]
         assert len(reconstruct_calls) == 2
         assert all(call["preserve_output_precision"] is True for call in reconstruct_calls)
+        expected_radius = 200.0 / (2.0 * 2.125)
+        assert solvent_mask_radii == [(expected_radius, expected_radius + 5.0)] * 2
+        assert solvent_mask_radii[0][0] != float(
+            np.float32(200.0) / (np.float32(2.0) * np.float32(2.125))
+        )
 
     def test_kclass_reconstruction_uses_1d_tau_shell_prior(self, monkeypatch):
         """K-class M-step reconstruction should index RELION tau2 as shells."""

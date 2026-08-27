@@ -518,7 +518,14 @@ def _reconstruct_and_postprocess_means(
                     filter_edgewidth=relion_fmask_edge,
                 )
         if particle_diameter_ang is not None and particle_diameter_ang > 0:
-            flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
+            # RELION's solvent-mask radius is evaluated in double RFLOAT.  A
+            # numpy.float32 voxel size otherwise rounds 200 / (2 * 2.125) to
+            # 47.05882263183594 before the double-precision cosine taper.
+            flatten_radius = (
+                float(particle_diameter_ang) / (2.0 * float(cryo.voxel_size))
+                if not k_class_enabled
+                else particle_diameter_ang / (2.0 * cryo.voxel_size)
+            )
             solvent_mask = mask.raised_cosine_mask(
                 volume_shape,
                 radius=flatten_radius,
