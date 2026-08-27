@@ -211,6 +211,34 @@ def test_captured_native_trace_shape_keeps_identity_rows_and_trace_instructions(
     )
 
 
+def test_captured_native_grid_trace_shape_keeps_captured_rows(
+    tmp_path, monkeypatch
+):
+    schedule, chronology = _write_inputs(tmp_path)
+    _configure(
+        monkeypatch,
+        schedule,
+        chronology,
+        topology="captured_native_grid_trace_shape",
+    )
+
+    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+        _Dataset(),
+        np.asarray([1, 0], dtype=np.int64),
+        rotation_count=3,
+        valid_rotation_counts=np.asarray([3, 3]),
+        debug_iteration=1,
+    )
+    np.testing.assert_array_equal(
+        orders,
+        np.asarray([[0, 2, 1], [1, 2, 0]], dtype=np.int32),
+    )
+    assert not local_em_engine._relion_vdam_identity_native_grid_replay()
+    assert local_em_engine._relion_vdam_native_trace_shape_replay(
+        debug_iteration=1
+    )
+
+
 def test_block_start_replay_rejects_a_different_rotation_bucket(tmp_path, monkeypatch):
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology)

@@ -611,6 +611,7 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         "captured_native_grid",
         "captured_native_count",
         "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
     }:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -648,6 +649,7 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_native_grid",
         "captured_native_count",
         "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
     }:
         if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
             return None
@@ -686,13 +688,15 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_native_grid",
         "captured_native_count",
         "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
     }:
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
             "'single_rotation_sm132', 'captured_block_start', "
             "'captured_block_grid', 'captured_native_grid', or "
-            "'captured_native_count', or 'captured_native_trace_shape'"
+            "'captured_native_count', 'captured_native_trace_shape', or "
+            "'captured_native_grid_trace_shape'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -715,6 +719,7 @@ def _relion_vdam_native_grid_counts_for_images(
         "captured_native_grid",
         "captured_native_count",
         "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
     }:
         return None
     orders = _relion_vdam_block_start_orders_for_images(
@@ -768,7 +773,10 @@ def _relion_vdam_native_trace_shape_replay(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    return topology == "captured_native_trace_shape" and (
+    return topology in {
+        "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
+    } and (
         _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration)
     )
 
