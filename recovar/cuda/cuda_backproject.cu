@@ -4495,7 +4495,7 @@ __device__ __forceinline__ void relion_vdam_translate_pixel_f32(
     translated_imag = cosine * imag + sine * real;
 }
 
-template <typename Accumulator>
+template <typename Accumulator, bool CapturedOrder, bool Trace>
 __global__ void relion_vdam_native_sgd_f32_kernel(
     RelionVdamProjectorKernel projector,
     float* image_real,
@@ -4533,26 +4533,29 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
 {
     unsigned tid = threadIdx.x;
     const unsigned physical_image = blockIdx.x;
-    const unsigned image = rotation_replay_order == nullptr
-        ? physical_image
-        : static_cast<unsigned>(rotation_replay_order[physical_image]);
-    VdamCandidateBlockTraceRecord* trace_record =
-        trace_records == nullptr ? nullptr : trace_records + physical_image;
-    if (trace_record != nullptr && tid == 0)
+    const unsigned image = CapturedOrder
+        ? static_cast<unsigned>(rotation_replay_order[physical_image])
+        : physical_image;
+    VdamCandidateBlockTraceRecord* trace_record = nullptr;
+    if constexpr (Trace)
     {
-        trace_record->launch_sequence = trace_launch_sequence;
-        trace_record->particle_id = trace_particle_id;
-        trace_record->block_start_globaltimer = vdam_candidate_globaltimer();
-        trace_record->first_atomic_globaltimer = 0;
-        trace_record->block_end_globaltimer = 0;
-        trace_record->orientation_row = image;
-        trace_record->worker_id = trace_worker_id;
-        trace_record->class_id = 0;
-        trace_record->sm_id = vdam_candidate_smid();
-        trace_record->image_count = gridDim.x;
-        trace_record->iteration = trace_iteration;
-        trace_record->flags = std::uint32_t(1U << 2);
-        trace_record->reserved = 0;
+        trace_record = trace_records + physical_image;
+        if (tid == 0)
+        {
+            trace_record->launch_sequence = trace_launch_sequence;
+            trace_record->particle_id = trace_particle_id;
+            trace_record->block_start_globaltimer = vdam_candidate_globaltimer();
+            trace_record->first_atomic_globaltimer = 0;
+            trace_record->block_end_globaltimer = 0;
+            trace_record->orientation_row = image;
+            trace_record->worker_id = trace_worker_id;
+            trace_record->class_id = 0;
+            trace_record->sm_id = vdam_candidate_smid();
+            trace_record->image_count = gridDim.x;
+            trace_record->iteration = trace_iteration;
+            trace_record->flags = std::uint32_t(1U << 2);
+            trace_record->reserved = 0;
+        }
     }
     int image_y_half = image_y / 2;
     int max_r2_volume = max_r2 * padding_factor * padding_factor;
@@ -4654,7 +4657,7 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
               static_cast<Accumulator>((COEFFICIENT) * Fweight))
 
             float dd000 = mfz * mfy * mfx;
-            if (trace_record != nullptr)
+            if constexpr (Trace)
             {
                 atomicCAS(
                     reinterpret_cast<unsigned long long*>(
@@ -4680,7 +4683,7 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
 #undef RELION_VDAM_NATIVE_ATOMIC_TRIPLET
         }
     }
-    if (trace_record != nullptr)
+    if constexpr (Trace)
     {
         __syncthreads();
         if (tid == 0)
@@ -5429,49 +5432,66 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 const int64_t grid_rotations = serial_rotation_replay
                     ? 1
                     : particle_rotation_count;
-                relion_vdam_native_sgd_f32_kernel<Accumulator><<<
-                    grid_rotations, 128, 0, particle_streams[lane]>>>(
-                    projector,
-                    image_real + particle * image_stride,
-                    image_imag + particle * image_stride,
-                    translation_x,
-                    translation_y,
-                    nullptr,
-                    const_cast<float*>(
-                        posterior_over_weight_norm + particle * posterior_stride +
-                        rotation_offset * translation_count),
-                    const_cast<float*>(minvsigma2 + particle * image_stride),
-                    const_cast<float*>(ctf + particle * image_stride),
-                    static_cast<unsigned long>(translation_count),
-                    significant_weight,
-                    weight_norm,
-                    const_cast<float*>(
-                        projector_eulers + particle * euler_stride +
-                        rotation_offset * 9),
-                    accumulator_real + accumulator_offset,
-                    accumulator_imag + accumulator_offset,
-                    accumulator_weight + accumulator_offset,
-                    static_cast<int>(sqrtf(max_r2) + 0.5f),
-                    static_cast<int>(max_r2),
-                    static_cast<float>(upsampling),
-                    static_cast<unsigned>(image_w),
-                    static_cast<unsigned>(image_h),
-                    1,
-                    static_cast<unsigned>(pixel_count),
-                    static_cast<unsigned>(model_x),
-                    static_cast<unsigned>(model_y),
-                    model_init_y,
-                    model_init_z,
-                    captured_rotation_replay && !serial_rotation_replay
-                        ? rotation_replay_order + particle * rotation_count
-                        : nullptr,
-                    candidate_trace_requested ? candidate_trace_records[lane] : nullptr,
-                    trace_launch_sequence,
-                    candidate_trace_requested
-                        ? static_cast<std::int64_t>(particle_trace_ids_host[particle])
-                        : 0,
-                    static_cast<std::int32_t>(lane),
-                    candidate_trace_iteration);
+                const auto launch_sgd = [&](auto captured_order_tag, auto trace_tag) {
+                    constexpr bool use_captured_order =
+                        decltype(captured_order_tag)::value;
+                    constexpr bool use_trace = decltype(trace_tag)::value;
+                    relion_vdam_native_sgd_f32_kernel<
+                        Accumulator, use_captured_order, use_trace><<<
+                        grid_rotations, 128, 0, particle_streams[lane]>>>(
+                        projector,
+                        image_real + particle * image_stride,
+                        image_imag + particle * image_stride,
+                        translation_x,
+                        translation_y,
+                        nullptr,
+                        const_cast<float*>(
+                            posterior_over_weight_norm + particle * posterior_stride +
+                            rotation_offset * translation_count),
+                        const_cast<float*>(minvsigma2 + particle * image_stride),
+                        const_cast<float*>(ctf + particle * image_stride),
+                        static_cast<unsigned long>(translation_count),
+                        significant_weight,
+                        weight_norm,
+                        const_cast<float*>(
+                            projector_eulers + particle * euler_stride +
+                            rotation_offset * 9),
+                        accumulator_real + accumulator_offset,
+                        accumulator_imag + accumulator_offset,
+                        accumulator_weight + accumulator_offset,
+                        static_cast<int>(sqrtf(max_r2) + 0.5f),
+                        static_cast<int>(max_r2),
+                        static_cast<float>(upsampling),
+                        static_cast<unsigned>(image_w),
+                        static_cast<unsigned>(image_h),
+                        1,
+                        static_cast<unsigned>(pixel_count),
+                        static_cast<unsigned>(model_x),
+                        static_cast<unsigned>(model_y),
+                        model_init_y,
+                        model_init_z,
+                        use_captured_order
+                            ? rotation_replay_order + particle * rotation_count
+                            : nullptr,
+                        use_trace ? candidate_trace_records[lane] : nullptr,
+                        trace_launch_sequence,
+                        use_trace
+                            ? static_cast<std::int64_t>(
+                                particle_trace_ids_host[particle])
+                            : 0,
+                        static_cast<std::int32_t>(lane),
+                        candidate_trace_iteration);
+                };
+                const bool use_captured_order =
+                    captured_rotation_replay && !serial_rotation_replay;
+                if (use_captured_order && candidate_trace_requested)
+                    launch_sgd(std::true_type{}, std::true_type{});
+                else if (use_captured_order)
+                    launch_sgd(std::true_type{}, std::false_type{});
+                else if (candidate_trace_requested)
+                    launch_sgd(std::false_type{}, std::true_type{});
+                else
+                    launch_sgd(std::false_type{}, std::false_type{});
                 const cudaError_t launch_error = cudaGetLastError();
                 if (launch_error != cudaSuccess) return launch_error;
             }

@@ -104,7 +104,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     projector_launcher = source.split(
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
     )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
-    assert "relion_vdam_native_sgd_f32_kernel<Accumulator><<<" in projector_launcher
+    assert "Accumulator, use_captured_order, use_trace><<<" in projector_launcher
+    assert "std::true_type{}, std::false_type{}" in projector_launcher
+    assert "std::false_type{}, std::false_type{}" in projector_launcher
     assert "grid_rotations, 128, 0, particle_streams[lane]" in projector_launcher
     assert "serial_rotation_replay ? rotation_count : 1" in projector_launcher
     assert "reverse_rotation_replay ? rotation_count - 1 - launch : launch" in projector_launcher
