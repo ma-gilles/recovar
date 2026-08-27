@@ -41,6 +41,9 @@ envelope. Every promoted result records source, executable, CUDA and RELION
 binding digests, fixture, GPU UUID, command, Slurm jobs, report paths, and
 SHA-256 values.
 
+<details>
+<summary><strong>Full terminal diagnostic history (jobs, evidence, and decisions)</strong></summary>
+
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
@@ -74,6 +77,8 @@ SHA-256 values.
 | GF47 CUDA toolchain / device code | gate `13036222` passes 25/25; exact-GPU panel `13036273` completes | CUDA-12.6/PTX matching improves reference to `1.439x / 1.221x` and post-second to `1.052x / 0.196x`, but compiler target alone is insufficient |
 | GF47 native trace instruction shape | seed-0 `13036723` passes, exact frozen seed-29 `13037011` fails | seed dependence is decisive: reference changes from `0.923x / 0.740x` to `2.841x / 2.355x`; no promotion |
 | GF47 materialized order + native trace epilogue | local `374b24b7f`; H100 gate `13038159` passes 29/29; exact-GPU panel `13038186` and full science `13038307` complete | short reference passes at **0.978x / 0.967x** and all raw accumulators pass; audit `13040047` first fails schedule @58, particle @61, map @80 |
+
+</details>
 
 > **Status: draft, not merge-ready.** K=1 correctness is the active gate.
 > Runtime optimization starts from a sealed passing trajectory; K>1,
