@@ -139,6 +139,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE" in source
     assert "candidate_trace_active && candidate_trace_writer->requested()" in source
     assert "candidate_trace_writer->append" in projector_launcher
+    assert "VdamCandidateBlockTraceRecord* candidate_trace_records = nullptr" in projector_launcher
+    assert "candidate_trace_records + particle * rotation_count" in projector_launcher
+    assert "Keep tracing passive" in projector_launcher
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
     assert "data_real_volume = jnp.asarray(data_volume.real" in wrapper

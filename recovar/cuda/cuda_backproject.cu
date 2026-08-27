@@ -5034,8 +5034,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int32_t* particle_trace_ids_host = nullptr;
     int32_t* rotation_replay_order_host = nullptr;
     int32_t* rotation_replay_counts_host = nullptr;
-    VdamCandidateBlockTraceRecord* candidate_trace_records[
-        kRelionVdamWorkerStreams] = {};
+    VdamCandidateBlockTraceRecord* candidate_trace_records = nullptr;
     VdamCandidateBlockTraceWriter* candidate_trace_writer =
         &vdam_candidate_block_trace_writer();
     const bool candidate_trace_requested =
@@ -5236,14 +5235,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             if (err != cudaSuccess) goto cleanup;
         }
         if (device_trace_requested)
-            for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
-            {
-                err = cudaMalloc(
-                    reinterpret_cast<void**>(&candidate_trace_records[lane]),
-                    static_cast<size_t>(rotation_count) *
-                        sizeof(VdamCandidateBlockTraceRecord));
-                if (err != cudaSuccess) goto cleanup;
-            }
+        {
+            err = cudaMalloc(
+                reinterpret_cast<void**>(&candidate_trace_records),
+                static_cast<size_t>(n_particles * rotation_count) *
+                    sizeof(VdamCandidateBlockTraceRecord));
+            if (err != cudaSuccess) goto cleanup;
+        }
         if (captured_rotation_replay)
         {
             err = cudaMallocHost(
@@ -5395,7 +5393,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         &trace_launch_sequence))
                     return cudaErrorInvalidValue;
                 const cudaError_t clear_error = cudaMemsetAsync(
-                    candidate_trace_records[lane],
+                    candidate_trace_records + particle * rotation_count,
                     0,
                     static_cast<size_t>(particle_rotation_count) *
                         sizeof(VdamCandidateBlockTraceRecord),
@@ -5482,7 +5480,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         use_captured_order
                             ? rotation_replay_order + particle * rotation_count
                             : nullptr,
-                        use_trace ? candidate_trace_records[lane] : nullptr,
+                        use_trace
+                            ? candidate_trace_records + particle * rotation_count
+                            : nullptr,
                         trace_launch_sequence,
                         use_trace
                             ? (candidate_trace_requested
@@ -5505,25 +5505,6 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     launch_sgd(std::false_type{}, std::false_type{});
                 const cudaError_t launch_error = cudaGetLastError();
                 if (launch_error != cudaSuccess) return launch_error;
-            }
-            if (candidate_trace_requested)
-            {
-                cudaError_t trace_error =
-                    cudaStreamSynchronize(particle_streams[lane]);
-                if (trace_error != cudaSuccess) return trace_error;
-                std::vector<VdamCandidateBlockTraceRecord> host_records(
-                    static_cast<size_t>(particle_rotation_count));
-                trace_error = cudaMemcpy(
-                    host_records.data(),
-                    candidate_trace_records[lane],
-                    static_cast<size_t>(particle_rotation_count) *
-                        sizeof(VdamCandidateBlockTraceRecord),
-                    cudaMemcpyDeviceToHost);
-                if (trace_error != cudaSuccess) return trace_error;
-                if (!candidate_trace_writer->append(
-                        host_records.data(),
-                        static_cast<std::uint64_t>(particle_rotation_count)))
-                    return cudaErrorInvalidValue;
             }
             return cudaSuccess;
         };
@@ -5594,6 +5575,33 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             err = cudaStreamSynchronize(particle_streams[lane]);
             if (err != cudaSuccess) goto cleanup;
         }
+        if (candidate_trace_requested)
+        {
+            // Keep tracing passive: all particle streams complete before one
+            // bulk device-to-host copy.  Synchronizing and copying inside
+            // launch_particle would serialize otherwise concurrent lanes and
+            // make the measured device chronology self-perturbing.
+            std::vector<VdamCandidateBlockTraceRecord> host_records(
+                static_cast<size_t>(n_particles * rotation_count));
+            err = cudaMemcpy(
+                host_records.data(),
+                candidate_trace_records,
+                host_records.size() * sizeof(VdamCandidateBlockTraceRecord),
+                cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) goto cleanup;
+            for (int64_t particle = 0; particle < n_particles; ++particle)
+            {
+                const auto record_count = static_cast<std::uint64_t>(
+                    rotation_replay_counts_host[particle]);
+                if (!candidate_trace_writer->append(
+                        host_records.data() + particle * rotation_count,
+                        record_count))
+                {
+                    err = cudaErrorInvalidValue;
+                    goto cleanup;
+                }
+            }
+        }
         if (float64_accumulator_replay)
         {
             const unsigned int cast_blocks = static_cast<unsigned int>(
@@ -5642,8 +5650,7 @@ cleanup:
     if (particle_trace_ids_host) cudaFreeHost(particle_trace_ids_host);
     if (rotation_replay_order_host) cudaFreeHost(rotation_replay_order_host);
     if (rotation_replay_counts_host) cudaFreeHost(rotation_replay_counts_host);
-    for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
-        if (candidate_trace_records[lane]) cudaFree(candidate_trace_records[lane]);
+    if (candidate_trace_records) cudaFree(candidate_trace_records);
     if (data_real_volume_f64) cudaFree(data_real_volume_f64);
     if (data_imag_volume_f64) cudaFree(data_imag_volume_f64);
     if (weight_volume_f64) cudaFree(weight_volume_f64);
