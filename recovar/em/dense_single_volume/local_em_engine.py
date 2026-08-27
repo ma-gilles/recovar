@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import gc
 import logging
 import os
@@ -353,6 +354,7 @@ LOCAL_SCORE_DUMP_TARGET_ONLY_ENV = "RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY"
 EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS"
 EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
+RELION_VDAM_WORKER_SCHEDULE_ENV = "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
 DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
 DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
@@ -372,6 +374,65 @@ def _local_mstep_rotations(bucket: LocalBucketSpec) -> np.ndarray:
     if rotations is None:
         rotations = bucket.local_rotations
     return np.asarray(rotations, dtype=np.float32)
+
+
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_worker_schedule(path: str) -> np.ndarray:
+    """Return a dense stack-index to worker-lane map from a sealed v2 trace."""
+
+    with np.load(path, allow_pickle=False) as payload:
+        schema_version = int(np.asarray(payload["schema_version"]).item())
+        dataset_particles = int(np.asarray(payload["dataset_particles"]).item())
+        n_threads = int(np.asarray(payload["n_threads"]).item())
+        stack_indices = np.asarray(
+            payload["stack_index_by_sorted_position"], dtype=np.int64
+        )
+        owners = np.asarray(payload["owner_by_sorted_position"], dtype=np.int64)
+    if schema_version != 2:
+        raise ValueError(
+            "VDAM worker replay requires a v2 trace with stack-image join keys"
+        )
+    if dataset_particles <= 0 or n_threads != 8:
+        raise ValueError("VDAM worker replay requires a positive dataset and eight workers")
+    if stack_indices.ndim != 1 or owners.shape != stack_indices.shape:
+        raise ValueError("VDAM worker replay arrays must be matching vectors")
+    if (
+        np.unique(stack_indices).size != stack_indices.size
+        or np.any(stack_indices < 0)
+        or np.any(stack_indices >= dataset_particles)
+        or np.any(owners < 0)
+        or np.any(owners >= n_threads)
+    ):
+        raise ValueError("VDAM worker replay schedule contains invalid stack IDs or owners")
+    owner_by_stack_index = np.full(dataset_particles, -1, dtype=np.int32)
+    owner_by_stack_index[stack_indices] = owners.astype(np.int32)
+    owner_by_stack_index.setflags(write=False)
+    return owner_by_stack_index
+
+
+def _relion_vdam_worker_lanes_for_images(experiment_dataset, image_indices):
+    """Resolve optional native worker owners into the current physical bucket order."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    if not path:
+        return None
+    owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("VDAM worker replay image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= owner_by_stack_index.size):
+        raise ValueError("VDAM worker replay image index is outside the traced dataset")
+    owners = owner_by_stack_index[original_indices]
+    if np.any(owners < 0):
+        missing = original_indices[owners < 0]
+        raise ValueError(
+            "VDAM worker replay is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    return owners.astype(np.int32, copy=False)
 
 
 def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_targets: set[int] | None) -> bool:
@@ -542,6 +603,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     volume_shape,
     max_r,
     reconstruction_group_ids=None,
+    worker_lane_ids=None,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -624,6 +686,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 int(projector_r_max),
                 int(projection_padding_factor),
                 reconstruction_group_ids=reconstruction_group_ids,
+                worker_lane_ids=worker_lane_ids,
             )
         )
     return Ft_y, Ft_ctf
@@ -4628,6 +4691,10 @@ def run_local_em_exact(
                     volume_shape=recon_volume_shape,
                     max_r=mstep_adjoint_max_r,
                     reconstruction_group_ids=bucket_reconstruction_group_ids,
+                    worker_lane_ids=_relion_vdam_worker_lanes_for_images(
+                        experiment_dataset,
+                        unpadded_bucket.image_indices,
+                    ),
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)

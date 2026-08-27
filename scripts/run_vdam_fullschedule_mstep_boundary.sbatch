@@ -26,6 +26,10 @@ TARGET_ITERATION=${TARGET_ITERATION:-2}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 RELION_THREADS=${RELION_THREADS:-8}
 RANDOM_SEED=${RANDOM_SEED:-0}
+WORKER_TRACE_REPLAY=${RELION_VDAM_WORKER_TRACE_REPLAY:-0}
+WORKER_TRACE_PARTICLES=${RELION_VDAM_WORKER_TRACE_PARTICLES:-200}
+WORKER_TRACE_DATASET_PARTICLES=${RELION_VDAM_WORKER_TRACE_DATASET_PARTICLES:-3000}
+WORKER_TRACE_POOL_SIZE=${RELION_VDAM_WORKER_TRACE_POOL_SIZE:-24}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
 BPREF_CONTRIBUTION_CAPTURE_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF:-${BPREF_CONTRIBUTION_HALF}}
@@ -46,6 +50,8 @@ NATIVE_CAPTURE=${OUTPUT_ROOT}/native_capture
 PROVENANCE=${OUTPUT_ROOT}/provenance
 ANALYSIS=${OUTPUT_ROOT}/analysis
 CONTRIBUTIONS=${OUTPUT_ROOT}/recovar_bpref_contributions
+WORKER_TRACE=${PROVENANCE}/relion_worker_trace_it001.tsv
+WORKER_SCHEDULE=${ANALYSIS}/relion_worker_schedule_it001.npz
 
 test -f "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 test -s "${DATA_DIR}/particles.star"
@@ -55,6 +61,14 @@ test "${TARGET_ITERATION}" -ge 1
 test "${TARGET_ITERATION}" -le "${NR_ITER_SCHEDULE}"
 test "${RELION_THREADS}" -ge 1
 test "${RELION_THREADS}" -le "${SLURM_CPUS_PER_TASK:-8}"
+test "${WORKER_TRACE_REPLAY}" = 0 -o "${WORKER_TRACE_REPLAY}" = 1
+if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
+  test "${TARGET_ITERATION}" -eq 1
+  test "${RELION_THREADS}" -eq 8
+  test "${WORKER_TRACE_PARTICLES}" -ge 1
+  test "${WORKER_TRACE_DATASET_PARTICLES}" -ge "${WORKER_TRACE_PARTICLES}"
+  test "${WORKER_TRACE_POOL_SIZE}" -ge 1
+fi
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   test "${BPREF_CONTRIBUTION_HALF}" = 1 -o "${BPREF_CONTRIBUTION_HALF}" = 2
   test "${BPREF_CONTRIBUTION_CAPTURE_HALF}" = 1 -o "${BPREF_CONTRIBUTION_CAPTURE_HALF}" = 2
@@ -133,6 +147,10 @@ export RELION_ACC_DUMP_DIR=${NATIVE_CAPTURE}
 export RELION_ACC_DUMP_PART_ID=${PART_ID}
 export RELION_ACC_DUMP_ITER=${TARGET_ITERATION}
 export RELION_ACC_DUMP_VERBOSE=0
+if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
+  export RELION_VDAM_WORKER_LOG=${WORKER_TRACE}
+  export RELION_VDAM_WORKER_TRACE_ITER=1
+fi
 
 RELION_COMMAND=(
   srun --ntasks=1 --cpus-per-task="${RELION_THREADS}" --cpu-bind=none "${VDAM_RELION_BINARY}"
@@ -179,6 +197,24 @@ wait "${relion_pid}"
 set -e
 touch "${OUTPUT_ROOT}/NATIVE_STOPPED_AFTER_IT${target_tag}"
 
+if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
+  test -s "${WORKER_TRACE}"
+  (
+    cd "${REPO_ROOT}"
+    "${PIXI_PY}" -m scripts.build_vdam_worker_schedule \
+      --trace "${WORKER_TRACE}" --iteration 1 \
+      --n-particles "${WORKER_TRACE_PARTICLES}" \
+      --dataset-particles "${WORKER_TRACE_DATASET_PARTICLES}" \
+      --n-threads "${RELION_THREADS}" --pool-size "${WORKER_TRACE_POOL_SIZE}" \
+      --output-npz "${WORKER_SCHEDULE}" \
+      --output-json "${ANALYSIS}/relion_worker_schedule_it001.json"
+  )
+  test -s "${WORKER_SCHEDULE}"
+  sha256sum "${WORKER_TRACE}" "${WORKER_SCHEDULE}" \
+    "${ANALYSIS}/relion_worker_schedule_it001.json" \
+    > "${PROVENANCE}/relion_worker_schedule.sha256"
+fi
+
 for required in \
   pipe_it${TARGET_ITERATION}_c0_bp_data_pre_reweight.bin \
   pipe_it${TARGET_ITERATION}_c0_bp_weight.bin \
@@ -206,8 +242,12 @@ fi
 unset MPI_ROOT CUDA_HOME OMPI_MCA_orte_tmpdir_base OMPI_MCA_shmem_mmap_enable_nfs_warning
 unset RECOVAR_DEBUG_DUMP_DIR RECOVAR_DEBUG_DUMP_MSTEP_ITER
 unset RELION_ACC_DUMP_DIR RELION_ACC_DUMP_PART_ID RELION_ACC_DUMP_ITER RELION_ACC_DUMP_VERBOSE
+unset RELION_VDAM_WORKER_LOG RELION_VDAM_WORKER_TRACE_ITER
 export RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}
 export RECOVAR_MSTEP_DUMP_ITER=${TARGET_ITERATION}
+if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
+  export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${WORKER_SCHEDULE}
+fi
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   mapfile -t contribution_metadata < <(
     "${PIXI_PY}" - "${DATA_DIR}/particles.star" \
@@ -346,9 +386,9 @@ sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${DATA_DIR}/particles.star" \
   "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${VDAM_RELION_BINARY}" \
   > "${PROVENANCE}/static_inputs.sha256"
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
   > "${PROVENANCE}/run.json"

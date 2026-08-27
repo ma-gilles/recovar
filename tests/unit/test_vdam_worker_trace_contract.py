@@ -30,3 +30,16 @@ def test_relion_worker_trace_build_seals_complete_gpu_patch():
     ]
     for text in required:
         assert text in build
+
+
+def test_fullschedule_boundary_can_replay_the_same_native_worker_trace():
+    runner = (ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+    required = [
+        "RELION_VDAM_WORKER_TRACE_REPLAY",
+        "export RELION_VDAM_WORKER_LOG=${WORKER_TRACE}",
+        "export RELION_VDAM_WORKER_TRACE_ITER=1",
+        "scripts.build_vdam_worker_schedule",
+        "export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${WORKER_SCHEDULE}",
+    ]
+    for text in required:
+        assert text in runner

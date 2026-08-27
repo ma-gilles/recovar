@@ -81,7 +81,7 @@ git -C "${RELION_SOURCE}" diff "${EXPECTED_RELION_BASE}"..HEAD -- \
 
 BINARY=${BUILD}/bin/relion_refine
 test -x "${BINARY}"
-strings "${BINARY}" | grep -Fx RELION_VDAM_WORKER_LOG_SCHEMA_V1 \
+strings "${BINARY}" | grep -Fx RELION_VDAM_WORKER_LOG_SCHEMA_V2 \
     > "${PROVENANCE}/schema_marker.txt"
 sha256sum "${BINARY}" "${PROVENANCE}/worker_trace.patch" \
     > "${PROVENANCE}/build.sha256"

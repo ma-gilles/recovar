@@ -1753,6 +1753,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     projector_max_r: int,
     projection_padding_factor: int,
     reconstruction_group_ids: jax.Array | None = None,
+    worker_lane_ids: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Project, form residuals, and scatter VDAM rows in one native launch."""
 
@@ -1816,6 +1817,14 @@ def relion_vdam_mstep_fused_projector_x_half(
         if data_volume.shape != weight_volume.shape or data_volume.shape[0] <= 0:
             raise ValueError("grouped VDAM accumulators must have matching nonempty shapes")
         reconstruction_group_count = int(data_volume.shape[0])
+    if worker_lane_ids is None:
+        worker_lane_ids = jnp.arange(n_particles, dtype=jnp.int32) % 8
+    else:
+        worker_lane_ids = jnp.asarray(worker_lane_ids)
+        if worker_lane_ids.dtype != jnp.int32:
+            raise TypeError("worker_lane_ids must be int32")
+        if worker_lane_ids.shape != (n_particles,):
+            raise ValueError("worker_lane_ids must match the particle axis")
     _ensure_ffi()
 
     dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
@@ -1857,7 +1866,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
         _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
         output_types,
-        input_output_aliases={9: 0, 10: 1, 11: 2},
+        input_output_aliases={10: 0, 11: 1, 12: 2},
         vmap_method="sequential",
     )(
         projector_full,
@@ -1869,6 +1878,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         eulers,
         rot6,
         reconstruction_group_ids,
+        worker_lane_ids,
         data_real_volume,
         data_imag_volume,
         weight_volume,

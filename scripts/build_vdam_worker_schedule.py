@@ -10,18 +10,29 @@ from pathlib import Path
 
 import numpy as np
 
-SCHEMA_MARKER = "# RELION_VDAM_WORKER_LOG_SCHEMA_V1"
+SCHEMA_MARKERS = {
+    "# RELION_VDAM_WORKER_LOG_SCHEMA_V1": 1,
+    "# RELION_VDAM_WORKER_LOG_SCHEMA_V2": 2,
+}
 
 
 def load_worker_trace(path: Path) -> np.ndarray:
     lines = path.read_text().splitlines()
-    if not lines or lines[0] != SCHEMA_MARKER:
-        raise ValueError(f"missing exact schema marker {SCHEMA_MARKER!r}")
+    if not lines or lines[0] not in SCHEMA_MARKERS:
+        raise ValueError(
+            "missing exact schema marker; expected one of "
+            f"{sorted(SCHEMA_MARKERS)!r}"
+        )
     rows = np.loadtxt(path, dtype=np.int64, comments="#", ndmin=2)
-    if rows.ndim != 2 or rows.shape[1] != 7:
-        raise ValueError(f"worker trace must contain seven integer columns; got {rows.shape}")
-    if not np.all(rows[:, 0] == 1):
-        raise ValueError("worker trace contains a non-v1 record")
+    schema_version = SCHEMA_MARKERS[lines[0]]
+    expected_columns = 7 if schema_version == 1 else 8
+    if rows.ndim != 2 or rows.shape[1] != expected_columns:
+        raise ValueError(
+            f"v{schema_version} worker trace must contain {expected_columns} "
+            f"integer columns; got {rows.shape}"
+        )
+    if not np.all(rows[:, 0] == schema_version):
+        raise ValueError(f"worker trace contains a non-v{schema_version} record")
     return rows
 
 
@@ -46,14 +57,26 @@ def validate_worker_trace(
     if not np.array_equal(positions, expected_positions):
         raise ValueError("sorted positions are not an exact zero-based particle bijection")
 
-    original_ids = selected[:, 5]
+    schema_version = int(selected[0, 0])
+    internal_ids = selected[:, 5]
     if (
-        np.unique(original_ids).size != n_particles
-        or np.any(original_ids < 0)
-        or np.any(original_ids >= dataset_particles)
+        np.unique(internal_ids).size != n_particles
+        or np.any(internal_ids < 0)
+        or np.any(internal_ids >= dataset_particles)
     ):
-        raise ValueError("original particle IDs are not unique rows in the full dataset")
-    owners = selected[:, 6]
+        raise ValueError("internal particle IDs are not unique rows in the full dataset")
+    if schema_version == 2:
+        stack_indices = selected[:, 6]
+        if (
+            np.unique(stack_indices).size != n_particles
+            or np.any(stack_indices < 0)
+            or np.any(stack_indices >= dataset_particles)
+        ):
+            raise ValueError("stack indices are not unique rows in the full dataset")
+        owners = selected[:, 7]
+    else:
+        stack_indices = None
+        owners = selected[:, 6]
     if np.any(owners < 0) or np.any(owners >= n_threads):
         raise ValueError(f"worker IDs must be in [0, {n_threads})")
 
@@ -67,8 +90,10 @@ def validate_worker_trace(
     thread_counts = np.bincount(owners, minlength=n_threads).astype(np.int64)
     return {
         "iteration": int(iteration),
+        "schema_version": schema_version,
         "owner_by_sorted_position": owners,
-        "original_particle_id_by_sorted_position": original_ids,
+        "internal_particle_id_by_sorted_position": internal_ids,
+        "stack_index_by_sorted_position": stack_indices,
         "pool_first_by_sorted_position": expected_pool_first,
         "thread_counts": thread_counts.tolist(),
         "pool_count": int(np.unique(expected_pool_first).size),
@@ -108,15 +133,20 @@ def main() -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         output_npz,
-        schema_version=np.int64(1),
+        schema_version=np.int64(schedule["schema_version"]),
         iteration=np.int64(args.iteration),
         n_particles=np.int64(args.n_particles),
         dataset_particles=np.int64(args.dataset_particles),
         n_threads=np.int64(args.n_threads),
         pool_size=np.int64(args.pool_size),
         owner_by_sorted_position=schedule["owner_by_sorted_position"],
-        original_particle_id_by_sorted_position=(
-            schedule["original_particle_id_by_sorted_position"]
+        internal_particle_id_by_sorted_position=(
+            schedule["internal_particle_id_by_sorted_position"]
+        ),
+        stack_index_by_sorted_position=(
+            np.asarray([], dtype=np.int64)
+            if schedule["stack_index_by_sorted_position"] is None
+            else schedule["stack_index_by_sorted_position"]
         ),
         pool_first_by_sorted_position=schedule["pool_first_by_sorted_position"],
         source_trace_sha256=np.asarray(trace_sha256),
@@ -126,6 +156,7 @@ def main() -> None:
         "result": "pass",
         "source_trace": str(trace),
         "source_trace_sha256": trace_sha256,
+        "trace_schema_version": schedule["schema_version"],
         "iteration": schedule["iteration"],
         "n_particles": args.n_particles,
         "dataset_particles": args.dataset_particles,

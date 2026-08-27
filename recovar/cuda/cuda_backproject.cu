@@ -4733,6 +4733,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const float* projector_eulers,
     const float* rot,
     const int32_t* reconstruction_group_ids,
+    const int32_t* worker_lane_ids,
     float* data_real_volume,
     float* data_imag_volume,
     float* weight_volume,
@@ -4779,6 +4780,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaStream_t particle_streams[kRelionVdamWorkerStreams] = {};
     cudaEvent_t particle_inputs_ready = nullptr;
     int32_t* reconstruction_groups_host = nullptr;
+    int32_t* worker_lanes_host = nullptr;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
         static_cast<size_t>(texture_voxels) * sizeof(float));
@@ -4926,9 +4928,20 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&reconstruction_groups_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
         if (err != cudaSuccess) goto cleanup;
+        err = cudaMallocHost(
+            reinterpret_cast<void**>(&worker_lanes_host),
+            static_cast<size_t>(n_particles) * sizeof(int32_t));
+        if (err != cudaSuccess) goto cleanup;
         err = cudaMemcpyAsync(
             reconstruction_groups_host,
             reconstruction_group_ids,
+            static_cast<size_t>(n_particles) * sizeof(int32_t),
+            cudaMemcpyDeviceToHost,
+            stream);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMemcpyAsync(
+            worker_lanes_host,
+            worker_lane_ids,
             static_cast<size_t>(n_particles) * sizeof(int32_t),
             cudaMemcpyDeviceToHost,
             stream);
@@ -4939,6 +4952,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         {
             if (reconstruction_groups_host[particle] < 0 ||
                 reconstruction_groups_host[particle] >= reconstruction_group_count)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            if (worker_lanes_host[particle] < 0 ||
+                worker_lanes_host[particle] >= kRelionVdamWorkerStreams)
             {
                 err = cudaErrorInvalidValue;
                 goto cleanup;
@@ -4979,11 +4998,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             texture_real,
             texture_imag,
         };
+        bool lane_started[kRelionVdamWorkerStreams] = {};
         for (int64_t particle = 0; particle < n_particles; ++particle)
         {
-            const int lane = static_cast<int>(
-                particle % kRelionVdamWorkerStreams);
-            if (particle >= kRelionVdamWorkerStreams)
+            const int lane = worker_lanes_host[particle];
+            if (lane_started[lane])
             {
                 err = cudaStreamSynchronize(particle_streams[lane]);
                 if (err != cudaSuccess) goto cleanup;
@@ -5023,6 +5042,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 model_init_z);
             err = cudaGetLastError();
             if (err != cudaSuccess) goto cleanup;
+            lane_started[lane] = true;
         }
         for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
         {
@@ -5057,6 +5077,7 @@ cleanup:
         if (particle_streams[lane]) cudaStreamDestroy(particle_streams[lane]);
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
     if (reconstruction_groups_host) cudaFreeHost(reconstruction_groups_host);
+    if (worker_lanes_host) cudaFreeHost(worker_lanes_host);
     if (texture_real) cudaDestroyTextureObject(texture_real);
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
@@ -8102,6 +8123,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     ffi::AnyBuffer eulers,
     ffi::AnyBuffer rot,
     ffi::AnyBuffer reconstruction_group_ids,
+    ffi::AnyBuffer worker_lane_ids,
     ffi::AnyBuffer data_real_volume_in,
     ffi::AnyBuffer data_imag_volume_in,
     ffi::AnyBuffer weight_volume_in,
@@ -8123,6 +8145,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         eulers.element_type() != ffi::DataType::F32 ||
         rot.element_type() != ffi::DataType::F32 ||
         reconstruction_group_ids.element_type() != ffi::DataType::S32 ||
+        worker_lane_ids.element_type() != ffi::DataType::S32 ||
         weight_volume_in.element_type() != ffi::DataType::F32 ||
         weight_volume_out->element_type() != ffi::DataType::F32 ||
         denominator_sum->element_type() != ffi::DataType::F32)
@@ -8145,6 +8168,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const auto euler_dims = eulers.dimensions();
     const auto rot_dims = rot.dimensions();
     const auto reconstruction_group_dims = reconstruction_group_ids.dimensions();
+    const auto worker_lane_dims = worker_lane_ids.dimensions();
     const auto denominator_dims = denominator_sum->dimensions();
     const int64_t pixel_count = image_h * image_w;
     if (projector_dims.size() != 3 || projector_dims[0] <= 0 ||
@@ -8161,6 +8185,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         rot_dims[1] != posterior_dims[1] || rot_dims[2] != 6 ||
         reconstruction_group_dims.size() != 1 ||
         reconstruction_group_dims[0] != image_dims[0] ||
+        worker_lane_dims.size() != 1 ||
+        worker_lane_dims[0] != image_dims[0] ||
         denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
         denominator_dims[1] != posterior_dims[1] || denominator_dims[2] != pixel_count)
         return ffi::Error::InvalidArgument(
@@ -8201,6 +8227,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<const float*>(eulers.untyped_data()),
         static_cast<const float*>(rot.untyped_data()),
         static_cast<const int32_t*>(reconstruction_group_ids.untyped_data()),
+        static_cast<const int32_t*>(worker_lane_ids.untyped_data()),
         static_cast<float*>(data_real_volume_out->untyped_data()),
         static_cast<float*>(data_imag_volume_out->untyped_data()),
         static_cast<float*>(weight_volume_out->untyped_data()),
@@ -8232,6 +8259,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("projector_max_r")
         .Attr<int64_t>("projection_padding_factor")
         .Attr<int64_t>("reconstruction_group_count")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
