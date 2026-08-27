@@ -4690,9 +4690,9 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
         __syncthreads();
         if (trace_record != nullptr && tid == 0)
         {
-            trace_record->block_end_globaltimer = vdam_candidate_globaltimer();
-            if (trace_record->first_atomic_globaltimer == 0)
+            if (trace_first_atomic_claimed == 0)
                 trace_record->flags |= std::uint32_t(1U << 3);
+            trace_record->block_end_globaltimer = vdam_candidate_globaltimer();
         }
     }
 }

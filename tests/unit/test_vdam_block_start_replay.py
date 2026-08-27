@@ -298,6 +298,13 @@ def test_native_trace_first_atomic_precedes_interpolation_registers():
     )
     assert trace_position < interpolation_position < first_atomic_position
 
+    no_atomic_position = kernel.rindex("if (trace_first_atomic_claimed == 0)")
+    block_end_position = kernel.rindex(
+        "trace_record->block_end_globaltimer = vdam_candidate_globaltimer();"
+    )
+    assert no_atomic_position < block_end_position
+    assert "trace_record->first_atomic_globaltimer == 0" not in kernel
+
 
 def test_block_start_replay_rejects_a_different_rotation_bucket(tmp_path, monkeypatch):
     schedule, chronology = _write_inputs(tmp_path)
