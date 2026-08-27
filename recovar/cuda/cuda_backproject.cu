@@ -43,6 +43,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <thread>
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
@@ -4753,7 +4754,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int physical_image_size,
     int projector_max_r,
     int projection_padding_factor,
-    int reconstruction_group_count)
+    int reconstruction_group_count,
+    bool parallel_worker_replay)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -4998,15 +5000,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             texture_real,
             texture_imag,
         };
-        bool lane_started[kRelionVdamWorkerStreams] = {};
-        for (int64_t particle = 0; particle < n_particles; ++particle)
-        {
-            const int lane = worker_lanes_host[particle];
-            if (lane_started[lane])
-            {
-                err = cudaStreamSynchronize(particle_streams[lane]);
-                if (err != cudaSuccess) goto cleanup;
-            }
+        const auto launch_particle = [&](int64_t particle, int lane) {
             const int64_t accumulator_offset =
                 static_cast<int64_t>(reconstruction_groups_host[particle]) *
                 accumulator_stride;
@@ -5040,9 +5034,61 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 static_cast<unsigned>(model_y),
                 model_init_y,
                 model_init_z);
-            err = cudaGetLastError();
-            if (err != cudaSuccess) goto cleanup;
-            lane_started[lane] = true;
+            return cudaGetLastError();
+        };
+        if (parallel_worker_replay)
+        {
+            // The captured owner map fixes RELION's task-to-worker assignment.
+            // Issue each worker's exact particle chain from an independent host
+            // thread so cross-stream launch timing is no longer serialized by
+            // RECOVAR's controller thread.
+            cudaError_t lane_errors[kRelionVdamWorkerStreams] = {};
+            std::thread worker_threads[kRelionVdamWorkerStreams];
+            for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
+            {
+                worker_threads[lane] = std::thread([&, lane]() {
+                    bool lane_started = false;
+                    for (int64_t particle = 0; particle < n_particles; ++particle)
+                    {
+                        if (worker_lanes_host[particle] != lane) continue;
+                        if (lane_started)
+                        {
+                            lane_errors[lane] =
+                                cudaStreamSynchronize(particle_streams[lane]);
+                            if (lane_errors[lane] != cudaSuccess) return;
+                        }
+                        lane_errors[lane] = launch_particle(particle, lane);
+                        if (lane_errors[lane] != cudaSuccess) return;
+                        lane_started = true;
+                    }
+                });
+            }
+            for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
+                worker_threads[lane].join();
+            for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
+            {
+                if (lane_errors[lane] != cudaSuccess)
+                {
+                    err = lane_errors[lane];
+                    goto cleanup;
+                }
+            }
+        }
+        else
+        {
+            bool lane_started[kRelionVdamWorkerStreams] = {};
+            for (int64_t particle = 0; particle < n_particles; ++particle)
+            {
+                const int lane = worker_lanes_host[particle];
+                if (lane_started[lane])
+                {
+                    err = cudaStreamSynchronize(particle_streams[lane]);
+                    if (err != cudaSuccess) goto cleanup;
+                }
+                err = launch_particle(particle, lane);
+                if (err != cudaSuccess) goto cleanup;
+                lane_started[lane] = true;
+            }
         }
         for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
         {
@@ -8114,6 +8160,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t projector_max_r,
     int64_t projection_padding_factor,
     int64_t reconstruction_group_count,
+    int64_t parallel_worker_replay,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -8155,7 +8202,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
         upsampling <= 0 || max_r2_x4 < 0 || physical_image_size <= 0 ||
         projector_max_r <= 0 || projection_padding_factor <= 0 ||
-        reconstruction_group_count <= 0)
+        reconstruction_group_count <= 0 ||
+        (parallel_worker_replay != 0 && parallel_worker_replay != 1))
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid geometry");
 
@@ -8237,7 +8285,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<int>(physical_image_size),
         static_cast<int>(projector_max_r),
         static_cast<int>(projection_padding_factor),
-        static_cast<int>(reconstruction_group_count));
+        static_cast<int>(reconstruction_group_count),
+        parallel_worker_replay != 0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8259,6 +8308,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("projector_max_r")
         .Attr<int64_t>("projection_padding_factor")
         .Attr<int64_t>("reconstruction_group_count")
+        .Attr<int64_t>("parallel_worker_replay")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

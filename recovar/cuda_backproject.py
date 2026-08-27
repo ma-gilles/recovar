@@ -1817,6 +1817,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         if data_volume.shape != weight_volume.shape or data_volume.shape[0] <= 0:
             raise ValueError("grouped VDAM accumulators must have matching nonempty shapes")
         reconstruction_group_count = int(data_volume.shape[0])
+    parallel_worker_replay = worker_lane_ids is not None
     if worker_lane_ids is None:
         worker_lane_ids = jnp.arange(n_particles, dtype=jnp.int32) % 8
     else:
@@ -1893,6 +1894,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         projector_max_r=np.int64(projector_max_r),
         projection_padding_factor=np.int64(projection_padding_factor),
         reconstruction_group_count=np.int64(reconstruction_group_count),
+        parallel_worker_replay=np.int64(parallel_worker_replay),
     )
     fused_data = jax.lax.complex(fused_real, fused_imag)
     full_h, full_w = map(int, image_shape)

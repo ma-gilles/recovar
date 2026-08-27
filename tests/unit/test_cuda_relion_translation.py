@@ -105,6 +105,8 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "constexpr int kRelionVdamWorkerStreams = 8" in projector_launcher
     assert "const int lane = worker_lanes_host[particle]" in projector_launcher
     assert "if (lane_started[lane])" in projector_launcher
+    assert "std::thread worker_threads[kRelionVdamWorkerStreams]" in projector_launcher
+    assert "worker_threads[lane] = std::thread([&, lane]()" in projector_launcher
     assert "cudaStreamSynchronize(particle_streams[lane])" in projector_launcher
     assert "reconstruction_groups_host[particle]" in projector_launcher
     assert "data_real_volume + accumulator_offset" in projector_launcher
@@ -122,6 +124,8 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "data_imag_volume = jnp.asarray(data_volume.imag" in projector_wrapper
     assert "fused_data = jax.lax.complex(fused_real, fused_imag)" in projector_wrapper
     assert "jnp.arange(n_particles, dtype=jnp.int32) % 8" in projector_wrapper
+    assert "parallel_worker_replay = worker_lane_ids is not None" in projector_wrapper
+    assert "parallel_worker_replay=np.int64(parallel_worker_replay)" in projector_wrapper
     assert "worker_lane_ids" in projector_wrapper
 
 
