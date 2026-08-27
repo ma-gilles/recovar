@@ -137,6 +137,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "VdamCandidateBlockTraceRecord" in source
     assert "vdam_candidate_globaltimer" in source
     assert "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE" in source
+    assert "candidate_trace_active && candidate_trace_writer->requested()" in source
     assert "candidate_trace_writer->append" in projector_launcher
 
     wrapper = inspect.getsource(cuda_backproject.relion_vdam_mstep_fused_x_half)
@@ -151,7 +152,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "data_imag_volume = jnp.asarray(data_volume.imag" in projector_wrapper
     assert "fused_data = jax.lax.complex(fused_real, fused_imag)" in projector_wrapper
     assert "jnp.arange(n_particles, dtype=jnp.int32) % 8" in projector_wrapper
-    assert "parallel_worker_replay = worker_lane_ids is not None" in projector_wrapper
+    assert "captured_worker_lanes = worker_lane_ids is not None" in projector_wrapper
     assert "parallel_worker_replay=np.int64(parallel_worker_replay)" in projector_wrapper
     assert "captured_rotation_replay=np.int64(captured_rotation_replay)" in projector_wrapper
     assert "serial_rotation_replay=np.int64(serial_rotation_replay)" in projector_wrapper
@@ -162,6 +163,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "rotation_replay_order" in projector_wrapper
     assert "rotation_replay_counts" in projector_wrapper
     assert "particle_trace_ids" in projector_wrapper
+    assert "candidate_trace_active=np.int64(candidate_trace_active)" in projector_wrapper
 
     engine_source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "Native launches every row in its padded significant-" in engine_source

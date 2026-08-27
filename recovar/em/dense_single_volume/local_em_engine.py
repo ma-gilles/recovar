@@ -361,6 +361,7 @@ RELION_VDAM_WORKER_REPLAY_ITER_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_ITER"
 RELION_VDAM_WORKER_STREAM_COUNT = 8
 RELION_VDAM_BLOCK_CHRONOLOGY_ENV = "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ"
 VDAM_CANDIDATE_BLOCK_TRACE_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE"
+VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER"
 VDAM_CANDIDATE_BLOCK_MAP_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP"
 VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_ITER"
 VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPACITY"
@@ -997,10 +998,35 @@ def _materialize_relion_vdam_rotation_rows(value, replay_order):
     )
 
 
-def _relion_vdam_candidate_trace_ids_for_images(experiment_dataset, image_indices):
-    """Return stable stack IDs only when passive candidate tracing is requested."""
+def _relion_vdam_candidate_trace_active(*, debug_iteration: int | None) -> bool:
+    """Gate passive candidate tracing to its explicitly sealed iteration."""
 
     if not os.environ.get(VDAM_CANDIDATE_BLOCK_TRACE_ENV, "").strip():
+        return False
+    iteration_text = os.environ.get(
+        VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+        "",
+    ).strip()
+    if not iteration_text:
+        raise ValueError("candidate block trace requires an explicit iteration")
+    try:
+        target_iteration = int(iteration_text)
+    except ValueError as exc:
+        raise ValueError("candidate block trace iteration must be an integer") from exc
+    if target_iteration <= 0:
+        raise ValueError("candidate block trace iteration must be positive")
+    return debug_iteration is not None and int(debug_iteration) == target_iteration
+
+
+def _relion_vdam_candidate_trace_ids_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None,
+):
+    """Return stable stack IDs only when passive candidate tracing is requested."""
+
+    if not _relion_vdam_candidate_trace_active(debug_iteration=debug_iteration):
         return None
     original_indices = np.asarray(
         experiment_dataset.original_image_indices_from_local(image_indices),
@@ -1451,6 +1477,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     native_trace_shape_replay=False,
     materialized_rotation_replay=False,
     particle_replay_order=None,
+    candidate_trace_active=False,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -1620,6 +1647,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 parallel_worker_replay=(
                     False if particle_replay_order is not None else None
                 ),
+                candidate_trace_active=candidate_trace_active,
             )
         )
     return Ft_y, Ft_ctf
@@ -5626,6 +5654,7 @@ def run_local_em_exact(
                 candidate_trace_ids = _relion_vdam_candidate_trace_ids_for_images(
                     experiment_dataset,
                     unpadded_bucket.image_indices,
+                    debug_iteration=debug_iteration,
                 )
                 block_start_order = _relion_vdam_block_start_orders_for_images(
                     experiment_dataset,
@@ -5730,6 +5759,9 @@ def run_local_em_exact(
                         )
                     ),
                     particle_replay_order=particle_issue_order,
+                    candidate_trace_active=_relion_vdam_candidate_trace_active(
+                        debug_iteration=debug_iteration
+                    ),
                 )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)

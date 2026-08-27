@@ -53,7 +53,7 @@ def test_fullschedule_boundary_seals_and_replays_each_native_block_chronology():
         "export RELION_VDAM_BLOCK_TRACE_ITER=1",
         "scripts.build_vdam_block_chronology",
         "captured block topology requires native block tracing in the same arm",
-        "export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${CANDIDATE_BLOCK_CHRONOLOGY}",
+        "export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${REPLAY_BLOCK_CHRONOLOGY}",
         "export RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY=${WORKER_REPLAY_TOPOLOGY}",
     ]
     for text in required:
@@ -65,9 +65,12 @@ def test_fullschedule_boundary_can_seal_passive_candidate_block_chronology():
     required = [
         "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPTURE",
         "export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE=${CANDIDATE_BLOCK_TRACE}",
-        "export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER=1",
+        "export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER=${TARGET_ITERATION}",
         "--capture \"${CANDIDATE_BLOCK_TRACE}\"",
         "--output-npz \"${CANDIDATE_BLOCK_CHRONOLOGY}\"",
+        "scripts.analyze_vdam_particle_issue_chronology",
+        "--native-chronology \"${REPLAY_BLOCK_CHRONOLOGY}\"",
+        '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue',
         'test "${WORKER_REPLAY_TOPOLOGY}" = captured',
     ]
     for text in required:

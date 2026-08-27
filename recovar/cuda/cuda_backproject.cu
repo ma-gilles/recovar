@@ -5002,7 +5002,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     bool float64_accumulator_replay,
     bool reverse_rotation_replay,
     int rotation_replay_stride,
-    bool native_trace_shape_replay)
+    bool native_trace_shape_replay,
+    bool candidate_trace_active)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -5037,15 +5038,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         kRelionVdamWorkerStreams] = {};
     VdamCandidateBlockTraceWriter* candidate_trace_writer =
         &vdam_candidate_block_trace_writer();
-    const bool candidate_trace_requested = candidate_trace_writer->requested();
+    const bool candidate_trace_requested =
+        candidate_trace_active && candidate_trace_writer->requested();
     const bool device_trace_requested =
         candidate_trace_requested || native_trace_shape_replay;
     const std::uint32_t candidate_trace_iteration =
-        candidate_trace_writer->iteration();
+        candidate_trace_requested ? candidate_trace_writer->iteration() : 0;
     double* data_real_volume_f64 = nullptr;
     double* data_imag_volume_f64 = nullptr;
     double* weight_volume_f64 = nullptr;
-    if (!candidate_trace_writer->healthy() ||
+    if ((candidate_trace_requested && !candidate_trace_writer->healthy()) ||
         (candidate_trace_requested && native_trace_shape_replay) ||
         (device_trace_requested && serial_rotation_replay))
         return cudaErrorInvalidValue;
@@ -8688,6 +8690,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t reverse_rotation_replay,
     int64_t rotation_replay_stride,
     int64_t native_trace_shape_replay,
+    int64_t candidate_trace_active,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -8742,6 +8745,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         (float64_accumulator_replay != 0 && float64_accumulator_replay != 1) ||
         (reverse_rotation_replay != 0 && reverse_rotation_replay != 1) ||
         (native_trace_shape_replay != 0 && native_trace_shape_replay != 1) ||
+        (candidate_trace_active != 0 && candidate_trace_active != 1) ||
         rotation_replay_stride < 0 ||
         (captured_rotation_replay != 0 && reverse_rotation_replay != 0) ||
         (captured_rotation_replay != 0 && rotation_replay_stride != 0) ||
@@ -8848,7 +8852,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         float64_accumulator_replay != 0,
         reverse_rotation_replay != 0,
         static_cast<int>(rotation_replay_stride),
-        native_trace_shape_replay != 0);
+        native_trace_shape_replay != 0,
+        candidate_trace_active != 0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -8877,6 +8882,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("reverse_rotation_replay")
         .Attr<int64_t>("rotation_replay_stride")
         .Attr<int64_t>("native_trace_shape_replay")
+        .Attr<int64_t>("candidate_trace_active")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

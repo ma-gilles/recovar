@@ -28,6 +28,7 @@ fi
 
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 TARGET_ITERATION=${TARGET_ITERATION:-2}
+TARGET_ITERATION_TAG=$(printf '%03d' "${TARGET_ITERATION}")
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 RELION_THREADS=${RELION_THREADS:-8}
 RANDOM_SEED=${RANDOM_SEED:-0}
@@ -89,8 +90,8 @@ WORKER_TRACE=${PROVENANCE}/relion_worker_trace_it001.tsv
 WORKER_SCHEDULE=${ANALYSIS}/relion_worker_schedule_it001.npz
 BLOCK_TRACE=${PROVENANCE}/relion_block_trace_it001.bin
 BLOCK_CHRONOLOGY=${ANALYSIS}/relion_block_chronology_it001.npz
-CANDIDATE_BLOCK_TRACE=${PROVENANCE}/recovar_block_trace_it001.bin
-CANDIDATE_BLOCK_CHRONOLOGY=${ANALYSIS}/recovar_block_chronology_it001.npz
+CANDIDATE_BLOCK_TRACE=${PROVENANCE}/recovar_block_trace_it${TARGET_ITERATION_TAG}.bin
+CANDIDATE_BLOCK_CHRONOLOGY=${ANALYSIS}/recovar_block_chronology_it${TARGET_ITERATION_TAG}.npz
 CANDIDATE_BLOCK_MAP=${PROVENANCE}/recovar_candidate_block_map_it001.bin
 CANDIDATE_BLOCK_MAP_SEAL=${ANALYSIS}/recovar_candidate_block_map_it001.npz
 
@@ -193,10 +194,12 @@ if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
   test "${WORKER_TRACE_POOL_SIZE}" -ge 1
 fi
 if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
-  test "${WORKER_TRACE_REPLAY}" = 1
-  test "${TARGET_ITERATION}" -eq 1
-  test "${WORKER_TRACE_ITERATION}" -eq 1
+  test "${WORKER_TRACE_REPLAY}" = 1 -o -n "${EXTERNAL_WORKER_SCHEDULE}"
+  if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
+    test "${WORKER_TRACE_ITERATION}" -eq "${TARGET_ITERATION}"
+  fi
   test "${WORKER_REPLAY_TOPOLOGY}" = captured -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_native_count -o \
@@ -347,9 +350,9 @@ if [[ -n "${EXTERNAL_WORKER_SCHEDULE}" ]]; then
   sha256sum "${EXTERNAL_WORKER_SCHEDULE}" \
     > "${PROVENANCE}/external_worker_schedule.sha256"
 fi
-CANDIDATE_BLOCK_CHRONOLOGY=${BLOCK_CHRONOLOGY}
+REPLAY_BLOCK_CHRONOLOGY=${BLOCK_CHRONOLOGY}
 if [[ -n "${EXTERNAL_BLOCK_CHRONOLOGY}" ]]; then
-  CANDIDATE_BLOCK_CHRONOLOGY=${EXTERNAL_BLOCK_CHRONOLOGY}
+  REPLAY_BLOCK_CHRONOLOGY=${EXTERNAL_BLOCK_CHRONOLOGY}
   sha256sum "${EXTERNAL_BLOCK_CHRONOLOGY}" \
     > "${PROVENANCE}/external_block_chronology.sha256"
 fi
@@ -604,11 +607,11 @@ elif [[ "${WORKER_TRACE_REPLAY}" = 1 || -n "${EXTERNAL_WORKER_SCHEDULE}" ]]; the
   export RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY=${WORKER_REPLAY_TOPOLOGY}
 fi
 if [[ "${BLOCK_TRACE_REPLAY}" = 1 || -n "${EXTERNAL_BLOCK_CHRONOLOGY}" ]]; then
-  export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${CANDIDATE_BLOCK_CHRONOLOGY}
+  export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${REPLAY_BLOCK_CHRONOLOGY}
 fi
 if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE=${CANDIDATE_BLOCK_TRACE}
-  export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER=1
+  export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER=${TARGET_ITERATION}
   export RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPACITY=${CANDIDATE_BLOCK_TRACE_CAPACITY}
 fi
 if [[ "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 1 ]]; then
@@ -747,17 +750,28 @@ if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   (
     cd "${REPO_ROOT}"
     "${PIXI_PY}" -m scripts.build_vdam_block_chronology \
-      --capture "${CANDIDATE_BLOCK_TRACE}" --iteration 1 \
+      --capture "${CANDIDATE_BLOCK_TRACE}" --iteration "${TARGET_ITERATION}" \
       --n-particles "${WORKER_TRACE_PARTICLES}" \
       --n-threads "${RELION_THREADS}" --n-classes 1 \
       --sm-count "${BLOCK_TRACE_SM_COUNT}" \
       --output-npz "${CANDIDATE_BLOCK_CHRONOLOGY}" \
-      --output-json "${ANALYSIS}/recovar_block_chronology_it001.json"
+      --output-json "${ANALYSIS}/recovar_block_chronology_it${TARGET_ITERATION_TAG}.json"
   )
   test -s "${CANDIDATE_BLOCK_CHRONOLOGY}"
   sha256sum "${CANDIDATE_BLOCK_TRACE}" "${CANDIDATE_BLOCK_CHRONOLOGY}" \
-    "${ANALYSIS}/recovar_block_chronology_it001.json" \
+    "${ANALYSIS}/recovar_block_chronology_it${TARGET_ITERATION_TAG}.json" \
     > "${PROVENANCE}/recovar_block_chronology.sha256"
+  if [[ -s "${REPLAY_BLOCK_CHRONOLOGY}" ]]; then
+    (
+      cd "${REPO_ROOT}"
+      "${PIXI_PY}" -m scripts.analyze_vdam_particle_issue_chronology \
+        --native-chronology "${REPLAY_BLOCK_CHRONOLOGY}" \
+        --candidate-chronology "${CANDIDATE_BLOCK_CHRONOLOGY}" \
+        --worker-schedule "${CANDIDATE_WORKER_SCHEDULE}" \
+        --output-json "${ANALYSIS}/particle_issue_chronology_it${TARGET_ITERATION_TAG}.json"
+    )
+    test -s "${ANALYSIS}/particle_issue_chronology_it${TARGET_ITERATION_TAG}.json"
+  fi
 fi
 if [[ "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 1 ]]; then
   test -s "${CANDIDATE_BLOCK_MAP}"
@@ -787,6 +801,7 @@ git -C "${RELION_SOURCE}" diff --binary | sha256sum > "${PROVENANCE}/relion_diff
 sha256sum "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
   "${REPO_ROOT}/scripts/build_vdam_block_chronology.py" \
   "${REPO_ROOT}/scripts/build_vdam_candidate_block_map.py" \
+  "${REPO_ROOT}/scripts/analyze_vdam_particle_issue_chronology.py" \
   "${REPO_ROOT}/scripts/analyze_vdam_mstep_boundary.py" \
   "${REPO_ROOT}/scripts/analyze_vdam_bpref_accumulator_boundary.py" \
   "${DATA_DIR}/particles.star" \

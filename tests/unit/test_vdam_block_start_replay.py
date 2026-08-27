@@ -416,6 +416,7 @@ def test_candidate_block_trace_uses_stable_stack_indices(monkeypatch):
         local_em_engine._relion_vdam_candidate_trace_ids_for_images(
             Dataset(),
             np.asarray([0, 1], dtype=np.int64),
+            debug_iteration=1,
         )
         is None
     )
@@ -423,8 +424,46 @@ def test_candidate_block_trace_uses_stable_stack_indices(monkeypatch):
         local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV,
         "/tmp/candidate-trace.bin",
     )
+    monkeypatch.setenv(
+        local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+        "58",
+    )
+    assert (
+        local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+            Dataset(),
+            np.asarray([2, 0], dtype=np.int64),
+            debug_iteration=57,
+        )
+        is None
+    )
     trace_ids = local_em_engine._relion_vdam_candidate_trace_ids_for_images(
         Dataset(),
         np.asarray([2, 0], dtype=np.int64),
+        debug_iteration=58,
     )
     np.testing.assert_array_equal(trace_ids, np.asarray([402, 901], dtype=np.int32))
+
+
+@pytest.mark.parametrize("iteration", ["", "0", "-1", "bad"])
+def test_candidate_block_trace_rejects_invalid_target_iteration(
+    tmp_path,
+    monkeypatch,
+    iteration,
+):
+    monkeypatch.setenv(
+        local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV,
+        str(tmp_path / "candidate-trace.bin"),
+    )
+    if iteration:
+        monkeypatch.setenv(
+            local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+            iteration,
+        )
+    else:
+        monkeypatch.delenv(
+            local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+            raising=False,
+        )
+
+    with pytest.raises(ValueError, match="candidate block trace"):
+        local_em_engine._relion_vdam_candidate_trace_active(debug_iteration=58)
