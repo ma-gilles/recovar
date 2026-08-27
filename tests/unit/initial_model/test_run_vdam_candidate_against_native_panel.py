@@ -20,6 +20,13 @@ def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     assert "exit 75" in source
     assert source.index("VDAM_TARGET_GPU_MISS") < source.index('mkdir -p "${RECOVAR_DIR}"')
     assert 'case "${variable_name}" in RECOVAR_*) unset "${variable_name}"' in source
+    assert "VDAM_WORKER_SCHEDULE_NPZ" in source
+    assert "EXPECTED_WORKER_SCHEDULE_SHA256" in source
+    assert "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ" in source
+    assert "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY" in source
+    assert source.index('case "${variable_name}" in RECOVAR_*) unset') < source.index(
+        "export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
+    )
     assert "RECOVAR_INITIAL_MODEL_RELION_F32_COARSE_TIE_ULPS" not in source
     assert "build_recovar_command" in source
     assert 'int(definition["nr_classes"]) != 1' in source

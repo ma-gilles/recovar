@@ -28,6 +28,9 @@ PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 VDAM_SCORECARD=${VDAM_SCORECARD:-${REPO_ROOT}/docs/math/vdam_k1_gui_default_full_suite_v1.json}
 VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
 VDAM_DEFER_AUDIT=${VDAM_DEFER_AUDIT:-1}
+VDAM_WORKER_SCHEDULE_NPZ=${VDAM_WORKER_SCHEDULE_NPZ:-}
+VDAM_WORKER_REPLAY_TOPOLOGY=${VDAM_WORKER_REPLAY_TOPOLOGY:-}
+EXPECTED_WORKER_SCHEDULE_SHA256=${EXPECTED_WORKER_SCHEDULE_SHA256:-}
 RECOVAR_CUDA_LIB_PATH=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}
 CANDIDATE_ROOT=${OUTPUT_ROOT}/${CASE_ID}
 RECOVAR_DIR=${CANDIDATE_ROOT}/recovar
@@ -41,6 +44,19 @@ case "${VDAM_DEFER_AUDIT}" in
     0|1) ;;
     *) echo "VDAM_DEFER_AUDIT must be 0 or 1" >&2; exit 2 ;;
 esac
+if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
+    test -s "${VDAM_WORKER_SCHEDULE_NPZ}"
+    test -n "${EXPECTED_WORKER_SCHEDULE_SHA256}"
+    test "$(sha256sum "${VDAM_WORKER_SCHEDULE_NPZ}" | awk '{print $1}')" = \
+        "${EXPECTED_WORKER_SCHEDULE_SHA256}"
+    case "${VDAM_WORKER_REPLAY_TOPOLOGY}" in
+        captured|single|single_rotation) ;;
+        *) echo "worker replay topology must be captured, single, or single_rotation" >&2; exit 2 ;;
+    esac
+elif [[ -n "${VDAM_WORKER_REPLAY_TOPOLOGY}" || -n "${EXPECTED_WORKER_SCHEDULE_SHA256}" ]]; then
+    echo "worker replay topology/hash requires VDAM_WORKER_SCHEDULE_NPZ" >&2
+    exit 2
+fi
 test -f "${PANEL_ROOT}/SAFE_TO_DELETE"
 test -s "${FIXTURE_DIR}/fixture_materialization.json"
 test -s "${FIXTURE_DIR}/particles.star"
@@ -112,6 +128,10 @@ export CUDA_LAUNCH_BLOCKING=0
 export CUDA_VISIBLE_DEVICES=0
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${RECOVAR_CUDA_LIB_PATH}
+if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
+    export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${VDAM_WORKER_SCHEDULE_NPZ}
+    export RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY=${VDAM_WORKER_REPLAY_TOPOLOGY}
+fi
 export JAX_COMPILATION_CACHE_DIR=${OUTPUT_ROOT}/jax_compilation_cache
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0.01
 export TMPDIR=${CANDIDATE_ROOT}/runtime/${SLURM_JOB_ID}/tmp
@@ -183,6 +203,9 @@ git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE_DIR}/repo_head.txt"
 sha256sum "${RECOVAR_CUDA_LIB}" "${RELION_BIND_MATCHES[0]}" "${VDAM_SCORECARD}" \
     "${FIXTURE_DIR}/particles.star" "${FIXTURE_DIR}/fixture_materialization.json" \
     > "${PROVENANCE_DIR}/input_sha256.txt"
+if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
+    sha256sum "${VDAM_WORKER_SCHEDULE_NPZ}" >> "${PROVENANCE_DIR}/input_sha256.txt"
+fi
 nvidia-smi -q > "${PROVENANCE_DIR}/nvidia_smi.txt"
 printf '%q ' "${RECOVAR_COMMAND[@]}" > "${PROVENANCE_DIR}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"
