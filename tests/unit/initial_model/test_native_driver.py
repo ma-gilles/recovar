@@ -90,6 +90,50 @@ def test_iteration_artifact_cadence_rejects_nonpositive_interval():
         driver._should_write_iteration_artifacts(1, 10, 0)
 
 
+def test_iteration_reference_replay_expands_iteration_and_class(monkeypatch, tmp_path):
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.5,
+        K=2,
+        nr_iter=10,
+        n_directions=12,
+    )
+    paths = []
+    expected = []
+    for class_index in (1, 2):
+        volume = np.full((8, 8, 8), 10.0 + class_index, dtype=np.float64)
+        path = tmp_path / f"run_it003_class{class_index:03d}.mrc"
+        driver.write_relion_mrc(path, volume, voxel_size=1.5)
+        paths.append(path)
+        expected.append(volume)
+    monkeypatch.setenv(
+        driver.INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV,
+        str(tmp_path / "run_it{iteration:03d}_class{k:03d}.mrc"),
+    )
+    meta = {}
+
+    replayed = driver._maybe_replay_iteration_references(state, iteration=3, meta=meta)
+
+    np.testing.assert_array_equal(replayed.Iref, np.asarray(expected))
+    np.testing.assert_array_equal(state.Iref, 0.0)
+    assert meta["diagnostic_iref_replay_paths"] == [str(path) for path in paths]
+    assert meta["diagnostic_iref_replay_iteration"] == 3
+
+
+def test_iteration_reference_replay_rejects_wrong_class_count(monkeypatch):
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=2,
+        nr_iter=10,
+        n_directions=12,
+    )
+    monkeypatch.setenv(driver.INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "one-map.mrc")
+
+    with pytest.raises(ValueError, match="expects one path for K=1 or K=2"):
+        driver._maybe_replay_iteration_references(state, iteration=1, meta={})
+
+
 def test_experiment_read_order_uses_micrograph_lexicographic_order():
     main = pd.DataFrame(
         {

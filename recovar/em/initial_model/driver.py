@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -62,6 +62,7 @@ RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
 RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
+INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV = "RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE"
 
 
 def _effective_initial_model_image_batch_size(
@@ -1559,6 +1560,64 @@ def _initial_state_from_particles(
     return state, optics_group_by_particle
 
 
+def _maybe_replay_iteration_references(
+    state: InitialModelState,
+    *,
+    iteration: int,
+    meta: dict,
+) -> InitialModelState:
+    """Replace post-M-step references from an explicit diagnostic template.
+
+    This fail-closed hook is used only for causal trajectory boundaries.  A
+    template may contain ``{iteration}`` and ``{k}`` format fields, where
+    ``k`` is RELION's one-based class number.  A comma-separated list supplies
+    one path per class; a single path is broadcast only for K=1.
+    """
+
+    template = os.environ.get(INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "").strip()
+    if not template:
+        return state
+
+    tokens = [token.strip() for token in template.split(",") if token.strip()]
+    if len(tokens) == 1 and "{k" in tokens[0]:
+        paths = [
+            tokens[0].format(iteration=int(iteration), k=class_index + 1)
+            for class_index in range(int(state.K))
+        ]
+    elif len(tokens) == 1 and int(state.K) == 1:
+        paths = [tokens[0].format(iteration=int(iteration), k=1)]
+    elif len(tokens) == int(state.K):
+        paths = [
+            token.format(iteration=int(iteration), k=class_index + 1)
+            for class_index, token in enumerate(tokens)
+        ]
+    else:
+        raise ValueError(
+            f"{INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV} expects one path for K=1 "
+            f"or K={int(state.K)} comma-separated paths, got {len(tokens)}"
+        )
+
+    from recovar.utils.helpers import load_relion_volume
+
+    references = np.stack(
+        [np.asarray(load_relion_volume(path), dtype=np.float64) for path in paths],
+        axis=0,
+    )
+    expected_shape = (int(state.K), int(state.ori_size), int(state.ori_size), int(state.ori_size))
+    if references.shape != expected_shape:
+        raise ValueError(
+            f"iteration reference replay shape {references.shape} != {expected_shape}"
+        )
+    if not np.all(np.isfinite(references)):
+        raise ValueError("iteration reference replay contains non-finite values")
+
+    out = replace(state)
+    out.Iref = references
+    meta["diagnostic_iref_replay_paths"] = paths
+    meta["diagnostic_iref_replay_iteration"] = int(iteration)
+    return out
+
+
 def _class_mrc_paths(output_prefix: str, iteration: int, K: int) -> tuple[str, ...]:
     return tuple(f"{output_prefix}_it{iteration:03d}_class{k + 1:03d}.mrc" for k in range(K))
 
@@ -1893,6 +1952,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             return None
 
     post_mstep_update = None
+    solvent_mask = None
     if opts.do_solvent:
         solvent_mask = relion_solvent_mask(
             ori_size=int(state.ori_size),
@@ -1900,8 +1960,16 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             particle_diameter_ang=float(opts.particle_diameter),
             width_mask_edge_px=float(opts.width_mask_edge_px),
         )
+    if opts.do_solvent or os.environ.get(INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "").strip():
+
         def post_mstep_update(current, _iteration, _meta):
-            return relion_solvent_flatten_state(current, mask=solvent_mask)
+            if solvent_mask is not None:
+                current = relion_solvent_flatten_state(current, mask=solvent_mask)
+            return _maybe_replay_iteration_references(
+                current,
+                iteration=int(_iteration),
+                meta=_meta,
+            )
 
     final_state = run_vdam_iterations(
         state,
