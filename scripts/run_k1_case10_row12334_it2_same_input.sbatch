@@ -135,7 +135,7 @@ NATIVE_FACTOR=$(find "${NATIVE_ROOT}/capture" -maxdepth 1 -type f \
     -name "*stack${TARGET_STACK_INDEX}_img0_class1.bpre-v2.bin" -print -quit)
 NATIVE_FINE=$(find "${NATIVE_ROOT}/capture" -maxdepth 1 -type f \
     -name "*stack${TARGET_STACK_INDEX}_class1.fine-score-v1.bin" -print -quit)
-LAUNCHER=${REPO}/scripts/run_k1_case10_row12334_it2_same_input.sbatch
+LAUNCHER=${K1_ROW_LAUNCHER_PATH:-${REPO}/scripts/run_k1_case10_row12334_it2_same_input.sbatch}
 RUNNER=${REPO}/scripts/run_multi_iter_parity.py
 OUTPUT=${ROOT}/output
 PASS2=${ROOT}/pass2
