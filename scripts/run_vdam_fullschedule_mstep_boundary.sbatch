@@ -63,6 +63,7 @@ NATIVE_BPREF_REPLAY_ALL=${VDAM_NATIVE_BPREF_REPLAY_ALL:-0}
 NATIVE_IREF_INPUT_REPLAY=${VDAM_NATIVE_IREF_INPUT_REPLAY:-0}
 NATIVE_IREF_INPUT_REPLAY_ALL=${VDAM_NATIVE_IREF_INPUT_REPLAY_ALL:-0}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
+STACK_INDEX=${VDAM_PREPROCESS_STACK_INDEX:-}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
 BPREF_CONTRIBUTION_CAPTURE_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF:-${BPREF_CONTRIBUTION_HALF}}
 BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP=${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP:-}
@@ -99,6 +100,10 @@ test "${TARGET_ITERATION}" -ge 1
 test "${TARGET_ITERATION}" -le "${NR_ITER_SCHEDULE}"
 test "${RELION_THREADS}" -ge 1
 test "${RELION_THREADS}" -le "${SLURM_CPUS_PER_TASK:-8}"
+if [[ -n "${STACK_INDEX}" && ! "${STACK_INDEX}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "VDAM_PREPROCESS_STACK_INDEX must be a positive integer" >&2
+  exit 2
+fi
 test "${WORKER_TRACE_REPLAY}" = 0 -o "${WORKER_TRACE_REPLAY}" = 1
 test "${BLOCK_TRACE_REPLAY}" = 0 -o "${BLOCK_TRACE_REPLAY}" = 1
 test "${BLOCK_TRACE_CAPTURE}" = 0 -o "${BLOCK_TRACE_CAPTURE}" = 1
@@ -304,6 +309,10 @@ else
 fi
 export RELION_ACC_DUMP_DIR=${NATIVE_CAPTURE}
 export RELION_ACC_DUMP_PART_ID=${PART_ID}
+unset RELION_ACC_DUMP_STACK_INDEX
+if [[ -n "${STACK_INDEX}" ]]; then
+  export RELION_ACC_DUMP_STACK_INDEX=${STACK_INDEX}
+fi
 export RELION_ACC_DUMP_ITER=${TARGET_ITERATION}
 export RELION_ACC_DUMP_VERBOSE=0
 if [[ "${WORKER_TRACE_REPLAY}" = 1 ]]; then
@@ -530,7 +539,7 @@ else
 fi
 unset MPI_ROOT CUDA_HOME OMPI_MCA_orte_tmpdir_base OMPI_MCA_shmem_mmap_enable_nfs_warning
 unset RECOVAR_DEBUG_DUMP_DIR RECOVAR_DEBUG_DUMP_MSTEP_ITER
-unset RELION_ACC_DUMP_DIR RELION_ACC_DUMP_PART_ID RELION_ACC_DUMP_ITER RELION_ACC_DUMP_VERBOSE
+unset RELION_ACC_DUMP_DIR RELION_ACC_DUMP_PART_ID RELION_ACC_DUMP_STACK_INDEX RELION_ACC_DUMP_ITER RELION_ACC_DUMP_VERBOSE
 unset RELION_VDAM_WORKER_LOG RELION_VDAM_WORKER_TRACE_ITER
 unset RELION_VDAM_BLOCK_TRACE RELION_VDAM_BLOCK_TRACE_ITER RELION_VDAM_BLOCK_TRACE_CAPACITY
 export RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}
@@ -767,9 +776,9 @@ fi
 if [[ -n "${EXTERNAL_BLOCK_CHRONOLOGY}" ]]; then
   sha256sum "${EXTERNAL_BLOCK_CHRONOLOGY}" >> "${PROVENANCE}/static_inputs.sha256"
 fi
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"xla_python_client_mem_fraction":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"native_second_moment_replay_all":%d,"native_first_moment_replay":%d,"native_first_moment_replay_all":%d,"native_bpref_replay":%d,"native_bpref_replay_all":%d,"native_iref_input_replay":%d,"native_iref_input_replay_all":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"xla_python_client_mem_fraction":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"native_second_moment_replay_all":%d,"native_first_moment_replay":%d,"native_first_moment_replay_all":%d,"native_bpref_replay":%d,"native_bpref_replay_all":%d,"native_iref_input_replay":%d,"native_iref_input_replay_all":%d,"preprocess_part_id":%d,"preprocess_stack_index":"%s","bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_GPU_UUID}" "${gpu_used_mib}" "${BOUNDARY_XLA_MEM_FRACTION}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" "${NATIVE_FIRST_MOMENT_REPLAY}" "${NATIVE_FIRST_MOMENT_REPLAY_ALL}" "${NATIVE_BPREF_REPLAY}" "${NATIVE_BPREF_REPLAY_ALL}" "${NATIVE_IREF_INPUT_REPLAY}" "${NATIVE_IREF_INPUT_REPLAY_ALL}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" "${NATIVE_FIRST_MOMENT_REPLAY}" "${NATIVE_FIRST_MOMENT_REPLAY_ALL}" "${NATIVE_BPREF_REPLAY}" "${NATIVE_BPREF_REPLAY_ALL}" "${NATIVE_IREF_INPUT_REPLAY}" "${NATIVE_IREF_INPUT_REPLAY_ALL}" "${PART_ID}" "${STACK_INDEX}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
   > "${PROVENANCE}/run.json"
