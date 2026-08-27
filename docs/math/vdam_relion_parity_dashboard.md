@@ -25,8 +25,8 @@ trajectories**. Earlier expansion v2 remains a separate regression track at
 | Verdict | **Not merge-ready**: K=1 quality is 2/20 and runtime is 0/20 |
 | Newly closed boundary | **GF38 iteration-3 controller passes** all active fields against 4/4 native repeats |
 | Earliest active science blockers | GF46 coarse cutoff @4; GF47 repeatability starts @1; GF38 accuracy controller @20 |
-| Latest qualification | GF47 frozen serial-orientation job `13025432` is running beyond iteration 96; partial iteration-58 particle audit is terminal and fails one particle |
-| Latest focused discriminator | Serial orientation ordering fixes accumulator repeatability and keeps maps inside the native envelope, but deterministically retains the old divergent pose for particle 2411; repeatability alone is insufficient |
+| Latest qualification | GF47 frozen serial-orientation job `13025432` is running beyond iteration 176; binary64-accumulator panel `13026518` and audit `13026519` are terminal |
+| Latest focused discriminator | Binary64 storage is bitwise repeatable but worsens reference error to **9.19--9.77e-6** versus a **1.64e-6** native floor; RELION's float32 accumulation order is part of the target |
 | Publication policy | Science fixes remain local/unpushed; this PR publishes only the live evidence dashboard |
 
 #### Frozen case checkboxes
@@ -41,7 +41,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 00:45 ET**
+Last scientific update: **2026-08-27 01:06 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -69,7 +69,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 repeatability starts @1 | iteration 0 is bitwise exact; serial orientation-block scatter repairs repeat spread but does not change the deterministic trajectory branch | iteration-58 partial audit: 199/200 active particles match the four-run native state envelope; `2411@particles.128.mrcs` retains the old divergent orientation with the exact native translation | no promotion; finish the run, then return to the systematic post-second-moment/trajectory-input boundary |
+| 1 | GF47 repeatability starts @1 | serial float32 fixes repeat spread but retains particle 2411's divergent branch; binary64 proves the target is not the exact mathematical sum | f64 panel `13026518`: RECOVAR repeats are bitwise exact, but raw/reference/noise errors all move outside the native floor; next test deterministic float32 orientation orders | no promotion; finish the run and find a stable float32 order inside the full native trajectory envelope |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -143,6 +143,20 @@ mode exactly: deterministic serial orientation-block ordering repairs
 repeatability but does not repair the stable trajectory branch. Job
 `13025432` continues to iteration 200 to seal later map and schedule evidence,
 but it cannot change the frozen score.
+
+Binary64-accumulator discriminator `13026518` and dependent aggregate audit
+`13026519` are terminal from local unpushed commit `75acbdef2`. Projection,
+translation, residual, scatter coefficients, and final output dtype remain
+RELION float32; only the accumulator storage is binary64 until the kernel
+finishes. Both RECOVAR repeats are bitwise identical at every measured stage,
+including the reconstructed reference. That stability is scientifically
+rejected because the systematic result is worse: raw BPref-data error is
+`1.29--1.36e-5` versus native repeat floor `9.37e-6`, `mom1_noise_power` is
+`5.45--6.55e-5` versus `1.11e-5`, and reference error is `9.19--9.77e-6`
+versus `1.64e-6`. RELION's float32 rounding order is therefore part of the
+effective target; replacing it with the exact high-precision sum cannot solve
+GF47. The sealed report SHA-256 is `4f3c1e780fda...`. The next bounded family
+is deterministic float32 orientation order, beginning with reverse order.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
