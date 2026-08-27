@@ -68,7 +68,7 @@ schedule contract passes. Runtime remains open for every row.
 | [ ] GF53 | [ ] GF54 | [ ] GF55 | [ ] GF56 | [ ] GF57 |
 | [ ] GF58 | [ ] GF59 | [ ] GF60 | [ ] GF61 | [ ] GF62 |
 
-Last scientific update: **2026-08-27 02:22 ET**
+Last scientific update: **2026-08-27 02:28 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -240,11 +240,14 @@ run has crossed iteration 99. A calibrated non-scoring live audit at iterations
 at least one native state at both checkpoints, including the particle that the
 serial trajectory missed at 58, and the complete schedule matches native repeat
 1 at 59. Iteration 58 still matches no *single complete* native schedule. Its
-offset-change value (`2.878784465`) matches repeat 4 (`2.878784`), while the
-rotation/translation accuracy fields miss all four native schedules; matching
-individual fields across different repeats is not accepted. This is an early
-failure localization, not a scoring audit. The frozen score remains 2/20 until
-all 201 checkpoints and the automatic sealed audit are terminal.
+offset range (`9.211616345` Angstrom) matches repeat 1 (`9.211616`), while its
+offset-change value (`2.878784465` Angstrom) matches repeat 4 (`2.878784`);
+no single repeat matches both active fields. Rotation/translation accuracy is
+intentionally outside this checkpoint's gate because accuracy estimation is
+not active yet. Matching individual active fields across different repeats is
+not accepted. This is an early failure localization, not a scoring audit. The
+frozen score remains 2/20 until all 201 checkpoints and the automatic sealed
+audit are terminal.
 
 GF47 same-physical-H100 panel `13024070` completed all four fresh-native arms
 in 147 seconds from local unpushed commit `d8faaea77`. Two default controls and
