@@ -321,6 +321,11 @@ class TestStepSizeSchedule:
         v_mid = compute_stepsize(iter=85, phase_lengths=p, is_3d_model=True, ref_dim=3)
         assert v_mid == pytest.approx(0.7, abs=2e-8)
 
+    def test_iteration_one_preserves_relion_float_scale_rounding(self):
+        """RELION's x/a/b/scale sigmoid locals are 32-bit ``float``."""
+        p = compute_phase_lengths(200, 0.3, 0.2)
+        assert compute_stepsize(iter=1, phase_lengths=p, is_3d_model=True, ref_dim=3) == 0.8999999046325726
+
     def test_short_8_iter_reference_schedule_matches_relion_initialmodel(self):
         """Pinned from the 50k/256 RELION InitialModel iter-8 reference."""
         p = compute_phase_lengths(8, 0.3, 0.2)
@@ -476,9 +481,10 @@ class TestTau2FudgeSchedule:
             )
             for it in range(0, 201, 10)
         ]
-        # Every step (after the flat initial tail) is non-decreasing
+        # RELION stores the sigmoid scale as float.  Its quantized tail can
+        # overshoot 4 and then fall back by one float-sized increment.
         for a, b in zip(values, values[1:]):
-            assert b >= a - 1e-12, f"trajectory not monotone: {a} -> {b}"
+            assert b >= a - 3e-8, f"trajectory not monotone within RELION float precision: {a} -> {b}"
         assert values[0] < 1.5  # starts near 1
         assert values[-1] > 3.5  # ends near 4
 

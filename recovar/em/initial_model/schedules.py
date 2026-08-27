@@ -268,9 +268,14 @@ def _step_sigmoid_value(
     ``value = inflated * scale + base * (1 - scale)`` with
     ``scale = 1 / (10**((iter - grad_ini - len/2) / (len/4)) + 1)``.
     """
-    x = float(iter)
-    a = float(sigmoid_length)
-    b = float(grad_ini_iter)
+    # RELION declares all four locals as ``float`` (not RFLOAT):
+    # ``float x, a, b, scale``.  The arithmetic inside ``pow`` is promoted
+    # by the double literals, then the result is rounded back to float when
+    # assigned to ``scale``.  Preserve that rounding boundary exactly; it is
+    # large enough to perturb reconstructGrad on long VDAM trajectories.
+    x = float(np.float32(iter))
+    a = float(np.float32(sigmoid_length))
+    b = float(np.float32(grad_ini_iter))
     if a <= 0.0:
         offset = x - b
         if offset == 0.0:
@@ -281,12 +286,15 @@ def _step_sigmoid_value(
     # Cap the exponent to avoid math.pow overflow; RELION relies on IEEE-754
     # saturating to +inf which makes scale -> 0.
     if exponent > 308.0:
-        scale = 0.0
+        scale = float(np.float32(0.0))
     elif exponent < -308.0:
-        scale = 1.0
+        scale = float(np.float32(1.0))
     else:
-        scale = 1.0 / (math.pow(10.0, exponent) + 1.0)
-    return inflated * scale + base * (1.0 - scale)
+        scale = float(np.float32(1.0 / (math.pow(10.0, exponent) + 1.0)))
+    # In RELION, ``1 - scale`` is also evaluated in float before the
+    # surrounding RFLOAT multiplication.
+    one_minus_scale = float(np.float32(1.0) - np.float32(scale))
+    return inflated * scale + base * one_minus_scale
 
 
 def _relion_round(x: float) -> int:

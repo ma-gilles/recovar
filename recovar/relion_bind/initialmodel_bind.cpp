@@ -565,12 +565,12 @@ static double vdam_compute_stepsize(
         float inflate = textToFloat(_scheme.substr(0, _scheme.find("-step")));
         if (inflate <= 0.)
             throw std::runtime_error("Invalid inflate value for grad_stepsize_scheme");
-        RFLOAT x = (RFLOAT)iter;
+        float x = iter;
         // RELION assigns `float a = grad_inbetween_iter/2`, so C++ integer
-        // division happens before conversion to RFLOAT.
-        RFLOAT a = (RFLOAT)(grad_inbetween_iter / 2);
-        RFLOAT b = (RFLOAT)grad_ini_iter;
-        RFLOAT scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
+        // division happens before conversion to float.
+        float a = grad_inbetween_iter / 2;
+        float b = grad_ini_iter;
+        float scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
         return (_stepsize * inflate) * scale + _stepsize * (1 - scale);
     }
 
@@ -618,13 +618,13 @@ static double vdam_compute_tau2_fudge(
         float deflate = textToFloat(_scheme.substr(0, _scheme.find("-step")));
         if (deflate <= 0.)
             throw std::runtime_error("Invalid deflate value for tau2_fudge_scheme");
-        RFLOAT x = (RFLOAT)iter;
+        float x = iter;
         // RELION assigns `float a = grad_inbetween_iter/4`. Short runs can
         // therefore hit a=0 and intentionally propagate NaN through the
         // sigmoid, matching InitialModel model.star output.
-        RFLOAT a = (RFLOAT)(grad_inbetween_iter / 4);
-        RFLOAT b = (RFLOAT)grad_ini_iter;
-        RFLOAT scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
+        float a = grad_inbetween_iter / 4;
+        float b = grad_ini_iter;
+        float scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
         return (_fudge / deflate) * scale + _fudge * (1 - scale);
     }
 

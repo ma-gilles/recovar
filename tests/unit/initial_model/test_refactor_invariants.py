@@ -293,15 +293,15 @@ class TestScheduleGoldenValues:
     def test_stepsize_trajectory(self):
         phase = compute_phase_lengths(200, 0.3, 0.2)
         kwargs = dict(phase_lengths=phase, is_3d_model=True, ref_dim=3)
-        np.testing.assert_allclose(compute_stepsize(iter=0, **kwargs), 0.8999999127624282)
-        np.testing.assert_allclose(compute_stepsize(iter=60, **kwargs), 0.8960395803545961)
-        np.testing.assert_allclose(compute_stepsize(iter=160, **kwargs), 0.5000003999996)
+        np.testing.assert_allclose(compute_stepsize(iter=0, **kwargs), 0.8999999046325726)
+        np.testing.assert_allclose(compute_stepsize(iter=60, **kwargs), 0.896039581534886)
+        np.testing.assert_allclose(compute_stepsize(iter=160, **kwargs), 0.5000003999995659)
 
     def test_tau2_fudge_trajectory(self):
         phase = compute_phase_lengths(200, 0.3, 0.2)
         kwargs = dict(phase_lengths=phase, is_3d_model=True, ref_dim=3)
-        np.testing.assert_allclose(compute_tau2_fudge(iter=0, **kwargs), 1.000000000007536)
-        np.testing.assert_allclose(compute_tau2_fudge(iter=60, **kwargs), 1.0297029702970297)
+        np.testing.assert_allclose(compute_tau2_fudge(iter=0, **kwargs), 1.0)
+        np.testing.assert_allclose(compute_tau2_fudge(iter=60, **kwargs), 1.0297029614448547)
         np.testing.assert_allclose(compute_tau2_fudge(iter=160, **kwargs), 3.9999999999999702)
 
     def test_default_subsets_scale_with_nr_particles(self):
