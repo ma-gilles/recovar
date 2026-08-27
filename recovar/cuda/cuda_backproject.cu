@@ -4524,6 +4524,7 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     unsigned model_y,
     int model_init_y,
     int model_init_z,
+    const int32_t* rotation_replay_order,
     VdamCandidateBlockTraceRecord* trace_records,
     std::uint64_t trace_launch_sequence,
     std::int64_t trace_particle_id,
@@ -4531,9 +4532,12 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     std::uint32_t trace_iteration)
 {
     unsigned tid = threadIdx.x;
-    unsigned image = blockIdx.x;
+    const unsigned physical_image = blockIdx.x;
+    const unsigned image = rotation_replay_order == nullptr
+        ? physical_image
+        : static_cast<unsigned>(rotation_replay_order[physical_image]);
     VdamCandidateBlockTraceRecord* trace_record =
-        trace_records == nullptr ? nullptr : trace_records + image;
+        trace_records == nullptr ? nullptr : trace_records + physical_image;
     if (trace_record != nullptr && tid == 0)
     {
         trace_record->launch_sequence = trace_launch_sequence;
@@ -5435,6 +5439,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     static_cast<unsigned>(model_y),
                     model_init_y,
                     model_init_z,
+                    captured_rotation_replay && !serial_rotation_replay
+                        ? rotation_replay_order + particle * rotation_count
+                        : nullptr,
                     candidate_trace_requested ? candidate_trace_records[lane] : nullptr,
                     trace_launch_sequence,
                     candidate_trace_requested

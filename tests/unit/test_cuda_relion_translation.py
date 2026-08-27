@@ -95,6 +95,10 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "if (weight >= significant_weight)" in native_kernel
     assert "weight = (weight / weight_norm) * ctf * minvsigma2;" in native_kernel
     assert "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);" in native_kernel
+    assert "const unsigned physical_image = blockIdx.x;" in native_kernel
+    assert "rotation_replay_order[physical_image]" in native_kernel
+    assert "trace_records + physical_image" in native_kernel
+    assert "trace_record->orientation_row = image;" in native_kernel
     assert "denominator" not in native_kernel
 
     projector_launcher = source.split(
@@ -106,6 +110,8 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "reverse_rotation_replay ? rotation_count - 1 - launch : launch" in projector_launcher
     assert "rotation_replay_order_host[" in projector_launcher
     assert "captured_rotation_replay" in projector_launcher
+    assert "captured_rotation_replay && !serial_rotation_replay" in projector_launcher
+    assert "rotation_replay_order + particle * rotation_count" in projector_launcher
     assert "seen[rotation] = 1" in projector_launcher
     assert "logical_lane + lane_wave * stride" in projector_launcher
     assert "rotation_offset * translation_count" in projector_launcher

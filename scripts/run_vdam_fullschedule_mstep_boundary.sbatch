@@ -93,7 +93,8 @@ fi
 if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   test "${WORKER_TRACE_REPLAY}" = 1
   test "${TARGET_ITERATION}" -eq 1
-  test "${WORKER_REPLAY_TOPOLOGY}" = captured
+  test "${WORKER_REPLAY_TOPOLOGY}" = captured -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid
   test "${CANDIDATE_BLOCK_TRACE_CAPACITY}" -ge 1
 fi
 if [[ "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 1 ]]; then
@@ -109,9 +110,11 @@ if [[ "${BLOCK_TRACE_CAPTURE}" = 1 ]]; then
 fi
 if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
   test "${BLOCK_TRACE_CAPTURE}" = 1
-  test "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start
-elif [[ "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start ]]; then
-  echo "captured_block_start requires native block tracing in the same arm" >&2
+  test "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid
+elif [[ "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start || \
+        "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid ]]; then
+  echo "captured block topology requires native block tracing in the same arm" >&2
   exit 2
 fi
 if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then

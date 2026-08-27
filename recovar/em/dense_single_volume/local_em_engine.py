@@ -604,13 +604,13 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology != "captured_block_start":
+    if topology not in {"captured_block_start", "captured_block_grid"}:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
     chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
     if not schedule_path or not chronology_path:
         raise ValueError(
-            "captured_block_start requires sealed worker schedule and block chronology NPZs"
+            "captured block replay requires sealed worker schedule and block chronology NPZs"
         )
     trace_iteration, _, _ = _load_relion_vdam_block_start_orders(
         schedule_path,
@@ -635,7 +635,7 @@ def _relion_vdam_worker_lanes_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology == "captured_block_start":
+    if topology in {"captured_block_start", "captured_block_grid"}:
         if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
             return None
     if topology in {
@@ -666,11 +666,11 @@ def _relion_vdam_worker_lanes_for_images(
         )
     if topology == "single":
         owners = np.zeros_like(owners)
-    elif topology not in {"captured", "captured_block_start"}:
+    elif topology not in {"captured", "captured_block_start", "captured_block_grid"}:
         raise ValueError(
             "VDAM worker replay topology must be 'captured', 'single', or "
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
-            "'single_rotation_sm132', or 'captured_block_start'"
+            "'single_rotation_sm132', 'captured_block_start', or 'captured_block_grid'"
         )
     return owners.astype(np.int32, copy=False)
 
@@ -869,6 +869,17 @@ def _relion_vdam_serial_rotation_replay() -> bool:
         "single_rotation_reverse",
         "single_rotation_sm132",
     }
+
+
+def _relion_vdam_captured_block_serial_replay() -> bool:
+    """Return whether captured native block order uses one-block launches."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return bool(path) and topology == "captured_block_start"
 
 
 def _relion_vdam_float64_accumulator_replay() -> bool:
@@ -5226,7 +5237,7 @@ def run_local_em_exact(
                     particle_trace_ids=candidate_trace_ids,
                     serial_rotation_replay=(
                         _relion_vdam_serial_rotation_replay()
-                        or block_start_order is not None
+                        or _relion_vdam_captured_block_serial_replay()
                     ),
                     float64_accumulator_replay=(
                         _relion_vdam_float64_accumulator_replay()

@@ -42,7 +42,13 @@ class _Dataset:
         return lookup[np.asarray(image_indices)]
 
 
-def _configure(monkeypatch, schedule: Path, chronology: Path) -> None:
+def _configure(
+    monkeypatch,
+    schedule: Path,
+    chronology: Path,
+    *,
+    topology: str = "captured_block_start",
+) -> None:
     monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV, str(schedule))
     monkeypatch.setenv(
         local_em_engine.RELION_VDAM_BLOCK_CHRONOLOGY_ENV,
@@ -50,7 +56,7 @@ def _configure(monkeypatch, schedule: Path, chronology: Path) -> None:
     )
     monkeypatch.setenv(
         local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
-        "captured_block_start",
+        topology,
     )
     local_em_engine._load_relion_vdam_worker_schedule.cache_clear()
     local_em_engine._load_relion_vdam_block_start_orders.cache_clear()
@@ -95,6 +101,35 @@ def test_block_start_replay_is_confined_to_the_traced_iteration(tmp_path, monkey
         )
         is None
     )
+
+
+def test_captured_block_grid_keeps_concurrent_launches(tmp_path, monkeypatch):
+    schedule, chronology = _write_inputs(tmp_path)
+    _configure(
+        monkeypatch,
+        schedule,
+        chronology,
+        topology="captured_block_grid",
+    )
+    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+        _Dataset(),
+        np.asarray([1, 0], dtype=np.int64),
+        rotation_count=3,
+        valid_rotation_counts=np.asarray([3, 3]),
+        debug_iteration=1,
+    )
+    np.testing.assert_array_equal(
+        orders,
+        np.asarray([[0, 2, 1], [1, 2, 0]], dtype=np.int32),
+    )
+    assert local_em_engine._relion_vdam_block_start_replay_active(debug_iteration=1)
+    assert not local_em_engine._relion_vdam_captured_block_serial_replay()
+
+    monkeypatch.setenv(
+        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured_block_start",
+    )
+    assert local_em_engine._relion_vdam_captured_block_serial_replay()
     assert not local_em_engine._relion_vdam_block_start_replay_active(
         debug_iteration=2
     )
