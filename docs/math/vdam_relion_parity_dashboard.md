@@ -22,7 +22,8 @@ Frozen case-definition SHA-256:
 | What still fails? | Production raw-BPref CUDA accumulation at iteration 58. Fresh paired job `13058221` has raw data relative L2 **`3.17e-4 / 6.04e-4`** and weight **`1.18e-4 / 2.34e-4`** for the two halves. |
 | How large is the state failure? | **1 / 3,000** paired particles differs (`46@particles.128.mrcs`); pose and translation match fractions are both **`0.9996667`**. The previously reported particles 2411 and 2707 now match fresh RELION exactly. |
 | What did that change diagnostically? | The divergent identity moves between native realizations, so this is not a fixed two-particle formula or tie-break bug. Fresh RELION itself lies outside the old four-repeat particle envelope (4/460/503/5 mismatches versus repeats 1--4). |
-| What is running next? | State-aligned stable-identity capture `13060276_2`: replay the paired native reference trajectory while leaving RECOVAR posterior/BPref live, eliminating native run-mode drift from the per-particle comparison. |
+| What did the state-aligned capture show? | Exact-H100 `13060276_2` has **0/3,000** particle divergences at iteration 58. Stable stack 2707 has exact posterior support (174/174 cells, zero mismatches) and only **`1.39e-5`** relative L2, **`1.77e-5`** L1, and **`4.14e-6`** max error. |
+| What is next? | Capture the native inverse-noise and isolated particle-BPref operands missing from the current StoreWavg bundle, then split per-row operand generation from atomic scatter/accumulation on this same state-aligned boundary. |
 | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No tolerance, denominator, or acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -70,6 +71,7 @@ SHA-256 values.
 | Float-schedule production discriminator | exact-H100 task `13056615_2` / internal job `13056622` completed 60 no-oracle iterations in 402 s; audit `13056914` completed | sampled maps still pass through 60 at minimum FSC-AUC `0.999997662`, but two particle states first split @58 and operative `optimal_offset_change` / `offset_range` split @58 / @60; it60 raw-BPref avalanche confirms accumulation order is the remaining production boundary |
 | Fresh paired iteration-58 boundary | exact-H100 task `13058221` completed from local science `834b78c54`; contribution bundle and paired state audit are sealed | raw BPref remains non-exact, but the old particles 2411/2707 match exactly and only moving identity `46@particles.128.mrcs` differs among 3,000; native-vs-native repeat counts are 4/460/503/5, rejecting a fixed particle-specific correction |
 | Stable-identity StoreWavg capture | exact-H100 `13059422_1` / internal job `13059423` completed in 390 s; posterior replay `13060135` completed | immutable stack 2707 resolved to run-local part 1898; all 128 candidate rotations occur natively, eight extra native rotations have exactly zero posterior, and all 116 translations map identically; this native run landed in a distant 462-particle mode, so its posterior difference is non-causal |
+| State-aligned stable-identity capture | exact-H100 `13060276_2` / internal job `13060278` completed in 394 s; posterior replay `13060652` completed | paired map replay restores 3,000/3,000 particle states; stack 2707 posterior support is exact at 174 cells and its residual is only `1.39e-5` relative L2, rejecting support/normalization as the dominant aggregate BPref error |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -129,7 +131,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-27 15:54 ET**
+Last scientific update: **2026-08-27 15:59 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -157,7 +159,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 production posterior/BPref boundary @58 | the inherited-reference and reconstruction boundary is closed: under raw-BPref replay, it60 references are `2.527e-15 / 2.460e-15`, FSC-AUC/assignment are `1.0`, and particle/operative schedule state has zero divergences | fresh paired exact-H100 `13058221` has one moving divergence among 3,000; stable capture `13059422_1` proved identity/rotation/translation joins but landed in a distant native mode; state-aligned reference-clamp capture `13060276_2` is running | none yet; compare native/candidate posterior and contributions from the same forced map trajectory, then choose a production accumulation or native-execution repair before rerunning 0--200 |
+| 1 | GF47 production BPref operand/accumulation boundary @58 | the inherited-reference/reconstruction path is closed; state-aligned `13060276_2` has 3,000/3,000 matching particle states and stack-2707 posterior support is exact, with only `1.39e-5` relative-L2 residual | stable identity, all contributing rotations, all translations, posterior normalization, and support are closed; the current native bundle lacks inverse noise and an isolated native particle-BPref accumulator | none yet; capture those two operands and split per-row generation from atomic scatter/order before rerunning 0--200 |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -215,10 +217,25 @@ RELION realization landed in the distant native mode: its paired trajectory
 has 462 divergent particles at iteration 58, matching the scale of frozen
 repeat 2 rather than the near-parity `13058221` realization. Local science
 commits `fe8524e79` and `3f88bed7c` make zero-mass native rotation padding
-explicit and add a fail-closed posterior-only replay. Exact-H100 task
-`13060276_2` is now replaying its own paired native reference trajectory while
-leaving RECOVAR posterior and BPref live, so the stable-identity comparison is
-state-aligned rather than selected from a favorable native repeat. The score
+explicit and add a fail-closed posterior-only replay.
+
+Exact-H100 task `13060276_2` (internal job `13060278`) then completed a
+state-aligned trajectory in 394 seconds by replaying its own paired native
+references while leaving RECOVAR posterior and BPref live. At iteration 58 all
+3,000 particle poses and translations match; maximum errors are `9.96e-6`
+degrees and `7.07e-6` Angstrom, and Pmax p95 is `1.8e-5`. Posterior replay
+`13060652` finds 174 positive cells in both engines with zero support
+mismatches. The full posterior residual is only `1.3945e-5` relative L2,
+`1.7704e-5` L1, and `4.1425e-6` maximum absolute error; RECOVAR's independent
+RELION-f32 replay is identical to its live posterior. Particle and posterior
+report SHA-256 values are `f1aac0526a88...` and `b2a6d003a30d...`.
+
+This closes immutable identity, rotation/translation topology, retained
+support, and posterior normalization as the dominant source of the aggregate
+raw-BPref mismatch. The next bounded capture adds native inverse noise and an
+isolated native particle-BPref accumulator, both absent from the current
+StoreWavg bundle, so per-row operand generation can be separated from CUDA
+scatter/atomic arrival order on the same state-aligned boundary. The score
 remains **2/20**.
 
 The inherited reference-map residue is closed to compiler last bits. RELION's
