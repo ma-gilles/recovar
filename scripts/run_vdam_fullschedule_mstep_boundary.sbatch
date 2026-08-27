@@ -55,6 +55,7 @@ GPU_RELEASE_MAX_USED_MIB=${VDAM_GPU_RELEASE_MAX_USED_MIB:-1024}
 GPU_RELEASE_TIMEOUT_S=${VDAM_GPU_RELEASE_TIMEOUT_S:-120}
 BOUNDARY_XLA_MEM_FRACTION=${VDAM_XLA_PYTHON_CLIENT_MEM_FRACTION:-0.50}
 NATIVE_SECOND_MOMENT_REPLAY=${VDAM_NATIVE_SECOND_MOMENT_REPLAY:-0}
+NATIVE_SECOND_MOMENT_REPLAY_ALL=${VDAM_NATIVE_SECOND_MOMENT_REPLAY_ALL:-0}
 PART_ID=${VDAM_PREPROCESS_PART_ID:-0}
 BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}
 BPREF_CONTRIBUTION_CAPTURE_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF:-${BPREF_CONTRIBUTION_HALF}}
@@ -98,6 +99,10 @@ test "${BLOCK_TRACE_CAPTURE}" = 0 -o "${BLOCK_TRACE_CAPTURE}" = 1
 test "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 0 -o "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1
 test "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 0 -o "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 1
 test "${NATIVE_SECOND_MOMENT_REPLAY}" = 0 -o "${NATIVE_SECOND_MOMENT_REPLAY}" = 1
+test "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" = 0 -o "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" = 1
+if [[ "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" = 1 ]]; then
+  test "${NATIVE_SECOND_MOMENT_REPLAY}" = 1
+fi
 test "${REPLAY_NATIVE_REFERENCES}" = 0 -o "${REPLAY_NATIVE_REFERENCES}" = 1
 test "${GPU_RELEASE_MAX_USED_MIB}" -ge 0
 test "${GPU_RELEASE_TIMEOUT_S}" -ge 1
@@ -264,7 +269,11 @@ export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
 export CUDA_VISIBLE_DEVICES=0
 
 export RECOVAR_DEBUG_DUMP_DIR=${NATIVE_MSTEP}
-export RECOVAR_DEBUG_DUMP_MSTEP_ITER=${TARGET_ITERATION}
+if [[ "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" = 1 ]]; then
+  unset RECOVAR_DEBUG_DUMP_MSTEP_ITER
+else
+  export RECOVAR_DEBUG_DUMP_MSTEP_ITER=${TARGET_ITERATION}
+fi
 export RELION_ACC_DUMP_DIR=${NATIVE_CAPTURE}
 export RELION_ACC_DUMP_PART_ID=${PART_ID}
 export RELION_ACC_DUMP_ITER=${TARGET_ITERATION}
@@ -403,9 +412,20 @@ for required in \
 done
 NATIVE_SECOND_MOMENT_REPLAY_BIN=${NATIVE_MSTEP}/pipe_it${TARGET_ITERATION}_c0_Igrad2_post.bin
 if [[ "${NATIVE_SECOND_MOMENT_REPLAY}" = 1 ]]; then
-  test -s "${NATIVE_SECOND_MOMENT_REPLAY_BIN}"
-  sha256sum "${NATIVE_SECOND_MOMENT_REPLAY_BIN}" \
-    > "${PROVENANCE}/native_second_moment_replay.sha256"
+  if [[ "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" = 1 ]]; then
+    NATIVE_SECOND_MOMENT_REPLAY_BIN=${NATIVE_MSTEP}/pipe_it{iteration}_c0_Igrad2_post.bin
+    test ! -e "${PROVENANCE}/native_second_moment_replay.sha256"
+    touch "${PROVENANCE}/native_second_moment_replay.sha256"
+    for replay_iteration in $(seq 1 "${TARGET_ITERATION}"); do
+      replay_path=${NATIVE_MSTEP}/pipe_it${replay_iteration}_c0_Igrad2_post.bin
+      test -s "${replay_path}"
+      sha256sum "${replay_path}" >> "${PROVENANCE}/native_second_moment_replay.sha256"
+    done
+  else
+    test -s "${NATIVE_SECOND_MOMENT_REPLAY_BIN}"
+    sha256sum "${NATIVE_SECOND_MOMENT_REPLAY_BIN}" \
+      > "${PROVENANCE}/native_second_moment_replay.sha256"
+  fi
 fi
 
 gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
@@ -431,7 +451,11 @@ export RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}
 export RECOVAR_MSTEP_DUMP_ITER=${TARGET_ITERATION}
 if [[ "${NATIVE_SECOND_MOMENT_REPLAY}" = 1 ]]; then
   export RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_BIN=${NATIVE_SECOND_MOMENT_REPLAY_BIN}
-  export RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER=${TARGET_ITERATION}
+  if [[ "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" = 1 ]]; then
+    export RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER=all
+  else
+    export RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER=${TARGET_ITERATION}
+  fi
 fi
 if [[ "${WORKER_TRACE_REPLAY}" = 1 || -n "${EXTERNAL_WORKER_SCHEDULE}" ]]; then
   export RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${CANDIDATE_WORKER_SCHEDULE}
@@ -631,9 +655,9 @@ fi
 if [[ -n "${EXTERNAL_BLOCK_CHRONOLOGY}" ]]; then
   sha256sum "${EXTERNAL_BLOCK_CHRONOLOGY}" >> "${PROVENANCE}/static_inputs.sha256"
 fi
-printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"xla_python_client_mem_fraction":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
+printf '{"job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","gpu_used_mib_before_recovar":%d,"xla_python_client_mem_fraction":"%s","nr_iter_schedule":%d,"stopped_after_iteration":%d,"relion_threads":%d,"random_seed":%d,"worker_trace_replay":%d,"external_worker_schedule":"%s","block_trace_capture":%d,"block_trace_replay":%d,"external_block_chronology":"%s","candidate_block_trace_capture":%d,"candidate_block_map_capture":%d,"worker_replay_topology":"%s","replay_native_references":%d,"iref_replay_template":"%s","native_second_moment_replay":%d,"native_second_moment_replay_all":%d,"bpref_contribution_half":"%s","bpref_contribution_capture_half":"%s","bpref_contribution_reconstruction_group":"%s","bpref_contribution_current_size":"%s","bpref_contribution_original_indices":"%s"}\n' \
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" "${TARGET_GPU_UUID}" "${gpu_used_mib}" "${BOUNDARY_XLA_MEM_FRACTION}" \
-  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${BPREF_CONTRIBUTION_HALF}" \
+  "${NR_ITER_SCHEDULE}" "${TARGET_ITERATION}" "${RELION_THREADS}" "${RANDOM_SEED}" "${WORKER_TRACE_REPLAY}" "${EXTERNAL_WORKER_SCHEDULE}" "${BLOCK_TRACE_CAPTURE}" "${BLOCK_TRACE_REPLAY}" "${EXTERNAL_BLOCK_CHRONOLOGY}" "${CANDIDATE_BLOCK_TRACE_CAPTURE}" "${CANDIDATE_BLOCK_MAP_CAPTURE}" "${WORKER_REPLAY_TOPOLOGY}" "${REPLAY_NATIVE_REFERENCES}" "${IREF_REPLAY_TEMPLATE}" "${NATIVE_SECOND_MOMENT_REPLAY}" "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" "${BPREF_CONTRIBUTION_HALF}" \
   "${BPREF_CONTRIBUTION_CAPTURE_HALF}" "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}" \
   "${BPREF_CONTRIBUTION_CURRENT_SIZE}" "${BPREF_CONTRIBUTION_ORIGINAL_INDICES}" \
   > "${PROVENANCE}/run.json"

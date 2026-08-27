@@ -123,6 +123,22 @@ def test_native_second_moment_replay_is_explicit_iteration_gated_and_exact(tmp_p
         replay,
     )
 
+    replay_all_path = tmp_path / "native_m2_it{iteration}.bin"
+    for iteration in (1, 2):
+        path = tmp_path / f"native_m2_it{iteration}.bin"
+        with path.open("wb") as stream:
+            np.asarray(replay.shape, dtype=np.int64).tofile(stream)
+            (replay * iteration).reshape(-1).view(np.float64).tofile(stream)
+    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, str(replay_all_path))
+    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "all")
+    for iteration in (1, 2):
+        np.testing.assert_array_equal(
+            _maybe_replay_native_second_moment(
+                computed, iteration=iteration, class_idx=0
+            ),
+            replay * iteration,
+        )
+
 
 def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch):
     ori = 16

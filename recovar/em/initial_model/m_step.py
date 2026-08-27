@@ -100,19 +100,24 @@ def _maybe_replay_native_second_moment(
 
     This is an explicit, fail-closed oracle discriminator. It is inactive by
     default and is not a production parity mechanism. The path may contain
-    ``{iteration}`` and ``{class_idx}`` placeholders.
+    ``{iteration}`` and ``{class_idx}`` placeholders. Setting the iteration
+    selector to ``all`` replays a templated buffer at every M-step.
     """
 
     replay_template = os.environ.get(VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, "").strip()
     if not replay_template:
         return computed
+    replay_iteration_value = os.environ.get(
+        VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "1"
+    ).strip()
+    replay_all_iterations = replay_iteration_value.lower() in {"all", "*"}
     try:
-        replay_iteration = int(os.environ.get(VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "1"))
+        replay_iteration = None if replay_all_iterations else int(replay_iteration_value)
     except ValueError as exc:
         raise ValueError(
-            f"{VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV} must be an integer"
+            f"{VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV} must be an integer or 'all'"
         ) from exc
-    if int(iteration) != replay_iteration:
+    if replay_iteration is not None and int(iteration) != replay_iteration:
         return computed
 
     replay_path = Path(
