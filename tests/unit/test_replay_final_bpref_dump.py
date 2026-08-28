@@ -42,6 +42,18 @@ def test_replay_final_bpref_dump_old_shape_defaults_to_even_padding():
     )
 
 
+def test_replay_final_bpref_dump_resolves_joined_accumulator_layout():
+    shape = (5, 5, 5)
+
+    assert replay_final_bpref_dump.resolve_joined_accumulator_layout(125, shape) == "full"
+    assert replay_final_bpref_dump.resolve_joined_accumulator_layout(75, shape) == "native_half"
+
+
+def test_replay_final_bpref_dump_rejects_unknown_joined_accumulator_layout():
+    with np.testing.assert_raises_regex(ValueError, "neither supported layout"):
+        replay_final_bpref_dump.resolve_joined_accumulator_layout(74, (5, 5, 5))
+
+
 def test_replay_final_bpref_dump_uses_joined_half_weight_sum():
     source = inspect.getsource(replay_final_bpref_dump.main)
 

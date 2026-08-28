@@ -114,6 +114,24 @@ def resolve_mstep_accumulator_shape(dump: Any, volume_shape: tuple[int, int, int
     return tuple(int(v) * int(padding_factor) for v in volume_shape)
 
 
+def resolve_joined_accumulator_layout(
+    element_count: int,
+    accumulator_shape: tuple[int, int, int],
+) -> str:
+    """Identify whether a dumped joined BPref uses full or native-half storage."""
+
+    full_count = int(np.prod(accumulator_shape))
+    native_half_count = int(accumulator_shape[0] * accumulator_shape[1] * (accumulator_shape[2] // 2 + 1))
+    if int(element_count) == full_count:
+        return "full"
+    if int(element_count) == native_half_count:
+        return "native_half"
+    raise ValueError(
+        "joined BPref element count matches neither supported layout: "
+        f"observed={element_count}, full={full_count}, native_half={native_half_count}"
+    )
+
+
 def read_relion_bpref_array(path: Path, *, dtype: np.dtype) -> np.ndarray:
     """Read a RELION BPref dump with a three-int64 shape header."""
 
@@ -490,19 +508,37 @@ def main(argv: list[str] | None = None) -> int:
                     "RELION BPref shape mismatch: "
                     f"data={relion_data.shape}, weight={relion_weight.shape}, expected={expected_half_shape}"
                 )
+            dump_layout = resolve_joined_accumulator_layout(
+                np.asarray(dump["Ft_y"]).size,
+                mstep_accumulator_shape,
+            )
+            if np.asarray(dump["Ft_ctf"]).size != np.asarray(dump["Ft_y"]).size:
+                raise ValueError("RECOVAR joined BPref numerator and denominator layouts differ")
             n = int(volume_shape[0])
-            reconstruction_Ft_y = relion_bpref_numerator_to_recovar_units(
-                half_volume_mstep.relion_x_half_volume_to_native_half(
+            if dump_layout == "full":
+                converted_relion_data = half_volume_mstep.relion_x_half_volume_to_full(
                     relion_data.reshape(-1),
                     mstep_accumulator_shape,
-                ),
+                )
+                converted_relion_weight = half_volume_mstep.relion_x_half_volume_to_full(
+                    relion_weight.reshape(-1),
+                    mstep_accumulator_shape,
+                )
+            else:
+                converted_relion_data = half_volume_mstep.relion_x_half_volume_to_native_half(
+                    relion_data.reshape(-1),
+                    mstep_accumulator_shape,
+                )
+                converted_relion_weight = half_volume_mstep.relion_x_half_volume_to_native_half(
+                    relion_weight.reshape(-1),
+                    mstep_accumulator_shape,
+                )
+            reconstruction_Ft_y = relion_bpref_numerator_to_recovar_units(
+                converted_relion_data,
                 grid_size=n,
             )
             reconstruction_Ft_ctf = (
-                half_volume_mstep.relion_x_half_volume_to_native_half(
-                    relion_weight.reshape(-1),
-                    mstep_accumulator_shape,
-                ).real
+                converted_relion_weight.real
                 / (n**4)
             )
             accumulator_comparison = {
@@ -510,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
                     "streamed float64/complex128 comparison after RELION-to-RECOVAR "
                     "layout, global-sign, and unit conversion"
                 ),
+                "layout": dump_layout,
                 "source": "recovar_joined_accumulator",
                 "target": "native_relion_joined_accumulator",
                 "numerator": streaming_field_metrics(
