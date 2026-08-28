@@ -26,6 +26,7 @@ STOP_TAG=$(printf '%03d' "${STOP_ITERATION}")
 AUDIT_MODE=${AUDIT_MODE:-transition}
 PROFILE_ITERATIONS=${PROFILE_ITERATIONS:-0}
 PIXEL_SIZE=${PIXEL_SIZE:-4.25}
+RANDOM_SEED=${RANDOM_SEED:-0}
 if [[ "${AUDIT_MODE}" != transition && "${AUDIT_MODE}" != pretransition && "${AUDIT_MODE}" != full ]]; then
   echo "AUDIT_MODE must be transition, pretransition, or full" >&2
   exit 2
@@ -77,8 +78,8 @@ fi
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE_DIR}/repo_head.txt"
 sha256sum "${CUDA_BINARY}" "${DATA_DIR}/particles.star" > "${PROVENANCE_DIR}/input_sha256.txt"
 nvidia-smi -q > "${PROVENANCE_DIR}/nvidia_smi.txt"
-printf 'audit_mode=%s\nstop_iteration=%s\nprofile_iterations=%s\n' \
-  "${AUDIT_MODE}" "${STOP_ITERATION}" "${PROFILE_ITERATIONS}" \
+printf 'audit_mode=%s\nstop_iteration=%s\nprofile_iterations=%s\nrandom_seed=%s\n' \
+  "${AUDIT_MODE}" "${STOP_ITERATION}" "${PROFILE_ITERATIONS}" "${RANDOM_SEED}" \
   > "${PROVENANCE_DIR}/run_mode.txt"
 
 COMMAND=(
@@ -92,7 +93,7 @@ COMMAND=(
   --sym C1
   --do_run_C1 1
   --particle_diameter 200.0
-  --random_seed 0
+  --random_seed "${RANDOM_SEED}"
   --healpix_order 1
   --oversampling 1
   --offset_range 6

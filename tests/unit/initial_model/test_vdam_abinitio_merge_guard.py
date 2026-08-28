@@ -600,6 +600,8 @@ def test_vdam_sampling_gate_can_stop_at_pretransition_boundary():
         "pretransition_particles.json",
         "if (( STOP_ITERATION >= 90 )); then",
         '--diagnostic_stop_after_iteration "${STOP_ITERATION}"',
+        'RANDOM_SEED=${RANDOM_SEED:-0}',
+        '--random_seed "${RANDOM_SEED}"',
     ]
     missing = [token for token in expected_tokens if token not in runner]
     assert not missing, f"VDAM pretransition capture lost bounded audit wiring: {missing}"
