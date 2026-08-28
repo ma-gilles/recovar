@@ -195,3 +195,59 @@ def test_candidate_provenance_rejects_ambiguous_cuda_digest(tmp_path):
 
     with pytest.raises(CandidateEnvelopeError, match="exactly one CUDA"):
         audit_module._candidate_provenance(tmp_path)
+
+
+def test_candidate_provenance_accepts_current_paired_run_format(tmp_path):
+    (tmp_path / "run_provenance.json").write_text(
+        json.dumps(
+            {
+                "git_head": "a" * 40,
+                "recovar_native_extensions": {
+                    "cuda_backproject": {"sha256": "b" * 64}
+                },
+            }
+        )
+    )
+    (tmp_path / "paired_gpu_uuid.json").write_text(
+        json.dumps(
+            {
+                "physical_gpu_uuid": "GPU-one",
+                "relion_gpu_uuid": "GPU-one",
+                "recovar_gpu_uuid": "GPU-one",
+            }
+        )
+    )
+
+    report = audit_module._candidate_provenance(tmp_path)
+
+    assert report == {
+        "source_head": "a" * 40,
+        "cuda_library_sha256": "b" * 64,
+        "physical_gpu_uuid": "GPU-one",
+        "source_format": "paired_run_provenance.v1",
+    }
+
+
+def test_candidate_provenance_rejects_mixed_paired_gpu_report(tmp_path):
+    (tmp_path / "run_provenance.json").write_text(
+        json.dumps(
+            {
+                "git_head": "a" * 40,
+                "recovar_native_extensions": {
+                    "cuda_backproject": {"sha256": "b" * 64}
+                },
+            }
+        )
+    )
+    (tmp_path / "paired_gpu_uuid.json").write_text(
+        json.dumps(
+            {
+                "physical_gpu_uuid": "GPU-one",
+                "relion_gpu_uuid": "GPU-one",
+                "recovar_gpu_uuid": "GPU-two",
+            }
+        )
+    )
+
+    with pytest.raises(CandidateEnvelopeError, match="paired GPU identity"):
+        audit_module._candidate_provenance(tmp_path)

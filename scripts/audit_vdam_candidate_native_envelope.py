@@ -79,6 +79,37 @@ def classify_candidate_checkpoint(
 
 
 def _candidate_provenance(candidate_root: Path) -> dict[str, str]:
+    run_provenance_path = candidate_root / "run_provenance.json"
+    paired_gpu_path = candidate_root / "paired_gpu_uuid.json"
+    if run_provenance_path.exists() or paired_gpu_path.exists():
+        run_provenance = _load_json(
+            run_provenance_path, label="candidate run provenance"
+        )
+        paired_gpu = _load_json(paired_gpu_path, label="candidate paired GPU report")
+        source_head = str(run_provenance.get("git_head", ""))
+        cuda_digest = str(
+            run_provenance.get("recovar_native_extensions", {})
+            .get("cuda_backproject", {})
+            .get("sha256", "")
+        )
+        physical_gpu = str(paired_gpu.get("physical_gpu_uuid", ""))
+        if _HEX40.fullmatch(source_head) is None:
+            raise CandidateEnvelopeError(f"candidate source head is invalid: {source_head!r}")
+        if _HEX64.fullmatch(cuda_digest) is None:
+            raise CandidateEnvelopeError("candidate CUDA library digest is invalid")
+        if {
+            physical_gpu,
+            str(paired_gpu.get("relion_gpu_uuid", "")),
+            str(paired_gpu.get("recovar_gpu_uuid", "")),
+        } != {physical_gpu} or not physical_gpu.startswith("GPU-"):
+            raise CandidateEnvelopeError("candidate paired GPU identity is incomplete or mixed")
+        return {
+            "source_head": source_head,
+            "cuda_library_sha256": cuda_digest,
+            "physical_gpu_uuid": physical_gpu,
+            "source_format": "paired_run_provenance.v1",
+        }
+
     provenance = candidate_root / "provenance"
     try:
         source_head = (provenance / "repo_head.txt").read_text().strip()
@@ -98,6 +129,7 @@ def _candidate_provenance(candidate_root: Path) -> dict[str, str]:
         "source_head": source_head,
         "cuda_library_sha256": cuda_rows[0],
         "physical_gpu_uuid": gpu_uuids[0],
+        "source_format": "legacy_provenance_directory.v1",
     }
 
 
