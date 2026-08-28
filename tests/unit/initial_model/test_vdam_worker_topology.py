@@ -333,20 +333,28 @@ def test_captured_particle_timing_rejects_start_before_first_launch(
 
 
 @pytest.mark.parametrize(
-    ("topology", "expected_offsets"),
+    ("topology", "expected_offsets", "identity_rows"),
     [
-        ("captured_particle_issue_native_count", None),
+        ("captured_particle_issue_native_count", None, True),
         (
             "captured_particle_timing_native_count",
             np.asarray([500, 0, 250], dtype=np.int32),
+            True,
+        ),
+        ("captured_particle_issue_native_grid", None, False),
+        (
+            "captured_particle_timing_native_grid",
+            np.asarray([500, 0, 250], dtype=np.int32),
+            False,
         ),
     ],
 )
-def test_captured_particle_native_count_composes_with_issue_and_timing(
+def test_captured_particle_native_grid_composes_with_issue_and_timing(
     monkeypatch,
     tmp_path,
     topology,
     expected_offsets,
+    identity_rows,
 ):
     _clear_worker_replay(monkeypatch)
     schedule_path, chronology_path = _write_particle_issue_seals(tmp_path)
@@ -377,7 +385,7 @@ def test_captured_particle_native_count_composes_with_issue_and_timing(
         assert offsets is None
     else:
         np.testing.assert_array_equal(offsets, expected_offsets)
-    assert local_em_engine._relion_vdam_identity_native_grid_replay()
+    assert local_em_engine._relion_vdam_identity_native_grid_replay() is identity_rows
 
 
 def test_captured_particle_issue_replay_only_targets_sealed_iteration(

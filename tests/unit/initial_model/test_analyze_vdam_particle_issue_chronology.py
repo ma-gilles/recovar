@@ -19,6 +19,7 @@ def _records(start_order=(0, 1, 2), *, particle_offset=10):
             ("worker_id", "<i4"),
             ("block_start_globaltimer", "<u8"),
             ("first_atomic_globaltimer", "<u8"),
+            ("orientation_row", "<u4"),
         ]
     )
     records = np.zeros(6, dtype=dtype)
@@ -30,6 +31,7 @@ def _records(start_order=(0, 1, 2), *, particle_offset=10):
         start_rank = start_order[launch_sequence]
         rows["block_start_globaltimer"] = 100 + 10 * start_rank + np.arange(2)
         rows["first_atomic_globaltimer"] = 200 + 10 * start_rank + np.arange(2)
+        rows["orientation_row"] = np.arange(2)
     return records
 
 
@@ -73,6 +75,14 @@ def test_particle_issue_analyzer_separates_host_order_from_device_admission(tmp_
     schedule_path = tmp_path / "schedule.npz"
     native = _records()
     candidate = _records(start_order=(2, 1, 0))
+    for launch_sequence in range(3):
+        indices = np.flatnonzero(candidate["launch_sequence"] == launch_sequence)
+        candidate["block_start_globaltimer"][indices] = candidate[
+            "block_start_globaltimer"
+        ][indices[::-1]]
+        candidate["first_atomic_globaltimer"][indices] = candidate[
+            "first_atomic_globaltimer"
+        ][indices[::-1]]
     candidate_particle_ids = np.asarray([90, 17, 42], dtype=np.int64)
     for launch_sequence, particle_id in enumerate(candidate_particle_ids):
         candidate["particle_id"][candidate["launch_sequence"] == launch_sequence] = (
@@ -106,3 +116,12 @@ def test_particle_issue_analyzer_separates_host_order_from_device_admission(tmp_
     assert report["launch_sequence_rank_correlation"] == 1.0
     assert report["first_block_start_rank_correlation"] == -1.0
     assert report["first_atomic_rank_correlation"] == -1.0
+    assert report["schema"] == "recovar.vdam_particle_issue_chronology.v2"
+    assert report["block_key_jaccard"] == 1.0
+    assert report["atomic_block_key_jaccard"] == 1.0
+    assert np.isclose(
+        report["within_particle_block_start_rank_correlation"]["median"], -1.0
+    )
+    assert np.isclose(
+        report["within_particle_atomic_rank_correlation"]["median"], -1.0
+    )

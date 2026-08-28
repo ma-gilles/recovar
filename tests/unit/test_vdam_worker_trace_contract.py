@@ -76,6 +76,8 @@ def test_fullschedule_boundary_can_seal_passive_candidate_block_chronology():
         '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing',
         '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue_native_count',
         '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing_native_count',
+        '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue_native_grid',
+        '"${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing_native_grid',
         'test "${WORKER_REPLAY_TOPOLOGY}" = captured',
     ]
     for text in required:

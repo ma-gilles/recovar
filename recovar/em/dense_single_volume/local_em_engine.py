@@ -687,8 +687,10 @@ def _relion_vdam_particle_issue_order_for_images(
     if topology not in {
         "captured_particle_issue",
         "captured_particle_issue_native_count",
+        "captured_particle_issue_native_grid",
         "captured_particle_timing",
         "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
     }:
         return None
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -737,6 +739,7 @@ def _relion_vdam_particle_start_offsets_for_images(
     if topology not in {
         "captured_particle_timing",
         "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
     }:
         return None
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -857,6 +860,8 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         "materialized_native_grid_trace_shape",
         "captured_particle_issue_native_count",
         "captured_particle_timing_native_count",
+        "captured_particle_issue_native_grid",
+        "captured_particle_timing_native_grid",
     }:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -919,8 +924,10 @@ def _relion_vdam_worker_lanes_for_images(
     if topology in {
         "captured_particle_issue",
         "captured_particle_issue_native_count",
+        "captured_particle_issue_native_grid",
         "captured_particle_timing",
         "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -932,8 +939,10 @@ def _relion_vdam_worker_lanes_for_images(
         if topology in {
             "captured_particle_issue",
             "captured_particle_issue_native_count",
+            "captured_particle_issue_native_grid",
             "captured_particle_timing",
             "captured_particle_timing_native_count",
+            "captured_particle_timing_native_grid",
         }:
             if (
                 _relion_vdam_particle_issue_order_for_images(
@@ -980,8 +989,10 @@ def _relion_vdam_worker_lanes_for_images(
         "captured",
         "captured_particle_issue",
         "captured_particle_issue_native_count",
+        "captured_particle_issue_native_grid",
         "captured_particle_timing",
         "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -996,7 +1007,9 @@ def _relion_vdam_worker_lanes_for_images(
             "'single_rotation_sm132', 'captured_particle_issue', 'captured_block_start', "
             "'captured_particle_timing', "
             "'captured_particle_issue_native_count', "
+            "'captured_particle_issue_native_grid', "
             "'captured_particle_timing_native_count', "
+            "'captured_particle_timing_native_grid', "
             "'captured_block_grid', 'captured_native_grid', or "
             "'captured_native_count', 'captured_native_trace_shape', or "
             "'captured_native_grid_trace_shape', or "
@@ -1027,6 +1040,8 @@ def _relion_vdam_native_grid_counts_for_images(
         "materialized_native_grid_trace_shape",
         "captured_particle_issue_native_count",
         "captured_particle_timing_native_count",
+        "captured_particle_issue_native_grid",
+        "captured_particle_timing_native_grid",
     }:
         return None
     orders = _relion_vdam_block_start_orders_for_images(

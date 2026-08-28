@@ -35,6 +35,7 @@ def _load_chronology(path: Path, *, label: str) -> tuple[int, np.ndarray]:
         "worker_id",
         "block_start_globaltimer",
         "first_atomic_globaltimer",
+        "orientation_row",
     }
     _require(
         records.ndim == 1
@@ -126,6 +127,119 @@ def _spacing(values: np.ndarray, launch_sequences: np.ndarray) -> dict[str, floa
     }
 
 
+def _block_events(
+    records: np.ndarray,
+    *,
+    particle_id_map: dict[int, int] | None,
+    label: str,
+) -> dict[tuple[int, int], tuple[int, int]]:
+    """Index every physical block by stable particle and logical orientation row."""
+
+    events: dict[tuple[int, int], tuple[int, int]] = {}
+    for row in records:
+        raw_particle_id = int(row["particle_id"])
+        if particle_id_map is None:
+            particle_id = raw_particle_id
+        else:
+            _require(raw_particle_id in particle_id_map, f"{label} particle is not scheduled")
+            particle_id = particle_id_map[raw_particle_id]
+        key = (particle_id, int(row["orientation_row"]))
+        _require(key not in events, f"{label} block key is not unique")
+        block_start = int(row["block_start_globaltimer"])
+        _require(block_start > 0, f"{label} block has no start timestamp")
+        events[key] = (block_start, int(row["first_atomic_globaltimer"]))
+    return events
+
+
+def _matched_event_rank_correlation(
+    native_events: dict[tuple[int, int], tuple[int, int]],
+    candidate_events: dict[tuple[int, int], tuple[int, int]],
+    *,
+    event_index: int,
+    positive_only: bool,
+) -> tuple[float, int, int, int, int]:
+    native_keys = {
+        key
+        for key, event in native_events.items()
+        if not positive_only or event[event_index] > 0
+    }
+    candidate_keys = {
+        key
+        for key, event in candidate_events.items()
+        if not positive_only or event[event_index] > 0
+    }
+    matched_keys = sorted(native_keys & candidate_keys)
+    _require(len(matched_keys) > 1, "fewer than two matched block events")
+    tie_breaker = np.arange(len(matched_keys), dtype=np.int64)
+    native_values = np.asarray(
+        [native_events[key][event_index] for key in matched_keys], dtype=np.int64
+    )
+    candidate_values = np.asarray(
+        [candidate_events[key][event_index] for key in matched_keys], dtype=np.int64
+    )
+    correlation = _correlation(
+        _ranks(native_values, tie_breaker),
+        _ranks(candidate_values, tie_breaker),
+    )
+    return (
+        correlation,
+        len(native_keys),
+        len(candidate_keys),
+        len(matched_keys),
+        len(native_keys | candidate_keys),
+    )
+
+
+def _within_particle_rank_summary(
+    native_events: dict[tuple[int, int], tuple[int, int]],
+    candidate_events: dict[tuple[int, int], tuple[int, int]],
+    *,
+    event_index: int,
+    positive_only: bool,
+) -> dict[str, float | int]:
+    correlations = []
+    particle_ids = sorted(
+        {key[0] for key in native_events} & {key[0] for key in candidate_events}
+    )
+    for particle_id in particle_ids:
+        keys = sorted(
+            key
+            for key in native_events.keys() & candidate_events.keys()
+            if key[0] == particle_id
+            and (
+                not positive_only
+                or (
+                    native_events[key][event_index] > 0
+                    and candidate_events[key][event_index] > 0
+                )
+            )
+        )
+        if len(keys) < 2:
+            continue
+        tie_breaker = np.asarray([key[1] for key in keys], dtype=np.int64)
+        native_rank = _ranks(
+            np.asarray([native_events[key][event_index] for key in keys], dtype=np.int64),
+            tie_breaker,
+        )
+        candidate_rank = _ranks(
+            np.asarray(
+                [candidate_events[key][event_index] for key in keys], dtype=np.int64
+            ),
+            tie_breaker,
+        )
+        correlations.append(_correlation(native_rank, candidate_rank))
+    _require(correlations, "no particle has two matched block events")
+    values = np.asarray(correlations, dtype=np.float64)
+    return {
+        "particle_count": int(values.size),
+        "minimum": float(values.min()),
+        "p10": float(np.quantile(values, 0.1)),
+        "median": float(np.median(values)),
+        "p90": float(np.quantile(values, 0.9)),
+        "maximum": float(values.max()),
+    }
+
+
 def analyze(
     native_chronology: Path,
     candidate_chronology: Path,
@@ -153,6 +267,40 @@ def analyze(
         label="candidate chronology",
     )
     _require(native_events.keys() == candidate_events.keys(), "chronology particles differ")
+    native_block_events = _block_events(
+        native_records,
+        particle_id_map=native_id_map,
+        label="native chronology",
+    )
+    candidate_block_events = _block_events(
+        candidate_records,
+        particle_id_map=None,
+        label="candidate chronology",
+    )
+    (
+        all_block_start_rank_correlation,
+        native_block_count,
+        candidate_block_count,
+        matched_block_count,
+        union_block_count,
+    ) = _matched_event_rank_correlation(
+        native_block_events,
+        candidate_block_events,
+        event_index=0,
+        positive_only=False,
+    )
+    (
+        all_atomic_rank_correlation,
+        native_atomic_count,
+        candidate_atomic_count,
+        matched_atomic_count,
+        union_atomic_count,
+    ) = _matched_event_rank_correlation(
+        native_block_events,
+        candidate_block_events,
+        event_index=1,
+        positive_only=True,
+    )
 
     particle_ids = np.asarray(sorted(native_events), dtype=np.int64)
     native = np.asarray([native_events[int(value)] for value in particle_ids], dtype=np.int64)
@@ -170,7 +318,7 @@ def analyze(
     native_atomic_spacing = _spacing(native[:, 3], native[:, 0])
     candidate_atomic_spacing = _spacing(candidate[:, 3], candidate[:, 0])
     return {
-        "schema": "recovar.vdam_particle_issue_chronology.v1",
+        "schema": "recovar.vdam_particle_issue_chronology.v2",
         "status": "complete",
         "iteration": iteration,
         "particle_count": int(particle_ids.size),
@@ -196,6 +344,28 @@ def analyze(
         ),
         "candidate_launch_to_first_atomic_rank_correlation": _correlation(
             candidate_launch_rank, candidate_atomic_rank
+        ),
+        "all_block_start_rank_correlation": all_block_start_rank_correlation,
+        "all_atomic_rank_correlation": all_atomic_rank_correlation,
+        "native_block_count": native_block_count,
+        "candidate_block_count": candidate_block_count,
+        "matched_block_count": matched_block_count,
+        "block_key_jaccard": matched_block_count / union_block_count,
+        "native_atomic_block_count": native_atomic_count,
+        "candidate_atomic_block_count": candidate_atomic_count,
+        "matched_atomic_block_count": matched_atomic_count,
+        "atomic_block_key_jaccard": matched_atomic_count / union_atomic_count,
+        "within_particle_block_start_rank_correlation": _within_particle_rank_summary(
+            native_block_events,
+            candidate_block_events,
+            event_index=0,
+            positive_only=False,
+        ),
+        "within_particle_atomic_rank_correlation": _within_particle_rank_summary(
+            native_block_events,
+            candidate_block_events,
+            event_index=1,
+            positive_only=True,
         ),
         "native_first_block_start_spacing": native_start_spacing,
         "candidate_first_block_start_spacing": candidate_start_spacing,
