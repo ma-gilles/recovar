@@ -43,15 +43,16 @@ then qualify the feedback trajectory. The score must not be improved by
 copying EM code, weakening particle gates, or selecting one lucky CUDA
 realization.
 
-The first repeat-robust candidate is now live. Enabling the existing shared
-`--deterministic-cuda` control (`CUDA_LAUNCH_BLOCKING=1`) closes GF46 twice
-through iteration 20 on the same physical H100: both runs retain exact
-particle-state and controller parity at every sampled checkpoint, with map
-FSC-AUC floors `0.9999999999565` and `0.9999999999567`. Their maps are not
-bitwise identical, but their maximum sampled repeat distance is only
-`2.5815e-7` relative L2 and no adaptive decision changes. This is diagnostic
-evidence, not a frozen-score promotion. Full 0--200 job `13117709` is the
-active qualification gate.
+The first launch-synchronized candidate closes GF46 twice through iteration
+20 on the same physical H100, but fails the long gate. With the existing
+shared `--deterministic-cuda` control (`CUDA_LAUNCH_BLOCKING=1`), jobs
+`13116813 / 13117293` retain exact sampled particle/controller parity and map
+FSC-AUC floors `0.9999999999565 / 0.9999999999567` through iteration 20.
+Full job `13117709` first differs at one particle in iteration 33, grows to
+178 particles by iteration 57, first fails the map gate at iteration 57
+(`0.993022975`), and crosses several controller fields at iteration 58.
+Launch synchronization is therefore a useful discriminator, not a production
+correction; the raw-BPref accumulator remains the active causal boundary.
 
 ### At a glance: progress, failure, and next gate
 
@@ -59,10 +60,10 @@ active qualification gate.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | The GF46 discrepancy is not a VDAM-local formula, geometry, projector, prior, posterior, or significance bug: both observed rank-100/101 score gaps are exactly reachable from the same captured shared-scorer lanes. The architecture guard also proves InitialModel imports EM's authoritative significance, sparse pass-2, local-refinement, and layout functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen scoring result remains **2/20 strict** and runtime remains **0/20** at **4.91--11.58x** RELION because the synchronized candidate has not completed 0--200 or the frozen 20-case matrix. The unsynchronized production baseline still first differs at particle 286 iteration 4 and at the schedule iteration 18. |
-| 🟡 | Why can both be true? | The expected-accuracy outputs are exact, but unsynchronized native-scale map variation shifts centered coarse scores by at most `2.48e-5`; a `9.14e-7` posterior-TV change can admit one extra adaptive parent. Synchronization does not make CUDA bitwise deterministic: the two candidate runs differ by at most `2.5815e-7` relative L2, but both now remain on the RELION branch through iteration 20. |
-| 🟢 | Former first systematic departure | The unsynchronized composed run first differs at particle `286@particles.128.mrcs` at iteration 4 and schedule iteration 18. Neither departure occurs in synchronized jobs `13116813 / 13117293`; all sampled particle and controller checkpoints through iteration 20 pass. |
-| ➡️ | What is next? | Full synchronized GF46 0--200 job `13117709` is running on the exact physical H100. If all 201 checkpoints pass, repeat the long gate, then run GF47 and the unchanged frozen 20-case K=1 matrix before considering a default change. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20** at **4.91--11.58x** RELION. Synchronization delays GF46's first particle departure from iteration 4 to iteration 33, but it does not prevent the long feedback avalanche: 178 particles differ and map FSC-AUC is `0.993022975` by iteration 57; controller fields first differ at iteration 58. |
+| 🟡 | Why can both be true? | A synchronized 20-iteration run is repeat-robust locally, but it is not a proof about 200 feedback steps. Residual raw-BPref/map bias remains below the particle gate through iteration 32, then one particle switches at 33 and the difference compounds. This is the same sensitivity that the raw-BPref oracle removes; global launch ordering alone does not reproduce RELION's accumulator distribution. |
+| 🔴 | First systematic departure | In synchronized full job `13117709`, `2538@particles.128.mrcs` first switches pose by 180 degrees and translation by `1.412063 A` at iteration 33. The divergence grows 1 -> 2 -> 7 -> 25 -> 69 -> 178 particles at iterations 33/37/42/48/52/57. |
+| ➡️ | What is next? | Preserve `13117709` as a complete negative trajectory, then implement and qualify the shared repeat-robust raw-BPref accumulator against RELION's native-repeat envelope. Re-enter the @4/@20/@33/@58 gates before another 0--200 run; do not change the default from this synchronization result. |
 | 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. InitialModel still imports the authoritative EM significance, sparse pass-2, local-refinement, layout, posterior, and expected-accuracy machinery by object identity. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
@@ -234,7 +235,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 18:20 ET**
+Last scientific update: **2026-08-28 18:34 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -262,7 +263,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF46 particle-286 posterior @4 | the unsynchronized path's one extra coarse parent is closed twice through iteration 20 by the existing shared deterministic-CUDA control. Both synchronized repeats have exact sampled particle/controller parity; their maximum sampled map-repeat distance is `2.5815e-7` relative L2 | @4 `13116158 / 13116369`; @20 `13116813 / 13117293`; current science `23150e50c`; full 0--200 `13117709` running | require 201/201 map, particle, and controller checkpoints on the full run and a second long repeat before matrix promotion; no score change yet |
+| 1 | GF46 raw-BPref feedback boundary | launch synchronization closes two repeats through @20 but fails the long gate: first particle @33, map @57, controller @58. The residual grows from one switched particle to 178 before the controller changes, so global synchronization is rejected as sufficient | @4 `13116158 / 13116369`; @20 `13116813 / 13117293`; failing 0--200 `13117709`; current science `23150e50c` | implement a shared repeat-robust BPref accumulator, require native-envelope raw buffers and exact @4/@20/@33/@58 gates, then rerun 0--200; no score change |
 | 2 | GF47 systematic mode boundary @4, particle 1085 | exact E-step/operand/support chain, terminal 4x8 audit, and native-posterior replay close iteration-1 raw-BPref distribution scale. Eight native repeats choose particle modes 5:3 while four candidates choose 4:0; the decisive boundary is the rank-10 adaptive-support parent inherited through iteration-3 map/PPref | native expansion `13091586--13091618`; 4x8 audit `13092340`; matched fixed-posterior/native-posterior panels `13095568 / 13097692`; replay science `eeeceb368` | reuse the same corrected shared coarse path, then qualify 0--4/0--20 before 0--200 |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
