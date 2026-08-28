@@ -143,6 +143,25 @@ def read_relion_spectrum(path: Path) -> np.ndarray:
     return values
 
 
+def relion_bpref_numerator_to_recovar_units(
+    numerator_in_recovar_layout: np.ndarray,
+    *,
+    grid_size: int,
+) -> np.ndarray:
+    """Convert native RELION BPref data to RECOVAR Fourier units.
+
+    ``relion_x_half_volume_to_native_half`` owns the axis/layout conversion.
+    The remaining volume convention includes RELION's global minus sign and
+    the numerator's ``N**2`` FFT scale.  The weight denominator has no sign
+    conversion and uses ``N**4`` separately.
+    """
+
+    grid_size = int(grid_size)
+    if grid_size <= 0:
+        raise ValueError(f"grid_size must be positive, got {grid_size}")
+    return -np.asarray(numerator_in_recovar_layout) / float(grid_size**2)
+
+
 def compare_relion_boundary_spectra(
     dump: Any,
     prefix: Path,
@@ -472,12 +491,12 @@ def main(argv: list[str] | None = None) -> int:
                     f"data={relion_data.shape}, weight={relion_weight.shape}, expected={expected_half_shape}"
                 )
             n = int(volume_shape[0])
-            reconstruction_Ft_y = (
+            reconstruction_Ft_y = relion_bpref_numerator_to_recovar_units(
                 half_volume_mstep.relion_x_half_volume_to_native_half(
                     relion_data.reshape(-1),
                     mstep_accumulator_shape,
-                )
-                / (n**2)
+                ),
+                grid_size=n,
             )
             reconstruction_Ft_ctf = (
                 half_volume_mstep.relion_x_half_volume_to_native_half(
@@ -489,7 +508,7 @@ def main(argv: list[str] | None = None) -> int:
             accumulator_comparison = {
                 "policy": (
                     "streamed float64/complex128 comparison after RELION-to-RECOVAR "
-                    "layout and unit conversion"
+                    "layout, global-sign, and unit conversion"
                 ),
                 "source": "recovar_joined_accumulator",
                 "target": "native_relion_joined_accumulator",

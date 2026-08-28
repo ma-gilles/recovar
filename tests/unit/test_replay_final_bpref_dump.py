@@ -83,6 +83,25 @@ def test_read_relion_spectrum_reads_length_header(tmp_path):
     np.testing.assert_array_equal(loaded, values)
 
 
+def test_relion_bpref_numerator_conversion_applies_global_sign_and_fft_scale():
+    relion_layout_converted = np.asarray([4.0 + 8.0j, -12.0 + 16.0j])
+
+    actual = replay_final_bpref_dump.relion_bpref_numerator_to_recovar_units(
+        relion_layout_converted,
+        grid_size=2,
+    )
+
+    np.testing.assert_array_equal(actual, np.asarray([-1.0 - 2.0j, 3.0 - 4.0j]))
+
+
+def test_relion_bpref_numerator_conversion_rejects_nonpositive_grid_size():
+    with np.testing.assert_raises_regex(ValueError, "grid_size must be positive"):
+        replay_final_bpref_dump.relion_bpref_numerator_to_recovar_units(
+            np.ones(1),
+            grid_size=0,
+        )
+
+
 def test_streaming_field_metrics_reports_exact_equality_across_chunks():
     values = np.arange(12, dtype=np.float64).reshape(3, 4)
 

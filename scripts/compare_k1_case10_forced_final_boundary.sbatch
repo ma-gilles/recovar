@@ -146,7 +146,10 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
+
 from scripts.audit_em_k1_membership_capture_inertness import _load_map, _metrics
+from recovar.utils import helpers
 
 
 def sha256(path: Path) -> str:
@@ -161,28 +164,42 @@ paths = {name: Path(os.environ[name]).resolve() for name in (
     "CONTROL_RELION", "CANDIDATE_RELION", "SOURCE_RECOVAR_MAP",
     "SEALED_RECOVAR_MAP", "REPLAY_RECOVAR_MAP", "REPLAY_RELION_MAP"
 )}
+relion_maps = {
+    name: np.asarray(helpers.load_relion_volume(str(paths[name])), dtype=np.float32)
+    for name in ("CONTROL_RELION", "CANDIDATE_RELION")
+}
+recovar_maps = {
+    name: _load_map(paths[name])
+    for name in (
+        "SOURCE_RECOVAR_MAP", "SEALED_RECOVAR_MAP",
+        "REPLAY_RECOVAR_MAP", "REPLAY_RELION_MAP",
+    )
+}
 inertness_comparisons = {
     "native_relion_replay_vs_source_capture": _metrics(
-        _load_map(paths["CANDIDATE_RELION"]), _load_map(paths["REPLAY_RELION_MAP"])
+        relion_maps["CANDIDATE_RELION"], recovar_maps["REPLAY_RELION_MAP"]
     ),
     "recovar_boundary_replay_vs_source_recovar": _metrics(
-        _load_map(paths["SOURCE_RECOVAR_MAP"]), _load_map(paths["REPLAY_RECOVAR_MAP"])
+        recovar_maps["SOURCE_RECOVAR_MAP"], recovar_maps["REPLAY_RECOVAR_MAP"]
     ),
 }
 scientific_comparisons = {
     "native_relion_capture_vs_sealed_relion": _metrics(
-        _load_map(paths["CONTROL_RELION"]), _load_map(paths["CANDIDATE_RELION"])
+        relion_maps["CONTROL_RELION"], relion_maps["CANDIDATE_RELION"]
     ),
     "recovar_capture_vs_sealed_recovar": _metrics(
-        _load_map(paths["SEALED_RECOVAR_MAP"]), _load_map(paths["SOURCE_RECOVAR_MAP"])
+        recovar_maps["SEALED_RECOVAR_MAP"], recovar_maps["SOURCE_RECOVAR_MAP"]
     ),
 }
 threshold = 0.999999
 for row in inertness_comparisons.values():
     row["passed"] = row["fsc_auc_non_dc"] >= threshold
 report = {
-    "schema": "em-k1-case10-forced-final-boundary-inertness-v1",
-    "metric_policy": "signed shellwise FSC and non-DC FSC-AUC; no correlation",
+    "schema": "em-k1-case10-forced-final-boundary-inertness-v2",
+    "metric_policy": (
+        "RELION and RECOVAR maps normalized to RECOVAR convention; "
+        "signed shellwise FSC and non-DC FSC-AUC; no correlation"
+    ),
     "fsc_auc_non_dc_threshold": threshold,
     "inertness_comparisons": inertness_comparisons,
     "scientific_comparisons": scientific_comparisons,
