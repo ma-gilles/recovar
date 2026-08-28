@@ -386,10 +386,6 @@ class TestAutoRefineExpectedAccuracyBinding:
             expected_accuracy._expected_accuracy_process_pool()
             is expected_accuracy._expected_accuracy_process_pool()
         )
-        child_environment = expected_accuracy._expected_accuracy_process_pool().submit(
-            expected_accuracy._expected_accuracy_spawn_worker_environment
-        ).result()
-        assert child_environment == expected_accuracy._EXPECTED_ACCURACY_CPU_ENV
 
     def test_split_half_random_shuffle_reference(self, bind):
         if not hasattr(bind, "auto_refine_randomise_half_order"):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
-import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -115,11 +114,6 @@ def estimate_relion_expected_accuracy_from_prepared_inputs(
 
 
 _EXPECTED_ACCURACY_PROCESS_POOL: ProcessPoolExecutor | None = None
-_EXPECTED_ACCURACY_CPU_ENV = {
-    "CUDA_VISIBLE_DEVICES": "",
-    "JAX_PLATFORMS": "cpu",
-    "JAX_PLATFORM_NAME": "cpu",
-}
 
 
 def _estimate_relion_expected_accuracy_spawn_worker(
@@ -129,53 +123,14 @@ def _estimate_relion_expected_accuracy_spawn_worker(
     return estimate_relion_expected_accuracy_from_prepared_inputs(**kwargs)
 
 
-def _expected_accuracy_spawn_worker_environment() -> dict[str, str]:
-    """Return the child-only platform environment for a fail-closed gate."""
-    return {
-        name: os.environ.get(name, "")
-        for name in _EXPECTED_ACCURACY_CPU_ENV
-    }
-
-
 def _expected_accuracy_process_pool() -> ProcessPoolExecutor:
     """Return the one-worker pool shared by expected-accuracy checkpoints."""
     global _EXPECTED_ACCURACY_PROCESS_POOL
     if _EXPECTED_ACCURACY_PROCESS_POOL is None:
-        previous_environment = {
-            name: os.environ.get(name)
-            for name in _EXPECTED_ACCURACY_CPU_ENV
-        }
-        candidate_pool = None
-        try:
-            os.environ.update(_EXPECTED_ACCURACY_CPU_ENV)
-            candidate_pool = ProcessPoolExecutor(
-                max_workers=1,
-                mp_context=multiprocessing.get_context("spawn"),
-            )
-            # ProcessPoolExecutor starts workers lazily. Submit while the
-            # parent temporarily exposes the CPU-only child environment, then
-            # restore the already-initialized production JAX process exactly.
-            child_environment = candidate_pool.submit(
-                _expected_accuracy_spawn_worker_environment
-            ).result()
-        except BaseException:
-            if candidate_pool is not None:
-                candidate_pool.shutdown(wait=True, cancel_futures=True)
-            raise
-        finally:
-            for name, value in previous_environment.items():
-                if value is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
-        if child_environment != _EXPECTED_ACCURACY_CPU_ENV:
-            if candidate_pool is not None:
-                candidate_pool.shutdown(wait=True, cancel_futures=True)
-            raise RuntimeError(
-                "isolated expected-accuracy worker did not retain its CPU-only "
-                f"environment: {child_environment!r}"
-            )
-        _EXPECTED_ACCURACY_PROCESS_POOL = candidate_pool
+        _EXPECTED_ACCURACY_PROCESS_POOL = ProcessPoolExecutor(
+            max_workers=1,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
     return _EXPECTED_ACCURACY_PROCESS_POOL
 
 
@@ -189,10 +144,9 @@ def estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
     wrapper exists for trajectory diagnostics where RELION's process-global
     RNG, FFT, or allocator state must not leak from the temporary
     expected-accuracy projectors into the production E/M-step process.
-    One CPU-only spawned worker is reused across checkpoints to amortize
-    import and binding startup without opening a second CUDA context.
-    ``spawn`` is deliberate: forking a process after JAX has created worker
-    threads or a CUDA context is unsafe.
+    One spawned worker is reused across checkpoints to amortize import and
+    binding startup. ``spawn`` is deliberate: forking a process after JAX has
+    created worker threads or a CUDA context is unsafe.
     """
     payload = _expected_accuracy_process_pool().submit(
         _estimate_relion_expected_accuracy_spawn_worker,
