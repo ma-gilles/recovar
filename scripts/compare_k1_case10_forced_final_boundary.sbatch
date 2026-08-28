@@ -133,12 +133,25 @@ PY
     --output-mrc "${ANALYSIS}/native_accumulator_replay.mrc" \
     > "${ANALYSIS}/native_accumulator_replay.stdout.json"
 
+"${PYTHON}" -m scripts.replay_final_bpref_dump \
+    --dump "${REC_DUMP}" \
+    --relion-bpref-prefix "${NATIVE_PREFIX}" \
+    --compare-relion-boundary-spectra \
+    --relion-tau2-bin "${NATIVE_PREFIX}_tau2.bin" \
+    --grid-correct on \
+    --gt-mrc "${DATA}/reference_gt.mrc" \
+    --relion-mrc "${CONTROL}/run_class001.mrc" \
+    --output-json "${ANALYSIS}/native_accumulator_replay_grid_on.json" \
+    --output-mrc "${ANALYSIS}/native_accumulator_replay_grid_on.mrc" \
+    > "${ANALYSIS}/native_accumulator_replay_grid_on.stdout.json"
+
 CONTROL_RELION=${CONTROL}/run_class001.mrc \
 CANDIDATE_RELION=${RELION_CAPTURE}/relion/run_class001.mrc \
 SOURCE_RECOVAR_MAP=${SOURCE_RECOVAR}/final_merged.mrc \
 SEALED_RECOVAR_MAP=${SEALED_RECOVAR}/final_merged.mrc \
 REPLAY_RECOVAR_MAP=${ANALYSIS}/recovar_accumulator_replay.mrc \
 REPLAY_RELION_MAP=${ANALYSIS}/native_accumulator_replay.mrc \
+REPLAY_RELION_GRID_ON_MAP=${ANALYSIS}/native_accumulator_replay_grid_on.mrc \
 OUTPUT_JSON=${ANALYSIS}/capture_and_replay_inertness.json \
 "${PYTHON}" - <<'PY'
 import hashlib
@@ -162,7 +175,8 @@ def sha256(path: Path) -> str:
 
 paths = {name: Path(os.environ[name]).resolve() for name in (
     "CONTROL_RELION", "CANDIDATE_RELION", "SOURCE_RECOVAR_MAP",
-    "SEALED_RECOVAR_MAP", "REPLAY_RECOVAR_MAP", "REPLAY_RELION_MAP"
+    "SEALED_RECOVAR_MAP", "REPLAY_RECOVAR_MAP", "REPLAY_RELION_MAP",
+    "REPLAY_RELION_GRID_ON_MAP",
 )}
 relion_maps = {
     name: np.asarray(helpers.load_relion_volume(str(paths[name])), dtype=np.float32)
@@ -173,11 +187,16 @@ recovar_maps = {
     for name in (
         "SOURCE_RECOVAR_MAP", "SEALED_RECOVAR_MAP",
         "REPLAY_RECOVAR_MAP", "REPLAY_RELION_MAP",
+        "REPLAY_RELION_GRID_ON_MAP",
     )
 }
 inertness_comparisons = {
     "native_relion_replay_vs_source_capture": _metrics(
         relion_maps["CANDIDATE_RELION"], recovar_maps["REPLAY_RELION_MAP"]
+    ),
+    "native_relion_grid_on_replay_vs_source_capture": _metrics(
+        relion_maps["CANDIDATE_RELION"],
+        recovar_maps["REPLAY_RELION_GRID_ON_MAP"],
     ),
     "recovar_boundary_replay_vs_source_recovar": _metrics(
         recovar_maps["SOURCE_RECOVAR_MAP"], recovar_maps["REPLAY_RECOVAR_MAP"]
