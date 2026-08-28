@@ -30,18 +30,26 @@ fractions must not be read as the same test with different implementations.
 |---|---|---|---|
 | Starting reference | Stable supplied map | Bootstrapped from the particles | VDAM must reproduce the initial basin as well as refinement. |
 | Feedback | Scores a comparatively stable reference | Every small M-step difference becomes the next E-step input | Native-scale atomic variation can cross a later adaptive cutoff and avalanche. |
-| Shared implementation | Authoritative significance, sparse pass-2, local-refinement, layout, posterior, and expected-accuracy code | Imports those same functions by object identity | The current gap is not a duplicate VDAM scorer implementation. |
+| Shared implementation | Authoritative significance, compact sparse pass-2, local-refinement, layout, posterior, and expected-accuracy code | Imports the numerical functions by object identity, but K=1 defaults to InitialModel's separate local pass-2 orchestration instead of supplied-map EM's `run_dense_k_class_em_adaptive` policy path | Scoring kernels are reused; grid/layout preparation, grouping, and reduction policy are not yet one end-to-end shared path. |
 | Algorithm-specific work | Conventional EM reconstruction/update path | InitialModel SGD BPref accumulation, gradient moments, pseudo-halfsets, reconstruction, and bootstrap/controller schedule | These pieces cannot simply call the supplied-map EM M-step because RELION uses a different update algorithm. |
 | Current causal boundary | Several difficult noise/topology cases still remain | Raw GPU BPref accumulation realization | Replaying RELION raw BPref makes a paired 60-iteration VDAM trajectory effectively exact (`2.46e-15` output-reference relative L2, zero particle/operative-schedule divergences). |
 | Runtime posture | Mature production path; best large run about 1.40x RELION | Reference-faithful and heavily guarded path; 4.91--11.58x | Correctness-first diagnostics and non-fused host work must be removed or optimized after a repeat-robust K=1 trajectory is sealed. |
 
-The practical interpretation is therefore: the mature EM scoring machinery
-has already been reused, and the remaining K=1 VDAM correctness problem is
-narrow but unusually sensitive. The production task is to make the shared
-BPref accumulation land reproducibly inside RELION's native distribution;
-then qualify the feedback trajectory. The score must not be improved by
-copying EM code, weakening particle gates, or selecting one lucky CUDA
-realization.
+The practical interpretation is therefore: the mature EM numerical machinery
+has already been reused, but InitialModel still wraps it with a distinct K=1
+pass-2 policy path. The remaining correctness boundary is narrow but unusually
+sensitive. The iteration-68 operand capture must determine whether the first
+winner departure originates in shared arithmetic or in that wrapper policy;
+the correction should then move behavior into the shared EM path rather than
+copying another VDAM-specific implementation. The production task also remains
+to make shared BPref accumulation land reproducibly inside RELION's native
+distribution and then qualify the feedback trajectory. The score must not be
+improved by weakening particle gates or selecting one lucky CUDA realization.
+Wholesale routing to the existing compact EM driver is already rejected:
+frozen K=1 job `12764156` reached only `0.9994907915` cross-engine FSC-AUC by
+iteration 8 and took `43.4x` RELION. Reuse work must therefore extract the
+qualified exact-local semantics and stable-shape planning into shared code,
+not change VDAM to the currently unqualified compact execution topology.
 
 The first launch-synchronized candidate closes GF46's map and particle-state
 envelopes through iteration 60 on the same physical H100. With the existing
@@ -71,7 +79,7 @@ entire failure trajectory.
 | Status | Question | Readout |
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
-| 🟢 | What is closed? | The GF46 discrepancy is not a VDAM-local formula, geometry, projector, prior, posterior, or significance bug: both observed rank-100/101 score gaps are exactly reachable from the same captured shared-scorer lanes. The architecture guard also proves InitialModel imports EM's authoritative significance, sparse pass-2, local-refinement, and layout functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
+| 🟢 | What is closed? | The GF46 discrepancy is not a separate VDAM scoring formula: both observed rank-100/101 score gaps are exactly reachable from captured shared-scorer lanes. The architecture guard proves InitialModel imports EM's authoritative numerical functions by object identity. Static tracing now also records the remaining reuse gap: K=1 InitialModel uses its own local pass-2 orchestration rather than supplied-map EM's complete adaptive wrapper. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. Active particle state first leaves the four-repeat envelope at iteration 68 (1/264 particles), and the map first crosses the fixed gate at 107. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟡 | Same-GPU qualification | The existing four-repeat GF46 panel was generated on H100 `GPU-97adb...`, while synchronized candidate `13117709` runs on `GPU-235ec...`. Those comparisons localize numerical behavior but cannot be promoted under the frozen same-physical-GPU rule. Native full repeats `13120241--13120244` are queued serially on `GPU-235ec...`, each with the iteration-68 particle capture, to create the qualifying envelope. |
