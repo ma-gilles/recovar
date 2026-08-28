@@ -14,17 +14,17 @@ Frozen case-definition SHA-256:
 | Same-H100 runtime | **0/20** comparable; 4.91--11.58x RELION | 20/20 comparable | 🔴 |
 | Terminal sealed audits | **20/20** | 20/20 | 🟢 |
 
-### Latest scientific readout
+### At a glance: progress, failure, and next gate
 
-| Question | Readout |
-|---|---|
-| What is closed? | RELION's float sigmoid schedule and the complete downstream reconstruction path: the 60-iteration raw-BPref oracle reaches reference input/output relative L2 **`2.527e-15 / 2.460e-15`**, FSC-AUC **`1.0`**, and zero state/schedule divergences. |
-| What still fails? | The aggregate production raw-BPref CUDA accumulator at iteration 58. The latest state-aligned repeat has **0/3,000** selected-state divergences, so this is no longer confounded by pose/translation drift. |
-| What is now closed? | Stable stack 2707 has exact posterior support; native inverse noise is captured; translated `Fimg * CTF / sigma2` matches at **`1.06e-7`**, `CTF^2 / sigma2` at **`7.17e-8`**, and the complete same-posterior per-particle BPref volume at **`1.05e-7`** relative L2. The isolated native-GPU `AccBackprojector` comparison also closes particle scatter: data/weight relative L2 are **`5.43e-6 / 5.42e-6`** at the live-posterior floor. |
-| What did that change diagnostically? | Particle identity, topology, preprocessing, translation phase, CTF/noise weighting, effective per-particle row generation, and isolated CUDA scatter are rejected as the aggregate failure. The first unclosed production operation is now shared multi-particle accumulation. |
-| What is the active theory? | **Compiled SGD device-code identity / intra-block chronology** is now the leading axis. Static native block-order replay leaves within-particle atomic medians unchanged at **`0.50 / 0.643`** and raw BPref non-passing. More importantly, four RELION repeats themselves have only **`0.50--0.72`** median within-particle atomic-rank agreement, so physical block admission is stochastic and not a stable correction target. RECOVAR and RELION use 40 registers for the 2-D SGD kernel, but their static shared-memory / constant layouts remain `1060 B / 792 B` versus `48 B / 624 B`. |
-| What is next? | Audit the prior trace-shape specialization against the exact qualified SASS, then build the smallest exact-signature RELION SGD discriminator only if it is not already covered. The acceptance gate remains both raw halves inside the native envelope before any 0--200 promotion. |
-| Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No tolerance, denominator, or acceptance rule changed. |
+| Status | Question | Readout |
+|:---:|---|---|
+| 🟢 | What improved? | Four independent same-H100 production panels (eight fresh arms) put **32/32 raw data/weight comparisons inside RELION's own repeat floor** at GF47 iteration 58. The cross/native ratio is median **`0.00203x`**, p90 **`0.01161x`**, and worst **`0.01283x`**: even the worst RECOVAR--RELION raw-accumulator difference is about **78x smaller** than the matched RELION--RELION separation. |
+| 🟢 | What is closed? | The iteration-58 production raw M-step formula is statistically RELION-equivalent at the measured native stochastic floor. Earlier oracle work also closes RELION's float sigmoid schedule and the downstream reconstruction path at reference input/output relative L2 **`2.527e-15 / 2.460e-15`**, FSC-AUC **`1.0`**, and zero state/schedule divergences. |
+| 🔴 | What still fails? | The frozen single-realization 0--200 score remains **2/20 strict**, with first GF47 failures at schedule 58, particle 61, and map 80; same-H100 runtime remains **0/20** at **4.91--11.58x** RELION. K>1, real-data, and final CLI/GUI qualification have not started. |
+| 🟡 | Why can both be true? | Native GPU atomic admission is stochastic. Four prior native chronology repeats agree at only **`0.50--0.72`** median within-particle atomic rank, and the new panels show native raw-data repeat relative L2 ranging from **`6.42e-4` to `4.19e-1`**. The frozen audit asks RECOVAR to follow one RELION stochastic mode exactly even when a fresh RELION run can select another much more distant mode. |
+| 🟡 | Current theory | There is no remaining evidence for a deterministic raw-BPref formula, topology, or instruction-order bug at iteration 58. The active blocker is **trajectory sensitivity to valid native stochastic modes**, followed separately by the known runtime gap. |
+| ➡️ | What is next? | Add a sealed repeat/distribution trajectory gate, then run independent GF47 production 0--200 pairs and compare RELION/RECOVAR distributions for schedule, particles, maps, and runtime. Only after that evidence defines a stable native envelope will the frozen K=1 matrix be rerun; thresholds and the 20-case denominator remain unchanged meanwhile. |
+| ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
 checked case means that its complete map, particle-state, and pre-divergence
@@ -86,6 +86,7 @@ SHA-256 values.
 | Same-arm native-count discriminator | runner fix `35025330f`; jobs `13070934 / 13070935` completed in 384/382 s | exact grid cardinality is not sufficient: issue+count raw data `9.12e-6 / 8.50e-6`, weights `3.35e-6 / 2.93e-6`; timing+count data `9.21e-6 / 8.09e-6`, weights `3.74e-6 / 2.79e-6`. Both chronology seals match their own RELION arm; no promotion |
 | Within-particle native-order discriminator | local science `92214d9ec`; 52 focused tests pass; jobs `13071700 / 13071701` completed in 392/381 s | no promotion: issue+grid raw data `8.35e-6 / 1.03e-5`, weights `3.13e-6 / 3.93e-6`; timing+grid data `7.89e-6 / 8.76e-6`, weights `2.90e-6 / 3.11e-6`. Within-particle atomic medians remain `0.50 / 0.643`; a static block permutation does not control physical admission |
 | Native physical-order repeatability | pairwise comparison of the four same-arm iteration-58 RELION seals from `13070934/35` and `13071700/01` | native-vs-native within-particle atomic-rank medians span `0.50--0.72`; candidate-vs-native is already inside that stochastic range, rejecting physical block order as a stable parity target |
+| Production native-repeat qualification | science `f5e7d74ad`; jobs `13072500--13072503`; aggregate SHA `9d8f48f54e43...` | **32/32** raw data/weight comparisons are inside native repeat variability; cross/native ratio median `0.00203x`, p90 `0.01161x`, max `0.01283x`. Raw formula boundary is statistically green; repeated 0--200 trajectory qualification is next |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
 | GF47 binary64 accumulator | repeats are bitwise exact | rejected: reference error is **5.60--5.96x** its native floor |
@@ -145,7 +146,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-27 20:25 ET**
+Last scientific update: **2026-08-27 21:26 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -173,7 +174,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 production BPref accumulation boundary @58 | exact particle/global/grid chronology and static block-order replay are insufficient; native physical order itself repeats at only `0.50--0.72` median rank | compare exact SGD device-code signature/SASS and isolate intra-block instruction chronology | none yet; promote only a robust aggregate correction, then rerun 0--200 |
+| 1 | GF47 production trajectory from raw BPref boundary @58 | four independent panels put **32/32** raw data/weight arms inside the native repeat floor; worst cross/native ratio is **`0.01283x`** | define and seal the repeat/distribution gate, then run independent production 0--200 pairs | no frozen score change; boundary evidence is statistically green, trajectory remains red |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -192,6 +193,24 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+The production iteration-58 raw-accumulator boundary now passes an independent
+native-repeat gate. Science commit `f5e7d74ad` adds a fail-closed multi-panel
+summarizer and focused tests. Same-H100 jobs `13072500--13072503` completed
+four panels (eight fresh arms) in 14:13--15:05. All **32/32** raw data/weight
+comparisons satisfy `cross-engine relative L2 <= native-repeat relative L2`;
+the ratio distribution is minimum `1.699e-5`, median `2.028e-3`, p90
+`1.161e-2`, and maximum `1.283e-2`. The four panel-report SHA-256 values are
+`0ee17564f5e6...`, `79935bac4c2b...`, `defb77ff9737...`, and
+`f2415f9c6910...`; aggregate report SHA-256 is `9d8f48f54e43...` under
+`vdam_gf47_it58_production_repeat_panel_92214d9ec_20260827/analysis/`.
+
+This rejects further static atomic-order or SGD instruction-shape imitation as
+the next justified experiment. It does not promote the frozen score: the next
+gate is repeated production 0--200 trajectories, comparing cross-engine
+schedule, particle, map, and runtime distributions against RELION repeats.
+Focused validation is **9/9** repeat-panel tests plus Ruff and Python compile;
+no generic RECOVAR full/long suite ran.
 
 The iteration-58 failure is now known to move between native realizations.
 Local science commit `834b78c54` fixes the BPref boundary analyzer so a target
