@@ -17,12 +17,16 @@ from recovar.utils import helpers
 
 
 def _load(path: Path, dtype: np.dtype) -> np.ndarray:
-    raw = path.read_bytes()
-    shape = struct.unpack_from("<3q", raw)
-    values = np.frombuffer(raw, dtype=dtype, offset=64).copy()
-    if values.size != int(np.prod(shape)):
+    dtype = np.dtype(dtype)
+    with path.open("rb") as stream:
+        header = stream.read(64)
+    if len(header) != 64:
+        raise ValueError(f"truncated header for {path}")
+    shape = struct.unpack_from("<3q", header)
+    expected_size = 64 + int(np.prod(shape)) * dtype.itemsize
+    if path.stat().st_size != expected_size:
         raise ValueError(f"payload size mismatch for {path}")
-    return values.reshape(shape)
+    return np.memmap(path, dtype=dtype, mode="r", offset=64, shape=shape, order="C")
 
 
 def _stage_path(

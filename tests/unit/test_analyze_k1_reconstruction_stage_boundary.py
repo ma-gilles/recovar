@@ -1,13 +1,34 @@
 from pathlib import Path
+import struct
 
 import numpy as np
 import pytest
 
 from scripts.analyze_k1_reconstruction_stage_boundary import (
+    _load,
     _relion_projector_centered_to_fftw_half,
     _select_accumulator_targets,
     _stage_path,
 )
+
+
+def test_load_memory_maps_exact_stage_payload(tmp_path: Path) -> None:
+    expected = np.arange(24, dtype=np.float64).reshape(2, 3, 4)
+    path = tmp_path / "stage.bin"
+    path.write_bytes(struct.pack("<3q", *expected.shape) + bytes(40) + expected.tobytes())
+
+    actual = _load(path, np.dtype("<f8"))
+
+    assert isinstance(actual, np.memmap)
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_load_rejects_payload_size_mismatch(tmp_path: Path) -> None:
+    path = tmp_path / "truncated.bin"
+    path.write_bytes(struct.pack("<3q", 2, 3, 4) + bytes(40) + bytes(8))
+
+    with pytest.raises(ValueError, match="payload size mismatch"):
+        _load(path, np.dtype("<f8"))
 
 
 def test_stage_path_selects_requested_uninterrupted_call(tmp_path: Path) -> None:
