@@ -211,9 +211,14 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
 def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():
     """Full-chain NPZ output must expose the class-mass split used in parity debugging."""
 
+    from recovar.em.dense_single_volume.helpers import iteration_history
+
+    history_source = inspect.getsource(iteration_history.RefinementHistory.record_class_weights)
+    assert "self.class_mstep_weight_trajectory.append(mstep_weights)" in history_source
+    assert "self.class_full_posterior_weight_trajectory.append(posterior_weights)" in history_source
+
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
-    assert "class_mstep_weight_trajectory.append(class_weights.copy())" in source
-    assert "class_full_posterior_weight_trajectory.append(" in source
+    assert "history.record_class_weights(" in source
 
     import scripts.run_full_refinement as run_full_refinement
 

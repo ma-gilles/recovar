@@ -8,6 +8,8 @@ import numpy as np
 
 from recovar.em.dense_single_volume.helpers.types import NoiseStats
 from recovar.em.dense_single_volume.iteration_loop import (
+    _dispatch_relion_follower_scale_for_final_all_data,
+    _dispatch_relion_follower_scale_for_numbered_iteration,
     _remap_relion_follower_runtime_inputs,
     _require_relion_follower_owners,
     _run_relion_iteration_loop,
@@ -21,6 +23,7 @@ from recovar.em.dense_single_volume.relion_replay import (
 from recovar.em.dense_single_volume.relion_worker_scale import (
     RelionDispatchSchedule,
     RelionFollowerScaleReplay,
+    RelionFollowerScaleSetup,
     load_relion_dispatch_schedule,
     load_relion_follower_scale_replay,
     make_relion_dispatch_schedule_from_chunks,
@@ -957,47 +960,53 @@ def test_final_dispatch_remaps_scoring_scale_norm_ratio_and_xa_aa_group_ids():
 
 def test_final_dispatch_remap_is_wired_before_final_scoring():
     source = inspect.getsource(_run_relion_iteration_loop)
-    final_dispatch_start = source.index("final_dispatch_relion_iteration")
-    final_scoring_start = source.index("if final_use_local:", final_dispatch_start)
-    final_dispatch_block = source[final_dispatch_start:final_scoring_start]
+    dispatch_call = source.index("_dispatch_relion_follower_scale_for_final_all_data(")
+    final_scoring_start = source.index("if final_use_local:", dispatch_call)
+    assert dispatch_call < final_scoring_start
 
-    assert "_require_relion_follower_owners(" in final_dispatch_block
-    assert 'stage="final all-data"' in final_dispatch_block
-    assert "_remap_relion_follower_runtime_inputs(" in final_dispatch_block
+    dispatch_source = inspect.getsource(_dispatch_relion_follower_scale_for_final_all_data)
+    assert "_require_relion_follower_owners(" in dispatch_source
+    assert 'stage="final all-data"' in dispatch_source
+    assert "_remap_relion_follower_runtime_inputs(" in dispatch_source
 
 
 def test_numbered_scale_telemetry_brackets_scoring_and_mstep_boundaries():
     source = inspect.getsource(_run_relion_iteration_loop)
-    pre_score_append = source.index(
-        "relion_scale_follower_scales_numbered_pre_score_trajectory.append("
-    )
+    dispatch_call = source.index("_dispatch_relion_follower_scale_for_numbered_iteration(")
     replay_apply = source.index("replay_result = apply_iter_replay_overrides(")
     scale_update = source.index("relion_follower_scale_state = update_relion_follower_scales(")
-    post_mstep_append = source.index(
-        "relion_scale_follower_scales_numbered_post_mstep_trajectory.append("
-    )
+    post_mstep_append = source.index("history.record_follower_scale_post_mstep(")
     convergence_update = source.index("# --- Update convergence state ---")
 
-    assert pre_score_append < replay_apply
+    assert dispatch_call < replay_apply
     assert scale_update < post_mstep_append < convergence_update
-    assert ".copy()" in source[pre_score_append:replay_apply]
     assert ".copy()" in source[post_mstep_append:convergence_update]
-    assert source.count('"relion_scale_follower_scales_numbered_pre_score_trajectory"') == 2
-    assert source.count('"relion_scale_follower_scales_numbered_post_mstep_trajectory"') == 2
+    # Both surviving result-dict sites source the follower-scale trajectory
+    # keys (including the two "numbered_*_trajectory" ones) from one shared
+    # RelionFollowerScaleSetup.to_result_dict() call.
+    assert source.count("follower_setup.to_result_dict(history)") == 2
+
+    dispatch_source = inspect.getsource(_dispatch_relion_follower_scale_for_numbered_iteration)
+    pre_score_append = dispatch_source.index("history.record_follower_scale_pre_score(")
+    assert ".copy()" in dispatch_source[pre_score_append:]
+
+    to_result_dict_source = inspect.getsource(RelionFollowerScaleSetup.to_result_dict)
+    assert '"relion_scale_follower_scales_numbered_pre_score_trajectory"' in to_result_dict_source
+    assert '"relion_scale_follower_scales_numbered_post_mstep_trajectory"' in to_result_dict_source
 
 
 def test_sparse_follower_scale_replay_replaces_state_before_remap_and_telemetry():
-    source = inspect.getsource(_run_relion_iteration_loop)
+    source = inspect.getsource(_dispatch_relion_follower_scale_for_numbered_iteration)
     replay_lookup = source.index(
-        "if numbered_relion_iteration in relion_follower_scale_replay_by_iteration:"
+        "if numbered_relion_iteration in setup.follower_scale_replay_by_iteration:"
     )
     state_replace = source.index(
-        "relion_follower_scale_state = type(relion_follower_scale_state)(",
+        "setup.follower_scale_state = type(setup.follower_scale_state)(",
         replay_lookup,
     )
     owner_remap = source.index("_remap_relion_follower_runtime_inputs(", state_replace)
     pre_score_telemetry = source.index(
-        "relion_scale_follower_scales_numbered_pre_score_trajectory.append(",
+        "history.record_follower_scale_pre_score(",
         owner_remap,
     )
 

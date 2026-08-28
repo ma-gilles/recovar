@@ -40,6 +40,12 @@ def _setup_refinement(n_iter=5, adaptive_oversampling=1, seed=42):
     """Common setup for refinement tests. Returns (result, dataset_info)."""
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+    from recovar.em.dense_single_volume.refinement_options import (
+        AdaptiveOptions,
+        RefinementBatching,
+        RefinementOptions,
+        RefinementSchedule,
+    )
     from recovar.em.sampling import get_rotation_grid, get_translation_grid
     from recovar.reconstruction.regularization import average_over_shells
     from recovar import utils
@@ -81,16 +87,17 @@ def _setup_refinement(n_iter=5, adaptive_oversampling=1, seed=42):
         init_mean_variance=mean_variance,
         rotations=rotations,
         translations=jnp.asarray(translations),
-        disc_type="linear_interp",
-        max_iter=n_iter,
-        image_batch_size=500,
-        rotation_block_size=5000,
-        init_current_size=init_current_size,
-        fsc_threshold=1.0 / 7.0,
-        adaptive_oversampling=adaptive_oversampling,
-        max_significants=500,
-        nside_level=healpix_order if adaptive_oversampling > 0 else None,
-        translation_pixel_offset=1.0 if adaptive_oversampling > 0 else None,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=n_iter, init_current_size=init_current_size, fsc_threshold=1.0 / 7.0),
+            batching=RefinementBatching(image_batch_size=500, rotation_block_size=5000),
+            adaptive=AdaptiveOptions(
+                adaptive_oversampling=adaptive_oversampling,
+                max_significants=500,
+                nside_level=healpix_order if adaptive_oversampling > 0 else None,
+                translation_pixel_offset=1.0 if adaptive_oversampling > 0 else None,
+            ),
+        ),
     )
 
     dataset_info = {

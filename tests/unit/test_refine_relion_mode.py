@@ -93,6 +93,17 @@ from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
     update_relion_norm_scale_corrections,
 )
+from recovar.em.dense_single_volume.refinement_options import (
+    AdaptiveOptions,
+    EngineDebugOptions,
+    KClassOptions,
+    LocalSearchOptions,
+    RefinementBatching,
+    RefinementOptions,
+    RefinementSchedule,
+    RelionParityOptions,
+    ReplayState,
+)
 from recovar.em.dense_single_volume.k_class import (
     KClassEMResult,
     _resolve_class_mstep_posterior_sums,
@@ -459,7 +470,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
             "offset_step": 1.416667,
         }
 
-    monkeypatch.setattr(iteration_loop_module, "read_relion_sampling_metadata", fake_sampling_metadata)
+    monkeypatch.setattr(relion_replay_module, "read_relion_sampling_metadata", fake_sampling_metadata)
 
     state = State()
     state_grid = get_translation_grid(state.translation_range, state.translation_step)
@@ -623,12 +634,12 @@ def test_sealed_sampling_override_never_reads_external_replay_files(monkeypatch,
         translation_step=99.0,
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda path: pytest.fail(f"unexpected external sampling read: {path}"),
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_model_metadata",
         lambda path: pytest.fail(f"unexpected external model read: {path}"),
     )
@@ -689,7 +700,7 @@ def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
     for half in (1, 2):
         (tmp_path / f"run_it001_half{half}_model.star").write_text("must not read\n")
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda path: {
             "random_perturbation": 0.0,
@@ -701,12 +712,12 @@ def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
         },
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_model_metadata",
         lambda path: {"current_image_size": 8},
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_direction_prior",
         lambda path: pytest.fail(f"unexpected direction-prior reload: {path}"),
     )
@@ -1165,15 +1176,13 @@ def test_final_all_data_runs_with_cold_start_only_override(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         rotations,
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=N_ROTATIONS,
-        init_current_size=4,
-        init_healpix_order=2,
-        max_healpix_order=2,
-        low_resol_join_halves_angstrom=0.0,
-        replay_iteration_overrides=[{}, None],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            replay=ReplayState(replay_iteration_overrides=[{}, None]),
+        ),
     )
 
     assert result["convergence_state"].has_converged is True
@@ -1211,14 +1220,12 @@ def test_last_numbered_state_does_not_trigger_post_cap_final_all_data(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         rotations,
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=N_ROTATIONS,
-        init_current_size=4,
-        init_healpix_order=2,
-        max_healpix_order=2,
-        low_resol_join_halves_angstrom=0.0,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+        ),
     )
 
     assert result["convergence_state"].has_converged is False
@@ -8572,6 +8579,9 @@ class MockDataset:
             image_mask = np.asarray(_unit_image_mask(np.float32), dtype=np.float32)
             image_mask_mode = "multiply"
 
+            def set_relion_image_mask(self, pixel_size: float, particle_diameter_ang: float, width_mask_edge_px: float = 5.0):
+                self.image_mask_mode = "relion_background_fill"
+
         class _ImageSource:
             process_images = staticmethod(_raw_real_process)
             process_images_half = staticmethod(_raw_real_process_half)
@@ -8759,6 +8769,9 @@ class RawRealImageDataset:
             image_mask = None
             image_mask_mode = "multiply"
 
+            def set_relion_image_mask(self, pixel_size: float, particle_diameter_ang: float, width_mask_edge_px: float = 5.0):
+                self.image_mask_mode = "relion_background_fill"
+
         class _ImageSource:
             process_images = staticmethod(_raw_real_process)
             process_images_half = staticmethod(_raw_real_process_half)
@@ -8833,6 +8846,22 @@ def rotations():
 @pytest.fixture
 def translations():
     return jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
+
+
+@pytest.fixture(autouse=True)
+def _clear_parity_dump_env(monkeypatch):
+    """Isolate these tests from ambient RELION-parity-dump debugging env vars.
+
+    ``_parity_dump.is_active()`` reads ``RECOVAR_PARITY_DUMP_DIR`` directly, and
+    it feeds the ``need_unreg_means`` gate in ``_run_relion_iteration_loop`` via
+    an ``or`` -- so a var left exported in a developer's shell from an earlier
+    parity-debugging session silently changes reconstruction call counts and
+    intermediate-file output for every test here, regardless of what each
+    test's own ``options`` request. ``monkeypatch.delenv`` restores whatever
+    value (or absence) existed once the test finishes.
+    """
+    monkeypatch.delenv("RECOVAR_PARITY_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_PARITY_TIMING_DIR", raising=False)
 
 
 # ===========================================================================
@@ -8928,17 +8957,22 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            emulate_relion_firstiter_cc=True,
-            relion_firstiter_ini_high_angstrom=8.0,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=4,
+                    init_healpix_order=2,
+                    max_healpix_order=2,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(
+                    low_resol_join_halves_angstrom=0.0,
+                    emulate_relion_firstiter_cc=True,
+                    relion_firstiter_ini_high_angstrom=8.0,
+                ),
+            ),
         )
 
         assert len(reconstruction_tau) == 2
@@ -9507,13 +9541,16 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         # Basic return dict structure
@@ -9547,14 +9584,12 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is False
@@ -9591,15 +9626,15 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=40.0,
-            relion_firstiter_ini_high_angstrom=30.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(
+                    low_resol_join_halves_angstrom=40.0,
+                    relion_firstiter_ini_high_angstrom=30.0,
+                ),
+            ),
         )
 
         expected_resolution = shell_index_to_resolution_angstrom(1, IMAGE_SHAPE[0], half_datasets[0].voxel_size)
@@ -9668,16 +9703,16 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            perturb_seed=17,
-            optimizer_random_seed=17,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(
+                    low_resol_join_halves_angstrom=0.0,
+                    perturb_seed=17,
+                    optimizer_random_seed=17,
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9769,14 +9804,12 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9872,14 +9905,12 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9934,14 +9965,12 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -9994,18 +10023,18 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            replay_iteration_overrides=[
-                None,
-                {"noise_variance": [replay_noise_h1, replay_noise_h2]},
-            ],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                replay=ReplayState(
+                    replay_iteration_overrides=[
+                        None,
+                        {"noise_variance": [replay_noise_h1, replay_noise_h2]},
+                    ]
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10217,15 +10246,13 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=4,
-            auto_local_healpix_order=4,
-            low_resol_join_halves_angstrom=0.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=4),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                local_search=LocalSearchOptions(auto_local_healpix_order=4),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10280,16 +10307,16 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=2,
-            max_healpix_order=2,
-            low_resol_join_halves_angstrom=0.0,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10418,17 +10445,17 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=4,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            adaptive_oversampling=1,
-            low_resol_join_halves_angstrom=0.0,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=4, init_healpix_order=1, max_healpix_order=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert result["convergence_state"].has_converged is True
@@ -10536,18 +10563,23 @@ class TestRelionModeSmokeTest:
                 jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
                 rotations,
                 translations,
-                disc_type="linear_interp",
-                max_iter=1,
-                image_batch_size=N_IMAGES,
-                rotation_block_size=N_ROTATIONS,
-                init_current_size=4,
-                init_healpix_order=1,
-                max_healpix_order=1,
-                adaptive_oversampling=1,
-                low_resol_join_halves_angstrom=0.0,
-                n_classes=2,
-                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-                skip_final_iteration=True,
+                options=RefinementOptions(
+                    disc_type="linear_interp",
+                    schedule=RefinementSchedule(
+                        max_iter=1,
+                        init_current_size=4,
+                        init_healpix_order=1,
+                        max_healpix_order=1,
+                        skip_final_iteration=True,
+                    ),
+                    batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                    adaptive=AdaptiveOptions(adaptive_oversampling=1),
+                    parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                    k_class=KClassOptions(
+                        n_classes=2,
+                        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                    ),
+                ),
             )
             return list(adaptive_calls)
 
@@ -10572,13 +10604,16 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         # Final mean should be finite
@@ -10606,15 +10641,20 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert np.all(np.isfinite(np.asarray(result["mean"])))
@@ -10684,14 +10724,17 @@ class TestRelionModeSmokeTest:
             init_tau,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert result["ave_Pmax_trajectory"] == pytest.approx(
@@ -10737,16 +10780,18 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             _make_rotations(20, seed=123),
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            init_current_size=16,
-            adaptive_oversampling=1,
-            nside_level=1,
-            init_healpix_order=1,
-            max_healpix_order=2,
-            particle_diameter_ang=200.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=1,
+                    max_healpix_order=2,
+                    particle_diameter_ang=200.0,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=1),
+            ),
         )
 
         assert recorded["particle_diameter"] == pytest.approx(200.0)
@@ -12058,14 +12103,17 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            auto_local_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                local_search=LocalSearchOptions(auto_local_healpix_order=3),
+            ),
         )
 
         state = result["convergence_state"]
@@ -12204,15 +12252,18 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            init_fsc=np.ones(grid_size // 2),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                    init_fsc=np.ones(grid_size // 2),
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert called["tau2"] >= 1
@@ -12266,15 +12317,18 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            particle_diameter_ang=200.0,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                    particle_diameter_ang=200.0,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert len(tau2_fsc_inputs) == 2
@@ -12338,16 +12392,19 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            particle_diameter_ang=200.0,
-            do_solvent_fsc_correction=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                    particle_diameter_ang=200.0,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                parity=RelionParityOptions(do_solvent_fsc_correction=True),
+            ),
         )
 
         assert len(tau2_fsc_inputs) == 2
@@ -12770,15 +12827,18 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            save_intermediates_dir=str(out_dir),
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                debug=EngineDebugOptions(save_intermediates_dir=str(out_dir)),
+            ),
         )
 
         assert len(result["current_sizes"]) == 1
@@ -12803,16 +12863,21 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            save_intermediates_dir=str(out_dir),
-            save_intermediates_skip_unregularized=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                debug=EngineDebugOptions(
+                    save_intermediates_dir=str(out_dir),
+                    save_intermediates_skip_unregularized=True,
+                ),
+            ),
         )
 
         assert len(result["current_sizes"]) == 1
@@ -12844,14 +12909,17 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            adaptive_oversampling=0,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert len(result["current_sizes"]) == 2
@@ -12871,13 +12939,16 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=2,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         n_iters = len(result["current_sizes"])
@@ -12975,15 +13046,17 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=len(rotations_many),
-            init_current_size=16,
-            adaptive_oversampling=0,
-            nside_level=1,
-            init_healpix_order=1,
-            max_healpix_order=2,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=1,
+                    max_healpix_order=2,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=len(rotations_many)),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            ),
         )
 
         expected_per_half = [
@@ -13052,15 +13125,18 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=len(rotations_many),
-            init_current_size=8,
-            adaptive_oversampling=0,
-            init_healpix_order=1,
-            max_healpix_order=2,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=8,
+                    init_healpix_order=1,
+                    max_healpix_order=2,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=len(rotations_many)),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
+            ),
         )
 
         assert len(captured_noise) == 2
@@ -13199,15 +13275,17 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            relion_current_sizes=[8],
-            adaptive_oversampling=1,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_healpix_order=1,
+                    max_healpix_order=1,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=1),
+            ),
         )
 
         assert call_idx["value"] == 2
@@ -13248,15 +13326,17 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations_many,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            relion_current_sizes=[8],
-            adaptive_oversampling=0,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_healpix_order=1,
+                    max_healpix_order=1,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=0),
+            ),
         )
 
         assert np.asarray(result["mean"]).shape == (VOLUME_SIZE,)
@@ -13396,18 +13476,22 @@ class TestRelionModeSmokeTest:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             _make_rotations(20, seed=334),
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=20,
-            relion_current_sizes=[8],
-            adaptive_oversampling=1,
-            init_healpix_order=1,
-            max_healpix_order=1,
-            low_resol_join_halves_angstrom=0.0,
-            n_classes=2,
-            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-            skip_final_iteration=True,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_healpix_order=1,
+                    max_healpix_order=1,
+                    skip_final_iteration=True,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
+                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=1),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                k_class=KClassOptions(
+                    n_classes=2,
+                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                ),
+            ),
         )
 
         assert call_idx["value"] == 2
@@ -13542,8 +13626,8 @@ class TestRelionDefault:
         def fake_relion_loop(**kwargs):
             called["ran_relion"] = True
             assert kwargs["experiment_datasets"] is half_datasets
-            assert kwargs["relion_current_sizes"] is None
-            assert kwargs["init_healpix_order"] == 2
+            assert kwargs["options"].adaptive.relion_current_sizes is None
+            assert kwargs["options"].schedule.init_healpix_order == 2
             return sentinel
 
         monkeypatch.setattr(
@@ -13559,19 +13643,22 @@ class TestRelionDefault:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
-            init_healpix_order=2,
-            max_healpix_order=3,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(
+                    max_iter=1,
+                    init_current_size=16,
+                    init_healpix_order=2,
+                    max_healpix_order=3,
+                ),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         assert result is sentinel
         assert called == {"ran_relion": True}
 
-    def test_refinement_options_struct_overrides_kwargs(
+    def test_refinement_options_struct_forwarded_to_iteration_loop(
         self,
         half_datasets,
         init_volume,
@@ -13579,15 +13666,7 @@ class TestRelionDefault:
         translations,
         monkeypatch,
     ):
-        """Passing ``options=RefinementOptions(...)`` overrides individual kwargs."""
-        from recovar.em.dense_single_volume import (
-            KClassOptions,
-            ReplayState,
-            RefinementOptions,
-            RefinementSchedule,
-            RelionParityOptions,
-        )
-
+        """The ``options=RefinementOptions(...)`` struct reaches the iteration loop unchanged."""
         sentinel = {"convergence_state": object()}
         captured: dict = {}
 
@@ -13620,30 +13699,21 @@ class TestRelionDefault:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            # These individual kwargs would normally win, but the struct overrides.
-            max_iter=1,
-            init_healpix_order=2,
-            max_healpix_order=3,
-            tau2_fudge=1.0,
-            emulate_relion_firstiter_cc=False,
-            n_classes=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=16,
             options=opts,
         )
 
         assert result is sentinel
-        assert captured["max_iter"] == 7
-        assert captured["init_healpix_order"] == 3
-        assert captured["max_healpix_order"] == 4
-        assert captured["tau2_fudge"] == 4.0
-        assert captured["perturb_replay_relion_prefix"] == "custom"
-        assert captured["emulate_relion_firstiter_cc"] is True
-        assert captured["do_solvent_fsc_correction"] is True
-        assert captured["image_fourier_backend"] == "jax_gpu"
-        assert captured["n_classes"] == 4
-        assert captured["init_group_count"] == [7, 8]
+        forwarded = captured["options"]
+        assert forwarded.schedule.max_iter == 7
+        assert forwarded.schedule.init_healpix_order == 3
+        assert forwarded.schedule.max_healpix_order == 4
+        assert forwarded.parity.tau2_fudge == 4.0
+        assert forwarded.parity.perturb_replay_relion_prefix == "custom"
+        assert forwarded.parity.emulate_relion_firstiter_cc is True
+        assert forwarded.parity.do_solvent_fsc_correction is True
+        assert forwarded.parity.image_fourier_backend == "jax_gpu"
+        assert forwarded.k_class.n_classes == 4
+        assert forwarded.replay.init_group_count == [7, 8]
 
     def test_canonical_rotation_grid_reuses_relion_euler_table(self, monkeypatch):
         """The auto-refine setup path must not convert canonical grids via SciPy."""
@@ -13979,16 +14049,13 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=99),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_h1, prev_h2],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
+        ),
     )
 
     assert not any(kind == "rot" and order == 5 for kind, order in grid_calls)
@@ -14196,17 +14263,14 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=111),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        perturb_factor=0.5,
-        init_previous_best_rotation_eulers=[prev_h1, prev_h2],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            parity=RelionParityOptions(perturb_factor=0.5),
+            replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
+        ),
     )
 
     assert any(
@@ -14387,17 +14451,16 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            replay=ReplayState(
+                init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
+                init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+            ),
+        ),
     )
 
     assert len(local_prior_translations) == 4
@@ -14566,20 +14629,18 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        perturb_factor=0.5,
-        perturb_seed=0,
-        local_search_translation_prior_mode="coarse",
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            replay=ReplayState(
+                init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
+                init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+            ),
+            parity=RelionParityOptions(perturb_factor=0.5, perturb_seed=0),
+            local_search=LocalSearchOptions(local_search_translation_prior_mode="coarse"),
+        ),
     )
 
     assert recorded_translation_reference_grids
@@ -14681,15 +14742,12 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=222),
         translations,
-        disc_type="linear_interp",
-        max_iter=2,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=2, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
+        ),
     )
 
     assert reconstruct_flags == [False, False]
@@ -14787,15 +14845,12 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=226),
         translations,
-        disc_type="linear_interp",
-        max_iter=2,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=2, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
+        ),
     )
 
     return image_batch_sizes
@@ -14970,7 +15025,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         ),
     )
     monkeypatch.setattr(
-        refine_mod,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda _path: {
             "random_perturbation": refine_mod.relion_sampling_perturbation_for_iteration(
@@ -14994,22 +15049,24 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        perturb_factor=0.5,
-        perturb_seed=0,
-        local_search_translation_prior_mode="coarse",
-        perturb_replay_relion_dir=str(tmp_path),
-        init_relion_iteration=13,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=4,
+                max_healpix_order=4,
+                init_relion_iteration=13,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            replay=ReplayState(
+                init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
+                init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+            ),
+            parity=RelionParityOptions(perturb_factor=0.5, perturb_seed=0, perturb_replay_relion_dir=str(tmp_path)),
+            local_search=LocalSearchOptions(local_search_translation_prior_mode="coarse"),
+        ),
     )
 
     assert recorded_translation_reference_grids
@@ -15173,23 +15230,27 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(rotation_grid_size(4), seed=7),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=512,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        replay_iteration_overrides=[
-            {
-                "local_search": True,
-                "healpix_order": 4,
-                "previous_best_rotation_eulers": [prev_h1, prev_h2],
-            }
-        ],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=4,
+                max_healpix_order=4,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=512),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
+            replay=ReplayState(
+                replay_iteration_overrides=[
+                    {
+                        "local_search": True,
+                        "healpix_order": 4,
+                        "previous_best_rotation_eulers": [prev_h1, prev_h2],
+                    }
+                ]
+            ),
+        ),
     )
 
     assert local_calls
@@ -15345,17 +15406,19 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(rotation_grid_size(4), seed=11),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=512,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_h1, prev_h2],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=4,
+                max_healpix_order=4,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=512),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
+            replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
+        ),
     )
 
     assert local_calls
@@ -15423,17 +15486,19 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(1, seed=123),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            replay=ReplayState(init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()]),
+        ),
     )
 
     expected_h1 = relion_translation_search_base(prev_h1) + chosen_trans[None, :]
@@ -15552,19 +15617,23 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
         _make_rotations(1, seed=123),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        replay_iteration_overrides=[{"class_tau2": class_tau2}],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+            replay=ReplayState(replay_iteration_overrides=[{"class_tau2": class_tau2}]),
+        ),
     )
 
     assert len(result["tau2_radial_trajectory"]) == 1
@@ -15578,18 +15647,22 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         init_tau2_volume,
         _make_rotations(1, seed=456),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+        ),
     )
     assert len(init_result["tau2_radial_trajectory"]) == 1
     np.testing.assert_allclose(init_result["tau2_radial_trajectory"][0], iref_tau2, rtol=0.0, atol=1e-5)
@@ -15604,19 +15677,23 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
         _make_rotations(1, seed=789),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+            replay=ReplayState(replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}]),
+        ),
     )
 
     assert len(replay_result["tau2_radial_trajectory"]) == 1
@@ -15631,19 +15708,23 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
         _make_rotations(1, seed=790),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=4,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        n_classes=n_classes,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}],
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=4,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+            ),
+            replay=ReplayState(replay_iteration_overrides=[{"class_tau2": class_tau2}, {"class_tau2": same_iter_tau2}]),
+        ),
     )
 
     assert len(same_iter_replay_result["tau2_radial_trajectory"]) == 1
@@ -15744,19 +15825,20 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(1, seed=123),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=1,
-        init_current_size=16,
-        adaptive_oversampling=0,
-        nside_level=1,
-        init_healpix_order=1,
-        max_healpix_order=1,
-        init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
-        n_classes=2,
-        init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
-        skip_final_iteration=True,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=1,
+                init_current_size=16,
+                init_healpix_order=1,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            replay=ReplayState(init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()]),
+            k_class=KClassOptions(n_classes=2, init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64))),
+        ),
     )
 
     expected_h1 = relion_translation_search_base(prev_h1) + selected_by_half[0]
@@ -15967,17 +16049,14 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
         _make_rotations(order_sizes[4], seed=321),
         translations,
-        disc_type="linear_interp",
-        max_iter=1,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        init_healpix_order=4,
-        max_healpix_order=4,
-        init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
-        perturb_factor=0.0,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            replay=ReplayState(init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2]),
+            parity=RelionParityOptions(perturb_factor=0.0),
+        ),
     )
 
     expected_rotation = _selected_rotation_matrices(

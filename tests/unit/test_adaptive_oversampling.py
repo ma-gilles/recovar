@@ -1063,6 +1063,12 @@ class TestRefineWithAdaptive:
         """refine_single_volume with adaptive_oversampling=1 should complete
         and produce valid (finite, non-zero) outputs."""
         from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+        from recovar.em.dense_single_volume.refinement_options import (
+            AdaptiveOptions,
+            RefinementBatching,
+            RefinementOptions,
+            RefinementSchedule,
+        )
         from recovar.em.sampling import get_rotation_grid
 
         n_images = 8
@@ -1087,14 +1093,12 @@ class TestRefineWithAdaptive:
             mean_variance,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=n_images,
-            rotation_block_size=len(rotations),
-            init_current_size=8,  # Use 8 to match volume_shape
-            adaptive_oversampling=1,
-            max_significants=100,
-            nside_level=nside_level,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=8),  # 8 to match volume_shape
+                batching=RefinementBatching(image_batch_size=n_images, rotation_block_size=len(rotations)),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1, max_significants=100, nside_level=nside_level),
+            ),
         )
 
         # Check basic structure
@@ -1118,6 +1122,12 @@ class TestRefineWithAdaptive:
     def test_relion_default_does_not_require_nside_level(self):
         """RELION mode derives the coarse grid from init_healpix_order."""
         from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+        from recovar.em.dense_single_volume.refinement_options import (
+            AdaptiveOptions,
+            RefinementBatching,
+            RefinementOptions,
+            RefinementSchedule,
+        )
 
         ds1 = MockDataset(n_images=2, seed=42)
         ds2 = MockDataset(n_images=2, seed=99)
@@ -1134,13 +1144,11 @@ class TestRefineWithAdaptive:
             mean_variance,
             rotations,
             translations,
-            max_iter=1,
-            image_batch_size=2,
-            rotation_block_size=5,
-            adaptive_oversampling=1,
-            nside_level=None,
-            init_healpix_order=2,
-            max_healpix_order=2,
+            options=RefinementOptions(
+                schedule=RefinementSchedule(max_iter=1, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=2, rotation_block_size=5),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=None),
+            ),
         )
 
         assert "convergence_state" in result

@@ -4615,6 +4615,18 @@ def main():
 
     # ---- Run refinement ----
     from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+    from recovar.em.dense_single_volume.refinement_options import (
+        AdaptiveOptions,
+        EngineDebugOptions,
+        ExpectedAccuracyOptions,
+        KClassOptions,
+        LocalSearchOptions,
+        RefinementBatching,
+        RefinementOptions,
+        RefinementSchedule,
+        RelionParityOptions,
+        ReplayState,
+    )
 
     experiment_datasets = [ds_half1, ds_half2]
     translations_jnp = jnp.asarray(translations)
@@ -5010,159 +5022,189 @@ def main():
             bool(state_swap_probe["replay_relion_references"]),
         )
 
+    sampling_kwargs = _refine_sampling_kwargs(args, init_healpix_order)
+
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
         init_volume=jnp.asarray(init_vol_ft),
-        init_reference_real=init_reference_real_for_projector,
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
         rotations=rotations,
         translations=translations_jnp,
-        disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
-        max_iter=args.max_iter,
-        image_batch_size=args.image_batch_size,
-        rotation_block_size=args.rotation_block_size,
-        relion_current_sizes=oracle_current_sizes,
-        relion_healpix_orders=oracle_healpix_orders,
-        init_current_size=init_current_size,
-        init_fsc=(
-            final_manifest_replay.fsc
-            if final_manifest_replay is not None
-            else (None if frozen_boundary is None else frozen_boundary.fsc)
+        options=RefinementOptions(
+            disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
+            schedule=RefinementSchedule(
+                max_iter=args.max_iter,
+                init_current_size=init_current_size,
+                init_fsc=(
+                    final_manifest_replay.fsc
+                    if final_manifest_replay is not None
+                    else (None if frozen_boundary is None else frozen_boundary.fsc)
+                ),
+                init_ave_Pmax=(
+                    final_manifest_replay.ave_pmax
+                    if final_manifest_replay is not None
+                    else (None if frozen_boundary is None else frozen_boundary.ave_pmax)
+                ),
+                init_has_high_fsc_at_limit=(
+                    None if frozen_boundary is None else frozen_boundary.has_high_fsc_at_limit
+                ),
+                init_relion_incr_size=(
+                    10 if frozen_boundary is None else frozen_boundary.relion_incr_size
+                ),
+                fsc_threshold=1.0 / 7.0,
+                init_healpix_order=sampling_kwargs["init_healpix_order"],
+                max_healpix_order=effective_max_healpix_order,
+                init_translation_range=sampling_kwargs["init_translation_range"],
+                init_translation_step=sampling_kwargs["init_translation_step"],
+                init_translation_sigma_angstrom=(
+                    final_manifest_replay.translation_sigma_angstrom_per_half
+                    if final_manifest_replay is not None
+                    else (
+                        frozen_boundary.translation_sigma_angstrom_per_half
+                        if frozen_boundary is not None
+                        else (
+                        relion_init_sigma_offset_angstrom
+                        if relion_init_sigma_offset_angstrom is not None
+                        else args.offset_sigma_angstrom
+                        )
+                    )
+                ),
+                particle_diameter_ang=particle_diameter_ang,
+                init_relion_iteration=args.init_relion_iteration,
+                skip_final_iteration=bool(args.skip_final_iteration),
+            ),
+            batching=RefinementBatching(
+                image_batch_size=args.image_batch_size,
+                rotation_block_size=args.rotation_block_size,
+            ),
+            adaptive=AdaptiveOptions(
+                relion_current_sizes=oracle_current_sizes,
+                relion_healpix_orders=oracle_healpix_orders,
+                adaptive_oversampling=args.adaptive_oversampling,
+                max_significants=args.max_significants,
+                nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
+                translation_pixel_offset=sampling_kwargs["translation_pixel_offset"],
+            ),
+            parity=RelionParityOptions(
+                tau2_fudge=effective_tau2_fudge,
+                perturb_factor=args.perturb_factor,
+                perturb_seed=effective_perturb_seed,
+                optimizer_random_seed=args.seed,
+                perturb_replay_relion_dir=args.perturb_replay_relion_dir,
+                perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
+                final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
+                image_fourier_backend=args.image_fourier_backend,
+                emulate_relion_firstiter_cc=bool(args.firstiter_cc),
+                relion_firstiter_ini_high_angstrom=(
+                    relion_firstiter_ini_high_angstrom if args.firstiter_cc else None
+                ),
+                use_per_half_mean_variance=(
+                    frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+                ),
+                preserve_bpref_particle_order=use_fresh_auto_refine_order,
+                relion_optics_image_sizes=relion_optics_image_sizes,
+                relion_optics_pixel_sizes=relion_optics_pixel_sizes,
+                relion_model_pixel_size=relion_model_pixel_size,
+            ),
+            local_search=LocalSearchOptions(
+                auto_local_healpix_order=sampling_kwargs["auto_local_healpix_order"],
+                local_search_profile_mode=args.local_search_profile,
+            ),
+            k_class=KClassOptions(
+                n_classes=args.n_classes,
+            ),
+            replay=ReplayState(
+                init_reference_real=init_reference_real_for_projector,
+                init_refinement_state_fields=(
+                    None if frozen_boundary is None else frozen_boundary.refinement_state_fields
+                ),
+                replay_iteration_overrides=replay_iteration_overrides,
+                final_replay_override=final_replay_override,
+                final_replay_reference_maps=final_replay_reference_maps,
+                final_replay_source_iteration=final_replay_source_iteration,
+                init_group_ids=native_group_ids_per_half,
+                init_group_count=native_group_count,
+                relion_scale_follower_count=relion_scale_followers,
+                relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
+                relion_follower_scale_replay=relion_follower_scale_replay,
+                init_relion_particle_ids=(
+                    None
+                    if native_group_layout is None
+                    else list(native_group_layout.particle_ids_per_half)
+                ),
+                init_relion_optics_group_ids=(
+                    None
+                    if native_group_layout is None
+                    else list(native_group_layout.optics_group_ids_per_half)
+                ),
+                init_relion_optics_group_count=(
+                    None if native_group_layout is None else native_group_layout.n_optics_groups
+                ),
+                init_previous_best_translations=(
+                    None
+                    if init_previous_best_poses is None
+                    else init_previous_best_poses["previous_best_translations"]
+                ),
+                init_previous_best_rotation_eulers=(
+                    None
+                    if init_previous_best_poses is None
+                    else init_previous_best_poses["previous_best_rotation_eulers"]
+                ),
+                init_image_corrections=(
+                    final_manifest_replay.image_corrections
+                    if final_manifest_replay is not None
+                    else (None if frozen_boundary is None else frozen_boundary.image_corrections)
+                ),
+                init_scale_corrections=(
+                    final_manifest_replay.scale_corrections
+                    if final_manifest_replay is not None
+                    else (None if frozen_boundary is None else frozen_boundary.scale_corrections)
+                ),
+                init_direction_prior=(
+                    None if frozen_boundary is None else frozen_boundary.direction_prior_per_half
+                ),
+                preserve_initial_direction_prior=frozen_boundary is not None,
+            ),
+            debug=EngineDebugOptions(
+                save_intermediates_dir=args.save_intermediates_dir,
+                save_intermediates_skip_unregularized=bool(args.save_intermediates_skip_unregularized),
+                state_swap_probe=state_swap_probe,
+                assert_initial_scoring_state_immutable=(
+                    frozen_boundary is not None or final_manifest_replay is not None
+                ),
+                stop_after_local_search_profile=bool(args.stop_after_local_search_profile),
+                stop_after_local_search=bool(args.stop_after_local_search),
+                stop_after_local_search_score_only=bool(args.stop_after_local_search_score_only),
+                sealed_sampling_state=(
+                    frozen_boundary.sampling_state
+                    if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+                    else None
+                ),
+                sealed_scoring_context=(
+                    {
+                        "schema": frozen_boundary.schema,
+                        "completed_relion_iteration": frozen_boundary.completed_relion_iteration,
+                        "consumer_relion_iteration": frozen_boundary.consumer_relion_iteration,
+                        "source_sha256": frozen_boundary.source_sha256,
+                        "source_roles": frozen_boundary.source_roles,
+                        "runtime_config": frozen_boundary.runtime_config,
+                        "map_lineage": frozen_boundary.map_lineage,
+                    }
+                    if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+                    else None
+                ),
+                diagnostic_final_only=final_manifest_replay is not None,
+                expected_accuracy=ExpectedAccuracyOptions(
+                    half1_base_order_local=expected_accuracy_half1_base_order_local,
+                    half1_trial_order_local=expected_accuracy_half1_trial_order_local,
+                    half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
+                    half1_particle_ids=expected_accuracy_half1_particle_ids,
+                    half1_ctf_params=expected_accuracy_half1_ctf_params,
+                    do_ctf_correction=expected_accuracy_do_ctf_correction,
+                ),
+            ),
         ),
-        init_ave_Pmax=(
-            final_manifest_replay.ave_pmax
-            if final_manifest_replay is not None
-            else (None if frozen_boundary is None else frozen_boundary.ave_pmax)
-        ),
-        init_has_high_fsc_at_limit=(
-            None if frozen_boundary is None else frozen_boundary.has_high_fsc_at_limit
-        ),
-        init_relion_incr_size=(
-            10 if frozen_boundary is None else frozen_boundary.relion_incr_size
-        ),
-        init_refinement_state_fields=(
-            None if frozen_boundary is None else frozen_boundary.refinement_state_fields
-        ),
-        fsc_threshold=1.0 / 7.0,
-        adaptive_oversampling=args.adaptive_oversampling,
-        max_significants=args.max_significants,
-        nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
-        **_refine_sampling_kwargs(args, init_healpix_order),
-        max_healpix_order=effective_max_healpix_order,
-        init_translation_sigma_angstrom=(
-            final_manifest_replay.translation_sigma_angstrom_per_half
-            if final_manifest_replay is not None
-            else (
-                frozen_boundary.translation_sigma_angstrom_per_half
-                if frozen_boundary is not None
-                else (
-                    relion_init_sigma_offset_angstrom
-                    if relion_init_sigma_offset_angstrom is not None
-                    else args.offset_sigma_angstrom
-                )
-            )
-        ),
-        particle_diameter_ang=particle_diameter_ang,
-        tau2_fudge=effective_tau2_fudge,
-        perturb_factor=args.perturb_factor,
-        perturb_seed=effective_perturb_seed,
-        optimizer_random_seed=args.seed,
-        relion_optics_image_sizes=relion_optics_image_sizes,
-        relion_optics_pixel_sizes=relion_optics_pixel_sizes,
-        relion_model_pixel_size=relion_model_pixel_size,
-        expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
-        expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
-        expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
-        expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
-        expected_accuracy_half1_ctf_params=expected_accuracy_half1_ctf_params,
-        expected_accuracy_do_ctf_correction=expected_accuracy_do_ctf_correction,
-        perturb_replay_relion_dir=args.perturb_replay_relion_dir,
-        perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
-        final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
-        replay_iteration_overrides=replay_iteration_overrides,
-        final_replay_override=final_replay_override,
-        final_replay_reference_maps=final_replay_reference_maps,
-        final_replay_source_iteration=final_replay_source_iteration,
-        init_relion_iteration=args.init_relion_iteration,
-        n_classes=args.n_classes,
-        image_fourier_backend=args.image_fourier_backend,
-        emulate_relion_firstiter_cc=bool(args.firstiter_cc),
-        relion_firstiter_ini_high_angstrom=(
-            relion_firstiter_ini_high_angstrom if args.firstiter_cc else None
-        ),
-        init_group_ids=native_group_ids_per_half,
-        init_group_count=native_group_count,
-        relion_scale_follower_count=relion_scale_followers,
-        relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
-        relion_follower_scale_replay=relion_follower_scale_replay,
-        init_relion_particle_ids=(
-            None if native_group_layout is None else list(native_group_layout.particle_ids_per_half)
-        ),
-        init_relion_optics_group_ids=(
-            None if native_group_layout is None else list(native_group_layout.optics_group_ids_per_half)
-        ),
-        init_relion_optics_group_count=(
-            None if native_group_layout is None else native_group_layout.n_optics_groups
-        ),
-        init_previous_best_translations=(
-            None
-            if init_previous_best_poses is None
-            else init_previous_best_poses["previous_best_translations"]
-        ),
-        init_previous_best_rotation_eulers=(
-            None
-            if init_previous_best_poses is None
-            else init_previous_best_poses["previous_best_rotation_eulers"]
-        ),
-        init_image_corrections=(
-            final_manifest_replay.image_corrections
-            if final_manifest_replay is not None
-            else (None if frozen_boundary is None else frozen_boundary.image_corrections)
-        ),
-        init_scale_corrections=(
-            final_manifest_replay.scale_corrections
-            if final_manifest_replay is not None
-            else (None if frozen_boundary is None else frozen_boundary.scale_corrections)
-        ),
-        init_direction_prior=(
-            None if frozen_boundary is None else frozen_boundary.direction_prior_per_half
-        ),
-        assert_initial_scoring_state_immutable=(
-            frozen_boundary is not None or final_manifest_replay is not None
-        ),
-        preserve_initial_direction_prior=frozen_boundary is not None,
-        skip_final_iteration=bool(args.skip_final_iteration),
-        save_intermediates_dir=args.save_intermediates_dir,
-        save_intermediates_skip_unregularized=bool(args.save_intermediates_skip_unregularized),
-        local_search_profile_mode=args.local_search_profile,
-        stop_after_local_search_profile=bool(args.stop_after_local_search_profile),
-        stop_after_local_search=bool(args.stop_after_local_search),
-        stop_after_local_search_score_only=bool(args.stop_after_local_search_score_only),
-        sealed_sampling_state=(
-            frozen_boundary.sampling_state
-            if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
-            else None
-        ),
-        sealed_scoring_context=(
-            {
-                "schema": frozen_boundary.schema,
-                "completed_relion_iteration": frozen_boundary.completed_relion_iteration,
-                "consumer_relion_iteration": frozen_boundary.consumer_relion_iteration,
-                "source_sha256": frozen_boundary.source_sha256,
-                "source_roles": frozen_boundary.source_roles,
-                "runtime_config": frozen_boundary.runtime_config,
-                "map_lineage": frozen_boundary.map_lineage,
-            }
-            if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
-            else None
-        ),
-        use_per_half_mean_variance=(
-            frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
-        ),
-        preserve_bpref_particle_order=use_fresh_auto_refine_order,
-        state_swap_probe=state_swap_probe,
-        diagnostic_final_only=final_manifest_replay is not None,
     )
 
     validate_state_swap_probe_application(
