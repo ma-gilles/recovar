@@ -1183,6 +1183,18 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     assert meta["offset_step_angstrom"] == pytest.approx(3.0)
 
 
+def test_expected_accuracy_skip_diagnostic_is_explicit_and_strict(monkeypatch):
+    monkeypatch.delenv(driver.INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV, raising=False)
+    assert driver._skip_native_sampling_accuracy_diagnostic() is False
+
+    monkeypatch.setenv(driver.INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV, "1")
+    assert driver._skip_native_sampling_accuracy_diagnostic() is True
+
+    monkeypatch.setenv(driver.INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV, "yes")
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        driver._skip_native_sampling_accuracy_diagnostic()
+
+
 def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatch, tmp_path):
     import recovar.relion_bind as relion_bind
 

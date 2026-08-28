@@ -72,6 +72,7 @@ RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
 INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV = "RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE"
+INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV = "RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY"
 
 
 def _effective_initial_model_image_batch_size(
@@ -704,6 +705,14 @@ def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, d
     return iteration <= int(nr_iter)
 
 
+def _skip_native_sampling_accuracy_diagnostic() -> bool:
+    """Return whether the focused controller discriminator skips accuracy estimation."""
+    value = os.environ.get(INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV, "").strip()
+    if value not in {"", "0", "1"}:
+        raise ValueError(f"{INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV} must be 0 or 1")
+    return value == "1"
+
+
 def _best_eulers_from_particle_state(
     particle_state: NativeParticleState,
     particle_ids: np.ndarray,
@@ -1291,10 +1300,15 @@ def _native_expectation_step(
         if sampling_state is None:
             sampling_plan = _build_sampling_plan(opts, iteration=iteration)
         else:
-            if optics_state is not None and _should_estimate_native_sampling_accuracy(
-                iteration=iteration,
-                nr_iter=int(state.nr_iter),
-                do_grad=do_grad,
+            skip_expected_accuracy = _skip_native_sampling_accuracy_diagnostic()
+            if (
+                optics_state is not None
+                and not skip_expected_accuracy
+                and _should_estimate_native_sampling_accuracy(
+                    iteration=iteration,
+                    nr_iter=int(state.nr_iter),
+                    do_grad=do_grad,
+                )
             ):
                 accuracy_meta = _estimate_native_sampling_accuracy(
                     sampling_state,
@@ -1368,6 +1382,7 @@ def _native_expectation_step(
         )
         if sampling_state is not None:
             result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
+            result.meta["sampling_accuracy_skipped_by_diagnostic"] = bool(skip_expected_accuracy)
             if accuracy_meta is not None:
                 result.meta.update(accuracy_meta)
             result.meta.update(
