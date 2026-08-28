@@ -67,6 +67,9 @@ _VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV = (
 _VDAM_EXTERNAL_HOST_REPLAY_REPORT_DIR_ENV = (
     "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_REPORT_DIR"
 )
+_VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV = (
+    "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR"
+)
 _vdam_external_host_replay_lock = threading.Lock()
 _vdam_external_host_replay_call = 0
 _bpref_device_signature_scope = contextvars.ContextVar(
@@ -1865,6 +1868,20 @@ def _run_vdam_external_host_replay_callback(
             reconstruction_group_count=np.int32(reconstruction_group_count),
             parallel_worker_replay=np.int32(parallel_worker_replay),
         )
+        capture_dir_text = os.environ.get(
+            _VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV, ""
+        ).strip()
+        if capture_dir_text:
+            capture_dir = pathlib.Path(capture_dir_text).expanduser().resolve()
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            capture_path = capture_dir / (
+                f"pid-{os.getpid()}-call-{call:04d}-input.npz"
+            )
+            if capture_path.exists():
+                raise FileExistsError(
+                    f"refusing to overwrite VDAM host-replay capture {capture_path}"
+                )
+            shutil.copy2(input_path, capture_path)
         command = [
             sys.executable,
             str(helper),

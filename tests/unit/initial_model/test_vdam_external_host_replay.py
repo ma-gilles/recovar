@@ -53,6 +53,15 @@ def test_external_host_replay_report_names_include_parent_pid():
     assert 'f"pid-{os.getpid()}-call-{call:04d}.json"' in wrapper
 
 
+def test_external_host_replay_can_preserve_input_bundles_fail_closed():
+    wrapper = PYTHON_WRAPPER.read_text()
+
+    assert "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR" in wrapper
+    assert 'f"pid-{os.getpid()}-call-{call:04d}-input.npz"' in wrapper
+    assert "refusing to overwrite VDAM host-replay capture" in wrapper
+    assert "shutil.copy2(input_path, capture_path)" in wrapper
+
+
 def test_exact_wavg_predecessor_uses_relion_ptx_and_same_particle_stream():
     cuda_source = CUDA_SOURCE.read_text()
 
