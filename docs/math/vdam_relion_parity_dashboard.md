@@ -14,6 +14,32 @@ Frozen case-definition SHA-256:
 | Same-H100 runtime | **0/20** comparable; 4.91--11.58x RELION | 20/20 comparable | 🔴 |
 | Terminal sealed audits | **20/20** | 20/20 | 🟢 |
 
+### Why VDAM currently trails supplied-map EM
+
+The headline scores are not a like-for-like measure of shared E-step maturity.
+Supplied-map EM's frozen K=1 suite is currently **31/34**, not 34/34; its K=4
+trajectory passes every class at **9/15** iterations, and its best current
+large default-like K=1 timing is about **1.40x RELION**. VDAM's 2/20 suite
+starts before a stable reference exists and fail-closes across as many as 201
+self-updating checkpoints, particle state, controller state, and runtime.
+
+| Axis | Supplied-map EM | VDAM / InitialModel | Consequence |
+|---|---|---|---|
+| Starting reference | Stable supplied map | Bootstrapped from the particles | VDAM must reproduce the initial basin as well as refinement. |
+| Feedback | Scores a comparatively stable reference | Every small M-step difference becomes the next E-step input | Native-scale atomic variation can cross a later adaptive cutoff and avalanche. |
+| Shared implementation | Authoritative significance, sparse pass-2, local-refinement, layout, posterior, and expected-accuracy code | Imports those same functions by object identity | The current gap is not a duplicate VDAM scorer implementation. |
+| Algorithm-specific work | Conventional EM reconstruction/update path | InitialModel SGD BPref accumulation, gradient moments, pseudo-halfsets, reconstruction, and bootstrap/controller schedule | These pieces cannot simply call the supplied-map EM M-step because RELION uses a different update algorithm. |
+| Current causal boundary | Several difficult noise/topology cases still remain | Raw GPU BPref accumulation realization | Replaying RELION raw BPref makes a paired 60-iteration VDAM trajectory effectively exact (`2.46e-15` output-reference relative L2, zero particle/operative-schedule divergences). |
+| Runtime posture | Mature production path; best large run about 1.40x RELION | Reference-faithful and heavily guarded path; 4.91--11.58x | Correctness-first diagnostics and non-fused host work must be removed or optimized after a repeat-robust K=1 trajectory is sealed. |
+
+The practical interpretation is therefore: the mature EM scoring machinery
+has already been reused, and the remaining K=1 VDAM correctness problem is
+narrow but unusually sensitive. The production task is to make the shared
+BPref accumulation land reproducibly inside RELION's native distribution;
+then qualify the feedback trajectory. The score must not be improved by
+copying EM code, weakening particle gates, or selecting one lucky CUDA
+realization.
+
 ### At a glance: progress, failure, and next gate
 
 | Status | Question | Readout |
