@@ -720,7 +720,7 @@ def _skip_native_sampling_accuracy_diagnostic() -> bool:
 
 
 def _isolate_native_sampling_accuracy_diagnostic() -> bool:
-    """Return whether expected accuracy runs in a fresh spawned process."""
+    """Return whether expected accuracy runs in an isolated spawned worker."""
     value = os.environ.get(INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "").strip()
     if value not in {"", "0", "1"}:
         raise ValueError(f"{INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV} must be 0 or 1")

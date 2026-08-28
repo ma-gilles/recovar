@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
-import traceback
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -113,18 +113,25 @@ def estimate_relion_expected_accuracy_from_prepared_inputs(
     )
 
 
+_EXPECTED_ACCURACY_PROCESS_POOL: ProcessPoolExecutor | None = None
+
+
 def _estimate_relion_expected_accuracy_spawn_worker(
-    connection,
     kwargs: dict[str, Any],
-) -> None:
+) -> ExpectedAccuracy:
     """Run the authoritative binding behind an isolated spawn boundary."""
-    try:
-        result = estimate_relion_expected_accuracy_from_prepared_inputs(**kwargs)
-        connection.send(("ok", result))
-    except BaseException:  # pragma: no cover - exercised through the parent error
-        connection.send(("error", traceback.format_exc()))
-    finally:
-        connection.close()
+    return estimate_relion_expected_accuracy_from_prepared_inputs(**kwargs)
+
+
+def _expected_accuracy_process_pool() -> ProcessPoolExecutor:
+    """Return the one-worker pool shared by expected-accuracy checkpoints."""
+    global _EXPECTED_ACCURACY_PROCESS_POOL
+    if _EXPECTED_ACCURACY_PROCESS_POOL is None:
+        _EXPECTED_ACCURACY_PROCESS_POOL = ProcessPoolExecutor(
+            max_workers=1,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+    return _EXPECTED_ACCURACY_PROCESS_POOL
 
 
 def estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
@@ -137,36 +144,14 @@ def estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
     wrapper exists for trajectory diagnostics where RELION's process-global
     RNG, FFT, or allocator state must not leak from the temporary
     expected-accuracy projectors into the production E/M-step process.
-    ``spawn`` is deliberate: forking a process after JAX has created worker
-    threads or a CUDA context is unsafe.
+    One spawned worker is reused across checkpoints to amortize import and
+    binding startup. ``spawn`` is deliberate: forking a process after JAX has
+    created worker threads or a CUDA context is unsafe.
     """
-    context = multiprocessing.get_context("spawn")
-    parent_connection, child_connection = context.Pipe(duplex=False)
-    process = context.Process(
-        target=_estimate_relion_expected_accuracy_spawn_worker,
-        args=(child_connection, kwargs),
-        name="recovar-relion-expected-accuracy",
-    )
-    process.start()
-    child_connection.close()
-    try:
-        status, payload = parent_connection.recv()
-    except EOFError as error:
-        process.join()
-        raise RuntimeError(
-            "isolated RELION expected-accuracy worker exited without a result "
-            f"(exit code {process.exitcode})"
-        ) from error
-    finally:
-        parent_connection.close()
-    process.join()
-    if process.exitcode != 0:
-        raise RuntimeError(
-            "isolated RELION expected-accuracy worker failed after returning "
-            f"a result (exit code {process.exitcode})"
-        )
-    if status != "ok":
-        raise RuntimeError(f"isolated RELION expected-accuracy worker failed:\n{payload}")
+    payload = _expected_accuracy_process_pool().submit(
+        _estimate_relion_expected_accuracy_spawn_worker,
+        kwargs,
+    ).result()
     if not isinstance(payload, ExpectedAccuracy):
         raise RuntimeError(
             "isolated RELION expected-accuracy worker returned an invalid payload"
