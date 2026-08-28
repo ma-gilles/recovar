@@ -124,6 +124,7 @@ def analyze(
     exact_path: Path,
     live_path: Path,
     physical_image_size: int,
+    native_pass: int = 1,
 ) -> dict[str, object]:
     exact = _load_capture(exact_path)
     live = _load_capture(live_path)
@@ -132,10 +133,12 @@ def analyze(
     current_size = int(np.asarray(live["current_size"]).item())
     original_index = int(np.asarray(live["original_index"]).item())
     _require(physical_image_size > 0, "physical image size must be positive")
+    _require(native_pass in (0, 1), "native pass must be 0 (coarse) or 1 (fine)")
 
-    real_path = _one(native_dump_dir, "pass1_img*_Fimg_corrected_real.bin")
-    imag_path = _one(native_dump_dir, "pass1_img*_Fimg_corrected_imag.bin")
-    corr_path = _one(native_dump_dir, "pass1_img*_corr_img.bin")
+    prefix = f"pass{native_pass}_img*"
+    real_path = _one(native_dump_dir, f"{prefix}_Fimg_corrected_real.bin")
+    imag_path = _one(native_dump_dir, f"{prefix}_Fimg_corrected_imag.bin")
+    corr_path = _one(native_dump_dir, f"{prefix}_corr_img.bin")
     native_raw_image = (
         _load_flat_real(real_path)
         + np.complex64(1j) * _load_flat_real(imag_path)
@@ -193,7 +196,7 @@ def analyze(
         "exact_vs_live": _metric(exact_weight, live_weight),
     }
     return {
-        "schema": "recovar.em.k1_native_coarse_image_boundary.v2",
+        "schema": "recovar.em.k1_native_coarse_image_boundary.v3",
         "status": "complete",
         "identity": {
             "source_row_zero_based": original_index,
@@ -201,6 +204,7 @@ def analyze(
             "current_size": current_size,
             "physical_image_size": physical_image_size,
             "native_pixel_count": native_pixel_count,
+            "native_pass": native_pass,
         },
         "unit_conversion": {
             "native_complex_multiplier": float(-scale),
@@ -242,6 +246,13 @@ def main() -> None:
     parser.add_argument("--exact", type=Path, required=True)
     parser.add_argument("--live", type=Path, required=True)
     parser.add_argument("--physical-image-size", type=int, required=True)
+    parser.add_argument(
+        "--native-pass",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="RELION expectation pass to load: 0=coarse, 1=fine (default)",
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
@@ -251,6 +262,7 @@ def main() -> None:
         exact_path=args.exact,
         live_path=args.live,
         physical_image_size=args.physical_image_size,
+        native_pass=args.native_pass,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"

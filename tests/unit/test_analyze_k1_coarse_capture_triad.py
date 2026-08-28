@@ -239,6 +239,73 @@ def test_native_coarse_image_analyzer_closes_unit_and_pixel_mapping(tmp_path):
     assert result["pixel_weight"]["metrics"]["native_vs_exact"]["mismatch_component_count"] == 0
 
 
+def test_native_coarse_image_analyzer_selects_requested_relion_pass(tmp_path):
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        make_fourier_window_indices_np,
+    )
+
+    physical_size = 4
+    current_size = 4
+    native_count = current_size * (current_size // 2 + 1)
+    score_indices, _ = make_fourier_window_indices_np(
+        (physical_size, physical_size),
+        current_size,
+        square=True,
+        include_dc=True,
+    )
+    native_dir = tmp_path / "native_passes"
+    native_dir.mkdir()
+
+    def write_real(name, values):
+        values = np.asarray(values, dtype="<f8")
+        with (native_dir / name).open("wb") as stream:
+            stream.write(np.asarray(values.size, dtype="<i4").tobytes())
+            stream.write(values.tobytes())
+
+    for native_pass, value in ((0, 1.0), (1, 2.0)):
+        write_real(
+            f"pass{native_pass}_img0_Fimg_corrected_real.bin",
+            np.full(native_count, value, dtype=np.float32),
+        )
+        write_real(
+            f"pass{native_pass}_img0_Fimg_corrected_imag.bin",
+            np.zeros(native_count, dtype=np.float32),
+        )
+        write_real(
+            f"pass{native_pass}_img0_corr_img.bin",
+            np.ones(native_count, dtype=np.float32),
+        )
+
+    recovar_path = tmp_path / "recovar.npz"
+    np.savez(
+        recovar_path,
+        current_size=np.asarray(current_size),
+        original_index=np.asarray(7),
+        coarse_gaussian_score_indices=score_indices,
+        coarse_gaussian_unshifted_corrected=np.full(
+            native_count,
+            -np.float32(physical_size**2),
+            dtype=np.complex64,
+        ),
+        coarse_gaussian_pixel_weight=np.full(
+            native_count,
+            np.float32(1.0 / physical_size**4),
+            dtype=np.float32,
+        ),
+    )
+
+    result = analyze_native_coarse_image(
+        native_dump_dir=native_dir,
+        exact_path=recovar_path,
+        live_path=recovar_path,
+        physical_image_size=physical_size,
+        native_pass=0,
+    )
+
+    assert result["identity"]["native_pass"] == 0
+    assert result["corrected_image"]["metrics"]["native_vs_live"]["max_abs"] == 0.0
+
+
 def test_native_verbose_rotation_mapping_is_direction_to_psi_major():
     native = np.asarray([0, 1, 47, 48, 5697, 5987], dtype=np.int64)
 
