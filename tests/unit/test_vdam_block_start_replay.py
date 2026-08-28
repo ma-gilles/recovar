@@ -444,6 +444,28 @@ def test_candidate_block_trace_uses_stable_stack_indices(monkeypatch):
     np.testing.assert_array_equal(trace_ids, np.asarray([402, 901], dtype=np.int32))
 
 
+def test_external_host_replay_capture_uses_stable_stack_indices(
+    tmp_path,
+    monkeypatch,
+):
+    class Dataset:
+        @staticmethod
+        def original_image_indices_from_local(image_indices):
+            lookup = np.asarray([901, 17, 402], dtype=np.int64)
+            return lookup[np.asarray(image_indices)]
+
+    monkeypatch.setenv(
+        local_em_engine.VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV,
+        str(tmp_path / "host-replay-inputs"),
+    )
+    trace_ids = local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+        Dataset(),
+        np.asarray([1, 2], dtype=np.int64),
+        debug_iteration=4,
+    )
+    np.testing.assert_array_equal(trace_ids, np.asarray([17, 402], dtype=np.int32))
+
+
 @pytest.mark.parametrize("iteration", ["", "0", "-1", "bad"])
 def test_candidate_block_trace_rejects_invalid_target_iteration(
     tmp_path,

@@ -363,6 +363,9 @@ RELION_VDAM_BLOCK_CHRONOLOGY_ENV = "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ"
 VDAM_CANDIDATE_BLOCK_TRACE_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE"
 VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER"
 VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV = "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE"
+VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV = (
+    "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR"
+)
 VDAM_CANDIDATE_BLOCK_MAP_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP"
 VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_ITER"
 VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPACITY"
@@ -1169,7 +1172,7 @@ def _relion_vdam_candidate_trace_ids_for_images(
     *,
     debug_iteration: int | None,
 ):
-    """Return stable stack IDs only when passive candidate tracing is requested."""
+    """Return stable stack IDs when a passive launch diagnostic needs them."""
 
     block_trace_active = _relion_vdam_candidate_trace_active(
         debug_iteration=debug_iteration
@@ -1177,7 +1180,10 @@ def _relion_vdam_candidate_trace_ids_for_images(
     host_gap_trace_active = bool(
         os.environ.get(VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV, "").strip()
     )
-    if not (block_trace_active or host_gap_trace_active):
+    host_replay_capture_active = bool(
+        os.environ.get(VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV, "").strip()
+    )
+    if not (block_trace_active or host_gap_trace_active or host_replay_capture_active):
         return None
     original_indices = np.asarray(
         experiment_dataset.original_image_indices_from_local(image_indices),
