@@ -1219,7 +1219,7 @@ def test_existing_relion_prefix_pins_production_scorer_and_iteration_coordinates
     launcher = (REPO_ROOT / "scripts" / "run_k1_existing_relion_prefix.sbatch").read_text()
 
     assert (
-        "PASS2_TARGET_ITERATION=${PASS2_TARGET_ITERATION:-$((TARGET_ITERATION - 1))}"
+        "PASS2_TARGET_ITERATION=${PASS2_TARGET_ITERATION:-${TARGET_ITERATION}}"
         in launcher
     )
     assert "RECOVAR_PASS2_DUMP_ITERATION=${PASS2_TARGET_ITERATION}" in launcher
