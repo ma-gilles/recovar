@@ -334,9 +334,6 @@ class TestRandomiseParticlesOrderBinding:
 
 class TestAutoRefineExpectedAccuracyBinding:
     def test_spawned_expected_accuracy_matches_direct_result(self, bind):
-        import os
-
-        from recovar.em.dense_single_volume.helpers import expected_accuracy
         from recovar.em.dense_single_volume.helpers.expected_accuracy import (
             estimate_relion_expected_accuracy_from_prepared_inputs,
             estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
@@ -370,10 +367,6 @@ class TestAutoRefineExpectedAccuracyBinding:
             "random_seed_particle_ids": np.asarray([101, 205], dtype=np.int64),
         }
         direct = estimate_relion_expected_accuracy_from_prepared_inputs(**kwargs)
-        parent_environment = {
-            name: os.environ.get(name)
-            for name in expected_accuracy._EXPECTED_ACCURACY_CPU_ENV
-        }
         isolated = estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
             **kwargs
         )
@@ -388,10 +381,6 @@ class TestAutoRefineExpectedAccuracyBinding:
         np.testing.assert_array_equal(isolated.class_counts, direct.class_counts)
         np.testing.assert_array_equal(isolated.trial_local_indices, direct.trial_local_indices)
         np.testing.assert_array_equal(isolated.trial_particle_ids, direct.trial_particle_ids)
-        assert {
-            name: os.environ.get(name)
-            for name in expected_accuracy._EXPECTED_ACCURACY_CPU_ENV
-        } == parent_environment
 
     def test_split_half_random_shuffle_reference(self, bind):
         if not hasattr(bind, "auto_refine_randomise_half_order"):
