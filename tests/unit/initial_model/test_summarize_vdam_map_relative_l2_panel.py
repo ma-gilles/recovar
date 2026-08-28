@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import copy
 
+import numpy as np
 import pytest
 
 from scripts.summarize_vdam_map_relative_l2_panel import (
     MapRelativeL2PanelError,
+    attach_candidate_repeat_spread,
     summarize_map_relative_l2_panel,
 )
 
@@ -68,3 +70,25 @@ def test_rejects_mixed_native_envelope() -> None:
     reports[3]["checkpoints"][0]["native_repeat_max_relative_l2"] = 5.0
     with pytest.raises(MapRelativeL2PanelError, match="native envelope differs"):
         summarize_map_relative_l2_panel(reports)
+
+
+def test_attaches_candidate_repeat_spread(monkeypatch) -> None:
+    reports = [_report(index) for index in range(4)]
+    panel = summarize_map_relative_l2_panel(reports)
+    maps = {
+        f"/candidate-{index}": np.asarray([float(index), 0.0])
+        for index in range(4)
+    }
+
+    def fake_load(path):
+        return maps[str(path.parents[1])]
+
+    monkeypatch.setattr(
+        "scripts.summarize_vdam_map_relative_l2_panel._load_map",
+        fake_load,
+    )
+    attach_candidate_repeat_spread(panel)
+    row = panel["checkpoints"][0]
+    assert len(row["candidate_repeat_relative_l2"]) == 6
+    assert row["candidate_repeat_max_relative_l2"] == 1.0
+    assert row["candidate_repeat_max_over_native_repeat_max_relative_l2"] == 0.25

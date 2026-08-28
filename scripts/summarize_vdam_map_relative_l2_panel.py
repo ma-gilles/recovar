@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 from pathlib import Path
 from typing import Any
 
+import mrcfile
 import numpy as np
 
 INPUT_SCHEMA = "recovar.vdam_map_relative_l2_envelope.v1"
@@ -39,6 +41,57 @@ def _load(path: Path) -> dict[str, Any]:
         raise MapRelativeL2PanelError(f"cannot read {path}: {exc}") from exc
     _require(isinstance(value, dict), f"report must be an object: {path}")
     return value
+
+
+def _load_map(path: Path) -> np.ndarray:
+    try:
+        with mrcfile.open(path, permissive=False) as handle:
+            values = np.asarray(handle.data, dtype=np.float64).copy()
+    except (OSError, ValueError) as exc:
+        raise MapRelativeL2PanelError(f"cannot read map {path}: {exc}") from exc
+    _require(values.ndim == 3 and np.all(np.isfinite(values)), f"invalid map: {path}")
+    return values
+
+
+def _symmetric_relative_l2(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    lhs = np.asarray(lhs, dtype=np.float64)
+    rhs = np.asarray(rhs, dtype=np.float64)
+    _require(lhs.shape == rhs.shape, f"candidate repeat map shapes differ: {lhs.shape} vs {rhs.shape}")
+    denominator = max(float(np.linalg.norm(lhs)), float(np.linalg.norm(rhs)))
+    return 0.0 if denominator == 0.0 else float(np.linalg.norm(lhs - rhs) / denominator)
+
+
+def attach_candidate_repeat_spread(report: dict[str, Any]) -> None:
+    """Measure candidate-candidate map spread on the same direct metric."""
+
+    roots = [Path(path) for path in report["candidate_roots"]]
+    panel_ratios: list[float] = []
+    for row in report["checkpoints"]:
+        iteration = int(row["iteration"])
+        maps = [
+            _load_map(root / "recovar" / f"run_it{iteration:03d}_class001.mrc")
+            for root in roots
+        ]
+        distances = [
+            _symmetric_relative_l2(maps[lhs], maps[rhs])
+            for lhs, rhs in itertools.combinations(range(len(maps)), 2)
+        ]
+        maximum = max(distances)
+        native_maximum = float(row["native_repeat_max_relative_l2"])
+        if native_maximum > 0.0:
+            ratio = maximum / native_maximum
+        elif maximum == 0.0:
+            ratio = 0.0
+        else:
+            ratio = None
+        row["candidate_repeat_relative_l2"] = distances
+        row["candidate_repeat_max_relative_l2"] = maximum
+        row["candidate_repeat_max_over_native_repeat_max_relative_l2"] = ratio
+        if ratio is not None:
+            panel_ratios.append(float(ratio))
+    report["maximum_candidate_repeat_spread_over_native_repeat_spread"] = (
+        max(panel_ratios) if panel_ratios else None
+    )
 
 
 def summarize_map_relative_l2_panel(
@@ -190,6 +243,7 @@ def main() -> int:
         [_load(path) for path in paths],
         expected_candidate_count=args.expected_candidate_count,
     )
+    attach_candidate_repeat_spread(report)
     report["provenance"] = {
         "input_report_sha256": {str(path): _sha256(path) for path in paths}
     }
