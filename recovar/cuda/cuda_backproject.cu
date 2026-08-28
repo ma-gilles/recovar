@@ -6004,34 +6004,44 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         }
         if (wavg_bpref_host_gap_trace_requested)
         {
-            std::ofstream trace(wavg_bpref_host_gap_trace_path);
-            if (!trace)
-            {
-                err = cudaErrorInvalidValue;
-                goto cleanup;
-            }
-            trace << "particle\ttrace_particle_id\tworker_lane\tintrinsic_gap_ns"
-                  << "\teffective_gap_ns\ttarget_gap_ns\n";
             bool found = false;
             for (int64_t particle = 0; particle < n_particles; ++particle)
+                found = found || wavg_bpref_intrinsic_gap_ns[particle] >= 0;
+            // One host-replay callback covers one packed bucket.  Most
+            // callbacks do not contain the requested global particle ID, so
+            // only the owning callback appends a record.
+            if (found)
             {
-                if (wavg_bpref_intrinsic_gap_ns[particle] < 0) continue;
-                found = true;
-                trace << particle << '\t'
-                      << particle_trace_ids_host[particle] << '\t'
-                      << worker_lanes_host[particle] << '\t'
-                      << wavg_bpref_intrinsic_gap_ns[particle] << '\t'
-                      << wavg_bpref_effective_gap_ns[particle] << '\t'
-                      << (wavg_bpref_host_gap_requested
-                              ? wavg_bpref_host_gap_ns
-                              : -1)
-                      << '\n';
-            }
-            trace.close();
-            if (!found || !trace)
-            {
-                err = cudaErrorInvalidValue;
-                goto cleanup;
+                std::ofstream trace(
+                    wavg_bpref_host_gap_trace_path, std::ios::app);
+                if (!trace)
+                {
+                    err = cudaErrorInvalidValue;
+                    goto cleanup;
+                }
+                if (trace.tellp() == 0)
+                    trace << "particle\ttrace_particle_id\tworker_lane"
+                          << "\tintrinsic_gap_ns\teffective_gap_ns"
+                          << "\ttarget_gap_ns\n";
+                for (int64_t particle = 0; particle < n_particles; ++particle)
+                {
+                    if (wavg_bpref_intrinsic_gap_ns[particle] < 0) continue;
+                    trace << particle << '\t'
+                          << particle_trace_ids_host[particle] << '\t'
+                          << worker_lanes_host[particle] << '\t'
+                          << wavg_bpref_intrinsic_gap_ns[particle] << '\t'
+                          << wavg_bpref_effective_gap_ns[particle] << '\t'
+                          << (wavg_bpref_host_gap_requested
+                                  ? wavg_bpref_host_gap_ns
+                                  : -1)
+                          << '\n';
+                }
+                trace.close();
+                if (!trace)
+                {
+                    err = cudaErrorInvalidValue;
+                    goto cleanup;
+                }
             }
         }
         if (candidate_trace_requested)

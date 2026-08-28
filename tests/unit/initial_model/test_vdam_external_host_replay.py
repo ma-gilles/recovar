@@ -81,4 +81,6 @@ def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
     assert "wavg_bpref_intrinsic_gap_ns" in cuda_source
     assert "wavg_bpref_effective_gap_ns" in cuda_source
     assert 'trace << "particle\\ttrace_particle_id\\tworker_lane' in cuda_source
-    assert "if (!found || !trace)" in cuda_source
+    assert "callbacks do not contain the requested global particle ID" in cuda_source
+    assert "std::ios::app" in cuda_source
+    assert "if (trace.tellp() == 0)" in cuda_source
