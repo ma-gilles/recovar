@@ -748,6 +748,24 @@ def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
     assert "VDAM_NR_ITER_OVERRIDE" not in capture
 
 
+def test_vdam_mstep_boundary_native_only_seals_raw_bpref_without_candidate():
+    capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+
+    expected_tokens = [
+        "NATIVE_ONLY=${VDAM_NATIVE_ONLY:-0}",
+        'if [[ "${NATIVE_ONLY}" = 1 ]]; then',
+        "mstep_it${TARGET_ITERATION}_c0_bpref_data.bin",
+        "mstep_it${TARGET_ITERATION}_c0_bpref_weight.bin",
+        "native_only_evidence.sha256",
+        "recovar.vdam_native_bpref_repeat.v1",
+        'touch "${OUTPUT_ROOT}/NATIVE_ONLY_SUCCESS"',
+        'touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"',
+        "exit 0",
+    ]
+    missing = [token for token in expected_tokens if token not in capture]
+    assert not missing, f"VDAM native-only BPref capture contract differs: {missing}"
+
+
 def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
     continuation = (REPO_ROOT / "scripts/run_vdam_relion_continuation_capture.sbatch").read_text()
 

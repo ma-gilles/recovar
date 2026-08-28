@@ -32,6 +32,7 @@ TARGET_ITERATION_TAG=$(printf '%03d' "${TARGET_ITERATION}")
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 RELION_THREADS=${RELION_THREADS:-8}
 RANDOM_SEED=${RANDOM_SEED:-0}
+NATIVE_ONLY=${VDAM_NATIVE_ONLY:-0}
 WORKER_TRACE_REPLAY=${RELION_VDAM_WORKER_TRACE_REPLAY:-0}
 WORKER_TRACE_ITERATION=${RELION_VDAM_WORKER_TRACE_ITERATION:-1}
 WORKER_TRACE_ITERATION_TAG=$(printf '%03d' "${WORKER_TRACE_ITERATION}")
@@ -106,6 +107,7 @@ test "${TARGET_ITERATION}" -ge 1
 test "${TARGET_ITERATION}" -le "${NR_ITER_SCHEDULE}"
 test "${RELION_THREADS}" -ge 1
 test "${RELION_THREADS}" -le "${SLURM_CPUS_PER_TASK:-8}"
+test "${NATIVE_ONLY}" = 0 -o "${NATIVE_ONLY}" = 1
 if [[ -n "${STACK_INDEX}" && ! "${STACK_INDEX}" =~ ^[1-9][0-9]*$ ]]; then
   echo "VDAM_PREPROCESS_STACK_INDEX must be a positive integer" >&2
   exit 2
@@ -275,6 +277,16 @@ if [[ -n "${BPREF_CONTRIBUTION_HALF}" ]]; then
   fi
   test -n "${BPREF_CONTRIBUTION_CURRENT_SIZE}"
   test "${BPREF_CONTRIBUTION_CURRENT_SIZE}" -ge 1
+fi
+if [[ "${NATIVE_ONLY}" = 1 ]]; then
+  test "${REPLAY_NATIVE_REFERENCES}" = 0
+  test "${NATIVE_SECOND_MOMENT_REPLAY}" = 0
+  test "${NATIVE_FIRST_MOMENT_REPLAY}" = 0
+  test "${NATIVE_BPREF_REPLAY}" = 0
+  test "${NATIVE_IREF_INPUT_REPLAY}" = 0
+  test "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 0
+  test "${CANDIDATE_BLOCK_MAP_CAPTURE}" = 0
+  test -z "${BPREF_CONTRIBUTION_HALF}"
 fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
@@ -487,6 +499,36 @@ for required in \
   mstep_it${TARGET_ITERATION}_c0_iref_after.bin; do
   test -s "${NATIVE_MSTEP}/${required}"
 done
+if [[ "${NATIVE_ONLY}" = 1 ]]; then
+  for required in \
+    mstep_it${TARGET_ITERATION}_c0_bpref_data.bin \
+    mstep_it${TARGET_ITERATION}_c0_bpref_weight.bin \
+    mstep_it${TARGET_ITERATION}_c0_bpref_data_pre.bin \
+    mstep_it${TARGET_ITERATION}_c0_bpref_weight_pre.bin; do
+    test -s "${NATIVE_MSTEP}/${required}"
+  done
+  gpu_uuid_after_native=$(nvidia-smi --query-gpu=uuid --format=csv,noheader \
+    | head -n 1 | tr -d '[:space:]')
+  test "${gpu_uuid_after_native}" = "${gpu_uuid_before}"
+  test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
+  test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
+  sha256sum \
+    "${REPO_ROOT}/scripts/run_vdam_fullschedule_mstep_boundary.sbatch" \
+    "${DATA_DIR}/particles.star" "${VDAM_RELION_BINARY}" \
+    "${NATIVE_MSTEP}/mstep_it${TARGET_ITERATION}_c0_bpref_data.bin" \
+    "${NATIVE_MSTEP}/mstep_it${TARGET_ITERATION}_c0_bpref_weight.bin" \
+    "${NATIVE_MSTEP}/mstep_it${TARGET_ITERATION}_c0_bpref_data_pre.bin" \
+    "${NATIVE_MSTEP}/mstep_it${TARGET_ITERATION}_c0_bpref_weight_pre.bin" \
+    > "${PROVENANCE}/native_only_evidence.sha256"
+  printf '{"schema":"recovar.vdam_native_bpref_repeat.v1","job_id":"%s","git_head":"%s","physical_gpu_uuid":"%s","target_gpu_uuid":"%s","iteration":%d,"nr_iter_schedule":%d,"relion_threads":%d,"random_seed":%d}\n' \
+    "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${gpu_uuid_before}" \
+    "${TARGET_GPU_UUID}" "${TARGET_ITERATION}" "${NR_ITER_SCHEDULE}" \
+    "${RELION_THREADS}" "${RANDOM_SEED}" \
+    > "${PROVENANCE}/native_only_completion.json"
+  touch "${OUTPUT_ROOT}/NATIVE_ONLY_SUCCESS"
+  touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
+  exit 0
+fi
 NATIVE_SECOND_MOMENT_REPLAY_BIN=${NATIVE_MSTEP}/pipe_it${TARGET_ITERATION}_c0_Igrad2_post.bin
 if [[ "${NATIVE_SECOND_MOMENT_REPLAY}" = 1 ]]; then
   if [[ "${NATIVE_SECOND_MOMENT_REPLAY_ALL}" = 1 ]]; then
