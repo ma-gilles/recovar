@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=500G
-#SBATCH --time=00:45:00
+#SBATCH --time=01:00:00
 
 set -euo pipefail
 
@@ -22,16 +22,14 @@ set -euo pipefail
 : "${EXPECTED_LAUNCHER_SHA256:?EXPECTED_LAUNCHER_SHA256 is required}"
 : "${EXPECTED_CUDA_LIB_SHA256:?EXPECTED_CUDA_LIB_SHA256 is required}"
 
-case "${TARGET_ORIGINAL_INDEX}:${TARGET_HALF}" in
-    0:1) EXPECTED_STACK_INDEX=1 ;;
-    3:2) EXPECTED_STACK_INDEX=4 ;;
-    *)
-        echo "Case-10 final panel accepts only original-index/half pairs 0:1 or 3:2" >&2
-        exit 2
-        ;;
+case "${TARGET_HALF}" in
+    1|2) ;;
+    *) echo "TARGET_HALF must be 1 or 2" >&2; exit 2 ;;
 esac
+[[ "${TARGET_ORIGINAL_INDEX}" =~ ^[0-9]+$ ]]
+EXPECTED_STACK_INDEX=$(( TARGET_ORIGINAL_INDEX + 1 ))
 
-REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_native_units_instrumentation_20260826
+REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_pr167_postintegration_debug_20260827
 FIXED_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
 CASE_ROOT=${FIXED_ROOT}/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0
 DATA=${CASE_ROOT}/data
@@ -39,18 +37,19 @@ RELION=${CASE_ROOT}/relion_ref
 SOURCE_RUN=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET
 SOURCE_MANIFESTS=${SOURCE_RUN}/output/intermediates
 SOURCE_RESULTS=${SOURCE_RUN}/output/refinement_results.npz
-CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_top4_recovar_fresh_fine_20260827T0420ET/cuda/libcuda_backproject.so
+CUDA_LIB=${REPO}/recovar/cuda/libcuda_backproject.so
 RELION_BIND=${FIXED_ROOT}/relion_bind_build/shared
 LAUNCHER=${REPO}/scripts/capture_recovar_k1_case10_final_particle.sbatch
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 OUTPUT=${RUN_ROOT}/output
 CONTRIBUTIONS=${RUN_ROOT}/contributions
+LOCAL_SCORE=${RUN_ROOT}/local_score
 IMAGE_NAMES=${RUN_ROOT}/provenance/image_names.npy
 
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
-test "$(git -C "${REPO}" diff --binary -- recovar/em scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
+test "$(git -C "${REPO}" diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu recovar/cuda_backproject.py scripts/run_full_refinement.py | sha256sum | awk '{print $1}')" = "${EXPECTED_SOURCE_DIFF_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
 test -s "${SOURCE_MANIFESTS}/manifest_final_half0.npz"
@@ -81,7 +80,7 @@ export RECOVAR_CACHE_DIR=
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" \
     "${JAX_COMPILATION_CACHE_DIR}" "${PYTHONPYCACHEPREFIX}" \
     "${OUTPUT}" "${OUTPUT}/intermediates" "${OUTPUT}/timing" \
-    "${CONTRIBUTIONS}" "${RUN_ROOT}/logs" "${RUN_ROOT}/provenance"
+    "${CONTRIBUTIONS}" "${LOCAL_SCORE}" "${RUN_ROOT}/logs" "${RUN_ROOT}/provenance"
 
 source /etc/profile.d/modules.sh
 set +u
@@ -126,10 +125,17 @@ export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY=${IMAGE_NAMES}
 export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256=6abfc7829307ed63cc1b8b24ba99ec1afca25e5467876ef056034a9dd8779585
 export RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY=1
 export RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET=1
+export RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1
+export RECOVAR_LOCAL_SCORE_DUMP_DIR=${LOCAL_SCORE}
+export RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
+export RECOVAR_LOCAL_SCORE_DUMP_CURRENT_SIZE=384
+export RECOVAR_LOCAL_SCORE_DUMP_ITERATION=16
+export RECOVAR_LOCAL_SCORE_DUMP_OPERANDS=1
+export RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT=1
 
 cd "${REPO}"
 git status --short --branch > "${RUN_ROOT}/provenance/git_status_${SLURM_JOB_ID}.txt"
-git diff --binary -- recovar/em scripts/run_full_refinement.py \
+git diff --binary -- recovar/em recovar/cuda/cuda_backproject.cu recovar/cuda_backproject.py scripts/run_full_refinement.py \
     > "${RUN_ROOT}/provenance/source_diff_${SLURM_JOB_ID}.patch"
 env | sort > "${RUN_ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
 nvidia-smi --query-gpu=uuid,name,memory.total,driver_version --format=csv,noheader \
@@ -212,10 +218,37 @@ printf '{"elapsed_seconds":%d,"job_id":"%s","original_index":%d,"half":%d}\n' \
 test "$(find "${CONTRIBUTIONS}" -maxdepth 1 -type f -name 'bpref_contribution_rows_it016_*.npz' | wc -l)" -eq 1
 CONTRIBUTION=$(find "${CONTRIBUTIONS}" -maxdepth 1 -type f -name 'bpref_contribution_rows_it016_*.npz' -print -quit)
 test -s "${CONTRIBUTION}"
+LOCAL_SCORE_CAPTURE=$(find "${LOCAL_SCORE}" -maxdepth 1 -type f \
+    -name "local_score_it016_image_${TARGET_ORIGINAL_INDEX}*.npz" -print -quit)
+test -n "${LOCAL_SCORE_CAPTURE}" -a -s "${LOCAL_SCORE_CAPTURE}"
+"${PYTHON}" - "${CONTRIBUTION}" "${LOCAL_SCORE_CAPTURE}" \
+    "${TARGET_ORIGINAL_INDEX}" "${EXPECTED_STACK_INDEX}" <<'PY'
+import sys
+
+import numpy as np
+
+contribution_path, local_score_path = sys.argv[1:3]
+original_index, stack_index = map(int, sys.argv[3:5])
+with np.load(contribution_path, allow_pickle=False) as values:
+    assert bool(values["high_precision_operand_bundle"])
+    assert values["original_indices"].tolist() == [original_index]
+    assert values["stack_indices_1based"].tolist() == [stack_index]
+    assert values["raw_real_images"].shape == (1, 384, 384)
+    assert values["ctf_params"].shape[0] == 1
+    assert values["noise_variance_half"].shape == (74112,)
+    assert values["mstep_shifted_recon"].ndim == 3
+    assert values["mstep_ctf2_over_nv"].shape == (1, 74112)
+with np.load(local_score_path, allow_pickle=False) as values:
+    assert values["selected_global_image_indices"].tolist() == [original_index]
+    assert int(values["debug_iteration"][0]) == 16
+    assert int(values["current_size"][0]) == 384
+    assert values["debug_shifted_recon"].ndim == 2
+    assert values["debug_ctf2_over_nv_recon"].shape == (74112,)
+PY
 rg -q 'RECOVAR BPref contribution dump completed' "${RUN_ROOT}/logs/run_${SLURM_JOB_ID}.log"
 rg -q 'Exact local diagnostic target-only: keeping' "${RUN_ROOT}/logs/run_${SLURM_JOB_ID}.log"
 ! rg -q 'RESOURCE_EXHAUSTED|Out of memory|accounting is inconsistent|Traceback' \
     "${RUN_ROOT}/logs/run_${SLURM_JOB_ID}.log"
-sha256sum "${CONTRIBUTION}" "${IMAGE_NAMES}" \
+sha256sum "${CONTRIBUTION}" "${LOCAL_SCORE_CAPTURE}" "${IMAGE_NAMES}" \
     > "${RUN_ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
 touch "${RUN_ROOT}/SUCCESS_${SLURM_JOB_ID}"

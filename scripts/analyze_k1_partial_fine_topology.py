@@ -144,6 +144,19 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
                 "rotation_matrix", "rotation_global_index", "rotation_parent_global",
                 "fine_translations",
             }
+        elif "pass2_scores_total" in archive.files:
+            required = {
+                "selected_global_image_indices",
+                "local_rotation_matrices",
+                "translations",
+                "pass2_scores_total",
+                "posterior",
+                "rotation_log_prior",
+                "translation_log_prior",
+                "reconstruction_sample_mask",
+                "local_rotation_indices",
+                "local_rotation_parent_indices",
+            }
         else:
             required = {
                 "original_index", "rotations", "fine_translations", "candidate_mask", "probs",
@@ -166,6 +179,44 @@ def load_recovar_candidate_table(path: Path) -> dict[str, np.ndarray]:
         # and pixel-operand arrays.  Candidate topology analysis must not load
         # fields it never reads.
         recovar = {name: np.asarray(archive[name]) for name in required}
+    if "pass2_scores_total" in recovar:
+        scores = np.asarray(recovar["pass2_scores_total"])[0]
+        posterior = np.asarray(recovar["posterior"])[0]
+        candidate_mask = np.isfinite(scores)
+        return {
+            **recovar,
+            "original_index": np.asarray(
+                recovar["selected_global_image_indices"][0], dtype=np.int64
+            ),
+            "rotations": np.asarray(
+                recovar["local_rotation_matrices"], dtype=np.float32
+            ),
+            "fine_translations": np.asarray(recovar["translations"], dtype=np.float32),
+            "candidate_mask": candidate_mask,
+            "candidate_sequence": np.argwhere(candidate_mask).astype(
+                np.int64, copy=False
+            ),
+            "probs": posterior,
+            "production_combined_score": scores,
+            "production_rotation_log_prior": np.broadcast_to(
+                np.asarray(recovar["rotation_log_prior"])[0, :, None],
+                scores.shape,
+            ),
+            "production_translation_log_prior": np.broadcast_to(
+                np.asarray(recovar["translation_log_prior"])[0, None, :],
+                scores.shape,
+            ),
+            "production_significant": np.asarray(
+                recovar["reconstruction_sample_mask"]
+            )[0],
+            "rotation_global_index": np.asarray(
+                recovar["local_rotation_indices"], dtype=np.int64
+            ),
+            "rotation_parent_global": np.asarray(
+                recovar["local_rotation_parent_indices"], dtype=np.int64
+            ),
+            "capture_schema": np.asarray("recovar.em.local_score.v1"),
+        }
     if schema != PRODUCTION_CAPTURE_SCHEMA:
         candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
         normalized = {

@@ -159,6 +159,7 @@ def analyze_panel(
     for capture_dir in recovar_capture_dirs:
         recovar_paths.extend(capture_dir.rglob("raw_k1_*.npz"))
         recovar_paths.extend(capture_dir.rglob("pass2_orig*_cs*.npz"))
+        recovar_paths.extend(capture_dir.rglob("local_score_it*_image_*.npz"))
     for path in sorted(set(recovar_paths)):
         stack_index = int(load_recovar_candidate_table(path)["original_index"]) + 1
         _require(stack_index not in recovar, f"duplicate RECOVAR capture for stack {stack_index}")

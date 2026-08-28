@@ -127,6 +127,49 @@ def test_legacy_loader_exposes_complete_production_boundary(tmp_path):
 
 
 @pytest.mark.unit
+def test_local_score_loader_exposes_complete_production_boundary(tmp_path):
+    path = tmp_path / "local_score_it016_image_7.npz"
+    scores = np.asarray([[[1.0, -np.inf], [3.0, 4.0]]], dtype=np.float64)
+    posterior = np.asarray([[[0.1, 0.0], [0.3, 0.6]]], dtype=np.float64)
+    rotations = np.stack(
+        [np.eye(3, dtype=np.float32), np.diag([-1.0, -1.0, 1.0])]
+    ).astype(np.float32)
+    np.savez(
+        path,
+        selected_global_image_indices=np.asarray([7], dtype=np.int64),
+        local_rotation_matrices=rotations,
+        translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+        pass2_scores_total=scores,
+        posterior=posterior,
+        rotation_log_prior=np.asarray([[0.25, 0.5]], dtype=np.float32),
+        translation_log_prior=np.asarray([[0.75, 1.0]], dtype=np.float32),
+        reconstruction_sample_mask=np.asarray(
+            [[[False, False], [True, True]]], dtype=bool
+        ),
+        local_rotation_indices=np.asarray([20, 21], dtype=np.int64),
+        local_rotation_parent_indices=np.asarray([100, 101], dtype=np.int64),
+    )
+
+    normalized = load_recovar_candidate_table(path)
+
+    assert int(normalized["original_index"]) == 7
+    np.testing.assert_array_equal(normalized["rotations"], rotations)
+    np.testing.assert_array_equal(
+        normalized["candidate_mask"], [[True, False], [True, True]]
+    )
+    np.testing.assert_array_equal(
+        normalized["candidate_sequence"], [[0, 0], [1, 0], [1, 1]]
+    )
+    np.testing.assert_array_equal(normalized["probs"], posterior[0])
+    np.testing.assert_array_equal(normalized["production_combined_score"], scores[0])
+    np.testing.assert_array_equal(
+        normalized["production_significant"], [[False, False], [True, True]]
+    )
+    np.testing.assert_array_equal(normalized["rotation_global_index"], [20, 21])
+    np.testing.assert_array_equal(normalized["rotation_parent_global"], [100, 101])
+
+
+@pytest.mark.unit
 def test_production_shard_normalizes_to_dense_partial_topology(tmp_path, monkeypatch):
     rotations = np.stack(
         [np.eye(3, dtype=np.float32), np.diag([-1.0, -1.0, 1.0]).astype(np.float32)]

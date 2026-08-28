@@ -294,6 +294,9 @@ LOCAL_SCORE_DUMP_FORCE_SPLIT_ENV = "RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT"
 LOCAL_SCORE_DUMP_OPERANDS_ENV = "RECOVAR_LOCAL_SCORE_DUMP_OPERANDS"
 LOCAL_SCORE_DUMP_TARGET_ONLY_ENV = "RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY"
 BPREF_CONTRIBUTION_TARGET_ONLY_ENV = "RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY"
+BPREF_HIGH_PRECISION_OPERAND_BUNDLE_ENV = (
+    "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE"
+)
 EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS"
 EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
@@ -342,6 +345,84 @@ def _bpref_contribution_target_only_original_indices(
             "original particle index"
         )
     return targets
+
+
+def _exact_local_high_precision_operand_bundle_requested(
+    *,
+    capture_active: bool,
+    environ=None,
+) -> bool:
+    """Return whether an exact-local contribution must retain raw operands."""
+
+    env = os.environ if environ is None else environ
+    return bool(
+        capture_active
+        and str(env.get(BPREF_HIGH_PRECISION_OPERAND_BUNDLE_ENV, "")).strip().lower()
+        in _TRUE_ENV_VALUES
+    )
+
+
+def _prepare_exact_local_contribution_preprocess_operands(
+    *,
+    requested: bool,
+    experiment_dataset,
+    batch_data,
+    image_indices,
+    batch_size: int,
+    image_shape,
+    score_with_masked_images: bool,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+):
+    """Capture the raw preprocessing inputs used by an exact-local bucket."""
+
+    if not requested:
+        return None
+    if batch_data is None:
+        raise RuntimeError(
+            "Exact-local high-precision BPref capture requires the raw image batch"
+        )
+    (
+        relion_cuda_preprocess,
+        integer_pre_shifts,
+        batch_image_corrections,
+        batch_scale_corrections,
+        relion_preprocess_kwargs,
+    ) = prepare_batch_preprocess_operands(
+        experiment_dataset,
+        batch_data,
+        image_indices,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+    )
+    if integer_pre_shifts is None:
+        integer_pre_shifts = np.zeros((batch_size, 2), dtype=np.int32)
+    if batch_image_corrections is None:
+        batch_image_corrections = np.ones(batch_size, dtype=np.float32)
+    normalization_factors = (
+        np.ones(batch_size, dtype=np.float32)
+        if relion_preprocess_kwargs is None
+        else np.asarray(
+            relion_preprocess_kwargs["relion_normalization_factors"],
+            dtype=np.float32,
+        )
+    )
+    image_mask, image_mask_mode = resolve_image_mask_for_half_preprocess(
+        experiment_dataset,
+        image_shape,
+        require_mask=bool(score_with_masked_images),
+    )
+    return {
+        "integer_pre_shifts": integer_pre_shifts,
+        "batch_image_corrections": batch_image_corrections,
+        "batch_scale_corrections": batch_scale_corrections,
+        "relion_preprocess_normalization_factors": normalization_factors,
+        "relion_cuda_preprocess": relion_cuda_preprocess,
+        "image_mask": image_mask,
+        "image_mask_mode": image_mask_mode,
+    }
 
 
 def _target_only_bucket_filter_enabled(
@@ -2133,6 +2214,11 @@ def run_local_em_exact(
         score_only=score_only,
         mstep_relion_x_half=mstep_relion_x_half,
     )
+    bpref_high_precision_operand_bundle = (
+        _exact_local_high_precision_operand_bundle_requested(
+            capture_active=bpref_contribution_capture_active,
+        )
+    )
     debug_score_dump_operands = bool(
         debug_score_dump_filter_matches
         and _env_flag(LOCAL_SCORE_DUMP_OPERANDS_ENV)
@@ -2684,7 +2770,7 @@ def run_local_em_exact(
         n_half,
         np.complex64,
         store_recon_half=bool(score_with_masked_images),
-    )
+    ) and not bpref_high_precision_operand_bundle
     use_big_jit_buckets = (
         ((not use_relion_projector) or relion_projector_big_jit_supported)
         and not disable_big_jit_buckets
@@ -4488,6 +4574,20 @@ def run_local_em_exact(
                     if threshold_for_bucket is None
                     else threshold_for_bucket
                 )
+                contribution_preprocess_operands = (
+                    _prepare_exact_local_contribution_preprocess_operands(
+                        requested=bpref_high_precision_operand_bundle,
+                        experiment_dataset=experiment_dataset,
+                        batch_data=batch_data,
+                        image_indices=bucket.image_indices,
+                        batch_size=batch_size,
+                        image_shape=image_shape,
+                        score_with_masked_images=score_with_masked_images,
+                        image_corrections=image_corrections,
+                        scale_corrections=scale_corrections,
+                        image_pre_shifts=image_pre_shifts,
+                    )
+                )
                 _maybe_dump_exact_local_bpref_contribution_rows(
                     experiment_dataset=experiment_dataset,
                     image_indices=bucket.image_indices,
@@ -4510,22 +4610,78 @@ def run_local_em_exact(
                     reconstruction_sum_weight=jnp.sum(reconstruction_probs, axis=(1, 2)),
                     reconstruction_threshold=reconstruction_threshold_for_dump,
                     candidate_mask=candidate_mask,
-                    high_precision_operand_bundle=False,
-                    raw_batch_data=None,
-                    ctf_params=None,
-                    noise_variance_half=None,
-                    integer_pre_shifts=None,
-                    batch_image_corrections=None,
-                    batch_scale_corrections=None,
-                    relion_preprocess_normalization_factors=None,
-                    relion_cuda_preprocess=False,
+                    high_precision_operand_bundle=bpref_high_precision_operand_bundle,
+                    raw_batch_data=(
+                        batch_data if bpref_high_precision_operand_bundle else None
+                    ),
+                    ctf_params=(
+                        ctf_params if bpref_high_precision_operand_bundle else None
+                    ),
+                    noise_variance_half=(
+                        noise_variance_half
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
+                    integer_pre_shifts=(
+                        contribution_preprocess_operands["integer_pre_shifts"]
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
+                    batch_image_corrections=(
+                        contribution_preprocess_operands[
+                            "batch_image_corrections"
+                        ]
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
+                    batch_scale_corrections=(
+                        contribution_preprocess_operands[
+                            "batch_scale_corrections"
+                        ]
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
+                    relion_preprocess_normalization_factors=(
+                        contribution_preprocess_operands[
+                            "relion_preprocess_normalization_factors"
+                        ]
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
+                    relion_cuda_preprocess=(
+                        contribution_preprocess_operands[
+                            "relion_cuda_preprocess"
+                        ]
+                        if bpref_high_precision_operand_bundle
+                        else False
+                    ),
                     score_with_masked_images=score_with_masked_images,
-                    image_mask=None,
-                    image_mask_mode="not-captured",
+                    image_mask=(
+                        contribution_preprocess_operands["image_mask"]
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
+                    image_mask_mode=(
+                        contribution_preprocess_operands["image_mask_mode"]
+                        if bpref_high_precision_operand_bundle
+                        else "not-captured"
+                    ),
                     voxel_size=experiment_dataset.voxel_size,
-                    ctf_mode="not-captured",
-                    ctf_dose_per_tilt=0.0,
-                    ctf_angle_per_tilt=0.0,
+                    ctf_mode=(
+                        getattr(getattr(config.ctf, "mode", "legacy"), "name", "legacy")
+                        if bpref_high_precision_operand_bundle
+                        else "not-captured"
+                    ),
+                    ctf_dose_per_tilt=(
+                        getattr(config.ctf, "dose_per_tilt", 0.0)
+                        if bpref_high_precision_operand_bundle
+                        else 0.0
+                    ),
+                    ctf_angle_per_tilt=(
+                        getattr(config.ctf, "angle_per_tilt", 0.0)
+                        if bpref_high_precision_operand_bundle
+                        else 0.0
+                    ),
                     disc_type=disc_type,
                     projection_padding_factor=projection_padding_factor,
                     reconstruction_padding_factor=reconstruction_padding_factor,
@@ -4538,6 +4694,16 @@ def run_local_em_exact(
                     shadow_only_mode=False,
                     shadow_score_bitwise_equal=True,
                     shadow_reduction_agreement=None,
+                    mstep_shifted_recon=(
+                        shifted_recon_split
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
+                    mstep_ctf2_over_nv=(
+                        ctf2_over_nv_recon
+                        if bpref_high_precision_operand_bundle
+                        else None
+                    ),
                 )
             scores = None
 

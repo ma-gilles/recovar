@@ -803,7 +803,82 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
     assert "_exact_local_bpref_contribution_capture_for_call" in source
     assert "and not bpref_contribution_capture_active" in source
     assert "if bpref_contribution_capture_active and not score_only:" in source
+    assert (
+        "high_precision_operand_bundle=bpref_high_precision_operand_bundle"
+        in source
+    )
+    assert "raw_batch_data=(" in source
+    assert "mstep_shifted_recon=(" in source
     assert "requires RELION x-half M-step geometry" in helper_source
+
+
+def test_exact_local_high_precision_operand_bundle_is_capture_scoped():
+    helper = local_em_engine._exact_local_high_precision_operand_bundle_requested
+    env = {"RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE": "1"}
+    assert not helper(capture_active=False, environ=env)
+    assert helper(capture_active=True, environ=env)
+    assert helper(
+        capture_active=True,
+        environ={"RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE": "true"},
+    )
+    assert not helper(capture_active=True, environ={})
+
+
+def test_exact_local_high_precision_preprocess_bundle_is_complete(monkeypatch):
+    helper = local_em_engine._prepare_exact_local_contribution_preprocess_operands
+    assert helper(
+        requested=False,
+        experiment_dataset=object(),
+        batch_data=None,
+        image_indices=np.asarray([4]),
+        batch_size=1,
+        image_shape=(4, 4),
+        score_with_masked_images=False,
+    ) is None
+    with pytest.raises(RuntimeError, match="requires the raw image batch"):
+        helper(
+            requested=True,
+            experiment_dataset=object(),
+            batch_data=None,
+            image_indices=np.asarray([4]),
+            batch_size=1,
+            image_shape=(4, 4),
+            score_with_masked_images=False,
+        )
+
+    monkeypatch.setattr(
+        local_em_engine,
+        "prepare_batch_preprocess_operands",
+        lambda *_args, **_kwargs: (
+            True,
+            None,
+            None,
+            np.asarray([1.25], dtype=np.float32),
+            {"relion_normalization_factors": np.asarray([0.75], dtype=np.float32)},
+        ),
+    )
+    monkeypatch.setattr(
+        local_em_engine,
+        "resolve_image_mask_for_half_preprocess",
+        lambda *_args, **_kwargs: (np.ones((4, 4), dtype=np.float32), "multiply"),
+    )
+    result = helper(
+        requested=True,
+        experiment_dataset=object(),
+        batch_data=np.zeros((1, 4, 4), dtype=np.float32),
+        image_indices=np.asarray([4]),
+        batch_size=1,
+        image_shape=(4, 4),
+        score_with_masked_images=True,
+    )
+    assert result["relion_cuda_preprocess"] is True
+    np.testing.assert_array_equal(result["integer_pre_shifts"], [[0, 0]])
+    np.testing.assert_array_equal(result["batch_image_corrections"], [1.0])
+    np.testing.assert_array_equal(result["batch_scale_corrections"], [1.25])
+    np.testing.assert_array_equal(
+        result["relion_preprocess_normalization_factors"], [0.75]
+    )
+    assert result["image_mask_mode"] == "multiply"
 
 
 def test_clear_dump_context_marks_contribution_and_native_dumps_inactive():
