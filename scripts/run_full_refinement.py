@@ -4313,7 +4313,18 @@ def main():
 
     from recovar.reconstruction import noise as recon_noise
 
-    if frozen_boundary is not None:
+    if final_manifest_replay is not None:
+        # The sealed final-pass manifests own the complete per-half scoring
+        # noise. It was loaded and shape-checked above; do not silently
+        # replace it with the ordinary fresh-run 1,000-particle bootstrap.
+        # Keeping this branch adjacent to the other noise owners makes the
+        # mutually exclusive precedence explicit.
+        noise_variance = np.stack(final_manifest_replay.noise_variance, axis=0)
+        initial_noise_radial = np.mean(
+            final_manifest_replay.noise_radial_per_half,
+            axis=0,
+        )
+    elif frozen_boundary is not None:
         noise_variance = _make_frozen_boundary_noise_variance(
             frozen_boundary.noise_radial_per_half,
             ds.image_shape,

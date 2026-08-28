@@ -272,6 +272,20 @@ def test_final_manifest_replay_reconstructs_fresh_physical_particle_order():
     assert not _use_fresh_auto_refine_particle_order(args, object())
 
 
+def test_final_manifest_replay_noise_precedes_fresh_bootstrap():
+    source = inspect.getsource(run_full_refinement.main)
+    section_start = source.index("# ---- Initialize noise and prior ----")
+    section_end = source.index("# Compute initial signal prior", section_start)
+    noise_section = source[section_start:section_end]
+
+    replay_branch = noise_section.index("if final_manifest_replay is not None:")
+    frozen_branch = noise_section.index("elif frozen_boundary is not None:")
+    fresh_bootstrap = noise_section.index("initial_noise_subset = np.arange")
+
+    assert replay_branch < frozen_branch < fresh_bootstrap
+    assert "np.stack(final_manifest_replay.noise_variance, axis=0)" in noise_section
+
+
 @pytest.mark.parametrize("token", ["1", "true", "YES", "on"])
 def test_k1_relion_live_initial_noise_truthy_tokens(token):
     assert _k1_relion_live_initial_noise_enabled(
