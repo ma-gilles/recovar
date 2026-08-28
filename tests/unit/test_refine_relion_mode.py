@@ -11229,7 +11229,15 @@ class TestRelionModeSmokeTest:
         coarse_pixel_counts = []
         original_coarse_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32
 
-        def capture_square_crop(reference, shifted_image, weight, initial_diff2, full_to_compact):
+        def capture_square_crop(
+            reference,
+            shifted_image,
+            weight,
+            initial_diff2,
+            full_to_compact,
+            *,
+            serial_particle_launches=False,
+        ):
             coarse_pixel_counts.append(
                 (
                     int(reference.shape[-1]),
@@ -11244,6 +11252,7 @@ class TestRelionModeSmokeTest:
                 weight,
                 initial_diff2,
                 full_to_compact,
+                serial_particle_launches=serial_particle_launches,
             )
 
         monkeypatch.setattr(
