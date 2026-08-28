@@ -42,6 +42,7 @@ def test_matched_panel_seals_source_binaries_and_both_reports() -> None:
         "VDAM_REPLAY_NATIVE_REPEAT_OPERANDS",
         "RELION_ACC_DUMP_BPREF_TOPOLOGY",
         "RELION_ACC_DUMP_BPREF_PANEL_DIR",
+        'VDAM_NATIVE_PANEL_WEIGHTS="${NATIVE_REPEAT_OPERANDS}"',
         "native_iteration1_panels.sha256",
         "scripts.audit_vdam_native_operand_replay_panel",
         '! -name "slurm-${SLURM_JOB_ID}.out"',

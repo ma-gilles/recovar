@@ -76,6 +76,18 @@ def _validate_replay_paths(panel_root: Path, repeat_count: int) -> None:
             )
         for repeat, arm in enumerate(arms, start=1):
             provenance = _load_json(arm / "provenance.json", label=f"{arm.name} provenance")
+            report = _load_json(
+                arm / "replay" / "worker_private_report.json",
+                label=f"{arm.name} report",
+            )
+            if provenance.get("native_panel_weights") is not True:
+                raise RepeatPanelError(
+                    f"{arm.name}: provenance did not enable native panel weights"
+                )
+            if report.get("native_panel_weights_replayed") is not True:
+                raise RepeatPanelError(
+                    f"{arm.name}: report did not replay native panel weights"
+                )
             for name, expected in _expected_repeat_paths(panel_root, repeat).items():
                 actual = Path(str(provenance.get(name, ""))).resolve()
                 if actual != expected:

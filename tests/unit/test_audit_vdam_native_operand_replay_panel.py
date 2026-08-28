@@ -37,7 +37,17 @@ def _tree(tmp_path: Path) -> Path:
             paths = audit._expected_repeat_paths(tmp_path, repeat)
             _write_json(
                 tmp_path / f"arm-{start + repeat - 1:02d}-{kind}" / "provenance.json",
-                {name: str(path) for name, path in paths.items()},
+                {
+                    **{name: str(path) for name, path in paths.items()},
+                    "native_panel_weights": True,
+                },
+            )
+            _write_json(
+                tmp_path
+                / f"arm-{start + repeat - 1:02d}-{kind}"
+                / "replay"
+                / "worker_private_report.json",
+                {"native_panel_weights_replayed": True},
             )
     return tmp_path
 

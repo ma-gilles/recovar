@@ -177,6 +177,7 @@ for kind in private shared; do
       VDAM_TOPOLOGY="${topology}" \
       VDAM_TOPOLOGY_DATA_STAR="${topology_data_star}" \
       VDAM_NATIVE_PANEL_DIRECTORY="${native_panel_directory}" \
+      VDAM_NATIVE_PANEL_WEIGHTS="${NATIVE_REPEAT_OPERANDS}" \
       VDAM_MERGE_CALLBACKS=1 \
       VDAM_SHARED_ACCUMULATORS="${shared_accumulators}" \
       bash scripts/run_vdam_worker_private_host_replay.sbatch \

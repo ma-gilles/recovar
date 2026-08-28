@@ -20,12 +20,20 @@ set -euo pipefail
 VDAM_TOPOLOGY=${VDAM_TOPOLOGY:-}
 VDAM_TOPOLOGY_DATA_STAR=${VDAM_TOPOLOGY_DATA_STAR:-}
 VDAM_NATIVE_PANEL_DIRECTORY=${VDAM_NATIVE_PANEL_DIRECTORY:-}
+VDAM_NATIVE_PANEL_WEIGHTS=${VDAM_NATIVE_PANEL_WEIGHTS:-0}
 VDAM_MERGE_CALLBACKS=${VDAM_MERGE_CALLBACKS:-0}
 VDAM_SHARED_ACCUMULATORS=${VDAM_SHARED_ACCUMULATORS:-0}
 case "${VDAM_MERGE_CALLBACKS}:${VDAM_SHARED_ACCUMULATORS}" in
   0:0|0:1|1:0|1:1) ;;
   *) echo "VDAM_MERGE_CALLBACKS and VDAM_SHARED_ACCUMULATORS must be 0 or 1" >&2; exit 2 ;;
 esac
+case "${VDAM_NATIVE_PANEL_WEIGHTS}" in
+  0|1) ;;
+  *) echo "VDAM_NATIVE_PANEL_WEIGHTS must be 0 or 1" >&2; exit 2 ;;
+esac
+if [[ "${VDAM_NATIVE_PANEL_WEIGHTS}" = 1 ]]; then
+  test -n "${VDAM_NATIVE_PANEL_DIRECTORY}"
+fi
 if [[ -n "${VDAM_TOPOLOGY}" || -n "${VDAM_TOPOLOGY_DATA_STAR}" ]]; then
   test -s "${VDAM_TOPOLOGY}"
   test -s "${VDAM_TOPOLOGY_DATA_STAR}"
@@ -75,6 +83,9 @@ fi
 if [[ "${VDAM_SHARED_ACCUMULATORS}" == 1 ]]; then
   command+=(--shared-accumulators)
 fi
+if [[ "${VDAM_NATIVE_PANEL_WEIGHTS}" == 1 ]]; then
+  command+=(--native-panel-weights)
+fi
 "${command[@]}" \
   > "${VDAM_OUTPUT_DIRECTORY}/runner.stdout" \
   2> "${VDAM_OUTPUT_DIRECTORY}/runner.stderr"
@@ -84,12 +95,12 @@ python - "${VDAM_OUTPUT_DIRECTORY}/provenance.json" \
   "${SLURM_JOB_ID}" "${visible_gpu_uuid}" "${VDAM_EXPECTED_HEAD}" \
   "$((end_s - start_s))" "${VDAM_TOPOLOGY}" "${VDAM_TOPOLOGY_DATA_STAR}" \
   "${VDAM_NATIVE_PANEL_DIRECTORY}" "${VDAM_MERGE_CALLBACKS}" \
-  "${VDAM_SHARED_ACCUMULATORS}" <<'PY'
+  "${VDAM_SHARED_ACCUMULATORS}" "${VDAM_NATIVE_PANEL_WEIGHTS}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-output, job_id, gpu_uuid, head, wall_s, topology, data_star, panels, merged, shared = sys.argv[1:]
+output, job_id, gpu_uuid, head, wall_s, topology, data_star, panels, merged, shared, native_weights = sys.argv[1:]
 Path(output).write_text(
     json.dumps(
         {
@@ -102,6 +113,7 @@ Path(output).write_text(
             "native_panel_directory": panels or None,
             "callbacks_merged_in_native_launch_order": merged == "1",
             "shared_accumulators": shared == "1",
+            "native_panel_weights": native_weights == "1",
         },
         indent=2,
         sort_keys=True,

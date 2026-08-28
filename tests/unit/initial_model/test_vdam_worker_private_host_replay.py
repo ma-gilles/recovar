@@ -172,6 +172,69 @@ def test_native_panel_remap_places_active_rows_at_exact_native_eulers() -> None:
     assert np.count_nonzero(result["posterior_over_weight_norm"][0, 1:4]) == 0
 
 
+def test_native_panel_weight_replay_uses_native_values_on_proven_support() -> None:
+    candidate_eulers = np.arange(18, dtype=np.float32).reshape(2, 9)
+    posterior = np.asarray([[[0.6, 0.0], [0.3, 0.0]]], dtype=np.float32)
+    source = {
+        "particle_trace_ids": np.asarray([10], dtype=np.int32),
+        "worker_lane_ids": np.asarray([0], dtype=np.int32),
+        "rotation_replay_order": np.arange(2, dtype=np.int32)[None, :],
+        "rotation_replay_counts": np.asarray([2], dtype=np.int32),
+        "rotation_count": np.int64(2),
+        "translation_count": np.int64(2),
+        "posterior_over_weight_norm": posterior,
+        "projector_eulers": candidate_eulers[None, :, :],
+        "compact_rotations": np.arange(12, dtype=np.float32).reshape(1, 2, 6),
+    }
+    panel = {
+        "orientation_count": 2,
+        "translation_count": 2,
+        "eulers": candidate_eulers,
+        "weights": np.asarray([[60.0, 1.0], [30.0, 9.0]], dtype=np.float32),
+    }
+
+    result = worker_private._apply_native_topology(
+        source,
+        {10: (0, 2)},
+        {10: panel},
+        native_panel_weights=True,
+    )
+
+    np.testing.assert_allclose(
+        result["posterior_over_weight_norm"],
+        np.asarray([[[0.6, 0.0], [0.3, 0.0]]], dtype=np.float32),
+    )
+
+
+def test_native_panel_weight_replay_rejects_candidate_support_not_native_top() -> None:
+    candidate_eulers = np.arange(18, dtype=np.float32).reshape(2, 9)
+    source = {
+        "particle_trace_ids": np.asarray([10], dtype=np.int32),
+        "worker_lane_ids": np.asarray([0], dtype=np.int32),
+        "rotation_replay_order": np.arange(2, dtype=np.int32)[None, :],
+        "rotation_replay_counts": np.asarray([2], dtype=np.int32),
+        "rotation_count": np.int64(2),
+        "translation_count": np.int64(1),
+        "posterior_over_weight_norm": np.asarray([[[0.0], [1.0]]], dtype=np.float32),
+        "projector_eulers": candidate_eulers[None, :, :],
+        "compact_rotations": np.arange(12, dtype=np.float32).reshape(1, 2, 6),
+    }
+    panel = {
+        "orientation_count": 2,
+        "translation_count": 1,
+        "eulers": candidate_eulers,
+        "weights": np.asarray([[10.0], [1.0]], dtype=np.float32),
+    }
+
+    with pytest.raises(ValueError, match="not the native top-weight set"):
+        worker_private._apply_native_topology(
+            source,
+            {10: (0, 2)},
+            {10: panel},
+            native_panel_weights=True,
+        )
+
+
 def test_read_native_panel_is_fail_closed_and_preserves_float32(tmp_path) -> None:
     path = tmp_path / "it1_part0_img0_class0.bin"
     header = (

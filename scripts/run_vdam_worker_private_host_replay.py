@@ -228,6 +228,8 @@ def _apply_native_topology(
     source: dict[str, np.ndarray],
     topology: dict[int, tuple[int, int]],
     panels: dict[int, dict[str, object]] | None = None,
+    *,
+    native_panel_weights: bool = False,
 ) -> dict[str, np.ndarray]:
     result = {name: np.asarray(value) for name, value in source.items()}
     trace_ids = np.asarray(source["particle_trace_ids"], dtype=np.int64)
@@ -250,6 +252,8 @@ def _apply_native_topology(
         counts[row] = count
     result["worker_lane_ids"] = workers
     result["rotation_replay_counts"] = counts
+    if native_panel_weights and panels is None:
+        raise ValueError("native panel weight replay requires native panels")
     if panels is None:
         return result
 
@@ -289,8 +293,11 @@ def _apply_native_topology(
                 f"native translation count mismatch for particle trace {trace_id}"
             )
         native_eulers = np.asarray(panel["eulers"], dtype=np.float32)
+        native_weights = np.asarray(panel["weights"], dtype=np.float32)
         if native_eulers.shape != (native_count, 9):
             raise ValueError(f"invalid native Euler shape for particle trace {trace_id}")
+        if native_weights.shape != (native_count, translation_count):
+            raise ValueError(f"invalid native weight shape for particle trace {trace_id}")
         remapped_eulers[row, :native_count] = native_eulers
 
         native_rows_by_euler: dict[bytes, list[int]] = {}
@@ -299,6 +306,7 @@ def _apply_native_topology(
                 native_eulers[native_row].tobytes(), []
             ).append(native_row)
         active_rows = np.flatnonzero(np.any(posterior[row] != 0.0, axis=1))
+        native_active_mask = np.zeros(native_weights.shape, dtype=bool)
         used_native_rows: set[int] = set()
         for candidate_row_value in active_rows:
             candidate_row = int(candidate_row_value)
@@ -313,8 +321,36 @@ def _apply_native_topology(
                     f"trace {trace_id}, candidate row {candidate_row}"
                 )
             used_native_rows.add(native_row)
-            remapped_posterior[row, native_row] = posterior[row, candidate_row]
+            candidate_active_cells = posterior[row, candidate_row] != 0.0
+            native_active_mask[native_row] = candidate_active_cells
+            if not native_panel_weights:
+                remapped_posterior[row, native_row] = posterior[row, candidate_row]
             remapped_compact[row, native_row] = compact[row, candidate_row]
+        if native_panel_weights:
+            active_weights = native_weights[native_active_mask]
+            inactive_weights = native_weights[~native_active_mask]
+            if active_weights.size == 0 or np.any(active_weights <= 0.0):
+                raise ValueError(
+                    f"native active support is not positive for particle trace {trace_id}"
+                )
+            if inactive_weights.size and np.max(inactive_weights) > np.min(active_weights):
+                raise ValueError(
+                    "candidate support is not the native top-weight set for particle "
+                    f"trace {trace_id}"
+                )
+            positive = native_weights > 0.0
+            weight_norm = np.float32(
+                np.sum(native_weights[positive], dtype=np.float64)
+            )
+            if not np.isfinite(weight_norm) or weight_norm <= 0.0:
+                raise ValueError(
+                    f"native weight normalization is invalid for particle trace {trace_id}"
+                )
+            remapped_posterior[row, :native_count] = np.where(
+                native_active_mask,
+                native_weights / weight_norm,
+                np.float32(0.0),
+            )
 
     result["rotation_count"] = np.asarray(source["rotation_count"]).dtype.type(
         replay_width
@@ -555,6 +591,7 @@ def replay(
     topology_path: Path | None = None,
     topology_data_star: Path | None = None,
     native_panel_directory: Path | None = None,
+    native_panel_weights: bool = False,
     merge_callbacks: bool = False,
     worker_private_accumulators: bool = True,
 ) -> dict:
@@ -575,6 +612,8 @@ def replay(
         raise ValueError("topology path and topology data STAR must be supplied together")
     if native_panel_directory is not None and topology_data_star is None:
         raise ValueError("native panels require topology and topology data STAR")
+    if native_panel_weights and native_panel_directory is None:
+        raise ValueError("native panel weights require a native panel directory")
     topology = None
     panels = None
     launch_order = None
@@ -614,7 +653,12 @@ def replay(
     for input_path in input_paths:
         source = _load_bundle(input_path)
         if topology is not None:
-            source = _apply_native_topology(source, topology, panels)
+            source = _apply_native_topology(
+                source,
+                topology,
+                panels,
+                native_panel_weights=native_panel_weights,
+            )
         prepared_sources.append(source)
     if merge_callbacks:
         if launch_order is None:
@@ -754,6 +798,7 @@ def replay(
                     ),
                     "native_topology" if topology is not None else "",
                     "native_panels" if panels is not None else "",
+                    "native_panel_weights" if native_panel_weights else "",
                     "merged_callbacks" if merge_callbacks else "",
                 ),
             )
@@ -765,6 +810,7 @@ def replay(
             str(topology_data_star) if topology_data_star else None
         ),
         "native_euler_panels_replayed": panels is not None,
+        "native_panel_weights_replayed": native_panel_weights,
         "native_panel_directory": (
             str(native_panel_directory) if native_panel_directory else None
         ),
@@ -803,6 +849,7 @@ def main() -> int:
     parser.add_argument("--topology", type=Path)
     parser.add_argument("--topology-data-star", type=Path)
     parser.add_argument("--native-panel-directory", type=Path)
+    parser.add_argument("--native-panel-weights", action="store_true")
     parser.add_argument("--merge-callbacks", action="store_true")
     parser.add_argument("--shared-accumulators", action="store_true")
     args = parser.parse_args()
@@ -817,6 +864,7 @@ def main() -> int:
         topology_path=args.topology,
         topology_data_star=args.topology_data_star,
         native_panel_directory=args.native_panel_directory,
+        native_panel_weights=args.native_panel_weights,
         merge_callbacks=args.merge_callbacks,
         worker_private_accumulators=not args.shared_accumulators,
     )
