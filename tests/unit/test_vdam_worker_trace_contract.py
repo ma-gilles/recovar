@@ -50,7 +50,9 @@ def test_fullschedule_boundary_seals_and_replays_each_native_block_chronology():
     required = [
         "RELION_VDAM_BLOCK_TRACE_REPLAY",
         "export RELION_VDAM_BLOCK_TRACE=${BLOCK_TRACE}",
-        "export RELION_VDAM_BLOCK_TRACE_ITER=1",
+        "export RELION_VDAM_BLOCK_TRACE_ITER=${BLOCK_TRACE_ITERATION}",
+        'test "${BLOCK_TRACE_ITERATION}" -eq "${TARGET_ITERATION}"',
+        '--iteration "${BLOCK_TRACE_ITERATION}"',
         "scripts.build_vdam_block_chronology",
         "captured block topology requires native block tracing in the same arm",
         "export RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${REPLAY_BLOCK_CHRONOLOGY}",
