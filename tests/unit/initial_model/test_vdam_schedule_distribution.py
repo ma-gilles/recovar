@@ -137,9 +137,24 @@ def test_schedule_distribution_ignores_unestimated_accuracy_but_gates_estimated_
     assert estimated_report["candidate_validity_pass"] is False
 
 
-def test_schedule_distribution_rejects_incomplete_or_nonsquare_evidence():
+def test_schedule_distribution_accepts_rectangular_candidate_native_panel():
+    candidates = [_candidate(), _candidate(offset_range_angstrom=7.9)]
+    natives = [
+        _state(),
+        _state(offset_range_angstrom=7.9),
+        _state(offset_range_angstrom=8.0),
+    ]
+
+    report = classify_schedule_distribution_envelope(_matrix(candidates, natives))
+
+    assert report["candidate_validity_pass"] is True
+    assert len(report["candidate_repeats"]) == 2
+    assert len(report["native_repeats"]) == 3
+
+
+def test_schedule_distribution_rejects_incomplete_evidence():
     row = {"iteration": 1, "candidate": _candidate(), "native": _state()}
-    with pytest.raises(CandidateStateEnvelopeError, match="square panel"):
+    with pytest.raises(CandidateStateEnvelopeError, match="two candidate and two native"):
         classify_schedule_distribution_envelope([[row], [row]])
 
     incomplete = _candidate()

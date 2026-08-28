@@ -20,6 +20,9 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 VDAM_SCORECARD=${VDAM_SCORECARD:-${REPO_ROOT}/docs/math/vdam_k1_gui_default_full_suite_v1.json}
 VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
+VDAM_NATIVE_ONLY_PANEL_ROOT=${VDAM_NATIVE_ONLY_PANEL_ROOT:-}
+VDAM_NATIVE_ONLY_START_INDEX=${VDAM_NATIVE_ONLY_START_INDEX:-$((VDAM_REPEAT_COUNT + 1))}
+VDAM_NATIVE_ONLY_REPEAT_COUNT=${VDAM_NATIVE_ONLY_REPEAT_COUNT:-0}
 ANALYSIS_TAG=$(git -C "${REPO_ROOT}" rev-parse --short=10 HEAD)
 ANALYSIS_ROOT=${PANEL_ROOT}/analysis/${ANALYSIS_TAG}
 MAP_REPORT=${ANALYSIS_ROOT}/repeat_map_distribution.json
@@ -43,6 +46,22 @@ for repeat_index in $(seq 1 "${VDAM_REPEAT_COUNT}"); do
     test "$("${PIXI_PY}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_head"])' "${repeat_root}/run_provenance.json")" = "${EXPECTED_SCIENCE_HEAD}"
 done
 
+additional_native_args=()
+if (( VDAM_NATIVE_ONLY_REPEAT_COUNT > 0 )); then
+    test -n "${VDAM_NATIVE_ONLY_PANEL_ROOT}"
+    for offset in $(seq 0 $((VDAM_NATIVE_ONLY_REPEAT_COUNT - 1))); do
+        native_index=$((VDAM_NATIVE_ONLY_START_INDEX + offset))
+        native_root=${VDAM_NATIVE_ONLY_PANEL_ROOT}/repeat-$(printf '%02d' "${native_index}")
+        test -f "${native_root}/SCIENCE_COMPLETED"
+        test -s "${native_root}/provenance/completion.json"
+        test -s "${native_root}/provenance/static_inputs.sha256"
+        additional_native_args+=(--additional-native-root "${native_root}")
+    done
+elif [[ -n "${VDAM_NATIVE_ONLY_PANEL_ROOT}" ]]; then
+    echo "VDAM_NATIVE_ONLY_REPEAT_COUNT must be positive when a native-only panel is set" >&2
+    exit 2
+fi
+
 if [[ -e "${ANALYSIS_ROOT}" ]]; then
     test -z "$(find "${ANALYSIS_ROOT}" -mindepth 1 -print -quit)"
 else
@@ -61,11 +80,13 @@ set +e
 "${PIXI_PY}" -m scripts.audit_vdam_repeat_panel \
     --scorecard "${VDAM_SCORECARD}" --case-id "${CASE_ID}" \
     --panel-root "${PANEL_ROOT}" --repeat-count "${VDAM_REPEAT_COUNT}" \
+    "${additional_native_args[@]}" \
     --output-json "${MAP_REPORT}" --output-shells-npz "${MAP_SHELLS}"
 map_status=$?
 "${PIXI_PY}" -m scripts.audit_vdam_repeat_state_panel \
     --scorecard "${VDAM_SCORECARD}" --case-id "${CASE_ID}" \
     --panel-root "${PANEL_ROOT}" --repeat-count "${VDAM_REPEAT_COUNT}" \
+    "${additional_native_args[@]}" \
     --output-json "${STATE_REPORT}"
 state_status=$?
 set -e

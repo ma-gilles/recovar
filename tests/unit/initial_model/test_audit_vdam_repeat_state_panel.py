@@ -104,6 +104,8 @@ def test_state_panel_requires_every_candidate_particle_and_schedule_mode(tmp_pat
     assert report["result"] == "pass"
     assert report["scoring"] is False
     assert [row["result"] for row in report["candidate_repeats"]] == ["pass", "pass"]
+    assert report["candidate_repeat_count"] == 2
+    assert report["native_repeat_count"] == 2
     assert report["schedule_distribution_result"] == "pass"
     assert report["provenance"]["cuda_library_sha256"] == "c" * 64
 
@@ -158,3 +160,63 @@ def test_state_panel_rejects_mixed_source_heads(tmp_path):
             panel_root=panel,
             repeat_count=2,
         )
+
+
+def test_state_panel_uses_additional_native_roots_without_creating_candidates(
+    tmp_path, monkeypatch
+):
+    scorecard, panel = _write_panel(tmp_path)
+    extra_native = tmp_path / "native-only"
+    seen_distribution_shapes = []
+    monkeypatch.setattr(audit_module, "_pixel_size", lambda root: 1.5)
+    monkeypatch.setattr(audit_module, "read_star", lambda path: (_table(), None))
+    monkeypatch.setattr(
+        audit_module,
+        "validate_additional_native_roots",
+        lambda roots, **kwargs: [{"root": str(roots[0])}],
+    )
+    monkeypatch.setattr(
+        audit_module,
+        "audit_sampling_trajectory",
+        lambda *args, **kwargs: {"iterations": [{"iteration": 1}]},
+    )
+    monkeypatch.setattr(
+        audit_module,
+        "compare_particle_tables_to_native_set",
+        lambda candidate, natives, **kwargs: {
+            "pass": len(natives) == 3,
+            "evaluated_particle_count": 1,
+        },
+    )
+    monkeypatch.setattr(
+        audit_module,
+        "classify_schedule_mode_envelope",
+        lambda rows: {"pass": len(rows) == 3, "matching_native_repeat_indices": [1]},
+    )
+
+    def classify_distribution(rows):
+        seen_distribution_shapes.append((len(rows), len(rows[0])))
+        return {
+            "pass": True,
+            "candidate_validity_pass": True,
+            "reverse_native_coverage_pass": True,
+        }
+
+    monkeypatch.setattr(
+        audit_module,
+        "classify_schedule_distribution_envelope",
+        classify_distribution,
+    )
+
+    report = audit_module.audit_state_panel(
+        scorecard_path=scorecard,
+        case_id="case",
+        panel_root=panel,
+        repeat_count=2,
+        additional_native_roots=[extra_native],
+    )
+
+    assert report["result"] == "pass"
+    assert report["candidate_repeat_count"] == 2
+    assert report["native_repeat_count"] == 3
+    assert seen_distribution_shapes == [(2, 3)]

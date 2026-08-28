@@ -237,10 +237,15 @@ def classify_schedule_distribution_envelope(
     than RELION varies against itself.
     """
 
-    repeat_count = len(rows_by_candidate)
-    if repeat_count < 2 or any(len(rows) != repeat_count for rows in rows_by_candidate):
+    candidate_count = len(rows_by_candidate)
+    native_count = len(rows_by_candidate[0]) if rows_by_candidate else 0
+    if (
+        candidate_count < 2
+        or native_count < 2
+        or any(len(rows) != native_count for rows in rows_by_candidate)
+    ):
         raise CandidateStateEnvelopeError(
-            "schedule distribution requires a square panel of at least two repeats"
+            "schedule distribution requires at least two candidate and two native repeats"
         )
     iterations = {
         int(row["iteration"])
@@ -262,8 +267,11 @@ def classify_schedule_distribution_envelope(
         accuracy_estimated.append(bool(states[0]["sampling_accuracy_estimated"]))
 
     native_states = []
-    for native_index in range(repeat_count):
-        states = [rows_by_candidate[index][native_index]["native"] for index in range(repeat_count)]
+    for native_index in range(native_count):
+        states = [
+            rows_by_candidate[index][native_index]["native"]
+            for index in range(candidate_count)
+        ]
         if any(state != states[0] for state in states[1:]):
             raise CandidateStateEnvelopeError(
                 f"native {native_index + 1} schedule differs across candidate audits"
@@ -386,7 +394,7 @@ def classify_schedule_distribution_envelope(
             for candidate_index, candidate_rows in enumerate(evaluations)
             if candidate_rows[native_index]["match"]
         ]
-        for native_index in range(repeat_count)
+        for native_index in range(native_count)
     ]
     candidate_validity = all(candidate_matches)
     reverse_native_coverage = all(native_matches)
@@ -404,14 +412,14 @@ def classify_schedule_distribution_envelope(
                 "best_native_repeat_index": best_native[index],
                 "native_evaluations": evaluations[index],
             }
-            for index in range(repeat_count)
+            for index in range(candidate_count)
         ],
         "native_repeats": [
             {
                 "repeat_index": index + 1,
                 "matching_candidate_repeat_indices": native_matches[index],
             }
-            for index in range(repeat_count)
+            for index in range(native_count)
         ],
     }
 

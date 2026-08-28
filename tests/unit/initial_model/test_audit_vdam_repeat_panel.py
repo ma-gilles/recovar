@@ -8,8 +8,10 @@ import pytest
 from scripts.audit_vdam_repeat_panel import (
     RepeatPanelError,
     _runtime_summary,
+    _sha256,
     classify_checkpoint,
     classify_native_radius_support,
+    validate_additional_native_roots,
 )
 
 SBATCH_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_repeat_panel.sbatch"
@@ -53,6 +55,23 @@ def test_repeat_panel_accepts_bidirectional_native_mode_matches():
 
     assert result["pass"] is True
     assert all(result["checks"].values())
+
+
+def test_repeat_panel_classification_accepts_rectangular_native_panel():
+    result = classify_checkpoint(
+        relion_self_fsc_auc=[0.90, 0.80, 0.85],
+        recovar_self_fsc_auc=[0.91],
+        cross_engine_fsc_auc=[
+            [0.9995, 0.9994, 0.9993],
+            [0.9994, 0.9995, 0.9994],
+        ],
+        gt_deltas=[0.0, 0.0],
+        cross_engine_min=0.999,
+        gt_delta_min=-0.002,
+    )
+
+    assert result["pass"] is True
+    assert len(result["native_radius_distribution"]["native_nearest_peer_fsc_auc"]) == 3
 
 
 def test_repeat_panel_rejects_candidate_mode_without_native_match():
@@ -179,3 +198,75 @@ def test_repeat_panel_rejects_invalid_timing(tmp_path):
 
     with pytest.raises(RepeatPanelError, match="must be positive"):
         _runtime_summary([{"index": 1, "root": root}])
+
+
+def _write_native_only_repeat(tmp_path: Path):
+    reference = tmp_path / "reference"
+    (reference / "relion").mkdir(parents=True)
+    (reference / "data").mkdir()
+    command = reference / "relion" / "relion_command.json"
+    particles = reference / "data" / "particles.star"
+    command.write_text("command\n")
+    particles.write_text("particles\n")
+
+    root = tmp_path / "native-only"
+    (root / "relion").mkdir(parents=True)
+    (root / "provenance").mkdir()
+    (root / "SCIENCE_COMPLETED").touch()
+    (root / "provenance" / "completion.json").write_text(
+        json.dumps(
+            {
+                "job_id": "123",
+                "wall_s": 10,
+                "gpu_uuid": "GPU-one",
+                "map_status": 1,
+                "particle_status": 0,
+            }
+        )
+    )
+    (root / "provenance" / "repo_head.txt").write_text("d" * 40 + "\n")
+    relion_hash = "b" * 64
+    (root / "provenance" / "static_inputs.sha256").write_text(
+        "\n".join(
+            (
+                f"{relion_hash}  relion_refine",
+                f"{_sha256(command)}  relion_command.json",
+                f"{_sha256(particles)}  particles.star",
+            )
+        )
+        + "\n"
+    )
+    for iteration in (0, 1):
+        (root / "relion" / f"run_it{iteration:03d}_class001.mrc").touch()
+        if iteration > 0:
+            (root / "relion" / f"run_it{iteration:03d}_data.star").touch()
+            (root / "relion" / f"run_it{iteration:03d}_sampling.star").touch()
+    return reference, root, relion_hash
+
+
+def test_additional_native_repeat_requires_sealed_inputs_and_same_gpu(tmp_path):
+    reference, root, relion_hash = _write_native_only_repeat(tmp_path)
+
+    report = validate_additional_native_roots(
+        [root],
+        reference_root=reference,
+        checkpoints=(0, 1),
+        physical_gpu_uuid="GPU-one",
+        relion_executable_sha256=relion_hash,
+    )
+
+    assert report[0]["science_head"] == "d" * 40
+    assert report[0]["audit_status"] == {"map": 1, "particle": 0}
+
+
+def test_additional_native_repeat_rejects_mixed_gpu(tmp_path):
+    reference, root, relion_hash = _write_native_only_repeat(tmp_path)
+
+    with pytest.raises(RepeatPanelError, match="different physical GPU"):
+        validate_additional_native_roots(
+            [root],
+            reference_root=reference,
+            checkpoints=(0, 1),
+            physical_gpu_uuid="GPU-two",
+            relion_executable_sha256=relion_hash,
+        )

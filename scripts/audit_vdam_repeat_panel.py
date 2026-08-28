@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 from pathlib import Path
@@ -102,6 +103,107 @@ def _load_json(path: Path, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RepeatPanelError(f"{label} must contain a JSON object: {path}")
     return value
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as exc:
+        raise RepeatPanelError(f"cannot hash {path}: {exc}") from exc
+    return digest.hexdigest()
+
+
+def _static_input_hashes(path: Path) -> list[str]:
+    try:
+        rows = [line.split() for line in path.read_text().splitlines() if line.strip()]
+    except OSError as exc:
+        raise RepeatPanelError(f"cannot read native-only static input hashes at {path}: {exc}") from exc
+    hashes = [row[0] for row in rows if len(row) >= 2]
+    if len(hashes) != 3 or any(len(value) != 64 for value in hashes):
+        raise RepeatPanelError(f"native-only static input hash manifest is invalid: {path}")
+    return hashes
+
+
+def validate_additional_native_roots(
+    roots: list[Path],
+    *,
+    reference_root: Path,
+    checkpoints: tuple[int, ...],
+    physical_gpu_uuid: str,
+    relion_executable_sha256: str,
+) -> list[dict[str, Any]]:
+    """Validate native-only repeats against the sealed paired-panel inputs."""
+
+    if not roots:
+        return []
+    expected_hashes = [
+        relion_executable_sha256,
+        _sha256(reference_root / "relion" / "relion_command.json"),
+        _sha256(reference_root / "data" / "particles.star"),
+    ]
+    resolved = [root.resolve() for root in roots]
+    if len(set(resolved)) != len(resolved):
+        raise RepeatPanelError("additional native repeat roots are not unique")
+    reports = []
+    for index, root in enumerate(resolved, start=1):
+        if not (root / "SCIENCE_COMPLETED").is_file():
+            raise RepeatPanelError(f"additional native repeat {index} is incomplete: {root}")
+        completion = _load_json(
+            root / "provenance" / "completion.json",
+            label=f"additional native repeat {index} completion",
+        )
+        if str(completion.get("gpu_uuid", "")) != physical_gpu_uuid:
+            raise RepeatPanelError(
+                f"additional native repeat {index} ran on a different physical GPU"
+            )
+        wall_s = float(completion.get("wall_s", float("nan")))
+        if not np.isfinite(wall_s) or wall_s <= 0.0:
+            raise RepeatPanelError(
+                f"additional native repeat {index} has invalid wall time"
+            )
+        if _static_input_hashes(root / "provenance" / "static_inputs.sha256") != expected_hashes:
+            raise RepeatPanelError(
+                f"additional native repeat {index} does not use the sealed RELION inputs"
+            )
+        try:
+            source_head = (root / "provenance" / "repo_head.txt").read_text().strip()
+        except OSError as exc:
+            raise RepeatPanelError(
+                f"cannot read additional native repeat {index} source head: {exc}"
+            ) from exc
+        if len(source_head) != 40:
+            raise RepeatPanelError(
+                f"additional native repeat {index} has an invalid source head"
+            )
+        for iteration in checkpoints:
+            if not (root / "relion" / f"run_it{iteration:03d}_class001.mrc").is_file():
+                raise RepeatPanelError(
+                    f"additional native repeat {index} is missing iteration {iteration} map"
+                )
+            if iteration > 0:
+                for suffix in ("data.star", "sampling.star"):
+                    if not (root / "relion" / f"run_it{iteration:03d}_{suffix}").is_file():
+                        raise RepeatPanelError(
+                            f"additional native repeat {index} is missing iteration "
+                            f"{iteration} {suffix}"
+                        )
+        reports.append(
+            {
+                "index": index,
+                "root": str(root),
+                "science_head": source_head,
+                "job_id": str(completion.get("job_id", "")),
+                "wall_s": wall_s,
+                "audit_status": {
+                    "map": int(completion.get("map_status", -1)),
+                    "particle": int(completion.get("particle_status", -1)),
+                },
+            }
+        )
+    return reports
 
 
 def classify_checkpoint(
@@ -249,6 +351,7 @@ def audit_repeat_panel(
     case_id: str,
     panel_root: Path,
     repeat_count: int,
+    additional_native_roots: list[Path] | None = None,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     if repeat_count < 2:
         raise RepeatPanelError("repeat_count must be at least two")
@@ -298,18 +401,37 @@ def audit_repeat_panel(
     if len(relion_hashes) != 1 or any(len(value) != 64 for value in relion_hashes):
         raise RepeatPanelError("repeat panel contains mixed or invalid RELION executable hashes")
 
+    additional_native_roots = list(additional_native_roots or ())
+    additional_native_provenance = validate_additional_native_roots(
+        additional_native_roots,
+        reference_root=Path(repeats[0]["root"]),
+        checkpoints=checkpoints,
+        physical_gpu_uuid=next(iter(gpu_uuids)),
+        relion_executable_sha256=next(iter(relion_hashes)),
+    )
+    native_repeats = repeats + [
+        {
+            "index": repeat_count + offset,
+            "root": root.resolve(),
+            "native_only": True,
+        }
+        for offset, root in enumerate(additional_native_roots, start=1)
+    ]
+    native_count = len(native_repeats)
+
     shellwise: dict[str, np.ndarray] = {}
     checkpoint_rows = []
     for iteration in checkpoints:
         relion_volumes = [
-            _load_relion_volume(_map_path(repeat["root"], "relion", iteration)) for repeat in repeats
+            _load_relion_volume(_map_path(repeat["root"], "relion", iteration))
+            for repeat in native_repeats
         ]
         recovar_volumes = [
             _load_relion_volume(_map_path(repeat["root"], "recovar", iteration)) for repeat in repeats
         ]
         relion_self = []
         recovar_self = []
-        for lhs, rhs in itertools.combinations(range(repeat_count), 2):
+        for lhs, rhs in itertools.combinations(range(native_count), 2):
             relion_self.append(
                 _metric(
                     relion_volumes[lhs],
@@ -318,6 +440,7 @@ def audit_repeat_panel(
                     shellwise=shellwise,
                 )
             )
+        for lhs, rhs in itertools.combinations(range(repeat_count), 2):
             recovar_self.append(
                 _metric(
                     recovar_volumes[lhs],
@@ -326,7 +449,7 @@ def audit_repeat_panel(
                     shellwise=shellwise,
                 )
             )
-        cross = np.empty((repeat_count, repeat_count), dtype=np.float64)
+        cross = np.empty((repeat_count, native_count), dtype=np.float64)
         for rec_index, recovar_volume in enumerate(recovar_volumes):
             for rel_index, relion_volume in enumerate(relion_volumes):
                 cross[rec_index, rel_index] = _metric(
@@ -359,6 +482,8 @@ def audit_repeat_panel(
         "case_name": case.get("name"),
         "result": result,
         "repeat_count": repeat_count,
+        "candidate_repeat_count": repeat_count,
+        "native_repeat_count": native_count,
         "source_head": next(iter(source_heads)),
         "physical_gpu_uuid": next(iter(gpu_uuids)),
         "relion_executable_sha256": next(iter(relion_hashes)),
@@ -375,6 +500,7 @@ def audit_repeat_panel(
         "correlation_used": False,
         "runtime": _runtime_summary(repeats),
         "individual_results": [repeat["trajectory"]["result"] for repeat in repeats],
+        "additional_native_provenance": additional_native_provenance,
         "checkpoints": checkpoint_rows,
     }
     return report, shellwise
@@ -386,6 +512,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--panel-root", type=Path, required=True)
     parser.add_argument("--repeat-count", type=int, default=4)
+    parser.add_argument("--additional-native-root", type=Path, action="append", default=[])
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-shells-npz", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -394,6 +521,7 @@ def main(argv: list[str] | None = None) -> int:
         case_id=args.case_id,
         panel_root=args.panel_root.resolve(),
         repeat_count=int(args.repeat_count),
+        additional_native_roots=[path.resolve() for path in args.additional_native_root],
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

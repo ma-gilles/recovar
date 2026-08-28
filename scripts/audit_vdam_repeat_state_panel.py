@@ -18,7 +18,12 @@ from scripts.audit_vdam_candidate_state_envelope import (
     classify_schedule_mode_envelope,
     compare_particle_tables_to_native_set,
 )
-from scripts.audit_vdam_repeat_panel import TRAJECTORY_SCHEMA, RepeatPanelError, _load_json
+from scripts.audit_vdam_repeat_panel import (
+    TRAJECTORY_SCHEMA,
+    RepeatPanelError,
+    _load_json,
+    validate_additional_native_roots,
+)
 from scripts.audit_vdam_sampling_trajectory import audit_sampling_trajectory
 
 SCHEMA = "recovar.vdam_repeat_state_panel.v1"
@@ -111,7 +116,12 @@ def _validated_roots(
 
 
 def audit_state_panel(
-    *, scorecard_path: Path, case_id: str, panel_root: Path, repeat_count: int
+    *,
+    scorecard_path: Path,
+    case_id: str,
+    panel_root: Path,
+    repeat_count: int,
+    additional_native_roots: list[Path] | None = None,
 ) -> dict[str, Any]:
     scorecard = _load_json(scorecard_path.resolve(), label="scorecard")
     roots, checkpoints, provenance = _validated_roots(
@@ -126,10 +136,21 @@ def audit_state_panel(
         raise RepeatPanelError(f"repeat fixtures have mixed pixel sizes: {pixel_sizes}")
     pixel_size = pixel_sizes[0]
 
+    additional_native_roots = list(additional_native_roots or ())
+    additional_native_provenance = validate_additional_native_roots(
+        additional_native_roots,
+        reference_root=roots[0],
+        checkpoints=checkpoints,
+        physical_gpu_uuid=str(provenance["physical_gpu_uuid"]),
+        relion_executable_sha256=str(provenance["relion_executable_sha256"]),
+    )
+    native_roots = roots + [root.resolve() for root in additional_native_roots]
+    native_count = len(native_roots)
+
     native_tables = {
         iteration: [
             read_star(str(root / "relion" / f"run_it{iteration:03d}_data.star"))[0]
-            for root in roots
+            for root in native_roots
         ]
         for iteration in iterations
     }
@@ -145,7 +166,7 @@ def audit_state_panel(
                 pixel_size=pixel_size,
                 iterations=list(iterations),
             )
-            for native_root in roots
+            for native_root in native_roots
         ]
         sampling_report_matrix.append(sampling_reports)
         particle_checkpoints = []
@@ -212,7 +233,7 @@ def audit_state_panel(
                 [
                     [
                         sampling_report_matrix[candidate_index][native_index]["iterations"][offset]
-                        for native_index in range(repeat_count)
+                        for native_index in range(native_count)
                     ]
                     for candidate_index in range(repeat_count)
                 ]
@@ -242,6 +263,8 @@ def audit_state_panel(
         ),
         "strict_point_reference_results_preserved": True,
         "repeat_count": repeat_count,
+        "candidate_repeat_count": repeat_count,
+        "native_repeat_count": native_count,
         "checkpoints": list(checkpoints),
         "pixel_size": pixel_size,
         "thresholds": {
@@ -249,6 +272,7 @@ def audit_state_panel(
             "translation_tolerance_angst": TRANSLATION_TOLERANCE_ANGST,
         },
         "provenance": provenance,
+        "additional_native_provenance": additional_native_provenance,
         "candidate_repeats": candidate_rows,
         "schedule_distribution_result": (
             "pass" if schedule_distribution_pass else "fail"
@@ -271,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--panel-root", type=Path, required=True)
     parser.add_argument("--repeat-count", type=int, default=4)
+    parser.add_argument("--additional-native-root", type=Path, action="append", default=[])
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args(argv)
     report = audit_state_panel(
@@ -278,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
         case_id=args.case_id,
         panel_root=args.panel_root,
         repeat_count=args.repeat_count,
+        additional_native_roots=args.additional_native_root,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
