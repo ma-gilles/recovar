@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import os
 import traceback
 from dataclasses import dataclass
 from typing import Any
@@ -113,16 +114,34 @@ def estimate_relion_expected_accuracy_from_prepared_inputs(
     )
 
 
+_EXPECTED_ACCURACY_CPU_ENV = {
+    "CUDA_VISIBLE_DEVICES": "",
+    "JAX_PLATFORMS": "cpu",
+    "JAX_PLATFORM_NAME": "cpu",
+}
+
+
+def _expected_accuracy_spawn_worker_environment() -> dict[str, str]:
+    """Return the child platform environment for a fail-closed gate."""
+    return {name: os.environ.get(name, "") for name in _EXPECTED_ACCURACY_CPU_ENV}
+
+
 def _estimate_relion_expected_accuracy_spawn_worker(
     connection,
     kwargs: dict[str, Any],
 ) -> None:
     """Run the authoritative binding behind an isolated spawn boundary."""
     try:
+        child_environment = _expected_accuracy_spawn_worker_environment()
+        if child_environment != _EXPECTED_ACCURACY_CPU_ENV:
+            raise RuntimeError(
+                "isolated expected-accuracy worker did not inherit its CPU-only "
+                f"environment: {child_environment!r}"
+            )
         result = estimate_relion_expected_accuracy_from_prepared_inputs(**kwargs)
-        connection.send(("ok", result))
+        connection.send(("ok", result, child_environment))
     except BaseException:  # pragma: no cover - exercised through the parent error
-        connection.send(("error", traceback.format_exc()))
+        connection.send(("error", traceback.format_exc(), None))
     finally:
         connection.close()
 
@@ -137,6 +156,9 @@ def estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
     wrapper exists for trajectory diagnostics where RELION's process-global
     RNG, FFT, or allocator state must not leak from the temporary
     expected-accuracy projectors into the production E/M-step process.
+    Every checkpoint gets a fresh CPU-only child: reusing a child retains
+    causal RELION state, while allowing the child onto CUDA perturbs the
+    production device context on some hosts.
     ``spawn`` is deliberate: forking a process after JAX has created worker
     threads or a CUDA context is unsafe.
     """
@@ -147,10 +169,26 @@ def estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
         args=(child_connection, kwargs),
         name="recovar-relion-expected-accuracy",
     )
-    process.start()
+    previous_environment = {
+        name: os.environ.get(name) for name in _EXPECTED_ACCURACY_CPU_ENV
+    }
+    try:
+        try:
+            os.environ.update(_EXPECTED_ACCURACY_CPU_ENV)
+            process.start()
+        finally:
+            for name, value in previous_environment.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+    except BaseException:
+        parent_connection.close()
+        child_connection.close()
+        raise
     child_connection.close()
     try:
-        status, payload = parent_connection.recv()
+        status, payload, child_environment = parent_connection.recv()
     except EOFError as error:
         process.join()
         raise RuntimeError(
@@ -167,6 +205,11 @@ def estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
         )
     if status != "ok":
         raise RuntimeError(f"isolated RELION expected-accuracy worker failed:\n{payload}")
+    if child_environment != _EXPECTED_ACCURACY_CPU_ENV:
+        raise RuntimeError(
+            "isolated RELION expected-accuracy worker returned an invalid "
+            f"environment: {child_environment!r}"
+        )
     if not isinstance(payload, ExpectedAccuracy):
         raise RuntimeError(
             "isolated RELION expected-accuracy worker returned an invalid payload"
