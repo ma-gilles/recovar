@@ -55,6 +55,35 @@ def _public_full_to_relion_half(values: np.ndarray, side: int) -> np.ndarray:
     return np.ascontiguousarray(np.fft.ifftshift(centered, axes=(0, 1)))
 
 
+def _relion_projector_centered_to_fftw_half(
+    values: np.ndarray,
+    *,
+    max_radius: int,
+) -> np.ndarray:
+    """Mirror RELION ``Projector::decenter`` for a cubic x-half grid.
+
+    The saved BPref uses logical projector coordinates: its Y/Z memory axes
+    run from ``-side//2`` through ``+side//2``. ``reconstruct`` gathers those
+    values into FFTW order and zeros coordinates outside the inclusive
+    ``max_r2`` sphere. Keeping this operation in native RELION layout gives
+    a conversion-free lifecycle/call-alignment check.
+    """
+
+    centered = np.asarray(values)
+    if centered.ndim != 3:
+        raise ValueError(f"expected a three-dimensional RELION BPref, got {centered.shape}")
+    side_z, side_y, half_x = centered.shape
+    if side_z != side_y or half_x != side_z // 2 + 1:
+        raise ValueError(f"expected cubic RELION x-half shape, got {centered.shape}")
+    side = side_z
+    logical = np.rint(np.fft.fftfreq(side) * side).astype(np.int64)
+    centered_indices = logical + side // 2
+    fftw = centered[np.ix_(centered_indices, centered_indices, np.arange(half_x))]
+    kz, ky, kx = np.meshgrid(logical, logical, np.arange(half_x), indexing="ij")
+    support = kz * kz + ky * ky + kx * kx <= int(max_radius) ** 2
+    return np.ascontiguousarray(np.where(support, fftw, np.zeros((), dtype=fftw.dtype)))
+
+
 def _json_scalar(value: np.generic | complex | float | int) -> object:
     value = np.asarray(value).item()
     if isinstance(value, complex):
@@ -229,6 +258,8 @@ def main() -> None:
                 Path(f"{prefix}_bpref_weight.bin"),
                 dtype=np.dtype(np.float64),
             )
+            relion_bpref_data_centered = relion_data
+            relion_bpref_weight_centered = relion_weight
             expected_half_shape = (
                 accumulator_shape[0],
                 accumulator_shape[1],
@@ -419,6 +450,28 @@ def main() -> None:
         native_decenter_support = _public_full_to_relion_half(
             valid.reshape(accumulator_shape), accumulator_side
         ).astype(bool)
+        native_bpref_direct = None
+        if args.relion_bpref_prefix is not None:
+            direct_numerator = _relion_projector_centered_to_fftw_half(
+                relion_bpref_data_centered,
+                max_radius=wiener_radius,
+            )
+            direct_weight = _relion_projector_centered_to_fftw_half(
+                relion_bpref_weight_centered,
+                max_radius=wiener_radius,
+            )
+            native_bpref_direct = {
+                "bpref_numerator_decentered": _metrics(direct_numerator, native_numerator),
+                "bpref_weight_decentered": _metrics(direct_weight, native_weight),
+                "converted_numerator_vs_direct_decentered": _metrics(
+                    rec_numerator_native,
+                    direct_numerator,
+                ),
+                "converted_weight_vs_direct_decentered": _metrics(
+                    rec_weight_native,
+                    direct_weight,
+                ),
+            }
 
         live_tau_replay = None
         live_tau_float64_ablation = None
@@ -501,6 +554,7 @@ def main() -> None:
             "native_tau_last_nonzero_shell": (
                 None if not np.any(native_tau != 0.0) else int(np.flatnonzero(native_tau != 0.0)[-1])
             ),
+            "native_bpref_direct": native_bpref_direct,
             "stages": {
                 "bpref_numerator_decentered": _metrics(
                     rec_numerator_native, native_numerator

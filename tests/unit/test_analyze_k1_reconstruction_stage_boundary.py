@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from scripts.analyze_k1_reconstruction_stage_boundary import (
+    _relion_projector_centered_to_fftw_half,
     _select_accumulator_targets,
     _stage_path,
 )
@@ -47,3 +48,33 @@ def test_select_accumulator_targets_rejects_ambiguous_joined_rank() -> None:
 
     with pytest.raises(ValueError, match="--halves 1"):
         _select_accumulator_targets(archive, joined=True, halves=(1, 2))
+
+
+def test_relion_projector_centered_to_fftw_half_matches_logical_gather() -> None:
+    side = 5
+    half_x = side // 2 + 1
+    centered = np.empty((side, side, half_x), dtype=np.complex128)
+    for z_index in range(side):
+        for y_index in range(side):
+            for x_index in range(half_x):
+                centered[z_index, y_index, x_index] = (
+                    100 * z_index + 10 * y_index + x_index
+                ) + 1j * (z_index - y_index)
+
+    actual = _relion_projector_centered_to_fftw_half(centered, max_radius=2)
+    logical = [0, 1, 2, -2, -1]
+    for z_raw, kz in enumerate(logical):
+        for y_raw, ky in enumerate(logical):
+            for kx in range(half_x):
+                if kz * kz + ky * ky + kx * kx <= 4:
+                    assert actual[z_raw, y_raw, kx] == centered[kz + 2, ky + 2, kx]
+                else:
+                    assert actual[z_raw, y_raw, kx] == 0
+
+
+def test_relion_projector_centered_to_fftw_half_rejects_bad_shape() -> None:
+    with pytest.raises(ValueError, match="cubic RELION x-half"):
+        _relion_projector_centered_to_fftw_half(
+            np.zeros((5, 4, 3), dtype=np.float64),
+            max_radius=2,
+        )
