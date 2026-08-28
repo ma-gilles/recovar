@@ -135,6 +135,18 @@ def audit_sampling_trajectory(
                 native[key] != previous_native[key]
                 for key in ("healpix_order", "offset_range_angstrom", "offset_step_angstrom")
             )
+        candidate_prior_mode_value = candidate.get("orientational_prior_mode")
+        candidate_prior_mode = (
+            None
+            if candidate_prior_mode_value is None
+            else int(candidate_prior_mode_value)
+        )
+        candidate_uniform_prior_value = candidate.get("uniform_local_orientation_prior")
+        candidate_uniform_prior = (
+            None
+            if candidate_uniform_prior_value is None
+            else bool(candidate_uniform_prior_value)
+        )
 
         checks = {
             "healpix_order": int(candidate["healpix_order"]) == int(native["healpix_order"]),
@@ -161,8 +173,8 @@ def audit_sampling_trajectory(
                 native_changes["current_changes_optimal_offsets_angstrom"],
                 atol=5.1e-7,
             ),
-            "orientational_prior_mode": int(candidate["orientational_prior_mode"])
-            == int(native_model["orientational_prior_mode"]),
+            "orientational_prior_mode": candidate_prior_mode is not None
+            and candidate_prior_mode == int(native_model["orientational_prior_mode"]),
             "current_size": int(candidate["current_size"])
             == int(native_model["current_size"]),
             "current_resolution": _close(
@@ -193,10 +205,8 @@ def audit_sampling_trajectory(
                     "current_resolution": candidate_current_resolution,
                     "current_resolution_angstrom": candidate_current_resolution_angstrom,
                     "current_resolution_shell": int(candidate["current_resolution_shell"]),
-                    "orientational_prior_mode": int(candidate["orientational_prior_mode"]),
-                    "uniform_local_orientation_prior": bool(
-                        candidate["uniform_local_orientation_prior"]
-                    ),
+                    "orientational_prior_mode": candidate_prior_mode,
+                    "uniform_local_orientation_prior": candidate_uniform_prior,
                     "current_changes_optimal_offsets_angstrom": float(
                         candidate["current_changes_optimal_offsets_angstrom"]
                     ),

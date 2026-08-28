@@ -17,7 +17,7 @@ def _write_iteration(
     candidate_range: float = 6.0,
     native_range: float = 6.0,
     candidate_translations: int = 52,
-    candidate_prior_mode: int = 0,
+    candidate_prior_mode: int | None = 0,
     native_prior_mode: int = 0,
     candidate_current_size: int = 28,
     native_current_size: int = 28,
@@ -40,9 +40,10 @@ def _write_iteration(
         "current_size": candidate_current_size,
         "current_resolution": 1.0 / candidate_current_resolution_angstrom,
         "current_resolution_shell": 5,
-        "orientational_prior_mode": candidate_prior_mode,
-        "uniform_local_orientation_prior": candidate_prior_mode == 1,
     }
+    if candidate_prior_mode is not None:
+        candidate["orientational_prior_mode"] = candidate_prior_mode
+        candidate["uniform_local_orientation_prior"] = candidate_prior_mode == 1
     (candidate_dir / f"run_it{tag}_recovar_meta.json").write_text(json.dumps(candidate))
     (relion_dir / f"run_it{tag}_sampling.star").write_text(
         "\n".join(
@@ -150,6 +151,21 @@ def test_sampling_trajectory_reports_first_orientation_prior_mode_mismatch(tmp_p
     assert report["first_mismatch"]["orientational_prior_mode"] == 90
     assert report["iterations"][1]["candidate"]["orientational_prior_mode"] == 0
     assert report["iterations"][1]["native"]["orientational_prior_mode"] == 1
+
+
+def test_sampling_trajectory_fails_closed_when_candidate_prior_mode_is_unrecorded(tmp_path):
+    candidate_dir = tmp_path / "candidate"
+    relion_dir = tmp_path / "relion"
+    candidate_dir.mkdir()
+    relion_dir.mkdir()
+    _write_iteration(candidate_dir, relion_dir, 1, candidate_prior_mode=None)
+
+    report = audit_sampling_trajectory(candidate_dir, relion_dir, pixel_size=2.0)
+
+    assert report["result"] == "fail"
+    assert report["first_mismatch"]["orientational_prior_mode"] == 1
+    assert report["iterations"][0]["candidate"]["orientational_prior_mode"] is None
+    assert report["iterations"][0]["candidate"]["uniform_local_orientation_prior"] is None
 
 
 def test_sampling_trajectory_reports_current_image_size_transition_lag(tmp_path):
