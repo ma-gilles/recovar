@@ -6,6 +6,7 @@ from scripts.analyze_k1_fine_operand_tuple import (
     _largest_mismatches,
     _masked_shifted_substitutions,
     _optimal_scalar_fit,
+    _projector_compact_rows_from_relion_full,
     _score_window_rows_from_relion_full,
     _shifted_source_phase_substitutions,
 )
@@ -74,6 +75,38 @@ def test_score_window_mapping_rejects_missing_or_duplicate_pixels():
             image_shape=(8, 8),
             current_size=4,
         )
+
+
+@pytest.mark.unit
+def test_projector_mapping_preserves_equal_size_lookup_order():
+    lookup = np.full(12, -1, dtype=np.int32)
+    lookup[[0, 4, 8, 10]] = [3, 1, 0, 2]
+
+    supported_full, compact_rows = _projector_compact_rows_from_relion_full(
+        full_to_compact=lookup,
+        capture_current_size=4,
+        recovar_current_size=4,
+    )
+
+    assert supported_full.tolist() == [0, 4, 8, 10]
+    assert compact_rows.tolist() == [3, 1, 0, 2]
+
+
+@pytest.mark.unit
+def test_projector_mapping_joins_smaller_model_rectangle_by_frequency():
+    # Native size 4 rows ky=[0, 1, +2, -1] are embedded in RECOVAR size 6
+    # rows [0, 1, 2, 5], respectively.
+    lookup = np.full(24, -1, dtype=np.int32)
+    lookup[[0, 5, 10, 21]] = [3, 1, 0, 2]
+
+    supported_full, compact_rows = _projector_compact_rows_from_relion_full(
+        full_to_compact=lookup,
+        capture_current_size=4,
+        recovar_current_size=6,
+    )
+
+    assert supported_full.tolist() == [0, 4, 8, 10]
+    assert compact_rows.tolist() == [3, 1, 0, 2]
 
 
 @pytest.mark.unit

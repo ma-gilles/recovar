@@ -379,6 +379,68 @@ def _score_window_rows_from_relion_full(
     return rows.astype(np.int64, copy=False)
 
 
+def _projector_compact_rows_from_relion_full(
+    *,
+    full_to_compact: np.ndarray,
+    capture_current_size: int,
+    recovar_current_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map a native capture FFT rectangle into RECOVAR projector rows.
+
+    A native capture can come from a restarted RELION boundary whose serialized
+    geometry differs from RECOVAR's live image-size rectangle.  The stored
+    projector lookup is indexed in RECOVAR coordinates, while the native
+    operand capture is indexed in its own rectangle.  Join them through signed
+    Fourier coordinates instead of assuming the two rectangle sizes are equal.
+    """
+
+    capture_current_size = int(capture_current_size)
+    recovar_current_size = int(recovar_current_size)
+    _require(capture_current_size > 0, "native capture current size must be positive")
+    _require(recovar_current_size > 0, "RECOVAR current size must be positive")
+    lookup = np.asarray(full_to_compact, dtype=np.int32).reshape(-1)
+    recovar_half_width = recovar_current_size // 2 + 1
+    _require(
+        lookup.size == recovar_current_size * recovar_half_width,
+        "RECOVAR full-to-compact lookup shape differs from its current size",
+    )
+
+    capture_half_width = capture_current_size // 2 + 1
+    capture_full = np.arange(
+        capture_current_size * capture_half_width,
+        dtype=np.int64,
+    )
+    capture_rows = capture_full // capture_half_width
+    columns = capture_full % capture_half_width
+    ky = np.where(
+        capture_rows <= capture_current_size // 2,
+        capture_rows,
+        capture_rows - capture_current_size,
+    )
+    _require(
+        bool(np.all(columns <= recovar_current_size // 2)),
+        "native capture x frequencies exceed the RECOVAR projector rectangle",
+    )
+    _require(
+        bool(
+            np.all(ky >= -(recovar_current_size // 2))
+            and np.all(ky <= recovar_current_size // 2)
+        ),
+        "native capture y frequencies exceed the RECOVAR projector rectangle",
+    )
+    recovar_rows = np.where(ky >= 0, ky, ky + recovar_current_size)
+    recovar_full = recovar_rows * recovar_half_width + columns
+    compact = lookup[recovar_full]
+    supported = compact >= 0
+    supported_full = capture_full[supported]
+    supported_compact = compact[supported].astype(np.int64, copy=False)
+    _require(
+        np.unique(supported_compact).size == supported_compact.size,
+        "native score pixels do not map one-to-one to RECOVAR projector rows",
+    )
+    return supported_full, supported_compact
+
+
 def analyze(
     capture_path: Path,
     pass2_path: Path,
@@ -432,11 +494,14 @@ def analyze(
         recovar = {name: np.asarray(archive[name]) for name in required}
 
     current_size = _infer_current_size(capture.image_size)
-    _require(int(np.asarray(recovar["current_size"]).item()) == current_size, "current size differs")
+    recovar_current_size = int(np.asarray(recovar["current_size"]).item())
     image_shape = (physical_image_size, physical_image_size)
     lookup = np.asarray(recovar["raw_operand_relion_full_to_compact"], dtype=np.int32)
-    supported_full = np.flatnonzero(lookup >= 0)
-    supported_compact = lookup[supported_full]
+    supported_full, supported_compact = _projector_compact_rows_from_relion_full(
+        full_to_compact=lookup,
+        capture_current_size=current_size,
+        recovar_current_size=recovar_current_size,
+    )
     supported_score_rows = _score_window_rows_from_relion_full(
         supported_full=supported_full,
         window_indices=recovar["window_indices"],
@@ -512,6 +577,16 @@ def analyze(
     relion_contribution = np.asarray(pixels["contribution"], dtype=np.float32)
     relion_sum = np.float32(candidate["sum_init"])
     recovar_sum = np.float32(np.asarray(recovar["raw_operand_highres_xi2_half"]).item())
+
+    coordinate_intersection = np.zeros(capture.image_size, dtype=bool)
+    coordinate_intersection[supported_full] = True
+    native_nonzero_correction = relion_corr != np.float32(0.0)
+    recovar_nonzero_correction = recovar_corr != np.float32(0.0)
+    common_nonzero_correction = (
+        coordinate_intersection
+        & native_nonzero_correction
+        & recovar_nonzero_correction
+    )
 
     recovar_raw_replay, recovar_contribution, recovar_lanes = _sass_tree_raw_diff2(
         recovar_reference,
@@ -672,12 +747,23 @@ def analyze(
             "recovar_translation_row": translation_row,
         },
         "alignment": {
+            "native_capture_current_size": current_size,
+            "recovar_image_current_size": recovar_current_size,
             "native_to_recovar_rotation_transform": (
                 "identity" if direct_matrix_error <= transpose_matrix_error else "transpose"
             ),
             "rotation_max_abs": min(direct_matrix_error, transpose_matrix_error),
             "translation_max_abs": translation_error,
             "supported_pixel_count": int(supported_full.size),
+            "native_nonzero_correction_pixel_count": int(
+                np.count_nonzero(native_nonzero_correction)
+            ),
+            "recovar_nonzero_correction_pixel_count_in_native_rectangle": int(
+                np.count_nonzero(recovar_nonzero_correction)
+            ),
+            "common_nonzero_correction_pixel_count": int(
+                np.count_nonzero(common_nonzero_correction)
+            ),
             "dc_present_in_compact_support": bool(np.any(dc_mask)),
         },
         "first_exact_unequal_boundary": first_unequal,
@@ -692,7 +778,8 @@ def analyze(
             relion_observed_phase[phase_valid], recovar_observed_phase[phase_valid]
         ),
         "score_active_pixel_stage_metrics_domain": (
-            "RECOVAR compact support embedded in the RELION current-size FFT rectangle"
+            "coordinate intersection of RECOVAR compact support and the native capture "
+            "FFT rectangle; correction weights can still be zero"
         ),
         "largest_pixel_mismatches": {
             name: _largest_mismatches(left, right)
@@ -712,6 +799,15 @@ def analyze(
             "native_host_replay": float(native_raw_replay),
             "recovar_production": float(recovar_production_raw),
             "recovar_host_replay": float(recovar_raw_replay),
+            "recovar_host_replay_is_full_production_domain": bool(
+                current_size == recovar_current_size
+            ),
+            "recovar_host_replay_domain": (
+                "full RECOVAR score rectangle"
+                if current_size == recovar_current_size
+                else "RECOVAR operands restricted to coordinates present in the smaller "
+                "native capture rectangle"
+            ),
             "substitutions": substitutions,
             "factorial_substitutions": factorial_substitutions,
             "positive_y_nyquist_shifted_substitutions": {
