@@ -5573,6 +5573,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             static_cast<size_t>(n_particles), -1);
         std::vector<long long> wavg_bpref_effective_gap_ns(
             static_cast<size_t>(n_particles), -1);
+        std::vector<long long> wavg_host_enqueue_ns(
+            static_cast<size_t>(n_particles), -1);
+        std::vector<long long> bpref_host_enqueue_ns(
+            static_cast<size_t>(n_particles), -1);
+        std::vector<long long> wavg_to_bpref_return_ns(
+            static_cast<size_t>(n_particles), -1);
         const auto launch_particle_with_accumulators = [&](
             int64_t particle,
             int lane,
@@ -5588,6 +5594,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             const int64_t particle_rotation_count =
                 rotation_replay_counts_host[particle];
             std::chrono::steady_clock::time_point exact_wavg_return_time;
+            const bool trace_this_gap_particle =
+                wavg_bpref_host_gap_trace_requested &&
+                particle_trace_ids_host[particle] ==
+                    wavg_bpref_host_gap_trace_particle;
             if (candidate_trace_requested)
             {
                 if (!candidate_trace_writer->reserve(
@@ -5664,6 +5674,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 constexpr unsigned kWavgBlockSize = 256;
                 constexpr unsigned kWavgSharedBytes =
                     (3 * kWavgBlockSize + 9) * sizeof(float);
+                std::chrono::steady_clock::time_point wavg_enqueue_start;
+                if (trace_this_gap_particle)
+                    wavg_enqueue_start = std::chrono::steady_clock::now();
                 driver_result = cuLaunchKernel(
                     exact_wavg_kernel,
                     static_cast<unsigned>(particle_rotation_count), 1, 1,
@@ -5678,6 +5691,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 if (wavg_bpref_host_gap_requested ||
                     wavg_bpref_host_gap_trace_requested)
                     exact_wavg_return_time = std::chrono::steady_clock::now();
+                if (trace_this_gap_particle)
+                    wavg_host_enqueue_ns[particle] =
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            exact_wavg_return_time - wavg_enqueue_start).count();
             }
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
@@ -5811,10 +5828,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                 &model_init_y_arg,
                                 &model_init_z_arg,
                             };
-                            const bool trace_this_gap =
-                                wavg_bpref_host_gap_trace_requested &&
-                                particle_trace_ids_host[particle] ==
-                                    wavg_bpref_host_gap_trace_particle;
+                            const bool trace_this_gap = trace_this_gap_particle;
                             if (trace_this_gap)
                                 wavg_bpref_intrinsic_gap_ns[particle] =
                                     std::chrono::duration_cast<
@@ -5840,6 +5854,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                         std::chrono::nanoseconds>(
                                             std::chrono::steady_clock::now() -
                                             exact_wavg_return_time).count();
+                            std::chrono::steady_clock::time_point
+                                bpref_enqueue_start;
+                            if (trace_this_gap)
+                                bpref_enqueue_start =
+                                    std::chrono::steady_clock::now();
                             driver_result = cuLaunchKernel(
                                 exact_native_ptx_kernel,
                                 static_cast<unsigned>(grid_rotations), 1, 1,
@@ -5851,6 +5870,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             if (driver_result != CUDA_SUCCESS)
                                 return report_relion_vdam_driver_error(
                                     "cuLaunchKernel", driver_result);
+                            if (trace_this_gap)
+                            {
+                                const auto bpref_enqueue_end =
+                                    std::chrono::steady_clock::now();
+                                bpref_host_enqueue_ns[particle] =
+                                    std::chrono::duration_cast<
+                                        std::chrono::nanoseconds>(
+                                            bpref_enqueue_end -
+                                            bpref_enqueue_start).count();
+                                wavg_to_bpref_return_ns[particle] =
+                                    std::chrono::duration_cast<
+                                        std::chrono::nanoseconds>(
+                                            bpref_enqueue_end -
+                                            exact_wavg_return_time).count();
+                            }
                             return cudaSuccess;
                         }
                     }
@@ -6021,7 +6055,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 }
                 if (trace.tellp() == 0)
                     trace << "particle\ttrace_particle_id\tworker_lane"
+                          << "\twavg_host_enqueue_ns"
                           << "\tintrinsic_gap_ns\teffective_gap_ns"
+                          << "\tbpref_host_enqueue_ns"
+                          << "\twavg_to_bpref_return_ns"
                           << "\ttarget_gap_ns\n";
                 for (int64_t particle = 0; particle < n_particles; ++particle)
                 {
@@ -6029,8 +6066,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     trace << particle << '\t'
                           << particle_trace_ids_host[particle] << '\t'
                           << worker_lanes_host[particle] << '\t'
+                          << wavg_host_enqueue_ns[particle] << '\t'
                           << wavg_bpref_intrinsic_gap_ns[particle] << '\t'
                           << wavg_bpref_effective_gap_ns[particle] << '\t'
+                          << bpref_host_enqueue_ns[particle] << '\t'
+                          << wavg_to_bpref_return_ns[particle] << '\t'
                           << (wavg_bpref_host_gap_requested
                                   ? wavg_bpref_host_gap_ns
                                   : -1)

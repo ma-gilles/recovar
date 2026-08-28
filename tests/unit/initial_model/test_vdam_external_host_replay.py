@@ -82,6 +82,9 @@ def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
     assert "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE_PARTICLE_ID" in cuda_source
     assert "wavg_bpref_intrinsic_gap_ns" in cuda_source
     assert "wavg_bpref_effective_gap_ns" in cuda_source
+    assert "wavg_host_enqueue_ns" in cuda_source
+    assert "bpref_host_enqueue_ns" in cuda_source
+    assert "wavg_to_bpref_return_ns" in cuda_source
     assert 'trace << "particle\\ttrace_particle_id\\tworker_lane' in cuda_source
     assert "callbacks do not contain the requested global particle ID" in cuda_source
     assert "std::ios::app" in cuda_source
