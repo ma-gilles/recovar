@@ -18,13 +18,13 @@ Frozen case-definition SHA-256:
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | A same-allocation matched panel now runs native RELION plus private/shared replay on one physical H100. Replaying each repeat's actual **200-particle native posterior** restores raw-BPref repeat width to **0.81--1.07x native** in both replay topologies. The earlier narrow replay was a frozen-posterior control, not evidence of missing GPU workload. |
-| 🟢 | What is closed? | The E-step, active operands/support, BPref formula, static launch geometry, worker-private/shared storage, and iteration-1 raw-BPref distribution scale are closed as sufficient causes. Native posterior realizations explain the previously missing replay width. Callback barriers/order, exact Wavg predecessor, host delay/API, PTX, context, and synthetic upstream workload remain rejected or unnecessary. |
+| 🟢 | What improved? | The matched live-posterior panel now measures all **200 particles** across four native and four RECOVAR iteration-1 repeats. RELION posterior width is `1.73e-5` relative L2 and centered-score RMS is `3.19e-5`; RECOVAR is byte-repeatable (`0 / 0`) with zero support drift. This directly localizes the missing distribution before BPref. |
+| 🟢 | What is closed? | Native-posterior replay restores raw-BPref width to **0.81--1.07x native**, while EM's source-faithful native-atomic soft-mask intervention leaves RECOVAR posterior/score width exactly zero. The E-step response, BPref formula/topologies, artificial workload, host delay/API, and soft-mask atomic reduction are rejected as sufficient causes. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict**, **5/20 map**, **6/20 particle**, **13/20 schedule**, and **0/20 runtime** at **4.91--11.58x** RELION. K>1, real-data, and final CLI/GUI qualification remain gated behind K=1. Expanded interim state checks still find candidate 1/2 outside eight-native particle support at iteration **58** and every candidate far outside the eight-native state set by iteration **200**. |
 | 🟡 | Why can both be true? | RELION itself bifurcates. At iteration 4, particle 1085 takes one exact state in native repeats **1/3/4/6/7** and the alternate state in **2/5/8**; all four RECOVAR repeats take the first state. Every candidate therefore follows a legitimate native branch, while RECOVAR still misses a native mode. Candidate particle states first leave the expanded native union only at iterations **58/58/107/107**. |
-| 🔴 | First open operation | The systematic iteration-4 mode bias inherited from the iteration-3 map/PPref. For particle 1085, RELION retains rank-10 coarse parent `[175,8]` at cumulative mass `0.9989997162`; RECOVAR prunes it at `0.9990066439`. Native iteration-4 PPref replay restores that parent and the alternate native state, proving the downstream E-step response is correct. |
-| ➡️ | What is next? | Reuse EM's source-faithful coarse scoring, float32 normalization, and adaptive-support cutoff to close the rank-10 boundary; do not create VDAM-only duplicate math. Qualify first on focused **0--4**, then **0--20**, before another 0--200 run. Artificial noise, seed tuning, workload injection, and gate widening remain excluded. |
-| 🟢 | What finished? | Matched job `13097692` completed in **1:05** on `GPU-1fdb...`; native-posterior replay is `eeeceb368`, focused validation is **18/18**, and report/evidence SHA values are `901255a8a74a... / c0657f213e4b...`. The fixed-posterior predecessor `13095568` remains a valid negative control. |
+| 🔴 | First open operation | The live RELION iteration-1 score/posterior observer varies while RECOVAR's already-shared exact fine scorer and posterior path is deterministic. Downstream, that missing numerical mode reaches the known iteration-4 rank-10 boundary: native cumulative mass `0.9989997162` retains parent `[175,8]`, while RECOVAR's `0.9990066439` prunes it. |
+| ➡️ | What is next? | Follow EM's fixed-state ladder: measure RECOVAR's deterministic posterior against the native repeat centroid/envelope, then freeze the same iteration-start projector/image/noise/prior tuple and compare complete fine-score tables. If RECOVAR is systematically outside native, repair the shared EM operand/reduction boundary; if it is inside, test robust **0--4** and **0--20** trajectory coverage without injecting noise or widening existing gates. |
+| 🟢 | What finished? | Matched native-atomic job `13101940` completed in **9:04** on `GPU-ddb1...`; report/evidence SHA values are `4468fefe7fa4... / 568c74f5eadd...`. Science commits `4d6c88e53 / 90bf177df` add support-aware analysis and a provenance-sealed EM native-atomic A/B. Focused validation is **14/14 + 5/5**; Ruff, shell syntax, and diff checks pass. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -119,6 +119,7 @@ SHA-256 values.
 | Full native BPref operand/prestate capture | RELION source `56e94b3`; build `13088114`; repeat-2 continuation `13088385`; binary SHA `7ce5e00a2c20...` | all 192 target files exist, including six immutable raw operand arrays, 13 launch scalars, and real/imag/weight accumulator prestate. The job was intentionally cancelled after iteration 4 had completed instead of wasting the GPU through iteration 200; the capture is diagnostic and non-scoring |
 | Matched fixed-posterior native/replay panel | exact-H100 job `13095568`; science `85cd685f3`; report SHA `6eca689fc7b5...` | four native arms and four private/shared replay arms ran sequentially in one allocation on one physical H100. Fixed replay widths were only `0.0139--0.0321x` native for private and `0.126--0.338x` for shared, showing that frozen operands under-represent the native distribution but not identifying why |
 | Matched native-posterior replay panel | exact-H100 job `13097692`; science `eeeceb368`; report/evidence SHA `901255a8a74a... / c0657f213e4b...` | all 200 native posterior panels were replayed fail-closed with zero support, Euler, or launch-count mismatches. Private/native BPref diameter ratios are `1.0367 / 0.8222 / 1.0076 / 0.8097`; shared/native ratios are `1.0384 / 0.8249 / 1.0739 / 0.8288` for data h0/h1 and weight h0/h1. Native posterior realization explains the missing width; upstream workload injection is retired |
+| Matched live-posterior repeat panel | exact-H100 jobs `13100126 / 13101940`; analysis/science `4d6c88e53 / 90bf177df`; sealed report/evidence SHA `4468fefe7fa4... / 568c74f5eadd...` | native posterior diameter is `1.72558e-5` and centered-score RMS is `3.19258e-5`; all four live RECOVAR posterior and score panels are byte-identical with zero support drift. Enabling EM's source-faithful native-atomic soft-mask reduction leaves both widths exactly zero, rejecting preprocessing atomic order as sufficient and localizing the next fixed-state audit to the shared fine-score input/reduction boundary |
 | Paired candidate host-input capture | science `9b26c2ae7`; exact-H100 `13088492` completed in 70 s; CUDA SHA `41a2fe4d31c2...` | 14/14 callback inputs are preserved with stable original stack IDs. Particle 1085 resolves uniquely to callback 12 row 96. Native/candidate launch geometry is `8 / 128` orientation blocks, and native prestate is worker-local while the current candidate inputs expose only two shared half accumulators. Exact candidate prelaunch state and iteration-1 aligned-state diffs remain open |
 | Exact-GPU setup misses, non-scoring | `13088398 / 13088453` | both exited fail-closed at time zero with code 75 after receiving `GPU-9f98...` instead of frozen `GPU-75c2...`; no science ran. Slot holder `13088479` selected the non-target GPU for 45 s, allowing `13088492` to start on the target, then was cancelled |
 | Native-radius map diagnostic | analysis `ac79e334`; focused job `13077189` passes 13/13; real-data audit `13077282` | candidate support passes 200/201 checkpoints; only @1 misses by `8.75e-13`. At @200, candidate/reverse native-radius margins are `+0.1991 / +0.0248`; remaining combined failures are reverse coverage and paired GT nondegradation, not candidate map support |
@@ -181,7 +182,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 10:17 ET**
+Last scientific update: **2026-08-28 12:52 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -228,6 +229,28 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+Matched exact-H100 job `13101940` completed four native and four live
+RECOVAR iteration-1 posterior captures in one allocation on physical GPU
+`GPU-ddb1592...`. RELION varies at `1.72558e-5` posterior relative L2 and
+`3.19258e-5` centered-score RMS; RECOVAR is byte-repeatable at both boundaries
+and neither engine changes positive support across its four repeats. The
+treatment enabled the supplied-map EM path's existing source-faithful native
+atomic soft-mask reduction, but RECOVAR posterior and score width remained
+exactly zero. This is a decisive null: soft-mask atomic order is not the
+missing VDAM distribution source. Report SHA is `4468fefe7fa4...`; evidence
+manifest SHA is `568c74f5eadd...`. No frozen score or tolerance changed.
+
+The next discriminator follows EM's established fixed-state investigation
+ladder. First place the deterministic RECOVAR posterior relative to the native
+repeat centroid and envelope. Then hold the iteration-start projector,
+preprocessed image, noise, priors, and candidate identities fixed and compare
+the complete fine-score tables. A systematic out-of-envelope score gap would
+authorize a smallest shared-EM correction; an in-envelope result would prove
+that exact pairing to one RELION GPU realization is not a valid target and
+move qualification to robust 0--4 and 0--20 trajectory coverage. Artificial
+noise, stochastic workload injection, seed tuning, and VDAM-only duplicate
+math remain excluded.
 
 Matched exact-H100 job `13097692` closes the iteration-1 raw-BPref width
 question. Four native RELION arms and four private/shared replay arms ran
