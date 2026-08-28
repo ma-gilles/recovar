@@ -1212,16 +1212,19 @@ def test_expected_accuracy_skip_diagnostic_is_explicit_and_strict(monkeypatch):
         driver._skip_native_sampling_accuracy_diagnostic()
 
 
-def test_expected_accuracy_subprocess_diagnostic_is_explicit_and_strict(monkeypatch):
+def test_expected_accuracy_subprocess_is_default_and_override_is_strict(monkeypatch):
     monkeypatch.delenv(driver.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, raising=False)
-    assert driver._isolate_native_sampling_accuracy_diagnostic() is False
+    assert driver._isolate_native_sampling_accuracy() is True
 
     monkeypatch.setenv(driver.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "1")
-    assert driver._isolate_native_sampling_accuracy_diagnostic() is True
+    assert driver._isolate_native_sampling_accuracy() is True
+
+    monkeypatch.setenv(driver.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "0")
+    assert driver._isolate_native_sampling_accuracy() is False
 
     monkeypatch.setenv(driver.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "yes")
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        driver._isolate_native_sampling_accuracy_diagnostic()
+        driver._isolate_native_sampling_accuracy()
 
 
 def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatch, tmp_path):
