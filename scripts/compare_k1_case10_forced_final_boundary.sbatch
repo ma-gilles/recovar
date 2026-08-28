@@ -15,6 +15,7 @@ set -euo pipefail
 
 : "${RUN_ROOT:?RUN_ROOT is required}"
 : "${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
+: "${REPO:?REPO is required}"
 : "${RECOVAR_CAPTURE_ROOT:?RECOVAR_CAPTURE_ROOT is required}"
 : "${RELION_CAPTURE_ROOT:?RELION_CAPTURE_ROOT is required}"
 : "${RELION_CAPTURE_JOB_ID:?RELION_CAPTURE_JOB_ID is required}"
@@ -22,7 +23,6 @@ set -euo pipefail
 : "${EXPECTED_ANALYZER_SHA256:?EXPECTED_ANALYZER_SHA256 is required}"
 : "${EXPECTED_LAUNCHER_SHA256:?EXPECTED_LAUNCHER_SHA256 is required}"
 
-REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 RELION_CAPTURE=${RELION_CAPTURE_ROOT}
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
