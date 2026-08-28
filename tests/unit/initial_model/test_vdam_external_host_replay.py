@@ -64,6 +64,16 @@ def test_exact_wavg_predecessor_uses_relion_ptx_and_same_particle_stream():
     assert "kWavgSharedBytes" in cuda_source
 
 
+def test_runtime_bpref_launch_discriminator_is_fail_closed():
+    cuda_source = CUDA_SOURCE.read_text()
+
+    assert "RECOVAR_VDAM_RUNTIME_BPREF_WITH_EXACT_WAVG" in cuda_source
+    assert "runtime_bpref_with_exact_wavg_requested &&" in cuda_source
+    assert "!exact_wavg_predecessor_requested" in cuda_source
+    assert "trace_runtime_gap" in cuda_source
+    assert "runtime_bpref_enqueue_start" in cuda_source
+
+
 def test_wavg_bpref_host_gap_is_fail_closed_and_measures_from_wavg_return():
     cuda_source = CUDA_SOURCE.read_text()
 

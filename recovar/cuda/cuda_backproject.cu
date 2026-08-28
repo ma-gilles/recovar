@@ -61,6 +61,8 @@ constexpr char kRelionVdamExactNativePtxEnv[] =
     "RECOVAR_VDAM_EXACT_NATIVE_PTX";
 constexpr char kRelionVdamExactWavgPredecessorEnv[] =
     "RECOVAR_VDAM_EXACT_WAVG_PREDECESSOR";
+constexpr char kRelionVdamRuntimeBprefWithExactWavgEnv[] =
+    "RECOVAR_VDAM_RUNTIME_BPREF_WITH_EXACT_WAVG";
 constexpr char kRelionVdamWavgBprefHostGapNsEnv[] =
     "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_NS";
 constexpr char kRelionVdamWavgBprefHostGapTraceEnv[] =
@@ -5097,6 +5099,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         exact_wavg_predecessor_value != nullptr &&
         exact_wavg_predecessor_value[0] != '\0' &&
         std::strcmp(exact_wavg_predecessor_value, "0") != 0;
+    const char* runtime_bpref_value =
+        std::getenv(kRelionVdamRuntimeBprefWithExactWavgEnv);
+    const bool runtime_bpref_with_exact_wavg_requested =
+        runtime_bpref_value != nullptr && runtime_bpref_value[0] != '\0' &&
+        std::strcmp(runtime_bpref_value, "0") != 0;
     const char* wavg_bpref_host_gap_value =
         std::getenv(kRelionVdamWavgBprefHostGapNsEnv);
     const bool wavg_bpref_host_gap_requested =
@@ -5158,6 +5165,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
          reverse_rotation_replay || rotation_replay_stride > 0))
         return cudaErrorInvalidValue;
     if (exact_wavg_predecessor_requested && !exact_native_ptx_requested)
+        return cudaErrorInvalidValue;
+    if (runtime_bpref_with_exact_wavg_requested &&
+        !exact_wavg_predecessor_requested)
         return cudaErrorInvalidValue;
     if (wavg_bpref_host_gap_requested && !exact_wavg_predecessor_requested)
         return cudaErrorInvalidValue;
@@ -5739,7 +5749,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     constexpr bool use_captured_order =
                         decltype(captured_order_tag)::value;
                     constexpr bool use_trace = decltype(trace_tag)::value;
-                    if (exact_native_ptx_requested)
+                    if (exact_native_ptx_requested &&
+                        !runtime_bpref_with_exact_wavg_requested)
                     {
                         if constexpr (!std::is_same_v<Accumulator, float>)
                         {
@@ -5888,6 +5899,36 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             return cudaSuccess;
                         }
                     }
+                    const bool trace_runtime_gap =
+                        runtime_bpref_with_exact_wavg_requested &&
+                        trace_this_gap_particle;
+                    if (trace_runtime_gap)
+                        wavg_bpref_intrinsic_gap_ns[particle] =
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() -
+                                exact_wavg_return_time).count();
+                    if (runtime_bpref_with_exact_wavg_requested &&
+                        wavg_bpref_host_gap_requested)
+                    {
+                        const auto target = exact_wavg_return_time +
+                            std::chrono::nanoseconds(wavg_bpref_host_gap_ns);
+                        constexpr auto spin_guard =
+                            std::chrono::microseconds(50);
+                        const auto now = std::chrono::steady_clock::now();
+                        if (now + spin_guard < target)
+                            std::this_thread::sleep_until(target - spin_guard);
+                        while (std::chrono::steady_clock::now() < target) {}
+                    }
+                    if (trace_runtime_gap)
+                        wavg_bpref_effective_gap_ns[particle] =
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() -
+                                exact_wavg_return_time).count();
+                    std::chrono::steady_clock::time_point
+                        runtime_bpref_enqueue_start;
+                    if (trace_runtime_gap)
+                        runtime_bpref_enqueue_start =
+                            std::chrono::steady_clock::now();
                     relion_vdam_native_sgd_f32_kernel<
                         Accumulator, use_captured_order, use_trace><<<
                         grid_rotations, 128, 0, particle_streams[lane]>>>(
@@ -5937,7 +5978,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             : 0,
                         static_cast<std::int32_t>(lane),
                         candidate_trace_iteration);
-                    return cudaGetLastError();
+                    const cudaError_t runtime_launch_error = cudaGetLastError();
+                    if (trace_runtime_gap)
+                    {
+                        const auto runtime_bpref_enqueue_end =
+                            std::chrono::steady_clock::now();
+                        bpref_host_enqueue_ns[particle] =
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                runtime_bpref_enqueue_end -
+                                runtime_bpref_enqueue_start).count();
+                        wavg_to_bpref_return_ns[particle] =
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                runtime_bpref_enqueue_end -
+                                exact_wavg_return_time).count();
+                    }
+                    return runtime_launch_error;
                 };
                 const bool use_captured_order =
                     captured_rotation_replay && !serial_rotation_replay;
