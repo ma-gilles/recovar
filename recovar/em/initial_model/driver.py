@@ -20,6 +20,9 @@ from recovar.core import mask as core_mask
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
+from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+    estimate_relion_expected_accuracy_from_prepared_inputs,
+)
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     make_relion_translation_log_prior,
     relion_round_away_from_zero,
@@ -768,39 +771,35 @@ def _estimate_native_sampling_accuracy(
             raise ValueError("sampling-accuracy particle order is not the stored RELION subset prefix")
         random_seed_particle_ids = sorted_part_ids[:n_trials].copy()
 
-    from recovar.relion_bind import _relion_bind_core as bind
-
     refs_relion = np.stack(
         [np.asarray(recovar_volume_to_relion(ref), dtype=np.float64) for ref in np.asarray(state.Iref)],
         axis=0,
     )
     current_image_size = int(state.current_size if state.current_size > 0 else state.ori_size)
-    out = bind.vdam_expected_angular_errors(
-        refs_relion,
-        eulers,
-        trial_particle_ids.astype(np.int64, copy=False),
-        class_ids.astype(np.int32, copy=False),
-        np.asarray(state.pdf_class, dtype=np.float64),
-        np.asarray(state.sigma2_noise[0], dtype=np.float64),
-        np.asarray(optics_state.defU, dtype=np.float64),
-        np.asarray(optics_state.defV, dtype=np.float64),
-        np.asarray(optics_state.defAngle, dtype=np.float64),
-        np.asarray(optics_state.phase_shift, dtype=np.float64),
-        float(optics_state.voltage),
-        float(optics_state.Cs),
-        float(optics_state.Q0),
-        float(optics_state.pixel_size),
-        int(state.ori_size),
-        current_image_size,
-        int(padding_factor),
-        1,
-        float(sigma2_fudge),
-        int(random_seed),
-        True,
-        False,
+    accuracy = estimate_relion_expected_accuracy_from_prepared_inputs(
+        references_relion=refs_relion,
+        trial_eulers_deg=eulers,
+        trial_local_indices=trial_particle_ids,
+        trial_class_ids=class_ids,
+        class_weights=np.asarray(state.pdf_class, dtype=np.float64),
+        sigma2_noise_relion=np.asarray(state.sigma2_noise[0], dtype=np.float64),
+        defocus_u=np.asarray(optics_state.defU, dtype=np.float64),
+        defocus_v=np.asarray(optics_state.defV, dtype=np.float64),
+        defocus_angle=np.asarray(optics_state.defAngle, dtype=np.float64),
+        phase_shift=np.asarray(optics_state.phase_shift, dtype=np.float64),
+        voltage=float(optics_state.voltage),
+        spherical_aberration=float(optics_state.Cs),
+        amplitude_contrast=float(optics_state.Q0),
+        pixel_size=float(optics_state.pixel_size),
+        ori_size=int(state.ori_size),
+        current_image_size=current_image_size,
+        padding_factor=int(padding_factor),
+        sigma2_fudge=float(sigma2_fudge),
+        random_seed=int(random_seed),
+        do_ctf_correction=True,
         # RELION seeds these trials with Experiment's internal ``part_id``,
         # not the original input-table row ids carried by RECOVAR's dataset.
-        random_seed_particle_ids,
+        random_seed_particle_ids=random_seed_particle_ids,
     )
     dump_dir = os.environ.get("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR", "").strip()
     dump_iterations = os.environ.get(
@@ -837,17 +836,17 @@ def _estimate_native_sampling_accuracy(
             sigma2_fudge=np.asarray(float(sigma2_fudge), dtype=np.float64),
             random_seed=np.asarray(int(random_seed), dtype=np.int64),
             random_seed_particle_ids=random_seed_particle_ids,
-            acc_rot=np.asarray(float(out["acc_rot"]), dtype=np.float64),
-            acc_trans=np.asarray(float(out["acc_trans"]), dtype=np.float64),
+            acc_rot=np.asarray(accuracy.acc_rot, dtype=np.float64),
+            acc_trans=np.asarray(accuracy.acc_trans_angstrom, dtype=np.float64),
         )
-    sampling_state.acc_rot = float(out["acc_rot"])
-    sampling_state.acc_trans_angstrom = float(out["acc_trans"])
+    sampling_state.acc_rot = accuracy.acc_rot
+    sampling_state.acc_trans_angstrom = accuracy.acc_trans_angstrom
     return {
-        "estimated_acc_rot": float(out["acc_rot"]),
-        "estimated_acc_trans_angstrom": float(out["acc_trans"]),
-        "estimated_acc_rot_class": np.asarray(out["acc_rot_class"], dtype=np.float64),
-        "estimated_acc_trans_class": np.asarray(out["acc_trans_class"], dtype=np.float64),
-        "estimated_acc_class_counts": np.asarray(out["class_counts"], dtype=np.int64),
+        "estimated_acc_rot": accuracy.acc_rot,
+        "estimated_acc_trans_angstrom": accuracy.acc_trans_angstrom,
+        "estimated_acc_rot_class": accuracy.acc_rot_per_class,
+        "estimated_acc_trans_class": accuracy.acc_trans_per_class_angstrom,
+        "estimated_acc_class_counts": accuracy.class_counts,
         "estimated_acc_n_trials": int(n_trials),
         "estimated_acc_sigma2_fudge": float(sigma2_fudge),
         "estimated_acc_seed_part_ids": random_seed_particle_ids,

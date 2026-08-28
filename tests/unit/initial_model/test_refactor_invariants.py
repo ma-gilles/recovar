@@ -151,8 +151,8 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
     implementation fail even if it is not wired in yet.
     """
     from recovar.em.dense_single_volume import k_class, local_layout
-    from recovar.em.dense_single_volume.helpers import significance
-    from recovar.em.initial_model import dense_adapter
+    from recovar.em.dense_single_volume.helpers import expected_accuracy, significance
+    from recovar.em.initial_model import dense_adapter, driver
 
     shared_callables = {
         "_compute_k_class_significance_batched": (
@@ -170,6 +170,10 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
         "build_pass2_hypothesis_layout": (
             dense_adapter.build_pass2_hypothesis_layout,
             local_layout.build_pass2_hypothesis_layout,
+        ),
+        "estimate_relion_expected_accuracy_from_prepared_inputs": (
+            driver.estimate_relion_expected_accuracy_from_prepared_inputs,
+            expected_accuracy.estimate_relion_expected_accuracy_from_prepared_inputs,
         ),
     }
     for name, (adapter_callable, shared_callable) in shared_callables.items():
