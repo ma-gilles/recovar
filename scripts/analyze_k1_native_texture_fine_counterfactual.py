@@ -106,6 +106,38 @@ def _pmax_from_raw_diff2(
     return float(np.max(weights) / normalization)
 
 
+def _winner_from_raw_diff2(
+    raw_diff2: np.ndarray,
+    rotation_log_prior: np.ndarray,
+    translation_log_prior: np.ndarray,
+    candidate_mask: np.ndarray,
+) -> dict[str, object]:
+    """Return the row-major winner after production float32 score conversion."""
+
+    raw = jnp.asarray(raw_diff2[None, ...], dtype=jnp.float32)
+    mask = jnp.asarray(candidate_mask[None, ...], dtype=bool)
+    minimum = _relion_cuda_fine_diff2_min(raw, mask)
+    scores = np.asarray(
+        _relion_cuda_fine_diff2_to_scores(
+            raw,
+            jnp.asarray(rotation_log_prior[None, :, None], dtype=jnp.float32),
+            jnp.asarray(translation_log_prior[None, None, :], dtype=jnp.float32),
+            mask,
+            min_diff2=minimum,
+        )[0],
+        dtype=np.float32,
+    )
+    flat = int(np.argmax(scores))
+    rotation, translation = np.unravel_index(flat, scores.shape)
+    return {
+        "rotation_row": int(rotation),
+        "translation_row": int(translation),
+        "raw_diff2": float(np.asarray(raw_diff2, dtype=np.float32)[rotation, translation]),
+        "score_with_prior": float(scores[rotation, translation]),
+        "minimum_raw_diff2": float(np.asarray(minimum, dtype=np.float32)[0]),
+    }
+
+
 def analyze(
     *,
     recovar_capture: Path,
@@ -151,7 +183,10 @@ def analyze(
     )
     native_raw = np.asarray(selected["raw_diff2"], dtype=np.float32)
 
-    reference_real = np.asarray(helpers.load_mrc(str(reference_map)), dtype=np.float64)
+    reference_real = np.asarray(
+        helpers.load_relion_volume(str(reference_map)),
+        dtype=np.float64,
+    )
     _require(
         reference_real.ndim == 3 and len(set(reference_real.shape)) == 1,
         "reference map must be cubic",
@@ -184,10 +219,7 @@ def analyze(
         dtype=np.complex64,
     )
 
-    image_scale = np.float32(physical_image_size * physical_image_size)
-    image = (
-        np.asarray(capture["direct_score_input"], dtype=np.complex64) / image_scale
-    )[None, :]
+    image = np.asarray(capture["direct_score_input"], dtype=np.complex64)[None, :]
     corr = np.asarray(capture["raw_operand_corr_img_score"], dtype=np.float32)
     half_weights = np.asarray(capture["raw_operand_half_weights"], dtype=np.float32)
     weights = np.asarray(
@@ -238,7 +270,6 @@ def analyze(
     texture_raw_transposed = texture_score(
         np.ascontiguousarray(rotations.transpose(0, 2, 1))
     )
-
     # Recover individual complex texture samples through the already-qualified
     # native normalized-CC pair kernel. A one-hot real/imaginary image makes
     # its numerator equal the projected reference's corresponding component.
@@ -370,7 +401,6 @@ def analyze(
     texture_transposed_aligned = texture_raw_transposed[
         mapped_rotation, mapped_translation
     ]
-
     current_centered = _center_cost(current_aligned)
     texture_direct_centered = _center_cost(texture_direct_aligned)
     texture_transposed_centered = _center_cost(texture_transposed_aligned)
@@ -474,6 +504,18 @@ def analyze(
             ),
         },
         "posterior_counterfactual": {
+            "current_preprojected_winner": _winner_from_raw_diff2(
+                current_raw,
+                np.asarray(capture["rotation_log_prior"], dtype=np.float32),
+                np.asarray(capture["translation_log_prior"], dtype=np.float32),
+                np.asarray(capture["candidate_mask"], dtype=bool),
+            ),
+            "native_texture_transposed_winner": _winner_from_raw_diff2(
+                texture_raw_transposed,
+                np.asarray(capture["rotation_log_prior"], dtype=np.float32),
+                np.asarray(capture["translation_log_prior"], dtype=np.float32),
+                np.asarray(capture["candidate_mask"], dtype=bool),
+            ),
             "current_native_units_pmax": _pmax_from_raw_diff2(
                 current_raw,
                 np.asarray(capture["rotation_log_prior"], dtype=np.float32),

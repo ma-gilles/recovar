@@ -29,7 +29,7 @@ set -euo pipefail
 
 LAUNCHER=${SOURCE}/scripts/run_k1_native_texture_fine_counterfactual.sbatch
 ANALYZER=${SOURCE}/scripts/analyze_k1_native_texture_fine_counterfactual.py
-OUTPUT=${RUN_ROOT}/analysis/K1_CASE10_ROW052958_NATIVE_TEXTURE_FINE.json
+OUTPUT=${RUN_ROOT}/analysis/K1_NATIVE_TEXTURE_FINE_COUNTERFACTUAL.json
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test "$(git -C "${SOURCE}" rev-parse HEAD)" = "${EXPECTED_HEAD}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA}"
