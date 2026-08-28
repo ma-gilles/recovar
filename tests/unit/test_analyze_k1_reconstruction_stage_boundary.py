@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from scripts.analyze_k1_reconstruction_stage_boundary import (
+    _infer_accumulator_half_volume,
     _load,
     _relion_projector_centered_to_fftw_half,
     _select_accumulator_targets,
@@ -29,6 +30,15 @@ def test_load_rejects_payload_size_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="payload size mismatch"):
         _load(path, np.dtype("<f8"))
+
+
+def test_infer_accumulator_half_volume_distinguishes_layouts() -> None:
+    volume_shape = (9, 9, 9)
+    assert _infer_accumulator_half_volume(np.zeros(9 * 9 * 5), volume_shape)
+    assert not _infer_accumulator_half_volume(np.zeros(9**3), volume_shape)
+
+    with pytest.raises(ValueError, match="expected packed"):
+        _infer_accumulator_half_volume(np.zeros(17), volume_shape)
 
 
 def test_stage_path_selects_requested_uninterrupted_call(tmp_path: Path) -> None:

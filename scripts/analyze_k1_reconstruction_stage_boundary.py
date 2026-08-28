@@ -59,6 +59,20 @@ def _public_full_to_relion_half(values: np.ndarray, side: int) -> np.ndarray:
     return np.ascontiguousarray(np.fft.ifftshift(centered, axes=(0, 1)))
 
 
+def _infer_accumulator_half_volume(values: np.ndarray, volume_shape: tuple[int, ...]) -> bool:
+    full_size = int(np.prod(volume_shape))
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    half_size = int(np.prod(half_shape))
+    size = int(np.asarray(values).size)
+    if size == half_size:
+        return True
+    if size == full_size:
+        return False
+    raise ValueError(
+        f"accumulator has {size} values; expected packed {half_size} or full {full_size}"
+    )
+
+
 def _relion_projector_centered_to_fftw_half(
     values: np.ndarray,
     *,
@@ -297,9 +311,6 @@ def main() -> None:
     n2 = float(grid_size**2)
     n4 = float(grid_size**4)
     wiener_radius = padding_factor * (current_size // 2)
-    valid = relion_functions._relion_current_size_decenter_mask(
-        accumulator_shape, wiener_radius, half_volume=False
-    ).reshape(-1)
     reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
         volume_shape, padding_factor
     )
@@ -309,6 +320,29 @@ def main() -> None:
 
     halves: dict[str, object] = {}
     for half, numerator_np, weight_np in accumulator_targets:
+        input_half_volume = _infer_accumulator_half_volume(numerator_np, accumulator_shape)
+        if _infer_accumulator_half_volume(weight_np, accumulator_shape) != input_half_volume:
+            raise ValueError("numerator and weight use different accumulator layouts")
+        packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(
+            accumulator_shape
+        )
+        valid = relion_functions._relion_current_size_decenter_mask(
+            accumulator_shape,
+            wiener_radius,
+            half_volume=input_half_volume,
+        ).reshape(-1)
+
+        def to_relion_half(values: np.ndarray) -> np.ndarray:
+            values = np.asarray(values)
+            if input_half_volume:
+                values = np.asarray(
+                    fourier_transform_utils.half_volume_to_full_volume(
+                        jnp.asarray(values).reshape(packed_shape),
+                        accumulator_shape,
+                    )
+                )
+            return _public_full_to_relion_half(values, accumulator_side)
+
         native_tau = _load(
             _stage_path(
                 args.native_stage_dir,
@@ -399,7 +433,7 @@ def main() -> None:
                 tau=tau_recovar,
                 padding_factor=padding_factor,
                 max_res_shell=current_size // 2,
-                half_volume=False,
+                half_volume=input_half_volume,
                 tau2_fudge=1.0,
                 minres_map=5,
                 relion_native_shell_floor=True,
@@ -408,9 +442,12 @@ def main() -> None:
                 relion_filter_scale=float(grid_size**4),
             )
             divided = numerator * valid.astype(numerator.real.dtype) / denominator
-            divided_half = fourier_transform_utils.full_volume_to_half_volume(
-                divided.reshape(accumulator_shape), accumulator_shape
-            )
+            if input_half_volume:
+                divided_half = divided.reshape(packed_shape)
+            else:
+                divided_half = fourier_transform_utils.full_volume_to_half_volume(
+                    divided.reshape(accumulator_shape), accumulator_shape
+                )
             divided_half = relion_functions._relion_window_centered_half_fourier(
                 divided_half, accumulator_shape, reconstruction_shape
             )
@@ -438,22 +475,16 @@ def main() -> None:
             tau_recovar_f32, tau_is_1d=True
         )
 
-        rec_weight_native = _public_full_to_relion_half(
-            np.asarray(weight * valid.astype(weight.dtype)), accumulator_side
+        rec_weight_native = to_relion_half(
+            np.asarray(weight * valid.astype(weight.dtype))
         ) * n4
-        rec_denominator_native = _public_full_to_relion_half(
-            denominator, accumulator_side
-        ) * n4
-        rec_divided_native = _public_full_to_relion_half(
-            divided, accumulator_side
-        ) / (-n2)
-        rec_numerator_native = _public_full_to_relion_half(
-            np.asarray(numerator * valid.astype(numerator.real.dtype)), accumulator_side
+        rec_denominator_native = to_relion_half(denominator) * n4
+        rec_divided_native = to_relion_half(divided) / (-n2)
+        rec_numerator_native = to_relion_half(
+            np.asarray(numerator * valid.astype(numerator.real.dtype))
         ) * (-n2)
         native_numerator = native_divided * native_denominator
-        native_decenter_support = _public_full_to_relion_half(
-            valid.reshape(accumulator_shape), accumulator_side
-        ).astype(bool)
+        native_decenter_support = to_relion_half(valid).astype(bool)
         native_bpref_direct = None
         if args.relion_bpref_prefix is not None:
             direct_numerator = _relion_projector_centered_to_fftw_half(
@@ -501,11 +532,11 @@ def main() -> None:
                     native_tau * n4,
                 ),
                 "wiener_denominator_after_floor": _metrics(
-                    _public_full_to_relion_half(live_denominator, accumulator_side) * n4,
+                    to_relion_half(live_denominator) * n4,
                     native_denominator,
                 ),
                 "fconv_divided": _metrics(
-                    _public_full_to_relion_half(live_divided, accumulator_side) / (-n2),
+                    to_relion_half(live_divided) / (-n2),
                     native_divided,
                 ),
                 "volume_before_gridding": _metrics(live_before, native_before),
@@ -541,11 +572,11 @@ def main() -> None:
                     np.asarray(live_tau_details["prior_shells"], dtype=np.float64),
                 ),
                 "wiener_denominator_after_floor": _metrics(
-                    _public_full_to_relion_half(f64_denominator, accumulator_side) * n4,
+                    to_relion_half(f64_denominator) * n4,
                     native_denominator,
                 ),
                 "fconv_divided": _metrics(
-                    _public_full_to_relion_half(f64_divided, accumulator_side) / (-n2),
+                    to_relion_half(f64_divided) / (-n2),
                     native_divided,
                 ),
                 "volume_before_gridding": _metrics(f64_before, native_before),
@@ -589,11 +620,11 @@ def main() -> None:
             },
             "float32_rounded_tau_replay": {
                 "wiener_denominator_after_floor": _metrics(
-                    _public_full_to_relion_half(rounded_denominator, accumulator_side) * n4,
+                    to_relion_half(rounded_denominator) * n4,
                     native_denominator,
                 ),
                 "fconv_divided": _metrics(
-                    _public_full_to_relion_half(rounded_divided, accumulator_side) / (-n2),
+                    to_relion_half(rounded_divided) / (-n2),
                     native_divided,
                 ),
                 "volume_before_gridding": _metrics(rounded_before, native_before),
