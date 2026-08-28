@@ -29,8 +29,10 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 from recovar.em.initial_model.layout import relion_bpref_frame_scales
 from scripts import analyze_vdam_mstep_boundary, run_vdam_exact_native_host_replay
 
-SCHEMA = "recovar.vdam_worker_private_host_replay.v3"
+SCHEMA = "recovar.vdam_worker_private_host_replay.v4"
 _CALL_RE = re.compile(r"-call-(\d+)-input\.npz$")
+_PANEL_MAGIC = 0x5644414D42504631
+_PANEL_HEADER_WORDS = 10
 
 
 def _scalar(bundle: dict[str, np.ndarray], name: str) -> int:
@@ -72,6 +74,24 @@ def _original_index_from_image_name(value: object) -> int:
     return stack_index - 1
 
 
+def _part_to_original_indices(data_star: Path, part_count: int) -> list[int]:
+    import starfile
+
+    document = starfile.read(data_star)
+    particles = document["particles"] if isinstance(document, dict) else document
+    if "rlnImageName" not in particles:
+        raise ValueError("RELION data STAR has no rlnImageName column")
+    if part_count > len(particles):
+        raise ValueError("native capture has more parts than the RELION data STAR")
+    result = [
+        _original_index_from_image_name(particles["rlnImageName"].iloc[part_id])
+        for part_id in range(part_count)
+    ]
+    if len(set(result)) != len(result):
+        raise ValueError("RELION data STAR contains duplicate captured identities")
+    return result
+
+
 def _load_native_topology(
     topology_path: Path,
     data_star: Path,
@@ -79,8 +99,6 @@ def _load_native_topology(
     iteration: int,
 ) -> dict[int, tuple[int, int]]:
     """Map original stack index to native ``(worker, launch_count)``."""
-    import starfile
-
     by_part: dict[int, tuple[int, int]] = {}
     for line_number, line in enumerate(topology_path.read_text().splitlines(), 1):
         fields = line.split("\t")
@@ -103,29 +121,89 @@ def _load_native_topology(
             raise ValueError(f"invalid native topology line {line_number}: {line!r}")
         by_part[part_id] = (worker, orientation_count)
 
-    document = starfile.read(data_star)
-    particles = document["particles"] if isinstance(document, dict) else document
-    if "rlnImageName" not in particles:
-        raise ValueError("RELION data STAR has no rlnImageName column")
     if set(by_part) != set(range(len(by_part))):
         raise ValueError(
             "native topology part IDs must be contiguous from zero"
         )
-    if len(by_part) > len(particles):
-        raise ValueError("native topology has more parts than the RELION data STAR")
+    original_indices = _part_to_original_indices(data_star, len(by_part))
     result: dict[int, tuple[int, int]] = {}
-    for part_id in range(len(by_part)):
-        image_name = particles["rlnImageName"].iloc[part_id]
-        original_index = _original_index_from_image_name(image_name)
+    for part_id, original_index in enumerate(original_indices):
         if original_index in result:
             raise ValueError(f"duplicate original stack index {original_index}")
         result[original_index] = by_part[part_id]
     return result
 
 
+def _read_native_panel(path: Path) -> dict[str, object]:
+    with path.open("rb") as stream:
+        header = np.fromfile(stream, dtype="<u8", count=_PANEL_HEADER_WORDS)
+        if header.size != _PANEL_HEADER_WORDS:
+            raise ValueError(f"truncated native BPref panel header: {path}")
+        if int(header[0]) != _PANEL_MAGIC or int(header[1]) != 1:
+            raise ValueError(f"unsupported native BPref panel schema: {path}")
+        xfloat_bytes = int(header[9])
+        if xfloat_bytes not in (4, 8):
+            raise ValueError(f"unsupported XFLOAT size {xfloat_bytes}: {path}")
+        dtype = np.dtype("<f4" if xfloat_bytes == 4 else "<f8")
+        orientation_count = int(header[7])
+        translation_count = int(header[8])
+        payload = np.fromfile(stream, dtype=dtype)
+    euler_values = orientation_count * 9
+    expected = euler_values + orientation_count * translation_count
+    if payload.size != expected:
+        raise ValueError(
+            f"native BPref panel {path} has {payload.size} values, expected {expected}"
+        )
+    return {
+        "path": str(path.resolve()),
+        "iteration": int(header[2]),
+        "part_id": int(header[3]),
+        "image_id": int(header[4]),
+        "class_id": int(header[5]),
+        "iproj_offset": int(header[6]),
+        "orientation_count": orientation_count,
+        "translation_count": translation_count,
+        "eulers": np.asarray(
+            payload[:euler_values].reshape(orientation_count, 9), dtype=np.float32
+        ),
+        "weights": np.asarray(
+            payload[euler_values:].reshape(orientation_count, translation_count),
+            dtype=np.float32,
+        ),
+    }
+
+
+def _load_native_panels(
+    panel_directory: Path,
+    data_star: Path,
+    *,
+    iteration: int,
+) -> dict[int, dict[str, object]]:
+    by_part: dict[int, dict[str, object]] = {}
+    for path in sorted(panel_directory.glob(f"it{iteration}_part*_img*_class*.bin")):
+        panel = _read_native_panel(path)
+        if panel["iteration"] != iteration:
+            raise ValueError(f"panel iteration mismatch: {path}")
+        if panel["image_id"] != 0 or panel["class_id"] != 0:
+            raise ValueError("K=1 native panel replay requires image 0 and class 0")
+        part_id = int(panel["part_id"])
+        if part_id in by_part:
+            raise ValueError(f"duplicate native BPref panel for part {part_id}")
+        by_part[part_id] = panel
+    if not by_part:
+        raise FileNotFoundError(f"no iteration {iteration} panels in {panel_directory}")
+    if set(by_part) != set(range(len(by_part))):
+        raise ValueError("native BPref panel part IDs must be contiguous from zero")
+    original_indices = _part_to_original_indices(data_star, len(by_part))
+    return {
+        original_indices[part_id]: by_part[part_id] for part_id in range(len(by_part))
+    }
+
+
 def _apply_native_topology(
     source: dict[str, np.ndarray],
     topology: dict[int, tuple[int, int]],
+    panels: dict[int, dict[str, object]] | None = None,
 ) -> dict[str, np.ndarray]:
     result = {name: np.asarray(value) for name, value in source.items()}
     trace_ids = np.asarray(source["particle_trace_ids"], dtype=np.int64)
@@ -139,7 +217,7 @@ def _apply_native_topology(
         if trace_id not in topology:
             raise ValueError(f"no native topology for particle trace {trace_id}")
         worker, count = topology[trace_id]
-        if count > replay_order.shape[1]:
+        if count > replay_order.shape[1] and panels is None:
             raise ValueError(
                 f"native launch count {count} exceeds sealed replay width "
                 f"{replay_order.shape[1]} for particle trace {trace_id}"
@@ -148,6 +226,81 @@ def _apply_native_topology(
         counts[row] = count
     result["worker_lane_ids"] = workers
     result["rotation_replay_counts"] = counts
+    if panels is None:
+        return result
+
+    posterior = np.asarray(source["posterior_over_weight_norm"], dtype=np.float32)
+    eulers = np.asarray(source["projector_eulers"], dtype=np.float32)
+    compact = np.asarray(source["compact_rotations"], dtype=np.float32)
+    n_particles, sealed_width = replay_order.shape
+    translation_count = _scalar(source, "translation_count")
+    if posterior.shape != (n_particles, sealed_width, translation_count):
+        raise ValueError("sealed posterior has inconsistent shape")
+    if eulers.shape != (n_particles, sealed_width, 9):
+        raise ValueError("sealed Euler panel has inconsistent shape")
+    if compact.shape != (n_particles, sealed_width, 6):
+        raise ValueError("sealed compact rotation panel has inconsistent shape")
+    identity = np.arange(sealed_width, dtype=np.int32)
+    if not np.all(replay_order == identity[None, :]):
+        raise ValueError("native panel remapping requires identity sealed replay order")
+
+    replay_width = max(sealed_width, int(np.max(counts)))
+    remapped_posterior = np.zeros(
+        (n_particles, replay_width, translation_count), dtype=np.float32
+    )
+    remapped_eulers = np.zeros((n_particles, replay_width, 9), dtype=np.float32)
+    remapped_compact = np.zeros((n_particles, replay_width, 6), dtype=np.float32)
+    for row, trace_id_value in enumerate(trace_ids):
+        trace_id = int(trace_id_value)
+        if trace_id not in panels:
+            raise ValueError(f"no native BPref panel for particle trace {trace_id}")
+        panel = panels[trace_id]
+        native_count = int(panel["orientation_count"])
+        if native_count != int(counts[row]):
+            raise ValueError(
+                f"native topology/panel count mismatch for particle trace {trace_id}"
+            )
+        if int(panel["translation_count"]) != translation_count:
+            raise ValueError(
+                f"native translation count mismatch for particle trace {trace_id}"
+            )
+        native_eulers = np.asarray(panel["eulers"], dtype=np.float32)
+        if native_eulers.shape != (native_count, 9):
+            raise ValueError(f"invalid native Euler shape for particle trace {trace_id}")
+        remapped_eulers[row, :native_count] = native_eulers
+
+        native_rows_by_euler: dict[bytes, list[int]] = {}
+        for native_row in range(native_count):
+            native_rows_by_euler.setdefault(
+                native_eulers[native_row].tobytes(), []
+            ).append(native_row)
+        active_rows = np.flatnonzero(np.any(posterior[row] != 0.0, axis=1))
+        used_native_rows: set[int] = set()
+        for candidate_row_value in active_rows:
+            candidate_row = int(candidate_row_value)
+            key = eulers[row, candidate_row].tobytes()
+            choices = native_rows_by_euler.get(key, [])
+            native_row = next(
+                (choice for choice in choices if choice not in used_native_rows), None
+            )
+            if native_row is None:
+                raise ValueError(
+                    "active candidate Euler has no exact native row for particle "
+                    f"trace {trace_id}, candidate row {candidate_row}"
+                )
+            used_native_rows.add(native_row)
+            remapped_posterior[row, native_row] = posterior[row, candidate_row]
+            remapped_compact[row, native_row] = compact[row, candidate_row]
+
+    result["rotation_count"] = np.asarray(source["rotation_count"]).dtype.type(
+        replay_width
+    )
+    result["posterior_over_weight_norm"] = remapped_posterior
+    result["projector_eulers"] = remapped_eulers
+    result["compact_rotations"] = remapped_compact
+    result["rotation_replay_order"] = np.tile(
+        np.arange(replay_width, dtype=np.int32), (n_particles, 1)
+    )
     return result
 
 
@@ -307,6 +460,7 @@ def replay(
     iteration: int,
     topology_path: Path | None = None,
     topology_data_star: Path | None = None,
+    native_panel_directory: Path | None = None,
 ) -> dict:
     if worker_count <= 0:
         raise ValueError("worker count must be positive")
@@ -323,11 +477,20 @@ def replay(
     input_paths = _ordered_inputs(input_directory)
     if (topology_path is None) != (topology_data_star is None):
         raise ValueError("topology path and topology data STAR must be supplied together")
+    if native_panel_directory is not None and topology_data_star is None:
+        raise ValueError("native panels require topology and topology data STAR")
     topology = None
+    panels = None
     if topology_path is not None and topology_data_star is not None:
         topology = _load_native_topology(
             topology_path, topology_data_star, iteration=iteration
         )
+        if native_panel_directory is not None:
+            panels = _load_native_panels(
+                native_panel_directory, topology_data_star, iteration=iteration
+            )
+            if set(panels) != set(topology):
+                raise ValueError("native topology and panel identities differ")
     first = _load_bundle(input_paths[0])
     group_count = _scalar(first, "reconstruction_group_count")
     source_accumulator = np.asarray(first["data_real_volume"])
@@ -350,7 +513,7 @@ def replay(
         for call_index, input_path in enumerate(input_paths):
             source = _load_bundle(input_path)
             if topology is not None:
-                source = _apply_native_topology(source, topology)
+                source = _apply_native_topology(source, topology, panels)
             if _scalar(source, "reconstruction_group_count") != group_count:
                 raise ValueError("reconstruction group count changes across callbacks")
             before_real = _serial_reduce(
@@ -439,15 +602,23 @@ def replay(
         "schema": SCHEMA,
         "status": "complete",
         "hypothesis": (
-            "persistent_worker_private_accumulators_with_native_topology"
-            if topology is not None
-            else "persistent_worker_private_accumulators"
+            "persistent_worker_private_accumulators_with_native_topology_and_panels"
+            if panels is not None
+            else (
+                "persistent_worker_private_accumulators_with_native_topology"
+                if topology is not None
+                else "persistent_worker_private_accumulators"
+            )
         ),
         "native_physical_grid_replayed": topology is not None,
         "native_worker_owners_replayed": topology is not None,
         "native_topology_path": str(topology_path) if topology_path else None,
         "native_topology_data_star": (
             str(topology_data_star) if topology_data_star else None
+        ),
+        "native_euler_panels_replayed": panels is not None,
+        "native_panel_directory": (
+            str(native_panel_directory) if native_panel_directory else None
         ),
         "worker_count": worker_count,
         "reconstruction_group_count": group_count,
@@ -481,6 +652,7 @@ def main() -> int:
     parser.add_argument("--iteration", type=int, default=1)
     parser.add_argument("--topology", type=Path)
     parser.add_argument("--topology-data-star", type=Path)
+    parser.add_argument("--native-panel-directory", type=Path)
     args = parser.parse_args()
     report = replay(
         args.input_directory,
@@ -492,6 +664,7 @@ def main() -> int:
         iteration=args.iteration,
         topology_path=args.topology,
         topology_data_star=args.topology_data_star,
+        native_panel_directory=args.native_panel_directory,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

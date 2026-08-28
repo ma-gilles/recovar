@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -124,3 +125,74 @@ def test_load_native_topology_maps_part_ids_through_star_identity(
     )
 
     assert result == {10: (2, 6), 20: (3, 7)}
+
+
+def test_native_panel_remap_places_active_rows_at_exact_native_eulers() -> None:
+    candidate_eulers = np.arange(36, dtype=np.float32).reshape(4, 9)
+    native_eulers = np.vstack(
+        [
+            candidate_eulers[2],
+            np.full(9, 101, dtype=np.float32),
+            np.full(9, 102, dtype=np.float32),
+            np.full(9, 103, dtype=np.float32),
+            candidate_eulers[0],
+        ]
+    )
+    posterior = np.zeros((1, 4, 2), dtype=np.float32)
+    posterior[0, 0] = [0.25, 0.5]
+    posterior[0, 2] = [0.75, 0.0]
+    source = {
+        "particle_trace_ids": np.asarray([10], dtype=np.int32),
+        "worker_lane_ids": np.asarray([0], dtype=np.int32),
+        "rotation_replay_order": np.arange(4, dtype=np.int32)[None, :],
+        "rotation_replay_counts": np.asarray([4], dtype=np.int32),
+        "rotation_count": np.int64(4),
+        "translation_count": np.int64(2),
+        "posterior_over_weight_norm": posterior,
+        "projector_eulers": candidate_eulers[None, :, :],
+        "compact_rotations": np.arange(24, dtype=np.float32).reshape(1, 4, 6),
+    }
+    panel = {
+        "orientation_count": 5,
+        "translation_count": 2,
+        "eulers": native_eulers,
+        "weights": np.zeros((5, 2), dtype=np.float32),
+    }
+
+    result = worker_private._apply_native_topology(
+        source, {10: (3, 5)}, {10: panel}
+    )
+
+    assert int(result["rotation_count"]) == 5
+    assert result["worker_lane_ids"].tolist() == [3]
+    assert result["rotation_replay_counts"].tolist() == [5]
+    assert np.array_equal(result["projector_eulers"][0], native_eulers)
+    assert np.array_equal(result["posterior_over_weight_norm"][0, 0], [0.75, 0.0])
+    assert np.array_equal(result["posterior_over_weight_norm"][0, 4], [0.25, 0.5])
+    assert np.count_nonzero(result["posterior_over_weight_norm"][0, 1:4]) == 0
+
+
+def test_read_native_panel_is_fail_closed_and_preserves_float32(tmp_path) -> None:
+    path = tmp_path / "it1_part0_img0_class0.bin"
+    header = (
+        worker_private._PANEL_MAGIC,
+        1,
+        1,
+        0,
+        0,
+        0,
+        1,
+        2,
+        3,
+        4,
+    )
+    eulers = np.arange(18, dtype="<f4")
+    weights = np.arange(6, dtype="<f4") + 20
+    path.write_bytes(struct.pack("<10Q", *header) + eulers.tobytes() + weights.tobytes())
+
+    panel = worker_private._read_native_panel(path)
+
+    assert panel["orientation_count"] == 2
+    assert panel["translation_count"] == 3
+    assert np.array_equal(panel["eulers"], eulers.reshape(2, 9))
+    assert np.array_equal(panel["weights"], weights.reshape(2, 3))

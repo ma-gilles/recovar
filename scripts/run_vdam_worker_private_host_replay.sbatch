@@ -19,9 +19,14 @@ set -euo pipefail
 : "${RECOVAR_VDAM_EXACT_NATIVE_PTX:?set the exact RELION PTX}"
 VDAM_TOPOLOGY=${VDAM_TOPOLOGY:-}
 VDAM_TOPOLOGY_DATA_STAR=${VDAM_TOPOLOGY_DATA_STAR:-}
+VDAM_NATIVE_PANEL_DIRECTORY=${VDAM_NATIVE_PANEL_DIRECTORY:-}
 if [[ -n "${VDAM_TOPOLOGY}" || -n "${VDAM_TOPOLOGY_DATA_STAR}" ]]; then
   test -s "${VDAM_TOPOLOGY}"
   test -s "${VDAM_TOPOLOGY_DATA_STAR}"
+fi
+if [[ -n "${VDAM_NATIVE_PANEL_DIRECTORY}" ]]; then
+  test -d "${VDAM_NATIVE_PANEL_DIRECTORY}"
+  test -n "${VDAM_TOPOLOGY}"
 fi
 
 cd "${VDAM_REPO_ROOT}"
@@ -55,6 +60,9 @@ if [[ -n "${VDAM_TOPOLOGY}" ]]; then
   command+=(--topology "${VDAM_TOPOLOGY}" \
     --topology-data-star "${VDAM_TOPOLOGY_DATA_STAR}")
 fi
+if [[ -n "${VDAM_NATIVE_PANEL_DIRECTORY}" ]]; then
+  command+=(--native-panel-directory "${VDAM_NATIVE_PANEL_DIRECTORY}")
+fi
 "${command[@]}" \
   > "${VDAM_OUTPUT_DIRECTORY}/runner.stdout" \
   2> "${VDAM_OUTPUT_DIRECTORY}/runner.stderr"
@@ -62,12 +70,13 @@ end_s=$(date +%s)
 
 python - "${VDAM_OUTPUT_DIRECTORY}/provenance.json" \
   "${SLURM_JOB_ID}" "${visible_gpu_uuid}" "${VDAM_EXPECTED_HEAD}" \
-  "$((end_s - start_s))" "${VDAM_TOPOLOGY}" "${VDAM_TOPOLOGY_DATA_STAR}" <<'PY'
+  "$((end_s - start_s))" "${VDAM_TOPOLOGY}" "${VDAM_TOPOLOGY_DATA_STAR}" \
+  "${VDAM_NATIVE_PANEL_DIRECTORY}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-output, job_id, gpu_uuid, head, wall_s, topology, data_star = sys.argv[1:]
+output, job_id, gpu_uuid, head, wall_s, topology, data_star, panels = sys.argv[1:]
 Path(output).write_text(
     json.dumps(
         {
@@ -77,6 +86,7 @@ Path(output).write_text(
             "wall_seconds": int(wall_s),
             "native_topology": topology or None,
             "native_topology_data_star": data_star or None,
+            "native_panel_directory": panels or None,
         },
         indent=2,
         sort_keys=True,
