@@ -15,6 +15,10 @@ set -euo pipefail
 
 : "${RUN_ROOT:?RUN_ROOT is required}"
 : "${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
+: "${REPO:?REPO is required}"
+: "${CASE_ROOT:?CASE_ROOT is required}"
+: "${SOURCE_RECOVAR:?SOURCE_RECOVAR is required}"
+: "${FINAL_RELION_ITERATION:?FINAL_RELION_ITERATION is required}"
 : "${RECOVAR_CAPTURE_ROOT:?RECOVAR_CAPTURE_ROOT is required}"
 : "${RELION_CAPTURE_ROOT:?RELION_CAPTURE_ROOT is required}"
 : "${RECOVAR_CAPTURE_JOB_ID:?RECOVAR_CAPTURE_JOB_ID is required}"
@@ -23,29 +27,27 @@ set -euo pipefail
 : "${EXPECTED_ANALYZER_SHA256:?EXPECTED_ANALYZER_SHA256 is required}"
 : "${EXPECTED_LAUNCHER_SHA256:?EXPECTED_LAUNCHER_SHA256 is required}"
 
-REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_native_units_instrumentation_20260826
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 LAUNCHER=${REPO}/scripts/compare_k1_case10_joined_final_boundary.sbatch
 ANALYZER=${REPO}/scripts/replay_final_bpref_dump.py
-FIXED_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
-CASE_ROOT=${FIXED_ROOT}/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0
 DATA=${CASE_ROOT}/data
 CONTROL=${CASE_ROOT}/relion_ref
-SOURCE_RECOVAR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET/output
 REC_DUMP=${RECOVAR_CAPTURE_ROOT}/final_bpref_accum/recovar_final_bpref_accum.npz
-NATIVE_PREFIX=${RELION_CAPTURE_ROOT}/bpref/mstep_it018_rank1_half0_c0_pre_reconstruct
+NATIVE_ITERATION_TAG=$(printf '%03d' "${FINAL_RELION_ITERATION}")
+NATIVE_PREFIX=${RELION_CAPTURE_ROOT}/bpref/mstep_it${NATIVE_ITERATION_TAG}_rank1_half0_c0_pre_reconstruct
 ANALYSIS=${RUN_ROOT}/analysis
 PROVENANCE=${RUN_ROOT}/provenance
 
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test -f "${RELION_CAPTURE_ROOT}/SUCCESS_${RELION_CAPTURE_JOB_ID}"
+test -f "${RECOVAR_CAPTURE_ROOT}/SUCCESS_${RECOVAR_CAPTURE_JOB_ID}"
 test -s "${REC_DUMP}"
 for suffix in bpref_data bpref_weight tau2 sigma2 data_vs_prior fsc fourier_coverage; do
     test -s "${NATIVE_PREFIX}_${suffix}.bin"
 done
 test -s "${NATIVE_PREFIX}_bpref_meta.txt"
-rg -q '^iter=18$' "${NATIVE_PREFIX}_bpref_meta.txt"
+rg -q "^iter=${FINAL_RELION_ITERATION}$" "${NATIVE_PREFIX}_bpref_meta.txt"
 rg -q '^rank=1$' "${NATIVE_PREFIX}_bpref_meta.txt"
 rg -q '^halfset=0$' "${NATIVE_PREFIX}_bpref_meta.txt"
 test -s "${RELION_CAPTURE_ROOT}/relion/run_class001.mrc"
@@ -175,7 +177,7 @@ threshold = 0.999999
 for row in comparisons.values():
     row["passed"] = row["fsc_auc_non_dc"] >= threshold
 report = {
-    "schema": "em-k1-case10-final-boundary-inertness-v1",
+    "schema": "em-k1-final-boundary-inertness-v2",
     "metric_policy": "signed shellwise FSC and non-DC FSC-AUC; no correlation",
     "fsc_auc_non_dc_threshold": threshold,
     "comparisons": comparisons,

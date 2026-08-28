@@ -12333,3 +12333,48 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_native_preprocess_retry1_it2_1a6ce905_20260813T2005ET`,
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_live_it2_1a6ce905_20260813T2030ET`, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_nativepre_it2_1a6ce905_20260813T2030ET`.
+
+## 2026-08-28 01:30 EDT — post-PR-167 final K=1 reconstruction and tau gates
+
+- PR #167 is merged on branch `codex/k1-pr167-integration-20260827` at
+  `73867f153`.  The mandatory ten-group long-test matrix is green.  The unit
+  retry is job `13073779` (`7061 passed, 53 skipped`); the other successful
+  groups are jobs `13073493`--`13073501`.  The immutable logs are under
+  `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_pr167_integration_20260827/logs`.
+- The fixed K=1 score is `31/34`.  Cases 4, 5, and 10 have final merged
+  FSC-AUC `0.992612675922`, `0.989369975606`, and `0.994309183056` against
+  the unchanged `0.995` gate.  Their numbered minima remain at least
+  `0.999723064486`.
+- The exact joined reconstruction-stage report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_joined_final_reconstruct_stage_audit_packed_20260828T0100ET/analysis/K1_JOINED_FINAL_RECONSTRUCTION_STAGES.json`.
+  Given identical native joined BPref and tau, numerator decentering is within
+  about `1e-16`, Fourier division within `1.7e-16`, and the reconstructed map
+  within about `1e-14`.  Generic final reconstruction arithmetic is rejected.
+- The sealed RELION-tau oracle report is
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_sealed_relion_tau_oracle_20260828T0110ET/analysis/recovar_accumulator_relion_tau_replay.json`.
+  It moves the current RECOVAR accumulator replay from `0.993882650175` to
+  `0.994488754974`.  Tau/FSC drift therefore explains about 54 percent of the
+  gate deficit, but the replay still misses by `0.000511245026`; the remaining
+  boundary is the joined BPref numerator/weight source.
+- RELION source confirms `joinTwoHalvesAtLowResolution()` precedes
+  `compareTwoHalves()`, as in RECOVAR.  Both engines' explicit joined maps are
+  expected to differ strongly from simple half-map averages, so the
+  merged-only pattern does not independently demonstrate a low-resolution
+  join bug.
+- The old forced-continuation particle panel is rejected for causal use: its
+  final native map is only about `0.747` FSC-AUC from the sealed uninterrupted
+  native map.  Candidate-set differences from that run are trajectory
+  confounded.
+- Fresh uninterrupted native jobs are `13076564` for case 4 (target physical
+  iteration 18) and `13081991` for case 10 (target physical iteration 16).
+  Clean integrated RECOVAR case-4 job `13078156` captures the corresponding
+  final accumulator.  Run roots are, respectively,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_native_fresh_final_accum_20260827T2240ET`,
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_native_fresh_final_accum_20260828T0145ET`, and
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_clean_final_boundary_pr167_20260828T0045ET`.
+- `scripts/compare_k1_case10_joined_final_boundary.sbatch` is now diagnostic-
+  case agnostic despite its historical filename: repository, case, source
+  output, and final RELION iteration are required inputs.  It verifies both
+  producer success markers and prevents the previous hard-coded case-10/
+  iteration-18 mismatch.  The active comparison remains fail-closed on fresh
+  native inertness FSC-AUC `>=0.999999` before interpreting BPref fields.

@@ -29957,3 +29957,38 @@ soft-posterior/support drift, not the root cause.
 The focused shell analyzer tests pass (`5 passed`), Ruff passes, and
 `git diff --check` passes.  Case-4 and case-5 terminal producers `13035321`
 and `13035322` remain active and have not been modified or reprioritized.
+
+## 2026-08-28 01:30 EDT — PR-167 integration is green; final K=1 boundary is BPref operands
+
+PR #167 is integrated on production candidate
+`codex/k1-pr167-integration-20260827` at `73867f153`.  All ten mandatory
+parallel long-test groups pass; the unit retry is job `13073779` with
+`7061 passed, 53 skipped`.  The fixed K=1 score is `31/34`: only cases 4, 5,
+and 10 remain below the unchanged final merged FSC-AUC gate, at
+`0.992612675922`, `0.989369975606`, and `0.994309183056` respectively.
+
+Case 10 is now localized past reconstruction.  Replaying a joined native
+RELION BPref and its live tau through RECOVAR matches the native reconstruction
+stages at approximately `1e-14` map relative-L2.  Replaying RECOVAR's joined
+accumulator with sealed RELION tau improves merged FSC-AUC from
+`0.993882650175` to `0.994488754974`, closing about 54 percent of the original
+gate deficit but remaining `0.000511245026` below the gate.  Reconstruction
+arithmetic is rejected; tau/FSC drift is causal but insufficient.  The active
+boundary is the posterior-weighted BPref numerator/weight source before the
+joined reconstruction.
+
+The apparent forced-continuation final candidate mismatch is quarantined:
+that native continuation is only about `0.747` FSC-AUC from the sealed fresh
+native result and cannot support tuple-level attribution.  Uninterrupted fresh
+native BPref captures are jobs `13076564` (case 4, final iteration 18) and
+`13081991` (case 10, final iteration 16).  Clean integrated RECOVAR case-4
+capture `13078156` runs independently.  No producer or unrelated Slurm job is
+modified, cancelled, or reprioritized.
+
+The next acceptance gate is fail-closed: first require each fresh native map
+to reproduce its sealed native map at FSC-AUC `>=0.999999`, then compare the
+joined numerator, weight, FSC, sigma2, tau2, and replayed map.  If the BPref
+fields differ, localize the first unequal per-particle tuple, posterior,
+significant support, or contribution operand.  If they agree, move to the
+exact reduction destination/order.  Do not enable a production treatment or
+run another complete trajectory before this boundary is classified.
