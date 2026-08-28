@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import pytest
+
+from scripts import run_vdam_exact_native_host_replay
+
 ROOT = Path(__file__).resolve().parents[3]
 CUDA_SOURCE = ROOT / "recovar" / "cuda" / "cuda_backproject.cu"
 PYTHON_WRAPPER = ROOT / "recovar" / "cuda_backproject.py"
@@ -62,6 +66,66 @@ def test_external_host_replay_can_preserve_input_bundles_fail_closed():
     assert "shutil.copy2(input_path, capture_path)" in wrapper
 
 
+def test_external_host_replay_can_capture_quiesced_prelaunch_state():
+    cuda_source = CUDA_SOURCE.read_text()
+    helper = HELPER.read_text()
+
+    assert "quiesced_prelaunch_target_particle_id" in cuda_source
+    assert "cudaDeviceSynchronize()" in cuda_source
+    assert "std::shared_mutex quiesced_prelaunch_launch_gate" in cuda_source
+    assert "std::unique_lock<std::shared_mutex>" in cuda_source
+    assert "std::shared_lock<std::shared_mutex>" in cuda_source
+    assert "RECOVAR_VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR" in helper
+    assert "RECOVAR_VDAM_QUIESCED_PRELAUNCH_PARTICLE_ID" in helper
+    assert "recovar.vdam_quiesced_prelaunch.v1" in helper
+    assert "refusing to overwrite" in helper
+
+
+def test_quiesced_prelaunch_capture_requires_directory_and_particle_id(
+    tmp_path,
+    monkeypatch,
+):
+    input_path = tmp_path / "input.npz"
+    library_path = tmp_path / "libcuda_backproject.so"
+    input_path.touch()
+    library_path.touch()
+    monkeypatch.setenv("RECOVAR_VDAM_EXACT_NATIVE_PTX", str(tmp_path / "exact.ptx"))
+    monkeypatch.setenv(
+        "RECOVAR_VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR",
+        str(tmp_path / "capture"),
+    )
+
+    with pytest.raises(RuntimeError, match="requires both directory and particle ID"):
+        run_vdam_exact_native_host_replay.run_replay(
+            input_path,
+            tmp_path / "output.npz",
+            library_path,
+        )
+
+
+def test_quiesced_prelaunch_capture_rejects_negative_particle_id(
+    tmp_path,
+    monkeypatch,
+):
+    input_path = tmp_path / "input.npz"
+    library_path = tmp_path / "libcuda_backproject.so"
+    input_path.touch()
+    library_path.touch()
+    monkeypatch.setenv("RECOVAR_VDAM_EXACT_NATIVE_PTX", str(tmp_path / "exact.ptx"))
+    monkeypatch.setenv(
+        "RECOVAR_VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR",
+        str(tmp_path / "capture"),
+    )
+    monkeypatch.setenv("RECOVAR_VDAM_QUIESCED_PRELAUNCH_PARTICLE_ID", "-1")
+
+    with pytest.raises(ValueError, match="must be nonnegative"):
+        run_vdam_exact_native_host_replay.run_replay(
+            input_path,
+            tmp_path / "output.npz",
+            library_path,
+        )
+
+
 def test_exact_wavg_predecessor_uses_relion_ptx_and_same_particle_stream():
     cuda_source = CUDA_SOURCE.read_text()
 
@@ -109,5 +173,11 @@ def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
     assert "std::ios::app" in cuda_source
     assert "if (trace.tellp() == 0)" in cuda_source
     assert 'VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV = "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE"' in local_engine
-    assert "block_trace_active or host_gap_trace_active" in local_engine
+    for diagnostic_gate in (
+        "block_trace_active",
+        "host_gap_trace_active",
+        "host_replay_capture_active",
+        "quiesced_prelaunch_capture_active",
+    ):
+        assert diagnostic_gate in local_engine
     assert "candidate_trace_active=_relion_vdam_candidate_trace_active(" in local_engine

@@ -49,6 +49,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -5049,7 +5050,15 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int rotation_replay_stride,
     bool native_trace_shape_replay,
     bool captured_particle_timing_replay,
-    bool candidate_trace_active)
+    bool candidate_trace_active,
+    float* quiesced_prelaunch_data_real,
+    float* quiesced_prelaunch_data_imag,
+    float* quiesced_prelaunch_weight,
+    std::int64_t quiesced_prelaunch_target_particle_id,
+    std::int32_t* quiesced_prelaunch_found,
+    std::int32_t* quiesced_prelaunch_particle_row,
+    std::int32_t* quiesced_prelaunch_worker_lane,
+    std::int32_t* quiesced_prelaunch_reconstruction_group)
 {
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
@@ -5087,6 +5096,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         &vdam_candidate_block_trace_writer();
     const bool candidate_trace_requested =
         candidate_trace_active && candidate_trace_writer->requested();
+    const bool quiesced_prelaunch_capture_requested =
+        quiesced_prelaunch_target_particle_id >= 0;
     const bool device_trace_requested =
         candidate_trace_requested || native_trace_shape_replay;
     const char* exact_native_ptx_path =
@@ -5154,7 +5165,15 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     if ((candidate_trace_requested && !candidate_trace_writer->healthy()) ||
         (candidate_trace_requested && native_trace_shape_replay) ||
         (device_trace_requested && serial_rotation_replay) ||
-        (captured_particle_timing_replay && parallel_worker_replay))
+        (captured_particle_timing_replay && parallel_worker_replay) ||
+        (quiesced_prelaunch_capture_requested &&
+         (quiesced_prelaunch_data_real == nullptr ||
+          quiesced_prelaunch_data_imag == nullptr ||
+          quiesced_prelaunch_weight == nullptr ||
+          quiesced_prelaunch_found == nullptr ||
+          quiesced_prelaunch_particle_row == nullptr ||
+          quiesced_prelaunch_worker_lane == nullptr ||
+          quiesced_prelaunch_reconstruction_group == nullptr)))
         return cudaErrorInvalidValue;
     // The extracted native entry has RELION's ordinary Ref3D ABI.  Keep the
     // discriminator fail-closed instead of silently mixing it with RECOVAR's
@@ -5367,7 +5386,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&worker_lanes_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
         if (err != cudaSuccess) goto cleanup;
-        if (candidate_trace_requested || wavg_bpref_host_gap_trace_requested)
+        if (candidate_trace_requested || wavg_bpref_host_gap_trace_requested ||
+            quiesced_prelaunch_capture_requested)
         {
             err = cudaMallocHost(
                 reinterpret_cast<void**>(&particle_trace_ids_host),
@@ -5414,7 +5434,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             cudaMemcpyDeviceToHost,
             stream);
         if (err != cudaSuccess) goto cleanup;
-        if (candidate_trace_requested || wavg_bpref_host_gap_trace_requested)
+        if (candidate_trace_requested || wavg_bpref_host_gap_trace_requested ||
+            quiesced_prelaunch_capture_requested)
         {
             err = cudaMemcpyAsync(
                 particle_trace_ids_host,
@@ -5468,7 +5489,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 goto cleanup;
             }
             if ((candidate_trace_requested ||
-                 wavg_bpref_host_gap_trace_requested) &&
+                 wavg_bpref_host_gap_trace_requested ||
+                 quiesced_prelaunch_capture_requested) &&
                 particle_trace_ids_host[particle] < 0)
             {
                 err = cudaErrorInvalidValue;
@@ -5589,6 +5611,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             static_cast<size_t>(n_particles), -1);
         std::vector<long long> wavg_to_bpref_return_ns(
             static_cast<size_t>(n_particles), -1);
+        int quiesced_prelaunch_capture_count = 0;
+        std::shared_mutex quiesced_prelaunch_launch_gate;
         const auto launch_particle_with_accumulators = [&](
             int64_t particle,
             int lane,
@@ -5705,6 +5729,55 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     wavg_host_enqueue_ns[particle] =
                         std::chrono::duration_cast<std::chrono::nanoseconds>(
                             exact_wavg_return_time - wavg_enqueue_start).count();
+            }
+            if (quiesced_prelaunch_capture_requested &&
+                particle_trace_ids_host[particle] ==
+                    quiesced_prelaunch_target_particle_id)
+            {
+                if constexpr (!std::is_same_v<Accumulator, float>)
+                {
+                    return cudaErrorInvalidValue;
+                }
+                else
+                {
+                    if (quiesced_prelaunch_capture_count != 0)
+                        return cudaErrorInvalidValue;
+                    // RELION copies a worker-private accumulator after
+                    // synchronizing that worker's class stream. RECOVAR's
+                    // current accumulator is shared across worker streams, so
+                    // a lane-only copy would race with other workers. Quiesce
+                    // all streams and label the diagnostic explicitly.
+                    cudaError_t capture_error = cudaDeviceSynchronize();
+                    if (capture_error != cudaSuccess) return capture_error;
+                    const size_t capture_bytes =
+                        static_cast<size_t>(accumulator_stride) * sizeof(float);
+                    capture_error = cudaMemcpy(
+                        quiesced_prelaunch_data_real,
+                        accumulator_real + accumulator_offset,
+                        capture_bytes,
+                        cudaMemcpyDeviceToHost);
+                    if (capture_error != cudaSuccess) return capture_error;
+                    capture_error = cudaMemcpy(
+                        quiesced_prelaunch_data_imag,
+                        accumulator_imag + accumulator_offset,
+                        capture_bytes,
+                        cudaMemcpyDeviceToHost);
+                    if (capture_error != cudaSuccess) return capture_error;
+                    capture_error = cudaMemcpy(
+                        quiesced_prelaunch_weight,
+                        accumulator_weight + accumulator_offset,
+                        capture_bytes,
+                        cudaMemcpyDeviceToHost);
+                    if (capture_error != cudaSuccess) return capture_error;
+                    *quiesced_prelaunch_found = 1;
+                    *quiesced_prelaunch_particle_row =
+                        static_cast<std::int32_t>(particle);
+                    *quiesced_prelaunch_worker_lane =
+                        static_cast<std::int32_t>(lane);
+                    *quiesced_prelaunch_reconstruction_group =
+                        reconstruction_groups_host[particle];
+                    ++quiesced_prelaunch_capture_count;
+                }
             }
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
@@ -6038,7 +6111,24 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                 cudaStreamSynchronize(particle_streams[lane]);
                             if (lane_errors[lane] != cudaSuccess) return;
                         }
-                        lane_errors[lane] = launch_particle(particle, lane);
+                        if (quiesced_prelaunch_capture_requested &&
+                            particle_trace_ids_host[particle] ==
+                                quiesced_prelaunch_target_particle_id)
+                        {
+                            std::unique_lock<std::shared_mutex> launch_lock(
+                                quiesced_prelaunch_launch_gate);
+                            lane_errors[lane] = launch_particle(particle, lane);
+                        }
+                        else if (quiesced_prelaunch_capture_requested)
+                        {
+                            std::shared_lock<std::shared_mutex> launch_lock(
+                                quiesced_prelaunch_launch_gate);
+                            lane_errors[lane] = launch_particle(particle, lane);
+                        }
+                        else
+                        {
+                            lane_errors[lane] = launch_particle(particle, lane);
+                        }
                         if (lane_errors[lane] != cudaSuccess) return;
                         lane_started = true;
                     }
@@ -6269,6 +6359,13 @@ struct RelionVdamExactHostReplayArguments
     float* data_imag_volume;
     float* weight_volume;
     float* denominator_sum;
+    float* quiesced_prelaunch_data_real;
+    float* quiesced_prelaunch_data_imag;
+    float* quiesced_prelaunch_weight;
+    std::int32_t* quiesced_prelaunch_found;
+    std::int32_t* quiesced_prelaunch_particle_row;
+    std::int32_t* quiesced_prelaunch_worker_lane;
+    std::int32_t* quiesced_prelaunch_reconstruction_group;
     std::int64_t projector_size;
     std::int64_t n_particles;
     std::int64_t rotation_count;
@@ -6286,6 +6383,7 @@ struct RelionVdamExactHostReplayArguments
     std::int32_t projection_padding_factor;
     std::int32_t reconstruction_group_count;
     std::int32_t parallel_worker_replay;
+    std::int64_t quiesced_prelaunch_target_particle_id;
 };
 
 extern "C" int recovar_relion_vdam_exact_native_host_replay(
@@ -6325,6 +6423,17 @@ extern "C" int recovar_relion_vdam_exact_native_host_replay(
         arguments->reconstruction_group_count <= 0 ||
         (arguments->parallel_worker_replay != 0 &&
          arguments->parallel_worker_replay != 1))
+        return static_cast<int>(cudaErrorInvalidValue);
+    const bool quiesced_prelaunch_capture_requested =
+        arguments->quiesced_prelaunch_target_particle_id >= 0;
+    if (quiesced_prelaunch_capture_requested &&
+        (arguments->quiesced_prelaunch_data_real == nullptr ||
+         arguments->quiesced_prelaunch_data_imag == nullptr ||
+         arguments->quiesced_prelaunch_weight == nullptr ||
+         arguments->quiesced_prelaunch_found == nullptr ||
+         arguments->quiesced_prelaunch_particle_row == nullptr ||
+         arguments->quiesced_prelaunch_worker_lane == nullptr ||
+         arguments->quiesced_prelaunch_reconstruction_group == nullptr))
         return static_cast<int>(cudaErrorInvalidValue);
     const char* exact_ptx = std::getenv(kRelionVdamExactNativePtxEnv);
     if (exact_ptx == nullptr || exact_ptx[0] == '\0')
@@ -6479,7 +6588,15 @@ extern "C" int recovar_relion_vdam_exact_native_host_replay(
         0,
         false,
         false,
-        false);
+        false,
+        arguments->quiesced_prelaunch_data_real,
+        arguments->quiesced_prelaunch_data_imag,
+        arguments->quiesced_prelaunch_weight,
+        arguments->quiesced_prelaunch_target_particle_id,
+        arguments->quiesced_prelaunch_found,
+        arguments->quiesced_prelaunch_particle_row,
+        arguments->quiesced_prelaunch_worker_lane,
+        arguments->quiesced_prelaunch_reconstruction_group);
     if (error != cudaSuccess) goto cleanup_host_replay;
 
 #define RECOVAR_HOST_REPLAY_COPY_OUTPUT(host_pointer, device_pointer, count)      \
@@ -9737,7 +9854,15 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<int>(rotation_replay_stride),
         native_trace_shape_replay != 0,
         captured_particle_timing_replay != 0,
-        candidate_trace_active != 0);
+        candidate_trace_active != 0,
+        nullptr,
+        nullptr,
+        nullptr,
+        -1,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();

@@ -32,6 +32,13 @@ class ReplayArguments(ctypes.Structure):
         ("data_imag_volume", ctypes.c_void_p),
         ("weight_volume", ctypes.c_void_p),
         ("denominator_sum", ctypes.c_void_p),
+        ("quiesced_prelaunch_data_real", ctypes.c_void_p),
+        ("quiesced_prelaunch_data_imag", ctypes.c_void_p),
+        ("quiesced_prelaunch_weight", ctypes.c_void_p),
+        ("quiesced_prelaunch_found", ctypes.c_void_p),
+        ("quiesced_prelaunch_particle_row", ctypes.c_void_p),
+        ("quiesced_prelaunch_worker_lane", ctypes.c_void_p),
+        ("quiesced_prelaunch_reconstruction_group", ctypes.c_void_p),
         ("projector_size", ctypes.c_int64),
         ("n_particles", ctypes.c_int64),
         ("rotation_count", ctypes.c_int64),
@@ -49,6 +56,7 @@ class ReplayArguments(ctypes.Structure):
         ("projection_padding_factor", ctypes.c_int32),
         ("reconstruction_group_count", ctypes.c_int32),
         ("parallel_worker_replay", ctypes.c_int32),
+        ("quiesced_prelaunch_target_particle_id", ctypes.c_int64),
     ]
 
 
@@ -70,6 +78,10 @@ def _pointer(value: np.ndarray) -> ctypes.c_void_p:
     return ctypes.c_void_p(int(value.ctypes.data))
 
 
+def _optional_pointer(value: np.ndarray | None) -> ctypes.c_void_p:
+    return ctypes.c_void_p() if value is None else _pointer(value)
+
+
 def run_replay(input_path: Path, output_path: Path, library_path: Path) -> dict:
     if output_path.exists():
         raise FileExistsError(f"refusing to overwrite {output_path}")
@@ -77,6 +89,26 @@ def run_replay(input_path: Path, output_path: Path, library_path: Path) -> dict:
         raise RuntimeError("RECOVAR_VDAM_EXACT_NATIVE_PTX is required")
     if not library_path.is_file():
         raise FileNotFoundError(library_path)
+    prelaunch_capture_dir_text = os.environ.get(
+        "RECOVAR_VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR", ""
+    ).strip()
+    prelaunch_target_text = os.environ.get(
+        "RECOVAR_VDAM_QUIESCED_PRELAUNCH_PARTICLE_ID", ""
+    ).strip()
+    if bool(prelaunch_capture_dir_text) != bool(prelaunch_target_text):
+        raise RuntimeError(
+            "quiesced prelaunch capture requires both directory and particle ID"
+        )
+    prelaunch_target = -1
+    if prelaunch_target_text:
+        try:
+            prelaunch_target = int(prelaunch_target_text)
+        except ValueError as exc:
+            raise ValueError(
+                "quiesced prelaunch particle ID must be an integer"
+            ) from exc
+        if prelaunch_target < 0:
+            raise ValueError("quiesced prelaunch particle ID must be nonnegative")
 
     with np.load(input_path, allow_pickle=False) as bundle:
         projector_size = _scalar(bundle, "projector_size")
@@ -148,6 +180,26 @@ def run_replay(input_path: Path, output_path: Path, library_path: Path) -> dict:
         data_real = _array(bundle, "data_real_volume", np.float32, accumulator_shape)
         data_imag = _array(bundle, "data_imag_volume", np.float32, accumulator_shape)
         weight = _array(bundle, "weight_volume", np.float32, accumulator_shape)
+        prelaunch_shape = (accumulator_shape[1],)
+        prelaunch_real = (
+            np.empty(prelaunch_shape, dtype=np.float32)
+            if prelaunch_target >= 0
+            else None
+        )
+        prelaunch_imag = (
+            np.empty(prelaunch_shape, dtype=np.float32)
+            if prelaunch_target >= 0
+            else None
+        )
+        prelaunch_weight = (
+            np.empty(prelaunch_shape, dtype=np.float32)
+            if prelaunch_target >= 0
+            else None
+        )
+        prelaunch_found = np.zeros(1, dtype=np.int32)
+        prelaunch_particle_row = np.full(1, -1, dtype=np.int32)
+        prelaunch_worker_lane = np.full(1, -1, dtype=np.int32)
+        prelaunch_reconstruction_group = np.full(1, -1, dtype=np.int32)
 
         denominator = np.empty(
             (n_particles, rotation_count, pixel_count), dtype=np.float32
@@ -171,6 +223,13 @@ def run_replay(input_path: Path, output_path: Path, library_path: Path) -> dict:
             _pointer(data_imag),
             _pointer(weight),
             _pointer(denominator),
+            _optional_pointer(prelaunch_real),
+            _optional_pointer(prelaunch_imag),
+            _optional_pointer(prelaunch_weight),
+            _pointer(prelaunch_found),
+            _pointer(prelaunch_particle_row),
+            _pointer(prelaunch_worker_lane),
+            _pointer(prelaunch_reconstruction_group),
             projector_size,
             n_particles,
             rotation_count,
@@ -188,6 +247,7 @@ def run_replay(input_path: Path, output_path: Path, library_path: Path) -> dict:
             _scalar(bundle, "projection_padding_factor"),
             reconstruction_group_count,
             _scalar(bundle, "parallel_worker_replay"),
+            prelaunch_target,
         )
 
     library = ctypes.CDLL(str(library_path), mode=ctypes.RTLD_LOCAL)
@@ -197,6 +257,27 @@ def run_replay(input_path: Path, output_path: Path, library_path: Path) -> dict:
     error = int(replay(ctypes.byref(arguments)))
     if error != 0:
         raise RuntimeError(f"clean-process CUDA replay failed with error {error}")
+
+    prelaunch_capture_path = None
+    if int(prelaunch_found[0]) != 0:
+        capture_dir = Path(prelaunch_capture_dir_text).expanduser().resolve()
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        prelaunch_capture_path = capture_dir / (
+            f"particle-{prelaunch_target}-quiesced-prelaunch.npz"
+        )
+        if prelaunch_capture_path.exists():
+            raise FileExistsError(f"refusing to overwrite {prelaunch_capture_path}")
+        np.savez(
+            prelaunch_capture_path,
+            schema=np.asarray("recovar.vdam_quiesced_prelaunch.v1"),
+            target_particle_id=np.int64(prelaunch_target),
+            particle_row=prelaunch_particle_row,
+            worker_lane=prelaunch_worker_lane,
+            reconstruction_group=prelaunch_reconstruction_group,
+            data_real_volume=prelaunch_real,
+            data_imag_volume=prelaunch_imag,
+            weight_volume=prelaunch_weight,
+        )
 
     np.savez(
         output_path,
@@ -215,6 +296,10 @@ def run_replay(input_path: Path, output_path: Path, library_path: Path) -> dict:
         "rotation_count": rotation_count,
         "translation_count": translation_count,
         "pixel_count": pixel_count,
+        "quiesced_prelaunch_found": bool(prelaunch_found[0]),
+        "quiesced_prelaunch_capture": (
+            None if prelaunch_capture_path is None else str(prelaunch_capture_path)
+        ),
     }
 
 

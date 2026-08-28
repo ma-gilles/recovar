@@ -366,6 +366,9 @@ VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV = "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE"
 VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV = (
     "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR"
 )
+VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR_ENV = (
+    "RECOVAR_VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR"
+)
 VDAM_CANDIDATE_BLOCK_MAP_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP"
 VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_ITER"
 VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPACITY"
@@ -1183,7 +1186,15 @@ def _relion_vdam_candidate_trace_ids_for_images(
     host_replay_capture_active = bool(
         os.environ.get(VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV, "").strip()
     )
-    if not (block_trace_active or host_gap_trace_active or host_replay_capture_active):
+    quiesced_prelaunch_capture_active = bool(
+        os.environ.get(VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR_ENV, "").strip()
+    )
+    if not (
+        block_trace_active
+        or host_gap_trace_active
+        or host_replay_capture_active
+        or quiesced_prelaunch_capture_active
+    ):
         return None
     original_indices = np.asarray(
         experiment_dataset.original_image_indices_from_local(image_indices),
