@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from scripts.audit_vdam_repeat_panel import classify_checkpoint
+import pytest
+
+from scripts.audit_vdam_repeat_panel import RepeatPanelError, _runtime_summary, classify_checkpoint
 
 SBATCH_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_relion_repeat_panel.sbatch"
 SUMMARY_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_vdam_repeat_panel_summary.sbatch"
@@ -87,3 +90,36 @@ def test_repeat_panel_keeps_frozen_gt_nondegradation_gate():
 
     assert result["pass"] is False
     assert result["checks"]["all_runs_meet_frozen_gt_nondegradation_gate"] is False
+
+
+def _write_timing(root: Path, *, relion_wall: float, recovar_wall: float) -> None:
+    for engine, wall in (("relion", relion_wall), ("recovar", recovar_wall)):
+        directory = root / engine
+        directory.mkdir(parents=True)
+        (directory / f"{engine}.timing.json").write_text(
+            json.dumps({"exit_status": 0, "external_wall_s": wall})
+        )
+
+
+def test_repeat_panel_reports_runtime_distribution(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _write_timing(first, relion_wall=10.0, recovar_wall=50.0)
+    _write_timing(second, relion_wall=20.0, recovar_wall=80.0)
+
+    result = _runtime_summary(
+        [{"index": 1, "root": first}, {"index": 2, "root": second}]
+    )
+
+    assert result["scoring"] is False
+    assert result["relion_wall_s"]["median"] == pytest.approx(15.0)
+    assert result["recovar_wall_s"]["median"] == pytest.approx(65.0)
+    assert result["recovar_over_relion"]["median"] == pytest.approx(4.5)
+
+
+def test_repeat_panel_rejects_invalid_timing(tmp_path):
+    root = tmp_path / "repeat"
+    _write_timing(root, relion_wall=0.0, recovar_wall=1.0)
+
+    with pytest.raises(RepeatPanelError, match="must be positive"):
+        _runtime_summary([{"index": 1, "root": root}])

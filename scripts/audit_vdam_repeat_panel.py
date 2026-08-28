@@ -96,6 +96,57 @@ def _metric(lhs: np.ndarray, rhs: np.ndarray, *, key: str, shellwise: dict[str, 
     return value
 
 
+def _distribution(values: list[float]) -> dict[str, float | int]:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1 or array.size == 0 or not np.all(np.isfinite(array)):
+        raise RepeatPanelError("runtime distribution values must be finite and nonempty")
+    return {
+        "count": int(array.size),
+        "min": float(np.min(array)),
+        "median": float(np.median(array)),
+        "p90": float(np.percentile(array, 90)),
+        "max": float(np.max(array)),
+    }
+
+
+def _runtime_summary(repeats: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = []
+    for repeat in repeats:
+        root = Path(repeat["root"])
+        relion = _load_json(
+            root / "relion" / "relion.timing.json",
+            label=f"repeat {repeat['index']} RELION timing",
+        )
+        recovar = _load_json(
+            root / "recovar" / "recovar.timing.json",
+            label=f"repeat {repeat['index']} RECOVAR timing",
+        )
+        if int(relion.get("exit_status", -1)) != 0 or int(recovar.get("exit_status", -1)) != 0:
+            raise RepeatPanelError(f"repeat {repeat['index']}: engine timing reports nonzero exit")
+        relion_wall = float(relion.get("external_wall_s", float("nan")))
+        recovar_wall = float(recovar.get("external_wall_s", float("nan")))
+        if not np.isfinite(relion_wall) or not np.isfinite(recovar_wall):
+            raise RepeatPanelError(f"repeat {repeat['index']}: engine timing is non-finite")
+        if relion_wall <= 0.0 or recovar_wall <= 0.0:
+            raise RepeatPanelError(f"repeat {repeat['index']}: engine timing must be positive")
+        rows.append(
+            {
+                "repeat_index": int(repeat["index"]),
+                "relion_wall_s": relion_wall,
+                "recovar_wall_s": recovar_wall,
+                "recovar_over_relion": recovar_wall / relion_wall,
+            }
+        )
+    return {
+        "scoring": False,
+        "reason": "the frozen scorecard defines no runtime acceptance threshold",
+        "repeats": rows,
+        "relion_wall_s": _distribution([row["relion_wall_s"] for row in rows]),
+        "recovar_wall_s": _distribution([row["recovar_wall_s"] for row in rows]),
+        "recovar_over_relion": _distribution([row["recovar_over_relion"] for row in rows]),
+    }
+
+
 def _map_path(repeat_root: Path, engine: str, iteration: int) -> Path:
     return repeat_root / engine / f"run_it{iteration:03d}_class001.mrc"
 
@@ -229,6 +280,7 @@ def audit_repeat_panel(
             "candidate and native repeat must have a cross-engine mode match at the frozen point gate"
         ),
         "correlation_used": False,
+        "runtime": _runtime_summary(repeats),
         "individual_results": [repeat["trajectory"]["result"] for repeat in repeats],
         "checkpoints": checkpoint_rows,
     }
