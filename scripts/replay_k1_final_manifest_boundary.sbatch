@@ -15,27 +15,28 @@ set -euo pipefail
 
 : "${RUN_ROOT:?RUN_ROOT is required}"
 : "${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
+: "${REPO:?REPO is required}"
+: "${CASE_ROOT:?CASE_ROOT is required}"
+: "${SOURCE_RUN:?SOURCE_RUN is required}"
+: "${CUDA_LIB:?CUDA_LIB is required}"
+: "${BIND_BUILD_DIR:?BIND_BUILD_DIR is required}"
 : "${EXPECTED_REPO_HEAD:?EXPECTED_REPO_HEAD is required}"
 : "${EXPECTED_SOURCE_DIFF_SHA256:?EXPECTED_SOURCE_DIFF_SHA256 is required}"
 : "${EXPECTED_LAUNCHER_SHA256:?EXPECTED_LAUNCHER_SHA256 is required}"
 : "${EXPECTED_CUDA_LIB_SHA256:?EXPECTED_CUDA_LIB_SHA256 is required}"
 
-REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_native_units_instrumentation_20260826
-FIXED_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_remaining3_prefetched_ddc9d5f54_20260820T1615ET
-CASE_ROOT=${FIXED_ROOT}/cases/10_high_res_anisotropic_100k_g384_radial_noise3_bf0
 DATA=${CASE_ROOT}/data
 RELION=${CASE_ROOT}/relion_ref
-SOURCE_RUN=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case10_terminal_current_b39_20260827T0732ET
 SOURCE_MANIFESTS=${SOURCE_RUN}/output/intermediates
 SOURCE_RESULTS=${SOURCE_RUN}/output/refinement_results.npz
-CUDA_LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case04_top4_recovar_fresh_fine_20260827T0420ET/cuda/libcuda_backproject.so
-RELION_BIND=${FIXED_ROOT}/relion_bind_build/shared
 LAUNCHER=${REPO}/scripts/replay_k1_final_manifest_boundary.sbatch
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
 OUTPUT=${RUN_ROOT}/output
 ACCUM=${RUN_ROOT}/final_bpref_accum
 ANALYSIS=${RUN_ROOT}/analysis
+RUN_CUDA_DIR=${RUN_ROOT}/cuda
+RUN_CUDA_LIB=${RUN_CUDA_DIR}/libcuda_backproject.so
 
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test -z "$(find "${OUTPUT}" -mindepth 1 ! -name SAFE_TO_DELETE -print -quit)"
@@ -62,7 +63,10 @@ export PYTHONPYCACHEPREFIX=${RUNTIME_ROOT}/${SLURM_JOB_ID}/pycache
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" \
     "${JAX_COMPILATION_CACHE_DIR}" "${PYTHONPYCACHEPREFIX}" \
     "${OUTPUT}" "${OUTPUT}/intermediates" "${OUTPUT}/timing" \
-    "${ACCUM}" "${ANALYSIS}" "${RUN_ROOT}/logs" "${RUN_ROOT}/provenance"
+    "${ACCUM}" "${ANALYSIS}" "${RUN_CUDA_DIR}" \
+    "${RUN_ROOT}/logs" "${RUN_ROOT}/provenance"
+test ! -e "${RUN_CUDA_LIB}"
+install -m 0555 "${CUDA_LIB}" "${RUN_CUDA_LIB}"
 
 source /etc/profile.d/modules.sh
 set +u
@@ -76,8 +80,8 @@ NVIDIA_LIBS=$(find "${NVIDIA_ROOT}" -type d -name lib | paste -sd: -)
 export LD_LIBRARY_PATH=${NVIDIA_LIBS}:${CUDA_HOME}/targets/x86_64-linux/lib:${PIXI_ENV}/lib
 : "${CUDA_VISIBLE_DEVICES:?Slurm must assign exactly one visible GPU}"
 
-export RECOVAR_CUDA_LIB=${CUDA_LIB}
-export RECOVAR_RELION_BIND_BUILD_DIR=${RELION_BIND}
+export RECOVAR_CUDA_LIB=${RUN_CUDA_LIB}
+export RECOVAR_RELION_BIND_BUILD_DIR=${BIND_BUILD_DIR}
 export RELION_SRC_DIR=/scratch/gpfs/GILLES/mg6942/relion/src
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO}
 export RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION=0.40
@@ -108,6 +112,8 @@ nvidia-smi --query-gpu=uuid,name,memory.total,driver_version --format=csv,nohead
 sha256sum "${SOURCE_MANIFESTS}/manifest_final_half0.npz" \
     "${SOURCE_MANIFESTS}/manifest_final_half1.npz" "${SOURCE_RESULTS}" \
     > "${RUN_ROOT}/provenance/source_boundary_${SLURM_JOB_ID}.sha256"
+sha256sum "${CUDA_LIB}" "${RUN_CUDA_LIB}" \
+    > "${RUN_ROOT}/provenance/cuda_before_import_${SLURM_JOB_ID}.sha256"
 
 "${PYTHON}" - <<'PY'
 from pathlib import Path
@@ -122,6 +128,9 @@ assert len(jax.devices("gpu")) == 1 and "H100" in jax.devices("gpu")[0].device_k
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
 print(jax.devices())
 PY
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
+sha256sum "${CUDA_LIB}" "${RUN_CUDA_LIB}" \
+    > "${RUN_ROOT}/provenance/cuda_after_import_${SLURM_JOB_ID}.sha256"
 
 command=("${PYTHON}" -m scripts.run_full_refinement
     --data_dir "${DATA}" --output "${OUTPUT}" --max_iter 0
@@ -162,5 +171,59 @@ test -s "${ACCUM}/recovar_final_bpref_accum.npz"
     --candidate-half2 "${OUTPUT}/intermediates/manifest_final_half1.npz" \
     --output-json "${ANALYSIS}/final_manifest_replay_ab.json"
 
+SOURCE_OUTPUT=${SOURCE_RUN}/output CANDIDATE_OUTPUT=${OUTPUT} \
+OUTPUT_JSON=${ANALYSIS}/final_map_replay_inertness.json \
+"${PYTHON}" - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+from scripts.audit_em_k1_membership_capture_inertness import _load_map, _metrics
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+source = Path(os.environ["SOURCE_OUTPUT"]).resolve()
+candidate = Path(os.environ["CANDIDATE_OUTPUT"]).resolve()
+threshold = 0.999999
+comparisons = {}
+artifacts = {}
+for name in ("final_half1.mrc", "final_half2.mrc", "final_merged.mrc"):
+    source_path = source / name
+    candidate_path = candidate / name
+    row = _metrics(_load_map(source_path), _load_map(candidate_path))
+    row["passed"] = bool(row["fsc_auc_non_dc"] >= threshold)
+    comparisons[name] = row
+    artifacts[f"source:{name}"] = {
+        "path": str(source_path),
+        "sha256": sha256(source_path),
+    }
+    artifacts[f"candidate:{name}"] = {
+        "path": str(candidate_path),
+        "sha256": sha256(candidate_path),
+    }
+report = {
+    "schema": "recovar.em.k1_final_map_replay_inertness.v1",
+    "metric_policy": "signed shellwise FSC and normalized non-DC FSC-AUC; no correlation",
+    "fsc_auc_non_dc_threshold": threshold,
+    "comparisons": comparisons,
+    "all_inertness_gates_passed": all(row["passed"] for row in comparisons.values()),
+    "artifacts": artifacts,
+}
+output = Path(os.environ["OUTPUT_JSON"])
+output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+print(json.dumps(report, indent=2, sort_keys=True))
+PY
+
 find "${OUTPUT}" "${ACCUM}" "${ANALYSIS}" -type f -print0 | sort -z | xargs -0 sha256sum \
     > "${RUN_ROOT}/provenance/results_${SLURM_JOB_ID}.sha256"
+test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
+sha256sum "${CUDA_LIB}" "${RUN_CUDA_LIB}" \
+    > "${RUN_ROOT}/provenance/cuda_after_run_${SLURM_JOB_ID}.sha256"
