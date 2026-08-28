@@ -19,6 +19,7 @@ trap 'failed_command=${BASH_COMMAND}; printf "BUILD_SETUP_FAILED line=%s command
 : "${SOURCE_ROOT:?SOURCE_ROOT is required}"
 : "${BUILD_ROOT:?BUILD_ROOT is required}"
 : "${RUNTIME_ROOT:?RUNTIME_ROOT is required}"
+: "${REPO_ROOT:?REPO_ROOT is required}"
 : "${MPI_DEV_ROOT:?MPI_DEV_ROOT is required}"
 : "${CUDA_DEV_OVERLAY:?CUDA_DEV_OVERLAY is required}"
 : "${EXPECTED_REPO_HEAD:?EXPECTED_REPO_HEAD is required}"
@@ -29,7 +30,7 @@ trap 'failed_command=${BASH_COMMAND}; printf "BUILD_SETUP_FAILED line=%s command
 : "${EXPECTED_MPI_DEV_MANIFEST_SHA256:?EXPECTED_MPI_DEV_MANIFEST_SHA256 is required}"
 : "${EXPECTED_CUDA_DEV_LIBS_SHA256:?EXPECTED_CUDA_DEV_LIBS_SHA256 is required}"
 
-REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+REPO=${REPO_ROOT}
 LAUNCHER=${REPO}/scripts/build_relion_k1_final_reconstruct_stages.sbatch
 CC_WRAPPER=${REPO}/scripts/relion_mpi_cc_wrapper.sh
 CXX_WRAPPER=${REPO}/scripts/relion_mpi_cxx_wrapper.sh
