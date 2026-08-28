@@ -18,13 +18,13 @@ Frozen case-definition SHA-256:
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | The matched live-posterior panel now measures all **200 particles** across four native and four RECOVAR iteration-1 repeats. RELION posterior width is `1.73e-5` relative L2 and centered-score RMS is `3.19e-5`; RECOVAR is byte-repeatable (`0 / 0`) with zero support drift. This directly localizes the missing distribution before BPref. |
-| 🟢 | What is closed? | Native-posterior replay restores raw-BPref width to **0.81--1.07x native**. EM's authoritative eight-repeat posterior ensemble already places pooled RECOVAR posterior error inside RELION's native diameter in both halves (`0.746x / 0.757x`), with **99.43% / 99.62%** coordinate-envelope coverage and exact support. The newer native-atomic soft-mask A/B leaves RECOVAR posterior/score width exactly zero, rejecting that reduction as the missing source. |
+| 🟢 | What improved? | GF46's first clean iteration-4 failure is now causally closed at the fused CUDA coarse reduction. The exact RECOVAR projector produces four captured lane partials per translation. Rank 101 has exactly two legal float32 totals, one ULP apart: RECOVAR selects the lower total and admits one extra parent, while RELION selects the higher total and excludes it. Canonical lane reduction reproduces the complete native **16,704-candidate mask with zero mismatches**. |
+| 🟢 | What is closed? | The GF46 discrepancy is not a VDAM-local formula, geometry, projector, prior, posterior, or significance bug: both observed rank-100/101 score gaps are exactly reachable from the same captured shared-scorer lanes. The architecture guard also proves InitialModel imports EM's authoritative significance, sparse pass-2, local-refinement, and layout functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict**, **5/20 map**, **6/20 particle**, **13/20 schedule**, and **0/20 runtime** at **4.91--11.58x** RELION. K>1, real-data, and final CLI/GUI qualification remain gated behind K=1. Expanded interim state checks still find candidate 1/2 outside eight-native particle support at iteration **58** and every candidate far outside the eight-native state set by iteration **200**. |
-| 🟡 | Why can both be true? | RELION itself bifurcates. At iteration 4, particle 1085 takes one exact state in native repeats **1/3/4/6/7** and the alternate state in **2/5/8**; all four RECOVAR repeats take the first state. Every candidate therefore follows a legitimate native branch, while RECOVAR still misses a native mode. Candidate particle states first leave the expanded native union only at iterations **58/58/107/107**. |
-| 🔴 | First systematic departure | Iteration 4 is a measured native bifurcation, not an out-of-envelope RECOVAR state: eight RELION repeats split **5:3**, while all candidates take the observed 5-repeat branch. Candidate particle validity first fails only at **58/58/104/104** in the four-repeat full trajectory. At iteration 58, the independent score boundary contains both raw-score and inherited rotation-prior components; a posterior-only or tie-break patch is not justified. |
-| ➡️ | What is next? | Follow EM's earliest-unequal-state ladder at the **iteration-58** production boundary: use the already sealed iteration-start maps and complete score/prior tables to isolate the first systematic operand or controller difference, then repair only the shared EM/VDAM layer it identifies. In parallel, close GF46's fused coarse lane-partial cutoff and GF38's iteration-20 controller fields. Requalify short prefixes after a production change, then the unchanged 20-case K=1 suite; do not inject noise or widen gates. |
-| 🟢 | What finished? | Matched native-atomic job `13101940` completed in **9:04** on `GPU-ddb1...`; report/evidence SHA values are `4468fefe7fa4... / 568c74f5eadd...`. Science commits `4d6c88e53 / 90bf177df` add support-aware analysis and a provenance-sealed EM native-atomic A/B. Focused validation is **14/14 + 5/5**; Ruff, shell syntax, and diff checks pass. |
+| 🟡 | Why can both be true? | RELION's parallel reductions legitimately realize multiple float32 outcomes. At GF46 rank 101, all scorer operands are fixed but the four atomic lanes permit totals `9.489091873` and `9.489092827`; that single ULP crosses the capped adaptive-support boundary. InitialModel then carries the changed parent through fine search, reconstruction, moments, priors, and later sampling, so a microscopic shared-E-step difference becomes a trajectory split. |
+| 🔴 | First systematic departure | GF46 iteration 4 is now an exact one-parent coarse-support departure: candidate support is 101, native support is 100. Canonical shared-lane reduction plus RELION's min-diff score frame reproduces all 100 native members exactly offline. The separate four-repeat trajectory first leaves the expanded native particle-state union at **58/58/104/104**, where inherited map/prior state is already involved. |
+| ➡️ | What is next? | Implement the smallest **shared EM/VDAM** diagnostic correction: deterministic canonical reduction in the existing fused coarse kernel, composed with RELION's exact min-diff score frame. Qualify GF46 through 0--4 and 0--20 before any promotion, then rerun the unchanged focused K=1 matrix. No VDAM-local scorer, particle special case, stochastic injection, or widened acceptance gate is allowed. |
+| 🟢 | What finished? | Shared lane-capture commit `f2a041d9d` passed the H100 build/symbol gate `13105204` and exact atomic-envelope test `13105316`. Exact replay `13105728` sealed the two legal cutoff gaps (`2.8610229e-6 / 3.8146973e-6`) and the zero-mismatch canonical native mask; report/NPZ SHA values are `d95bcc46d927... / 9a13139e72a4...`. Shared-engine identity guard `21ac2c872` passes its focused test. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -182,7 +182,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 13:04 ET**
+Last scientific update: **2026-08-28 17:36 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -210,8 +210,8 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 systematic mode boundary @4, particle 1085 | exact E-step/operand/support chain, terminal 4x8 audit, and native-posterior replay close iteration-1 raw-BPref distribution scale. Eight native repeats choose particle modes 5:3 while four candidates choose 4:0; the decisive boundary is the rank-10 adaptive-support parent inherited through iteration-3 map/PPref | native expansion `13091586--13091618`; 4x8 audit `13092340`; matched fixed-posterior/native-posterior panels `13095568 / 13097692`; replay science `eeeceb368` | no frozen score change; reuse EM's source-ordered coarse scoring, float32 posterior normalization, and cutoff, then qualify 0--4/0--20 before 0--200 |
-| 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
+| 1 | GF46 coarse cutoff @4 | exact four-lane capture proves the rank-101 total has two legal outcomes one ULP apart; RECOVAR's outcome admits one extra parent, while canonical order plus RELION's min-diff frame reproduces the full native 100-member mask with **0/16,704** mismatches | H100 gates `13105204 / 13105316`; exact replay `13105728`; science `f2a041d9d`; report SHA `d95bcc46d927...` | compose the two shared corrections and qualify 0--4/0--20; no frozen score change yet |
+| 2 | GF47 systematic mode boundary @4, particle 1085 | exact E-step/operand/support chain, terminal 4x8 audit, and native-posterior replay close iteration-1 raw-BPref distribution scale. Eight native repeats choose particle modes 5:3 while four candidates choose 4:0; the decisive boundary is the rank-10 adaptive-support parent inherited through iteration-3 map/PPref | native expansion `13091586--13091618`; 4x8 audit `13092340`; matched fixed-posterior/native-posterior panels `13095568 / 13097692`; replay science `eeeceb368` | reuse the same corrected shared coarse path, then qualify 0--4/0--20 before 0--200 |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
 
@@ -230,27 +230,35 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 ### Latest change
 
-Matched exact-H100 job `13101940` completed four native and four live
-RECOVAR iteration-1 posterior captures in one allocation on physical GPU
-`GPU-ddb1592...`. RELION varies at `1.72558e-5` posterior relative L2 and
-`3.19258e-5` centered-score RMS; RECOVAR is byte-repeatable at both boundaries
-and neither engine changes positive support across its four repeats. The
-treatment enabled the supplied-map EM path's existing source-faithful native
-atomic soft-mask reduction, but RECOVAR posterior and score width remained
-exactly zero. This is a decisive null: soft-mask atomic order is not the
-missing VDAM distribution source. Report SHA is `4468fefe7fa4...`; evidence
-manifest SHA is `568c74f5eadd...`. No frozen score or tolerance changed.
+Exact-H100 replay `13105728` closes GF46's first clean candidate-support
+departure. Shared diagnostic commit `f2a041d9d` captures the 128 pre-atomic
+lanes from the same fused projector kernel used in production; it does not
+reimplement the scorer. With 29 translations, four lanes contribute to each
+candidate. The rank-100 parent has one legal float32 total. The rank-101 parent
+has exactly two totals, `9.489091873` and `9.489092827`, separated by one ULP.
+RECOVAR's production outcome is the lower total and RELION's observed
+rank-100/rank-101 gap is exactly the higher legal outcome. Thus the formula,
+geometry, projector, priors, and posterior rule are all closed at this boundary.
 
-The next discriminator follows EM's established fixed-state investigation
-ladder. First place the deterministic RECOVAR posterior relative to the native
-repeat centroid and envelope. Then hold the iteration-start projector,
-preprocessed image, noise, priors, and candidate identities fixed and compare
-the complete fine-score tables. A systematic out-of-envelope score gap would
-authorize a smallest shared-EM correction; an in-envelope result would prove
-that exact pairing to one RELION GPU realization is not a valid target and
-move qualification to robust 0--4 and 0--20 trajectory coverage. Artificial
-noise, stochastic workload injection, seed tuning, and VDAM-only duplicate
-math remain excluded.
+Applying a fixed lane order to the captured lanes, then preserving RELION's
+absolute `min_diff2` score frame, reproduces the complete native threshold mask:
+100 significant candidates, zero extras, zero omissions, and zero mismatches
+across all 16,704 candidates. Order `(0,2,1,3)` reproduces the current extra
+rank-101 parent; canonical `(0,1,2,3)` and two other legal orders reproduce the
+native mask exactly. The next change must therefore live in the shared fused
+coarse scorer/posterior path: deterministic canonical reduction composed with
+the already tested min-diff frame. It remains diagnostic until GF46 passes
+0--4 and 0--20 and then the unchanged frozen matrix. Report/NPZ SHA values are
+`d95bcc46d927... / 9a13139e72a4...`; no score or tolerance changed.
+
+The shared-code audit is also explicit now. Commit `21ac2c872` adds an object-
+identity invariant showing that InitialModel directly imports EM's
+significance, sparse adaptive pass-2, local K-class refinement, and hypothesis
+layout implementations. The focused identity test passes. The broader
+refactor-invariant file still reports existing size-budget debt in
+`dense_adapter.py`, `m_step.py`, and the package total plus a loaded-login-node
+cold-import timeout; those are maintenance failures, not duplicate scorer
+implementations, and their limits were not raised.
 
 Matched exact-H100 job `13097692` closes the iteration-1 raw-BPref width
 question. Four native RELION arms and four private/shared replay arms ran
@@ -1667,13 +1675,13 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47's first systematic production departure | iteration 4 is inside the eight-native state union; jobs `12909370 / 12909383 / 13092340 / 13097692` close the iteration-1 posterior envelope and downstream response. Four full repeats first leave native particle support at **58/58/104/104** | apply EM's earliest-unequal-state ladder to the sealed iteration-58 map/score/prior boundary; promote only a smallest shared correction, then requalify focused prefixes before another 0--200 run |
-| 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
+| 1 | Qualify the shared GF46 coarse correction | exact fused lanes and native mask are sealed by `13105728`; canonical order plus `a8af8b28a`'s min-diff frame gives 100 native members with zero mismatches offline | compose both changes only in the shared EM/VDAM path; pass exact-H100 0--4 and 0--20 before considering a full trajectory |
+| 2 | Close GF47's first systematic production departure | iteration 4 is inside the eight-native state union; jobs `12909370 / 12909383 / 13092340 / 13097692` close the iteration-1 posterior envelope and downstream response. Four full repeats first leave native particle support at **58/58/104/104** | retest the same boundary with the corrected shared coarse path; if it remains, resume EM's earliest-unequal-state ladder on the sealed iteration-58 map/score/prior boundary |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
 | 5 | Seeded GF29 / GF43 / GF45 calibrated audits | GF29 and GF45 pass; GF43 fails only map at 146 | retain exact accepted/failed outcomes |
 | 6 | GF41 authoritative re-audit | `12999430` terminal: map pass, particle fail | retain as classified repair target |
-| 7 | Local corrections | `6387ff7c9` posterior mass; `9685e9317` cumulative checkpoint state; `0a001923e` metadata precision; `a8af8b28a` coarse min-diff score frame | full trajectories pass before implementation is published |
+| 7 | Local corrections | `6387ff7c9` posterior mass; `9685e9317` cumulative checkpoint state; `0a001923e` metadata precision; `a8af8b28a` coarse min-diff score frame; shared lane capture `f2a041d9d`; reuse guard `21ac2c872` | full trajectories pass before implementation is published |
 | 8 | Runtime, K>1, real-data, CLI/GUI finalization | deferred behind K=1 | comparable runtime and zero suite failures |
 
 Implementation and diagnostic experiments remain in isolated local worktrees.
