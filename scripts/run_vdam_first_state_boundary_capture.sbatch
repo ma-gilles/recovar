@@ -44,6 +44,11 @@ CAPTURE_COARSE_SCORE=${CAPTURE_COARSE_SCORE:-0}
 case "${CAPTURE_COARSE_SCORE}" in 0|1) ;; *) echo "CAPTURE_COARSE_SCORE must be 0 or 1" >&2; exit 2 ;; esac
 CAPTURE_NATIVE_REPLAY=${CAPTURE_NATIVE_REPLAY:-1}
 case "${CAPTURE_NATIVE_REPLAY}" in 0|1) ;; *) echo "CAPTURE_NATIVE_REPLAY must be 0 or 1" >&2; exit 2 ;; esac
+BOUNDARY_DETERMINISTIC_CUDA=${BOUNDARY_DETERMINISTIC_CUDA:-0}
+case "${BOUNDARY_DETERMINISTIC_CUDA}" in
+  0|1) ;;
+  *) echo "BOUNDARY_DETERMINISTIC_CUDA must be 0 or 1" >&2; exit 2 ;;
+esac
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 REFERENCE_RELION_DIR=${REFERENCE_RELION_DIR:-$(dirname "${RELION_OPTIMISER}")}
 NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
@@ -230,7 +235,7 @@ unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORMS JAX_PLATFORM_
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export CUDA_LAUNCH_BLOCKING=0
+export CUDA_LAUNCH_BLOCKING=${BOUNDARY_DETERMINISTIC_CUDA}
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${CUDA_BINARY}
 export JAX_COMPILATION_CACHE_DIR=${OUTPUT_ROOT}/jax_cache
@@ -347,6 +352,9 @@ else
     --diagnostic_stop_after_iteration "${TARGET_ITERATION}"
   )
 fi
+if [[ "${BOUNDARY_DETERMINISTIC_CUDA}" == 1 ]]; then
+  COMMAND+=(--deterministic_cuda)
+fi
 printf '%q ' "${COMMAND[@]}" > "${PROVENANCE}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE}/recovar_command.sh"
 STATIC_INPUTS=(
@@ -431,7 +439,8 @@ test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUD
   "${TARGET_STACK_INDEX}" "${CAPTURE_LOCAL_SCORE}" "${CAPTURE_FUSED_SCORES}" \
   "${CAPTURE_COARSE_SCORE}" "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" "${CASE_ID}" \
   "${VDAM_SCORECARD}" "${TARGET_RELION_PERTURBATION}" \
-  "${TARGET_RELION_PERTURBATION_SOURCE}" <<'PY'
+  "${TARGET_RELION_PERTURBATION_SOURCE}" \
+  "${BOUNDARY_DETERMINISTIC_CUDA}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -454,6 +463,8 @@ payload = {
     "scorecard": sys.argv[16] or None,
     "target_relion_perturbation": float(sys.argv[17]),
     "target_relion_perturbation_source": sys.argv[18],
+    "deterministic_cuda": bool(int(sys.argv[19])),
+    "cuda_launch_blocking": int(sys.argv[19]),
 }
 Path(sys.argv[1]).write_text(
     json.dumps(payload, indent=2, sort_keys=True) + "\n"
