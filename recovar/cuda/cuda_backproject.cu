@@ -7122,7 +7122,10 @@ __global__ void relion_coarse_diff2_initialize_f32_kernel(
     int64_t translation_count,
     int64_t output_count);
 
-template <int EULERS_PER_BLOCK, bool CAPTURE_LANES = false>
+template <
+    int EULERS_PER_BLOCK,
+    bool CAPTURE_LANES = false,
+    bool CANONICAL_REDUCTION = false>
 __global__ __launch_bounds__(kRelionCoarseDiff2BlockSize)
 void relion_coarse_diff2_projector_f32_kernel(
     cudaTextureObject_t tex_real,
@@ -7156,6 +7159,8 @@ void relion_coarse_diff2_projector_f32_kernel(
     if (batch >= batch_size) return;
 
     __shared__ float shared_rotations[EULERS_PER_BLOCK * 6];
+    __shared__ float shared_lane_partials[
+        CANONICAL_REDUCTION ? EULERS_PER_BLOCK * kRelionCoarseDiff2BlockSize : 1];
     for (int index = threadIdx.x; index < EULERS_PER_BLOCK * 6; index += blockDim.x) {
         const int local_rotation = index / 6;
         const int component = index - local_rotation * 6;
@@ -7262,14 +7267,47 @@ void relion_coarse_diff2_projector_f32_kernel(
                     kRelionCoarseDiff2BlockSize +
                 threadIdx.x] = lane_sums[local_rotation];
         }
-        atomicAdd(
-            &output[(batch * output_rotation_count + rotation) *
-                    translation_count + translation],
-            lane_sums[local_rotation]);
+        if constexpr (CANONICAL_REDUCTION) {
+            shared_lane_partials[
+                local_rotation * kRelionCoarseDiff2BlockSize + threadIdx.x] =
+                    lane_sums[local_rotation];
+        } else {
+            atomicAdd(
+                &output[(batch * output_rotation_count + rotation) *
+                        translation_count + translation],
+                lane_sums[local_rotation]);
+        }
+    }
+
+    if constexpr (CANONICAL_REDUCTION) {
+        __syncthreads();
+        if (threadIdx.x < translation_count) {
+            #pragma unroll
+            for (int local_rotation = 0;
+                 local_rotation < EULERS_PER_BLOCK;
+                 ++local_rotation) {
+                const int rotation = rotation_start + local_rotation;
+                if (rotation >= rotation_offset + rotation_count) continue;
+                const int output_index =
+                    (batch * output_rotation_count + rotation) *
+                        translation_count + threadIdx.x;
+                float total = output[output_index];
+                for (int lane_index = 0;
+                     lane_index < active_lanes;
+                     ++lane_index) {
+                    total = __fadd_rn(
+                        total,
+                        shared_lane_partials[
+                            local_rotation * kRelionCoarseDiff2BlockSize +
+                            threadIdx.x + lane_index * translation_count]);
+                }
+                output[output_index] = total;
+            }
+        }
     }
 }
 
-template <bool CAPTURE_LANES = false>
+template <bool CAPTURE_LANES = false, bool CANONICAL_REDUCTION = false>
 cudaError_t launch_relion_coarse_diff2_projector_f32(
     cudaStream_t stream,
     const float2* projector_full,
@@ -7391,7 +7429,9 @@ cudaError_t launch_relion_coarse_diff2_projector_f32(
             const int blocks =
                 batch_size * (main_rotation_count / kRelionCoarseEulersPerBlock);
             relion_coarse_diff2_projector_f32_kernel<
-                kRelionCoarseEulersPerBlock, CAPTURE_LANES><<<
+                kRelionCoarseEulersPerBlock,
+                CAPTURE_LANES,
+                CANONICAL_REDUCTION><<<
                 blocks, kRelionCoarseDiff2BlockSize, 0, stream>>>(
                     texture_real, texture_imag, rotations, images,
                     translation_angles, weight, full_to_compact, output,
@@ -7404,7 +7444,8 @@ cudaError_t launch_relion_coarse_diff2_projector_f32(
         }
         const int tail_count = rotation_count - main_rotation_count;
         if (tail_count > 0) {
-            relion_coarse_diff2_projector_f32_kernel<1, CAPTURE_LANES><<<
+            relion_coarse_diff2_projector_f32_kernel<
+                1, CAPTURE_LANES, CANONICAL_REDUCTION><<<
                 batch_size * tail_count,
                 kRelionCoarseDiff2BlockSize,
                 0,
@@ -10111,6 +10152,7 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
     int64_t current_size,
     int64_t physical_image_size,
     int64_t model_max_r,
+    int64_t canonical_reduction,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer rotations,
     ffi::AnyBuffer images,
@@ -10161,29 +10203,53 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
         output_dims[0] != image_dims[0] ||
         output_dims[1] != rotation_dims[0] ||
         output_dims[2] != angle_dims[0] ||
-        current_size <= 0 || physical_image_size <= 0 || model_max_r <= 0)
+        current_size <= 0 || physical_image_size <= 0 || model_max_r <= 0 ||
+        (canonical_reduction != 0 && canonical_reduction != 1))
         return ffi::Error::InvalidArgument(
             "RelionCoarseDiff2ProjectorF32: inconsistent operand shapes or attributes");
 
-    cudaError_t err = launch_relion_coarse_diff2_projector_f32(
-        stream,
-        static_cast<const float2*>(projector_full.untyped_data()),
-        static_cast<const float*>(rotations.untyped_data()),
-        static_cast<const float2*>(images.untyped_data()),
-        static_cast<const float*>(translation_angles.untyped_data()),
-        static_cast<const float*>(weight.untyped_data()),
-        static_cast<const float*>(initial_diff2.untyped_data()),
-        static_cast<const int32_t*>(full_to_compact.untyped_data()),
-        static_cast<float*>(output->untyped_data()),
-        nullptr,
-        image_dims[0],
-        rotation_dims[0],
-        angle_dims[0],
-        image_dims[1],
-        current_size,
-        projector_dims[0],
-        model_max_r,
-        -static_cast<float>(physical_image_size * physical_image_size));
+    cudaError_t err;
+    if (canonical_reduction) {
+        err = launch_relion_coarse_diff2_projector_f32<false, true>(
+            stream,
+            static_cast<const float2*>(projector_full.untyped_data()),
+            static_cast<const float*>(rotations.untyped_data()),
+            static_cast<const float2*>(images.untyped_data()),
+            static_cast<const float*>(translation_angles.untyped_data()),
+            static_cast<const float*>(weight.untyped_data()),
+            static_cast<const float*>(initial_diff2.untyped_data()),
+            static_cast<const int32_t*>(full_to_compact.untyped_data()),
+            static_cast<float*>(output->untyped_data()),
+            nullptr,
+            image_dims[0],
+            rotation_dims[0],
+            angle_dims[0],
+            image_dims[1],
+            current_size,
+            projector_dims[0],
+            model_max_r,
+            -static_cast<float>(physical_image_size * physical_image_size));
+    } else {
+        err = launch_relion_coarse_diff2_projector_f32(
+            stream,
+            static_cast<const float2*>(projector_full.untyped_data()),
+            static_cast<const float*>(rotations.untyped_data()),
+            static_cast<const float2*>(images.untyped_data()),
+            static_cast<const float*>(translation_angles.untyped_data()),
+            static_cast<const float*>(weight.untyped_data()),
+            static_cast<const float*>(initial_diff2.untyped_data()),
+            static_cast<const int32_t*>(full_to_compact.untyped_data()),
+            static_cast<float*>(output->untyped_data()),
+            nullptr,
+            image_dims[0],
+            rotation_dims[0],
+            angle_dims[0],
+            image_dims[1],
+            current_size,
+            projector_dims[0],
+            model_max_r,
+            -static_cast<float>(physical_image_size * physical_image_size));
+    }
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
@@ -10197,6 +10263,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("current_size")
         .Attr<int64_t>("physical_image_size")
         .Attr<int64_t>("model_max_r")
+        .Attr<int64_t>("canonical_reduction")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -10230,6 +10297,7 @@ ffi::Error RelionCoarseDiff2ProjectorLanesF32Impl(
         current_size,
         physical_image_size,
         model_max_r,
+        0,
         projector_full,
         rotations,
         images,

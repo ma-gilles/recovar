@@ -2579,7 +2579,12 @@ def _prepare_relion_coarse_diff2_projector_f32(
 
 @functools.partial(
     jax.jit,
-    static_argnames=("current_size", "physical_image_size", "model_max_r"),
+    static_argnames=(
+        "current_size",
+        "physical_image_size",
+        "model_max_r",
+        "canonical_reduction",
+    ),
 )
 def relion_coarse_diff2_projector_f32(
     projector_full: jax.Array,
@@ -2593,8 +2598,15 @@ def relion_coarse_diff2_projector_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    canonical_reduction: bool = False,
 ) -> jax.Array:
-    """Run the parity-locked RELION InitialModel fused coarse projector."""
+    """Run the parity-locked shared RELION fused coarse projector.
+
+    ``canonical_reduction`` replaces the final atomic lane admission with a
+    fixed lane-index sum.  It retains the same projector, interpolation,
+    translation, pixel traversal, and per-lane arithmetic and is intended for
+    source-order parity qualification at marginal adaptive cutoffs.
+    """
 
     compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
         projector_full,
@@ -2623,6 +2635,7 @@ def relion_coarse_diff2_projector_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        canonical_reduction=np.int64(bool(canonical_reduction)),
     )
 
 

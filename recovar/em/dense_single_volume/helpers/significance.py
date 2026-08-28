@@ -34,6 +34,9 @@ _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
 _K1_COARSE_GAUSSIAN_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
 _K1_COARSE_GAUSSIAN_SINCOSF_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF"
 _K1_COARSE_FUSED_PROJECTOR_ENV = "RECOVAR_K1_COARSE_FUSED_PROJECTOR"
+_RELION_COARSE_CANONICAL_REDUCTION_ENV = (
+    "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION"
+)
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
@@ -224,6 +227,22 @@ def _k1_coarse_fused_projector_enabled(*, default: bool = False) -> bool:
         return True
     raise ValueError(
         f"Unsupported {_K1_COARSE_FUSED_PROJECTOR_ENV}={token!r}",
+    )
+
+
+def _relion_coarse_canonical_reduction_enabled() -> bool:
+    """Whether the shared fused coarse scorer reduces lanes in index order."""
+
+    token = os.environ.get(
+        _RELION_COARSE_CANONICAL_REDUCTION_ENV,
+        "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_RELION_COARSE_CANONICAL_REDUCTION_ENV}={token!r}",
     )
 
 
@@ -2229,6 +2248,15 @@ def _compute_k_class_significance_batched(
         and score_mode == "gaussian"
         and _k1_coarse_fused_projector_supports_padding(projection_padding_factor)
     )
+    coarse_canonical_reduction_enabled = (
+        _relion_coarse_canonical_reduction_enabled()
+        and score_mode == "gaussian"
+    )
+    if coarse_canonical_reduction_enabled and not coarse_fused_projector_enabled:
+        raise ValueError(
+            f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV} requires "
+            f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1",
+        )
     if (
         coarse_fused_projector_requested
         and score_mode == "gaussian"
@@ -2449,6 +2477,11 @@ def _compute_k_class_significance_batched(
                 n_rot,
                 n_trans,
             )
+            if coarse_canonical_reduction_enabled:
+                logger.warning(
+                    "RELION shared coarse canonical lane reduction enabled "
+                    "(environment override)",
+                )
         if coarse_gaussian_native_texture_enabled:
             from recovar.em.dense_single_volume.helpers.projection import (
                 relion_projector_half_to_texture_full,
@@ -2710,6 +2743,7 @@ def _compute_k_class_significance_batched(
                 current_size=score_size,
                 physical_image_size=int(image_shape[0]),
                 model_max_r=int(relion_projector_r_max),
+                canonical_reduction=coarse_canonical_reduction_enabled,
             )
             return -diff2
 

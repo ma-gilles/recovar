@@ -258,8 +258,12 @@ def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation
     assert "relion_fine_diff2_update_f32(" in block
     assert "const int score_max_r = min(model_max_r, current_size / 2);" in launcher
     assert "(rotation_count / 128) * 128" in launcher
-    assert "relion_coarse_diff2_projector_f32_kernel<1, CAPTURE_LANES>" in launcher
+    assert "1, CAPTURE_LANES, CANONICAL_REDUCTION" in launcher
     assert "if constexpr (CAPTURE_LANES)" in block
+    assert "if constexpr (CANONICAL_REDUCTION)" in block
+    assert "shared_lane_partials[" in block
+    assert "threadIdx.x + lane_index * translation_count" in block
+    assert "total = __fadd_rn(" in block
     assert "lane_partials[" in block
     assert "kRelionCoarseDiff2BlockSize +" in block
 
@@ -361,6 +365,13 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert significance._k1_coarse_fused_projector_enabled()
     assert significance._k1_coarse_fused_projector_supports_padding(1)
     assert not significance._k1_coarse_fused_projector_supports_padding(2)
+
+    monkeypatch.delenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", raising=False)
+    assert not significance._relion_coarse_canonical_reduction_enabled()
+    monkeypatch.setenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", "1")
+    assert significance._relion_coarse_canonical_reduction_enabled()
+    monkeypatch.setenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", "0")
+    assert not significance._relion_coarse_canonical_reduction_enabled()
 
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
@@ -702,9 +713,23 @@ def test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope(
             physical_image_size=current_size,
             model_max_r=model_max_r,
         )
+        canonical = cuda_backproject.relion_coarse_diff2_projector_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            jnp.asarray(images),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(initial_diff2),
+            jnp.asarray(lookup),
+            current_size=current_size,
+            physical_image_size=current_size,
+            model_max_r=model_max_r,
+            canonical_reduction=True,
+        )
 
     captured_np = np.asarray(captured)
     production_np = np.asarray(production)
+    canonical_np = np.asarray(canonical)
     lanes_np = np.asarray(lanes)
     assert lanes_np.shape == (1, rotation_count, 128)
     np.testing.assert_array_equal(
@@ -724,6 +749,14 @@ def test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope(
                 possible.add(int(total.view(np.uint32)))
             assert int(captured_np[0, rotation, translation].view(np.uint32)) in possible
             assert int(production_np[0, rotation, translation].view(np.uint32)) in possible
+            canonical_total = initial_diff2[0]
+            for lane in range(4):
+                canonical_total = np.add(
+                    canonical_total,
+                    partials[lane],
+                    dtype=np.float32,
+                )
+            assert canonical_np[0, rotation, translation] == canonical_total
 
 
 @pytest.mark.gpu
