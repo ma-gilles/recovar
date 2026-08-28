@@ -18,6 +18,9 @@ set -euo pipefail
 : "${REPO:?REPO is required}"
 : "${CASE_ROOT:?CASE_ROOT is required}"
 : "${SOURCE_RUN:?SOURCE_RUN is required}"
+: "${INIT_RELION_ITERATION:?INIT_RELION_ITERATION is required}"
+: "${HEALPIX_ORDER:?HEALPIX_ORDER is required}"
+: "${REFINEMENT_SEED:?REFINEMENT_SEED is required}"
 : "${CUDA_LIB:?CUDA_LIB is required}"
 : "${BIND_BUILD_DIR:?BIND_BUILD_DIR is required}"
 : "${EXPECTED_REPO_HEAD:?EXPECTED_REPO_HEAD is required}"
@@ -134,10 +137,12 @@ sha256sum "${CUDA_LIB}" "${RUN_CUDA_LIB}" \
 
 command=("${PYTHON}" -m scripts.run_full_refinement
     --data_dir "${DATA}" --output "${OUTPUT}" --max_iter 0
-    --init_relion_iteration 15 --healpix_order 5 --auto_local_healpix_order 4
+    --init_relion_iteration "${INIT_RELION_ITERATION}"
+    --healpix_order "${HEALPIX_ORDER}" --auto_local_healpix_order 4
     --offset_range 3.0 --offset_step 1.0 --adaptive_oversampling 1
     --init_resolution 30.0 --image_batch_size 187 --rotation_block_size 8192
-    --seed 1710 --perturb_seed 1710 --particle_diameter_ang 200
+    --seed "${REFINEMENT_SEED}" --perturb_seed "${REFINEMENT_SEED}"
+    --particle_diameter_ang 200
     --tau2_fudge 1.0 --max_significants -1 --firstiter_cc
     --image-fourier-backend relion_cuda
     --benchmark_ledger_json "${OUTPUT}/benchmark_ledger.json"

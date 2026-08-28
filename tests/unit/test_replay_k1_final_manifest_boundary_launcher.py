@@ -12,7 +12,16 @@ LAUNCHER = (
 def test_launcher_requires_explicit_boundary_inputs() -> None:
     source = LAUNCHER.read_text()
 
-    for name in ("REPO", "CASE_ROOT", "SOURCE_RUN", "CUDA_LIB", "BIND_BUILD_DIR"):
+    for name in (
+        "REPO",
+        "CASE_ROOT",
+        "SOURCE_RUN",
+        "INIT_RELION_ITERATION",
+        "HEALPIX_ORDER",
+        "REFINEMENT_SEED",
+        "CUDA_LIB",
+        "BIND_BUILD_DIR",
+    ):
         assert f': "${{{name}:?' in source
 
     assert "REPO=/scratch/" not in source
