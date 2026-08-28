@@ -40,6 +40,25 @@ POSE_TOLERANCE_DEG = 1e-3
 TRANSLATION_TOLERANCE_ANGST = 1e-4
 _ACCURACY_CHECKS = frozenset(("accuracy_rotation", "accuracy_translation"))
 _DIAGNOSTIC_ONLY_FIELDS = frozenset(("nr_iter_without_resolution_gain",))
+_SCHEDULE_CATEGORICAL_FIELDS = (
+    "healpix_order",
+    "n_translations",
+    "current_size",
+    "orientational_prior_mode",
+    "sampling_updated",
+)
+_SCHEDULE_CONTINUOUS_TOLERANCES = {
+    "offset_range_angstrom": 5.1e-7,
+    "offset_step_angstrom": 5.1e-7,
+    "random_perturbation": 5.1e-6,
+    "sampling_acc_rot": 5.1e-4,
+    "sampling_acc_trans_angstrom": 5.1e-7,
+    "current_changes_optimal_offsets_angstrom": 5.1e-7,
+    "current_resolution_angstrom": 5.1e-7,
+}
+_SCHEDULE_ACCURACY_FIELDS = frozenset(
+    ("sampling_acc_rot", "sampling_acc_trans_angstrom")
+)
 
 
 class CandidateStateEnvelopeError(RuntimeError):
@@ -202,6 +221,198 @@ def classify_schedule_mode_envelope(
             name: any(bool(checks.get(name, False)) for checks in diagnostic_checks)
             for name in sorted(_DIAGNOSTIC_ONLY_FIELDS)
         },
+    }
+
+
+def classify_schedule_distribution_envelope(
+    rows_by_candidate: list[list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Compare complete candidate schedules with native repeat variability.
+
+    Categorical schedule fields must match one native mode exactly. For each
+    such native anchor, the continuous-field radius is defined by that
+    anchor's nearest same-mode native peer, independently per field and never
+    below the frozen serialization tolerance. This keeps one coherent native
+    categorical mode while allowing continuous statistics to vary by no more
+    than RELION varies against itself.
+    """
+
+    repeat_count = len(rows_by_candidate)
+    if repeat_count < 2 or any(len(rows) != repeat_count for rows in rows_by_candidate):
+        raise CandidateStateEnvelopeError(
+            "schedule distribution requires a square panel of at least two repeats"
+        )
+    iterations = {
+        int(row["iteration"])
+        for candidate_rows in rows_by_candidate
+        for row in candidate_rows
+    }
+    if len(iterations) != 1:
+        raise CandidateStateEnvelopeError("schedule distribution rows do not describe one iteration")
+
+    candidate_states = []
+    accuracy_estimated = []
+    for candidate_index, candidate_rows in enumerate(rows_by_candidate, start=1):
+        states = [row["candidate"] for row in candidate_rows]
+        if any(state != states[0] for state in states[1:]):
+            raise CandidateStateEnvelopeError(
+                f"candidate {candidate_index} schedule differs across native audits"
+            )
+        candidate_states.append(states[0])
+        accuracy_estimated.append(bool(states[0]["sampling_accuracy_estimated"]))
+
+    native_states = []
+    for native_index in range(repeat_count):
+        states = [rows_by_candidate[index][native_index]["native"] for index in range(repeat_count)]
+        if any(state != states[0] for state in states[1:]):
+            raise CandidateStateEnvelopeError(
+                f"native {native_index + 1} schedule differs across candidate audits"
+            )
+        native_states.append(states[0])
+
+    required_fields = set(_SCHEDULE_CATEGORICAL_FIELDS) | set(
+        _SCHEDULE_CONTINUOUS_TOLERANCES
+    )
+    for label, states in (("candidate", candidate_states), ("native", native_states)):
+        for index, state in enumerate(states, start=1):
+            missing = sorted(required_fields - set(state))
+            if missing:
+                raise CandidateStateEnvelopeError(
+                    f"{label} {index} schedule is missing fields: {missing}"
+                )
+            continuous = np.asarray(
+                [float(state[field]) for field in _SCHEDULE_CONTINUOUS_TOLERANCES],
+                dtype=np.float64,
+            )
+            if not np.all(np.isfinite(continuous)):
+                raise CandidateStateEnvelopeError(
+                    f"{label} {index} schedule contains non-finite values"
+                )
+
+    def categorical_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
+        return all(left[field] == right[field] for field in _SCHEDULE_CATEGORICAL_FIELDS)
+
+    evaluations: list[list[dict[str, Any]]] = []
+    for candidate_index, candidate in enumerate(candidate_states):
+        active_fields = [
+            field
+            for field in _SCHEDULE_CONTINUOUS_TOLERANCES
+            if accuracy_estimated[candidate_index] or field not in _SCHEDULE_ACCURACY_FIELDS
+        ]
+        candidate_evaluations = []
+        for native_index, native in enumerate(native_states):
+            if not categorical_match(candidate, native):
+                candidate_evaluations.append(
+                    {
+                        "native_repeat_index": native_index + 1,
+                        "categorical_match": False,
+                        "nearest_native_peer_index": None,
+                        "normalized_field_distances": {},
+                        "maximum_normalized_distance": None,
+                        "match": False,
+                    }
+                )
+                continue
+
+            peers = [
+                peer_index
+                for peer_index, peer in enumerate(native_states)
+                if peer_index != native_index and categorical_match(native, peer)
+            ]
+            nearest_peer = None
+            if peers:
+                nearest_peer = min(
+                    peers,
+                    key=lambda peer_index: (
+                        max(
+                            abs(float(native[field]) - float(native_states[peer_index][field]))
+                            / _SCHEDULE_CONTINUOUS_TOLERANCES[field]
+                            for field in active_fields
+                        ),
+                        peer_index,
+                    ),
+                )
+            normalized = {}
+            radii = {}
+            for field in active_fields:
+                tolerance = _SCHEDULE_CONTINUOUS_TOLERANCES[field]
+                radius = tolerance
+                if nearest_peer is not None:
+                    radius = max(
+                        tolerance,
+                        abs(float(native[field]) - float(native_states[nearest_peer][field])),
+                    )
+                radii[field] = radius
+                normalized[field] = abs(float(candidate[field]) - float(native[field])) / radius
+            maximum_distance = max(normalized.values())
+            candidate_evaluations.append(
+                {
+                    "native_repeat_index": native_index + 1,
+                    "categorical_match": True,
+                    "nearest_native_peer_index": (
+                        None if nearest_peer is None else nearest_peer + 1
+                    ),
+                    "continuous_field_radii": radii,
+                    "normalized_field_distances": normalized,
+                    "maximum_normalized_distance": maximum_distance,
+                    "match": bool(maximum_distance <= 1.0),
+                }
+            )
+        evaluations.append(candidate_evaluations)
+
+    candidate_matches = [
+        [row["native_repeat_index"] for row in candidate_rows if row["match"]]
+        for candidate_rows in evaluations
+    ]
+    best_native = []
+    for candidate_rows in evaluations:
+        comparable = [
+            row for row in candidate_rows if row["maximum_normalized_distance"] is not None
+        ]
+        best_native.append(
+            None
+            if not comparable
+            else min(
+                comparable,
+                key=lambda row: (
+                    row["maximum_normalized_distance"],
+                    row["native_repeat_index"],
+                ),
+            )["native_repeat_index"]
+        )
+    native_matches = [
+        [
+            candidate_index + 1
+            for candidate_index, candidate_rows in enumerate(evaluations)
+            if candidate_rows[native_index]["match"]
+        ]
+        for native_index in range(repeat_count)
+    ]
+    candidate_validity = all(candidate_matches)
+    reverse_native_coverage = all(native_matches)
+    return {
+        "pass": candidate_validity and reverse_native_coverage,
+        "candidate_validity_pass": candidate_validity,
+        "reverse_native_coverage_pass": reverse_native_coverage,
+        "categorical_fields": list(_SCHEDULE_CATEGORICAL_FIELDS),
+        "continuous_field_tolerances": dict(_SCHEDULE_CONTINUOUS_TOLERANCES),
+        "candidate_repeats": [
+            {
+                "repeat_index": index + 1,
+                "sampling_accuracy_estimated": accuracy_estimated[index],
+                "matching_native_repeat_indices": candidate_matches[index],
+                "best_native_repeat_index": best_native[index],
+                "native_evaluations": evaluations[index],
+            }
+            for index in range(repeat_count)
+        ],
+        "native_repeats": [
+            {
+                "repeat_index": index + 1,
+                "matching_candidate_repeat_indices": native_matches[index],
+            }
+            for index in range(repeat_count)
+        ],
     }
 
 

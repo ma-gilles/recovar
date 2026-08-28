@@ -14,6 +14,7 @@ from recovar.data_io.starfile import read_star
 from scripts.audit_vdam_candidate_state_envelope import (
     POSE_TOLERANCE_DEG,
     TRANSLATION_TOLERANCE_ANGST,
+    classify_schedule_distribution_envelope,
     classify_schedule_mode_envelope,
     compare_particle_tables_to_native_set,
 )
@@ -133,6 +134,7 @@ def audit_state_panel(
         for iteration in iterations
     }
     candidate_rows = []
+    sampling_report_matrix = []
     for candidate_index, root in enumerate(roots, start=1):
         fixture, _ = read_star(str(root / "data" / "particles.star"))
         identity_column = _column(fixture, "rlnImageName")
@@ -145,6 +147,7 @@ def audit_state_panel(
             )
             for native_root in roots
         ]
+        sampling_report_matrix.append(sampling_reports)
         particle_checkpoints = []
         schedule_checkpoints = []
         for offset, iteration in enumerate(iterations):
@@ -202,6 +205,25 @@ def audit_state_panel(
             }
         )
 
+    schedule_distribution_checkpoints = [
+        {
+            "iteration": iteration,
+            **classify_schedule_distribution_envelope(
+                [
+                    [
+                        sampling_report_matrix[candidate_index][native_index]["iterations"][offset]
+                        for native_index in range(repeat_count)
+                    ]
+                    for candidate_index in range(repeat_count)
+                ]
+            ),
+        }
+        for offset, iteration in enumerate(iterations)
+    ]
+    schedule_distribution_pass = all(
+        row["pass"] for row in schedule_distribution_checkpoints
+    )
+
     result = "pass" if all(row["result"] == "pass" for row in candidate_rows) else "fail"
     return {
         "schema": SCHEMA,
@@ -213,6 +235,11 @@ def audit_state_panel(
             "fixed-tolerance active-particle coverage by any native repeat and complete "
             "per-iteration native schedule-mode coverage for every candidate repeat"
         ),
+        "schedule_distribution_scope": (
+            "non-scoring candidate validity and reverse native coverage for complete "
+            "categorical schedule modes, with continuous radii set by each native "
+            "anchor's nearest same-mode native peer"
+        ),
         "strict_point_reference_results_preserved": True,
         "repeat_count": repeat_count,
         "checkpoints": list(checkpoints),
@@ -223,6 +250,18 @@ def audit_state_panel(
         },
         "provenance": provenance,
         "candidate_repeats": candidate_rows,
+        "schedule_distribution_result": (
+            "pass" if schedule_distribution_pass else "fail"
+        ),
+        "first_schedule_distribution_failure_iteration": next(
+            (
+                row["iteration"]
+                for row in schedule_distribution_checkpoints
+                if not row["pass"]
+            ),
+            None,
+        ),
+        "schedule_distribution_checkpoints": schedule_distribution_checkpoints,
     }
 
 

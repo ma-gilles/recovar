@@ -87,6 +87,15 @@ def test_state_panel_requires_every_candidate_particle_and_schedule_mode(tmp_pat
         "classify_schedule_mode_envelope",
         lambda rows: {"pass": True, "matching_native_repeat_indices": [1]},
     )
+    monkeypatch.setattr(
+        audit_module,
+        "classify_schedule_distribution_envelope",
+        lambda rows: {
+            "pass": True,
+            "candidate_validity_pass": True,
+            "reverse_native_coverage_pass": True,
+        },
+    )
 
     report = audit_module.audit_state_panel(
         scorecard_path=scorecard, case_id="case", panel_root=panel, repeat_count=2
@@ -95,6 +104,7 @@ def test_state_panel_requires_every_candidate_particle_and_schedule_mode(tmp_pat
     assert report["result"] == "pass"
     assert report["scoring"] is False
     assert [row["result"] for row in report["candidate_repeats"]] == ["pass", "pass"]
+    assert report["schedule_distribution_result"] == "pass"
     assert report["provenance"]["cuda_library_sha256"] == "c" * 64
 
 
@@ -117,6 +127,15 @@ def test_state_panel_reports_candidate_failure(tmp_path, monkeypatch):
         "classify_schedule_mode_envelope",
         lambda rows: {"pass": True, "matching_native_repeat_indices": [1]},
     )
+    monkeypatch.setattr(
+        audit_module,
+        "classify_schedule_distribution_envelope",
+        lambda rows: {
+            "pass": False,
+            "candidate_validity_pass": False,
+            "reverse_native_coverage_pass": False,
+        },
+    )
 
     report = audit_module.audit_state_panel(
         scorecard_path=scorecard, case_id="case", panel_root=panel, repeat_count=2
@@ -124,6 +143,8 @@ def test_state_panel_reports_candidate_failure(tmp_path, monkeypatch):
 
     assert report["result"] == "fail"
     assert all(row["first_particle_failure_iteration"] == 1 for row in report["candidate_repeats"])
+    assert report["schedule_distribution_result"] == "fail"
+    assert report["first_schedule_distribution_failure_iteration"] == 1
 
 
 def test_state_panel_rejects_mixed_source_heads(tmp_path):

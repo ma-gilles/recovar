@@ -98,6 +98,8 @@ sha256sum \
     "${MAP_REPORT}" "${MAP_SHELLS}" "${STATE_REPORT}" "${STATUS_REPORT}" \
     "${REPO_ROOT}/scripts/audit_vdam_repeat_panel.py" \
     "${REPO_ROOT}/scripts/audit_vdam_repeat_state_panel.py" \
+    "${REPO_ROOT}/scripts/audit_vdam_candidate_state_envelope.py" \
+    "${REPO_ROOT}/scripts/audit_vdam_sampling_trajectory.py" \
     "${REPO_ROOT}/scripts/run_vdam_repeat_distribution_summary.sbatch" \
     > "${ANALYSIS_ROOT}/evidence.sha256"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_ANALYZER_HEAD}"
