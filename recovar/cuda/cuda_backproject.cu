@@ -36,11 +36,13 @@
  * This matches NumPy/JAX C-order flatten convention.
  */
 
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +56,29 @@
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
+
+constexpr char kRelionVdamExactNativePtxEnv[] =
+    "RECOVAR_VDAM_EXACT_NATIVE_PTX";
+constexpr char kRelionVdamExactNativePtxKernel[] =
+    "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
+    "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
+
+cudaError_t report_relion_vdam_driver_error(
+    const char* operation,
+    CUresult result)
+{
+    const char* name = nullptr;
+    const char* description = nullptr;
+    cuGetErrorName(result, &name);
+    cuGetErrorString(result, &description);
+    std::fprintf(
+        stderr,
+        "RECOVAR exact RELION VDAM PTX %s failed: %s (%s)\n",
+        operation,
+        name == nullptr ? "unknown CUDA driver error" : name,
+        description == nullptr ? "no description" : description);
+    return cudaErrorUnknown;
+}
 
 struct VdamCandidateBlockTraceHeader
 {
@@ -4454,6 +4479,11 @@ struct RelionVdamProjectorKernel
     }
 };
 
+static_assert(sizeof(RelionVdamProjectorKernel) == 64,
+              "RELION AccProjectorKernel ABI must remain 64 bytes");
+static_assert(alignof(RelionVdamProjectorKernel) == 8,
+              "RELION AccProjectorKernel ABI must remain 8-byte aligned");
+
 __global__ void relion_vdam_scale_texture_f32_kernel(
     float* real,
     float* imag,
@@ -5045,6 +5075,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         candidate_trace_active && candidate_trace_writer->requested();
     const bool device_trace_requested =
         candidate_trace_requested || native_trace_shape_replay;
+    const char* exact_native_ptx_path =
+        std::getenv(kRelionVdamExactNativePtxEnv);
+    const bool exact_native_ptx_requested =
+        exact_native_ptx_path != nullptr && exact_native_ptx_path[0] != '\0';
+    CUcontext exact_native_ptx_context = nullptr;
+    CUmodule exact_native_ptx_module = nullptr;
+    CUfunction exact_native_ptx_kernel = nullptr;
     const std::uint32_t candidate_trace_iteration =
         candidate_trace_requested ? candidate_trace_writer->iteration() : 0;
     double* data_real_volume_f64 = nullptr;
@@ -5054,6 +5091,14 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         (candidate_trace_requested && native_trace_shape_replay) ||
         (device_trace_requested && serial_rotation_replay) ||
         (captured_particle_timing_replay && parallel_worker_replay))
+        return cudaErrorInvalidValue;
+    // The extracted native entry has RELION's ordinary Ref3D ABI.  Keep the
+    // discriminator fail-closed instead of silently mixing it with RECOVAR's
+    // diagnostic-only remapping, tracing, or double-accumulator variants.
+    if (exact_native_ptx_requested &&
+        (captured_rotation_replay || serial_rotation_replay ||
+         float64_accumulator_replay || device_trace_requested ||
+         reverse_rotation_replay || rotation_replay_stride > 0))
         return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
@@ -5366,6 +5411,35 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             }
         }
 
+        if (exact_native_ptx_requested)
+        {
+            CUresult driver_result = cuCtxGetCurrent(&exact_native_ptx_context);
+            if (driver_result != CUDA_SUCCESS || exact_native_ptx_context == nullptr)
+            {
+                err = report_relion_vdam_driver_error(
+                    "cuCtxGetCurrent", driver_result);
+                goto cleanup;
+            }
+            driver_result = cuModuleLoad(
+                &exact_native_ptx_module, exact_native_ptx_path);
+            if (driver_result != CUDA_SUCCESS)
+            {
+                err = report_relion_vdam_driver_error(
+                    "cuModuleLoad", driver_result);
+                goto cleanup;
+            }
+            driver_result = cuModuleGetFunction(
+                &exact_native_ptx_kernel,
+                exact_native_ptx_module,
+                kRelionVdamExactNativePtxKernel);
+            if (driver_result != CUDA_SUCCESS)
+            {
+                err = report_relion_vdam_driver_error(
+                    "cuModuleGetFunction", driver_result);
+                goto cleanup;
+            }
+        }
+
         // RELION's task distributor hands one particle at a time to each of
         // its --j workers.  Each worker launches into its own blocking class
         // stream and synchronizes that stream before requesting another task.
@@ -5471,6 +5545,109 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     constexpr bool use_captured_order =
                         decltype(captured_order_tag)::value;
                     constexpr bool use_trace = decltype(trace_tag)::value;
+                    if (exact_native_ptx_requested)
+                    {
+                        if constexpr (!std::is_same_v<Accumulator, float>)
+                        {
+                            return cudaErrorInvalidValue;
+                        }
+                        else
+                        {
+                            CUresult driver_result =
+                                cuCtxSetCurrent(exact_native_ptx_context);
+                            if (driver_result != CUDA_SUCCESS)
+                                return report_relion_vdam_driver_error(
+                                    "cuCtxSetCurrent", driver_result);
+
+                            float* image_real_arg =
+                                image_real + particle * image_stride;
+                            float* image_imag_arg =
+                                image_imag + particle * image_stride;
+                            float* translation_x_arg = translation_x;
+                            float* translation_y_arg = translation_y;
+                            float* translation_z_arg = nullptr;
+                            float* weights_arg = const_cast<float*>(
+                                posterior_over_weight_norm +
+                                particle * posterior_stride +
+                                rotation_offset * translation_count);
+                            float* minvsigma2_arg = const_cast<float*>(
+                                minvsigma2 + particle * image_stride);
+                            float* ctf_arg = const_cast<float*>(
+                                ctf + particle * image_stride);
+                            unsigned long translation_count_arg =
+                                static_cast<unsigned long>(translation_count);
+                            float significant_weight_arg = significant_weight;
+                            float weight_norm_arg = weight_norm;
+                            float* eulers_arg = const_cast<float*>(
+                                projector_eulers + particle * euler_stride +
+                                rotation_offset * 9);
+                            float* accumulator_real_arg =
+                                accumulator_real + accumulator_offset;
+                            float* accumulator_imag_arg =
+                                accumulator_imag + accumulator_offset;
+                            float* accumulator_weight_arg =
+                                accumulator_weight + accumulator_offset;
+                            int max_r_arg =
+                                static_cast<int>(sqrtf(max_r2) + 0.5f);
+                            int max_r2_arg = static_cast<int>(max_r2);
+                            float padding_factor_arg =
+                                static_cast<float>(upsampling);
+                            unsigned image_x_arg =
+                                static_cast<unsigned>(image_w);
+                            unsigned image_y_arg =
+                                static_cast<unsigned>(image_h);
+                            unsigned image_z_arg = 1;
+                            unsigned image_xyz_arg =
+                                static_cast<unsigned>(pixel_count);
+                            unsigned model_x_arg =
+                                static_cast<unsigned>(model_x);
+                            unsigned model_y_arg =
+                                static_cast<unsigned>(model_y);
+                            int model_init_y_arg = model_init_y;
+                            int model_init_z_arg = model_init_z;
+                            void* kernel_parameters[] = {
+                                &projector,
+                                &image_real_arg,
+                                &image_imag_arg,
+                                &translation_x_arg,
+                                &translation_y_arg,
+                                &translation_z_arg,
+                                &weights_arg,
+                                &minvsigma2_arg,
+                                &ctf_arg,
+                                &translation_count_arg,
+                                &significant_weight_arg,
+                                &weight_norm_arg,
+                                &eulers_arg,
+                                &accumulator_real_arg,
+                                &accumulator_imag_arg,
+                                &accumulator_weight_arg,
+                                &max_r_arg,
+                                &max_r2_arg,
+                                &padding_factor_arg,
+                                &image_x_arg,
+                                &image_y_arg,
+                                &image_z_arg,
+                                &image_xyz_arg,
+                                &model_x_arg,
+                                &model_y_arg,
+                                &model_init_y_arg,
+                                &model_init_z_arg,
+                            };
+                            driver_result = cuLaunchKernel(
+                                exact_native_ptx_kernel,
+                                static_cast<unsigned>(grid_rotations), 1, 1,
+                                128, 1, 1,
+                                0,
+                                reinterpret_cast<CUstream>(particle_streams[lane]),
+                                kernel_parameters,
+                                nullptr);
+                            if (driver_result != CUDA_SUCCESS)
+                                return report_relion_vdam_driver_error(
+                                    "cuLaunchKernel", driver_result);
+                            return cudaSuccess;
+                        }
+                    }
                     relion_vdam_native_sgd_f32_kernel<
                         Accumulator, use_captured_order, use_trace><<<
                         grid_rotations, 128, 0, particle_streams[lane]>>>(
@@ -5520,18 +5697,19 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             : 0,
                         static_cast<std::int32_t>(lane),
                         candidate_trace_iteration);
+                    return cudaGetLastError();
                 };
                 const bool use_captured_order =
                     captured_rotation_replay && !serial_rotation_replay;
+                cudaError_t launch_error = cudaSuccess;
                 if (use_captured_order && device_trace_requested)
-                    launch_sgd(std::true_type{}, std::true_type{});
+                    launch_error = launch_sgd(std::true_type{}, std::true_type{});
                 else if (use_captured_order)
-                    launch_sgd(std::true_type{}, std::false_type{});
+                    launch_error = launch_sgd(std::true_type{}, std::false_type{});
                 else if (device_trace_requested)
-                    launch_sgd(std::false_type{}, std::true_type{});
+                    launch_error = launch_sgd(std::false_type{}, std::true_type{});
                 else
-                    launch_sgd(std::false_type{}, std::false_type{});
-                const cudaError_t launch_error = cudaGetLastError();
+                    launch_error = launch_sgd(std::false_type{}, std::false_type{});
                 if (launch_error != cudaSuccess) return launch_error;
             }
             return cudaSuccess;
@@ -5685,6 +5863,17 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     }
 
 cleanup:
+    if (exact_native_ptx_module != nullptr)
+    {
+        CUresult driver_result = cuCtxSetCurrent(exact_native_ptx_context);
+        if (driver_result == CUDA_SUCCESS)
+            driver_result = cuCtxSynchronize();
+        if (driver_result == CUDA_SUCCESS)
+            driver_result = cuModuleUnload(exact_native_ptx_module);
+        if (driver_result != CUDA_SUCCESS && err == cudaSuccess)
+            err = report_relion_vdam_driver_error(
+                "module cleanup", driver_result);
+    }
     for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
         if (particle_streams[lane]) cudaStreamDestroy(particle_streams[lane]);
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);

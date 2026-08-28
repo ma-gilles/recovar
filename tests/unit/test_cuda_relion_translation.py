@@ -179,6 +179,78 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "_build_reconstruction_pack_indices(" in engine_source
 
 
+def test_relion_vdam_exact_native_ptx_discriminator_is_opt_in_and_fail_closed():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+    makefile = (
+        Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "Makefile"
+    ).read_text()
+
+    assert '"RECOVAR_VDAM_EXACT_NATIVE_PTX"' in source
+    assert 'exact_native_ptx_path[0] != \'\\0\'' in source
+    assert "cuModuleLoad(" in source
+    assert "cuModuleGetFunction(" in source
+    assert "cuLaunchKernel(" in source
+    assert "cuModuleUnload(" in source
+    assert "-lcuda" in makefile
+    assert "sizeof(RelionVdamProjectorKernel) == 64" in source
+    assert "alignof(RelionVdamProjectorKernel) == 8" in source
+
+    launcher = source.split(
+        "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
+    )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
+    fail_closed = launcher.split(
+        "if (exact_native_ptx_requested &&", 1
+    )[1].split("return cudaErrorInvalidValue;", 1)[0]
+    for incompatible_mode in (
+        "captured_rotation_replay",
+        "serial_rotation_replay",
+        "float64_accumulator_replay",
+        "device_trace_requested",
+        "reverse_rotation_replay",
+        "rotation_replay_stride > 0",
+    ):
+        assert incompatible_mode in fail_closed
+
+    exact_launch = launcher.split(
+        "if (exact_native_ptx_requested)", 2
+    )[2].split("relion_vdam_native_sgd_f32_kernel<", 1)[0]
+    for argument in (
+        "&projector",
+        "&image_real_arg",
+        "&image_imag_arg",
+        "&translation_x_arg",
+        "&translation_y_arg",
+        "&translation_z_arg",
+        "&weights_arg",
+        "&minvsigma2_arg",
+        "&ctf_arg",
+        "&translation_count_arg",
+        "&significant_weight_arg",
+        "&weight_norm_arg",
+        "&eulers_arg",
+        "&accumulator_real_arg",
+        "&accumulator_imag_arg",
+        "&accumulator_weight_arg",
+        "&max_r_arg",
+        "&max_r2_arg",
+        "&padding_factor_arg",
+        "&image_x_arg",
+        "&image_y_arg",
+        "&image_z_arg",
+        "&image_xyz_arg",
+        "&model_x_arg",
+        "&model_y_arg",
+        "&model_init_y_arg",
+        "&model_init_z_arg",
+    ):
+        assert argument in exact_launch
+
+
 @pytest.mark.gpu
 def test_relion_translate_score_f32_matches_float32_reference(
     monkeypatch,

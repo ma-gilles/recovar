@@ -75,7 +75,7 @@ endif
 
 CUDA_ARCH ?= $(CUDA_ARCH_VOLTA_TURING) $(CUDA_ARCH_AMPERE_HOPPER) $(CUDA_ARCH_BLACKWELL)
 
-NVCC_FLAGS := -O3 -std=c++17 -Xcompiler -fPIC -Xcompiler -pthread --shared $(CUDA_ARCH) -I$(XLA_INC)
+NVCC_FLAGS := -O3 -std=c++17 -Xcompiler -fPIC -Xcompiler -pthread --shared $(CUDA_ARCH) -I$(XLA_INC) -lcuda
 
 LIB ?= libcuda_backproject.so
 
