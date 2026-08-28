@@ -83,7 +83,27 @@ status = {
     "schema": "recovar.vdam_repeat_distribution_job.v1",
     "result": "pass" if sys.argv[4:6] == ["0", "0"] else "fail",
     "map_result": map_report["result"],
+    "map_native_radius_distribution_result": (
+        "pass"
+        if all(
+            row.get("native_radius_distribution", {}).get("pass", False)
+            for row in map_report["checkpoints"]
+        )
+        else "fail"
+    ),
+    "first_map_native_radius_failure_iteration": next(
+        (
+            row["iteration"]
+            for row in map_report["checkpoints"]
+            if not row.get("native_radius_distribution", {}).get("pass", False)
+        ),
+        None,
+    ),
     "state_result": state_report["result"],
+    "schedule_distribution_result": state_report.get("schedule_distribution_result"),
+    "first_schedule_distribution_failure_iteration": state_report.get(
+        "first_schedule_distribution_failure_iteration"
+    ),
     "map_exit_status": int(sys.argv[4]),
     "state_exit_status": int(sys.argv[5]),
     "science_head": sys.argv[6],

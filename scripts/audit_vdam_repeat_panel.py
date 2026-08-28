@@ -25,6 +25,75 @@ class RepeatPanelError(RuntimeError):
     """Raised when repeat-panel evidence is incomplete or mixed."""
 
 
+def classify_native_radius_support(
+    *,
+    relion_self_fsc_auc: list[float],
+    cross_engine_fsc_auc: list[list[float]],
+) -> dict[str, Any]:
+    """Test bidirectional support using each native's nearest native peer."""
+
+    cross = np.asarray(cross_engine_fsc_auc, dtype=np.float64)
+    if cross.ndim != 2 or min(cross.shape) < 2 or not np.all(np.isfinite(cross)):
+        raise RepeatPanelError(
+            "native-radius support requires a finite candidate-by-native panel of at least 2x2"
+        )
+    native_count = int(cross.shape[1])
+    expected_pairs = native_count * (native_count - 1) // 2
+    native_pairs = np.asarray(relion_self_fsc_auc, dtype=np.float64)
+    if (
+        native_pairs.shape != (expected_pairs,)
+        or not np.all(np.isfinite(native_pairs))
+    ):
+        raise RepeatPanelError(
+            f"native-radius support expected {expected_pairs} finite native pairs"
+        )
+
+    native_matrix = np.full((native_count, native_count), -np.inf, dtype=np.float64)
+    np.fill_diagonal(native_matrix, 1.0)
+    for value, (lhs, rhs) in zip(
+        native_pairs,
+        itertools.combinations(range(native_count), 2),
+        strict=True,
+    ):
+        native_matrix[lhs, rhs] = value
+        native_matrix[rhs, lhs] = value
+    np.fill_diagonal(native_matrix, -np.inf)
+    native_nearest = np.max(native_matrix, axis=1)
+    matches = cross >= native_nearest[np.newaxis, :]
+    candidate_matches = [
+        (np.flatnonzero(row) + 1).astype(int).tolist() for row in matches
+    ]
+    native_matches = [
+        (np.flatnonzero(matches[:, index]) + 1).astype(int).tolist()
+        for index in range(native_count)
+    ]
+    candidate_best = np.max(cross, axis=1)
+    native_best = np.max(cross, axis=0)
+    candidate_validity = all(candidate_matches)
+    reverse_coverage = all(native_matches)
+    return {
+        "pass": candidate_validity and reverse_coverage,
+        "candidate_validity_pass": candidate_validity,
+        "reverse_native_coverage_pass": reverse_coverage,
+        "native_nearest_peer_fsc_auc": native_nearest.tolist(),
+        "candidate_matching_native_repeat_indices": candidate_matches,
+        "native_matching_candidate_repeat_indices": native_matches,
+        "candidate_best_native_fsc_auc": candidate_best.tolist(),
+        "native_best_candidate_fsc_auc": native_best.tolist(),
+        "minimum_candidate_radius_margin_fsc_auc": float(
+            np.min(
+                [
+                    np.max(cross[index] - native_nearest)
+                    for index in range(cross.shape[0])
+                ]
+            )
+        ),
+        "minimum_native_radius_margin_fsc_auc": float(
+            np.min(native_best - native_nearest)
+        ),
+    }
+
+
 def _load_json(path: Path, *, label: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text())
@@ -72,6 +141,24 @@ def classify_checkpoint(
         ),
         "all_runs_meet_frozen_gt_nondegradation_gate": gt_floor >= float(gt_delta_min),
     }
+    native_radius_support = classify_native_radius_support(
+        relion_self_fsc_auc=relion_self_fsc_auc,
+        cross_engine_fsc_auc=cross_engine_fsc_auc,
+    )
+    native_radius_checks = {
+        "candidate_repeat_within_native_envelope": checks[
+            "candidate_repeat_within_native_envelope"
+        ],
+        "every_candidate_run_inside_native_nearest_peer_radius": (
+            native_radius_support["candidate_validity_pass"]
+        ),
+        "every_native_radius_covered_by_candidate_panel": (
+            native_radius_support["reverse_native_coverage_pass"]
+        ),
+        "all_runs_meet_frozen_gt_nondegradation_gate": checks[
+            "all_runs_meet_frozen_gt_nondegradation_gate"
+        ],
+    }
     return {
         "pass": all(checks.values()),
         "checks": checks,
@@ -82,6 +169,11 @@ def classify_checkpoint(
         "minimum_candidate_best_native_fsc_auc": float(np.min(candidate_best_native)),
         "minimum_native_best_candidate_fsc_auc": float(np.min(native_best_candidate)),
         "minimum_recovar_minus_relion_gt_fsc_auc": gt_floor,
+        "native_radius_distribution": {
+            **native_radius_support,
+            "pass": all(native_radius_checks.values()),
+            "checks": native_radius_checks,
+        },
     }
 
 
@@ -277,7 +369,8 @@ def audit_repeat_panel(
         "metric_policy": (
             "signed shellwise FSC and normalized non-DC FSC-AUC only; the frozen point gates are retained, "
             "candidate repeat variability must stay inside the same-GPU native RELION envelope, and every "
-            "candidate and native repeat must have a cross-engine mode match at the frozen point gate"
+            "candidate and native repeat must have a cross-engine mode match at the frozen point gate; a "
+            "separate non-scoring diagnostic uses each native repeat's nearest-native FSC-AUC radius"
         ),
         "correlation_used": False,
         "runtime": _runtime_summary(repeats),

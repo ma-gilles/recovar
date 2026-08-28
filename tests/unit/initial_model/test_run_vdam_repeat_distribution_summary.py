@@ -18,6 +18,8 @@ def test_distribution_summary_is_restart_safe_and_preserves_failed_evidence():
         'test -s "${repeat_root}/recovar/recovar.timing.json"',
         "scripts.audit_vdam_repeat_panel",
         "scripts.audit_vdam_repeat_state_panel",
+        '"map_native_radius_distribution_result"',
+        '"schedule_distribution_result"',
         '"${REPO_ROOT}/scripts/audit_vdam_candidate_state_envelope.py"',
         '"${REPO_ROOT}/scripts/audit_vdam_sampling_trajectory.py"',
         "set +e",
