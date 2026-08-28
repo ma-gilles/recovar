@@ -81,19 +81,15 @@ target_indices=$(
 import sys
 from pathlib import Path
 
-from scripts.analyze_vdam_storewavg_panel import (
-    _native_prefixes,
-    _part_to_original_indices,
-)
+from scripts.run_vdam_worker_private_host_replay import _load_native_panels
 
 root = Path(sys.argv[1])
-prefixes, incomplete = _native_prefixes(root / "native_capture")
-if incomplete or not prefixes:
-    raise SystemExit("native repeat-01 capture is incomplete")
-original_by_part = _part_to_original_indices(root / "relion" / "run_it001_data.star")
-if not set(prefixes).issubset(original_by_part):
-    raise SystemExit("native capture part identity is absent from data STAR")
-print(",".join(str(original_by_part[part]) for part in sorted(prefixes)))
+panels = _load_native_panels(
+    root / "native_panels",
+    root / "relion" / "run_it001_data.star",
+    iteration=1,
+)
+print(",".join(str(identity) for identity in sorted(panels)))
 PY
 )
 target_count=$(awk -F, '{print NF}' <<< "${target_indices}")

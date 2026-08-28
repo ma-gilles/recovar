@@ -80,6 +80,25 @@ def test_load_candidate_capture_rejects_missing_scores(tmp_path: Path):
         audit._load_candidate_capture(path, iteration=1)
 
 
+def test_load_native_repeat_uses_complete_panel_capture(monkeypatch, tmp_path: Path):
+    panel = {
+        "orientation_count": 1,
+        "eulers": np.eye(3, dtype=np.float32).reshape(1, 9),
+        "weights": np.asarray([[3.0, 1.0]], dtype=np.float32),
+        "part_id": 0,
+        "path": str(tmp_path / "panel.bin"),
+    }
+    monkeypatch.setattr(
+        audit,
+        "_load_native_panels",
+        lambda *_args, **_kwargs: {7: panel},
+    )
+    result = audit._load_native_repeat(tmp_path, iteration=1)
+    assert set(result) == {7}
+    np.testing.assert_array_equal(result[7]["rotations"], _rotation())
+    np.testing.assert_allclose(result[7]["probabilities"], [[0.75, 0.25]])
+
+
 def test_matched_audit_reports_candidate_underdispersion(monkeypatch, tmp_path: Path):
     native_repeats = [
         {7: _native((0.60, 0.40), (60.0, 40.0))},

@@ -11,19 +11,17 @@ from typing import Any
 
 import numpy as np
 
-from scripts.analyze_vdam_posterior_repeat_panel import _native_raw_weights
 from scripts.analyze_vdam_storewavg_boundary import (
-    _load_native,
     _match_rotations,
     _positive_rotation_mask,
 )
-from scripts.analyze_vdam_storewavg_panel import (
-    _native_prefixes,
-    _part_to_original_indices,
-    _quantiles,
+from scripts.analyze_vdam_storewavg_panel import _quantiles
+from scripts.audit_vdam_native_operand_replay_panel import (
+    _normalized_weights,
+    _pairwise_width,
 )
-from scripts.audit_vdam_native_operand_replay_panel import _pairwise_width
 from scripts.audit_vdam_repeat_panel import RepeatPanelError, _load_json
+from scripts.run_vdam_worker_private_host_replay import _load_native_panels
 
 SCHEMA = "recovar.vdam_live_posterior_repeat_panel.v1"
 
@@ -134,20 +132,22 @@ def _load_candidate_repeat(directory: Path, *, iteration: int) -> dict[int, dict
 
 
 def _load_native_repeat(root: Path, *, iteration: int) -> dict[int, dict[str, Any]]:
-    capture_directory = root / "native_capture"
     data_star = root / "relion" / f"run_it{iteration:03d}_data.star"
-    prefixes, incomplete = _native_prefixes(capture_directory)
-    _require(not incomplete, f"native repeat has incomplete captures: {root}")
-    original_by_part = _part_to_original_indices(data_star)
-    _require(set(prefixes).issubset(original_by_part), f"native part identity is absent: {root}")
+    panels = _load_native_panels(
+        root / "native_panels", data_star, iteration=iteration
+    )
     result = {}
-    for part_id, prefix in sorted(prefixes.items()):
-        original_index = int(original_by_part[part_id])
-        native = _load_native(capture_directory, prefix, load_projector=False)
-        native["raw_weights"] = _native_raw_weights(capture_directory, prefix)
-        native["part_id"] = int(part_id)
-        native["prefix"] = prefix
-        result[original_index] = native
+    for original_index, panel in panels.items():
+        orientation_count = int(panel["orientation_count"])
+        result[int(original_index)] = {
+            "probabilities": _normalized_weights(panel),
+            "rotations": np.asarray(panel["eulers"], dtype=np.float32)
+            .reshape(orientation_count, 3, 3)
+            .transpose(0, 2, 1),
+            "raw_weights": np.asarray(panel["weights"], dtype=np.float64),
+            "part_id": int(panel["part_id"]),
+            "path": str(panel["path"]),
+        }
     _require(bool(result), f"native repeat is empty: {root}")
     return result
 
@@ -198,6 +198,15 @@ def _aligned_particle_panel(
             rotation_tolerance,
         )
         posterior = np.asarray(candidate["posterior"], dtype=np.float32)[rotation_map]
+        positive = posterior > np.float32(0.0)
+        posterior_norm = float(np.sum(posterior[positive], dtype=np.float64))
+        _require(
+            np.isfinite(posterior_norm) and posterior_norm > 0.0,
+            "candidate posterior normalization is invalid",
+        )
+        posterior = np.where(positive, posterior / posterior_norm, 0.0).astype(
+            np.float32
+        )
         centered_scores = np.asarray(candidate["centered_scores"], dtype=np.float64)[
             rotation_map
         ]
