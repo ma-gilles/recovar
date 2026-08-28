@@ -203,7 +203,10 @@ def _first_primitive_boundary(comparisons: dict[str, dict[str, Any]]) -> str:
         "same_posterior_numerator_terms",
         "same_posterior_denominator_terms",
     ):
-        if float(comparisons[name]["relative_l2_over_reference"]) > RELATIVE_L2_BOUND:
+        if (
+            name in comparisons
+            and float(comparisons[name]["relative_l2_over_reference"]) > RELATIVE_L2_BOUND
+        ):
             return name
     return "particle_prescatter_boundary_closes"
 
@@ -372,35 +375,6 @@ def _compare_particle(
     native_base_num = native_term_num / posterior[:, None]
     native_base_den = native_term_den / posterior[:, None]
 
-    native_ctf = factor.pixels["ctf"][pixel_rows].astype(np.float32)
-    native_inverse_noise = factor.pixels["minvsigma2"][pixel_rows].astype(np.float32)
-    recovar_ctf = (
-        np.asarray(recovar["direct_ctf_rfloat_score"], dtype=np.float64)[score_rows]
-        * np.float64(np.asarray(recovar["batch_scale_correction"]).item())
-    ).astype(np.float32)
-    recovar_inverse_noise = np.asarray(
-        recovar["direct_inverse_noise_score"], dtype=np.float32
-    )[score_rows]
-    recovar_inverse_noise_native = (recovar_inverse_noise * scale_den).astype(np.float32)
-    native_weighted_ctf = (
-        -terms["weighted_ctf"] / posterior[:, None] / scale_den
-    ).astype(np.float32)
-    recovar_weighted_ctf = (recovar_ctf * recovar_inverse_noise).astype(np.float32)
-    recovar_weighted_ctf_grid = np.broadcast_to(
-        recovar_weighted_ctf,
-        native_weighted_ctf.shape,
-    )
-    native_translated = (
-        terms["translated_re"] + np.complex64(1j) * terms["translated_im"]
-    ).astype(np.complex64) * scale_num
-    recovar_shifted = shifted[mapped_translation]
-    valid_weight = np.abs(recovar_weighted_ctf_grid) > np.float32(1.0e-20)
-    _require(np.any(valid_weight), f"stack {stack_index}: weighted CTF is zero on the full window")
-    recovar_translated = np.zeros_like(recovar_shifted)
-    recovar_translated[valid_weight] = (
-        recovar_shifted[valid_weight] / recovar_weighted_ctf_grid[valid_weight]
-    ).astype(np.complex64)
-
     native_term_num_grid = np.zeros((recovar_prob.shape[0], shifted.shape[1]), dtype=np.complex64)
     native_term_den_grid = np.zeros((recovar_prob.shape[0], shifted.shape[1]), dtype=np.float32)
     for row in range(accepted_flat.size):
@@ -442,12 +416,6 @@ def _compare_particle(
     _require(np.any(common_support), f"stack {stack_index}: native/RECOVAR support intersection is empty")
     comparisons = {
         "posterior_common_support": _metric(native_prob[common_support], recovar_prob[common_support]),
-        "ctf_with_scale": _metric(native_ctf, -recovar_ctf),
-        "inverse_noise": _metric(native_inverse_noise, recovar_inverse_noise_native),
-        "weighted_ctf": _metric(native_weighted_ctf, recovar_weighted_ctf_grid),
-        "translated_fourier_image": _metric(
-            native_translated[valid_weight], recovar_translated[valid_weight]
-        ),
         "same_posterior_numerator_terms": _metric(native_term_num, recovar_term_num),
         "same_posterior_denominator_terms": _metric(native_term_den, recovar_term_den),
         "base_numerator_operand": _metric(native_base_num, shifted[mapped_translation]),
@@ -470,19 +438,64 @@ def _compare_particle(
         "relion_summary_to_recovar_sequential_denominator": _metric(
             native_summary_den[support], sequential_den[support]
         ),
-        "native_translated_with_recovar_weighted_ctf": _metric(
-            native_base_num,
-            (native_translated * recovar_weighted_ctf_grid).astype(np.complex64),
-        ),
-        "recovar_translated_with_native_weighted_ctf": _metric(
-            native_base_num,
-            (recovar_translated * native_weighted_ctf).astype(np.complex64),
-        ),
-        "native_internal_numerator": _metric(
-            native_base_num,
-            (native_translated * native_weighted_ctf).astype(np.complex64),
-        ),
     }
+    direct_operand_keys = {
+        "direct_ctf_rfloat_score",
+        "batch_scale_correction",
+        "direct_inverse_noise_score",
+    }
+    direct_primitives_available = direct_operand_keys.issubset(recovar)
+    if direct_primitives_available:
+        native_ctf = factor.pixels["ctf"][pixel_rows].astype(np.float32)
+        native_inverse_noise = factor.pixels["minvsigma2"][pixel_rows].astype(np.float32)
+        recovar_ctf = (
+            np.asarray(recovar["direct_ctf_rfloat_score"], dtype=np.float64)[score_rows]
+            * np.float64(np.asarray(recovar["batch_scale_correction"]).item())
+        ).astype(np.float32)
+        recovar_inverse_noise = np.asarray(
+            recovar["direct_inverse_noise_score"], dtype=np.float32
+        )[score_rows]
+        recovar_inverse_noise_native = (recovar_inverse_noise * scale_den).astype(np.float32)
+        native_weighted_ctf = (
+            -terms["weighted_ctf"] / posterior[:, None] / scale_den
+        ).astype(np.float32)
+        recovar_weighted_ctf = (recovar_ctf * recovar_inverse_noise).astype(np.float32)
+        recovar_weighted_ctf_grid = np.broadcast_to(
+            recovar_weighted_ctf,
+            native_weighted_ctf.shape,
+        )
+        native_translated = (
+            terms["translated_re"] + np.complex64(1j) * terms["translated_im"]
+        ).astype(np.complex64) * scale_num
+        recovar_shifted = shifted[mapped_translation]
+        valid_weight = np.abs(recovar_weighted_ctf_grid) > np.float32(1.0e-20)
+        _require(np.any(valid_weight), f"stack {stack_index}: weighted CTF is zero on the full window")
+        recovar_translated = np.zeros_like(recovar_shifted)
+        recovar_translated[valid_weight] = (
+            recovar_shifted[valid_weight] / recovar_weighted_ctf_grid[valid_weight]
+        ).astype(np.complex64)
+        comparisons.update(
+            {
+                "ctf_with_scale": _metric(native_ctf, -recovar_ctf),
+                "inverse_noise": _metric(native_inverse_noise, recovar_inverse_noise_native),
+                "weighted_ctf": _metric(native_weighted_ctf, recovar_weighted_ctf_grid),
+                "translated_fourier_image": _metric(
+                    native_translated[valid_weight], recovar_translated[valid_weight]
+                ),
+                "native_translated_with_recovar_weighted_ctf": _metric(
+                    native_base_num,
+                    (native_translated * recovar_weighted_ctf_grid).astype(np.complex64),
+                ),
+                "recovar_translated_with_native_weighted_ctf": _metric(
+                    native_base_num,
+                    (recovar_translated * native_weighted_ctf).astype(np.complex64),
+                ),
+                "native_internal_numerator": _metric(
+                    native_base_num,
+                    (native_translated * native_weighted_ctf).astype(np.complex64),
+                ),
+            }
+        )
     capture_self_closes = all(
         comparisons[name]["relative_l2_over_reference"] <= RELATIVE_L2_BOUND
         for name in (
@@ -530,6 +543,7 @@ def _compare_particle(
         "rotation_map_max_abs": rotation_error,
         "translation_map_max_abs": translation_error,
         "comparisons": comparisons,
+        "direct_primitives_available": direct_primitives_available,
         "capture_self_closes": capture_self_closes,
         "same_posterior_operands_close": same_posterior_operands_close,
         "sequential_summary_closes": sequential_summary_closes,

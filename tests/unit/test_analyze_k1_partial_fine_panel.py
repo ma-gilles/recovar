@@ -3,6 +3,7 @@ import pytest
 from scripts.analyze_k1_partial_fine_panel import (
     _expected_stacks_from_selection,
     _parse_expected_stacks,
+    _selected_capture_stacks,
     stage_outcomes,
     summarize_reports,
 )
@@ -65,3 +66,38 @@ def test_stage_outcomes_and_fixed_denominator_summary():
         "fine_significant_support": 1,
         "preprior_score_centered": 1,
     }
+
+
+@pytest.mark.unit
+def test_selected_capture_stacks_accepts_explicit_recovar_subset():
+    assert _selected_capture_stacks(
+        factor_stacks={79, 469, 2498},
+        fine_score_stacks={79, 469, 2498},
+        recovar_stacks={79},
+        expected_stacks={79},
+    ) == {79}
+
+
+@pytest.mark.unit
+def test_selected_capture_stacks_remains_fail_closed():
+    with pytest.raises(ValueError, match="factor/fine-score"):
+        _selected_capture_stacks(
+            factor_stacks={79, 469},
+            fine_score_stacks={79},
+            recovar_stacks={79},
+            expected_stacks={79},
+        )
+    with pytest.raises(ValueError, match="expected RECOVAR"):
+        _selected_capture_stacks(
+            factor_stacks={79, 469},
+            fine_score_stacks={79, 469},
+            recovar_stacks={79},
+            expected_stacks={469},
+        )
+    with pytest.raises(ValueError, match="capture stack sets"):
+        _selected_capture_stacks(
+            factor_stacks={79, 469},
+            fine_score_stacks={79, 469},
+            recovar_stacks={79},
+            expected_stacks=None,
+        )

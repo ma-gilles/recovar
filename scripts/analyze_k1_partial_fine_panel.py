@@ -137,6 +137,26 @@ def _unique_by_stack(paths: list[Path], loader, label: str) -> dict[int, Path]:
     return result
 
 
+def _selected_capture_stacks(
+    *,
+    factor_stacks: set[int],
+    fine_score_stacks: set[int],
+    recovar_stacks: set[int],
+    expected_stacks: set[int] | None,
+) -> set[int]:
+    """Select an explicit qualified subset without weakening full-panel checks."""
+
+    _require(factor_stacks == fine_score_stacks, "native factor/fine-score stack sets differ")
+    if expected_stacks is None:
+        _require(factor_stacks == recovar_stacks, "capture stack sets differ")
+        return factor_stacks
+    missing_native = expected_stacks - factor_stacks
+    missing_recovar = expected_stacks - recovar_stacks
+    _require(not missing_native, f"expected native stacks are missing: {sorted(missing_native)}")
+    _require(not missing_recovar, f"expected RECOVAR stacks are missing: {sorted(missing_recovar)}")
+    return expected_stacks
+
+
 def analyze_panel(
     *,
     native_capture_dir: Path,
@@ -164,10 +184,12 @@ def analyze_panel(
         stack_index = int(load_recovar_candidate_table(path)["original_index"]) + 1
         _require(stack_index not in recovar, f"duplicate RECOVAR capture for stack {stack_index}")
         recovar[stack_index] = path
-    observed = set(factors)
-    _require(observed == set(fine_scores) == set(recovar), "capture stack sets differ")
-    if expected_stacks is not None:
-        _require(observed == expected_stacks, "capture stack set differs from expected stacks")
+    observed = _selected_capture_stacks(
+        factor_stacks=set(factors),
+        fine_score_stacks=set(fine_scores),
+        recovar_stacks=set(recovar),
+        expected_stacks=expected_stacks,
+    )
     reports = {
         stack_index: analyze(
             factor_path=factors[stack_index],
@@ -180,6 +202,12 @@ def analyze_panel(
     return {
         "schema": "recovar.em.k1_partial_fine_panel.v1",
         "status": "complete",
+        "capture_inventory": {
+            "native_factor_stacks": sorted(factors),
+            "native_fine_score_stacks": sorted(fine_scores),
+            "recovar_stacks": sorted(recovar),
+            "analyzed_stacks": sorted(observed),
+        },
         "summary": summarize_reports(reports),
         "reports": {str(stack_index): reports[stack_index] for stack_index in sorted(reports)},
     }

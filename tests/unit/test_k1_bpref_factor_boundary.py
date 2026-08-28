@@ -140,3 +140,20 @@ def test_first_primitive_boundary_uses_observer_qualified_tolerance():
     comparisons["inverse_noise"]["relative_l2_over_reference"] = 1.01e-7
     comparisons["weighted_ctf"]["relative_l2_over_reference"] = 2.0e-7
     assert _first_primitive_boundary(comparisons) == "inverse_noise"
+
+
+@pytest.mark.unit
+def test_first_primitive_boundary_accepts_focused_operand_subset():
+    assert (
+        _first_primitive_boundary(
+            {
+                "same_posterior_numerator_terms": {
+                    "relative_l2_over_reference": 0.0,
+                },
+                "same_posterior_denominator_terms": {
+                    "relative_l2_over_reference": 2.0e-7,
+                },
+            }
+        )
+        == "same_posterior_denominator_terms"
+    )
