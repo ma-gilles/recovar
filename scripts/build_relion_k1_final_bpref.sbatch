@@ -114,6 +114,7 @@ printf 'BUILD_SETUP_OK stage=compile\n'
 BINARY=${BUILD}/bin/relion_refine_mpi
 test -x "${BINARY}"
 test "$(strings "${BINARY}" | rg -c RELION_DUMP_BPREF)" -ge 1
+test "$(strings "${BINARY}" | rg -c RELION_RESTORE_FRESH_PHYSICAL_ORDER)" -ge 1
 test "$(strings "${BINARY}" | rg -c pre_reconstruct)" -ge 1
 cmake -LA -N "${BUILD}" > "${PROVENANCE}/cmake_cache_${SLURM_JOB_ID}.txt"
 sha256sum "${BINARY}" > "${PROVENANCE}/binary_${SLURM_JOB_ID}.sha256"

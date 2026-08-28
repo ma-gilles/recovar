@@ -49,6 +49,9 @@ input_digest() {
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test -s "${DATA}/particles.384.mrcs"
 test "$(sha256sum "${BINARY}" | awk '{print $1}')" = "${EXPECTED_BINARY_SHA256}"
+test "$(strings "${BINARY}" | rg -c RELION_DUMP_BPREF)" -ge 1
+test "$(strings "${BINARY}" | rg -c RELION_RESTORE_FRESH_PHYSICAL_ORDER)" -ge 1
+test "$(strings "${BINARY}" | rg -c pre_reconstruct)" -ge 1
 test "$(input_digest)" = "${EXPECTED_INPUTS_SHA256}"
 test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test -z "$(
