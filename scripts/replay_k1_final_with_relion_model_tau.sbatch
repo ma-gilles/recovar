@@ -137,9 +137,11 @@ import sys
 from pathlib import Path
 
 report = json.loads(Path(sys.argv[1]).read_text())
+metrics = report["metrics_vs_relion"]
 summary = {
-    "fsc_auc_vs_relion": report["metrics_vs_relion"]["fsc_auc"],
-    "relative_l2_vs_relion": report["metrics_vs_relion"]["relative_l2"],
+    "fsc_auc_vs_relion": metrics["fsc_auc"],
+    "correlation_vs_relion": metrics.get("corr"),
+    "relative_l2_vs_relion": metrics.get("relative_l2"),
     "tau2_source": report["tau2_source"],
 }
 Path(sys.argv[2]).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
