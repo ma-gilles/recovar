@@ -61,6 +61,8 @@ constexpr char kRelionVdamExactNativePtxEnv[] =
     "RECOVAR_VDAM_EXACT_NATIVE_PTX";
 constexpr char kRelionVdamExactWavgPredecessorEnv[] =
     "RECOVAR_VDAM_EXACT_WAVG_PREDECESSOR";
+constexpr char kRelionVdamWavgBprefHostGapNsEnv[] =
+    "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_NS";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
@@ -5091,6 +5093,23 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         exact_wavg_predecessor_value != nullptr &&
         exact_wavg_predecessor_value[0] != '\0' &&
         std::strcmp(exact_wavg_predecessor_value, "0") != 0;
+    const char* wavg_bpref_host_gap_value =
+        std::getenv(kRelionVdamWavgBprefHostGapNsEnv);
+    const bool wavg_bpref_host_gap_requested =
+        wavg_bpref_host_gap_value != nullptr &&
+        wavg_bpref_host_gap_value[0] != '\0';
+    long long wavg_bpref_host_gap_ns = 0;
+    if (wavg_bpref_host_gap_requested)
+    {
+        char* gap_end = nullptr;
+        errno = 0;
+        wavg_bpref_host_gap_ns = std::strtoll(
+            wavg_bpref_host_gap_value, &gap_end, 10);
+        if (errno != 0 || gap_end == wavg_bpref_host_gap_value ||
+            gap_end == nullptr || gap_end[0] != '\0' ||
+            wavg_bpref_host_gap_ns < 0)
+            return cudaErrorInvalidValue;
+    }
     CUcontext exact_native_ptx_context = nullptr;
     CUmodule exact_native_ptx_module = nullptr;
     CUfunction exact_native_ptx_kernel = nullptr;
@@ -5114,6 +5133,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
          reverse_rotation_replay || rotation_replay_stride > 0))
         return cudaErrorInvalidValue;
     if (exact_wavg_predecessor_requested && !exact_native_ptx_requested)
+        return cudaErrorInvalidValue;
+    if (wavg_bpref_host_gap_requested && !exact_wavg_predecessor_requested)
         return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
@@ -5532,6 +5553,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             std::uint64_t trace_launch_sequence = 0;
             const int64_t particle_rotation_count =
                 rotation_replay_counts_host[particle];
+            std::chrono::steady_clock::time_point exact_wavg_return_time;
             if (candidate_trace_requested)
             {
                 if (!candidate_trace_writer->reserve(
@@ -5619,6 +5641,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 if (driver_result != CUDA_SUCCESS)
                     return report_relion_vdam_driver_error(
                         "cuLaunchKernel(wavg)", driver_result);
+                if (wavg_bpref_host_gap_requested)
+                    exact_wavg_return_time = std::chrono::steady_clock::now();
             }
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
@@ -5752,6 +5776,19 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                 &model_init_y_arg,
                                 &model_init_z_arg,
                             };
+                            if (wavg_bpref_host_gap_requested)
+                            {
+                                const auto target = exact_wavg_return_time +
+                                    std::chrono::nanoseconds(
+                                        wavg_bpref_host_gap_ns);
+                                constexpr auto spin_guard =
+                                    std::chrono::microseconds(50);
+                                const auto now = std::chrono::steady_clock::now();
+                                if (now + spin_guard < target)
+                                    std::this_thread::sleep_until(
+                                        target - spin_guard);
+                                while (std::chrono::steady_clock::now() < target) {}
+                            }
                             driver_result = cuLaunchKernel(
                                 exact_native_ptx_kernel,
                                 static_cast<unsigned>(grid_rotations), 1, 1,
