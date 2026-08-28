@@ -28,6 +28,15 @@ def test_launcher_requires_explicit_boundary_inputs() -> None:
     assert "SOURCE_RUN=/scratch/" not in source
 
 
+def test_launcher_accepts_explicit_boundary_overrides() -> None:
+    source = LAUNCHER.read_text()
+
+    assert "SOURCE_MANIFESTS=${SOURCE_MANIFESTS_OVERRIDE:-${SOURCE_RUN}/output/intermediates}" in source
+    assert "SOURCE_RESULTS=${SOURCE_RESULTS_OVERRIDE:-${SOURCE_RUN}/output/refinement_results.npz}" in source
+    assert '--diagnostic-final-manifest-dir "${SOURCE_MANIFESTS}"' in source
+    assert '--diagnostic-final-source-results "${SOURCE_RESULTS}"' in source
+
+
 def test_launcher_isolates_cuda_rebuilds_from_pinned_input() -> None:
     source = LAUNCHER.read_text()
 

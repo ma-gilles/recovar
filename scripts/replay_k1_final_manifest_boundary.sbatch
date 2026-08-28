@@ -30,8 +30,8 @@ set -euo pipefail
 
 DATA=${CASE_ROOT}/data
 RELION=${CASE_ROOT}/relion_ref
-SOURCE_MANIFESTS=${SOURCE_RUN}/output/intermediates
-SOURCE_RESULTS=${SOURCE_RUN}/output/refinement_results.npz
+SOURCE_MANIFESTS=${SOURCE_MANIFESTS_OVERRIDE:-${SOURCE_RUN}/output/intermediates}
+SOURCE_RESULTS=${SOURCE_RESULTS_OVERRIDE:-${SOURCE_RUN}/output/refinement_results.npz}
 LAUNCHER=${REPO}/scripts/replay_k1_final_manifest_boundary.sbatch
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
