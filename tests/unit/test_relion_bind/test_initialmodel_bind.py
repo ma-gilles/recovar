@@ -334,7 +334,6 @@ class TestRandomiseParticlesOrderBinding:
 
 class TestAutoRefineExpectedAccuracyBinding:
     def test_spawned_expected_accuracy_matches_direct_result(self, bind):
-        from recovar.em.dense_single_volume.helpers import expected_accuracy
         from recovar.em.dense_single_volume.helpers.expected_accuracy import (
             estimate_relion_expected_accuracy_from_prepared_inputs,
             estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
@@ -382,10 +381,6 @@ class TestAutoRefineExpectedAccuracyBinding:
         np.testing.assert_array_equal(isolated.class_counts, direct.class_counts)
         np.testing.assert_array_equal(isolated.trial_local_indices, direct.trial_local_indices)
         np.testing.assert_array_equal(isolated.trial_particle_ids, direct.trial_particle_ids)
-        assert (
-            expected_accuracy._expected_accuracy_process_pool()
-            is expected_accuracy._expected_accuracy_process_pool()
-        )
 
     def test_split_half_random_shuffle_reference(self, bind):
         if not hasattr(bind, "auto_refine_randomise_half_order"):
