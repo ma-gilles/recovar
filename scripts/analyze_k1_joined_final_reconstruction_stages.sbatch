@@ -26,6 +26,7 @@ set -euo pipefail
 REPO=${REPO_ROOT}
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
+BOUNDARY_DUMP=${RECOVAR_DUMP}
 LAUNCHER=${REPO}/scripts/analyze_k1_joined_final_reconstruction_stages.sbatch
 ANALYZER=${REPO}/scripts/analyze_k1_reconstruction_stage_boundary.py
 NATIVE_STAGES=${NATIVE_RUN_ROOT}/reconstruct
@@ -36,7 +37,7 @@ REPORT=${ANALYSIS}/K1_JOINED_FINAL_RECONSTRUCTION_STAGES.json
 
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test -f "${NATIVE_RUN_ROOT}/SUCCESS_${NATIVE_JOB_ID}"
-test -s "${RECOVAR_DUMP}"
+test -s "${BOUNDARY_DUMP}"
 for suffix in bpref_data bpref_weight tau2; do
     test -s "${NATIVE_PREFIX}_${suffix}.bin"
 done
@@ -94,7 +95,7 @@ env | sort > "${PROVENANCE}/environment_${SLURM_JOB_ID}.txt"
 git status --short --branch > "${PROVENANCE}/git_status_${SLURM_JOB_ID}.txt"
 nvidia-smi --query-gpu=uuid,name,memory.total,driver_version --format=csv,noheader \
     > "${PROVENANCE}/gpu_${SLURM_JOB_ID}.txt"
-sha256sum "${ANALYZER}" "${LAUNCHER}" "${RECOVAR_DUMP}" \
+sha256sum "${ANALYZER}" "${LAUNCHER}" "${BOUNDARY_DUMP}" \
     "${NATIVE_PREFIX}_bpref_data.bin" "${NATIVE_PREFIX}_bpref_weight.bin" \
     "${NATIVE_PREFIX}_tau2.bin" \
     > "${PROVENANCE}/inputs_${SLURM_JOB_ID}.sha256"
@@ -102,7 +103,7 @@ find "${NATIVE_STAGES}" -maxdepth 1 -type f -name 'reconstruct_rank01_pid*_call0
     -print0 | sort -z | xargs -0 sha256sum >> "${PROVENANCE}/inputs_${SLURM_JOB_ID}.sha256"
 
 "${PYTHON}" -m scripts.analyze_k1_reconstruction_stage_boundary \
-    --recovar-accumulator "${RECOVAR_DUMP}" \
+    --recovar-accumulator "${BOUNDARY_DUMP}" \
     --native-stage-dir "${NATIVE_STAGES}" \
     --native-call-index 0 \
     --native-tau-provenance live-pre-reconstruction \
