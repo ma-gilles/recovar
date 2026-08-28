@@ -5,6 +5,7 @@ import pytest
 
 from scripts.analyze_vdam_coarse_projector_boundary import (
     _centered_metric,
+    _coarse_lane_cutoff_report,
     _complex_metric,
     _flat_dump,
     _load_captured_recovar_projector,
@@ -98,3 +99,35 @@ def test_native_current_fft_rows_map_native_order_into_centered_full_rows():
         rows.reshape(4, 3),
         np.asarray([[20, 21, 22], [25, 26, 27], [30, 31, 32], [15, 16, 17]]),
     )
+
+
+def test_coarse_lane_cutoff_report_reuses_exact_atomic_enumeration():
+    scores = np.full((2, 29), -np.inf, dtype=np.float32)
+    scores[0, 0] = np.float32(1.0)
+    scores[1, 0] = np.float32(0.0)
+    lanes = np.zeros((2, 128), dtype=np.float32)
+    thread_ids = np.asarray([0, 29, 58, 87])
+    lanes[0, thread_ids] = np.asarray([1.0, 2.0, 3.0, 0.0], dtype=np.float32)
+    lanes[1, thread_ids] = np.asarray([1.0, 2.0, 4.0, 0.0], dtype=np.float32)
+    production = np.zeros(58, dtype=np.float32)
+    production[0] = np.float32(16.0)
+    production[29] = np.float32(17.0)
+    native = production.copy()
+    native[29] = np.float32(18.0)
+
+    report = _coarse_lane_cutoff_report(
+        scores_with_prior=scores,
+        lane_partials=lanes,
+        initial_diff2=np.float32(10.0),
+        production_diff2=production,
+        fused_diff2=production,
+        native_diff2=native,
+        max_significants=1,
+    )
+
+    assert [row["flat_index"] for row in report["candidates"]] == [0, 29]
+    assert all(row["production_reachable"] for row in report["candidates"])
+    assert report["candidates"][1]["native_diff2_reachable_from_candidate_lanes"] is False
+    assert report["observed_total_score_gaps"]["production"][
+        "exactly_reachable_from_candidate_lanes"
+    ]

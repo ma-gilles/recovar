@@ -17,14 +17,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.projection import (
+from recovar import cuda_backproject  # noqa: E402
+from recovar.em.dense_single_volume.helpers.projection import (  # noqa: E402
     compute_relion_projector_projections_block,
     relion_projector_half_to_texture_full,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (  # noqa: E402
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
+)
+from scripts.validate_relion_coarse_lane_capture import (  # noqa: E402
+    possible_atomic_sums,
 )
 
 
@@ -135,6 +138,126 @@ def _native_current_fft_rows(*, full_size: int, current_size: int) -> np.ndarray
         (logical_y[:, None] + full_size // 2) * (full_size // 2 + 1)
         + np.arange(current_size // 2 + 1)[None, :]
     ).astype(np.int32).reshape(-1)
+
+
+def _coarse_lane_cutoff_report(
+    *,
+    scores_with_prior: np.ndarray,
+    lane_partials: np.ndarray,
+    initial_diff2: np.float32,
+    production_diff2: np.ndarray,
+    fused_diff2: np.ndarray,
+    native_diff2: np.ndarray,
+    max_significants: int,
+) -> dict[str, object]:
+    """Classify a cutoff pair against every legal four-lane atomic order."""
+
+    total_scores = np.asarray(scores_with_prior, dtype=np.float32)
+    if total_scores.ndim != 2:
+        raise ValueError(f"scores_with_prior must be (R,T), got {total_scores.shape}")
+    n_rotations, n_translations = total_scores.shape
+    lanes = np.asarray(lane_partials, dtype=np.float32)
+    if lanes.shape != (n_rotations, 128):
+        raise ValueError(
+            f"lane_partials must have shape {(n_rotations, 128)}, got {lanes.shape}"
+        )
+    if max_significants < 1 or max_significants >= total_scores.size:
+        raise ValueError(f"invalid max_significants={max_significants}")
+    active_lanes = 128 // n_translations
+    if active_lanes < 1 or active_lanes > 8:
+        raise ValueError(
+            f"refusing atomic enumeration for {active_lanes} active lanes"
+        )
+
+    order = np.argsort(-total_scores.reshape(-1), kind="stable")
+    flats = order[[max_significants - 1, max_significants]].astype(np.int64)
+    raw_arrays = {
+        "production": np.asarray(production_diff2, dtype=np.float32).reshape(-1),
+        "fused_replay": np.asarray(fused_diff2, dtype=np.float32).reshape(-1),
+        "native": np.asarray(native_diff2, dtype=np.float32).reshape(-1),
+    }
+    for name, values in raw_arrays.items():
+        if values.size != total_scores.size:
+            raise ValueError(
+                f"{name} diff2 has {values.size} values, expected {total_scores.size}"
+            )
+
+    candidates = []
+    possible_total_scores = []
+    for rank, flat in zip((max_significants, max_significants + 1), flats):
+        rotation, translation = divmod(int(flat), n_translations)
+        thread_ids = translation + np.arange(active_lanes) * n_translations
+        partials = lanes[rotation, thread_ids]
+        outcomes = possible_atomic_sums(partials, initial=np.float32(initial_diff2))
+        outcome_bits = set(np.asarray(outcomes).view(np.uint32).astype(int).tolist())
+        prior = np.subtract(
+            total_scores[rotation, translation],
+            -raw_arrays["production"][flat],
+            dtype=np.float32,
+        )
+        total_outcomes = np.add(-outcomes, prior, dtype=np.float32)
+        possible_total_scores.append(total_outcomes)
+        candidates.append(
+            {
+                "rank": int(rank),
+                "flat_index": int(flat),
+                "rotation_index": int(rotation),
+                "translation_index": int(translation),
+                "thread_ids": thread_ids.astype(int).tolist(),
+                "lane_partials": partials.astype(float).tolist(),
+                "atomic_outcome_count": int(outcomes.size),
+                "atomic_diff2_min": float(np.min(outcomes)),
+                "atomic_diff2_max": float(np.max(outcomes)),
+                "production_diff2": float(raw_arrays["production"][flat]),
+                "production_reachable": int(
+                    raw_arrays["production"][flat].view(np.uint32)
+                )
+                in outcome_bits,
+                "fused_replay_diff2": float(raw_arrays["fused_replay"][flat]),
+                "fused_replay_reachable": int(
+                    raw_arrays["fused_replay"][flat].view(np.uint32)
+                )
+                in outcome_bits,
+                "native_diff2": float(raw_arrays["native"][flat]),
+                "native_diff2_reachable_from_candidate_lanes": int(
+                    raw_arrays["native"][flat].view(np.uint32)
+                )
+                in outcome_bits,
+                "candidate_log_prior": float(prior),
+            }
+        )
+
+    gap_outcomes = np.subtract(
+        possible_total_scores[0][:, None],
+        possible_total_scores[1][None, :],
+        dtype=np.float32,
+    ).reshape(-1)
+    gap_bits = set(gap_outcomes.view(np.uint32).astype(int).tolist())
+    observed_gaps = {}
+    priors = np.asarray(
+        [candidate["candidate_log_prior"] for candidate in candidates],
+        dtype=np.float32,
+    )
+    for name, values in raw_arrays.items():
+        observed_total = np.add(-values[flats], priors, dtype=np.float32)
+        gap = np.subtract(observed_total[0], observed_total[1], dtype=np.float32)
+        residual = np.abs(gap_outcomes.astype(np.float64) - float(gap))
+        observed_gaps[name] = {
+            "rank_maxsig_minus_next": float(gap),
+            "exactly_reachable_from_candidate_lanes": int(gap.view(np.uint32))
+            in gap_bits,
+            "nearest_legal_gap_abs_difference": float(np.min(residual)),
+        }
+
+    return {
+        "max_significants": int(max_significants),
+        "active_lanes_per_translation": int(active_lanes),
+        "candidates": candidates,
+        "legal_total_score_gap_count": int(np.unique(gap_outcomes.view(np.uint32)).size),
+        "legal_total_score_gap_min": float(np.min(gap_outcomes)),
+        "legal_total_score_gap_max": float(np.max(gap_outcomes)),
+        "observed_total_score_gaps": observed_gaps,
+    }
 
 
 def _fine_projector_checks(
@@ -276,6 +399,7 @@ def analyze(
         )
     )
     recovar_projector_fused_replay_diff2 = None
+    recovar_projector_fused_lane_partials = None
     if recovar_projector_capture is not None:
         recovar_projector, recovar_r_max, recovar_padding_factor = (
             recovar_projector_capture
@@ -285,9 +409,13 @@ def analyze(
                 "fused RECOVAR projector replay currently requires padding factor 1, "
                 f"got {recovar_padding_factor}",
             )
-        recovar_projector_fused_replay_diff2 = np.asarray(
-            jax.block_until_ready(
-                cuda_backproject.relion_coarse_diff2_projector_f32(
+        (
+            recovar_projector_fused_replay_diff2,
+            recovar_projector_fused_lane_partials,
+        ) = (
+            np.asarray(value)
+            for value in jax.block_until_ready(
+                cuda_backproject.relion_coarse_diff2_projector_lanes_f32(
                     relion_projector_half_to_texture_full(
                         jnp.asarray(recovar_projector, dtype=jnp.complex64)
                     ),
@@ -301,9 +429,16 @@ def analyze(
                     physical_image_size=physical_image_size,
                     model_max_r=recovar_r_max,
                 )
-            ),
+            )
+        )
+        recovar_projector_fused_replay_diff2 = np.asarray(
+            recovar_projector_fused_replay_diff2,
             dtype=np.float32,
         ).reshape(-1)
+        recovar_projector_fused_lane_partials = np.asarray(
+            recovar_projector_fused_lane_partials,
+            dtype=np.float32,
+        ).reshape(rotations.shape[0], 128)
 
     native_diff2 = _flat_dump(
         Path(native_directory) / native_score_name,
@@ -319,6 +454,20 @@ def analyze(
     production_diff2 = -np.asarray(
         coarse["scores_pre_prior_per_class"], dtype=np.float32
     ).reshape(-1)
+    coarse_lane_cutoff = None
+    if recovar_projector_fused_lane_partials is not None:
+        coarse_lane_cutoff = _coarse_lane_cutoff_report(
+            scores_with_prior=np.asarray(
+                coarse["scores_with_prior_per_class"],
+                dtype=np.float32,
+            ).reshape(rotations.shape[0], translations.shape[0]),
+            lane_partials=recovar_projector_fused_lane_partials,
+            initial_diff2=np.float32(initial_diff2),
+            production_diff2=production_diff2,
+            fused_diff2=recovar_projector_fused_replay_diff2,
+            native_diff2=native_diff2,
+            max_significants=int(np.asarray(coarse["max_significants"]).item()),
+        )
     fine_projector_checks = _fine_projector_checks(
         native_directory,
         projector,
@@ -345,6 +494,9 @@ def analyze(
         if recovar_projector_fused_replay_diff2 is not None:
             debug_values["recovar_projector_fused_replay_diff2"] = (
                 recovar_projector_fused_replay_diff2
+            )
+            debug_values["recovar_projector_fused_lane_partials"] = (
+                recovar_projector_fused_lane_partials
             )
         np.savez_compressed(debug_npz, **debug_values)
 
@@ -398,6 +550,7 @@ def analyze(
             "captured_recovar_projector": recovar_projector_capture is not None,
         },
         "comparisons": comparisons,
+        "coarse_lane_cutoff": coarse_lane_cutoff,
         "artifacts": {
             "native_directory": str(Path(native_directory).resolve()),
             "recovar_coarse_dump": str(Path(recovar_coarse_dump).resolve()),

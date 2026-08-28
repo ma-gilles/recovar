@@ -258,7 +258,19 @@ def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation
     assert "relion_fine_diff2_update_f32(" in block
     assert "const int score_max_r = min(model_max_r, current_size / 2);" in launcher
     assert "(rotation_count / 128) * 128" in launcher
-    assert "relion_coarse_diff2_projector_f32_kernel<1>" in launcher
+    assert "relion_coarse_diff2_projector_f32_kernel<1, CAPTURE_LANES>" in launcher
+    assert "if constexpr (CAPTURE_LANES)" in block
+    assert "lane_partials[" in block
+    assert "kRelionCoarseDiff2BlockSize +" in block
+
+    # The diagnostic delegates validation to the production handler and
+    # specializes the same kernel instead of copying fused scoring math.
+    capture_start = source.index("RelionCoarseDiff2ProjectorLanesF32Impl")
+    capture = source[
+        capture_start : source.index("XLA_FFI_DEFINE_HANDLER_SYMBOL(", capture_start)
+    ]
+    assert "RelionCoarseDiff2ProjectorF32Impl(" in capture
+    assert "launch_relion_coarse_diff2_projector_f32<true>(" in capture
 
     from recovar.em.dense_single_volume.helpers import significance
 
@@ -632,6 +644,89 @@ def test_relion_coarse_diff2_rectangular_matches_atomic_envelope(
 
 
 @pytest.mark.gpu
+def test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(46)
+    current_size = 8
+    model_max_r = 1
+    projector_size = 2 * model_max_r + 3
+    rotation_count = 128
+    translation_count = 29
+    compact_pixel_count = current_size * (current_size // 2 + 1)
+    projector = (
+        rng.normal(0.0, 0.02, (projector_size,) * 3)
+        + 1j * rng.normal(0.0, 0.02, (projector_size,) * 3)
+    ).astype(np.complex64)
+    rotations = np.repeat(np.eye(3, dtype=np.float32)[None], rotation_count, axis=0)
+    images = (
+        rng.normal(0.0, 0.02, (1, compact_pixel_count))
+        + 1j * rng.normal(0.0, 0.02, (1, compact_pixel_count))
+    ).astype(np.complex64)
+    translation_angles = rng.uniform(-0.2, 0.2, (translation_count, 2)).astype(
+        np.float32
+    )
+    weight = rng.uniform(0.1, 3.0, images.shape).astype(np.float32)
+    initial_diff2 = np.asarray([10.0], dtype=np.float32)
+    lookup = np.arange(compact_pixel_count, dtype=np.int32)
+
+    with jax.default_device(gpu_device):
+        captured, lanes = cuda_backproject.relion_coarse_diff2_projector_lanes_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            jnp.asarray(images),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(initial_diff2),
+            jnp.asarray(lookup),
+            current_size=current_size,
+            physical_image_size=current_size,
+            model_max_r=model_max_r,
+        )
+        production = cuda_backproject.relion_coarse_diff2_projector_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            jnp.asarray(images),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(initial_diff2),
+            jnp.asarray(lookup),
+            current_size=current_size,
+            physical_image_size=current_size,
+            model_max_r=model_max_r,
+        )
+
+    captured_np = np.asarray(captured)
+    production_np = np.asarray(production)
+    lanes_np = np.asarray(lanes)
+    assert lanes_np.shape == (1, rotation_count, 128)
+    np.testing.assert_array_equal(
+        lanes_np[:, :, 116:].view(np.uint32),
+        np.zeros((1, rotation_count, 12), dtype=np.uint32),
+    )
+
+    for rotation in (0, 100, 101, 127):
+        for translation in range(translation_count):
+            thread_ids = translation + np.arange(4) * translation_count
+            partials = lanes_np[0, rotation, thread_ids]
+            possible = set()
+            for order in permutations(range(4)):
+                total = initial_diff2[0]
+                for lane in order:
+                    total = np.add(total, partials[lane], dtype=np.float32)
+                possible.add(int(total.view(np.uint32)))
+            assert int(captured_np[0, rotation, translation].view(np.uint32)) in possible
+            assert int(production_np[0, rotation, translation].view(np.uint32)) in possible
+
+
+@pytest.mark.gpu
 def test_relion_fine_diff2_rectangular_matches_production_tree_bitwise(
     monkeypatch,
     custom_cuda_lib,
@@ -898,6 +993,27 @@ def test_relion_coarse_vdam_projector_fails_closed_without_gpu(monkeypatch):
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
         cuda_backproject.relion_coarse_diff2_projector_f32.__wrapped__(
+            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            current_size=1,
+            physical_image_size=1,
+            model_max_r=1,
+        )
+
+
+def test_relion_coarse_vdam_projector_lane_capture_fails_closed_without_gpu(
+    monkeypatch,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_coarse_diff2_projector_lanes_f32.__wrapped__(
             jnp.zeros((5, 5, 5), dtype=jnp.complex64),
             jnp.eye(3, dtype=jnp.float32)[None, :, :],
             jnp.zeros((1, 1), dtype=jnp.complex64),

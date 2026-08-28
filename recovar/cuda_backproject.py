@@ -553,6 +553,9 @@ _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
 _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32 = (
     "cuda_relion_coarse_diff2_projector_f32"
 )
+_TARGET_RELION_COARSE_DIFF2_PROJECTOR_LANES_F32 = (
+    "cuda_relion_coarse_diff2_projector_lanes_f32"
+)
 _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_native_texture_rectangular_f32"
 )
@@ -636,6 +639,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32,
         "RelionCoarseDiff2ProjectorF32",
+    ),
+    (
+        _TARGET_RELION_COARSE_DIFF2_PROJECTOR_LANES_F32,
+        "RelionCoarseDiff2ProjectorLanesF32",
     ),
     (
         _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
@@ -2497,11 +2504,7 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
     return components if return_components else components[:, 0]
 
 
-@functools.partial(
-    jax.jit,
-    static_argnames=("current_size", "physical_image_size", "model_max_r"),
-)
-def relion_coarse_diff2_projector_f32(
+def _prepare_relion_coarse_diff2_projector_f32(
     projector_full: jax.Array,
     rotation_matrices: jax.Array,
     images: jax.Array,
@@ -2513,9 +2516,8 @@ def relion_coarse_diff2_projector_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
-) -> jax.Array:
-    """Run the parity-locked RELION InitialModel fused coarse projector."""
-
+) -> tuple[jax.Array, jax.ShapeDtypeStruct]:
+    """Validate and prepare the one shared fused coarse-projector ABI."""
     if projector_full.dtype != jnp.complex64 or projector_full.ndim != 3:
         raise TypeError(
             "projector_full must be a rank-3 complex64 array, got "
@@ -2572,9 +2574,103 @@ def relion_coarse_diff2_projector_f32(
         (images.shape[0], rotation_matrices.shape[0], translation_angles.shape[0]),
         jnp.float32,
     )
+    return compact_rotations, out_type
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=("current_size", "physical_image_size", "model_max_r"),
+)
+def relion_coarse_diff2_projector_f32(
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    images: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+    physical_image_size: int,
+    model_max_r: int,
+) -> jax.Array:
+    """Run the parity-locked RELION InitialModel fused coarse projector."""
+
+    compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
+        projector_full,
+        rotation_matrices,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=current_size,
+        physical_image_size=physical_image_size,
+        model_max_r=model_max_r,
+    )
     return jax.ffi.ffi_call(
         _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32,
         out_type,
+        vmap_method="sequential",
+    )(
+        projector_full,
+        compact_rotations,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=np.int64(current_size),
+        physical_image_size=np.int64(physical_image_size),
+        model_max_r=np.int64(model_max_r),
+    )
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=("current_size", "physical_image_size", "model_max_r"),
+)
+def relion_coarse_diff2_projector_lanes_f32(
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    images: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+    physical_image_size: int,
+    model_max_r: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Expose pre-atomic lanes from the shared fused coarse projector.
+
+    This is a bounded diagnostic for exact RELION cutoff investigations.  It
+    uses a compile-time capture specialization of the production kernel and
+    returns ``(diff2, lanes)`` with lanes shaped ``(B, R, 128)``.  For a
+    translation ``t``, its active partials are lanes ``t + q*T`` for
+    ``q < 128 // T``; the remaining lanes are positive zero.
+    """
+
+    compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
+        projector_full,
+        rotation_matrices,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=current_size,
+        physical_image_size=physical_image_size,
+        model_max_r=model_max_r,
+    )
+    lane_type = jax.ShapeDtypeStruct(
+        (images.shape[0], rotation_matrices.shape[0], 128),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_PROJECTOR_LANES_F32,
+        (out_type, lane_type),
         vmap_method="sequential",
     )(
         projector_full,
