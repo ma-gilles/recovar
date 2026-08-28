@@ -32,6 +32,13 @@ def test_runner_stops_after_iteration_one_and_reuses_compile_cache():
     assert "JAX_COMPILATION_CACHE_DIR=${shared_jax_cache}" in text
 
 
+def test_runner_records_native_atomic_softmask_intervention():
+    text = _runner_text()
+    assert "VDAM_CANDIDATE_NATIVE_ATOMIC_SOFTMASK" in text
+    assert "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION=${NATIVE_ATOMIC_SOFTMASK}" in text
+    assert '"candidate_native_atomic_softmask"' in text
+
+
 def test_runner_seals_source_cuda_gpu_and_report():
     text = _runner_text()
     assert 'test "$(git rev-parse HEAD)" = "${VDAM_EXPECTED_HEAD}"' in text

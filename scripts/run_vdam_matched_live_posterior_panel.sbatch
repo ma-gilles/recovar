@@ -18,7 +18,12 @@ set -euo pipefail
 : "${VDAM_EXPECTED_RELION_BIND_SHA256:?pin the qualified RELION binding}"
 
 REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
+NATIVE_ATOMIC_SOFTMASK=${VDAM_CANDIDATE_NATIVE_ATOMIC_SOFTMASK:-0}
 test "${REPEAT_COUNT}" -ge 2
+case "${NATIVE_ATOMIC_SOFTMASK}" in
+  0|1) ;;
+  *) echo "VDAM_CANDIDATE_NATIVE_ATOMIC_SOFTMASK must be 0 or 1" >&2; exit 2 ;;
+esac
 test -f "${VDAM_PANEL_ROOT}/SAFE_TO_DELETE"
 test -z "$(find "${VDAM_PANEL_ROOT}" -mindepth 1 -maxdepth 1 \
   ! -name SAFE_TO_DELETE \
@@ -121,6 +126,7 @@ for repeat in $(seq 1 "${REPEAT_COUNT}"); do
   export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${target_indices}
   export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=1
   export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES=1
+  export RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION=${NATIVE_ATOMIC_SOFTMASK}
   mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 
   start_epoch=$(date +%s)
@@ -175,21 +181,21 @@ if observed != expected:
         f"extra={sorted(observed - expected)}"
     )
 PY
-  printf '{"schema":"recovar.vdam_live_posterior_repeat.v1","repeat":%d,"science_head":"%s","physical_gpu_uuid":"%s","particle_count":%d,"wall_s":%d}\n' \
+  printf '{"schema":"recovar.vdam_live_posterior_repeat.v1","repeat":%d,"science_head":"%s","physical_gpu_uuid":"%s","particle_count":%d,"wall_s":%d,"native_atomic_softmask":%d}\n' \
     "${repeat}" "${VDAM_EXPECTED_HEAD}" "${physical_gpu_uuid}" \
-    "${target_count}" "${wall_s}" \
+    "${target_count}" "${wall_s}" "${NATIVE_ATOMIC_SOFTMASK}" \
     > "${output_root}/provenance.json"
 done
 
 "${PIXI_PY}" - "${VDAM_PANEL_ROOT}/submission_provenance.json" \
   "${VDAM_EXPECTED_HEAD}" "${physical_gpu_uuid}" "${REPEAT_COUNT}" \
-  "${VDAM_EXPECTED_CUDA_SHA256}" <<'PY'
+  "${VDAM_EXPECTED_CUDA_SHA256}" "${NATIVE_ATOMIC_SOFTMASK}" <<'PY'
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
 
-output, head, gpu_uuid, repeats, cuda_sha = sys.argv[1:]
+output, head, gpu_uuid, repeats, cuda_sha, native_atomic_softmask = sys.argv[1:]
 Path(output).write_text(
     json.dumps(
         {
@@ -202,6 +208,7 @@ Path(output).write_text(
             ),
             "repeat_count_per_engine": int(repeats),
             "cuda_library_sha256": cuda_sha,
+            "candidate_native_atomic_softmask": native_atomic_softmask == "1",
         },
         indent=2,
         sort_keys=True,
