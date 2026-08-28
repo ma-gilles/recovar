@@ -1215,6 +1215,35 @@ def test_existing_relion_prefix_exposes_scoped_native_texture_diagnostic():
     )
 
 
+def test_existing_relion_prefix_pins_production_scorer_and_iteration_coordinates():
+    launcher = (REPO_ROOT / "scripts" / "run_k1_existing_relion_prefix.sbatch").read_text()
+
+    assert (
+        "PASS2_TARGET_ITERATION=${PASS2_TARGET_ITERATION:-$((TARGET_ITERATION - 1))}"
+        in launcher
+    )
+    assert "RECOVAR_PASS2_DUMP_ITERATION=${PASS2_TARGET_ITERATION}" in launcher
+    assert "RECOVAR_SIGNIFICANCE_DUMP_ITERATION=${TARGET_ITERATION}" in launcher
+    assert (
+        "ENABLE_NATIVE_FINE_SCORE_UNITS=${ENABLE_NATIVE_FINE_SCORE_UNITS:-1}"
+        in launcher
+    )
+    assert (
+        "RECOVAR_K1_RELION_NATIVE_FINE_SCORE_UNITS=${ENABLE_NATIVE_FINE_SCORE_UNITS}"
+        in launcher
+    )
+    assert (
+        "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS=${ENABLE_EXACT_COARSE}"
+        in launcher
+    )
+    assert (
+        "RECOVAR_K1_RELION_F32_COARSE_SUPPORT=${ENABLE_F32_COARSE_SUPPORT}"
+        in launcher
+    )
+    assert "RECOVAR_K1_COARSE_GAUSSIAN_FFI=${ENABLE_COARSE_FFI}" in launcher
+    assert "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF=${ENABLE_COARSE_SINCOSF}" in launcher
+
+
 def test_existing_relion_prefix_supports_inert_production_candidate_capture():
     launcher = (REPO_ROOT / "scripts" / "run_k1_existing_relion_prefix.sbatch").read_text()
 
