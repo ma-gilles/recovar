@@ -796,6 +796,34 @@ def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkey
     assert exact_rmax is None
 
 
+def test_resolve_class_inputs_reuses_prebuilt_production_projector(monkeypatch):
+    projector_half = np.ones((1, 3, 3, 2), dtype=np.complex64)
+    dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
+    mean_variance = np.abs(dense_means) ** 2
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.reference_to_relion_projector_half_maps",
+        lambda *args, **kwargs: pytest.fail("prebuilt production projector was rebuilt"),
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
+    config = DenseInitialModelEstepConfig(
+        means=dense_means,
+        mean_variance=mean_variance,
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=np.eye(3, dtype=np.float32)[None],
+        translations=np.zeros((1, 2), dtype=np.float32),
+        relion_projector_frame=True,
+        relion_projector_half_by_class=projector_half,
+        relion_projector_r_max=2,
+    )
+
+    means, variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
+
+    assert means is dense_means
+    assert variance is mean_variance
+    np.testing.assert_array_equal(exact_half, projector_half)
+    assert exact_rmax == 2
+
+
 def test_resolve_class_inputs_can_dump_exact_projector_operand(monkeypatch, tmp_path):
     projector_half = np.arange(54, dtype=np.float32).reshape(1, 3, 3, 6)[..., :2].astype(np.complex64)
     dense_means = np.zeros((1, 8**3), dtype=np.complex64)

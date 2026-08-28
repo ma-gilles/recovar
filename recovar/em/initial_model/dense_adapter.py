@@ -202,6 +202,8 @@ class DenseInitialModelEstepConfig:
     class_log_priors: Any | None = None
     relion_bpref_frame: bool = True
     relion_projector_frame: bool = False
+    relion_projector_half_by_class: Any | None = None
+    relion_projector_r_max: int | None = None
     engine_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
@@ -1313,36 +1315,67 @@ def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
     return np.asarray(means, dtype=np.complex64)
 
 
+def prepare_relion_projector_class_inputs(
+    state: InitialModelState,
+    *,
+    padding_factor: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Build InitialModel's production RELION projector once per iteration."""
+    projector_half_by_class, projector_r_max = reference_to_relion_projector_half_maps(
+        state.Iref,
+        current_size=state.current_size if state.current_size > 0 else state.ori_size,
+        padding_factor=padding_factor,
+    )
+    projector_dump_dir = os.environ.get(_RELION_PROJECTOR_DUMP_DIR_ENV, "").strip()
+    if projector_dump_dir:
+        os.makedirs(projector_dump_dir, exist_ok=True)
+        np.savez_compressed(
+            os.path.join(projector_dump_dir, f"iter{int(state.iter):03d}_relion_projector_half.npz"),
+            projector_half=np.asarray(projector_half_by_class),
+            projector_r_max=np.int64(projector_r_max),
+            current_size=np.int64(
+                state.current_size if state.current_size > 0 else state.ori_size
+            ),
+            padding_factor=np.int64(padding_factor),
+            iteration=np.int64(state.iter),
+        )
+    means = relion_projector_half_maps_to_dense_means(
+        projector_half_by_class,
+        int(state.ori_size),
+    )
+    mean_variance = np.abs(np.asarray(means)) ** 2
+    return means, mean_variance, projector_half_by_class, int(projector_r_max)
+
+
 def _resolve_class_inputs(
     state: InitialModelState,
     config: DenseInitialModelEstepConfig,
 ) -> tuple[Any, Any, np.ndarray | None, int | None]:
     relion_projector_half_by_class = None
     relion_projector_r_max = None
-    if config.means is not None:
+    if config.relion_projector_half_by_class is not None:
+        if config.relion_projector_r_max is None:
+            raise ValueError(
+                "relion_projector_r_max is required with relion_projector_half_by_class"
+            )
+        relion_projector_half_by_class = np.asarray(config.relion_projector_half_by_class)
+        relion_projector_r_max = int(config.relion_projector_r_max)
+        means = (
+            config.means
+            if config.means is not None
+            else relion_projector_half_maps_to_dense_means(
+                relion_projector_half_by_class,
+                int(state.ori_size),
+            )
+        )
+    elif config.means is not None:
         means = config.means
     elif config.relion_projector_frame:
-        projector_half_by_class, projector_r_max = reference_to_relion_projector_half_maps(
-            state.Iref,
-            current_size=state.current_size if state.current_size > 0 else state.ori_size,
-            padding_factor=config.padding_factor,
-        )
-        projector_dump_dir = os.environ.get(_RELION_PROJECTOR_DUMP_DIR_ENV, "").strip()
-        if projector_dump_dir:
-            os.makedirs(projector_dump_dir, exist_ok=True)
-            np.savez_compressed(
-                os.path.join(projector_dump_dir, f"iter{int(state.iter):03d}_relion_projector_half.npz"),
-                projector_half=np.asarray(projector_half_by_class),
-                projector_r_max=np.int64(projector_r_max),
-                current_size=np.int64(
-                    state.current_size if state.current_size > 0 else state.ori_size
-                ),
-                padding_factor=np.int64(config.padding_factor),
-                iteration=np.int64(state.iter),
+        means, _prepared_variance, projector_half_by_class, projector_r_max = (
+            prepare_relion_projector_class_inputs(
+                state,
+                padding_factor=config.padding_factor,
             )
-        means = relion_projector_half_maps_to_dense_means(
-            projector_half_by_class,
-            int(state.ori_size),
         )
         exact_projector_setting = os.environ.get(_EXACT_RELION_PROJECTOR_ENV, "1").strip().lower()
         if exact_projector_setting not in {"0", "false", "no", "off"}:

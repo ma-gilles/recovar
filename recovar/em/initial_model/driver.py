@@ -40,7 +40,11 @@ from recovar.utils.helpers import (
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
-from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
+from .dense_adapter import (
+    DenseInitialModelEstepConfig,
+    prepare_relion_projector_class_inputs,
+    run_dense_initial_model_estep,
+)
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
 from .schedules import (
@@ -1292,6 +1296,7 @@ def _native_expectation_step(
         )
         sampling_updated = False
         accuracy_meta = None
+        prepared_projector_inputs = None
         pass1_healpix_order = (
             int(opts.healpix_order)
             if sampling_state is None
@@ -1310,6 +1315,15 @@ def _native_expectation_step(
                     do_grad=do_grad,
                 )
             ):
+                # RELION expectationSetup constructs the production PPref
+                # before calculateExpectedAngularErrors and reuses that PPref
+                # for scoring. Build RECOVAR's production projector in the
+                # same order and pass it through the shared E-step adapter so
+                # the accuracy helper cannot perturb a later rebuild.
+                prepared_projector_inputs = prepare_relion_projector_class_inputs(
+                    state,
+                    padding_factor=int(opts.padding_factor),
+                )
                 accuracy_meta = _estimate_native_sampling_accuracy(
                     sampling_state,
                     state,
@@ -1343,6 +1357,17 @@ def _native_expectation_step(
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
             pass1_healpix_order=pass1_healpix_order,
         )
+        if prepared_projector_inputs is not None:
+            prepared_means, prepared_variance, prepared_half, prepared_r_max = (
+                prepared_projector_inputs
+            )
+            config = replace(
+                config,
+                means=prepared_means,
+                mean_variance=prepared_variance,
+                relion_projector_half_by_class=prepared_half,
+                relion_projector_r_max=prepared_r_max,
+            )
         class_rotation_log_prior = _class_rotation_log_prior_for_sampling(
             state,
             sampling_state,
