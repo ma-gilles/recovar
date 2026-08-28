@@ -79,11 +79,15 @@ def build_pose_results_hybrid(
     relion_data_star: Path,
     aligned_manifest_dir: Path,
     output_results: Path,
+    replace_eulers: bool = True,
+    replace_translations: bool = True,
 ) -> dict[str, object]:
-    """Replace only the last-numbered pose arrays in a sealed results archive."""
+    """Replace selected last-numbered pose arrays in a sealed results archive."""
 
     if output_results.exists():
         raise FileExistsError(f"refusing to overwrite {output_results}")
+    if not replace_eulers and not replace_translations:
+        raise ValueError("at least one pose component must be replaced")
     input_particles = _particles(input_particle_star)
     relion_particles = _particles(relion_data_star)
     input_rows = _identity_rows(input_particles, label="input particle STAR")
@@ -167,8 +171,10 @@ def build_pose_results_hybrid(
                 "manifest_sha256": _sha256(manifest_path),
             }
         )
-        payload[euler_key] = eulers
-        payload[translation_key] = translations
+        if replace_eulers:
+            payload[euler_key] = eulers
+        if replace_translations:
+            payload[translation_key] = translations
         pose_halves.append(eulers)
         translation_halves.append(translations)
 
@@ -188,14 +194,20 @@ def build_pose_results_hybrid(
             if key in payload:
                 payload[key] = value
 
-    _replace_derived("best_rotation_eulers", pose_halves)
-    _replace_derived("best_translations", translation_halves)
+    if replace_eulers:
+        _replace_derived("best_rotation_eulers", pose_halves)
+    if replace_translations:
+        _replace_derived("best_translations", translation_halves)
     output_results.parent.mkdir(parents=True, exist_ok=True)
     np.savez(output_results, **payload)
     return {
         "schema": "recovar.em.k1_final_pose_results_hybrid.v1",
         "status": "complete",
         "pose_iteration_label": pose_label,
+        "replaced_components": {
+            "eulers": replace_eulers,
+            "translations": replace_translations,
+        },
         "pixel_size_angstrom": pixel_size,
         "base_results": str(base_results.resolve()),
         "base_results_sha256": _sha256(base_results),
@@ -217,6 +229,12 @@ def main() -> None:
     parser.add_argument("--aligned-manifest-dir", type=Path, required=True)
     parser.add_argument("--output-results", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument(
+        "--pose-components",
+        choices=("both", "eulers", "translations"),
+        default="both",
+        help="last-numbered pose components to replace (default: both)",
+    )
     args = parser.parse_args()
     if args.output_json.exists():
         raise FileExistsError(f"refusing to overwrite {args.output_json}")
@@ -226,6 +244,8 @@ def main() -> None:
         relion_data_star=args.relion_data_star.resolve(),
         aligned_manifest_dir=args.aligned_manifest_dir.resolve(),
         output_results=args.output_results.resolve(),
+        replace_eulers=args.pose_components in ("both", "eulers"),
+        replace_translations=args.pose_components in ("both", "translations"),
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
