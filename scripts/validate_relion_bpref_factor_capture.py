@@ -131,6 +131,7 @@ def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
     elif schema in {
         "recovar.em.k1_bpref_factor_panel.v1",
         "recovar.em.k1_fine_score_panel.v1",
+        "recovar.em.k1_same_process_final_boundary_panel.v1",
     }:
         records = selection.get("targets")
         stack_field = "stack_index_one_based"

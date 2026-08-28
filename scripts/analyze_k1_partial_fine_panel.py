@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 from scripts.analyze_k1_partial_fine_topology import (
@@ -18,9 +19,11 @@ from scripts.validate_relion_fine_score_capture import load_fine_score_capture
 STAGES = (
     "rotation_topology",
     "active_tuple_topology",
+    "active_tuple_sequence",
     "preprior_score_centered",
     "orientation_log_prior",
     "translation_log_prior",
+    "combined_log_weight_centered",
     "posterior",
     "fine_significant_support",
 )
@@ -40,14 +43,36 @@ def _parse_expected_stacks(text: str | None) -> set[int] | None:
     return set(values)
 
 
+def _expected_stacks_from_selection(path: Path) -> set[int]:
+    selection = json.loads(path.read_text())
+    schema = selection.get("schema")
+    _require(
+        schema
+        in {
+            "recovar.em.k1_bpref_factor_panel.v1",
+            "recovar.em.k1_fine_score_panel.v1",
+            "recovar.em.k1_same_process_final_boundary_panel.v1",
+        },
+        "unexpected selection schema",
+    )
+    targets = selection.get("targets")
+    _require(isinstance(targets, list) and bool(targets), "selection is empty")
+    stacks = [int(target["stack_index_one_based"]) for target in targets]
+    _require(all(stack > 0 for stack in stacks), "selection stacks must be positive")
+    _require(len(stacks) == len(set(stacks)), "selection stacks must be unique")
+    return set(stacks)
+
+
 def stage_outcomes(report: dict[str, object]) -> dict[str, bool]:
     """Return ordered exactness gates for one partial fine-boundary report."""
 
     rotations = report["rotation_topology"]
     tuples = report["active_tuple_topology"]
+    sequence = report["active_tuple_sequence"]
     production = report["production_boundary"]
     _require(isinstance(rotations, dict), "rotation topology is absent")
     _require(isinstance(tuples, dict), "active tuple topology is absent")
+    _require(isinstance(sequence, dict), "active tuple sequence is absent")
     _require(isinstance(production, dict), "production boundary is absent")
     rotation_exact = (
         rotations["native_count"]
@@ -62,9 +87,13 @@ def stage_outcomes(report: dict[str, object]) -> dict[str, bool]:
     return {
         "rotation_topology": bool(rotation_exact),
         "active_tuple_topology": bool(tuple_exact),
+        "active_tuple_sequence": bool(sequence["exact"]),
         "preprior_score_centered": bool(production["preprior_score_centered"]["exact_equal"]),
         "orientation_log_prior": bool(production["orientation_log_prior"]["exact_equal"]),
         "translation_log_prior": bool(production["translation_log_prior"]["exact_equal"]),
+        "combined_log_weight_centered": bool(
+            production["combined_log_weight_centered"]["exact_equal"]
+        ),
         "posterior": bool(production["posterior_on_common_native_normalization"]["exact_equal"]),
         "fine_significant_support": bool(production["fine_significant_support"]["exact"]),
     }
@@ -111,22 +140,26 @@ def _unique_by_stack(paths: list[Path], loader, label: str) -> dict[int, Path]:
 def analyze_panel(
     *,
     native_capture_dir: Path,
-    recovar_capture_dir: Path,
+    recovar_capture_dirs: Sequence[Path],
     physical_image_size: int,
     expected_stacks: set[int] | None,
 ) -> dict[str, object]:
     factors = _unique_by_stack(
-        sorted(native_capture_dir.glob("*.bpre-v2.bin")),
+        sorted(native_capture_dir.rglob("*.bpre-v2.bin")),
         load_factor_capture,
         "native BPref",
     )
     fine_scores = _unique_by_stack(
-        sorted(native_capture_dir.glob("*.fine-score-v1.bin")),
+        sorted(native_capture_dir.rglob("*.fine-score-v1.bin")),
         load_fine_score_capture,
         "native fine-score",
     )
     recovar: dict[int, Path] = {}
-    for path in sorted(recovar_capture_dir.glob("raw_k1_*.npz")):
+    recovar_paths = []
+    for capture_dir in recovar_capture_dirs:
+        recovar_paths.extend(capture_dir.rglob("raw_k1_*.npz"))
+        recovar_paths.extend(capture_dir.rglob("pass2_orig*_cs*.npz"))
+    for path in sorted(set(recovar_paths)):
         stack_index = int(load_recovar_candidate_table(path)["original_index"]) + 1
         _require(stack_index not in recovar, f"duplicate RECOVAR capture for stack {stack_index}")
         recovar[stack_index] = path
@@ -154,16 +187,32 @@ def analyze_panel(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--native-capture-dir", type=Path, required=True)
-    parser.add_argument("--recovar-capture-dir", type=Path, required=True)
+    parser.add_argument(
+        "--recovar-capture-dir",
+        type=Path,
+        action="append",
+        dest="recovar_capture_dirs",
+        required=True,
+        help="RECOVAR capture root; repeat for independently captured halves",
+    )
     parser.add_argument("--physical-image-size", type=int, default=128)
     parser.add_argument("--expected-stacks")
+    parser.add_argument("--selection-json", type=Path)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
+    expected_stacks = _parse_expected_stacks(args.expected_stacks)
+    if args.selection_json is not None:
+        selection_stacks = _expected_stacks_from_selection(args.selection_json)
+        _require(
+            expected_stacks is None or expected_stacks == selection_stacks,
+            "explicit and selection-derived expected stacks differ",
+        )
+        expected_stacks = selection_stacks
     report = analyze_panel(
         native_capture_dir=args.native_capture_dir,
-        recovar_capture_dir=args.recovar_capture_dir,
+        recovar_capture_dirs=args.recovar_capture_dirs,
         physical_image_size=args.physical_image_size,
-        expected_stacks=_parse_expected_stacks(args.expected_stacks),
+        expected_stacks=expected_stacks,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

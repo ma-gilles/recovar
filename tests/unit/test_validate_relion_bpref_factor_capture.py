@@ -203,6 +203,22 @@ def test_factor_capture_directory_accepts_k1_fine_score_panel_schema(tmp_path):
     assert report["capture_ready"] is True
 
 
+def test_factor_capture_directory_accepts_same_process_final_boundary_schema(tmp_path):
+    selection = tmp_path / "selection.json"
+    _k1_selection(
+        selection,
+        ranks=(1, 2),
+        schema="recovar.em.k1_same_process_final_boundary_panel.v1",
+    )
+    _write_capture(tmp_path / "part117_stack17_img0_class1.bpre-v2.bin", stack=17, rank=1)
+    _write_capture(tmp_path / "part123_stack23_img0_class1.bpre-v2.bin", stack=23, rank=2)
+
+    report = validator.validate_directory(tmp_path, selection)
+
+    assert report["capture_ready"] is True
+    assert report["mpi_rank_by_stack"] == {"17": 1, "23": 2}
+
+
 def test_factor_capture_accepts_explicit_zero_accepted_hypotheses(tmp_path):
     """Geometry remains valid when one selected class has no accepted pose."""
 
