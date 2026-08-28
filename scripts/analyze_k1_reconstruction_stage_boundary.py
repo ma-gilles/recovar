@@ -175,6 +175,14 @@ def main() -> None:
         help="Replay the joined Ft_y/Ft_ctf accumulator against native rank-1 reconstruction stages.",
     )
     parser.add_argument(
+        "--relion-bpref-prefix",
+        type=Path,
+        help=(
+            "Use the native RELION BPref data/weight at this prefix as the joined replay "
+            "input. This isolates conversion and reconstruction self-consistency."
+        ),
+    )
+    parser.add_argument(
         "--allow-any-native-rank",
         action="store_true",
         help="Accept the single rank emitted by non-MPI relion_external_reconstruct.",
@@ -191,6 +199,8 @@ def main() -> None:
     requested_halves = tuple(int(half) for half in args.halves)
     if args.joined and args.recovar_fsc is not None:
         raise ValueError("--joined does not support --recovar-fsc; use the captured native tau")
+    if args.relion_bpref_prefix is not None and not args.joined:
+        raise ValueError("--relion-bpref-prefix requires --joined --halves 1")
 
     with np.load(args.recovar_accumulator, allow_pickle=False) as archive:
         grid_size = int(archive["grid_size"])
@@ -203,6 +213,48 @@ def main() -> None:
             joined=bool(args.joined),
             halves=requested_halves,
         )
+        if args.relion_bpref_prefix is not None:
+            from recovar.em.dense_single_volume.helpers import half_volume_mstep
+            from scripts.replay_final_bpref_dump import (
+                read_relion_bpref_array,
+                relion_bpref_numerator_to_recovar_units,
+            )
+
+            prefix = args.relion_bpref_prefix.resolve()
+            relion_data = read_relion_bpref_array(
+                Path(f"{prefix}_bpref_data.bin"),
+                dtype=np.dtype(np.complex128),
+            )
+            relion_weight = read_relion_bpref_array(
+                Path(f"{prefix}_bpref_weight.bin"),
+                dtype=np.dtype(np.float64),
+            )
+            expected_half_shape = (
+                accumulator_shape[0],
+                accumulator_shape[1],
+                accumulator_shape[2] // 2 + 1,
+            )
+            if relion_data.shape != expected_half_shape or relion_weight.shape != expected_half_shape:
+                raise ValueError(
+                    "RELION BPref shape mismatch: "
+                    f"data={relion_data.shape}, weight={relion_weight.shape}, "
+                    f"expected={expected_half_shape}"
+                )
+            native_numerator = relion_bpref_numerator_to_recovar_units(
+                half_volume_mstep.relion_x_half_volume_to_native_half(
+                    relion_data.reshape(-1),
+                    accumulator_shape,
+                ),
+                grid_size=grid_size,
+            )
+            native_weight = (
+                half_volume_mstep.relion_x_half_volume_to_native_half(
+                    relion_weight.reshape(-1),
+                    accumulator_shape,
+                ).real
+                / float(grid_size**4)
+            )
+            accumulator_targets = [(1, np.asarray(native_numerator), np.asarray(native_weight))]
 
     accumulator_side = accumulator_shape[0]
     if accumulator_shape != (accumulator_side,) * 3:
@@ -500,6 +552,9 @@ def main() -> None:
         "native_call_index": args.native_call_index,
         "requested_halves": list(requested_halves),
         "joined": bool(args.joined),
+        "relion_bpref_prefix": (
+            None if args.relion_bpref_prefix is None else str(args.relion_bpref_prefix.resolve())
+        ),
         "recovar_fsc": None if args.recovar_fsc is None else str(args.recovar_fsc.resolve()),
         "native_tau_provenance": args.native_tau_provenance,
         "recovar_full_half_axis": args.recovar_full_half_axis,
