@@ -719,14 +719,9 @@ def _skip_native_sampling_accuracy_diagnostic() -> bool:
     return value == "1"
 
 
-def _isolate_native_sampling_accuracy() -> bool:
-    """Return whether expected accuracy runs in a fresh spawned process.
-
-    Isolation is the production default because the RELION binding retains
-    process-global state that changes later InitialModel particle selection.
-    The environment override remains as a strict diagnostic escape hatch.
-    """
-    value = os.environ.get(INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "1").strip()
+def _isolate_native_sampling_accuracy_diagnostic() -> bool:
+    """Return whether expected accuracy runs in a fresh spawned process."""
+    value = os.environ.get(INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "").strip()
     if value not in {"", "0", "1"}:
         raise ValueError(f"{INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV} must be 0 or 1")
     return value == "1"
@@ -806,7 +801,7 @@ def _estimate_native_sampling_accuracy(
     current_image_size = int(state.current_size if state.current_size > 0 else state.ori_size)
     accuracy_estimator = (
         estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs
-        if _isolate_native_sampling_accuracy()
+        if _isolate_native_sampling_accuracy_diagnostic()
         else estimate_relion_expected_accuracy_from_prepared_inputs
     )
     accuracy = accuracy_estimator(
@@ -1428,8 +1423,8 @@ def _native_expectation_step(
         if sampling_state is not None:
             result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
             result.meta["sampling_accuracy_skipped_by_diagnostic"] = bool(skip_expected_accuracy)
-            result.meta["sampling_accuracy_isolated"] = bool(
-                _isolate_native_sampling_accuracy()
+            result.meta["sampling_accuracy_isolated_by_diagnostic"] = bool(
+                _isolate_native_sampling_accuracy_diagnostic()
             )
             if accuracy_meta is not None:
                 result.meta.update(accuracy_meta)
