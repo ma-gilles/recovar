@@ -71,3 +71,14 @@ def test_wavg_bpref_host_gap_is_fail_closed_and_measures_from_wavg_return():
     assert "exact_wavg_return_time = std::chrono::steady_clock::now()" in cuda_source
     assert "exact_wavg_return_time +" in cuda_source
     assert "std::this_thread::sleep_until" in cuda_source
+
+
+def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
+    cuda_source = CUDA_SOURCE.read_text()
+
+    assert "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE" in cuda_source
+    assert "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE_PARTICLE_ID" in cuda_source
+    assert "wavg_bpref_intrinsic_gap_ns" in cuda_source
+    assert "wavg_bpref_effective_gap_ns" in cuda_source
+    assert 'trace << "particle\\ttrace_particle_id\\tworker_lane' in cuda_source
+    assert "if (!found || !trace)" in cuda_source

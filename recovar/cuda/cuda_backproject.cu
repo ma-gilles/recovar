@@ -63,6 +63,10 @@ constexpr char kRelionVdamExactWavgPredecessorEnv[] =
     "RECOVAR_VDAM_EXACT_WAVG_PREDECESSOR";
 constexpr char kRelionVdamWavgBprefHostGapNsEnv[] =
     "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_NS";
+constexpr char kRelionVdamWavgBprefHostGapTraceEnv[] =
+    "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE";
+constexpr char kRelionVdamWavgBprefHostGapTraceParticleEnv[] =
+    "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE_PARTICLE_ID";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
@@ -5110,6 +5114,27 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             wavg_bpref_host_gap_ns < 0)
             return cudaErrorInvalidValue;
     }
+    const char* wavg_bpref_host_gap_trace_path =
+        std::getenv(kRelionVdamWavgBprefHostGapTraceEnv);
+    const bool wavg_bpref_host_gap_trace_requested =
+        wavg_bpref_host_gap_trace_path != nullptr &&
+        wavg_bpref_host_gap_trace_path[0] != '\0';
+    long long wavg_bpref_host_gap_trace_particle = -1;
+    if (wavg_bpref_host_gap_trace_requested)
+    {
+        const char* trace_particle_value =
+            std::getenv(kRelionVdamWavgBprefHostGapTraceParticleEnv);
+        if (trace_particle_value == nullptr || trace_particle_value[0] == '\0')
+            return cudaErrorInvalidValue;
+        char* trace_end = nullptr;
+        errno = 0;
+        wavg_bpref_host_gap_trace_particle = std::strtoll(
+            trace_particle_value, &trace_end, 10);
+        if (errno != 0 || trace_end == trace_particle_value ||
+            trace_end == nullptr || trace_end[0] != '\0' ||
+            wavg_bpref_host_gap_trace_particle < 0)
+            return cudaErrorInvalidValue;
+    }
     CUcontext exact_native_ptx_context = nullptr;
     CUmodule exact_native_ptx_module = nullptr;
     CUfunction exact_native_ptx_kernel = nullptr;
@@ -5135,6 +5160,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     if (exact_wavg_predecessor_requested && !exact_native_ptx_requested)
         return cudaErrorInvalidValue;
     if (wavg_bpref_host_gap_requested && !exact_wavg_predecessor_requested)
+        return cudaErrorInvalidValue;
+    if (wavg_bpref_host_gap_trace_requested &&
+        !exact_wavg_predecessor_requested)
         return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
@@ -5329,7 +5357,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&worker_lanes_host),
             static_cast<size_t>(n_particles) * sizeof(int32_t));
         if (err != cudaSuccess) goto cleanup;
-        if (candidate_trace_requested)
+        if (candidate_trace_requested || wavg_bpref_host_gap_trace_requested)
         {
             err = cudaMallocHost(
                 reinterpret_cast<void**>(&particle_trace_ids_host),
@@ -5376,7 +5404,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             cudaMemcpyDeviceToHost,
             stream);
         if (err != cudaSuccess) goto cleanup;
-        if (candidate_trace_requested)
+        if (candidate_trace_requested || wavg_bpref_host_gap_trace_requested)
         {
             err = cudaMemcpyAsync(
                 particle_trace_ids_host,
@@ -5429,7 +5457,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 err = cudaErrorInvalidValue;
                 goto cleanup;
             }
-            if (candidate_trace_requested && particle_trace_ids_host[particle] < 0)
+            if ((candidate_trace_requested ||
+                 wavg_bpref_host_gap_trace_requested) &&
+                particle_trace_ids_host[particle] < 0)
             {
                 err = cudaErrorInvalidValue;
                 goto cleanup;
@@ -5539,6 +5569,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             texture_real,
             texture_imag,
         };
+        std::vector<long long> wavg_bpref_intrinsic_gap_ns(
+            static_cast<size_t>(n_particles), -1);
+        std::vector<long long> wavg_bpref_effective_gap_ns(
+            static_cast<size_t>(n_particles), -1);
         const auto launch_particle_with_accumulators = [&](
             int64_t particle,
             int lane,
@@ -5641,7 +5675,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 if (driver_result != CUDA_SUCCESS)
                     return report_relion_vdam_driver_error(
                         "cuLaunchKernel(wavg)", driver_result);
-                if (wavg_bpref_host_gap_requested)
+                if (wavg_bpref_host_gap_requested ||
+                    wavg_bpref_host_gap_trace_requested)
                     exact_wavg_return_time = std::chrono::steady_clock::now();
             }
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
@@ -5776,6 +5811,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                 &model_init_y_arg,
                                 &model_init_z_arg,
                             };
+                            const bool trace_this_gap =
+                                wavg_bpref_host_gap_trace_requested &&
+                                particle_trace_ids_host[particle] ==
+                                    wavg_bpref_host_gap_trace_particle;
+                            if (trace_this_gap)
+                                wavg_bpref_intrinsic_gap_ns[particle] =
+                                    std::chrono::duration_cast<
+                                        std::chrono::nanoseconds>(
+                                            std::chrono::steady_clock::now() -
+                                            exact_wavg_return_time).count();
                             if (wavg_bpref_host_gap_requested)
                             {
                                 const auto target = exact_wavg_return_time +
@@ -5789,6 +5834,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                         target - spin_guard);
                                 while (std::chrono::steady_clock::now() < target) {}
                             }
+                            if (trace_this_gap)
+                                wavg_bpref_effective_gap_ns[particle] =
+                                    std::chrono::duration_cast<
+                                        std::chrono::nanoseconds>(
+                                            std::chrono::steady_clock::now() -
+                                            exact_wavg_return_time).count();
                             driver_result = cuLaunchKernel(
                                 exact_native_ptx_kernel,
                                 static_cast<unsigned>(grid_rotations), 1, 1,
@@ -5950,6 +6001,38 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         {
             err = cudaStreamSynchronize(particle_streams[lane]);
             if (err != cudaSuccess) goto cleanup;
+        }
+        if (wavg_bpref_host_gap_trace_requested)
+        {
+            std::ofstream trace(wavg_bpref_host_gap_trace_path);
+            if (!trace)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            trace << "particle\ttrace_particle_id\tworker_lane\tintrinsic_gap_ns"
+                  << "\teffective_gap_ns\ttarget_gap_ns\n";
+            bool found = false;
+            for (int64_t particle = 0; particle < n_particles; ++particle)
+            {
+                if (wavg_bpref_intrinsic_gap_ns[particle] < 0) continue;
+                found = true;
+                trace << particle << '\t'
+                      << particle_trace_ids_host[particle] << '\t'
+                      << worker_lanes_host[particle] << '\t'
+                      << wavg_bpref_intrinsic_gap_ns[particle] << '\t'
+                      << wavg_bpref_effective_gap_ns[particle] << '\t'
+                      << (wavg_bpref_host_gap_requested
+                              ? wavg_bpref_host_gap_ns
+                              : -1)
+                      << '\n';
+            }
+            trace.close();
+            if (!found || !trace)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
         }
         if (candidate_trace_requested)
         {
