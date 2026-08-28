@@ -196,3 +196,45 @@ def test_read_native_panel_is_fail_closed_and_preserves_float32(tmp_path) -> Non
     assert panel["translation_count"] == 3
     assert np.array_equal(panel["eulers"], eulers.reshape(2, 9))
     assert np.array_equal(panel["weights"], weights.reshape(2, 3))
+
+
+def test_merge_callbacks_removes_bucket_barrier_in_native_launch_order() -> None:
+    def source(trace_ids: list[int], width: int) -> dict[str, np.ndarray]:
+        count = len(trace_ids)
+        return {
+            "images": np.asarray(trace_ids, dtype=np.complex64)[:, None],
+            "ctf": np.ones((count, 1), dtype=np.float32),
+            "minvsigma2": np.ones((count, 1), dtype=np.float32),
+            "reconstruction_group_ids": np.zeros(count, dtype=np.int32),
+            "worker_lane_ids": np.arange(count, dtype=np.int32),
+            "particle_trace_ids": np.asarray(trace_ids, dtype=np.int32),
+            "rotation_replay_counts": np.full(count, width, dtype=np.int32),
+            "particle_start_offsets_ns": np.full(count, 123, dtype=np.int32),
+            "posterior_over_weight_norm": np.ones(
+                (count, width, 1), dtype=np.float32
+            ),
+            "projector_eulers": np.ones((count, width, 9), dtype=np.float32),
+            "compact_rotations": np.ones((count, width, 6), dtype=np.float32),
+            "rotation_replay_order": np.tile(
+                np.arange(width, dtype=np.int32), (count, 1)
+            ),
+            "n_particles": np.int64(count),
+            "rotation_count": np.int64(width),
+            "data_real_volume": np.zeros((1, 2), dtype=np.float32),
+            "data_imag_volume": np.zeros((1, 2), dtype=np.float32),
+            "weight_volume": np.zeros((1, 2), dtype=np.float32),
+            "translation_count": np.int64(1),
+            "parallel_worker_replay": np.int32(1),
+        }
+
+    merged = worker_private._merge_callback_sources(
+        [source([10, 20], 2), source([30], 3)], [30, 10, 20]
+    )
+
+    assert merged["particle_trace_ids"].tolist() == [30, 10, 20]
+    assert merged["images"][:, 0].real.tolist() == [30, 10, 20]
+    assert int(merged["n_particles"]) == 3
+    assert int(merged["rotation_count"]) == 3
+    assert merged["posterior_over_weight_norm"].shape == (3, 3, 1)
+    assert np.count_nonzero(merged["posterior_over_weight_norm"][1:, 2]) == 0
+    assert np.count_nonzero(merged["particle_start_offsets_ns"]) == 0

@@ -29,7 +29,7 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 from recovar.em.initial_model.layout import relion_bpref_frame_scales
 from scripts import analyze_vdam_mstep_boundary, run_vdam_exact_native_host_replay
 
-SCHEMA = "recovar.vdam_worker_private_host_replay.v4"
+SCHEMA = "recovar.vdam_worker_private_host_replay.v5"
 _CALL_RE = re.compile(r"-call-(\d+)-input\.npz$")
 _PANEL_MAGIC = 0x5644414D42504631
 _PANEL_HEADER_WORDS = 10
@@ -132,6 +132,30 @@ def _load_native_topology(
             raise ValueError(f"duplicate original stack index {original_index}")
         result[original_index] = by_part[part_id]
     return result
+
+
+def _load_native_launch_order(
+    topology_path: Path,
+    data_star: Path,
+    *,
+    iteration: int,
+) -> list[int]:
+    part_ids = []
+    for line_number, line in enumerate(topology_path.read_text().splitlines(), 1):
+        fields = line.split("\t")
+        if len(fields) != 6:
+            raise ValueError(
+                f"topology line {line_number} has {len(fields)} fields, expected 6"
+            )
+        row_iteration, part_id = int(fields[0]), int(fields[1])
+        if row_iteration == iteration:
+            part_ids.append(part_id)
+    if set(part_ids) != set(range(len(part_ids))) or len(set(part_ids)) != len(
+        part_ids
+    ):
+        raise ValueError("native launch order must cover each contiguous part once")
+    original_indices = _part_to_original_indices(data_star, len(part_ids))
+    return [original_indices[part_id] for part_id in part_ids]
 
 
 def _read_native_panel(path: Path) -> dict[str, object]:
@@ -304,6 +328,76 @@ def _apply_native_topology(
     return result
 
 
+def _merge_callback_sources(
+    sources: list[dict[str, np.ndarray]],
+    launch_order: list[int],
+) -> dict[str, np.ndarray]:
+    if not sources:
+        raise ValueError("cannot merge an empty callback list")
+    particle_keys = (
+        "images",
+        "ctf",
+        "minvsigma2",
+        "reconstruction_group_ids",
+        "worker_lane_ids",
+        "particle_trace_ids",
+        "rotation_replay_counts",
+        "particle_start_offsets_ns",
+    )
+    rotation_keys = (
+        "posterior_over_weight_norm",
+        "projector_eulers",
+        "compact_rotations",
+    )
+    varying_keys = set(particle_keys) | set(rotation_keys) | {
+        "rotation_replay_order",
+        "n_particles",
+        "rotation_count",
+        "data_real_volume",
+        "data_imag_volume",
+        "weight_volume",
+    }
+    first = sources[0]
+    for source in sources[1:]:
+        if set(source) != set(first):
+            raise ValueError("sealed callback schemas differ")
+        for name in set(first) - varying_keys:
+            if not np.array_equal(source[name], first[name]):
+                raise ValueError(f"sealed static callback field changes: {name}")
+
+    width = max(_scalar(source, "rotation_count") for source in sources)
+    merged = {name: np.asarray(value) for name, value in first.items()}
+    for name in particle_keys:
+        merged[name] = np.concatenate([np.asarray(source[name]) for source in sources])
+    for name in rotation_keys:
+        rows = []
+        for source in sources:
+            value = np.asarray(source[name])
+            padding = [(0, 0), (0, width - value.shape[1])]
+            padding.extend((0, 0) for _axis in range(value.ndim - 2))
+            rows.append(np.pad(value, padding, mode="constant"))
+        merged[name] = np.concatenate(rows)
+    n_particles = sum(_scalar(source, "n_particles") for source in sources)
+    merged["rotation_replay_order"] = np.tile(
+        np.arange(width, dtype=np.int32), (n_particles, 1)
+    )
+    merged["n_particles"] = np.asarray(first["n_particles"]).dtype.type(n_particles)
+    merged["rotation_count"] = np.asarray(first["rotation_count"]).dtype.type(width)
+    merged["particle_start_offsets_ns"] = np.zeros(n_particles, dtype=np.int32)
+    merged["parallel_worker_replay"] = np.int32(1)
+
+    trace_ids = np.asarray(merged["particle_trace_ids"], dtype=np.int64)
+    if len(set(trace_ids.tolist())) != n_particles:
+        raise ValueError("merged callback particle traces are not unique")
+    if set(trace_ids.tolist()) != set(launch_order):
+        raise ValueError("merged callback identities differ from native launch order")
+    row_by_trace = {int(trace_id): row for row, trace_id in enumerate(trace_ids)}
+    order = np.asarray([row_by_trace[trace_id] for trace_id in launch_order])
+    for name in particle_keys + rotation_keys + ("rotation_replay_order",):
+        merged[name] = np.ascontiguousarray(merged[name][order])
+    return merged
+
+
 def _private_bundle(
     source: dict[str, np.ndarray],
     private_real: np.ndarray,
@@ -461,6 +555,7 @@ def replay(
     topology_path: Path | None = None,
     topology_data_star: Path | None = None,
     native_panel_directory: Path | None = None,
+    merge_callbacks: bool = False,
 ) -> dict:
     if worker_count <= 0:
         raise ValueError("worker count must be positive")
@@ -481,10 +576,15 @@ def replay(
         raise ValueError("native panels require topology and topology data STAR")
     topology = None
     panels = None
+    launch_order = None
     if topology_path is not None and topology_data_star is not None:
         topology = _load_native_topology(
             topology_path, topology_data_star, iteration=iteration
         )
+        if merge_callbacks:
+            launch_order = _load_native_launch_order(
+                topology_path, topology_data_star, iteration=iteration
+            )
         if native_panel_directory is not None:
             panels = _load_native_panels(
                 native_panel_directory, topology_data_star, iteration=iteration
@@ -505,15 +605,31 @@ def replay(
     recon_volume_shape = tuple(
         _scalar(first, name) for name in ("volume_n0", "volume_n1", "volume_n2")
     )
+    prepared_sources = []
+    for input_path in input_paths:
+        source = _load_bundle(input_path)
+        if topology is not None:
+            source = _apply_native_topology(source, topology, panels)
+        prepared_sources.append(source)
+    if merge_callbacks:
+        if launch_order is None:
+            raise ValueError("merged callback replay requires native topology")
+        callback_sources = [
+            (
+                "merged_native_launch_order",
+                _merge_callback_sources(prepared_sources, launch_order),
+            )
+        ]
+    else:
+        callback_sources = list(
+            zip((str(path) for path in input_paths), prepared_sources)
+        )
 
     with tempfile.TemporaryDirectory(
         prefix="vdam-worker-private-", dir=output_directory
     ) as temporary_text:
         temporary = Path(temporary_text)
-        for call_index, input_path in enumerate(input_paths):
-            source = _load_bundle(input_path)
-            if topology is not None:
-                source = _apply_native_topology(source, topology, panels)
+        for call_index, (source_label, source) in enumerate(callback_sources):
             if _scalar(source, "reconstruction_group_count") != group_count:
                 raise ValueError("reconstruction group count changes across callbacks")
             before_real = _serial_reduce(
@@ -560,7 +676,7 @@ def replay(
             callbacks.append(
                 {
                     "call_index": call_index,
-                    "source": str(input_path),
+                    "source": source_label,
                     "n_particles": callback["n_particles"],
                     "rotation_count": callback["rotation_count"],
                     "pixel_count": callback["pixel_count"],
@@ -620,6 +736,7 @@ def replay(
         "native_panel_directory": (
             str(native_panel_directory) if native_panel_directory else None
         ),
+        "callbacks_merged_in_native_launch_order": merge_callbacks,
         "worker_count": worker_count,
         "reconstruction_group_count": group_count,
         "callback_count": len(callbacks),
@@ -653,6 +770,7 @@ def main() -> int:
     parser.add_argument("--topology", type=Path)
     parser.add_argument("--topology-data-star", type=Path)
     parser.add_argument("--native-panel-directory", type=Path)
+    parser.add_argument("--merge-callbacks", action="store_true")
     args = parser.parse_args()
     report = replay(
         args.input_directory,
@@ -665,6 +783,7 @@ def main() -> int:
         topology_path=args.topology,
         topology_data_star=args.topology_data_star,
         native_panel_directory=args.native_panel_directory,
+        merge_callbacks=args.merge_callbacks,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

@@ -20,6 +20,11 @@ set -euo pipefail
 VDAM_TOPOLOGY=${VDAM_TOPOLOGY:-}
 VDAM_TOPOLOGY_DATA_STAR=${VDAM_TOPOLOGY_DATA_STAR:-}
 VDAM_NATIVE_PANEL_DIRECTORY=${VDAM_NATIVE_PANEL_DIRECTORY:-}
+VDAM_MERGE_CALLBACKS=${VDAM_MERGE_CALLBACKS:-0}
+case "${VDAM_MERGE_CALLBACKS}" in
+  0|1) ;;
+  *) echo "VDAM_MERGE_CALLBACKS must be 0 or 1" >&2; exit 2 ;;
+esac
 if [[ -n "${VDAM_TOPOLOGY}" || -n "${VDAM_TOPOLOGY_DATA_STAR}" ]]; then
   test -s "${VDAM_TOPOLOGY}"
   test -s "${VDAM_TOPOLOGY_DATA_STAR}"
@@ -63,6 +68,9 @@ fi
 if [[ -n "${VDAM_NATIVE_PANEL_DIRECTORY}" ]]; then
   command+=(--native-panel-directory "${VDAM_NATIVE_PANEL_DIRECTORY}")
 fi
+if [[ "${VDAM_MERGE_CALLBACKS}" == 1 ]]; then
+  command+=(--merge-callbacks)
+fi
 "${command[@]}" \
   > "${VDAM_OUTPUT_DIRECTORY}/runner.stdout" \
   2> "${VDAM_OUTPUT_DIRECTORY}/runner.stderr"
@@ -71,12 +79,12 @@ end_s=$(date +%s)
 python - "${VDAM_OUTPUT_DIRECTORY}/provenance.json" \
   "${SLURM_JOB_ID}" "${visible_gpu_uuid}" "${VDAM_EXPECTED_HEAD}" \
   "$((end_s - start_s))" "${VDAM_TOPOLOGY}" "${VDAM_TOPOLOGY_DATA_STAR}" \
-  "${VDAM_NATIVE_PANEL_DIRECTORY}" <<'PY'
+  "${VDAM_NATIVE_PANEL_DIRECTORY}" "${VDAM_MERGE_CALLBACKS}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-output, job_id, gpu_uuid, head, wall_s, topology, data_star, panels = sys.argv[1:]
+output, job_id, gpu_uuid, head, wall_s, topology, data_star, panels, merged = sys.argv[1:]
 Path(output).write_text(
     json.dumps(
         {
@@ -87,6 +95,7 @@ Path(output).write_text(
             "native_topology": topology or None,
             "native_topology_data_star": data_star or None,
             "native_panel_directory": panels or None,
+            "callbacks_merged_in_native_launch_order": merged == "1",
         },
         indent=2,
         sort_keys=True,
