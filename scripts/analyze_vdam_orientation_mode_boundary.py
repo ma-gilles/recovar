@@ -30,8 +30,11 @@ def _column(table, name: str) -> str:
 def summarize_orientation_modes(
     *,
     local_eulers: np.ndarray,
+    raw_scores: np.ndarray,
     total_scores: np.ndarray,
     posterior: np.ndarray,
+    rotation_log_prior: np.ndarray,
+    translation_log_prior: np.ndarray,
     modes: dict[str, np.ndarray],
     translation_index: int,
     angular_tolerance_deg: float = 1.0e-3,
@@ -39,14 +42,20 @@ def summarize_orientation_modes(
     """Map serialized modes to local rows and report their score spacing."""
 
     local_eulers = np.asarray(local_eulers, dtype=np.float64)
+    raw_scores = np.asarray(raw_scores)
     total_scores = np.asarray(total_scores)
     posterior = np.asarray(posterior)
+    rotation_log_prior = np.asarray(rotation_log_prior).reshape(-1)
+    translation_log_prior = np.asarray(translation_log_prior).reshape(-1)
     if local_eulers.ndim != 2 or local_eulers.shape[1] != 3 or local_eulers.shape[0] == 0:
         raise OrientationModeError("local Euler table must have nonempty shape (R, 3)")
     if (
         total_scores.ndim != 2
         or total_scores.shape != posterior.shape
+        or total_scores.shape != raw_scores.shape
         or total_scores.shape[0] != local_eulers.shape[0]
+        or rotation_log_prior.shape != (local_eulers.shape[0],)
+        or translation_log_prior.shape != (total_scores.shape[1],)
     ):
         raise OrientationModeError("score, posterior, and local rotation shapes differ")
     if not modes:
@@ -60,6 +69,9 @@ def summarize_orientation_modes(
     if not np.isfinite(winner_score):
         raise OrientationModeError("captured score table has no finite hypothesis")
     ulp = abs(float(np.spacing(np.float32(winner_score))))
+    winner_raw = float(raw_scores[winner_row, winner_translation])
+    winner_rotation_prior = float(rotation_log_prior[winner_row])
+    winner_translation_prior = float(translation_log_prior[winner_translation])
 
     rows: list[dict[str, Any]] = []
     for label, raw_eulers in sorted(modes.items()):
@@ -72,8 +84,12 @@ def summarize_orientation_modes(
                 f"mode {label} misses local support: {error:.9g} > {angular_tolerance_deg:.9g} deg"
             )
         score = float(total_scores[nearest, int(translation_index)])
+        raw_score = float(raw_scores[nearest, int(translation_index)])
+        rotation_prior = float(rotation_log_prior[nearest])
+        translation_prior = float(translation_log_prior[int(translation_index)])
         probability = float(posterior[nearest, int(translation_index)])
         gap = winner_score - score
+        recomposed = raw_score + rotation_prior + translation_prior
         rows.append(
             {
                 "label": label,
@@ -82,8 +98,18 @@ def summarize_orientation_modes(
                 "angular_mapping_error_deg": error,
                 "translation_index": int(translation_index),
                 "total_log_score": score,
+                "raw_log_score": raw_score,
+                "rotation_log_prior": rotation_prior,
+                "translation_log_prior": translation_prior,
+                "recomposed_total_log_score": recomposed,
+                "total_score_minus_recomposed": score - recomposed,
                 "posterior": probability,
                 "winner_minus_mode_score": gap,
+                "winner_minus_mode_components": {
+                    "raw_log_score": winner_raw - raw_score,
+                    "rotation_log_prior": winner_rotation_prior - rotation_prior,
+                    "translation_log_prior": winner_translation_prior - translation_prior,
+                },
                 "winner_minus_mode_score_float32_ulps": (gap / ulp if ulp else None),
                 "is_global_winner": (
                     nearest == int(winner_row)
@@ -100,6 +126,9 @@ def summarize_orientation_modes(
             "rotation_row": int(winner_row),
             "translation_index": int(winner_translation),
             "total_log_score": winner_score,
+            "raw_log_score": winner_raw,
+            "rotation_log_prior": winner_rotation_prior,
+            "translation_log_prior": winner_translation_prior,
             "posterior": float(posterior[winner_row, winner_translation]),
             "float32_ulp": ulp,
         },
@@ -154,7 +183,10 @@ def analyze(
             "selected_global_image_indices",
             "local_rotation_eulers",
             "pass2_scores_total",
+            "pass2_scores_raw",
             "posterior",
+            "rotation_log_prior",
+            "translation_log_prior",
             "best_score_translation_index",
             "debug_iteration",
         }
@@ -175,8 +207,11 @@ def analyze(
         )
         summary = summarize_orientation_modes(
             local_eulers=np.asarray(archive["local_rotation_eulers"]),
+            raw_scores=np.asarray(archive["pass2_scores_raw"])[0],
             total_scores=scores,
             posterior=posterior,
+            rotation_log_prior=np.asarray(archive["rotation_log_prior"]),
+            translation_log_prior=np.asarray(archive["translation_log_prior"]),
             modes=modes,
             translation_index=translation_index,
         )
