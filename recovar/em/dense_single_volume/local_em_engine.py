@@ -684,7 +684,12 @@ def _relion_vdam_particle_issue_order_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology not in {"captured_particle_issue", "captured_particle_timing"}:
+    if topology not in {
+        "captured_particle_issue",
+        "captured_particle_issue_native_count",
+        "captured_particle_timing",
+        "captured_particle_timing_native_count",
+    }:
         return None
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
     chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
@@ -729,7 +734,10 @@ def _relion_vdam_particle_start_offsets_for_images(
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    if topology != "captured_particle_timing":
+    if topology not in {
+        "captured_particle_timing",
+        "captured_particle_timing_native_count",
+    }:
         return None
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
     chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
@@ -847,6 +855,8 @@ def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bo
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
         "materialized_native_grid_trace_shape",
+        "captured_particle_issue_native_count",
+        "captured_particle_timing_native_count",
     }:
         return False
     schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
@@ -908,7 +918,9 @@ def _relion_vdam_worker_lanes_for_images(
     owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
     if topology in {
         "captured_particle_issue",
+        "captured_particle_issue_native_count",
         "captured_particle_timing",
+        "captured_particle_timing_native_count",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -917,7 +929,12 @@ def _relion_vdam_worker_lanes_for_images(
         "captured_native_grid_trace_shape",
         "materialized_native_grid_trace_shape",
     }:
-        if topology in {"captured_particle_issue", "captured_particle_timing"}:
+        if topology in {
+            "captured_particle_issue",
+            "captured_particle_issue_native_count",
+            "captured_particle_timing",
+            "captured_particle_timing_native_count",
+        }:
             if (
                 _relion_vdam_particle_issue_order_for_images(
                     experiment_dataset,
@@ -962,7 +979,9 @@ def _relion_vdam_worker_lanes_for_images(
     elif topology not in {
         "captured",
         "captured_particle_issue",
+        "captured_particle_issue_native_count",
         "captured_particle_timing",
+        "captured_particle_timing_native_count",
         "captured_block_start",
         "captured_block_grid",
         "captured_native_grid",
@@ -976,6 +995,8 @@ def _relion_vdam_worker_lanes_for_images(
             "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
             "'single_rotation_sm132', 'captured_particle_issue', 'captured_block_start', "
             "'captured_particle_timing', "
+            "'captured_particle_issue_native_count', "
+            "'captured_particle_timing_native_count', "
             "'captured_block_grid', 'captured_native_grid', or "
             "'captured_native_count', 'captured_native_trace_shape', or "
             "'captured_native_grid_trace_shape', or "
@@ -1004,6 +1025,8 @@ def _relion_vdam_native_grid_counts_for_images(
         "captured_native_trace_shape",
         "captured_native_grid_trace_shape",
         "materialized_native_grid_trace_shape",
+        "captured_particle_issue_native_count",
+        "captured_particle_timing_native_count",
     }:
         return None
     orders = _relion_vdam_block_start_orders_for_images(
@@ -1045,7 +1068,12 @@ def _relion_vdam_identity_native_grid_replay() -> bool:
         RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     ).strip().lower()
-    return topology in {"captured_native_count", "captured_native_trace_shape"}
+    return topology in {
+        "captured_native_count",
+        "captured_native_trace_shape",
+        "captured_particle_issue_native_count",
+        "captured_particle_timing_native_count",
+    }
 
 
 def _relion_vdam_materialized_native_grid_replay(

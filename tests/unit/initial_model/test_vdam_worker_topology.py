@@ -23,6 +23,7 @@ def _clear_worker_replay(monkeypatch):
         raising=False,
     )
     local_em_engine._load_relion_vdam_worker_schedule.cache_clear()
+    local_em_engine._load_relion_vdam_block_start_orders.cache_clear()
     local_em_engine._load_relion_vdam_particle_issue_ranks.cache_clear()
     local_em_engine._load_relion_vdam_particle_start_offsets_ns.cache_clear()
 
@@ -60,6 +61,8 @@ def _write_particle_issue_seals(tmp_path, *, launch_sequences=(2, 0, 1)):
             ("particle_id", "<i8"),
             ("worker_id", "<i4"),
             ("block_start_globaltimer", "<u8"),
+            ("orientation_row", "<u4"),
+            ("image_count", "<u4"),
         ],
     )
     for position, (internal_id, owner, launch_sequence) in enumerate(
@@ -71,6 +74,8 @@ def _write_particle_issue_seals(tmp_path, *, launch_sequences=(2, 0, 1)):
         records["block_start_globaltimer"][2 * position : 2 * position + 2] = (
             1_000 + launch_sequence * 250
         )
+        records["orientation_row"][2 * position : 2 * position + 2] = [0, 1]
+        records["image_count"][2 * position : 2 * position + 2] = 2
     np.savez(
         chronology_path,
         schema_version=np.asarray(1),
@@ -325,6 +330,54 @@ def test_captured_particle_timing_rejects_start_before_first_launch(
             np.arange(3, dtype=np.int64),
             debug_iteration=58,
         )
+
+
+@pytest.mark.parametrize(
+    ("topology", "expected_offsets"),
+    [
+        ("captured_particle_issue_native_count", None),
+        (
+            "captured_particle_timing_native_count",
+            np.asarray([500, 0, 250], dtype=np.int32),
+        ),
+    ],
+)
+def test_captured_particle_native_count_composes_with_issue_and_timing(
+    monkeypatch,
+    tmp_path,
+    topology,
+    expected_offsets,
+):
+    _clear_worker_replay(monkeypatch)
+    schedule_path, chronology_path = _write_particle_issue_seals(tmp_path)
+    _enable_particle_issue_replay(
+        monkeypatch,
+        schedule_path,
+        chronology_path,
+        topology=topology,
+    )
+    dataset = _IndexDataset([4, 1, 7])
+    indices = np.arange(3, dtype=np.int64)
+
+    counts = local_em_engine._relion_vdam_native_grid_counts_for_images(
+        dataset,
+        indices,
+        rotation_count=4,
+        valid_rotation_counts=np.asarray([2, 2, 2]),
+        debug_iteration=58,
+    )
+    offsets = local_em_engine._relion_vdam_particle_start_offsets_for_images(
+        dataset,
+        indices,
+        debug_iteration=58,
+    )
+
+    np.testing.assert_array_equal(counts, np.asarray([2, 2, 2], dtype=np.int32))
+    if expected_offsets is None:
+        assert offsets is None
+    else:
+        np.testing.assert_array_equal(offsets, expected_offsets)
+    assert local_em_engine._relion_vdam_identity_native_grid_replay()
 
 
 def test_captured_particle_issue_replay_only_targets_sealed_iteration(

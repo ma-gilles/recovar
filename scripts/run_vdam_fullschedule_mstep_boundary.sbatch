@@ -200,7 +200,9 @@ if [[ "${CANDIDATE_BLOCK_TRACE_CAPTURE}" = 1 ]]; then
   fi
   test "${WORKER_REPLAY_TOPOLOGY}" = captured -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue_native_count -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing_native_count -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_native_count -o \
@@ -224,7 +226,9 @@ fi
 if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
   test "${BLOCK_TRACE_CAPTURE}" = 1
   test "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue_native_count -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing -o \
+    "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing_native_count -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid -o \
     "${WORKER_REPLAY_TOPOLOGY}" = captured_native_count -o \
@@ -233,7 +237,9 @@ if [[ "${BLOCK_TRACE_REPLAY}" = 1 ]]; then
     "${WORKER_REPLAY_TOPOLOGY}" = materialized_native_grid_trace_shape
 elif [[ -z "${EXTERNAL_BLOCK_CHRONOLOGY}" && \
         ( "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue || \
+        "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_issue_native_count || \
         "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing || \
+        "${WORKER_REPLAY_TOPOLOGY}" = captured_particle_timing_native_count || \
         "${WORKER_REPLAY_TOPOLOGY}" = captured_block_start || \
         "${WORKER_REPLAY_TOPOLOGY}" = captured_block_grid || \
         "${WORKER_REPLAY_TOPOLOGY}" = captured_native_grid || \
