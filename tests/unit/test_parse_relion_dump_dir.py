@@ -117,6 +117,8 @@ def test_parse_relion_dump_dir_classifies_pass_prefixed_files(tmp_path):
     _write_flat_real(tmp_path / "pass0_candidate_weight_normalized.bin", [0.7, 0.2, 0.1])
     _write_flat_real(tmp_path / "pass1_exp_Mweight_raw_preprior.bin", [-3.0, -2.0])
     _write_flat_real(tmp_path / "pass0_img0_corr_img.bin", [4.0, 5.0])
+    _write_flat_real(tmp_path / "pass0_img0_ctf_rfloat.bin", [0.25, -0.75])
+    _write_flat_real(tmp_path / "pass0_img0_pixel_correction.bin", [4.0, -4.0 / 3.0])
     _write_flat_real(tmp_path / "pass0_img0_Fimg_corrected_real.bin", [1.0, 2.0])
     _write_flat_real(tmp_path / "pass0_img0_Fimg_corrected_imag.bin", [-1.0, -2.0])
     _write_flat_int(tmp_path / "pass0_candidate_in_fine_threshold_set.bin", [1, 0, 1])
@@ -130,6 +132,10 @@ def test_parse_relion_dump_dir_classifies_pass_prefixed_files(tmp_path):
     np.testing.assert_array_equal(parsed["pass0_candidate_weight_normalized"], np.array([0.7, 0.2, 0.1]))
     np.testing.assert_array_equal(parsed["pass1_exp_Mweight_raw_preprior"], np.array([-3.0, -2.0]))
     np.testing.assert_array_equal(parsed["pass0_img0_corr_img"], np.array([4.0, 5.0]))
+    np.testing.assert_array_equal(parsed["pass0_img0_ctf_rfloat"], np.array([0.25, -0.75]))
+    np.testing.assert_array_equal(
+        parsed["pass0_img0_pixel_correction"], np.array([4.0, -4.0 / 3.0])
+    )
     np.testing.assert_array_equal(parsed["pass0_img0_Fimg_corrected_real"], np.array([1.0, 2.0]))
     np.testing.assert_array_equal(parsed["pass0_img0_Fimg_corrected_imag"], np.array([-1.0, -2.0]))
     np.testing.assert_array_equal(
