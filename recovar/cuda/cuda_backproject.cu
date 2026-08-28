@@ -5900,6 +5900,295 @@ cleanup:
     return err;
 }
 
+// Host-only ABI used by the clean-process VDAM discriminator.  It deliberately
+// accepts already-materialized dense operands: the parent JAX process retains
+// responsibility for scoring and packing, while a fresh CUDA-runtime process
+// owns texture construction, worker streams, the exact PTX launch, and atomic
+// accumulation.  This path is diagnostic-only and is not registered with XLA.
+struct RelionVdamExactHostReplayArguments
+{
+    const float2* projector_full;
+    const float2* images;
+    const float* ctf;
+    const float* minvsigma2;
+    const float* posterior_over_weight_norm;
+    const float* translation_angles;
+    const float* projector_eulers;
+    const float* compact_rotations;
+    const std::int32_t* reconstruction_group_ids;
+    const std::int32_t* worker_lane_ids;
+    const std::int32_t* particle_trace_ids;
+    const std::int32_t* rotation_replay_order;
+    const std::int32_t* rotation_replay_counts;
+    const std::int32_t* particle_start_offsets_ns;
+    float* data_real_volume;
+    float* data_imag_volume;
+    float* weight_volume;
+    float* denominator_sum;
+    std::int64_t projector_size;
+    std::int64_t n_particles;
+    std::int64_t rotation_count;
+    std::int64_t translation_count;
+    std::int64_t pixel_count;
+    std::int64_t image_h;
+    std::int64_t image_w;
+    std::int64_t volume_n0;
+    std::int64_t volume_n1;
+    std::int64_t volume_n2;
+    std::int64_t upsampling;
+    std::int64_t max_r2_x4;
+    std::int32_t physical_image_size;
+    std::int32_t projector_max_r;
+    std::int32_t projection_padding_factor;
+    std::int32_t reconstruction_group_count;
+    std::int32_t parallel_worker_replay;
+};
+
+extern "C" int recovar_relion_vdam_exact_native_host_replay(
+    const RelionVdamExactHostReplayArguments* arguments)
+{
+    if (arguments == nullptr ||
+        arguments->projector_full == nullptr ||
+        arguments->images == nullptr ||
+        arguments->ctf == nullptr ||
+        arguments->minvsigma2 == nullptr ||
+        arguments->posterior_over_weight_norm == nullptr ||
+        arguments->translation_angles == nullptr ||
+        arguments->projector_eulers == nullptr ||
+        arguments->compact_rotations == nullptr ||
+        arguments->reconstruction_group_ids == nullptr ||
+        arguments->worker_lane_ids == nullptr ||
+        arguments->particle_trace_ids == nullptr ||
+        arguments->rotation_replay_order == nullptr ||
+        arguments->rotation_replay_counts == nullptr ||
+        arguments->particle_start_offsets_ns == nullptr ||
+        arguments->data_real_volume == nullptr ||
+        arguments->data_imag_volume == nullptr ||
+        arguments->weight_volume == nullptr ||
+        arguments->denominator_sum == nullptr)
+        return static_cast<int>(cudaErrorInvalidValue);
+    if (arguments->projector_size <= 0 ||
+        arguments->n_particles <= 0 ||
+        arguments->rotation_count <= 0 ||
+        arguments->translation_count <= 0 ||
+        arguments->pixel_count <= 0 ||
+        arguments->image_h <= 0 ||
+        arguments->image_w <= 0 ||
+        arguments->image_h * arguments->image_w != arguments->pixel_count ||
+        arguments->volume_n0 <= 0 ||
+        arguments->volume_n1 <= 0 ||
+        arguments->volume_n2 <= 0 ||
+        arguments->reconstruction_group_count <= 0 ||
+        (arguments->parallel_worker_replay != 0 &&
+         arguments->parallel_worker_replay != 1))
+        return static_cast<int>(cudaErrorInvalidValue);
+    const char* exact_ptx = std::getenv(kRelionVdamExactNativePtxEnv);
+    if (exact_ptx == nullptr || exact_ptx[0] == '\0')
+        return static_cast<int>(cudaErrorInvalidValue);
+
+    const std::int64_t projector_count =
+        arguments->projector_size * arguments->projector_size *
+        arguments->projector_size;
+    const std::int64_t image_count =
+        arguments->n_particles * arguments->pixel_count;
+    const std::int64_t posterior_count =
+        arguments->n_particles * arguments->rotation_count *
+        arguments->translation_count;
+    const std::int64_t rotation_count =
+        arguments->n_particles * arguments->rotation_count;
+    const std::int64_t accumulator_stride =
+        arguments->volume_n0 * arguments->volume_n1 *
+        (arguments->volume_n2 / 2 + 1);
+    const std::int64_t accumulator_count =
+        arguments->reconstruction_group_count * accumulator_stride;
+    const std::int64_t denominator_count =
+        arguments->n_particles * arguments->rotation_count *
+        arguments->pixel_count;
+
+    cudaStream_t stream = nullptr;
+    float2* device_projector = nullptr;
+    float2* device_images = nullptr;
+    float* device_ctf = nullptr;
+    float* device_minvsigma2 = nullptr;
+    float* device_posterior = nullptr;
+    float* device_translations = nullptr;
+    float* device_eulers = nullptr;
+    float* device_compact_rotations = nullptr;
+    std::int32_t* device_reconstruction_groups = nullptr;
+    std::int32_t* device_worker_lanes = nullptr;
+    std::int32_t* device_particle_trace_ids = nullptr;
+    std::int32_t* device_rotation_order = nullptr;
+    std::int32_t* device_rotation_counts = nullptr;
+    std::int32_t* device_particle_offsets = nullptr;
+    float* device_data_real = nullptr;
+    float* device_data_imag = nullptr;
+    float* device_weight = nullptr;
+    float* device_denominator = nullptr;
+    cudaError_t error = cudaStreamCreate(&stream);
+    if (error != cudaSuccess) goto cleanup_host_replay;
+
+#define RECOVAR_HOST_REPLAY_ALLOC_COPY(device_pointer, host_pointer, count)       \
+    do {                                                                          \
+        error = cudaMalloc(                                                       \
+            reinterpret_cast<void**>(&(device_pointer)),                         \
+            static_cast<std::size_t>(count) * sizeof(*(device_pointer)));         \
+        if (error != cudaSuccess) goto cleanup_host_replay;                       \
+        error = cudaMemcpyAsync(                                                  \
+            (device_pointer),                                                     \
+            (host_pointer),                                                       \
+            static_cast<std::size_t>(count) * sizeof(*(device_pointer)),          \
+            cudaMemcpyHostToDevice,                                               \
+            stream);                                                              \
+        if (error != cudaSuccess) goto cleanup_host_replay;                       \
+    } while (false)
+
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_projector, arguments->projector_full, projector_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_images, arguments->images, image_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(device_ctf, arguments->ctf, image_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_minvsigma2, arguments->minvsigma2, image_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_posterior, arguments->posterior_over_weight_norm, posterior_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_translations, arguments->translation_angles,
+        arguments->translation_count * 2);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_eulers, arguments->projector_eulers, rotation_count * 9);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_compact_rotations, arguments->compact_rotations, rotation_count * 6);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_reconstruction_groups, arguments->reconstruction_group_ids,
+        arguments->n_particles);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_worker_lanes, arguments->worker_lane_ids, arguments->n_particles);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_particle_trace_ids, arguments->particle_trace_ids,
+        arguments->n_particles);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_rotation_order, arguments->rotation_replay_order, rotation_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_rotation_counts, arguments->rotation_replay_counts,
+        arguments->n_particles);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_particle_offsets, arguments->particle_start_offsets_ns,
+        arguments->n_particles);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_data_real, arguments->data_real_volume, accumulator_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_data_imag, arguments->data_imag_volume, accumulator_count);
+    RECOVAR_HOST_REPLAY_ALLOC_COPY(
+        device_weight, arguments->weight_volume, accumulator_count);
+    error = cudaMalloc(
+        reinterpret_cast<void**>(&device_denominator),
+        static_cast<std::size_t>(denominator_count) * sizeof(float));
+    if (error != cudaSuccess) goto cleanup_host_replay;
+    error = cudaMemsetAsync(
+        device_denominator,
+        0,
+        static_cast<std::size_t>(denominator_count) * sizeof(float),
+        stream);
+    if (error != cudaSuccess) goto cleanup_host_replay;
+
+    error = launch_relion_vdam_mstep_fused_projector_x_half(
+        stream,
+        device_projector,
+        device_images,
+        device_ctf,
+        device_minvsigma2,
+        device_posterior,
+        device_translations,
+        device_eulers,
+        device_compact_rotations,
+        device_reconstruction_groups,
+        device_worker_lanes,
+        device_particle_trace_ids,
+        device_rotation_order,
+        device_rotation_counts,
+        device_particle_offsets,
+        device_data_real,
+        device_data_imag,
+        device_weight,
+        device_denominator,
+        arguments->projector_size,
+        arguments->n_particles,
+        arguments->rotation_count,
+        arguments->translation_count,
+        arguments->pixel_count,
+        arguments->image_h,
+        arguments->image_w,
+        arguments->volume_n0,
+        arguments->volume_n1,
+        arguments->volume_n2,
+        arguments->upsampling,
+        arguments->max_r2_x4,
+        arguments->physical_image_size,
+        arguments->projector_max_r,
+        arguments->projection_padding_factor,
+        arguments->reconstruction_group_count,
+        arguments->parallel_worker_replay != 0,
+        false,
+        false,
+        false,
+        false,
+        0,
+        false,
+        false,
+        false);
+    if (error != cudaSuccess) goto cleanup_host_replay;
+
+#define RECOVAR_HOST_REPLAY_COPY_OUTPUT(host_pointer, device_pointer, count)      \
+    do {                                                                          \
+        error = cudaMemcpyAsync(                                                  \
+            (host_pointer),                                                       \
+            (device_pointer),                                                     \
+            static_cast<std::size_t>(count) * sizeof(*(device_pointer)),          \
+            cudaMemcpyDeviceToHost,                                               \
+            stream);                                                              \
+        if (error != cudaSuccess) goto cleanup_host_replay;                       \
+    } while (false)
+
+    RECOVAR_HOST_REPLAY_COPY_OUTPUT(
+        arguments->data_real_volume, device_data_real, accumulator_count);
+    RECOVAR_HOST_REPLAY_COPY_OUTPUT(
+        arguments->data_imag_volume, device_data_imag, accumulator_count);
+    RECOVAR_HOST_REPLAY_COPY_OUTPUT(
+        arguments->weight_volume, device_weight, accumulator_count);
+    RECOVAR_HOST_REPLAY_COPY_OUTPUT(
+        arguments->denominator_sum, device_denominator, denominator_count);
+    error = cudaStreamSynchronize(stream);
+
+cleanup_host_replay:
+#undef RECOVAR_HOST_REPLAY_ALLOC_COPY
+#undef RECOVAR_HOST_REPLAY_COPY_OUTPUT
+    if (device_projector) cudaFree(device_projector);
+    if (device_images) cudaFree(device_images);
+    if (device_ctf) cudaFree(device_ctf);
+    if (device_minvsigma2) cudaFree(device_minvsigma2);
+    if (device_posterior) cudaFree(device_posterior);
+    if (device_translations) cudaFree(device_translations);
+    if (device_eulers) cudaFree(device_eulers);
+    if (device_compact_rotations) cudaFree(device_compact_rotations);
+    if (device_reconstruction_groups) cudaFree(device_reconstruction_groups);
+    if (device_worker_lanes) cudaFree(device_worker_lanes);
+    if (device_particle_trace_ids) cudaFree(device_particle_trace_ids);
+    if (device_rotation_order) cudaFree(device_rotation_order);
+    if (device_rotation_counts) cudaFree(device_rotation_counts);
+    if (device_particle_offsets) cudaFree(device_particle_offsets);
+    if (device_data_real) cudaFree(device_data_real);
+    if (device_data_imag) cudaFree(device_data_imag);
+    if (device_weight) cudaFree(device_weight);
+    if (device_denominator) cudaFree(device_denominator);
+    if (stream) cudaStreamDestroy(stream);
+    if (error != cudaSuccess)
+        std::fprintf(
+            stderr,
+            "RECOVAR exact RELION VDAM clean-process replay failed: %s\n",
+            cudaGetErrorString(error));
+    return static_cast<int>(error);
+}
+
 __device__ __forceinline__ float relion_fine_diff2_update_f32(
     float2 reference,
     float2 shifted_image,

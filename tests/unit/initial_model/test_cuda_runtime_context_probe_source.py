@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "scripts" / "cuda_runtime_context_probe.cu"
 SBATCH = ROOT / "scripts" / "run_vdam_cuda_context_probe.sbatch"

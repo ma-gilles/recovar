@@ -26,6 +26,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -60,6 +61,14 @@ _CUDA_CACHE_DIR_ENV = "RECOVAR_CUDA_CACHE_DIR"
 _BUILD_LOCKFILE = ".build.lock"
 _RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV = "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY"
 _BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV = "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR"
+_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV = (
+    "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY"
+)
+_VDAM_EXTERNAL_HOST_REPLAY_REPORT_DIR_ENV = (
+    "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_REPORT_DIR"
+)
+_vdam_external_host_replay_lock = threading.Lock()
+_vdam_external_host_replay_call = 0
 _bpref_device_signature_scope = contextvars.ContextVar(
     "recovar_bpref_device_signature_scope",
     default=None,
@@ -69,6 +78,14 @@ _bpref_device_signature_scope = contextvars.ContextVar(
 def _env_flag(name: str) -> bool:
     value = os.environ.get(name, "")
     return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+def _next_vdam_external_host_replay_call() -> int:
+    global _vdam_external_host_replay_call
+    with _vdam_external_host_replay_lock:
+        call = _vdam_external_host_replay_call
+        _vdam_external_host_replay_call += 1
+    return call
 
 
 def relion_x_half_bp_block_topology_enabled() -> bool:
@@ -1735,6 +1752,165 @@ def relion_vdam_mstep_fused_x_half(
     return fused_data, fused_weight, compact_denominator
 
 
+def _run_vdam_external_host_replay_callback(
+    projector_full,
+    dense_images,
+    dense_ctf,
+    dense_minvsigma2,
+    posterior_over_weight_norm,
+    translation_angles,
+    projector_eulers,
+    compact_rotations,
+    reconstruction_group_ids,
+    worker_lane_ids,
+    particle_trace_ids,
+    rotation_replay_order,
+    rotation_replay_counts,
+    particle_start_offsets_ns,
+    data_real_volume,
+    data_imag_volume,
+    weight_volume,
+    *,
+    image_h: int,
+    image_w: int,
+    volume_shape: tuple[int, int, int],
+    upsampling: int,
+    max_r2_x4: int,
+    physical_image_size: int,
+    projector_max_r: int,
+    projection_padding_factor: int,
+    reconstruction_group_count: int,
+    parallel_worker_replay: bool,
+):
+    """Materialize one VDAM accumulation through a fresh CUDA process."""
+
+    library_text = os.environ.get(_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, "").strip()
+    if not library_text:
+        raise RuntimeError("external VDAM host replay library is not configured")
+    library = pathlib.Path(library_text).expanduser().resolve()
+    if not library.is_file():
+        raise FileNotFoundError(library)
+    exact_ptx = os.environ.get("RECOVAR_VDAM_EXACT_NATIVE_PTX", "").strip()
+    if not exact_ptx:
+        raise RuntimeError("external VDAM host replay requires exact native PTX")
+
+    helper = pathlib.Path(__file__).resolve().parents[1] / "scripts" / (
+        "run_vdam_exact_native_host_replay.py"
+    )
+    if not helper.is_file():
+        raise FileNotFoundError(helper)
+    call = _next_vdam_external_host_replay_call()
+    temp_parent = os.environ.get("TMPDIR", "").strip() or None
+    with tempfile.TemporaryDirectory(
+        prefix=f"recovar-vdam-host-replay-{call:04d}-",
+        dir=temp_parent,
+    ) as temporary_directory:
+        root = pathlib.Path(temporary_directory)
+        input_path = root / "input.npz"
+        output_path = root / "output.npz"
+        report_path = root / "report.json"
+        n_particles, rotation_count, translation_count = map(
+            int, np.asarray(posterior_over_weight_norm).shape
+        )
+        pixel_count = int(np.asarray(dense_images).shape[1])
+        projector_size = int(np.asarray(projector_full).shape[0])
+        np.savez(
+            input_path,
+            projector_full=np.asarray(projector_full, dtype=np.complex64),
+            images=np.asarray(dense_images, dtype=np.complex64),
+            ctf=np.asarray(dense_ctf, dtype=np.float32),
+            minvsigma2=np.asarray(dense_minvsigma2, dtype=np.float32),
+            posterior_over_weight_norm=np.asarray(
+                posterior_over_weight_norm, dtype=np.float32
+            ),
+            translation_angles=np.asarray(translation_angles, dtype=np.float32),
+            projector_eulers=np.asarray(projector_eulers, dtype=np.float32),
+            compact_rotations=np.asarray(compact_rotations, dtype=np.float32),
+            reconstruction_group_ids=np.asarray(
+                reconstruction_group_ids, dtype=np.int32
+            ),
+            worker_lane_ids=np.asarray(worker_lane_ids, dtype=np.int32),
+            particle_trace_ids=np.asarray(particle_trace_ids, dtype=np.int32),
+            rotation_replay_order=np.asarray(rotation_replay_order, dtype=np.int32),
+            rotation_replay_counts=np.asarray(
+                rotation_replay_counts, dtype=np.int32
+            ),
+            particle_start_offsets_ns=np.asarray(
+                particle_start_offsets_ns, dtype=np.int32
+            ),
+            data_real_volume=np.asarray(data_real_volume, dtype=np.float32).reshape(
+                reconstruction_group_count, -1
+            ),
+            data_imag_volume=np.asarray(data_imag_volume, dtype=np.float32).reshape(
+                reconstruction_group_count, -1
+            ),
+            weight_volume=np.asarray(weight_volume, dtype=np.float32).reshape(
+                reconstruction_group_count, -1
+            ),
+            projector_size=np.int64(projector_size),
+            n_particles=np.int64(n_particles),
+            rotation_count=np.int64(rotation_count),
+            translation_count=np.int64(translation_count),
+            pixel_count=np.int64(pixel_count),
+            image_h=np.int64(image_h),
+            image_w=np.int64(image_w),
+            volume_n0=np.int64(volume_shape[0]),
+            volume_n1=np.int64(volume_shape[1]),
+            volume_n2=np.int64(volume_shape[2]),
+            upsampling=np.int64(upsampling),
+            max_r2_x4=np.int64(max_r2_x4),
+            physical_image_size=np.int32(physical_image_size),
+            projector_max_r=np.int32(projector_max_r),
+            projection_padding_factor=np.int32(projection_padding_factor),
+            reconstruction_group_count=np.int32(reconstruction_group_count),
+            parallel_worker_replay=np.int32(parallel_worker_replay),
+        )
+        command = [
+            sys.executable,
+            str(helper),
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--library",
+            str(library),
+            "--report",
+            str(report_path),
+        ]
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "external VDAM host replay failed with exit "
+                f"{result.returncode}: stdout={result.stdout!r} stderr={result.stderr!r}"
+            )
+        report_dir_text = os.environ.get(
+            _VDAM_EXTERNAL_HOST_REPLAY_REPORT_DIR_ENV, ""
+        ).strip()
+        if report_dir_text:
+            report_dir = pathlib.Path(report_dir_text).expanduser().resolve()
+            report_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(report_path, report_dir / f"call-{call:04d}.json")
+        with np.load(output_path, allow_pickle=False) as output:
+            return (
+                np.asarray(output["data_real_volume"], dtype=np.float32).reshape(
+                    np.asarray(data_real_volume).shape
+                ),
+                np.asarray(output["data_imag_volume"], dtype=np.float32).reshape(
+                    np.asarray(data_imag_volume).shape
+                ),
+                np.asarray(output["weight_volume"], dtype=np.float32).reshape(
+                    np.asarray(weight_volume).shape
+                ),
+                np.asarray(output["denominator_sum"], dtype=np.float32),
+            )
+
+
 @functools.partial(
     jax.jit,
     static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27),
@@ -1923,50 +2099,106 @@ def relion_vdam_mstep_fused_projector_x_half(
         jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
         denominator_type,
     )
-    fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
-        _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
-        output_types,
-        input_output_aliases={14: 0, 15: 1, 16: 2},
-        vmap_method="sequential",
-    )(
-        projector_full,
-        dense_images,
-        dense_ctf,
-        dense_minvsigma2,
-        posterior_over_weight_norm,
-        translation_angles,
-        eulers,
-        rot6,
-        reconstruction_group_ids,
-        worker_lane_ids,
-        particle_trace_ids,
-        rotation_replay_order,
-        rotation_replay_counts,
-        particle_start_offsets_ns,
-        data_real_volume,
-        data_imag_volume,
-        weight_volume,
-        image_h=np.int64(current_h),
-        image_w=np.int64(current_w),
-        N0=kw["N0"],
-        N1=kw["N1"],
-        N2=kw["N2"],
-        upsampling=kw["upsampling"],
-        max_r2_x4=kw["max_r2_x4"],
-        physical_image_size=np.int64(image_shape[0]),
-        projector_max_r=np.int64(projector_max_r),
-        projection_padding_factor=np.int64(projection_padding_factor),
-        reconstruction_group_count=np.int64(reconstruction_group_count),
-        parallel_worker_replay=np.int64(parallel_worker_replay),
-        captured_rotation_replay=np.int64(captured_rotation_replay),
-        serial_rotation_replay=np.int64(serial_rotation_replay),
-        float64_accumulator_replay=np.int64(float64_accumulator_replay),
-        reverse_rotation_replay=np.int64(reverse_rotation_replay),
-        rotation_replay_stride=np.int64(rotation_replay_stride),
-        native_trace_shape_replay=np.int64(native_trace_shape_replay),
-        captured_particle_timing_replay=np.int64(captured_particle_timing_replay),
-        candidate_trace_active=np.int64(candidate_trace_active),
+    external_host_replay = bool(
+        os.environ.get(_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, "").strip()
     )
+    if external_host_replay:
+        if (
+            captured_rotation_replay
+            or serial_rotation_replay
+            or float64_accumulator_replay
+            or reverse_rotation_replay
+            or rotation_replay_stride
+            or native_trace_shape_replay
+            or captured_particle_timing_replay
+            or candidate_trace_active
+        ):
+            raise ValueError(
+                "external exact-native host replay cannot mix with rotation, "
+                "timing, trace, or float64 diagnostics"
+            )
+        callback = functools.partial(
+            _run_vdam_external_host_replay_callback,
+            image_h=current_h,
+            image_w=current_w,
+            volume_shape=tuple(map(int, volume_shape)),
+            upsampling=int(kw["upsampling"]),
+            max_r2_x4=int(kw["max_r2_x4"]),
+            physical_image_size=int(image_shape[0]),
+            projector_max_r=int(projector_max_r),
+            projection_padding_factor=int(projection_padding_factor),
+            reconstruction_group_count=int(reconstruction_group_count),
+            parallel_worker_replay=bool(parallel_worker_replay),
+        )
+        fused_real, fused_imag, fused_weight, dense_denominator = (
+            jax.experimental.io_callback(
+                callback,
+                output_types,
+                projector_full,
+                dense_images,
+                dense_ctf,
+                dense_minvsigma2,
+                posterior_over_weight_norm,
+                translation_angles,
+                eulers,
+                rot6,
+                reconstruction_group_ids,
+                worker_lane_ids,
+                particle_trace_ids,
+                rotation_replay_order,
+                rotation_replay_counts,
+                particle_start_offsets_ns,
+                data_real_volume,
+                data_imag_volume,
+                weight_volume,
+                ordered=True,
+            )
+        )
+    else:
+        fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
+            _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
+            output_types,
+            input_output_aliases={14: 0, 15: 1, 16: 2},
+            vmap_method="sequential",
+        )(
+            projector_full,
+            dense_images,
+            dense_ctf,
+            dense_minvsigma2,
+            posterior_over_weight_norm,
+            translation_angles,
+            eulers,
+            rot6,
+            reconstruction_group_ids,
+            worker_lane_ids,
+            particle_trace_ids,
+            rotation_replay_order,
+            rotation_replay_counts,
+            particle_start_offsets_ns,
+            data_real_volume,
+            data_imag_volume,
+            weight_volume,
+            image_h=np.int64(current_h),
+            image_w=np.int64(current_w),
+            N0=kw["N0"],
+            N1=kw["N1"],
+            N2=kw["N2"],
+            upsampling=kw["upsampling"],
+            max_r2_x4=kw["max_r2_x4"],
+            physical_image_size=np.int64(image_shape[0]),
+            projector_max_r=np.int64(projector_max_r),
+            projection_padding_factor=np.int64(projection_padding_factor),
+            reconstruction_group_count=np.int64(reconstruction_group_count),
+            parallel_worker_replay=np.int64(parallel_worker_replay),
+            captured_rotation_replay=np.int64(captured_rotation_replay),
+            serial_rotation_replay=np.int64(serial_rotation_replay),
+            float64_accumulator_replay=np.int64(float64_accumulator_replay),
+            reverse_rotation_replay=np.int64(reverse_rotation_replay),
+            rotation_replay_stride=np.int64(rotation_replay_stride),
+            native_trace_shape_replay=np.int64(native_trace_shape_replay),
+            captured_particle_timing_replay=np.int64(captured_particle_timing_replay),
+            candidate_trace_active=np.int64(candidate_trace_active),
+        )
     fused_data = jax.lax.complex(fused_real, fused_imag)
     full_h, full_w = map(int, image_shape)
     full_half_w = full_w // 2 + 1
