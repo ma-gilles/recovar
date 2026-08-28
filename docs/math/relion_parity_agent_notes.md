@@ -13967,3 +13967,130 @@ test_relion_functions.py`).
   in a future session.
 - Bug #2's fix has no GPU-scale empirical validation yet (only the CPU
   unit test) -- see above.
+
+## 2026-08-28 correction: round 3's GPU validation never exercised the fix it
+## claimed to -- run_multi_iter_parity.py builds its own init_volume
+## independently of run_full_refinement.py; fixed and re-validated
+
+User feedback after round 3: "You previously modified the run_full_
+refinement script to handle double precision of the mean volume, but I
+instead want to handle it in run_relion_iteration_loop func." Investigating
+that request surfaced a real gap in round 3's own claims, not just a design
+preference: `_run_relion_iteration_loop` receives `init_volume` **already
+in Fourier space** -- `ftu.get_dft3` has already run in the caller by the
+time the iteration loop sees it. `jnp.fft` computes at whatever dtype the
+*real-space* array had going in (confirmed by reading `get_dft3`'s
+implementation: a bare `jnp.fft.fftn`, no forced dtype), so casting the
+already-computed complex array to complex128 *inside* the iteration loop
+would be a no-op recast -- exactly the same narrow-then-widen pattern this
+whole audit exists to catch, just relocated one level deeper. Centralizing
+the fix inside `_run_relion_iteration_loop` (as literally requested) would
+not have fixed anything.
+
+Worse: `scripts/run_multi_iter_parity.py` and `scripts/run_comparison.py`
+both call `refine_single_volume` directly with their own independently-
+built `init_volume`, **bypassing `run_full_refinement.py` entirely**.
+`run_multi_iter_parity.py` is the script this session's own GPU/RELION
+parity validation runs (jobs 60344370, 60344461) used -- meaning round 3's
+"validated end-to-end on GPU" claim for the `run_full_refinement.py` fix
+was not actually exercising that fix at all; those jobs' `vol_ft_h1`/
+`vol_ft_h2` came from `helpers.load_relion_volume(...)` (float32, no
+widening) followed by `ftu.get_dft3` at float32, entirely independent of
+commit `423b8d32`'s changes. The GPU results reported in round 3 (corr
+0.999999, FSC-AUC 0.999591-0.999592 for both "double-precision" and
+"control" runs) are real and not wrong, but they demonstrate no regression
+from `423b8d32`'s code, not that `423b8d32`'s fix does anything on GPU --
+those two numbers being nearly identical is consistent with both runs
+genuinely being float32 internally that whole time.
+
+Presented this precision constraint plus the multi-caller gap to the user
+via `AskUserQuestion` with three concrete options (change `init_volume`'s
+contract to real-space and FFT inside the iteration loop; cast-only inside
+the iteration loop, matching the literal request but a numerical no-op;
+apply the same real-space-before-FFT fix directly in each caller). User
+chose the third: keep `run_full_refinement.py`'s fix as-is, and replicate
+the identical pattern in `run_multi_iter_parity.py` (not asked to also fix
+`run_comparison.py` this round -- that script independently builds
+`init_volume` the same unfixed way and remains an open gap).
+
+### Fix: `scripts/run_multi_iter_parity.py`
+
+Added the same `_init_volume_dtype` (gated on
+`RECOVAR_USE_FLOAT64_PROJECTIONS`) pattern as `423b8d32`, applied to
+`vol_h1`/`vol_h2` before `ftu.get_dft3`, in both the `--initial-half1-mrc`
+diagnostic-override branch and the default `helpers.load_relion_volume`
+branch (the one every non-diagnostic run, including this session's own
+validation jobs, actually takes). The `--initial-half1-ft-npz` branch
+(`load_initial_fourier_volume`) is untouched -- it faithfully replays a
+previously-captured Fourier array's own dtype by design (a "sealed exact
+state" diagnostic path per its own docstring), and forcing a dtype there
+would fight that contract, not fix a bug.
+
+Verified the fix is real, not another no-op, via a direct standalone check
+against `relion_em_test_double_seeded`'s own half1 MRC: flag off ->
+`helpers.load_relion_volume` gives float32, widened-and-FFT'd gives
+`complex64`; flag on -> widened real dtype float64, FFT dtype
+`complex128`. `tests/unit/test_run_multi_iter_parity.py`: 46 passed, no
+regression (this file has no test harness for `main()`'s inline
+volume-loading block itself -- it is not factored into an independently
+testable helper, unlike `_pad_volume_for_projection_host` -- so this round
+relied on the standalone dtype check plus the full GPU re-run below rather
+than a new unit test).
+
+### Unrelated environment gap this surfaced: nvcc disappears after
+### `.vscode/load_env.sh`'s `module unload CUDA`, breaking the custom CUDA
+### extension's lazy build
+
+Re-running the GPU validation with this fix live hit a new failure: the
+double-precision run crashed mid-iteration-2 with `RECOVAR's preferred
+custom CUDA backproject/project extension is unavailable ... Command
+['make', '-B', '-C', '.../recovar/cuda', ...] returned non-zero exit
+status 2`, while the float32 control run in the same job succeeded. Root
+cause, confirmed via a dedicated diagnostic job (60357508): `.vscode/
+load_env.sh`'s `module unload CUDA` step -- necessary for jax's own GPU
+device init to succeed, per round 3's node-diagnosis section above --
+removes `nvcc` from `PATH` entirely (not just a dependent-module warning;
+`which nvcc` genuinely fails afterward). `recovar/cuda/libcuda_
+backproject.so` lazily (re)builds via `make` on first use per GPU-worker
+process when not already cached to disk, and that build needs `nvcc`.
+Round 3's earlier GPU jobs happened not to hit this (the `.so` was already
+cached from some earlier invocation); this round's fresh cache state
+exposed it. Not a code bug in this audit's scope -- fixed operationally by
+building the extension explicitly once, with `CUDA/12.1.1` still loaded
+(job 60357511, `PYTHON="$PIXI_PY" make -C recovar/cuda clean all`, exit 0),
+before any runtime job's `module unload CUDA`. The precompiled `.so` is
+then cached to disk (`recovar/cuda/libcuda_backproject.so` and/or `~/
+.cache/recovar/cuda/libcuda_backproject.so`) and runtime jobs work without
+`nvcc` from then on. **Worth remembering for future GPU/Slurm sessions in
+this repo**: if the custom CUDA extension's cache is ever cleared (`rm
+recovar/cuda/*.so ~/.cache/recovar/cuda/*.so`, a fresh clone, etc.), it
+must be rebuilt with a CUDA-toolkit module loaded (nvcc on `PATH`) *before*
+any `.vscode/load_env.sh`-style runtime job that unloads it.
+
+### Re-validation, this time genuinely exercising the fix
+
+`--max_iter 2` against `relion_em_test_double_seeded`, Slurm `gpu`
+partition, job 60357525 (node `r818u09n09`, both runs succeeded,
+`devices: [CudaDevice(id=0)]` confirmed): double-precision half1/half2/
+merged `corr=0.999999/0.999997/0.999999`, FSC-AUC `0.999591`; float32
+control **identical** (`corr=0.999999/0.999997/0.999999`, FSC-AUC
+`0.999591`). Both clear the `>=0.999` parity gate, no regression. The two
+runs' numbers converging to bit-for-bit-identical FSC-AUC (round 3's
+earlier, not-actually-exercising-the-fix numbers differed by ~1e-6 between
+"double" and "control"; this round's genuinely-different-internally runs
+differ by even less) is unsurprising at this fixture's small scale (128^3,
+2 iterations, `--firstiter_cc`) -- consistent with the expectation
+documented in round 3 that float32-vs-float64 differences should matter
+more at larger box sizes / more iterations, not less, so seeing no visible
+separation here is not itself informative about whether the fix works;
+the standalone dtype check above is the actual evidence that it does.
+
+Committed as `bada1a2e` on `double_parity`.
+
+### Still open
+
+- `scripts/run_comparison.py` independently builds `init_volume` the same
+  way `run_multi_iter_parity.py` did before this fix -- not touched this
+  round (not requested), remains a real gap for any future double-
+  precision comparison run through that script specifically.
+- Everything listed as "Still open" in round 3's entry above is unchanged.

@@ -15931,3 +15931,47 @@ attempt to crash once it silently fell back to CPU -- confirmed unrelated
 to precision correctness); bug #2's fix (`_pad_volume_for_projection_host`)
 has no GPU-scale empirical validation, only the CPU unit test, since this
 fixture (128^3) is well under its `>=293^3` host-path threshold.
+
+### 2026-08-28 correction: round 3's GPU validation didn't exercise its own
+### fix (run_multi_iter_parity.py has an independent, unfixed init_volume
+### path); fixed and re-validated genuinely this time
+
+User pushed back on round 3's approach (wanted the fix moved into
+`_run_relion_iteration_loop`), which on investigation surfaced two real
+problems, not just a design preference -- full detail in `docs/math/
+relion_parity_agent_notes.md`'s 2026-08-28 entry:
+
+1. `_run_relion_iteration_loop` receives `init_volume` already in Fourier
+   space; `jnp.fft` computes at whatever dtype the real-space array had
+   going in, so casting inside the iteration loop after the FFT already
+   ran (in the caller) cannot recover precision -- moving the fix there as
+   literally requested would have been a no-op.
+2. `scripts/run_multi_iter_parity.py` (the script this session's own GPU
+   validation jobs used) and `scripts/run_comparison.py` build
+   `init_volume` independently and call `refine_single_volume` directly,
+   bypassing `run_full_refinement.py` (and its `423b8d32` fix) entirely.
+   **Round 3's GPU validation numbers were real but did not exercise the
+   fix they were reported alongside** -- both the "double-precision" and
+   "control" runs were internally float32 the whole time for this
+   specific volume-loading step.
+
+Presented this to the user with three options; chose to keep `423b8d32`'s
+fix as-is and additionally apply the identical real-space-before-FFT
+pattern directly in `run_multi_iter_parity.py` (not `run_comparison.py`
+this round -- open gap). Fixed, verified via a standalone dtype check
+against the real oracle MRC (confirmed genuine float32->complex64 vs
+float64->complex128 behavior, not another no-op), and re-ran the GPU
+validation (job 60357525, this time actually exercising the fix):
+double-precision and float32-control merged `corr=0.999999`, FSC-AUC
+`0.999591` for both -- clears the parity gate, no regression, though at
+this small fixture's scale the two runs' numbers converge closely enough
+that the GPU comparison itself isn't strong evidence either way; the
+standalone dtype check is the real evidence the fix works. Also fixed an
+unrelated environment gap this surfaced along the way: recovar's custom
+CUDA extension's lazy `make`-based build needs `nvcc`, which `.vscode/
+load_env.sh`'s `module unload CUDA` removes from `PATH` -- worked around
+by building the extension explicitly once with CUDA still loaded (job
+60357511) before any runtime job unloads it.
+
+Committed as `bada1a2e`. **`scripts/run_comparison.py` still has the same
+unfixed independent init_volume path** -- open for a future session.
