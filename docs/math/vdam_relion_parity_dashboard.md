@@ -51,15 +51,20 @@ shared `--deterministic-cuda` control (`CUDA_LAUNCH_BLOCKING=1`), jobs
 its apparent paired-reference differences at iterations 33--60 are not a
 candidate failure. All 3,000 particles match native repeat 3 at iterations 33
 and 57, and every sampled map from 20--60 passes against repeat 3 with minimum
-FSC-AUC `0.9999999999596`. The first true repeat-envelope failure is the
-controller: angular accuracy differs by `0.001 deg` at iteration 40 and the
-sampling-update timing differs at 52, before the complete state rejoins native
-repeat 3 at iteration 60. The altered controller history is not harmless:
-the candidate has 24 / 223 / 1,572 particle states outside the four-repeat
-native envelope at iterations 80 / 100 / 110, and the map gate first fails in
-the sampled late checkpoints at iteration 110 (repeat-3 FSC-AUC
-`0.997492222`). Full 0--200 qualification remains live to preserve the entire
-failure trajectory.
+FSC-AUC `0.9999999999596`. Expected angular accuracy differs by `0.001 deg`
+at iteration 40, but this does **not** change the operative sampling schedule:
+the candidate matches native repeat 3's Healpix order, translation range, and
+translation step through at least iteration 130. The earlier apparent update
+miss at iteration 52 was a sparse-audit artifact: that audit compared native
+52 to the previous requested checkpoint (40), not to iteration 51, while both
+engines actually updated at iteration 50. The first active-particle envelope
+miss is iteration 68, where one of 264 evaluated particles
+(`2667@particles.128.mrcs`) chooses the same orientation as repeat 3 but a
+translation displaced by exact sampling-grid steps; the particle re-enters
+the envelope at 71. Map drift remains tiny for dozens more iterations and
+first crosses the fixed `0.999` gate at iteration 107 (repeat-3 FSC-AUC
+`0.9989987666`). Full 0--200 qualification remains live to preserve the
+entire failure trajectory.
 
 ### At a glance: progress, failure, and next gate
 
@@ -67,10 +72,10 @@ failure trajectory.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | The GF46 discrepancy is not a VDAM-local formula, geometry, projector, prior, posterior, or significance bug: both observed rank-100/101 score gaps are exactly reachable from the same captured shared-scorer lanes. The architecture guard also proves InitialModel imports EM's authoritative significance, sparse pass-2, local-refinement, and layout functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Through iteration 60, map and particle-state envelopes pass, but the strict controller envelope fails: candidate/native angular accuracy is `0.767 / 0.768 deg` at iteration 40 and `0.7075 / 0.7065 deg` at 52, delaying the sampling update. Particle state then leaves the native envelope at 80 and the sampled map gate fails by 110. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. Active particle state first leaves the four-repeat envelope at iteration 68 (1/264 particles), and the map first crosses the fixed gate at 107. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
-| 🔴 | First true envelope departure | The synchronized candidate initially matches a complete native particle/map mode. Its first no-native-mode field is shared expected angular accuracy at iteration 40 (`0.001 deg` error); sampling-update timing then differs at 52. Although all audited fields rejoin repeat 3 at 60, the changed history yields 24 particle-envelope misses by 80, 223 by 100, and 1,572 plus a map failure by 110. |
-| ➡️ | What is next? | Finish and seal `13117709` through iteration 200. Focused job `13118846` captures the shared expected-accuracy inputs through iteration 52 so the `0.001 deg` discrepancy and update timing can be repaired in the authoritative EM helper, then requalified without any VDAM-local scorer. |
+| 🔴 | First true envelope departure | The first strict scalar miss is expected angular accuracy at iteration 40, but it does not alter the operative schedule. The first scientific state miss is the newly active particle `2667@particles.128.mrcs` at iteration 68: RECOVAR and repeat 3 agree on orientation, while RECOVAR's translation differs by one/two exact effective grid steps. The state is back inside the envelope at 71; accumulated map drift crosses `0.999` at 107. |
+| ➡️ | What is next? | Finish and seal `13117709` through iteration 200. Job `13118846` captures the shared expected-accuracy inputs as a secondary exactness gap. Focused first-state job `13120034` captures native and RECOVAR coarse, local, and fused score operands for particle 2667 at iteration 68, which is now the primary trajectory boundary. |
 | 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. InitialModel still imports the authoritative EM significance, sparse pass-2, local-refinement, layout, posterior, and expected-accuracy machinery by object identity. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
@@ -270,7 +275,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF46 shared expected-accuracy controller @40/@52 | synchronized candidate maps and particles match native repeat 3 through @60; the apparent repeat-1 avalanche is native mode selection. Angular accuracy misses every native mode by `0.001 deg` at @40 and update timing misses at @52. The altered history later causes particle-envelope misses @80 and a map failure by @110 | @4 `13116158 / 13116369`; @20 `13116813 / 13117293`; live 0--200 `13117709`; expected-accuracy capture `13118846`; current science `23150e50c` | localize the one-trial expected-accuracy threshold in the authoritative shared EM helper/input, require exact native controller modes at @40/@52 and particle/map envelopes @80/@100/@110, then rerun 0--200; no score change |
+| 1 | GF46 first active state miss @68, particle 2667 | synchronized candidate maps and particles match native repeat 3 through @67; the apparent repeat-1 avalanche is native mode selection. The `0.001 deg` expected-accuracy miss at @40/@50 does not change the sampling schedule. One newly active particle leaves the four-repeat state envelope at @68 by exact translation-grid steps, temporarily re-enters at @71, and accumulated map drift crosses `0.999` at @107 | @4 `13116158 / 13116369`; @20 `13116813 / 13117293`; live 0--200 `13117709`; expected-accuracy capture `13118846`; @68 score/operand capture `13120034`; current science `23150e50c` | compare native and shared-EM coarse/local/fused winner operands at @68, fix the authoritative shared boundary, separately close expected-accuracy scalar parity, then rerun 0--200; no score change |
 | 2 | GF47 systematic mode boundary @4, particle 1085 | exact E-step/operand/support chain, terminal 4x8 audit, and native-posterior replay close iteration-1 raw-BPref distribution scale. Eight native repeats choose particle modes 5:3 while four candidates choose 4:0; the decisive boundary is the rank-10 adaptive-support parent inherited through iteration-3 map/PPref | native expansion `13091586--13091618`; 4x8 audit `13092340`; matched fixed-posterior/native-posterior panels `13095568 / 13097692`; replay science `eeeceb368` | reuse the same corrected shared coarse path, then qualify 0--4/0--20 before 0--200 |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
