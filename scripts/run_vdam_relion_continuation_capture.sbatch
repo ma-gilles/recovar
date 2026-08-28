@@ -30,6 +30,8 @@ CAPTURE_ENABLED=${VDAM_RELION_CONT_CAPTURE:-0}
 BPREF_OPERANDS=${VDAM_RELION_CONT_BPREF_OPERANDS:-0}
 PERTURBATION=${VDAM_RELION_CONT_PERTURBATION:-}
 SIGMA2_NOISE_DUMP_DIR=${VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR:-}
+BPREF_TOPOLOGY_PATH=${VDAM_RELION_CONT_BPREF_TOPOLOGY_PATH:-}
+BPREF_TOPOLOGY_EXPECTED_ROWS=${VDAM_RELION_CONT_BPREF_TOPOLOGY_EXPECTED_ROWS:-}
 RELION_BINARY=${VDAM_RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}
@@ -81,6 +83,11 @@ if [[ -n "${SIGMA2_NOISE_DUMP_DIR}" ]]; then
     mkdir -p "${SIGMA2_NOISE_DUMP_DIR}"
     export RELION_DUMP_SIGMA2_NOISE_DIR=${SIGMA2_NOISE_DUMP_DIR}
 fi
+if [[ -n "${BPREF_TOPOLOGY_PATH}" ]]; then
+    test ! -e "${BPREF_TOPOLOGY_PATH}"
+    mkdir -p "$(dirname "${BPREF_TOPOLOGY_PATH}")"
+    export RELION_ACC_DUMP_BPREF_TOPOLOGY=${BPREF_TOPOLOGY_PATH}
+fi
 
 if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     export RELION_ACC_DUMP_DIR=${CAPTURE}
@@ -115,13 +122,20 @@ start_epoch=$(date +%s)
 wall_s=$(( $(date +%s) - start_epoch ))
 
 test -s "${OUTPUT}/run_it$(printf '%03d' "${ITERATION}")_data.star"
+if [[ -n "${BPREF_TOPOLOGY_PATH}" ]]; then
+    test -s "${BPREF_TOPOLOGY_PATH}"
+    if [[ -n "${BPREF_TOPOLOGY_EXPECTED_ROWS}" ]]; then
+        test "$(wc -l < "${BPREF_TOPOLOGY_PATH}")" -eq \
+            "${BPREF_TOPOLOGY_EXPECTED_ROWS}"
+    fi
+fi
 if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     test -s "${CAPTURE}/Pmax.bin"
     test -s "${CAPTURE}/pass0_coarse_raw_diff2.bin"
     test -s "${CAPTURE}/pass1_exp_Mweight_posterior.bin"
 fi
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${OUTPUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"stack_index":"%s","capture":%s,"bpref_operands":%s,"continued_from":"%s","forced_perturbation":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${BPREF_OPERANDS}" "${CONTINUE}" "${PERTURBATION}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"stack_index":"%s","capture":%s,"bpref_operands":%s,"bpref_topology":"%s","bpref_topology_expected_rows":"%s","continued_from":"%s","forced_perturbation":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${BPREF_OPERANDS}" "${BPREF_TOPOLOGY_PATH}" "${BPREF_TOPOLOGY_EXPECTED_ROWS}" "${CONTINUE}" "${PERTURBATION}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
