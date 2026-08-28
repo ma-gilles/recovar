@@ -18,13 +18,13 @@ Frozen case-definition SHA-256:
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | The sealed **4 candidate x 8 native x 201 checkpoint** audit is terminal. Every RECOVAR map stays inside the eight-run RELION envelope at all **201/201** checkpoints; all four particle-state trajectories stay inside through iteration **27**. The exact replay repeat analyzer now seals four private and four shared arms with immutable GPU/library/artifact hashes. |
-| 🟢 | What is closed? | The E-step, active operands/support, BPref formula, static launch geometry, and worker-private storage are closed as sufficient causes. Exact shared native owner/count/Euler/order replay is **6.92--10.49x** more variable than private replay, confirming RELION's shared-BPref source topology matters, but storage topology alone still does not restore reverse native mode coverage. Callback barriers/order, exact Wavg predecessor, host delay/API, PTX, and context remain rejected individually. |
+| 🟢 | What improved? | A same-allocation matched panel now runs native RELION plus private/shared replay on one physical H100. Replaying each repeat's actual **200-particle native posterior** restores raw-BPref repeat width to **0.81--1.07x native** in both replay topologies. The earlier narrow replay was a frozen-posterior control, not evidence of missing GPU workload. |
+| 🟢 | What is closed? | The E-step, active operands/support, BPref formula, static launch geometry, worker-private/shared storage, and iteration-1 raw-BPref distribution scale are closed as sufficient causes. Native posterior realizations explain the previously missing replay width. Callback barriers/order, exact Wavg predecessor, host delay/API, PTX, context, and synthetic upstream workload remain rejected or unnecessary. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict**, **5/20 map**, **6/20 particle**, **13/20 schedule**, and **0/20 runtime** at **4.91--11.58x** RELION. K>1, real-data, and final CLI/GUI qualification remain gated behind K=1. Expanded interim state checks still find candidate 1/2 outside eight-native particle support at iteration **58** and every candidate far outside the eight-native state set by iteration **200**. |
 | 🟡 | Why can both be true? | RELION itself bifurcates. At iteration 4, particle 1085 takes one exact state in native repeats **1/3/4/6/7** and the alternate state in **2/5/8**; all four RECOVAR repeats take the first state. Every candidate therefore follows a legitimate native branch, while RECOVAR still misses a native mode. Candidate particle states first leave the expanded native union only at iterations **58/58/107/107**. |
-| 🔴 | First open operation | The GPU work competing with shared BPref. RELION's eight host workers update one device-level BPref from separate blocking class streams while other workers are still running real preparation/scoring work. The exact replay preserves owners, counts, Euler panels, launch order, Wavg, PTX, and shared storage, but presents a regular Wavg/BPref-only device workload. A matched native iteration-1 raw-BPref repeat panel is also needed before comparing raw replay widths across engines. |
-| ➡️ | What is next? | Seal matched native iteration-1 final-BPref repeats, then capture/replay the real cross-worker upstream kernel workload and readiness edge. Reuse EM's exact fused scorer, posterior/support normalization, and source-ordered M-step primitives when integrating that execution graph. Qualify the change on focused **0--4** and **0--20** panels before another 0--200 run. Artificial noise, seed tuning, and gate widening remain excluded. |
-| 🟢 | What finished? | Audit `13092340` wrote all evidence in **1:19:36** and exited 1 only for scientific parity failure. Exact-H100 smoke `13093816` and replay jobs **`13093837--13093842 / 13093844--13093845`** all completed in **7--9 s** on `GPU-75c2...`. Replay analyzer commit is `28b4cf4e2`; focused validation is **4/4**, Ruff and bytecode checks clean, report SHA `fd723f4ddf25...`. |
+| 🔴 | First open operation | The systematic iteration-4 mode bias inherited from the iteration-3 map/PPref. For particle 1085, RELION retains rank-10 coarse parent `[175,8]` at cumulative mass `0.9989997162`; RECOVAR prunes it at `0.9990066439`. Native iteration-4 PPref replay restores that parent and the alternate native state, proving the downstream E-step response is correct. |
+| ➡️ | What is next? | Reuse EM's source-faithful coarse scoring, float32 normalization, and adaptive-support cutoff to close the rank-10 boundary; do not create VDAM-only duplicate math. Qualify first on focused **0--4**, then **0--20**, before another 0--200 run. Artificial noise, seed tuning, workload injection, and gate widening remain excluded. |
+| 🟢 | What finished? | Matched job `13097692` completed in **1:05** on `GPU-1fdb...`; native-posterior replay is `eeeceb368`, focused validation is **18/18**, and report/evidence SHA values are `901255a8a74a... / c0657f213e4b...`. The fixed-posterior predecessor `13095568` remains a valid negative control. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -117,6 +117,8 @@ SHA-256 values.
 | Complete exact-PTX launch intervals | exact-H100 `13087597` completed 0--4 in 71 s; binary SHA `b3b3bdbd2dca...` | candidate iteration-4 Wavg/BPref enqueue is `3,102 / 7,802 ns` and Wavg-return-to-BPref-return is `8,131 ns`, versus native `4,082 / 3,613 / 3,846 ns`. The dynamic Driver API has a real iteration-4 host-latency spike |
 | Registered Runtime BPref launch | local science `b60152741`; exact-H100 trace `13087838` and two-arm panel `13087881`; binary SHA `41a2fe4d31c2...`; focused guards `8/8` | Runtime BPref removes the host spike (`2,828 ns`, total `3,072 ns`) but does not restore native mode coverage. Candidate repeat map distance is `7.38888e-8` versus native `6.27404e-5`; paired ratios are `0.005026 / 1.000159`. Launch API affects timing but is rejected as the scientific cause |
 | Full native BPref operand/prestate capture | RELION source `56e94b3`; build `13088114`; repeat-2 continuation `13088385`; binary SHA `7ce5e00a2c20...` | all 192 target files exist, including six immutable raw operand arrays, 13 launch scalars, and real/imag/weight accumulator prestate. The job was intentionally cancelled after iteration 4 had completed instead of wasting the GPU through iteration 200; the capture is diagnostic and non-scoring |
+| Matched fixed-posterior native/replay panel | exact-H100 job `13095568`; science `85cd685f3`; report SHA `6eca689fc7b5...` | four native arms and four private/shared replay arms ran sequentially in one allocation on one physical H100. Fixed replay widths were only `0.0139--0.0321x` native for private and `0.126--0.338x` for shared, showing that frozen operands under-represent the native distribution but not identifying why |
+| Matched native-posterior replay panel | exact-H100 job `13097692`; science `eeeceb368`; report/evidence SHA `901255a8a74a... / c0657f213e4b...` | all 200 native posterior panels were replayed fail-closed with zero support, Euler, or launch-count mismatches. Private/native BPref diameter ratios are `1.0367 / 0.8222 / 1.0076 / 0.8097`; shared/native ratios are `1.0384 / 0.8249 / 1.0739 / 0.8288` for data h0/h1 and weight h0/h1. Native posterior realization explains the missing width; upstream workload injection is retired |
 | Paired candidate host-input capture | science `9b26c2ae7`; exact-H100 `13088492` completed in 70 s; CUDA SHA `41a2fe4d31c2...` | 14/14 callback inputs are preserved with stable original stack IDs. Particle 1085 resolves uniquely to callback 12 row 96. Native/candidate launch geometry is `8 / 128` orientation blocks, and native prestate is worker-local while the current candidate inputs expose only two shared half accumulators. Exact candidate prelaunch state and iteration-1 aligned-state diffs remain open |
 | Exact-GPU setup misses, non-scoring | `13088398 / 13088453` | both exited fail-closed at time zero with code 75 after receiving `GPU-9f98...` instead of frozen `GPU-75c2...`; no science ran. Slot holder `13088479` selected the non-target GPU for 45 s, allowing `13088492` to start on the target, then was cancelled |
 | Native-radius map diagnostic | analysis `ac79e334`; focused job `13077189` passes 13/13; real-data audit `13077282` | candidate support passes 200/201 checkpoints; only @1 misses by `8.75e-13`. At @200, candidate/reverse native-radius margins are `+0.1991 / +0.0248`; remaining combined failures are reverse coverage and paired GT nondegradation, not candidate map support |
@@ -207,7 +209,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 stochastic mode boundary @4, particle 1085 | exact E-step/operand/support chain, full 200-particle native BPref panels, and terminal 4x8 distribution audit; eight native repeats choose particle modes 5:3 while four candidates choose 4:0; shared exact replay is 6.92--10.49x wider than private | native expansion `13091586 / 13091616 / 13091617 / 13091618`; sealed 4x8 audit `13092340`; exact replay `13093837--13093845`; analyzer `28b4cf4e2` | no frozen score change; measure matched native raw-BPref width and restore real upstream shared-stream workload, then qualify 0--4/0--20 before 0--200 |
+| 1 | GF47 systematic mode boundary @4, particle 1085 | exact E-step/operand/support chain, terminal 4x8 audit, and native-posterior replay close iteration-1 raw-BPref distribution scale. Eight native repeats choose particle modes 5:3 while four candidates choose 4:0; the decisive boundary is the rank-10 adaptive-support parent inherited through iteration-3 map/PPref | native expansion `13091586--13091618`; 4x8 audit `13092340`; matched fixed-posterior/native-posterior panels `13095568 / 13097692`; replay science `eeeceb368` | no frozen score change; reuse EM's source-ordered coarse scoring, float32 posterior normalization, and cutoff, then qualify 0--4/0--20 before 0--200 |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -227,35 +229,45 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 ### Latest change
 
-The rectangular audit `13092340` is terminal and fail-closed. All four
-candidate maps are inside the eight-native direct map envelope for all
-**201/201** checkpoints. Reverse native-radius coverage fails because the
-candidate panel does not reproduce every valid RELION branch. All candidate
-particle states are covered by the native union through iteration 27; the
-first per-candidate exits are **58 / 58 / 107 / 107**. The independent schedule
-distribution gate first fails at iteration **4**, exactly where particle 1085
-splits 5:3 across native repeats but 4:0 across candidate repeats. Runtime is
-still **5.55--6.14x** RELION for this panel.
+Matched exact-H100 job `13097692` closes the iteration-1 raw-BPref width
+question. Four native RELION arms and four private/shared replay arms ran
+sequentially in one allocation on physical GPU `GPU-1fdb3b99...`. Each replay
+used its corresponding repeat's actual native posterior for all **200**
+particles. Validation found zero support-coordinate, Euler, or launch-count
+mismatches. The pooled normalized native posterior itself varies at
+`1.40e-5--1.62e-5` relative L2; per-particle maximum pairwise variation has
+median `1.90e-5` and maximum `5.89e-5`.
 
-The rebuilt exact-replay library SHA is `9eb4e2dabfac...`; smoke `13093816`
-proved that the earlier eight setup failures came from the stale
-`41a2fe4d31c2...` binary rather than the replay hypothesis. Four private arms
-`13093837--13093840` and four shared arms
-`13093841 / 13093842 / 13093844 / 13093845` then completed on the exact H100.
-Maximum pairwise relative-L2 widths for private real/imag/weight are
-`1.39544e-7 / 1.41939e-7 / 7.28693e-8`; shared widths are
-`1.46451e-6 / 9.82465e-7 / 7.48217e-7`. Shared BPref is therefore
-`10.49x / 6.92x / 10.27x` wider than worker-private replay, supporting the
-RELION source topology while rejecting private storage as a repair.
+That posterior variation restores the complete raw-BPref distribution scale.
+Private/native maximum-diameter ratios are
+`1.0367 / 0.8222 / 1.0076 / 0.8097`, and shared/native ratios are
+`1.0384 / 0.8249 / 1.0739 / 0.8288`, ordered as data half 0/1 and weight half
+0/1. Report SHA is `901255a8a74a...`; the complete evidence manifest is
+`c0657f213e4b...`. Science commit `eeeceb368` adds the fail-closed posterior
+mapping and matched harness. Its focused validation is **18/18**, with Ruff,
+shell syntax, and diff checks clean.
 
-Commit `28b4cf4e2` adds a reusable fail-closed analyzer for this panel and four
-focused tests covering diameter calculation, physical-GPU provenance,
-accumulator-topology labeling, and missing-arm rejection. The sealed report
-SHA is `fd723f4ddf25...`. The next discriminator is not an artificial delay:
-it is matched native final-BPref repeatability plus the real cross-worker
-preparation/scoring workload that occupies the device before each shared
-BPref. The implementation path reuses EM's exact fused score, posterior, and
-source-ordered M-step primitives.
+The fixed-posterior matched panel `13095568` remains an important negative
+control: its private widths were only `0.0139--0.0321x` native and shared
+widths `0.126--0.338x`. Diagnostic job `13096599` is excluded from the
+posterior-causality claim because its first implementation remapped native
+Euler/support topology but accidentally retained RECOVAR posterior weights;
+that mistake was corrected and guarded in `eeeceb368`. The combined evidence
+means no artificial delay, upstream workload injection, or stochastic repair
+is justified. Native posterior realization—not omitted GPU work—caused the
+previously missing replay width.
+
+The active boundary therefore returns to the systematic iteration-4 mode
+bias. The rectangular audit `13092340` remains terminal: all four candidate
+maps are inside the eight-native direct map envelope at **201/201** checkpoints,
+but candidate repeats sample only the common iteration-4 mode. For particle
+1085, RELION retains rank-10 coarse parent `[175,8]` at cumulative mass
+`0.9989997162`, while RECOVAR prunes it at `0.9990066439`. Live native-PPref
+intervention `13081790` restores that parent and the alternate state, so the
+downstream E-step is exonerated. The next implementation work explicitly
+reuses EM's source-ordered coarse scorer, float32 posterior normalization,
+adaptive-support cutoff, and fused M-step primitives instead of adding
+VDAM-only duplicate math.
 
 Complete iteration-1 native BPref capture `13090875` seals all **200**
 particles, not only the causal target. Every active candidate Euler/support row
@@ -283,15 +295,14 @@ coverage still fails; candidate repeats 1/2 again leave the expanded particle
 support at iteration 58. The sealed rectangular audit is job `13092340` from
 analysis commit `dfb0b1cfa`; it is non-scoring while live.
 
-The next bounded discriminator is repeatability of the exact replay itself:
-four shared and four worker-private native-PTX arms with identical sealed
-operands, native owner/count/Euler panels, concurrent eight-worker streams,
-and native launch order. RELION source confirms that all eight workers update a
-single device-level BPref, so worker-private storage is a negative control, not
-a candidate production repair. If both repeat panels remain narrow, the next
-source-faithful discriminator is the per-worker upstream workload that controls
-when each blocking class stream reaches Wavg/BPref. Artificial noise, seed
-tuning, and gate widening remain out of scope.
+The exact replay repeatability discriminator is now complete. Its initial
+fixed-posterior arms correctly showed shared accumulation wider than private,
+but the matched native panel proved that both controls were artificially
+narrow because each repeat reused one frozen posterior. Replaying each native
+posterior restores both private and shared widths to the native range. The
+worker-private arm remains a topology control; neither shared topology nor
+upstream device workload is promoted as a repair. Artificial noise, seed
+tuning, workload injection, and gate widening remain out of scope.
 
 Complete exact-PTX trace `13087597` resolves the interval mismatch.  At
 iteration 4, RECOVAR's Wavg enqueue is `3,102 ns`, its dynamic Driver API
@@ -392,8 +403,10 @@ SHA `48f17d85d197...`, RELION binding SHA `77ac98f16ae9...`, source STARs,
 capture NPZ, and runner log. Its report is
 `vdam_gf47_it4_native_ppref_live_3c896257b_20260828/ppref_live_intervention_d83d1df7f.json`
 with SHA `7240ff9d866d...`. Four focused analyzer tests pass; no generic RECOVAR
-suite ran. This closes the E-step response and makes the earliest shared
-multi-particle BPref/map accumulation the active K=1 boundary.
+suite ran. This closes the E-step response. The matched posterior panel later
+closed raw-BPref width as a missing-distribution cause, leaving the
+source-faithful coarse-score/normalization/cutoff path as the active K=1
+implementation boundary.
 
 ### Earlier production-accumulator qualification
 
@@ -1631,7 +1644,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 iteration-4 native-mode coverage | jobs `13079981 / 13080743 / 13081790 / 13082447--50` and analyzers `1fd5617d4 / d83d1df7f / 120f044d5` prove exact E-step causality plus an under-dispersed candidate map ensemble | natively reuse or correct the shared accumulation distribution, then run focused 0--4/0--20 qualification before another 0--200 |
+| 1 | Close GF47 iteration-4 native-mode coverage | jobs `13081790 / 13092340 / 13095568 / 13097692` prove exact E-step causality, the systematic rank-10 cutoff miss, and native-scale raw-BPref width under posterior-matched replay | reuse EM's source-ordered coarse scorer, float32 normalization, and adaptive-support cutoff; then run focused 0--4/0--20 qualification before another 0--200 |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
