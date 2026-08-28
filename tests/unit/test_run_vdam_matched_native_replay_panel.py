@@ -39,6 +39,8 @@ def test_matched_panel_seals_source_binaries_and_both_reports() -> None:
         "VDAM_EXPECTED_CUDA_SHA256",
         "VDAM_EXPECTED_RELION_BIND_SHA256",
         "VDAM_EXPECTED_EXACT_PTX_SHA256",
+        '! -name "slurm-${SLURM_JOB_ID}.out"',
+        '! -name "slurm-${SLURM_JOB_ID}.err"',
         "git status --porcelain=v1 --untracked-files=no",
         "recovar.vdam_replay_repeat_panel_submission.v2",
         "replay_repeat_distribution.json",

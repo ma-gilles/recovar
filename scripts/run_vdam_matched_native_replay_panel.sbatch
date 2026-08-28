@@ -28,7 +28,11 @@ set -euo pipefail
 REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
 test "${REPEAT_COUNT}" -ge 2
 test -f "${VDAM_PANEL_ROOT}/SAFE_TO_DELETE"
-test -z "$(find "${VDAM_PANEL_ROOT}" -mindepth 1 -maxdepth 1 ! -name SAFE_TO_DELETE -print -quit)"
+test -z "$(find "${VDAM_PANEL_ROOT}" -mindepth 1 -maxdepth 1 \
+  ! -name SAFE_TO_DELETE \
+  ! -name "slurm-${SLURM_JOB_ID}.out" \
+  ! -name "slurm-${SLURM_JOB_ID}.err" \
+  -print -quit)"
 cd "${VDAM_REPO_ROOT}"
 test "$(git rev-parse HEAD)" = "${VDAM_EXPECTED_HEAD}"
 test -z "$(git status --porcelain=v1 --untracked-files=no)"
