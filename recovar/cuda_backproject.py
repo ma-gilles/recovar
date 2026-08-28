@@ -1895,7 +1895,10 @@ def _run_vdam_external_host_replay_callback(
         if report_dir_text:
             report_dir = pathlib.Path(report_dir_text).expanduser().resolve()
             report_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(report_path, report_dir / f"call-{call:04d}.json")
+            shutil.copy2(
+                report_path,
+                report_dir / f"pid-{os.getpid()}-call-{call:04d}.json",
+            )
         with np.load(output_path, allow_pickle=False) as output:
             return (
                 np.asarray(output["data_real_volume"], dtype=np.float32).reshape(

@@ -59,9 +59,14 @@ namespace ffi = xla::ffi;
 
 constexpr char kRelionVdamExactNativePtxEnv[] =
     "RECOVAR_VDAM_EXACT_NATIVE_PTX";
+constexpr char kRelionVdamExactWavgPredecessorEnv[] =
+    "RECOVAR_VDAM_EXACT_WAVG_PREDECESSOR";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
+constexpr char kRelionVdamExactWavgKernel[] =
+    "_Z16cuda_kernel_wavgILb1ELb1ELb0ELi256EEvPf18AccProjectorKernel"
+    "jmS0_S0_S0_S0_S0_S0_S0_S0_S0_S0_mfff";
 
 cudaError_t report_relion_vdam_driver_error(
     const char* operation,
@@ -5052,6 +5057,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     float* image_imag = nullptr;
     float* translation_x = nullptr;
     float* translation_y = nullptr;
+    float* wavg_dummy_outputs = nullptr;
     cudaArray_t array_real = nullptr;
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
@@ -5079,9 +5085,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         std::getenv(kRelionVdamExactNativePtxEnv);
     const bool exact_native_ptx_requested =
         exact_native_ptx_path != nullptr && exact_native_ptx_path[0] != '\0';
+    const char* exact_wavg_predecessor_value =
+        std::getenv(kRelionVdamExactWavgPredecessorEnv);
+    const bool exact_wavg_predecessor_requested =
+        exact_wavg_predecessor_value != nullptr &&
+        exact_wavg_predecessor_value[0] != '\0' &&
+        std::strcmp(exact_wavg_predecessor_value, "0") != 0;
     CUcontext exact_native_ptx_context = nullptr;
     CUmodule exact_native_ptx_module = nullptr;
     CUfunction exact_native_ptx_kernel = nullptr;
+    CUfunction exact_wavg_kernel = nullptr;
     const std::uint32_t candidate_trace_iteration =
         candidate_trace_requested ? candidate_trace_writer->iteration() : 0;
     double* data_real_volume_f64 = nullptr;
@@ -5099,6 +5112,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         (captured_rotation_replay || serial_rotation_replay ||
          float64_accumulator_replay || device_trace_requested ||
          reverse_rotation_replay || rotation_replay_stride > 0))
+        return cudaErrorInvalidValue;
+    if (exact_wavg_predecessor_requested && !exact_native_ptx_requested)
         return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
@@ -5225,6 +5240,22 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&translation_y),
             static_cast<size_t>(translation_count) * sizeof(float));
         if (err != cudaSuccess) goto cleanup;
+        if (exact_wavg_predecessor_requested)
+        {
+            // RELION's wdiff2 arrays are worker-local and reused by successive
+            // particles.  Preserve that ownership topology while discarding
+            // the diagnostic predecessor's numerical outputs.
+            constexpr int kWavgOutputCount = 3;
+            const size_t wavg_output_count = static_cast<size_t>(
+                kRelionVdamWorkerStreams) * kWavgOutputCount * pixel_count;
+            err = cudaMalloc(
+                reinterpret_cast<void**>(&wavg_dummy_outputs),
+                wavg_output_count * sizeof(float));
+            if (err != cudaSuccess) goto cleanup;
+            err = cudaMemsetAsync(
+                wavg_dummy_outputs, 0, wavg_output_count * sizeof(float), stream);
+            if (err != cudaSuccess) goto cleanup;
+        }
 
         split_complex_float_kernel<<<
             static_cast<unsigned int>((image_value_count + BLOCK_SIZE - 1) / BLOCK_SIZE),
@@ -5438,6 +5469,19 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     "cuModuleGetFunction", driver_result);
                 goto cleanup;
             }
+            if (exact_wavg_predecessor_requested)
+            {
+                driver_result = cuModuleGetFunction(
+                    &exact_wavg_kernel,
+                    exact_native_ptx_module,
+                    kRelionVdamExactWavgKernel);
+                if (driver_result != CUDA_SUCCESS)
+                {
+                    err = report_relion_vdam_driver_error(
+                        "cuModuleGetFunction(wavg)", driver_result);
+                    goto cleanup;
+                }
+            }
         }
 
         // RELION's task distributor hands one particle at a time to each of
@@ -5501,6 +5545,80 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         sizeof(VdamCandidateBlockTraceRecord),
                     particle_streams[lane]);
                 if (clear_error != cudaSuccess) return clear_error;
+            }
+            if (exact_wavg_predecessor_requested)
+            {
+                // RELION queues Wavg and BPref consecutively on the same class
+                // stream.  Its Wavg outputs are irrelevant to BPref, but the
+                // predecessor changes the device scheduler state seen by the
+                // atomic backprojection.  Launch the exact embedded RELION
+                // Ref3D/Data2D/CTF-corrected entry with the same particle
+                // operands and worker-local scratch, without an intervening
+                // synchronization.
+                CUresult driver_result =
+                    cuCtxSetCurrent(exact_native_ptx_context);
+                if (driver_result != CUDA_SUCCESS)
+                    return report_relion_vdam_driver_error(
+                        "cuCtxSetCurrent(wavg)", driver_result);
+                float* eulers_arg = const_cast<float*>(
+                    projector_eulers + particle * euler_stride);
+                unsigned image_size_arg = static_cast<unsigned>(pixel_count);
+                unsigned long orientation_count_arg =
+                    static_cast<unsigned long>(particle_rotation_count);
+                float* image_real_arg = image_real + particle * image_stride;
+                float* image_imag_arg = image_imag + particle * image_stride;
+                float* translation_x_arg = translation_x;
+                float* translation_y_arg = translation_y;
+                float* translation_z_arg = nullptr;
+                float* weights_arg = const_cast<float*>(
+                    posterior_over_weight_norm + particle * posterior_stride);
+                float* ctf_arg = const_cast<float*>(
+                    ctf + particle * image_stride);
+                const int64_t lane_output_offset =
+                    static_cast<int64_t>(lane) * 3 * pixel_count;
+                float* wdiff2_parts_arg =
+                    wavg_dummy_outputs + lane_output_offset;
+                float* wdiff2_aa_arg = wdiff2_parts_arg + pixel_count;
+                float* wdiff2_xa_arg = wdiff2_aa_arg + pixel_count;
+                unsigned long translation_count_arg =
+                    static_cast<unsigned long>(translation_count);
+                float weight_norm_arg = weight_norm;
+                float significant_weight_arg = significant_weight;
+                float part_scale_arg = 1.0f;
+                void* wavg_parameters[] = {
+                    &eulers_arg,
+                    &projector,
+                    &image_size_arg,
+                    &orientation_count_arg,
+                    &image_real_arg,
+                    &image_imag_arg,
+                    &translation_x_arg,
+                    &translation_y_arg,
+                    &translation_z_arg,
+                    &weights_arg,
+                    &ctf_arg,
+                    &wdiff2_parts_arg,
+                    &wdiff2_aa_arg,
+                    &wdiff2_xa_arg,
+                    &translation_count_arg,
+                    &weight_norm_arg,
+                    &significant_weight_arg,
+                    &part_scale_arg,
+                };
+                constexpr unsigned kWavgBlockSize = 256;
+                constexpr unsigned kWavgSharedBytes =
+                    (3 * kWavgBlockSize + 9) * sizeof(float);
+                driver_result = cuLaunchKernel(
+                    exact_wavg_kernel,
+                    static_cast<unsigned>(particle_rotation_count), 1, 1,
+                    kWavgBlockSize, 1, 1,
+                    kWavgSharedBytes,
+                    reinterpret_cast<CUstream>(particle_streams[lane]),
+                    wavg_parameters,
+                    nullptr);
+                if (driver_result != CUDA_SUCCESS)
+                    return report_relion_vdam_driver_error(
+                        "cuLaunchKernel(wavg)", driver_result);
             }
             const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
@@ -5895,6 +6013,7 @@ cleanup:
     if (image_imag) cudaFree(image_imag);
     if (translation_x) cudaFree(translation_x);
     if (translation_y) cudaFree(translation_y);
+    if (wavg_dummy_outputs) cudaFree(wavg_dummy_outputs);
     if (real) cudaFree(real);
     if (imag) cudaFree(imag);
     return err;

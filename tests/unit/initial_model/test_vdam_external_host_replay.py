@@ -44,3 +44,20 @@ def test_external_host_replay_requires_exact_ptx_and_protects_outputs():
     assert "refusing to overwrite" in helper
     assert "allow_pickle=False" in helper
     assert "clean-process CUDA replay failed" in helper
+
+
+def test_external_host_replay_report_names_include_parent_pid():
+    wrapper = PYTHON_WRAPPER.read_text()
+
+    assert 'f"pid-{os.getpid()}-call-{call:04d}.json"' in wrapper
+
+
+def test_exact_wavg_predecessor_uses_relion_ptx_and_same_particle_stream():
+    cuda_source = CUDA_SOURCE.read_text()
+
+    assert "RECOVAR_VDAM_EXACT_WAVG_PREDECESSOR" in cuda_source
+    assert "_Z16cuda_kernel_wavgILb1ELb1ELb0ELi256E" in cuda_source
+    assert "cuModuleGetFunction(wavg)" in cuda_source
+    assert "cuLaunchKernel(wavg)" in cuda_source
+    assert "reinterpret_cast<CUstream>(particle_streams[lane])" in cuda_source
+    assert "kWavgSharedBytes" in cuda_source
