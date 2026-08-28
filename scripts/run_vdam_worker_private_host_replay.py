@@ -29,7 +29,7 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 from recovar.em.initial_model.layout import relion_bpref_frame_scales
 from scripts import analyze_vdam_mstep_boundary, run_vdam_exact_native_host_replay
 
-SCHEMA = "recovar.vdam_worker_private_host_replay.v5"
+SCHEMA = "recovar.vdam_worker_private_host_replay.v6"
 _CALL_RE = re.compile(r"-call-(\d+)-input\.npz$")
 _PANEL_MAGIC = 0x5644414D42504631
 _PANEL_HEADER_WORDS = 10
@@ -556,6 +556,7 @@ def replay(
     topology_data_star: Path | None = None,
     native_panel_directory: Path | None = None,
     merge_callbacks: bool = False,
+    worker_private_accumulators: bool = True,
 ) -> dict:
     if worker_count <= 0:
         raise ValueError("worker count must be positive")
@@ -596,10 +597,14 @@ def replay(
     source_accumulator = np.asarray(first["data_real_volume"])
     if source_accumulator.ndim != 2 or source_accumulator.shape[0] != group_count:
         raise ValueError("sealed source accumulator has invalid shape")
-    private_shape = (group_count, worker_count, source_accumulator.shape[1])
-    private_real = np.zeros(private_shape, dtype=np.float32)
-    private_imag = np.zeros(private_shape, dtype=np.float32)
-    private_weight = np.zeros(private_shape, dtype=np.float32)
+    state_shape = (
+        (group_count, worker_count, source_accumulator.shape[1])
+        if worker_private_accumulators
+        else (group_count, source_accumulator.shape[1])
+    )
+    state_real = np.zeros(state_shape, dtype=np.float32)
+    state_imag = np.zeros(state_shape, dtype=np.float32)
+    state_weight = np.zeros(state_shape, dtype=np.float32)
     callbacks = []
     ori_size = _scalar(first, "physical_image_size")
     recon_volume_shape = tuple(
@@ -632,15 +637,16 @@ def replay(
         for call_index, (source_label, source) in enumerate(callback_sources):
             if _scalar(source, "reconstruction_group_count") != group_count:
                 raise ValueError("reconstruction group count changes across callbacks")
-            before_real = _serial_reduce(
-                private_real, tuple(range(worker_count))
-            )
-            before_imag = _serial_reduce(
-                private_imag, tuple(range(worker_count))
-            )
-            before_weight = _serial_reduce(
-                private_weight, tuple(range(worker_count))
-            )
+            if worker_private_accumulators:
+                before_real = _serial_reduce(state_real, tuple(range(worker_count)))
+                before_imag = _serial_reduce(state_imag, tuple(range(worker_count)))
+                before_weight = _serial_reduce(
+                    state_weight, tuple(range(worker_count))
+                )
+            else:
+                before_real = state_real
+                before_imag = state_imag
+                before_weight = state_weight
             sealed_real = np.asarray(source["data_real_volume"], dtype=np.float32)
             sealed_imag = np.asarray(source["data_imag_volume"], dtype=np.float32)
             sealed_weight = np.asarray(source["weight_volume"], dtype=np.float32)
@@ -655,13 +661,20 @@ def replay(
                     before_weight, sealed_weight
                 ),
             }
-            packed = _private_bundle(
-                source,
-                private_real,
-                private_imag,
-                private_weight,
-                worker_count=worker_count,
-            )
+            if worker_private_accumulators:
+                packed = _private_bundle(
+                    source,
+                    state_real,
+                    state_imag,
+                    state_weight,
+                    worker_count=worker_count,
+                )
+            else:
+                packed = {name: np.asarray(value) for name, value in source.items()}
+                packed["data_real_volume"] = state_real
+                packed["data_imag_volume"] = state_imag
+                packed["weight_volume"] = state_weight
+                packed["parallel_worker_replay"] = np.int32(1)
             packed_input = temporary / f"call-{call_index:04d}-input.npz"
             packed_output = temporary / f"call-{call_index:04d}-output.npz"
             np.savez(packed_input, **packed)
@@ -669,10 +682,9 @@ def replay(
                 packed_input, packed_output, library_path
             )
             with np.load(packed_output, allow_pickle=False) as result:
-                shape = (group_count, worker_count, source_accumulator.shape[1])
-                private_real = np.asarray(result["data_real_volume"]).reshape(shape)
-                private_imag = np.asarray(result["data_imag_volume"]).reshape(shape)
-                private_weight = np.asarray(result["weight_volume"]).reshape(shape)
+                state_real = np.asarray(result["data_real_volume"]).reshape(state_shape)
+                state_imag = np.asarray(result["data_imag_volume"]).reshape(state_shape)
+                state_weight = np.asarray(result["weight_volume"]).reshape(state_shape)
             callbacks.append(
                 {
                     "call_index": call_index,
@@ -700,30 +712,50 @@ def replay(
             )
 
     order = tuple(range(worker_count))
-    reduced_real = _serial_reduce(private_real, order)
-    reduced_imag = _serial_reduce(private_imag, order)
-    reduced_weight = _serial_reduce(private_weight, order)
+    if worker_private_accumulators:
+        reduced_real = _serial_reduce(state_real, order)
+        reduced_imag = _serial_reduce(state_imag, order)
+        reduced_weight = _serial_reduce(state_weight, order)
+    else:
+        reduced_real = state_real
+        reduced_imag = state_imag
+        reduced_weight = state_weight
     accumulator_path = output_directory / "worker_private_accumulators.npz"
-    np.savez(
-        accumulator_path,
-        private_real=private_real,
-        private_imag=private_imag,
-        private_weight=private_weight,
+    accumulator_bundle = dict(
         reduced_real=reduced_real,
         reduced_imag=reduced_imag,
         reduced_weight=reduced_weight,
         reduction_order=np.asarray(order, dtype=np.int32),
     )
+    if worker_private_accumulators:
+        accumulator_bundle.update(
+            private_real=state_real,
+            private_imag=state_imag,
+            private_weight=state_weight,
+        )
+    else:
+        accumulator_bundle.update(
+            shared_real=state_real,
+            shared_imag=state_imag,
+            shared_weight=state_weight,
+        )
+    np.savez(accumulator_path, **accumulator_bundle)
     report = {
         "schema": SCHEMA,
         "status": "complete",
-        "hypothesis": (
-            "persistent_worker_private_accumulators_with_native_topology_and_panels"
-            if panels is not None
-            else (
-                "persistent_worker_private_accumulators_with_native_topology"
-                if topology is not None
-                else "persistent_worker_private_accumulators"
+        "hypothesis": "_with_".join(
+            filter(
+                None,
+                (
+                    (
+                        "persistent_worker_private_accumulators"
+                        if worker_private_accumulators
+                        else "shared_accumulators"
+                    ),
+                    "native_topology" if topology is not None else "",
+                    "native_panels" if panels is not None else "",
+                    "merged_callbacks" if merge_callbacks else "",
+                ),
             )
         ),
         "native_physical_grid_replayed": topology is not None,
@@ -737,6 +769,7 @@ def replay(
             str(native_panel_directory) if native_panel_directory else None
         ),
         "callbacks_merged_in_native_launch_order": merge_callbacks,
+        "worker_private_accumulators": worker_private_accumulators,
         "worker_count": worker_count,
         "reconstruction_group_count": group_count,
         "callback_count": len(callbacks),
@@ -771,6 +804,7 @@ def main() -> int:
     parser.add_argument("--topology-data-star", type=Path)
     parser.add_argument("--native-panel-directory", type=Path)
     parser.add_argument("--merge-callbacks", action="store_true")
+    parser.add_argument("--shared-accumulators", action="store_true")
     args = parser.parse_args()
     report = replay(
         args.input_directory,
@@ -784,6 +818,7 @@ def main() -> int:
         topology_data_star=args.topology_data_star,
         native_panel_directory=args.native_panel_directory,
         merge_callbacks=args.merge_callbacks,
+        worker_private_accumulators=not args.shared_accumulators,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
