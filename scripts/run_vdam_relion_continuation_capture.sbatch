@@ -27,6 +27,7 @@ NR_ITER_SCHEDULE=${VDAM_RELION_CONT_NR_ITER_SCHEDULE:-${ITERATION}}
 PART_ID=${VDAM_RELION_CONT_PART_ID:-9}
 STACK_INDEX=${VDAM_RELION_CONT_STACK_INDEX:-}
 CAPTURE_ENABLED=${VDAM_RELION_CONT_CAPTURE:-0}
+BPREF_OPERANDS=${VDAM_RELION_CONT_BPREF_OPERANDS:-0}
 PERTURBATION=${VDAM_RELION_CONT_PERTURBATION:-}
 SIGMA2_NOISE_DUMP_DIR=${VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR:-}
 RELION_BINARY=${VDAM_RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
@@ -42,6 +43,10 @@ test -x "${RELION_BINARY}"
 test "${ITERATION}" -ge 1
 test "${NR_ITER_SCHEDULE}" -ge "${ITERATION}"
 case "${CAPTURE_ENABLED}" in 0|1) ;; *) echo "VDAM_RELION_CONT_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
+case "${BPREF_OPERANDS}" in 0|1) ;; *) echo "VDAM_RELION_CONT_BPREF_OPERANDS must be 0 or 1" >&2; exit 2 ;; esac
+if [[ "${BPREF_OPERANDS}" == 1 ]]; then
+    test "${CAPTURE_ENABLED}" == 1
+fi
 case "${RELION_SKIP_MODULE}" in 0|1) ;; *) echo "VDAM_RELION_SKIP_MODULE must be 0 or 1" >&2; exit 2 ;; esac
 mkdir -p "${OUTPUT}" "${CAPTURE}" "${ROOT}/provenance"
 test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
@@ -85,6 +90,9 @@ if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     fi
     export RELION_ACC_DUMP_ITER=${ITERATION}
     export RELION_ACC_DUMP_VERBOSE=1
+    if [[ "${BPREF_OPERANDS}" == 1 ]]; then
+        export RELION_ACC_DUMP_BPREF_OPERANDS=1
+    fi
 fi
 
 COMMAND=(
@@ -113,7 +121,7 @@ if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
     test -s "${CAPTURE}/pass1_exp_Mweight_posterior.bin"
 fi
 ! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${OUTPUT}/runner.stderr"
-printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"stack_index":"%s","capture":%s,"continued_from":"%s","forced_perturbation":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${CONTINUE}" "${PERTURBATION}" \
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"stack_index":"%s","capture":%s,"bpref_operands":%s,"continued_from":"%s","forced_perturbation":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${BPREF_OPERANDS}" "${CONTINUE}" "${PERTURBATION}" \
     > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
 touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"
