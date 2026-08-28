@@ -17,6 +17,12 @@ set -euo pipefail
 : "${VDAM_RECOVAR_DIRECTORY:?set the matched RECOVAR M-step directory}"
 : "${VDAM_TARGET_GPU_UUID:?pin the physical H100}"
 : "${RECOVAR_VDAM_EXACT_NATIVE_PTX:?set the exact RELION PTX}"
+VDAM_TOPOLOGY=${VDAM_TOPOLOGY:-}
+VDAM_TOPOLOGY_DATA_STAR=${VDAM_TOPOLOGY_DATA_STAR:-}
+if [[ -n "${VDAM_TOPOLOGY}" || -n "${VDAM_TOPOLOGY_DATA_STAR}" ]]; then
+  test -s "${VDAM_TOPOLOGY}"
+  test -s "${VDAM_TOPOLOGY_DATA_STAR}"
+fi
 
 cd "${VDAM_REPO_ROOT}"
 test "$(git rev-parse HEAD)" = "${VDAM_EXPECTED_HEAD}"
@@ -37,26 +43,31 @@ export TMPDIR="${runtime_root}/tmp"
 export CUDA_CACHE_PATH="${runtime_root}/cache"
 
 start_s=$(date +%s)
-pixi run python -m scripts.run_vdam_worker_private_host_replay \
+command=(pixi run python -m scripts.run_vdam_worker_private_host_replay \
   --input-directory "${VDAM_INPUT_DIRECTORY}" \
   --output-directory "${VDAM_OUTPUT_DIRECTORY}/replay" \
   --library "${VDAM_LIBRARY}" \
   --native-directory "${VDAM_NATIVE_DIRECTORY}" \
   --recovar-directory "${VDAM_RECOVAR_DIRECTORY}" \
   --worker-count 8 \
-  --iteration 1 \
+  --iteration 1)
+if [[ -n "${VDAM_TOPOLOGY}" ]]; then
+  command+=(--topology "${VDAM_TOPOLOGY}" \
+    --topology-data-star "${VDAM_TOPOLOGY_DATA_STAR}")
+fi
+"${command[@]}" \
   > "${VDAM_OUTPUT_DIRECTORY}/runner.stdout" \
   2> "${VDAM_OUTPUT_DIRECTORY}/runner.stderr"
 end_s=$(date +%s)
 
 python - "${VDAM_OUTPUT_DIRECTORY}/provenance.json" \
   "${SLURM_JOB_ID}" "${visible_gpu_uuid}" "${VDAM_EXPECTED_HEAD}" \
-  "$((end_s - start_s))" <<'PY'
+  "$((end_s - start_s))" "${VDAM_TOPOLOGY}" "${VDAM_TOPOLOGY_DATA_STAR}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-output, job_id, gpu_uuid, head, wall_s = sys.argv[1:]
+output, job_id, gpu_uuid, head, wall_s, topology, data_star = sys.argv[1:]
 Path(output).write_text(
     json.dumps(
         {
@@ -64,6 +75,8 @@ Path(output).write_text(
             "gpu_uuid": gpu_uuid,
             "science_head": head,
             "wall_seconds": int(wall_s),
+            "native_topology": topology or None,
+            "native_topology_data_star": data_star or None,
         },
         indent=2,
         sort_keys=True,

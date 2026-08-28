@@ -71,3 +71,56 @@ def test_relion_continuation_can_capture_complete_bpref_topology() -> None:
     assert "VDAM_RELION_CONT_BPREF_TOPOLOGY_PATH" in source
     assert "VDAM_RELION_CONT_BPREF_TOPOLOGY_EXPECTED_ROWS" in source
     assert "RELION_ACC_DUMP_BPREF_TOPOLOGY" in source
+    assert "VDAM_RELION_CONT_MSTEP_DUMP_DIR" in source
+    assert "VDAM_RELION_CONT_TARGET_GPU_UUID" in source
+    assert "VDAM_TARGET_GPU_MISS" in source
+
+
+def test_apply_native_topology_replaces_owner_and_physical_count() -> None:
+    source = _bundle()
+    source["particle_trace_ids"] = np.asarray([10, 11, 12, 13], dtype=np.int32)
+    source["rotation_replay_order"] = np.tile(
+        np.arange(8, dtype=np.int32), (4, 1)
+    )
+    source["rotation_replay_counts"] = np.full(4, 8, dtype=np.int32)
+    topology = {10: (1, 4), 11: (0, 7), 12: (2, 6), 13: (1, 5)}
+
+    result = worker_private._apply_native_topology(source, topology)
+
+    assert result["worker_lane_ids"].tolist() == [1, 0, 2, 1]
+    assert result["rotation_replay_counts"].tolist() == [4, 7, 6, 5]
+    assert source["worker_lane_ids"].tolist() == [2, 0, 1, 2]
+
+
+def test_apply_native_topology_rejects_count_beyond_sealed_grid() -> None:
+    source = _bundle()
+    source["particle_trace_ids"] = np.asarray([10, 11, 12, 13], dtype=np.int32)
+    source["rotation_replay_order"] = np.tile(
+        np.arange(8, dtype=np.int32), (4, 1)
+    )
+    topology = {10: (1, 9), 11: (0, 7), 12: (2, 6), 13: (1, 5)}
+    with pytest.raises(ValueError, match="exceeds sealed replay width"):
+        worker_private._apply_native_topology(source, topology)
+
+
+def test_load_native_topology_maps_part_ids_through_star_identity(
+    tmp_path, monkeypatch
+) -> None:
+    import pandas as pd
+    import starfile
+
+    topology = tmp_path / "topology.tsv"
+    topology.write_text(
+        "1\t1\t0\t3\t7\t0\n"
+        "2\t0\t0\t6\t4\t0\n"
+        "1\t0\t0\t2\t6\t0\n"
+        "2\t1\t0\t7\t5\t0\n"
+    )
+    particles = pd.DataFrame({"rlnImageName": ["0011@x.mrcs", "0021@x.mrcs"]})
+    monkeypatch.setattr(starfile, "read", lambda _path: {"particles": particles})
+
+    result = worker_private._load_native_topology(
+        topology, tmp_path / "data.star", iteration=1
+    )
+
+    assert result == {10: (2, 6), 20: (3, 7)}

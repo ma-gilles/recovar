@@ -5,9 +5,10 @@ The production RECOVAR replay has one accumulator per reconstruction group.
 RELION instead gives each host worker a private backprojector and reduces those
 backprojectors after the particle loop.  This diagnostic preserves the sealed
 RECOVAR operands and concurrent worker streams, but remaps every
-``(group, worker)`` pair to its own persistent accumulator.  Native physical
-grid cardinality is deliberately left unchanged so the two hypotheses remain
-separable.
+``(group, worker)`` pair to its own persistent accumulator.  By default native
+physical grid cardinality is left unchanged so the two hypotheses remain
+separable.  An optional RELION topology capture can replace both worker
+ownership and per-particle launch cardinality for the combined causal arm.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 from recovar.em.initial_model.layout import relion_bpref_frame_scales
 from scripts import analyze_vdam_mstep_boundary, run_vdam_exact_native_host_replay
 
-SCHEMA = "recovar.vdam_worker_private_host_replay.v2"
+SCHEMA = "recovar.vdam_worker_private_host_replay.v3"
 _CALL_RE = re.compile(r"-call-(\d+)-input\.npz$")
 
 
@@ -58,6 +59,96 @@ def _ordered_inputs(input_directory: Path) -> list[Path]:
     if call_ids != expected:
         raise ValueError(f"callback IDs are not contiguous: {call_ids}")
     return [path for _call_id, path in rows]
+
+
+def _original_index_from_image_name(value: object) -> int:
+    token = str(value).split("@", maxsplit=1)[0]
+    try:
+        stack_index = int(token)
+    except ValueError as error:
+        raise ValueError(f"invalid RELION rlnImageName {value!r}") from error
+    if stack_index <= 0:
+        raise ValueError(f"RELION stack index must be one-based: {value!r}")
+    return stack_index - 1
+
+
+def _load_native_topology(
+    topology_path: Path,
+    data_star: Path,
+    *,
+    iteration: int,
+) -> dict[int, tuple[int, int]]:
+    """Map original stack index to native ``(worker, launch_count)``."""
+    import starfile
+
+    by_part: dict[int, tuple[int, int]] = {}
+    for line_number, line in enumerate(topology_path.read_text().splitlines(), 1):
+        fields = line.split("\t")
+        if len(fields) != 6:
+            raise ValueError(
+                f"topology line {line_number} has {len(fields)} fields, expected 6"
+            )
+        row_iteration, part_id, image_id, worker, orientation_count, _offset = (
+            int(field) for field in fields
+        )
+        if row_iteration != iteration:
+            continue
+        if image_id != 0:
+            raise ValueError(
+                f"topology line {line_number} has image_id {image_id}, expected 0"
+            )
+        if part_id in by_part:
+            raise ValueError(f"duplicate native topology part_id {part_id}")
+        if worker < 0 or orientation_count <= 0:
+            raise ValueError(f"invalid native topology line {line_number}: {line!r}")
+        by_part[part_id] = (worker, orientation_count)
+
+    document = starfile.read(data_star)
+    particles = document["particles"] if isinstance(document, dict) else document
+    if "rlnImageName" not in particles:
+        raise ValueError("RELION data STAR has no rlnImageName column")
+    if set(by_part) != set(range(len(by_part))):
+        raise ValueError(
+            "native topology part IDs must be contiguous from zero"
+        )
+    if len(by_part) > len(particles):
+        raise ValueError("native topology has more parts than the RELION data STAR")
+    result: dict[int, tuple[int, int]] = {}
+    for part_id in range(len(by_part)):
+        image_name = particles["rlnImageName"].iloc[part_id]
+        original_index = _original_index_from_image_name(image_name)
+        if original_index in result:
+            raise ValueError(f"duplicate original stack index {original_index}")
+        result[original_index] = by_part[part_id]
+    return result
+
+
+def _apply_native_topology(
+    source: dict[str, np.ndarray],
+    topology: dict[int, tuple[int, int]],
+) -> dict[str, np.ndarray]:
+    result = {name: np.asarray(value) for name, value in source.items()}
+    trace_ids = np.asarray(source["particle_trace_ids"], dtype=np.int64)
+    replay_order = np.asarray(source["rotation_replay_order"])
+    if replay_order.ndim != 2 or replay_order.shape[0] != trace_ids.size:
+        raise ValueError("sealed rotation replay order has inconsistent shape")
+    workers = np.empty(trace_ids.size, dtype=np.int32)
+    counts = np.empty(trace_ids.size, dtype=np.int32)
+    for row, trace_id_value in enumerate(trace_ids):
+        trace_id = int(trace_id_value)
+        if trace_id not in topology:
+            raise ValueError(f"no native topology for particle trace {trace_id}")
+        worker, count = topology[trace_id]
+        if count > replay_order.shape[1]:
+            raise ValueError(
+                f"native launch count {count} exceeds sealed replay width "
+                f"{replay_order.shape[1]} for particle trace {trace_id}"
+            )
+        workers[row] = worker
+        counts[row] = count
+    result["worker_lane_ids"] = workers
+    result["rotation_replay_counts"] = counts
+    return result
 
 
 def _private_bundle(
@@ -214,6 +305,8 @@ def replay(
     *,
     worker_count: int,
     iteration: int,
+    topology_path: Path | None = None,
+    topology_data_star: Path | None = None,
 ) -> dict:
     if worker_count <= 0:
         raise ValueError("worker count must be positive")
@@ -228,6 +321,13 @@ def replay(
         raise FileExistsError(f"refusing to reuse nonempty {output_directory}")
     output_directory.mkdir(parents=True, exist_ok=True)
     input_paths = _ordered_inputs(input_directory)
+    if (topology_path is None) != (topology_data_star is None):
+        raise ValueError("topology path and topology data STAR must be supplied together")
+    topology = None
+    if topology_path is not None and topology_data_star is not None:
+        topology = _load_native_topology(
+            topology_path, topology_data_star, iteration=iteration
+        )
     first = _load_bundle(input_paths[0])
     group_count = _scalar(first, "reconstruction_group_count")
     source_accumulator = np.asarray(first["data_real_volume"])
@@ -249,6 +349,8 @@ def replay(
         temporary = Path(temporary_text)
         for call_index, input_path in enumerate(input_paths):
             source = _load_bundle(input_path)
+            if topology is not None:
+                source = _apply_native_topology(source, topology)
             if _scalar(source, "reconstruction_group_count") != group_count:
                 raise ValueError("reconstruction group count changes across callbacks")
             before_real = _serial_reduce(
@@ -299,6 +401,19 @@ def replay(
                     "n_particles": callback["n_particles"],
                     "rotation_count": callback["rotation_count"],
                     "pixel_count": callback["pixel_count"],
+                    "native_worker_lanes": (
+                        sorted(set(np.asarray(source["worker_lane_ids"]).tolist()))
+                        if topology is not None
+                        else None
+                    ),
+                    "native_rotation_count_range": (
+                        [
+                            int(np.min(source["rotation_replay_counts"])),
+                            int(np.max(source["rotation_replay_counts"])),
+                        ]
+                        if topology is not None
+                        else None
+                    ),
                     "start_state_private_vs_production_shared": (
                         start_state_comparison
                     ),
@@ -323,8 +438,17 @@ def replay(
     report = {
         "schema": SCHEMA,
         "status": "complete",
-        "hypothesis": "persistent_worker_private_accumulators",
-        "native_physical_grid_replayed": False,
+        "hypothesis": (
+            "persistent_worker_private_accumulators_with_native_topology"
+            if topology is not None
+            else "persistent_worker_private_accumulators"
+        ),
+        "native_physical_grid_replayed": topology is not None,
+        "native_worker_owners_replayed": topology is not None,
+        "native_topology_path": str(topology_path) if topology_path else None,
+        "native_topology_data_star": (
+            str(topology_data_star) if topology_data_star else None
+        ),
         "worker_count": worker_count,
         "reconstruction_group_count": group_count,
         "callback_count": len(callbacks),
@@ -355,6 +479,8 @@ def main() -> int:
     parser.add_argument("--recovar-directory", type=Path, required=True)
     parser.add_argument("--worker-count", type=int, default=8)
     parser.add_argument("--iteration", type=int, default=1)
+    parser.add_argument("--topology", type=Path)
+    parser.add_argument("--topology-data-star", type=Path)
     args = parser.parse_args()
     report = replay(
         args.input_directory,
@@ -364,6 +490,8 @@ def main() -> int:
         args.recovar_directory,
         worker_count=args.worker_count,
         iteration=args.iteration,
+        topology_path=args.topology,
+        topology_data_star=args.topology_data_star,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
