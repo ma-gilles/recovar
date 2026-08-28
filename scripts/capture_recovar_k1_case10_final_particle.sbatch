@@ -58,6 +58,7 @@ test -s "${SOURCE_RESULTS}"
 test -z "$(
     find "${RUN_ROOT}" -mindepth 1 \
         ! -name SAFE_TO_DELETE \
+        ! -name SUBMISSION.md \
         ! -name 'slurm-*.out' \
         -print -quit
 )"
