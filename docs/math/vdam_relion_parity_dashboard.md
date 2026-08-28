@@ -24,6 +24,7 @@ Frozen case-definition SHA-256:
 | 🟡 | Why can both be true? | Native GPU atomic admission is stochastic. Four prior native chronology repeats agree at only **`0.50--0.72`** median within-particle atomic rank, and the new panels show native raw-data repeat relative L2 ranging from **`6.42e-4` to `4.19e-1`**. The frozen audit asks RECOVAR to follow one RELION stochastic mode exactly even when a fresh RELION run can select another much more distant mode. |
 | 🟡 | Current theory | There is no remaining evidence for a deterministic raw-BPref formula, topology, or instruction-order bug at iteration 58. The active blocker is **trajectory sensitivity to valid native stochastic modes**, followed separately by the known runtime gap. |
 | ➡️ | What is next? | Add a sealed repeat/distribution trajectory gate, then run independent GF47 production 0--200 pairs and compare RELION/RECOVAR distributions for schedule, particles, maps, and runtime. Only after that evidence defines a stable native envelope will the frozen K=1 matrix be rerun; thresholds and the 20-case denominator remain unchanged meanwhile. |
+| 🟡 | What is running? | Current-head job **`13073643`** is a same-H100 four-pair GF47 panel: four fresh RELION and four fresh RECOVAR 0--200 trajectories, all 201 checkpoints, with bidirectional map-mode coverage and sealed per-engine timing. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -146,7 +147,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-27 21:26 ET**
+Last scientific update: **2026-08-27 21:34 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -174,7 +175,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 production trajectory from raw BPref boundary @58 | four independent panels put **32/32** raw data/weight arms inside the native repeat floor; worst cross/native ratio is **`0.01283x`** | define and seal the repeat/distribution gate, then run independent production 0--200 pairs | no frozen score change; boundary evidence is statistically green, trajectory remains red |
+| 1 | GF47 production trajectory from raw BPref boundary @58 | four independent panels put **32/32** raw data/weight arms inside the native repeat floor; worst cross/native ratio is **`0.01283x`** | current-head four-pair 0--200 job **`13073643`** is running on one H100 | no frozen score change; boundary evidence is statistically green, trajectory remains red |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
