@@ -11,10 +11,6 @@ from typing import Any
 
 import numpy as np
 
-from scripts.analyze_vdam_storewavg_boundary import (
-    _match_rotations,
-    _positive_rotation_mask,
-)
 from scripts.analyze_vdam_storewavg_panel import _quantiles
 from scripts.audit_vdam_native_operand_replay_panel import (
     _normalized_weights,
@@ -107,15 +103,25 @@ def _load_candidate_capture(path: Path, *, iteration: int) -> dict[str, Any]:
     active_posterior = posterior[0, active]
     active_scores = scores[0, active]
     _require(
-        np.all(np.isfinite(active_scores)),
-        f"candidate active scores contain nonfinite values: {path}",
+        not np.any(np.isnan(active_scores)) and not np.any(np.isposinf(active_scores)),
+        f"candidate active scores contain NaN or positive infinity: {path}",
+    )
+    _require(
+        np.all(np.isfinite(active_scores[active_posterior > np.float32(0.0)])),
+        f"candidate positive posterior has a nonfinite score: {path}",
+    )
+    finite_scores = np.isfinite(active_scores)
+    _require(np.any(finite_scores), f"candidate active scores are all masked: {path}")
+    centered_scores = np.full(active_scores.shape, -np.inf, dtype=np.float32)
+    centered_scores[finite_scores] = (
+        active_scores[finite_scores] - np.max(active_scores[finite_scores])
     )
     return {
         "path": path.resolve(),
         "original_index": int(identities[0]),
         "rotations": rotations[active],
         "posterior": active_posterior,
-        "centered_scores": active_scores - np.max(active_scores),
+        "centered_scores": centered_scores,
         "translation_count": int(np.asarray(values["translations"]).shape[0]),
     }
 
@@ -152,91 +158,163 @@ def _load_native_repeat(root: Path, *, iteration: int) -> dict[int, dict[str, An
     return result
 
 
+def _rotation_union_maps(
+    rotations_by_repeat: list[np.ndarray],
+    *,
+    rotation_tolerance: float,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    union: list[np.ndarray] = []
+    exact_lookup: dict[bytes, int] = {}
+    mappings: list[np.ndarray] = []
+    for repeat_index, rotations in enumerate(rotations_by_repeat):
+        rotations = np.asarray(rotations, dtype=np.float32)
+        _require(
+            rotations.ndim == 3 and rotations.shape[1:] == (3, 3),
+            "repeat rotation topology differs",
+        )
+        mapping = []
+        for rotation in rotations:
+            exact_key = np.ascontiguousarray(rotation).tobytes()
+            nearest = exact_lookup.get(exact_key, -1)
+            if nearest < 0 and union and repeat_index > 0:
+                errors = np.max(
+                    np.abs(np.asarray(union, dtype=np.float32) - rotation), axis=(1, 2)
+                )
+                nearest = int(np.argmin(errors))
+            else:
+                errors = np.asarray([], dtype=np.float32)
+            if nearest < 0 or (
+                errors.size > 0 and float(errors[nearest]) > rotation_tolerance
+            ):
+                union.append(rotation.copy())
+                nearest = len(union) - 1
+            exact_lookup[exact_key] = nearest
+            mapping.append(nearest)
+        mapping_array = np.asarray(mapping, dtype=np.int64)
+        _require(
+            np.unique(mapping_array).size == mapping_array.size,
+            "repeat contains duplicate rotations within tolerance",
+        )
+        mappings.append(mapping_array)
+    _require(bool(union), "repeat family has no active rotations")
+    return np.asarray(union, dtype=np.float32), mappings
+
+
+def _align_repeat_family(
+    values: list[dict[str, Any]],
+    *,
+    posterior_key: str,
+    score_key: str,
+    scores_are_weights: bool,
+    rotation_tolerance: float,
+) -> dict[str, Any]:
+    active_values = []
+    translation_count = None
+    for value in values:
+        posterior = np.asarray(value[posterior_key], dtype=np.float32)
+        scores_or_weights = np.asarray(value[score_key])
+        rotations = np.asarray(value["rotations"], dtype=np.float32)
+        _require(
+            posterior.ndim == 2
+            and scores_or_weights.shape == posterior.shape
+            and rotations.shape == (posterior.shape[0], 3, 3),
+            "repeat posterior/score topology differs",
+        )
+        if translation_count is None:
+            translation_count = posterior.shape[1]
+        _require(
+            posterior.shape[1] == translation_count,
+            "repeat translation topology differs",
+        )
+        if scores_are_weights:
+            finite_score = scores_or_weights > 0.0
+            centered_scores = np.full(posterior.shape, -np.inf, dtype=np.float64)
+            centered_scores[finite_score] = np.log(scores_or_weights[finite_score])
+            centered_scores[finite_score] -= np.max(centered_scores[finite_score])
+        else:
+            centered_scores = np.asarray(scores_or_weights, dtype=np.float64)
+            finite_score = np.isfinite(centered_scores)
+        active_rotation = np.logical_or(
+            np.any(posterior > np.float32(0.0), axis=1),
+            np.any(finite_score, axis=1),
+        )
+        _require(np.any(active_rotation), "repeat has no active posterior rotations")
+        active_values.append(
+            {
+                "rotations": rotations[active_rotation],
+                "posterior": posterior[active_rotation],
+                "centered_scores": centered_scores[active_rotation],
+            }
+        )
+
+    union, mappings = _rotation_union_maps(
+        [value["rotations"] for value in active_values],
+        rotation_tolerance=rotation_tolerance,
+    )
+    aligned_posteriors = []
+    aligned_scores = []
+    for value, mapping in zip(active_values, mappings, strict=True):
+        posterior = np.zeros((union.shape[0], int(translation_count)), dtype=np.float32)
+        posterior[mapping] = value["posterior"]
+        normalization = float(np.sum(posterior, dtype=np.float64))
+        _require(
+            np.isfinite(normalization) and normalization > 0.0,
+            "repeat posterior normalization is invalid",
+        )
+        posterior /= np.float32(normalization)
+        scores = np.full((union.shape[0], int(translation_count)), -np.inf)
+        scores[mapping] = value["centered_scores"]
+        aligned_posteriors.append(posterior)
+        aligned_scores.append(scores)
+
+    shared_score_mask = np.logical_and.reduce(
+        [np.isfinite(value) for value in aligned_scores]
+    )
+    _require(
+        np.any(shared_score_mask),
+        "repeat family shares no finite score coordinates",
+    )
+    positive_supports = [value > np.float32(0.0) for value in aligned_posteriors]
+    return {
+        "posteriors": aligned_posteriors,
+        "scores": [value[shared_score_mask] for value in aligned_scores],
+        "support_mismatch": int(
+            np.count_nonzero(
+                np.logical_or.reduce(positive_supports)
+                != np.logical_and.reduce(positive_supports)
+            )
+        ),
+    }
+
+
 def _aligned_particle_panel(
     native_values: list[dict[str, Any]],
     candidate_values: list[dict[str, Any]],
     *,
     rotation_tolerance: float,
 ) -> dict[str, Any]:
-    canonical_native = native_values[0]
-    canonical_probabilities_all = np.asarray(
-        canonical_native["probabilities"], dtype=np.float32
+    native = _align_repeat_family(
+        native_values,
+        posterior_key="probabilities",
+        score_key="raw_weights",
+        scores_are_weights=True,
+        rotation_tolerance=rotation_tolerance,
     )
-    canonical_positive = _positive_rotation_mask(canonical_probabilities_all)
-    canonical_rotations = np.asarray(canonical_native["rotations"], dtype=np.float32)[
-        canonical_positive
-    ]
+    candidate = _align_repeat_family(
+        candidate_values,
+        posterior_key="posterior",
+        score_key="centered_scores",
+        scores_are_weights=False,
+        rotation_tolerance=rotation_tolerance,
+    )
 
-    native_posteriors = []
-    native_centered_scores = []
-    native_positive_score_masks = []
-    for native in native_values:
-        rotation_map = _match_rotations(
-            canonical_rotations,
-            np.asarray(native["rotations"], dtype=np.float32),
-            rotation_tolerance,
-        )
-        probabilities = np.asarray(native["probabilities"], dtype=np.float32)[rotation_map]
-        raw_weights = np.asarray(native["raw_weights"], dtype=np.float64)[rotation_map]
-        _require(
-            probabilities.shape[1] == raw_weights.shape[1],
-            "native posterior/score translation topology differs",
-        )
-        positive = raw_weights > 0.0
-        centered = np.full(raw_weights.shape, np.nan, dtype=np.float64)
-        centered[positive] = np.log(raw_weights[positive]) - np.max(np.log(raw_weights[positive]))
-        native_posteriors.append(probabilities)
-        native_centered_scores.append(centered)
-        native_positive_score_masks.append(positive)
-
-    candidate_posteriors = []
-    candidate_centered_scores = []
-    for candidate in candidate_values:
-        rotation_map = _match_rotations(
-            canonical_rotations,
-            np.asarray(candidate["rotations"], dtype=np.float32),
-            rotation_tolerance,
-        )
-        posterior = np.asarray(candidate["posterior"], dtype=np.float32)[rotation_map]
-        positive = posterior > np.float32(0.0)
-        posterior_norm = float(np.sum(posterior[positive], dtype=np.float64))
-        _require(
-            np.isfinite(posterior_norm) and posterior_norm > 0.0,
-            "candidate posterior normalization is invalid",
-        )
-        posterior = np.where(positive, posterior / posterior_norm, 0.0).astype(
-            np.float32
-        )
-        centered_scores = np.asarray(candidate["centered_scores"], dtype=np.float64)[
-            rotation_map
-        ]
-        _require(
-            posterior.shape == native_posteriors[0].shape
-            and centered_scores.shape == posterior.shape,
-            "native/candidate posterior topology differs",
-        )
-        candidate_posteriors.append(posterior)
-        candidate_centered_scores.append(centered_scores)
-
-    native_score_mask = np.logical_and.reduce(native_positive_score_masks)
-    _require(np.any(native_score_mask), "native repeats share no positive score coordinates")
     return {
-        "native_posteriors": native_posteriors,
-        "candidate_posteriors": candidate_posteriors,
-        "native_scores": [value[native_score_mask] for value in native_centered_scores],
-        "candidate_scores": [value[native_score_mask] for value in candidate_centered_scores],
-        "native_support_mismatch": int(
-            np.count_nonzero(
-                np.logical_or.reduce([value > 0.0 for value in native_posteriors])
-                != np.logical_and.reduce([value > 0.0 for value in native_posteriors])
-            )
-        ),
-        "candidate_support_mismatch": int(
-            np.count_nonzero(
-                np.logical_or.reduce([value > 0.0 for value in candidate_posteriors])
-                != np.logical_and.reduce([value > 0.0 for value in candidate_posteriors])
-            )
-        ),
+        "native_posteriors": native["posteriors"],
+        "candidate_posteriors": candidate["posteriors"],
+        "native_scores": native["scores"],
+        "candidate_scores": candidate["scores"],
+        "native_support_mismatch": native["support_mismatch"],
+        "candidate_support_mismatch": candidate["support_mismatch"],
     }
 
 

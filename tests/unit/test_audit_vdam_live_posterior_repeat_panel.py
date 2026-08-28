@@ -70,6 +70,42 @@ def test_load_candidate_capture_selects_active_rotation(tmp_path: Path):
     np.testing.assert_array_equal(result["centered_scores"], [[0.0, -1.0]])
 
 
+def test_load_candidate_capture_accepts_masked_translation_scores(tmp_path: Path):
+    path = tmp_path / "local_fused_posterior_it001_image_7.npz"
+    np.savez(
+        path,
+        selected_global_image_indices=np.asarray([7], dtype=np.int64),
+        local_rotation_matrices=_rotation(),
+        translations=np.zeros((3, 2), dtype=np.float32),
+        posterior=np.asarray([[[0.7, 0.3, 0.0]]], dtype=np.float32),
+        reconstruction_rotation_mask=np.asarray([[True]]),
+        pass2_scores_total=np.asarray([[[5.0, 4.0, -np.inf]]], dtype=np.float32),
+        debug_iteration=np.asarray([1], dtype=np.int32),
+    )
+    result = audit._load_candidate_capture(path, iteration=1)
+    np.testing.assert_allclose(result["posterior"], [[0.7, 0.3, 0.0]])
+    np.testing.assert_array_equal(result["centered_scores"][:, :2], [[0.0, -1.0]])
+    assert np.isneginf(result["centered_scores"][0, 2])
+
+
+def test_load_candidate_capture_rejects_positive_posterior_with_masked_score(
+    tmp_path: Path,
+):
+    path = tmp_path / "local_fused_posterior_it001_image_7.npz"
+    np.savez(
+        path,
+        selected_global_image_indices=np.asarray([7], dtype=np.int64),
+        local_rotation_matrices=_rotation(),
+        translations=np.zeros((2, 2), dtype=np.float32),
+        posterior=np.asarray([[[0.7, 0.3]]], dtype=np.float32),
+        reconstruction_rotation_mask=np.asarray([[True]]),
+        pass2_scores_total=np.asarray([[[5.0, -np.inf]]], dtype=np.float32),
+        debug_iteration=np.asarray([1], dtype=np.int32),
+    )
+    with pytest.raises(RepeatPanelError, match="positive posterior"):
+        audit._load_candidate_capture(path, iteration=1)
+
+
 def test_load_candidate_capture_rejects_missing_scores(tmp_path: Path):
     path = tmp_path / "local_fused_posterior_it001_image_7.npz"
     np.savez(
@@ -135,6 +171,34 @@ def test_matched_audit_reports_candidate_underdispersion(monkeypatch, tmp_path: 
     assert result["physical_gpu_uuid"] == "GPU-test"
     assert result["posterior"]["candidate_over_native_maximum_diameter"] < 0.02
     assert result["centered_score"]["candidate_over_native_maximum_diameter"] < 0.02
+
+
+def test_align_repeat_family_preserves_rotation_support_drift():
+    second_rotation = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
+    values = [
+        {
+            "posterior": np.asarray([[0.6, 0.4]], dtype=np.float32),
+            "centered_scores": np.asarray([[0.0, -0.4]], dtype=np.float32),
+            "rotations": _rotation(),
+        },
+        {
+            "posterior": np.asarray([[0.54, 0.36], [0.1, 0.0]], dtype=np.float32),
+            "centered_scores": np.asarray(
+                [[0.0, -0.4], [-1.7, -np.inf]], dtype=np.float32
+            ),
+            "rotations": np.concatenate([_rotation(), second_rotation[None]], axis=0),
+        },
+    ]
+    result = audit._align_repeat_family(
+        values,
+        posterior_key="posterior",
+        score_key="centered_scores",
+        scores_are_weights=False,
+        rotation_tolerance=1.0e-5,
+    )
+    assert len(result["posteriors"]) == 2
+    assert result["posteriors"][0].shape == (2, 2)
+    assert result["support_mismatch"] == 1
 
 
 def test_matched_audit_rejects_identity_drift(monkeypatch, tmp_path: Path):
