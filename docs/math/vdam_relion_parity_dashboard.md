@@ -21,10 +21,10 @@ Frozen case-definition SHA-256:
 | 🟢 | What improved? | The systematic GF47 iteration-4 split is now a **live causal chain**. Replaying only RELION repeat-2's incoming PPref restores the tenth coarse parent and moves particle 1085 from the control mode, **`116.39 deg / 8.5 A`** away, to RELION's native-2 pose within **`2.49e-6 deg / 1.0e-6 A`**. Pmax differs by only **`7e-6`** at STAR precision. |
 | 🟢 | What is closed? | Coarse grid/topology (**16,704/16,704** hypotheses), cutoff semantics, texture coordinates, fused score arithmetic, map-to-PPref construction, and the live E-step response are closed for particle 1085. Native-PPref score replay closes the causal pair gap to **`0.0000610`**; serialized RELION-map PPref rebuild is bit-exact and the RECOVAR rebuild closes to **`5.11e-9`** relative L2. |
 | 🔴 | What still fails? | The frozen single-realization 0--200 score remains **2/20 strict**. Fresh repeats 1--4 first fail particle/map @**27/75**, **4/13**, **71/115**, and **27/75**, with minimum FSC-AUC **`0.756025 / 0.515764 / 0.897837 / 0.753370`** and runtime **`6.14x / 5.75x / 5.55x / 5.62x`**. K>1, real-data, and final CLI/GUI qualification have not started. |
-| 🟡 | Why can both be true? | Native GPU atomic admission is stochastic. Four prior native chronology repeats agree at only **`0.50--0.72`** median within-particle atomic rank, and the new panels show native raw-data repeat relative L2 ranging from **`6.42e-4` to `4.19e-1`**. The frozen audit asks RECOVAR to follow one RELION stochastic mode exactly even when a fresh RELION run can select another much more distant mode. |
+| 🟡 | Why can both be true? | Every candidate map is inside the four-repeat native direct relative-L2 envelope at all **201/201** checkpoints, but RECOVAR's repeat distribution is much narrower: candidate spread is only **`0.2166x`** native at iteration 1, **`0.00386x`** at iteration 2, and **`0.000721x`** at iteration 4. At iteration 4 all four candidate maps are nearest native repeat 3; being inside the native diameter does not provide reverse native-mode coverage. |
 | 🔴 | First open operation | The serialized iteration-3 maps differ by **`6.29176e-5`** relative L2 and generate the full **`5.77441e-5`** PPref difference. The live intervention proves this state is sufficient, reconnecting the early mode split to the known iteration-1 shared multi-particle BPref atomic accumulation boundary. Native physical admission is stochastic; static order, worker ownership, grid cardinality, launch timing, and several instruction-shape replays have each been rejected as sufficient. |
-| ➡️ | What is next? | Measure the earliest iteration-1 raw BPref and map residual across the sealed 4x4 native/candidate panel. Then implement the smallest K=1 accumulation path that restores native mode coverage without degrading the existing **32/32** stochastic-floor result; rerun focused trajectories before expanding the outlier/noise/pose/scale matrix. |
-| 🟢 | What finished? | Live intervention **`13081790`**, paired capture **`13079981`**, 4x4 map/state audit **`13077225`**, projector replay **`13080743`**, 20-repeat early panel **`13078176`**, and independent iteration-58 replay **`13078944`** are sealed. Analyzer `d83d1df7f` records the intervention; setup-only failures `13080653 / 13081765` produced no science. No productive job is currently running. |
+| ➡️ | What is next? | Treat accumulation **distribution width/mode coverage**, not direct map-error magnitude, as the correction target. Reuse the native VDAM accumulation operation or introduce a production path that reproduces RELION's worker/atomic distribution without the `5.49x` repeatability regression of the rejected concurrent-owner replay; then rerun the focused 0--4/0--20 trajectory before 0--200. |
+| 🟢 | What finished? | Direct-map jobs **`13082447--13082450`**, live intervention **`13081790`**, paired capture **`13079981`**, 4x4 map/state audit **`13077225`**, projector replay **`13080743`**, and 20-repeat early panel **`13078176`** are sealed. Analyzers `120f044d5 / d83d1df7f` record the latest evidence. No productive job is currently running. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -105,6 +105,7 @@ SHA-256 values.
 | Native/RECOVAR PPref coarse replay | exact-H100 job `13080743`; analyzer `51ff050eb`; setup-only attempt `13080653` had no science | native PPref reduces centered global score max from `0.0383606` to `0.00016785`; RECOVAR PPref reproduces production within `0.0000610`. On the exact winner/cutoff pair, native PPref replay misses native by only `0.0000610`, while RECOVAR PPref is exact to production |
 | Serialized-map to PPref boundary | analyzer `1fd5617d4`; 10/10 focused map/projector tests; report SHA `93f6035fefc2...` | native serialized-map rebuild is bit-exact over all 26,011 PPref cells; RECOVAR rebuild closes at `5.107e-9` relative L2; cross-engine PPref is `5.774e-5`, a `11,306x` separation. First open state is the serialized iteration-3 map at `6.292e-5` relative L2 |
 | Live native-PPref E-step intervention | exact-H100 job `13081790`; science `3c896257b`; analyzer `d83d1df7f`; report SHA `7240ff9d866d...` | replacing only iteration-4 PPref restores 10 coarse parents including causal index `5083`, preserves winner `16138`, and restores native repeat-2 particle state within `2.49e-6 deg / 1.0e-6 A`; untreated control is `116.39 deg / 8.5 A` away. Incoming PPref/map state is causally sufficient; E-step implementation is exonerated |
+| Four-by-four direct map relative-L2 panel | CPU jobs `13082447--13082450`; analyzers `a8e43bb55 / 120f044d5`; aggregate SHA `058289d6e6e6...` | all 804 candidate checkpoints are inside the native four-repeat diameter; worst candidate/native-envelope ratio is `0.60616` at iteration 1. Candidate repeat spread is only `0.21659x / 0.003857x / 0.000721x` native at iterations 1/2/4; nearest-native coverage contracts from repeats 1/3 at iteration 1 to repeat 3 only at iteration 4. Magnitude is statistically green, reverse mode coverage is not |
 | Native-radius map diagnostic | analysis `ac79e334`; focused job `13077189` passes 13/13; real-data audit `13077282` | candidate support passes 200/201 checkpoints; only @1 misses by `8.75e-13`. At @200, candidate/reverse native-radius margins are `+0.1991 / +0.0248`; remaining combined failures are reverse coverage and paired GT nondegradation, not candidate map support |
 | Failed setup, non-scoring | attempted 0--200 job `13036861` exited after 25 s before checkpoint 0 | seed-0 schedule could not join seed-29 selected particles; no science/audit result |
 | GF47 serial float32 | repeat spread falls sharply; full job `13025432` completed 201 checkpoints | audit `13026777` fails particle @58, schedule @59, map @79; runtime **8.75x** native |
@@ -165,7 +166,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 01:35 ET**
+Last scientific update: **2026-08-28 01:55 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
@@ -193,7 +194,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF47 systematic mode boundary @4, particle 1085 | exact grid/cutoff/scorer/projector; live native-PPref replay restores the tenth parent and native-2 particle state, proving incoming map state is sufficient | paired capture `13079981`; projector replay `13080743`; live intervention `13081790`; analyzers `1fd5617d4 / d83d1df7f` | no frozen score change; repair earliest shared BPref accumulation, then requalify trajectory |
+| 1 | GF47 systematic mode boundary @4, particle 1085 | exact E-step chain; direct-map magnitude is inside native spread at 804/804 candidate checkpoints, but candidate repeat width collapses to `0.000721x` native by iteration 4 | captures `13079981 / 13080743 / 13081790`; map panel `13082447--50`; analyzers `1fd5617d4 / d83d1df7f / 120f044d5` | no frozen score change; restore accumulation distribution/mode coverage, then requalify trajectory |
 | 2 | GF46 coarse cutoff @4 | support error is one rank-100/101 float32 score-spacing decision; geometry, posterior rule, and texture interpolation are rejected | fused-CUDA lane-partial capture is next | none; current fix remains partial |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
@@ -212,6 +213,27 @@ accepted failure. A successful short replay never changes the 20-case score.
 <summary><strong>Detailed causal evidence, implementation checkpoints, and rejected attempts</strong></summary>
 
 ### Latest change
+
+CPU jobs `13082447--13082450` completed four trajectory-wide direct-map
+analyses from analyzer head `d83d1df7f`; aggregate analyzer `120f044d5` then
+measured both candidate-to-native distance and candidate-repeat spread without
+alignment or scale fitting. All **804/804** candidate checkpoints are inside
+the four-repeat native relative-L2 diameter. The worst ratio is `0.606156` at
+iteration 1, so a gross map-error magnitude is rejected.
+
+The repeat distribution is nevertheless under-dispersed. At iteration 1 the
+maximum candidate-candidate distance is only `0.216588x` the native diameter,
+and nearest-native coverage contains repeats 1 and 3 but misses 2 and 4. The
+spread ratio falls to `0.003857x` at iteration 2 and `0.000721x` at iteration
+4, where every candidate is nearest native repeat 3. Aggregate report
+`vdam_gf47_map_l2_4x4_d83d1df7f_20260828/panel_120f044d5.json` has SHA
+`058289d6e6e6...`; its four input report SHAs and all source roots are sealed.
+Focused map/intervention validation passes **13/13**, followed by **4/4**
+spread-specific tests after the extension; no generic RECOVAR suite ran. The
+active target is now native accumulation distribution width and reverse mode
+coverage, not lower direct relative-L2 error.
+
+### Live causal intervention
 
 Exact-H100 job `13081790` completed the live iteration-4 causal intervention
 from science commit `3c896257b`. RECOVAR owned iterations 1--3 and every other
@@ -1467,7 +1489,7 @@ accepted K=1 trajectory so performance changes cannot hide scientific drift.
 
 | Priority | Work | Slurm / state | Exit condition |
 |---:|---|---|---|
-| 1 | Close GF47 iteration-4 native-mode coverage | jobs `13079981 / 13080743 / 13081790` and analyzers `1fd5617d4 / d83d1df7f` close grid, cutoff, scorer, texture, map-to-PPref, and the live E-step response | compare iteration-1 raw BPref/map against the 4x4 native distribution, then repair or natively reuse the shared accumulation before another 0--200 qualification |
+| 1 | Close GF47 iteration-4 native-mode coverage | jobs `13079981 / 13080743 / 13081790 / 13082447--50` and analyzers `1fd5617d4 / d83d1df7f / 120f044d5` prove exact E-step causality plus an under-dispersed candidate map ensemble | natively reuse or correct the shared accumulation distribution, then run focused 0--4/0--20 qualification before another 0--200 |
 | 2 | Close GF46 coarse score-spacing residual | local science head `a8af8b28a`; focused guards 6/6; operand job `13018487` proves preprojected operands cannot answer the fused-kernel lane-order question | capture the fused ranks-100/101 four-lane partials passively, restore native support, then requalify iteration 4 and 0--200 |
 | 3 | Repair GF38's replacement boundary | composed-head 0--200 task `13017334` completed in 2,110 s; audit `13018631` fails schedule @20, particle @27, map @60 | close iteration-20 accuracy rotation/translation, then rerun 0--200 |
 | 4 | Frozen v3 matrix | **20/20 terminal: 2 accepted, 18 failed, 0 pending**; GF53 fails particle @40 and map @44 while schedule passes | retain every failure as a repair target |
