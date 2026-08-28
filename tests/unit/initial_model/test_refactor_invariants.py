@@ -141,6 +141,51 @@ def test_relion_round_is_single_source_of_truth():
     )
 
 
+def test_initial_model_estep_reuses_shared_dense_em_engine():
+    """VDAM must remain an adapter around the mature shared EM implementation.
+
+    InitialModel owns its subset/controller and RELION layout conversion, but
+    it must not grow private copies of coarse significance, pass-2 layout, or
+    local K-class refinement.  Identity checks pin the adapter imports to the
+    canonical implementations; the definition scan makes a copied shadow
+    implementation fail even if it is not wired in yet.
+    """
+    from recovar.em.dense_single_volume import k_class, local_layout
+    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.initial_model import dense_adapter
+
+    shared_callables = {
+        "_compute_k_class_significance_batched": (
+            dense_adapter._compute_k_class_significance_batched,
+            significance._compute_k_class_significance_batched,
+        ),
+        "_run_sparse_k_class_adaptive_pass2": (
+            dense_adapter._run_sparse_k_class_adaptive_pass2,
+            k_class._run_sparse_k_class_adaptive_pass2,
+        ),
+        "run_local_k_class_em": (
+            dense_adapter.run_local_k_class_em,
+            k_class.run_local_k_class_em,
+        ),
+        "build_pass2_hypothesis_layout": (
+            dense_adapter.build_pass2_hypothesis_layout,
+            local_layout.build_pass2_hypothesis_layout,
+        ),
+    }
+    for name, (adapter_callable, shared_callable) in shared_callables.items():
+        assert adapter_callable is shared_callable, (
+            f"InitialModel {name} no longer resolves to the shared dense EM implementation"
+        )
+
+    initial_model_source = "\n".join(path.read_text() for path in PACKAGE_DIR.glob("*.py"))
+    copied = [
+        name
+        for name in shared_callables
+        if f"def {name}(" in initial_model_source
+    ]
+    assert not copied, f"InitialModel contains private copies of shared EM functions: {copied}"
+
+
 # ---------------------------------------------------------------------------
 # 3. Extracted helpers — presence and signature pin.
 # ---------------------------------------------------------------------------
