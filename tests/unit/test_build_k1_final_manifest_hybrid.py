@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from scripts.build_k1_final_manifest_hybrid import build_hybrid
 
@@ -102,3 +103,67 @@ def test_build_hybrid_rejects_wrong_manifest_half_before_writing(tmp_path: Path)
         )
 
     assert not output_dir.exists()
+
+
+def test_build_hybrid_dtype_policy_is_explicit(tmp_path: Path) -> None:
+    base_dir = tmp_path / "base"
+    donor_dir = tmp_path / "donor"
+    base_dir.mkdir()
+    donor_dir.mkdir()
+    base_results = tmp_path / "base_results.npz"
+    donor_results = tmp_path / "donor_results.npz"
+    _write_results(base_results, [10, 20], [30, 40])
+    _write_results(donor_results, [10, 20], [30, 40])
+    for half in range(2):
+        np.savez(
+            base_dir / f"manifest_final_half{half}.npz",
+            half_index=np.int32(half),
+            noise_variance=np.asarray([1.0, 2.0], dtype=np.float32),
+        )
+        np.savez(
+            donor_dir / f"manifest_final_half{half}.npz",
+            half_index=np.int32(half),
+            noise_variance=np.asarray([3.0, 4.0], dtype=np.float64),
+        )
+
+    with np.testing.assert_raises_regex(ValueError, "dtype differs"):
+        build_hybrid(
+            base_manifest_dir=base_dir,
+            base_results=base_results,
+            donor_manifest_dir=donor_dir,
+            donor_results=donor_results,
+            output_dir=tmp_path / "strict",
+            fields=("noise_variance",),
+        )
+
+    cast_report = build_hybrid(
+        base_manifest_dir=base_dir,
+        base_results=base_results,
+        donor_manifest_dir=donor_dir,
+        donor_results=donor_results,
+        output_dir=tmp_path / "cast",
+        fields=("noise_variance",),
+        dtype_policy="cast-to-base",
+    )
+    with np.load(tmp_path / "cast" / "manifest_final_half0.npz") as archive:
+        assert archive["noise_variance"].dtype == np.dtype(np.float32)
+    field_report = cast_report["halves"][0]["fields"]["noise_variance"]
+    assert field_report["shape"] == [2]
+    assert field_report["base_dtype"] == "float32"
+    assert field_report["donor_dtype"] == "float64"
+    assert field_report["output_dtype"] == "float32"
+    assert field_report["dtype_policy"] == "cast-to-base"
+    assert field_report["changed_count"] == 2
+    assert field_report["relative_l2_donor_minus_base"] == pytest.approx(np.sqrt(8.0 / 5.0))
+
+    build_hybrid(
+        base_manifest_dir=base_dir,
+        base_results=base_results,
+        donor_manifest_dir=donor_dir,
+        donor_results=donor_results,
+        output_dir=tmp_path / "preserve",
+        fields=("noise_variance",),
+        dtype_policy="preserve-donor",
+    )
+    with np.load(tmp_path / "preserve" / "manifest_final_half0.npz") as archive:
+        assert archive["noise_variance"].dtype == np.dtype(np.float64)

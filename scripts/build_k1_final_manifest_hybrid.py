@@ -60,9 +60,12 @@ def build_hybrid(
     donor_results: Path,
     output_dir: Path,
     fields: tuple[str, ...],
+    dtype_policy: str = "strict",
 ) -> dict[str, object]:
     if not fields or len(set(fields)) != len(fields):
         raise ValueError("at least one unique --field is required")
+    if dtype_policy not in {"strict", "cast-to-base", "preserve-donor"}:
+        raise ValueError(f"unsupported dtype policy: {dtype_policy}")
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"refusing to overwrite non-empty output directory {output_dir}")
     base_indices = _half_indices(base_results)
@@ -97,25 +100,47 @@ def build_hybrid(
                             f"half {half} donor {field} has {donor_value.shape[0]} rows, expected {gather.size}"
                         )
                     aligned_donor = donor_value[gather]
-                if aligned_donor.shape != base_value.shape or aligned_donor.dtype != base_value.dtype:
+                if aligned_donor.shape != base_value.shape:
                     raise ValueError(
                         f"half {half} {field} topology differs: "
                         f"base={base_value.shape}/{base_value.dtype}, "
                         f"donor={aligned_donor.shape}/{aligned_donor.dtype}"
                     )
-                if not (
-                    np.issubdtype(base_value.dtype, np.number)
-                    or np.issubdtype(base_value.dtype, np.bool_)
+                if not all(
+                    np.issubdtype(value.dtype, np.number)
+                    or np.issubdtype(value.dtype, np.bool_)
+                    for value in (base_value, aligned_donor)
                 ):
                     raise ValueError(f"half {half} {field} must be numeric or boolean")
-                payload[field] = aligned_donor
-                comparison_dtype = np.complex128 if np.iscomplexobj(aligned_donor) else np.float64
-                residual = aligned_donor.astype(comparison_dtype) - base_value.astype(comparison_dtype)
+                donor_dtype = aligned_donor.dtype
+                if donor_dtype != base_value.dtype:
+                    if dtype_policy == "strict":
+                        raise ValueError(
+                            f"half {half} {field} dtype differs: "
+                            f"base={base_value.dtype}, donor={donor_dtype}"
+                        )
+                    if dtype_policy == "cast-to-base":
+                        if not np.can_cast(donor_dtype, base_value.dtype, casting="same_kind"):
+                            raise ValueError(
+                                f"half {half} {field} cannot be cast from {donor_dtype} "
+                                f"to {base_value.dtype} with same-kind casting"
+                            )
+                        replacement = aligned_donor.astype(base_value.dtype)
+                    else:
+                        replacement = aligned_donor
+                else:
+                    replacement = aligned_donor
+                payload[field] = replacement
+                comparison_dtype = np.complex128 if np.iscomplexobj(replacement) else np.float64
+                residual = replacement.astype(comparison_dtype) - base_value.astype(comparison_dtype)
                 denominator = float(np.linalg.norm(base_value.reshape(-1)))
                 field_rows[field] = {
                     "shape": list(base_value.shape),
-                    "dtype": str(base_value.dtype),
-                    "changed_count": int(np.count_nonzero(aligned_donor != base_value)),
+                    "base_dtype": str(base_value.dtype),
+                    "donor_dtype": str(donor_dtype),
+                    "output_dtype": str(replacement.dtype),
+                    "dtype_policy": dtype_policy,
+                    "changed_count": int(np.count_nonzero(replacement != base_value)),
                     "relative_l2_donor_minus_base": (
                         float(np.linalg.norm(residual.reshape(-1)) / denominator)
                         if denominator > 0.0
@@ -144,6 +169,7 @@ def build_hybrid(
         "schema": "recovar.em.k1_final_manifest_hybrid.v1",
         "status": "complete",
         "fields": list(fields),
+        "dtype_policy": dtype_policy,
         "identity_semantics": "base physical row -> immutable source row -> donor row",
         "base_results": str(base_results.resolve()),
         "base_results_sha256": _sha256(base_results),
@@ -161,6 +187,12 @@ def main() -> None:
     parser.add_argument("--donor-results", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--field", action="append", required=True)
+    parser.add_argument(
+        "--dtype-policy",
+        choices=("strict", "cast-to-base", "preserve-donor"),
+        default="strict",
+        help="How to handle a selected donor field whose dtype differs from the base field.",
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
 
@@ -173,6 +205,7 @@ def main() -> None:
         donor_results=args.donor_results.resolve(),
         output_dir=args.output_dir.resolve(),
         fields=tuple(args.field),
+        dtype_policy=args.dtype_policy,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
