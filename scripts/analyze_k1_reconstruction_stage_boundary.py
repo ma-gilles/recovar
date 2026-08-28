@@ -126,6 +126,28 @@ def _native_floor(regularized: np.ndarray, radial_floor: np.ndarray, padding_fac
     return np.maximum(regularized, radial_floor[shells])
 
 
+def _select_accumulator_targets(
+    archive: object,
+    *,
+    joined: bool,
+    halves: tuple[int, ...],
+) -> list[tuple[int, np.ndarray, np.ndarray]]:
+    """Select per-half or joined numerator/weight pairs for stage replay."""
+
+    if joined:
+        if halves != (1,):
+            raise ValueError("--joined requires --halves 1 (native joined reconstruction is on rank 1)")
+        return [(1, np.asarray(archive["Ft_y"]), np.asarray(archive["Ft_ctf"]))]
+    return [
+        (
+            half,
+            np.asarray(archive[f"Ft_y_{half - 1}"]),
+            np.asarray(archive[f"Ft_ctf_{half - 1}"]),
+        )
+        for half in halves
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recovar-accumulator", type=Path, required=True)
@@ -148,6 +170,11 @@ def main() -> None:
     parser.add_argument("--recovar-full-half-axis", type=int, default=0)
     parser.add_argument("--halves", type=int, choices=(1, 2), nargs="+", default=(1, 2))
     parser.add_argument(
+        "--joined",
+        action="store_true",
+        help="Replay the joined Ft_y/Ft_ctf accumulator against native rank-1 reconstruction stages.",
+    )
+    parser.add_argument(
         "--allow-any-native-rank",
         action="store_true",
         help="Accept the single rank emitted by non-MPI relion_external_reconstruct.",
@@ -161,6 +188,9 @@ def main() -> None:
             "--recovar-fsc requires --native-tau-provenance=live-pre-reconstruction; "
             "a model.star tau spectrum may already contain RELION's post-reconstruction taper"
         )
+    requested_halves = tuple(int(half) for half in args.halves)
+    if args.joined and args.recovar_fsc is not None:
+        raise ValueError("--joined does not support --recovar-fsc; use the captured native tau")
 
     with np.load(args.recovar_accumulator, allow_pickle=False) as archive:
         grid_size = int(archive["grid_size"])
@@ -168,8 +198,11 @@ def main() -> None:
         padding_factor = int(archive["padding_factor"])
         volume_shape = tuple(int(value) for value in archive["volume_shape"])
         accumulator_shape = tuple(int(value) for value in archive["mstep_accumulator_shape"])
-        numerators = [np.asarray(archive[f"Ft_y_{index}"]) for index in (0, 1)]
-        weights = [np.asarray(archive[f"Ft_ctf_{index}"]) for index in (0, 1)]
+        accumulator_targets = _select_accumulator_targets(
+            archive,
+            joined=bool(args.joined),
+            halves=requested_halves,
+        )
 
     accumulator_side = accumulator_shape[0]
     if accumulator_shape != (accumulator_side,) * 3:
@@ -188,7 +221,7 @@ def main() -> None:
         recovar_fsc = np.asarray(np.load(args.recovar_fsc, allow_pickle=False), dtype=np.float64).reshape(-1)
 
     halves: dict[str, object] = {}
-    for half in args.halves:
+    for half, numerator_np, weight_np in accumulator_targets:
         native_tau = _load(
             _stage_path(
                 args.native_stage_dir,
@@ -265,8 +298,8 @@ def main() -> None:
             )
         )
 
-        weight = jnp.asarray(weights[half - 1])
-        numerator = jnp.asarray(numerators[half - 1])
+        weight = jnp.asarray(weight_np)
+        numerator = jnp.asarray(numerator_np)
 
         def replay(
             tau_recovar: jnp.ndarray,
@@ -465,7 +498,8 @@ def main() -> None:
         "recovar_accumulator": str(args.recovar_accumulator.resolve()),
         "native_stage_dir": str(args.native_stage_dir.resolve()),
         "native_call_index": args.native_call_index,
-        "requested_halves": list(args.halves),
+        "requested_halves": list(requested_halves),
+        "joined": bool(args.joined),
         "recovar_fsc": None if args.recovar_fsc is None else str(args.recovar_fsc.resolve()),
         "native_tau_provenance": args.native_tau_provenance,
         "recovar_full_half_axis": args.recovar_full_half_axis,
