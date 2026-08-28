@@ -1663,6 +1663,24 @@ def main():
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
     # This matches the internal convention expected by the refinement code.
+    #
+    # RELION's Image<RFLOAT>::read() widens a reference MRC (on-disk float32)
+    # to RFLOAT (double, in our ACC_DOUBLE_PRECISION oracle build) as part of
+    # the read itself, and every downstream step -- including the FFT that
+    # builds Projector::data -- runs at that same double precision (see
+    # scripts/run_full_refinement.py's matching fix and
+    # docs/math/relion_parity_agent_notes.md's 2026-08-27 "round 3" entry for
+    # the RELION source citations). Widen real-space inputs to float64 *before*
+    # ftu.get_dft3: casting an already-computed complex64 result cannot recover
+    # precision discarded by a float32 FFT. Gate this specifically on
+    # RECOVAR_USE_FLOAT64_PROJECTIONS to match DensePrecisionPolicy's
+    # projection dtype behavior.
+    _init_volume_use_float64 = bool(
+        os.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    _init_volume_dtype = np.float64 if _init_volume_use_float64 else np.float32
+
     model_reference_path = Path(f"{prefix}_half1_class001.mrc")
     relion_model_pixel_size = read_relion_model_pixel_size(model_reference_path)
     relion_optics_image_sizes, relion_optics_pixel_sizes = read_relion_optics_image_geometry(
@@ -1686,7 +1704,7 @@ def main():
             ini_high_angstrom=relion_ini_high,
         )
         initial_reference_real_for_projector = [filtered_real, filtered_real]
-        filtered_for_fourier = filtered_real.astype(np.float32, copy=False)
+        filtered_for_fourier = filtered_real.astype(_init_volume_dtype, copy=False)
         vol_ft = np.asarray(ftu.get_dft3(jnp.asarray(filtered_for_fourier))).reshape(-1)
         vol_ft_h1 = vol_ft
         vol_ft_h2 = vol_ft
@@ -1703,8 +1721,8 @@ def main():
             f"half1={args.initial_half1_ft_npz}, half2={args.initial_half2_ft_npz}"
         )
     elif args.initial_half1_mrc is not None:
-        vol_h1 = helpers.load_mrc(args.initial_half1_mrc)
-        vol_h2 = helpers.load_mrc(args.initial_half2_mrc)
+        vol_h1 = helpers.load_mrc(args.initial_half1_mrc).astype(_init_volume_dtype)
+        vol_h2 = helpers.load_mrc(args.initial_half2_mrc).astype(_init_volume_dtype)
         print(
             "  Diagnostic initial half maps (RECOVAR frame): "
             f"half1={args.initial_half1_mrc}, half2={args.initial_half2_mrc}"
@@ -1712,8 +1730,8 @@ def main():
         vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
         vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
     else:
-        vol_h1 = helpers.load_relion_volume(f"{prefix}_half1_class001.mrc")
-        vol_h2 = helpers.load_relion_volume(f"{prefix}_half2_class001.mrc")
+        vol_h1 = helpers.load_relion_volume(f"{prefix}_half1_class001.mrc").astype(_init_volume_dtype)
+        vol_h2 = helpers.load_relion_volume(f"{prefix}_half2_class001.mrc").astype(_init_volume_dtype)
         vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
         vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
 
