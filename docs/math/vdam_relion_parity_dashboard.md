@@ -152,6 +152,20 @@ semantics in VDAM BPref accumulation. One-particle isolation is still a
 diagnostic host implementation, not a production correction or frozen-score
 promotion; the next gate is a larger repeat panel followed by the equivalent
 particle-ordered reduction in the shared fused kernel.
+Expanded exact-target job `13136895` then completed all 16 host-isolated
+science trajectories in `55:23`, with a tight `198--206 s` wall-time range
+(median `202 s`). Durable audit `13137251` rejects the apparent 4/4 closure:
+only **14/16** particle trajectories pass, and repeats 6/7 recreate exactly
+`286@4`, `2903@16`, and `903@18`. Their map panel fails from iteration 4
+through 20 with worst candidate-diameter / native-diameter `15.3493` and worst
+nearest-native / native-diameter `14.8708`. Particle ordering is therefore a
+causal lever but not a complete correction; repeat variation remains inside
+each particle's concurrent orientation-block atomic accumulation. Shared-code
+commit `1485282f8` reuses the existing fused CUDA callback's one-orientation
+launch mode and combines it with the one-particle lane policy, without adding
+an InitialModel numerical implementation or a new kernel. Exact-target
+16-repeat qualification `13138767` and dependent durable audit `13138768` are
+the next gate.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -251,7 +265,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Observer discriminator `13133259` is all green. BPref chunk panel `13135177` makes the historical red trajectory reproducible but rejects chunk 3 as a fix; map-only replay `13135757` leaves `(67,14)` 3--5 ULPs below cutoff for every map. Exact-target job `13135769` passes all four one-particle-isolated trajectories and its map panel through iteration 20. Qualify that result over a larger repeat panel, then implement the same particle-ordered reduction inside the shared fused EM kernel rather than promote a slow VDAM host loop. |
+| ➡️ | What is next? | Expanded host-isolation job `13136895` is only **14/16**: repeats 6/7 reproduce the complete historical red signature, proving particle ordering is causal but insufficient. Shared commit `1485282f8` now combines one-lane particle order with the existing one-orientation fused CUDA launch policy. Exact-target jobs `13138767 / 13138768` must pass all 16 particle trajectories and the map envelope before any nonblocking/runtime or long-trajectory promotion. |
 | 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
