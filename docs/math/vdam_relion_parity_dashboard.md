@@ -197,8 +197,11 @@ orientation barrier. Focused H100 gate `13140084` passes all three source,
 routing, and numerical tests; persistent and launch-serialized outputs are
 byte-identical in the direct kernel test. The compiled sm90 binary SHA-256 is
 `e222e3a211bc...`. Exact-target four-repeat trajectory/runtime discriminator
-`13140202` started on the qualified GPU after the particle-only arm released
-it; its replacement cache-isolated audit is `13142207`. The separate
+`13140202` completed in `00:21:29`; all four iteration-20 runs pass the direct
+particle and map envelopes under cache-isolated audit `13142207` (`00:00:53`,
+exit `0:0`). Wall times are `313--317 s` (median `316 s`), worst
+candidate/native map-diameter ratio is `0.5980`, and worst nearest/native ratio
+is `0.6288`; summary SHA-256 is `d8b87062f247...`. The separate
 16-repeat fused-particle science job `13139327` initially completed ten
 iteration-20 processes in `188--195 s`, but a direct audit of repeat 8
 reproduced the complete historical red signature: particle `286` escapes the
@@ -216,16 +219,23 @@ implementation. The optimization remains unpromoted until its trajectory
 reproduces the now-closed oracle particle/map envelope at materially lower wall
 time. The runner is qualified directly atop persistent source as commit
 `64f8a9d30`; focused runner, routing, and shared-source coverage passes 5/5.
-Four-repeat job `13140202` and audit `13142207` remain the first trajectory and
-runtime smoke. Because the rejected particle-only arm stayed green through
+The four-repeat persistent result remains a smoke rather than a promotion.
+Because the rejected particle-only arm stayed green through
 seven audited processes before failing at repeat 8, promotion now requires a
 separate 16-repeat persistent qualification: science `13143741`, aggregate
 particle/map audit `13143742`. Paired one-repeat profile job `13143819` runs
 the ordinary fused and persistent arms with identical operands before that
 panel, so the next optimization can target measured stage time rather than
-guessing. Two-repeat full-200 job `13143692` was retargeted to depend on the
-16-repeat audit, so it cannot run after a merely lucky four-repeat panel or any
-failed aggregate gate.
+guessing. Opt-in commit `6d96acbf1` now reuses the exact RELION projector in a
+parallel materialization kernel and feeds those float32 references to the same
+persistent ordered scatter. H100 gate `13144508` passes 3/3 focused tests and
+proves byte-exact output against the persistent oracle on nonzero projector
+data; its qualified sm90 binary SHA-256 is `30e5063e8cd2...`. Four-repeat
+trajectory/runtime science `13144574` and cache-isolated audit `13144575` are
+dependency-held behind the paired profile. The 16-repeat persistent control
+now starts after that bounded discriminator terminates. Two-repeat full-200
+job `13143692` remains dependent on a green 16-repeat aggregate audit, so it
+cannot run after a merely lucky four-repeat panel or any failed gate.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
