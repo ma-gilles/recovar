@@ -66,15 +66,18 @@ iteration 4. Worst candidate/native map-diameter ratios are `0.2688` and
 shows no runtime regression. Science commit `826e160c6` makes canonical
 reduction the shared exact-path default while preserving explicit environment
 value `0` as rollback; `eee92e4aa` interleaves future A/B arms. The next gate
-is now past its fresh environment-unset iteration-4 qualification: same-H100
-job `13130772` completed four baseline and four skip processes with all eight
+is now past its fresh environment-unset iteration-4 qualification under the
+existing deterministic-CUDA control: same-H100 job `13130772` completed four
+baseline and four skip processes with all eight
 direct particle envelopes and both map panels green. Worst candidate/native
 map-diameter ratios are `0.6027 / 0.6093`; aggregate analysis SHA-256 is
 `8c779b2b4d27fa78c2e6cba774a4a2a6e942b2fe86d7681ef6475e514fad63f7`.
 Focused baseline-only job `13131897` is the active four-repeat iteration-20
-gate. If it seals, the unchanged complete 0--200 K=1 trajectory follows. The
-score must not be improved by weakening particle gates or selecting one lucky
-CUDA realization.
+deterministic control. Because GUI default `deterministic_cuda=False` leaves
+`CUDA_LAUNCH_BLOCKING=0`, the asynchronous default must then pass the same
+iteration-4 and iteration-20 gates before the unchanged complete 0--200 K=1
+trajectory. The score must not be improved by weakening particle gates or
+selecting one lucky CUDA realization.
 Wholesale routing to the existing compact EM driver is already rejected:
 frozen K=1 job `12764156` reached only `0.9994907915` cross-engine FSC-AUC by
 iteration 8 and took `43.4x` RELION. Reuse work must therefore extract the
@@ -166,8 +169,8 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Baseline-only job `13131897` is running four fresh environment-unset processes through iteration 20 on the same physical H100. If sealed, launch the unchanged 0--200 K=1 trajectory/runtime gate before changing the frozen score or expanding to K>1. |
-| 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset default particle audits and both map panels through iteration 4, proving the shared default itself is active. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
+| ➡️ | What is next? | Baseline-only job `13131897` is running four environment-unset processes through iteration 20 on the same physical H100 with deterministic CUDA. If sealed, qualify the actual asynchronous GUI default (`CUDA_LAUNCH_BLOCKING=0`) at iterations 4 and 20, then launch the unchanged 0--200 K=1 trajectory/runtime gate. |
+| 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -202,7 +205,7 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
-| Environment-unset shared default | exact-H100 job `13130772`; four baseline plus four skip processes; all 8 direct particle reports and both map reports pass through iteration 4; worst nearest-native diameter ratio `0.6093`; aggregate SHA `8c779b2b4d27...` | the canonical reduction is qualified as the actual default, not merely an explicit diagnostic flag; proceed to the active four-repeat iteration-20 gate `13131897`; frozen score unchanged |
+| Environment-unset shared canonical policy | exact-H100 job `13130772`; deterministic CUDA; four baseline plus four skip processes; all 8 direct particle reports and both map reports pass through iteration 4; worst nearest-native diameter ratio `0.6093`; aggregate SHA `8c779b2b4d27...` | the canonical reduction is qualified without its environment override; proceed through deterministic iteration 20 (`13131897`) and then the asynchronous GUI-default short gates; frozen score unchanged |
 | Expanded expected-accuracy repeat panel | same-H100 job `13127488`; 16 baseline plus 16 skip processes; complete direct particle/map audits | baseline passes `14/16`, skip passes `15/16`; the identical iteration-4 branch occurs in both arms, so expected-accuracy execution is retired as a correction |
 | Shared canonical-reduction repeat panel | same-H100 job `13128280`; 16/16 process seals; all 16 direct particle reports and both 8-repeat map reports pass; science `826e160c6 / eee92e4aa` | promote canonical lane order only as the shared exact coarse default; keep frozen score unchanged until a fresh default 0--200 trajectory passes |
 | Shared canonical reduction qualification | production `b90f22b1c`; build/test `13107529 / 13107668`; live 0--4 `13107898`; live 0--20 `13108111` | iteration-4 causal boundary is closed in production; zero particle-state divergence through iteration 19; frozen score unchanged pending full case qualification |
