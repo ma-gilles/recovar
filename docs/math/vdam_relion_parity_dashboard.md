@@ -71,8 +71,13 @@ miss is iteration 68, where one of 264 evaluated particles
 translation displaced by exact sampling-grid steps; the particle re-enters
 the envelope at 71. Map drift remains tiny for dozens more iterations and
 first crosses the fixed `0.999` gate at iteration 107 (repeat-3 FSC-AUC
-`0.9989987666`). Full 0--200 qualification remains live to preserve the
-entire failure trajectory.
+`0.9989987666`). The candidate completed all 201 science checkpoints. Against
+cross-GPU diagnostic repeat 3, map FSC-AUC reaches a minimum `0.9655810120` at
+iteration 196 and ends at `0.9658890125`; the all-particle audit ends with
+2,997/3,000 states different. The Slurm wrapper exited after science because
+it incorrectly required a fused capture even when all capture flags were
+disabled. Local commit `ad2499e48` fixes that terminal check and the sparse
+sampling-audit artifact; focused coverage passes `8/8`.
 
 ### At a glance: progress, failure, and next gate
 
@@ -80,12 +85,12 @@ entire failure trajectory.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | The GF46 discrepancy is not a separate VDAM scoring formula: both observed rank-100/101 score gaps are exactly reachable from captured shared-scorer lanes. The architecture guard proves InitialModel imports EM's authoritative numerical functions by object identity. Static tracing now also records the remaining reuse gap: K=1 InitialModel uses its own local pass-2 orchestration rather than supplied-map EM's complete adaptive wrapper. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. Active particle state first leaves the four-repeat envelope at iteration 68 (1/264 particles), and the map first crosses the fixed gate at 107. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. Active particle state first leaves the old four-repeat envelope at iteration 68 (1/264 particles); the map first crosses the fixed gate at 107, bottoms at `0.9655810120` at 196, and ends at `0.9658890125`. These full-trajectory values are cross-GPU diagnostics until the replacement panel finishes. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
-| 🟡 | Same-GPU qualification | The existing four-repeat GF46 panel was generated on H100 `GPU-97adb...`, while synchronized candidate `13117709` runs on `GPU-235ec...`. Those comparisons localize numerical behavior but cannot be promoted under the frozen same-physical-GPU rule. Native full repeats `13120241--13120244` are queued serially on `GPU-235ec...`, each with the iteration-68 particle capture, to create the qualifying envelope. |
+| 🟡 | Same-GPU qualification | The existing four-repeat GF46 panel was generated on H100 `GPU-97adb...`, while synchronized candidate science `13117709` ran on `GPU-235ec...`. The first replacement jobs failed before science because repeat 3 has no copied `data/` directory. Corrected focused job `13121209` has acquired exact `GPU-235ec...`; native full repeats `13121264--13121267` are chained behind it using repeat-1 data/command and each captures particle 2667 at iteration 68. Slot-holder jobs keep the non-target GPU occupied. |
 | 🔴 | First true envelope departure | The first strict scalar miss is expected angular accuracy at iteration 40, but it does not alter the operative schedule. The first scientific state miss is the newly active particle `2667@particles.128.mrcs` at iteration 68: RECOVAR and repeat 3 agree on orientation, while RECOVAR's translation differs by one/two exact effective grid steps. The state is back inside the envelope at 71; accumulated map drift crosses `0.999` at 107. |
-| ➡️ | What is next? | Finish and seal `13117709` through iteration 200. Job `13118846` captures the shared expected-accuracy inputs as a secondary exactness gap. Focused first-state job `13120034` captures native and RECOVAR coarse, local, and fused score operands for particle 2667 at iteration 68. Native jobs `13120241--13120244` then establish the required same-H100 repeat envelope before any qualification claim. |
-| 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. InitialModel still imports the authoritative EM significance, sparse pass-2, local-refinement, layout, posterior, and expected-accuracy machinery by object identity. |
+| ➡️ | What is next? | Let `13121209` capture native and RECOVAR coarse, local, and fused operands at the first active state departure. Jobs `13121264--13121267` then establish the required same-H100 repeat envelope. Analyze the first winner decision and correct the shared exact-local behavior; expected-accuracy per-trial capture remains the secondary scalar boundary. |
+| 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. Job `13117709` wrote all checkpoints 0--200; CPU audits `13120726 / 13120727 / 13120744` seal the cross-GPU diagnostic escape. Local science commit `ad2499e48` fixes the post-science capture check and immediate-previous-iteration sampling audit with `8/8` focused tests. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -256,7 +261,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 18:51 ET**
+Last scientific update: **2026-08-28 20:07 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
