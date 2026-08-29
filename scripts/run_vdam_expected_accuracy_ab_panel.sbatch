@@ -50,18 +50,15 @@ test -s "${VDAM_SCORECARD}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 
-visible_gpu_uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr -d '[:space:]')
-if [[ "${visible_gpu_uuid}" != "${TARGET_GPU_UUID}" ]]; then
-  echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${visible_gpu_uuid}" >&2
-  if [[ "${GPU_MISS_HOLD_SECONDS}" -gt 0 ]]; then
-    sleep "${GPU_MISS_HOLD_SECONDS}"
-  fi
-  exit 75
-fi
+source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
+vdam_select_target_gpu "${TARGET_GPU_UUID}" "${GPU_MISS_HOLD_SECONDS}"
+visible_gpu_uuid=${VDAM_SELECTED_GPU_UUID}
 
 mkdir -p "${OUTPUT_ROOT}/provenance"
 touch "${OUTPUT_ROOT}/SAFE_TO_DELETE"
 git -C "${REPO_ROOT}" rev-parse HEAD > "${OUTPUT_ROOT}/provenance/repo_head.txt"
+printf '%s\n' "${visible_gpu_uuid}" > "${OUTPUT_ROOT}/provenance/selected_gpu_uuid.txt"
+printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${OUTPUT_ROOT}/provenance/allocated_gpu_uuids.csv"
 nvidia-smi -q > "${OUTPUT_ROOT}/provenance/nvidia_smi.txt"
 env | LC_ALL=C sort > "${OUTPUT_ROOT}/provenance/submission_environment.txt"
 

@@ -101,12 +101,10 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
-gpu_uuid_before=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
-case "${gpu_uuid_before}" in GPU-*) ;; *) echo "invalid GPU UUID: ${gpu_uuid_before}" >&2; exit 2 ;; esac
-if [[ -n "${TARGET_GPU_UUID}" ]] && [[ "${gpu_uuid_before}" != "${TARGET_GPU_UUID}" ]]; then
-  echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${gpu_uuid_before}" >&2
-  exit 75
-fi
+# vdam_gpu_selection emits VDAM_TARGET_GPU_MISS when the pinned UUID is absent.
+source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
+vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
+gpu_uuid_before=${VDAM_SELECTED_GPU_UUID}
 mkdir -p "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${RECOVAR_COARSE_CAPTURE}" "${PROVENANCE}"
 test -z "$(find "${NATIVE_ROOT}" "${RECOVAR_ROOT}" "${RECOVAR_CAPTURE}" "${RECOVAR_SCORE_CAPTURE}" "${RECOVAR_COARSE_CAPTURE}" "${PROVENANCE}" -mindepth 1 -print -quit)"
 mkdir -p "$(dirname "${CUDA_BINARY}")"
@@ -228,7 +226,8 @@ else
   test -z "$(find "${NATIVE_ROOT}" -mindepth 1 -print -quit)"
 fi
 
-gpu_uuid_after_relion=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+vdam_verify_selected_gpu "${gpu_uuid_before}"
+gpu_uuid_after_relion=${VDAM_SELECTED_GPU_UUID}
 test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV JAX_PLATFORMS JAX_PLATFORM_NAME
@@ -431,7 +430,8 @@ else
 fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
-gpu_uuid_after_recovar=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+vdam_verify_selected_gpu "${gpu_uuid_before}"
+gpu_uuid_after_recovar=${VDAM_SELECTED_GPU_UUID}
 test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"
 if [[ "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" != "${EXPECTED_CUDA_SHA256}" ]]; then
   echo "VDAM boundary CUDA library changed during science" >&2
