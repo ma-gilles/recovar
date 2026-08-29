@@ -6,6 +6,7 @@ from pathlib import Path
 SCRIPT = Path("scripts/run_vdam_expected_accuracy_ab_panel.sbatch")
 GPU_HELPER = Path("scripts/vdam_gpu_selection.sh")
 BOUNDARY_SCRIPT = Path("scripts/run_vdam_first_state_boundary_capture.sbatch")
+BPREF_CHUNK_SCRIPT = Path("scripts/run_vdam_bpref_particle_chunk_panel.sbatch")
 
 
 def test_expected_accuracy_ab_panel_is_same_allocation_and_fail_closed() -> None:
@@ -56,6 +57,26 @@ def test_expected_accuracy_ab_panel_records_provenance_and_disposable_markers() 
     assert 'env | LC_ALL=C sort > "${OUTPUT_ROOT}/provenance/submission_environment.txt"' in text
     assert '"${OUTPUT_ROOT}/provenance/execution_order.tsv"' in text
     assert 'printf \'%s\\n\' "${mode}"' in text
+
+
+def test_bpref_particle_chunk_panel_reuses_and_interleaves_the_boundary_runner() -> None:
+    text = BPREF_CHUNK_SCRIPT.read_text()
+
+    assert "VDAM_BPREF_PARTICLE_CHUNK_ARMS=${VDAM_BPREF_PARTICLE_CHUNK_ARMS:-default,3}" in text
+    assert 'for repeat in $(seq 1 "${REPEATS}")' in text
+    assert "repeat % 2 == 0" in text
+    assert "unsupported BPref particle chunk arm" in text
+    assert "duplicate BPref particle chunk arm" in text
+    assert "unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE" in text
+    assert "export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE=${arm}" in text
+    assert "VDAM_EXPECTED_ACCURACY_MODES=baseline" in text
+    assert "VDAM_CAPTURE_LOCAL_SCORE=0" in text
+    assert "VDAM_CAPTURE_FUSED_SCORES=0" in text
+    assert "VDAM_CAPTURE_COARSE_SCORE=0" in text
+    assert 'bash "${PANEL_RUNNER}"' in text
+    assert 'touch "${OUTPUT_ROOT}/SAFE_TO_DELETE"' in text
+    assert '"${OUTPUT_ROOT}/provenance/execution_order.tsv"' in text
+    assert 'touch "${OUTPUT_ROOT}/COMPLETED"' in text
 
 
 def test_shared_gpu_selector_handles_multi_gpu_target_and_missing_target() -> None:
