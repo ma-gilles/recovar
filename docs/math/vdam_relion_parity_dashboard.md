@@ -507,13 +507,23 @@ Those four `della-h19g4` allocations were subsequently cancelled for queue
 starvation before repeat 1 produced science; `13165002` created setup files
 only, and `13165003--13165005` never started. Replacement job `13165164` keeps
 all 16 repeats inside one allocation on physical H100
-`GPU-690aeace-9f87-7c36-57c0-77f1a92b0326` (`della-h20g4`). Its fail-fast
-direct auditor is live and will cancel the remaining panel on the first state
-mismatch. Repeat 1 passes every iteration-1--20 particle checkpoint in `172 s`;
-the alternate-H100 gate is therefore **1/1 completed, 15 pending**, not yet a
-promotion. Diagnostic-only late-iteration Nsight job `13165315` is queued from
-the same immutable source/CUDA pair to split projection, the shared EM fused
-CUDA fine scorer, and compiled glue inside the remaining big-JIT time.
+`GPU-690aeace-9f87-7c36-57c0-77f1a92b0326` (`della-h20g4`). Repeats 1--4 pass
+every iteration-1--20 particle checkpoint, but repeat 5 reproduces the complete
+historical signature: `286@4`, `2903@16`, and `903@18` (audit SHA-256
+`5b853fe59b57...`, wall `203 s`). The fail-fast auditor cancelled the panel
+immediately; repeat 6 had started but did not complete. The gate is **4/5** and
+rejects 24-image planner phase as sufficient. No frozen-H100 promotion was
+submitted.
+
+Diagnostic-only Nsight job `13165358` captured a 60-second late window from the
+same immutable source/CUDA pair, then intentionally terminated the incomplete
+science process. Projection itself is only `0.2%` of captured GPU kernel time.
+The shared source-order Wavg translation loop emits 3,248 `loop_add_fusion_5`
+and 3,370 `loop_multiply_fusion` kernels (`57.8%` combined GPU kernel time),
+while seven local big-JIT shape compilations consume `21.394 s` inside the
+window. A separate shared-EM CUDA translation-loop prototype is therefore the
+next runtime discriminator; it cannot repair or promote the rejected dynamic
+correctness topology.
 
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
@@ -537,7 +547,7 @@ CUDA fine scorer, and compiled glue inside the remaining big-JIT time.
 | Worker-private BPref + serial rotations + three-particle ownership | same lone particle `1723@19` failure | `212 s` in `13161927` | ownership exonerated; rejected for parity |
 | Source-faithful dynamic task claiming, shared BPref, 24-particle pools, blocking | direct 1--20 audit green: 0 failures over 200 particles x 20 iterations; SHA `11a4fddc1a9b...` | `407 s` in `13162940` | exact smoke, rejected as speed path under launch blocking |
 | Same source-faithful dynamic topology, nonblocking | **5/6**; repeat 6 fails `286@4 / 2903@16 / 903@18`; SHA `fd408a42ccc2...` | green walls `181--185 s`; failing wall `187 s` | rejected; remaining and dependent jobs cancelled |
-| Dynamic shared-BPref topology + globally aligned 24-particle planner phase | 35 focused tests + direct 1--20 smoke green; alternate-H100 repeat gate **1/1 completed, 15 pending** | `176 s` smoke; first gate repeat `172 s` | replacement gate `13165164` active; frozen-H100 gate still required |
+| Dynamic shared-BPref topology + globally aligned 24-particle planner phase | **4/5**; repeat 5 fails `286@4 / 2903@16 / 903@18`, SHA `5b853fe59b57...` | green repeats `172 s`; failing repeat `203 s` | rejected; repeat 6 cancelled incomplete, no frozen-H100 gate |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
