@@ -320,7 +320,19 @@ scatter order. Same-H100 science/audit `13148293 / 13148294` pass **2/2**
 particle and map trajectories at `206 / 206 s`. Worst map-diameter and
 nearest-native ratios are `0.5975 / 0.6296`. This matches the ordinary fast
 path while preserving the correctness boundary. It is now undergoing the
-required 16-repeat qualification in `13148646 / 13148647`.
+required 16-repeat qualification in `13148646 / 13148647`. The first two
+read-only early particle audits are green at all 20 checkpoints, with walls
+`206 / 203 s`; this is progress evidence only, not promotion before the sealed
+16-repeat particle-and-map audit finishes.
+
+The next EM-style speed discriminator is queued fail-closed behind that audit
+as `13149063 / 13149064`. It doubles only the x-half preparation budget from
+40M to 80M row-pixels. On GF46 the current 60/60/60/20-particle preparation
+buckets should collapse to roughly 120/80, while the qualified residual
+formula, particle chronology, and one ordered scatter launch per rotation stay
+unchanged. Four exact-target repeats will decide both trajectory parity and
+wall time; the dependency prevents GPU science if the 16-repeat candidate is
+rejected.
 
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
@@ -331,7 +343,8 @@ required 16-repeat qualification in `13148646 / 13148647`.
 | Persistent + parallel residual | **1/2** | median `205 s` | rejected: parity failure |
 | EM-batched residual + launch-ordered scatter, blocking | **2/2** | median `219.5 s` | exact fallback |
 | Same hybrid + EM projection cache | **0/2**, first fail @1 | median `253 s` | rejected: parity and runtime |
-| Same hybrid, no global launch blocking | **2/2** | median `206 s` | active 16-repeat candidate |
+| Same hybrid, no global launch blocking | **2/2** sealed; early **2/2** of 16 green | `203 / 206 s` early | active 16-repeat candidate (`13148646 / 13148647`) |
+| Same hybrid + 80M x-half preparation budget | queued after 16-repeat audit | pending | four-repeat EM-style batching discriminator (`13149063 / 13149064`) |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
