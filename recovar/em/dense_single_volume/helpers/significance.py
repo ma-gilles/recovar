@@ -230,12 +230,12 @@ def _k1_coarse_fused_projector_enabled(*, default: bool = False) -> bool:
     )
 
 
-def _relion_coarse_canonical_reduction_enabled() -> bool:
+def _relion_coarse_canonical_reduction_enabled(*, default: bool = False) -> bool:
     """Whether the shared fused coarse scorer reduces lanes in index order."""
 
     token = os.environ.get(
         _RELION_COARSE_CANONICAL_REDUCTION_ENV,
-        "0",
+        "1" if default else "0",
     ).strip().lower()
     if token in {"0", "false", "no", "off"}:
         return False
@@ -2249,7 +2249,12 @@ def _compute_k_class_significance_batched(
         and _k1_coarse_fused_projector_supports_padding(projection_padding_factor)
     )
     coarse_canonical_reduction_enabled = (
-        _relion_coarse_canonical_reduction_enabled()
+        _relion_coarse_canonical_reduction_enabled(
+            default=(
+                relion_coarse_gaussian_default
+                and coarse_fused_projector_enabled
+            ),
+        )
         and score_mode == "gaussian"
     )
     if coarse_canonical_reduction_enabled and not coarse_fused_projector_enabled:
@@ -2479,8 +2484,12 @@ def _compute_k_class_significance_batched(
             )
             if coarse_canonical_reduction_enabled:
                 logger.warning(
-                    "RELION shared coarse canonical lane reduction enabled "
-                    "(environment override)",
+                    "RELION shared coarse canonical lane reduction enabled (%s)",
+                    (
+                        "guarded exact-path default"
+                        if _RELION_COARSE_CANONICAL_REDUCTION_ENV not in os.environ
+                        else "environment override"
+                    ),
                 )
         if coarse_gaussian_native_texture_enabled:
             from recovar.em.dense_single_volume.helpers.projection import (

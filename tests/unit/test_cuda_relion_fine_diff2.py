@@ -368,14 +368,16 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
 
     monkeypatch.delenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", raising=False)
     assert not significance._relion_coarse_canonical_reduction_enabled()
+    assert significance._relion_coarse_canonical_reduction_enabled(default=True)
     monkeypatch.setenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", "1")
     assert significance._relion_coarse_canonical_reduction_enabled()
     monkeypatch.setenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", "0")
-    assert not significance._relion_coarse_canonical_reduction_enabled()
+    assert not significance._relion_coarse_canonical_reduction_enabled(default=True)
 
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
     assert "relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled" in source
+    assert "relion_coarse_gaussian_default\n                and coarse_fused_projector_enabled" in source
     assert "production half-image preprocessing path" in source
     assert "relion_coarse_diff2_projector_f32(" in source
     assert "rotation_block_size = n_rot" in source
