@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     source = (REPO_ROOT / "scripts/run_vdam_candidate_against_native_panel.sbatch").read_text()
+    selector = (REPO_ROOT / "scripts/vdam_gpu_selection.sh").read_text()
 
     assert "#SBATCH --constraint=h100" in source
     assert "EXPECTED_REPO_HEAD" in source
@@ -16,10 +17,24 @@ def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     assert "binding_path.is_file()" in source
     assert 'pathlib.Path(_relion_bind_core.__file__).resolve()).startswith' not in source
     assert "TARGET_GPU_UUID" in source
-    assert "VDAM_TARGET_GPU_MISS" in source
-    assert "exit 75" in source
-    assert source.index("VDAM_TARGET_GPU_MISS") < source.index('mkdir -p "${RECOVAR_DIR}"')
+    assert "VDAM_TARGET_GPU_MISS" in selector
+    assert "return 75" in selector
+    assert 'source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"' in source
+    assert 'vdam_select_target_gpu "${TARGET_GPU_UUID}" 0' in source
+    assert source.index('vdam_select_target_gpu "${TARGET_GPU_UUID}" 0') < source.index(
+        'mkdir -p "${RECOVAR_DIR}"'
+    )
+    assert "VISIBLE_GPU_UUID=${VDAM_SELECTED_GPU_UUID}" in source
+    assert "expected exactly one visible physical GPU" not in source
+    assert "export CUDA_VISIBLE_DEVICES=0" not in source
+    assert 'env CUDA_VISIBLE_DEVICES="${VISIBLE_GPU_UUID}"' in source
+    assert 'vdam_verify_selected_gpu "${VISIBLE_GPU_UUID}"' in source
+    assert 'selected_gpu_uuid.txt' in source
+    assert 'allocated_gpu_uuids.csv' in source
     assert 'case "${variable_name}" in RECOVAR_*) unset "${variable_name}"' in source
+    assert source.index('case "${variable_name}" in RECOVAR_*) unset') < source.index(
+        "vdam_select_target_gpu"
+    )
     assert "VDAM_WORKER_SCHEDULE_NPZ" in source
     assert "EXPECTED_WORKER_SCHEDULE_SHA256" in source
     assert "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ" in source

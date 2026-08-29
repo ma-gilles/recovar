@@ -96,6 +96,15 @@ if (( ${#RELION_BIND_MATCHES[@]} != 1 )); then
 fi
 test "$(sha256sum "${RELION_BIND_MATCHES[0]}" | awk '{print $1}')" = "${EXPECTED_RELION_BIND_SHA256}"
 
+# Remove submit-shell contamination before selecting the allocated physical GPU.
+# The selector intentionally exports RECOVAR_SELECTED_GPU_UUID, so the RECOVAR_*
+# scrub must precede it.
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
+unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
+while IFS='=' read -r variable_name _; do
+    case "${variable_name}" in RECOVAR_*) unset "${variable_name}" ;; esac
+done < <(env)
+
 PANEL_GPU_UUID=$("${PIXI_PY}" - "${PANEL_ROOT}" "${CASE_ID}" "${VDAM_REPEAT_COUNT}" <<'PY'
 import json
 import sys
@@ -118,18 +127,14 @@ PY
 test "${PANEL_GPU_UUID}" = "${TARGET_GPU_UUID}"
 
 # A native envelope is only calibrated for the physical GPU that produced it.
-# Exit before creating output when Slurm assigns another H100 so the job can be
-# safely resubmitted without leaving a partial candidate behind.
-mapfile -t VISIBLE_GPU_UUIDS < <(nvidia-smi --query-gpu=uuid --format=csv,noheader)
-if (( ${#VISIBLE_GPU_UUIDS[@]} != 1 )); then
-    echo "expected exactly one visible physical GPU, found ${#VISIBLE_GPU_UUIDS[@]}" >&2
-    exit 2
-fi
-VISIBLE_GPU_UUID=${VISIBLE_GPU_UUIDS[0]//[[:space:]]/}
-if [[ "${VISIBLE_GPU_UUID}" != "${TARGET_GPU_UUID}" ]]; then
-    echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${VISIBLE_GPU_UUID}" >&2
-    exit 75
-fi
+# Reuse the same fail-closed selector as the short VDAM panels.  This permits a
+# wider Slurm allocation to contain the frozen target while restricting JAX and
+# the science srun to that single UUID.  Selection happens before output creation
+# so a target miss remains a clean, retryable setup exit.
+# shellcheck source=scripts/vdam_gpu_selection.sh
+source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
+vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
+VISIBLE_GPU_UUID=${VDAM_SELECTED_GPU_UUID}
 
 if [[ -d "${CANDIDATE_ROOT}" ]] && [[ -n "$(find "${CANDIDATE_ROOT}" -mindepth 1 -print -quit)" ]]; then
     echo "refusing to reuse non-empty candidate root: ${CANDIDATE_ROOT}" >&2
@@ -138,17 +143,11 @@ fi
 mkdir -p "${RECOVAR_DIR}" "${PROVENANCE_DIR}" "${ANALYSIS_DIR}"
 touch "${CANDIDATE_ROOT}/SAFE_TO_DELETE"
 
-unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
-unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA RECOVAR_CUDA_DISABLE
-while IFS='=' read -r variable_name _; do
-    case "${variable_name}" in RECOVAR_*) unset "${variable_name}" ;; esac
-done < <(env)
 export PYTHONPATH=${REPO_ROOT}
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export CUDA_LAUNCH_BLOCKING=0
-export CUDA_VISIBLE_DEVICES=0
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${RECOVAR_CUDA_LIB_PATH}
 if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
@@ -228,6 +227,7 @@ PY
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE_DIR}/repo_head.txt"
 sha256sum "${RECOVAR_CUDA_LIB}" "${RELION_BIND_MATCHES[0]}" "${VDAM_SCORECARD}" \
     "${FIXTURE_DIR}/particles.star" "${FIXTURE_DIR}/fixture_materialization.json" \
+    "${REPO_ROOT}/scripts/vdam_gpu_selection.sh" \
     > "${PROVENANCE_DIR}/input_sha256.txt"
 if [[ -n "${VDAM_WORKER_SCHEDULE_NPZ}" ]]; then
     sha256sum "${VDAM_WORKER_SCHEDULE_NPZ}" >> "${PROVENANCE_DIR}/input_sha256.txt"
@@ -236,21 +236,24 @@ if [[ -n "${VDAM_BLOCK_CHRONOLOGY_NPZ}" ]]; then
     sha256sum "${VDAM_BLOCK_CHRONOLOGY_NPZ}" >> "${PROVENANCE_DIR}/input_sha256.txt"
 fi
 nvidia-smi -q > "${PROVENANCE_DIR}/nvidia_smi.txt"
+printf '%s\n' "${VISIBLE_GPU_UUID}" > "${PROVENANCE_DIR}/selected_gpu_uuid.txt"
+printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE_DIR}/allocated_gpu_uuids.csv"
 printf '%q ' "${RECOVAR_COMMAND[@]}" > "${PROVENANCE_DIR}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"
 env | LC_ALL=C sort > "${PROVENANCE_DIR}/runtime_environment.txt"
 
 start_epoch=$(date +%s)
 /usr/bin/time -v srun --ntasks=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-8}" --cpu-bind=none \
+    env CUDA_VISIBLE_DEVICES="${VISIBLE_GPU_UUID}" \
     "${RECOVAR_COMMAND[@]}" > "${RECOVAR_DIR}/runner.stdout" 2> "${RECOVAR_DIR}/runner.stderr"
 wall_s=$(( $(date +%s) - start_epoch ))
 test -s "${RECOVAR_DIR}/run_it200_model.star"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${RECOVAR_CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
-test "$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr -d '[:space:]')" = "${TARGET_GPU_UUID}"
+vdam_verify_selected_gpu "${VISIBLE_GPU_UUID}"
 printf '{"schema":"recovar.vdam_candidate_panel_science.v1","job_id":"%s","wall_s":%d,"gpu_uuid":"%s"}\n' \
-    "${SLURM_JOB_ID}" "${wall_s}" "${TARGET_GPU_UUID}" > "${PROVENANCE_DIR}/completion.json"
+    "${SLURM_JOB_ID}" "${wall_s}" "${VISIBLE_GPU_UUID}" > "${PROVENANCE_DIR}/completion.json"
 touch "${CANDIDATE_ROOT}/SCIENCE_COMPLETED"
 
 PIXEL_SIZE=$("${PIXI_PY}" - "${FIXTURE_DIR}/particles.star" <<'PY'
