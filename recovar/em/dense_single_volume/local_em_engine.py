@@ -343,6 +343,9 @@ EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV = (
 EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV = (
     "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES"
 )
+EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS"
+)
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM = 512
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM"
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
@@ -5958,9 +5961,15 @@ def run_local_em_exact(
                     unpadded_bucket.image_indices,
                     debug_iteration=debug_iteration,
                 )
-                serial_rotation_replay = bool(
+                chronology_serial_rotation_replay = bool(
                     _relion_vdam_serial_rotation_replay()
                     or _relion_vdam_captured_block_serial_replay()
+                )
+                fused_serial_rotations = _env_flag(
+                    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV
+                )
+                serial_rotation_replay = bool(
+                    chronology_serial_rotation_replay or fused_serial_rotations
                 )
                 float64_accumulator_replay = _relion_vdam_float64_accumulator_replay()
                 reverse_rotation_replay = _relion_vdam_reverse_rotation_replay()
@@ -5978,6 +5987,31 @@ def run_local_em_exact(
                 fused_serial_particles = _env_flag(
                     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV
                 )
+                if fused_serial_rotations and (
+                    worker_lane_ids is not None
+                    or any(
+                        value is not None
+                        for value in (
+                            block_start_order,
+                            native_grid_counts,
+                            particle_start_offsets_ns,
+                            particle_issue_order,
+                        )
+                    )
+                    or any(
+                        (
+                            chronology_serial_rotation_replay,
+                            float64_accumulator_replay,
+                            reverse_rotation_replay,
+                            native_trace_shape_replay,
+                            materialized_rotation_replay,
+                        )
+                    )
+                ):
+                    raise ValueError(
+                        "fused serial VDAM BPref rotations cannot be combined "
+                        "with VDAM chronology replay"
+                    )
                 if fused_serial_particles and particle_chunk_cap is not None:
                     raise ValueError(
                         "fused serial VDAM BPref particles cannot be combined with "
@@ -6000,7 +6034,7 @@ def run_local_em_exact(
                         )
                     ) or any(
                         (
-                            serial_rotation_replay,
+                            chronology_serial_rotation_replay,
                             float64_accumulator_replay,
                             reverse_rotation_replay,
                             native_trace_shape_replay,
@@ -6021,12 +6055,17 @@ def run_local_em_exact(
                             int(packed_mstep_rotations_np.shape[1]),
                         )
                         logged_deferred_mstep_chunking = True
-                elif fused_serial_particles and not logged_deferred_mstep_chunking:
+                elif (
+                    fused_serial_particles or fused_serial_rotations
+                ) and not logged_deferred_mstep_chunking:
                     logger.info(
-                        "Exact local VDAM BPref fused serial particle ordering: "
-                        "particles=%d packed_rows=%d",
+                        "Exact local VDAM BPref fused serial ordering: "
+                        "particles=%d packed_rows=%d serial_particles=%s "
+                        "serial_rotations=%s",
                         unpadded_batch_size,
                         int(packed_mstep_rotations_np.shape[1]),
+                        fused_serial_particles,
+                        fused_serial_rotations,
                     )
                     logged_deferred_mstep_chunking = True
 

@@ -122,6 +122,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV,
     EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
@@ -3875,6 +3876,13 @@ def test_fused_serial_vdam_particle_control_is_wired_into_grouped_path():
     assert "serial_particle_accumulation=fused_serial_particles" in grouped_vdam
     assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV.endswith(
         "FUSED_SERIAL_PARTICLES"
+    )
+    assert "EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV" in grouped_vdam
+    assert "chronology_serial_rotation_replay or fused_serial_rotations" in grouped_vdam
+    assert "serial_rotation_replay=serial_rotation_replay" in grouped_vdam
+    assert "fused serial VDAM BPref rotations cannot be combined" in grouped_vdam
+    assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV.endswith(
+        "FUSED_SERIAL_ROTATIONS"
     )
 
 
