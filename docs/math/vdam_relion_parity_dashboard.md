@@ -144,8 +144,8 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🔴 | First true envelope departure | Iteration **4**, particle `286@particles.128.mrcs`, in candidate repeat 3. RELION retains 100 coarse parents; RECOVAR retains 101, including candidate-only parent `(67,14)`. The centered score discrepancy is only `2.48e-5`, so a discrete adaptive-support decision amplifies a native-scale numerical residue. |
-| ➡️ | What is next? | Same-H100 A/B job `13127124` runs four baseline and four expected-accuracy-skip processes through iteration 4 in one allocation. Promotion requires a repeat-level causal result, not the earlier single lucky skip. If causal, patch the smallest setup/shared boundary and rerun the complete K=1 trajectory; if not, move one boundary earlier without reopening BPref. |
-| 🟢 | What finished? | Direct map spread is green at iterations 1--3 and localizes the only iteration-4 outlier; the matching particle audit identifies exactly particle 286. Science commit `221f874a6` adds the fail-closed repeat-map analyzer (3 focused tests), and `4f230659e / 196b58526` add the pinned repeated A/B Slurm gate (2 focused tests). No frozen acceptance rule or score changed. |
+| ➡️ | What is next? | Expanded same-H100 A/B job `13127488` runs 16 baseline and 16 expected-accuracy-skip processes through iteration 4. The preliminary 4+4 job was green in both arms, so expected-accuracy execution is not yet causal. If the expanded panel remains indistinguishable, retire that theory and move one boundary earlier without reopening BPref. |
+| 🟢 | What finished? | Direct map spread localizes the historical iteration-4 outlier to particle 286. Same-H100 job `13127124` then completed 4+4 fresh processes in 493 s: both arms pass all particle envelopes and map checkpoints through iteration 4; iteration-4 candidate/native diameter ratios are `0.1510` baseline and `0.3469` skip. Science commits `221f874a6 / 4f230659e / 196b58526` add the fail-closed analyzer and pinned A/B gate; 5 focused tests pass. No frozen acceptance rule or score changed. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -316,7 +316,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 23:22 ET**
+Last scientific update: **2026-08-28 23:27 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
