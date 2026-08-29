@@ -474,17 +474,28 @@ failures (audit SHA-256 `e5de030a1d6d...`). Its cold wall is `386 s`, but the
 iteration timestamp profile separates a `138 s` first-iteration compile from
 much faster late iterations: iterations 15--20 take `10--12 s` each versus
 `34--52 s` with launch blocking. Expanded 16-process qualification
-`13163796` is running on physical H100 `GPU-990435...`; its first two processes
-pass the direct audit at `184 / 184 s`. Its next two also pass at `185 / 182 s`,
-bringing the live panel to **4/4**. This is an additional-H100 robustness
-panel, not the frozen same-physical-GPU promotion gate: the native envelope and
-serialized oracle ran on `GPU-235ec...` on `della-h19g2`. Exact-GPU dependent
-allocations `13164168--13164171` are queued and will fail closed unless that
-physical UUID is visible. Setup-only allocation
+`13163796` ran on physical H100 `GPU-990435...`. Repeats 1--5 pass the direct
+audit at `184 / 184 / 185 / 182 / 181 s`, but repeat 6 fails the historical
+three-particle signature: `286@4`, `2903@16`, and `903@18` (audit SHA-256
+`fd408a42ccc2...`). The monitor cancelled the remaining science immediately;
+the panel is **5/6**, not 5/5. This additional-H100 robustness result rejects
+dynamic claiming alone. It also cancels frozen-GPU dependent allocations
+`13164168--13164171` and profile allocations `13164522--13164525` before
+science. Setup-only allocation
 `13163719` and companion allocations `13163797--13163799` exited `75` in
 2--3 seconds after receiving other GPU UUIDs; none ran science. The candidate
-cannot be promoted from one green realization because the earlier asynchronous
-shared-volume design first failed at repeat 9/11.
+cannot be promoted from five green realizations.
+
+The next discriminator corrects the remaining source-topology mismatch before
+changing numerical kernels. RELION's task distributor restarts on consecutive
+global groups of `--pool * --j = 24`, but RECOVAR still cut shared FFI calls on
+the bucket planner's three-particle/memory boundary, restarting dynamic claims
+at different particle phases. Commit `d54ee2ea3` adds a reusable preserved
+image-group size to the shared planner: all ordinary paths retain the default
+group of three, while dynamic VDAM requests 24 and fails closed if the group
+cannot fit. Thirty-five focused planner/InitialModel tests pass; the CUDA source
+is unchanged, so the sealed `d2f24d4ae5d...` binary is reused. Exact target-GPU
+smoke allocations `13164822--13164825` are queued on `della-h19g4`.
 
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
@@ -507,7 +518,8 @@ shared-volume design first failed at repeat 9/11.
 | Worker-private BPref + serial rotations | same lone particle `1723@19` failure; paired oracle green | `210 s`; paired oracle `412 s` anomalous | rotation concurrency exonerated; rejected for parity |
 | Worker-private BPref + serial rotations + three-particle ownership | same lone particle `1723@19` failure | `212 s` in `13161927` | ownership exonerated; rejected for parity |
 | Source-faithful dynamic task claiming, shared BPref, 24-particle pools, blocking | direct 1--20 audit green: 0 failures over 200 particles x 20 iterations; SHA `11a4fddc1a9b...` | `407 s` in `13162940` | exact smoke, rejected as speed path under launch blocking |
-| Same source-faithful dynamic topology, nonblocking | direct 1--20 audit green: 0 failures; SHA `e5de030a1d6d...`; alternate-H100 qualification **4/4** | cold `386 s`; qualification walls `184 / 184 / 185 / 182 s`; late iterations 15--20 `10--12 s` each | alternate-H100 16-process panel `13163796` running; frozen-GPU panel `13164168--13164171` queued |
+| Same source-faithful dynamic topology, nonblocking | **5/6**; repeat 6 fails `286@4 / 2903@16 / 903@18`; SHA `fd408a42ccc2...` | green walls `181--185 s`; failing wall `187 s` | rejected; remaining and dependent jobs cancelled |
+| Dynamic shared-BPref topology + globally aligned 24-particle planner phase | 35 focused tests green; unchanged CUDA SHA `d2f24d4ae5d...` | target-GPU smoke `13164822--13164825` queued | active discriminator |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -607,8 +619,8 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Monitor and directly audit all 16 fresh nonblocking dynamic-worker processes in alternate-H100 job `13163796`; stop at the first failure. Then repeat the gate on frozen physical GPU `GPU-235ec...` via queued allocations `13164168--13164171`. Only an exact-GPU green panel advances to a complete 200-iteration trajectory and frozen-suite promotion. |
-| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`; bounded compact scoring and compact posterior are exact but no faster. Whole-big-JIT pair buckets regress `+31%`; synchronized scoring-only buckets regress expectation `+36%` (`13161362`). Worker-private BPref closes most of the speed gap at `192--212 s`, but all ownership/rotation variants fail the same `1723@19` state. Source-faithful shared-BPref dynamic claiming closes both blocking and nonblocking direct 1--20 smokes (`13162940 / 13163318`); blocking takes `407 s`, while nonblocking takes a cold `386 s` and cuts late-iteration time by roughly 3--4x. No-global-blocking remains rejected at **10/11**, launch-blocked at **6/7**, and EM's projection cache at **0/2**. |
+| ➡️ | What is next? | Run the 24-particle phase-aligned target-GPU smoke in `13164822--13164825`, then direct-audit iterations 1--20. If green, repeat at least 16 processes on frozen physical GPU `GPU-235ec...`; if red, retain the failure signature and move to persistent distributor state across unavoidable FFI splits. Only a frozen-GPU green panel advances to a complete 200-iteration trajectory. |
+| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`; bounded compact scoring and compact posterior are exact but no faster. Worker-private BPref reaches `192--212 s` but misses `1723@19`. Dynamic shared-BPref claiming reaches `181--187 s`, but expanded job `13163796` rejects it at **5/6** with the historical `286@4 / 2903@16 / 903@18` branch. No-global-blocking remains rejected at **10/11**, launch-blocked at **6/7**, and EM's projection cache at **0/2**. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
