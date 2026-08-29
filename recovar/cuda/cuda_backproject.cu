@@ -70,6 +70,8 @@ constexpr char kRelionVdamWavgBprefHostGapTraceEnv[] =
     "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE";
 constexpr char kRelionVdamWavgBprefHostGapTraceParticleEnv[] =
     "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE_PARTICLE_ID";
+constexpr char kRelionVdamPreprojectPersistentRotationsEnv[] =
+    "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
@@ -4498,6 +4500,44 @@ static_assert(sizeof(RelionVdamProjectorKernel) == 64,
 static_assert(alignof(RelionVdamProjectorKernel) == 8,
               "RELION AccProjectorKernel ABI must remain 8-byte aligned");
 
+__global__ void relion_vdam_native_project_f32_kernel(
+    RelionVdamProjectorKernel projector,
+    const float* eulers,
+    float2* references,
+    unsigned image_x,
+    unsigned image_y,
+    unsigned image_xyz,
+    unsigned rotation_count)
+{
+    const unsigned image = blockIdx.x;
+    if (image >= rotation_count) return;
+    __shared__ float shared_eulers[9];
+    if (threadIdx.x < 9)
+        shared_eulers[threadIdx.x] = eulers[image * 9 + threadIdx.x];
+    __syncthreads();
+    const int image_y_half = image_y / 2;
+    for (unsigned pixel = threadIdx.x; pixel < image_xyz; pixel += blockDim.x)
+    {
+        const int x = pixel % image_x;
+        int y = static_cast<int>(pixel / image_x);
+        if (y > image_y_half) y -= image_y;
+        float real = 0.0f;
+        float imag = 0.0f;
+        projector.project3Dmodel(
+            x,
+            y,
+            shared_eulers[0],
+            shared_eulers[1],
+            shared_eulers[3],
+            shared_eulers[4],
+            shared_eulers[6],
+            shared_eulers[7],
+            real,
+            imag);
+        references[image * image_xyz + pixel] = make_float2(real, imag);
+    }
+}
+
 __global__ void relion_vdam_scale_texture_f32_kernel(
     float* real,
     float* imag,
@@ -4547,6 +4587,7 @@ template <
     bool PersistentSerialRotations>
 __global__ void relion_vdam_native_sgd_f32_kernel(
     RelionVdamProjectorKernel projector,
+    const float2* preprojected_references,
     float* image_real,
     float* image_imag,
     float* translation_x,
@@ -4636,19 +4677,31 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
         int y = static_cast<int>(pixel / image_x);
         if (y > image_y_half) y -= image_y;
 
-        float reference_real = 0.0f;
-        float reference_imag = 0.0f;
-        projector.project3Dmodel(
-            x,
-            y,
-            shared_eulers[0],
-            shared_eulers[1],
-            shared_eulers[3],
-            shared_eulers[4],
-            shared_eulers[6],
-            shared_eulers[7],
-            reference_real,
-            reference_imag);
+        float reference_real;
+        float reference_imag;
+        if (preprojected_references != nullptr)
+        {
+            const float2 reference =
+                preprojected_references[image * image_xyz + pixel];
+            reference_real = reference.x;
+            reference_imag = reference.y;
+        }
+        else
+        {
+            reference_real = 0.0f;
+            reference_imag = 0.0f;
+            projector.project3Dmodel(
+                x,
+                y,
+                shared_eulers[0],
+                shared_eulers[1],
+                shared_eulers[3],
+                shared_eulers[4],
+                shared_eulers[6],
+                shared_eulers[7],
+                reference_real,
+                reference_imag);
+        }
 
         minvsigma2 = __ldg(&minvsigma2s[pixel]);
         ctf = __ldg(&ctfs[pixel]);
@@ -5096,6 +5149,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     float* translation_x = nullptr;
     float* translation_y = nullptr;
     float* wavg_dummy_outputs = nullptr;
+    float2* preprojected_references = nullptr;
     cudaArray_t array_real = nullptr;
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
@@ -5125,6 +5179,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         std::getenv(kRelionVdamExactNativePtxEnv);
     const bool exact_native_ptx_requested =
         exact_native_ptx_path != nullptr && exact_native_ptx_path[0] != '\0';
+    const char* preproject_persistent_value =
+        std::getenv(kRelionVdamPreprojectPersistentRotationsEnv);
+    const bool preproject_persistent_requested =
+        preproject_persistent_value != nullptr &&
+        preproject_persistent_value[0] != '\0' &&
+        std::strcmp(preproject_persistent_value, "0") != 0;
     const char* exact_wavg_predecessor_value =
         std::getenv(kRelionVdamExactWavgPredecessorEnv);
     const bool exact_wavg_predecessor_requested =
@@ -5213,6 +5273,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         return cudaErrorInvalidValue;
     if (wavg_bpref_host_gap_trace_requested &&
         !exact_wavg_predecessor_requested)
+        return cudaErrorInvalidValue;
+    if (preproject_persistent_requested &&
+        (!persistent_serial_rotation_replay || parallel_worker_replay ||
+         captured_rotation_replay || reverse_rotation_replay ||
+         rotation_replay_stride > 0))
         return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
@@ -5339,6 +5404,23 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             reinterpret_cast<void**>(&translation_y),
             static_cast<size_t>(translation_count) * sizeof(float));
         if (err != cudaSuccess) goto cleanup;
+        if (preproject_persistent_requested)
+        {
+            const size_t reference_count =
+                static_cast<size_t>(rotation_count) *
+                static_cast<size_t>(pixel_count);
+            if (rotation_count > 0 &&
+                reference_count / static_cast<size_t>(rotation_count) !=
+                    static_cast<size_t>(pixel_count))
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            err = cudaMalloc(
+                reinterpret_cast<void**>(&preprojected_references),
+                reference_count * sizeof(float2));
+            if (err != cudaSuccess) goto cleanup;
+        }
         if (exact_wavg_predecessor_requested)
         {
             // RELION's wdiff2 arrays are worker-local and reused by successive
@@ -6027,6 +6109,24 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     if (trace_runtime_gap)
                         runtime_bpref_enqueue_start =
                             std::chrono::steady_clock::now();
+                    if (preproject_persistent_requested)
+                    {
+                        relion_vdam_native_project_f32_kernel<<<
+                            particle_rotation_count,
+                            128,
+                            0,
+                            particle_streams[lane]>>>(
+                            projector,
+                            projector_eulers + particle * euler_stride,
+                            preprojected_references,
+                            static_cast<unsigned>(image_w),
+                            static_cast<unsigned>(image_h),
+                            static_cast<unsigned>(pixel_count),
+                            static_cast<unsigned>(particle_rotation_count));
+                        const cudaError_t projection_error = cudaGetLastError();
+                        if (projection_error != cudaSuccess)
+                            return projection_error;
+                    }
                     const auto launch_runtime_sgd = [&](auto persistent_tag) {
                     constexpr bool persistent_serial =
                         decltype(persistent_tag)::value;
@@ -6037,6 +6137,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         persistent_serial><<<
                         grid_rotations, 128, 0, particle_streams[lane]>>>(
                         projector,
+                        preprojected_references,
                         image_real + particle * image_stride,
                         image_imag + particle * image_stride,
                         translation_x,
@@ -6366,6 +6467,7 @@ cleanup:
     if (translation_x) cudaFree(translation_x);
     if (translation_y) cudaFree(translation_y);
     if (wavg_dummy_outputs) cudaFree(wavg_dummy_outputs);
+    if (preprojected_references) cudaFree(preprojected_references);
     if (real) cudaFree(real);
     if (imag) cudaFree(imag);
     return err;

@@ -96,6 +96,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "weight = (weight / weight_norm) * ctf * minvsigma2;" in native_kernel
     assert "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);" in native_kernel
     assert "PersistentSerialRotations ? 0 : blockIdx.x" in native_kernel
+    assert "preprojected_references[image * image_xyz + pixel]" in native_kernel
     assert "physical_image < physical_image_end" in native_kernel
     assert "trace_record->image_count = rotation_count;" in native_kernel
     assert "rotation_replay_order[physical_image]" in native_kernel
@@ -109,6 +110,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "persistent_serial><<<" in projector_launcher
     assert "launch_runtime_sgd(std::true_type{})" in projector_launcher
     assert "launch_runtime_sgd(std::false_type{})" in projector_launcher
+    assert "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS" in source
+    assert "relion_vdam_native_project_f32_kernel<<<" in projector_launcher
+    assert "preproject_persistent_requested &&" in projector_launcher
     assert "std::true_type{}, std::false_type{}" in projector_launcher
     assert "std::false_type{}, std::false_type{}" in projector_launcher
     assert "grid_rotations, 128, 0, particle_streams[lane]" in projector_launcher
@@ -833,8 +837,45 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
             serial_rotation_replay=True,
             persistent_serial_rotation_replay=True,
+            parallel_worker_replay=False,
         )
-        jax.block_until_ready((expected, actual, f64_a, f64_b, serial, persistent))
+        projector_values = (
+            rng.normal(size=(11, 11, 11))
+            + 1j * rng.normal(size=(11, 11, 11))
+        ).astype(np.complex64) * np.float32(1.0e-3)
+        persistent_nonzero = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            jnp.asarray(projector_values),
+            rotations,
+            image_shape,
+            volume_shape,
+            max_r,
+            4,
+            1,
+            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+            serial_rotation_replay=True,
+            persistent_serial_rotation_replay=True,
+            parallel_worker_replay=False,
+        )
+        jax.block_until_ready(
+            (expected, actual, f64_a, f64_b, serial, persistent, persistent_nonzero)
+        )
+        monkeypatch.setenv("RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS", "1")
+        preprojected_nonzero = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            jnp.asarray(projector_values),
+            rotations,
+            image_shape,
+            volume_shape,
+            max_r,
+            4,
+            1,
+            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+            serial_rotation_replay=True,
+            persistent_serial_rotation_replay=True,
+            parallel_worker_replay=False,
+        )
+        jax.block_until_ready(preprojected_nonzero)
 
     for expected_value, actual_value in zip(expected, actual, strict=True):
         np.testing.assert_allclose(actual_value, expected_value, rtol=0.0, atol=0.0)
@@ -842,6 +883,10 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         np.testing.assert_array_equal(first, second)
         assert np.all(np.isfinite(np.asarray(first)))
     for expected_value, actual_value in zip(serial, persistent, strict=True):
+        np.testing.assert_array_equal(actual_value, expected_value)
+    for expected_value, actual_value in zip(
+        persistent_nonzero, preprojected_nonzero, strict=True
+    ):
         np.testing.assert_array_equal(actual_value, expected_value)
 
 
