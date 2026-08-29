@@ -27,7 +27,7 @@ case "${REPEATS}" in
 esac
 test "${REPEATS}" -ge 1
 test ! -e "${OUTPUT_ROOT}"
-test -x "${PANEL_RUNNER}"
+test -f "${PANEL_RUNNER}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 
