@@ -223,19 +223,33 @@ The four-repeat persistent result remains a smoke rather than a promotion.
 Because the rejected particle-only arm stayed green through
 seven audited processes before failing at repeat 8, promotion now requires a
 separate 16-repeat persistent qualification: science `13143741`, aggregate
-particle/map audit `13143742`. Paired one-repeat profile job `13143819` runs
-the ordinary fused and persistent arms with identical operands before that
-panel, so the next optimization can target measured stage time rather than
-guessing. Opt-in commit `6d96acbf1` now reuses the exact RELION projector in a
-parallel materialization kernel and feeds those float32 references to the same
+particle/map audit `13143742`. Intended paired profile job `13143819` completed
+only the ordinary fused arm because Slurm parsed the comma in the exported arm
+list as another export separator. It is not a paired comparison. The valid
+ordinary-arm measurement is `203 s` wall, with `178.21 s` summed expectation
+time; sparse pass 2 accounts for `146.87 s`, while the M-step itself accounts
+for only `2.96 s`. Persistent-only replacement profile `13145012` is queued
+on the same physical H100.
+
+Opt-in commit `6d96acbf1` reuses the exact RELION projector in a parallel
+materialization kernel and feeds those float32 references to the same
 persistent ordered scatter. H100 gate `13144508` passes 3/3 focused tests and
 proves byte-exact output against the persistent oracle on nonzero projector
-data; its qualified sm90 binary SHA-256 is `30e5063e8cd2...`. Four-repeat
-trajectory/runtime science `13144574` and cache-isolated audit `13144575` are
-dependency-held behind the paired profile. The 16-repeat persistent control
-now starts after that bounded discriminator terminates. Two-repeat full-200
-job `13143692` remains dependent on a green 16-repeat aggregate audit, so it
-cannot run after a merely lucky four-repeat panel or any failed gate.
+data; its qualified sm90 binary SHA-256 is `30e5063e8cd2...`. The first of
+four trajectory/runtime repeats in job `13144574` took `311 s`, only `1.6%`
+below the qualified persistent median, so reference projection alone is not
+yet a material runtime repair. Cache-isolated audit `13144575` remains
+dependency-held behind all four repeats. Follow-up commit `20c6e1820` makes
+the optimization fail closed unless every particle uses one worker lane,
+preventing the single reusable preprojection buffer from being overwritten by
+another stream. H100 gate `13145236` passes 3/3 focused tests, including the
+multi-lane rejection and byte-exact nonzero-projector comparison; its sm90
+binary SHA-256 is `2bad97e91e27...`. Submission `13145201` failed before
+output or science because its Git pin was abbreviated incorrectly. The
+16-repeat persistent control starts after the bounded projection discriminator
+terminates. Two-repeat full-200 job `13143692` remains dependent on a green
+16-repeat aggregate audit, so it cannot run after a merely lucky four-repeat
+panel or any failed gate.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -331,12 +345,12 @@ initial basins without inflating one diameter until every result passes.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. The less restrictive and persistent candidates remain under qualification. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Launch-serialized particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. Particle-only ordering is rejected after repeat 8 recreated all three historical failures. Persistent ordered scatter is **4/4** in smoke coverage, not yet promoted. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Shared commit `1485282f8` is now authoritatively **16/16** particle-green with its complete iteration-1--20 map envelope green in `13139299 / 13140157`. Less restrictive fused-particle science `13139327` has completed seven runs; five early audits are green, including both historically failing repeat positions. Cache-isolated audit `13142285` still requires 16/16 particles and maps. If green, dependency-gated job `13142923` runs two complete 200-iteration trajectories from direct source head `4152128ba`. Persistent science `13140202` and audit `13142207` remain the fallback if fused particles fail. |
-| 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
+| ➡️ | What is next? | Finish the four-repeat parallel-projection run/audit (`13144574 / 13144575`) and the valid same-H100 persistent stage profile (`13145012`). Unless four-repeat timing becomes materially better than `316 s`, reject projection-only optimization and retain persistent ordered scatter for correctness. Then run the required 16-repeat persistent science/audit (`13143741 / 13143742`), followed only on green by two independent full 200-iteration trajectories (`13143692`). The next performance hypothesis is parallel residual formation feeding the same qualified ordered scatter, reusing the mature shared CUDA arithmetic rather than adding another InitialModel implementation. |
+| 🟢 | What finished? | Launch-serialized particle+rotation ordering passes **16/16** particles and the full iteration-1--20 map envelope (`13139299 / 13140157`). Persistent one-block rotation replay passes its focused byte-exact gate and a **4/4** trajectory/map smoke (`13140084`, `13140202 / 13142207`) at median `316 s`. Projection-only gate `13144508` is byte exact; safety follow-up `20c6e1820` and H100 gate `13145236` additionally reject unsafe multi-lane buffer reuse. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
