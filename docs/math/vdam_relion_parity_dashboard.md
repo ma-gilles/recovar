@@ -345,8 +345,23 @@ fine scoring through EM's existing compact candidate-pair scorer, then restores
 the dense score grid before the unchanged posterior/M-step. The profiled late
 iteration has about `5.67M` rectangular rotation/translation slots but only
 about `48k` significant pairs, so this targets the dominant `96.8 s` local
-big-JIT region without copying EM code. Twenty-two focused contracts pass at
-local head `e4a165032`; H100 numerical and trajectory A/B gates remain open.
+big-JIT region without copying EM code. The initial port at `e4a165032` passed
+22 focused contracts, but its first panels correctly exposed an oracle
+configuration error: the later `2a75b40a...` ordered-residual hybrid is the
+**6/7** rejected arm, even when described informally as serial. Both invalid
+chains were cancelled after their dense controls reproduced
+`286@4, 2903@16, 903@18`; one otherwise complete dense arm measured `228 s`
+but cannot count.
+
+The exact **16/16** oracle is now pinned without inference: source
+`1485282f8`, CUDA `8dca3db09ae1...`, and
+`FUSED_SERIAL_PARTICLES=1 + FUSED_SERIAL_ROTATIONS=1`, where that historical
+CUDA source implements one kernel launch per orientation. The shared EM
+compact scorer was ported directly onto that lineage at `fff2159c4`; 13
+focused contracts pass and exact-target job `13153912` is queued. Separately,
+the mature EM compact native reduction now casts x64 probabilities only at its
+float32 FFI boundary (`9f6379baa`); CPU coverage passes and H100 job `13152925`
+passes its 2/2 optional x-half guards.
 
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
@@ -360,7 +375,7 @@ local head `e4a165032`; H100 numerical and trajectory A/B gates remain open.
 | Same hybrid, no global launch blocking | **10/11** directly audited; repeat 9 fails @4/16/18 | `203--214 s` completed | rejected; remaining/dependent jobs cancelled |
 | Blocking hybrid, expanded qualification | **6/7** directly audited; repeat 7 fails @4/16/18 | `224--226 s` first repeats | rejected; science/audit cancelled |
 | Blocking hybrid + compact valid projection rows | seven focused contracts + CPU equivalence green | not run | dependent H100 gate `13150548 / 13150559` cancelled after baseline failure |
-| Serial-particle oracle + shared EM compact candidate pairs | 22 focused contracts green | pending | exact H100 numerical/trajectory A/B is the next speed gate |
+| Exact 16/16 oracle + shared EM compact candidate pairs | 13 focused contracts green on exact lineage | pending | exact-target H100 A/B `13153912` queued |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -454,14 +469,14 @@ initial basins without inflating one diameter until every result passes.
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | VDAM now has opt-in paths for two mature EM batching ideas: compact active projection rows and EM's shared compact candidate-pair scorer. The latter attacks roughly `5.67M` rectangular late-iteration slots with about `48k` valid pairs while restoring the existing dense downstream interface. Twenty-two focused tests pass. |
+| 🟢 | What improved? | VDAM now has opt-in paths for two mature EM batching ideas: compact active projection rows and EM's shared compact candidate-pair scorer. The latter attacks roughly `5.67M` rectangular late-iteration slots with about `48k` valid pairs while restoring the existing dense downstream interface. The scorer is now ported onto the exact `1485282f8 / 8dca3db0...` 16/16 oracle lineage; 13 focused tests pass there. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Launch-serialized particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. Both asynchronous (**10/11**) and launch-blocked (**6/7**) eight-worker variants recreate the identical iteration-4/16/18 branch; launch blocking is therefore not a deterministic fallback. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Qualify EM's shared compact candidate-pair scorer first against the **16/16** serial-particle oracle on H100, measuring score/pose identity and wall time. Then combine it with compact projection rows. Independently, replace the shared-volume eight-worker atomic race with a genuinely ordered BPref design; environment-level launch blocking is closed as insufficient. |
-| 🟢 | What finished? | The no-global-blocking variant is rejected at **10/11** and the launch-blocked variant at **6/7**, with the same three particle boundaries. All remaining jobs in both invalid chains were cancelled. EM's projection cache remains rejected at **0/2** and median `253 s`; the compact-pair prototype reuses EM's scorer directly and passes 22 focused tests. |
+| ➡️ | What is next? | Run exact-target A/B `13153912` against the recovered **16/16** oracle, measuring score/pose identity and wall time. Then expand only a green arm and combine it with compact projection rows. Independently, replace the shared-volume eight-worker atomic race with a genuinely ordered BPref design; environment-level launch blocking is closed as insufficient. |
+| 🟢 | What finished? | The no-global-blocking variant is rejected at **10/11** and the launch-blocked/ordered-residual hybrid at **6/7**, with the same three particle boundaries. All remaining jobs in invalid chains were cancelled. EM's projection cache remains rejected at **0/2** and median `253 s`; the exact-oracle compact-pair port passes 13 focused tests, and shared EM's optional compact x-half CUDA guard passes 2/2 in job `13152925`. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
