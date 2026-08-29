@@ -163,9 +163,18 @@ causal lever but not a complete correction; repeat variation remains inside
 each particle's concurrent orientation-block atomic accumulation. Shared-code
 commit `1485282f8` reuses the existing fused CUDA callback's one-orientation
 launch mode and combines it with the one-particle lane policy, without adding
-an InitialModel numerical implementation or a new kernel. Exact-target
-16-repeat qualification `13138767` and dependent durable audit `13138768` are
-the next gate.
+an InitialModel numerical implementation or a new kernel. Interleaved job
+`13136896` and audit `13137252` further distinguish callback context: the host
+one-particle arm is only **3/4** and recreates the iteration-4 branch, while the
+shared fused one-lane particle arm is **4/4** with its map panel green (worst
+diameter / nearest-native ratios `0.6546 / 0.5664`) and median wall time
+`193 s` versus `198.5 s` for the host arm. Four repeats remain insufficient
+after the 14/16 falsification. Exact-target 16-repeat particle+rotation
+qualification `13139299` and dependent durable audit `13139300` are the next
+gate. Admission attempts `13138767 / 13139266` exited in two/three seconds
+before science because of an abbreviated Git pin and then a missing worktree
+RELION binding; the replacement pins the full SHA and the qualified binding
+digest.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -265,7 +274,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Expanded host-isolation job `13136895` is only **14/16**: repeats 6/7 reproduce the complete historical red signature, proving particle ordering is causal but insufficient. Shared commit `1485282f8` now combines one-lane particle order with the existing one-orientation fused CUDA launch policy. Exact-target jobs `13138767 / 13138768` must pass all 16 particle trajectories and the map envelope before any nonblocking/runtime or long-trajectory promotion. |
+| ➡️ | What is next? | Expanded host-isolation job `13136895` is only **14/16**: repeats 6/7 reproduce the complete historical red signature. Interleaved `13136896 / 13137252` then gives host **3/4** versus fused-particle **4/4**, so callback context matters but four repeats do not seal it. Shared commit `1485282f8` combines one-lane particle order with the existing one-orientation fused CUDA launch policy. Exact-target jobs `13139299 / 13139300` must pass all 16 particle trajectories and the map envelope; separate fused-particle jobs `13139327 / 13139328` test whether the stronger rotation ordering is necessary. |
 | 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
