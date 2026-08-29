@@ -38,13 +38,16 @@ fractions must not be read as the same test with different implementations.
 The practical interpretation is therefore: the mature EM numerical machinery
 has already been reused, but InitialModel still wraps it with a distinct K=1
 pass-2 policy path. The remaining correctness boundary is narrow but unusually
-sensitive. The iteration-64 operand capture must determine whether the first
-winner departure originates in shared arithmetic or in that wrapper policy;
-the correction should then move behavior into the shared EM path rather than
-copying another VDAM-specific implementation. The production task also remains
-to make shared BPref accumulation land reproducibly inside RELION's native
-distribution and then qualify the feedback trajectory. The score must not be
-improved by weakening particle gates or selecting one lucky CUDA realization.
+sensitive. The iteration-64 operand capture and map-only counterfactual now
+exclude support, raw-score evaluation, the translation prior, posterior
+normalization, and winner selection as the local cause. Holding those live
+operands fixed and swapping only the incoming iteration-63 map reproduces the
+observed translation flip. The correction must therefore target the upstream
+shared BPref/map accumulation boundary rather than copy or modify VDAM scoring.
+The production task remains to make that accumulation land reproducibly inside
+RELION's native distribution and then qualify the feedback trajectory. The
+score must not be improved by weakening particle gates or selecting one lucky
+CUDA realization.
 Wholesale routing to the existing compact EM driver is already rejected:
 frozen K=1 job `12764156` reached only `0.9994907915` cross-engine FSC-AUC by
 iteration 8 and took `43.4x` RELION. Reuse work must therefore extract the
@@ -89,17 +92,38 @@ it incorrectly required a fused capture even when all capture flags were
 disabled. Local commit `ad2499e48` fixes that terminal check and the sparse
 sampling-audit artifact; focused coverage passes `8/8`.
 
+The corrected same-H100 candidate capture `13123370` completed at iteration 64
+but did not reproduce the original escape. It selected the native repeat-1/2
+orientation and translation 66 (`Y=-5.861935`, posterior `0.137571`); the
+original escaping run selected translation 70 (`Y=-4.644310`). In the live
+capture, those two hypotheses are an exceptionally close cancellation:
+likelihood margin `+2.51120`, translation-prior margin `-2.47171`, and total
+margin only `+0.03949`. Replaying the production projector and scorer closes
+the live projection at relative L2 `2.36e-8`. Replacing only the iteration-63
+map with the original escaping map changes the likelihood margin to `+2.46979`
+while leaving the prior fixed, producing total margin `-0.001920` and selecting
+translation 70 exactly. This is a causal map-state substitution, not a
+correlation inference: the first active-state escape is upstream in the
+iteration-63 BPref/map state.
+
+Native iteration-64 capture repeat `13123933` selected an additional valid
+orientation mode outside the original four-repeat panel. Candidate capture
+repeat `13123942` completed on the same H100 and selected another native-covered
+orientation for particle 927. These repeats show that four native samples
+undersample the branch distribution, but they do not relax the contract: the
+candidate must still become repeat-robust under the unchanged envelope rules.
+
 ### At a glance: progress, failure, and next gate
 
 | Status | Question | Readout |
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
-| 🟢 | What is closed? | The GF46 discrepancy is not a separate VDAM scoring formula: both observed rank-100/101 score gaps are exactly reachable from captured shared-scorer lanes. The architecture guard proves InitialModel imports EM's authoritative numerical functions by object identity. Static tracing now also records the remaining reuse gap: K=1 InitialModel uses its own local pass-2 orchestration rather than supplied-map EM's complete adaptive wrapper. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
+| 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. The first genuine target-H100 active-state escape is one particle at iteration 64. The direct four-repeat audit fails 131 particle checkpoints and 94 map checkpoints; minimum best-native map FSC-AUC is `0.9392536352`. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
-| 🔴 | First true envelope departure | Iteration **64**, particle `927@particles.128.mrcs`. All active states pass through 63. At 64, RECOVAR agrees with native repeats 1/2 on orientation but differs in Y translation by `1.21763 A`; repeats 3/4 choose other orientations, so none of the four native modes covers the candidate state. The strict expected-accuracy scalar remains an earlier non-operative `0.001 deg` miss at iteration 40. |
-| ➡️ | What is next? | Native iteration-64 operands are sealed by job `13122858`. Candidate job `13123370` is replaying the autonomous 0--64 prefix on the identical H100 and will capture coarse/local/fused operands plus expected-accuracy inputs. Compare support, raw score, prior, posterior, and winner in that order, then correct the lowest shared exact-local boundary rather than adding a VDAM-only duplicate. |
+| 🔴 | First true envelope departure | In the original sealed candidate, iteration **64**, particle `927@particles.128.mrcs`. The local cause is now the incoming map: with the captured map, translation 66 wins by `+0.03949`; changing only to the original iteration-63 map makes translation 70 win by `-0.001920`, exactly reproducing the escape. The strict expected-accuracy scalar remains an earlier non-operative `0.001 deg` miss at iteration 40. |
+| ➡️ | What is next? | Trace the first BPref/map divergence before iteration 63 and compare InitialModel's aggregate launch/grouping/finalization with the mature shared EM accumulator path. Reuse or extract the lowest common accumulator primitive; do not add a VDAM-only scorer. Then rerun the complete K=1 trajectory before expanding the matrix. |
 | 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. Job `13117709` wrote all checkpoints 0--200; CPU audits `13120726 / 13120727 / 13120744` seal the cross-GPU diagnostic escape. Local science commit `ad2499e48` fixes the post-science capture check and immediate-previous-iteration sampling audit with `8/8` focused tests. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
