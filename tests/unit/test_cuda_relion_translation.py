@@ -113,6 +113,10 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS" in source
     assert "relion_vdam_native_project_f32_kernel<<<" in projector_launcher
     assert "preproject_persistent_requested &&" in projector_launcher
+    assert "const int32_t preproject_worker_lane" in projector_launcher
+    assert (
+        "worker_lanes_host[particle] != preproject_worker_lane" in projector_launcher
+    )
     assert "std::true_type{}, std::false_type{}" in projector_launcher
     assert "std::false_type{}, std::false_type{}" in projector_launcher
     assert "grid_rotations, 128, 0, particle_streams[lane]" in projector_launcher
@@ -876,6 +880,35 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             parallel_worker_replay=False,
         )
         jax.block_until_ready(preprojected_nonzero)
+
+        multi_particle_common = (
+            common[0],
+            common[1],
+            jnp.repeat(common[2], 2, axis=0),
+            jnp.repeat(common[3], 2, axis=0),
+            jnp.repeat(common[4], 2, axis=0),
+            jnp.repeat(common[5], 2, axis=0),
+            common[6],
+            common[7],
+        )
+        with pytest.raises(jax.errors.JaxRuntimeError, match="CUDA: invalid argument"):
+            invalid_multi_lane = (
+                cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                    *multi_particle_common,
+                    jnp.asarray(projector_values),
+                    jnp.repeat(rotations, 2, axis=0),
+                    image_shape,
+                    volume_shape,
+                    max_r,
+                    4,
+                    1,
+                    worker_lane_ids=jnp.asarray([0, 1], dtype=jnp.int32),
+                    serial_rotation_replay=True,
+                    persistent_serial_rotation_replay=True,
+                    parallel_worker_replay=False,
+                )
+            )
+            jax.block_until_ready(invalid_multi_lane)
 
     for expected_value, actual_value in zip(expected, actual, strict=True):
         np.testing.assert_allclose(actual_value, expected_value, rtol=0.0, atol=0.0)

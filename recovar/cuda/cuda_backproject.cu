@@ -5577,6 +5577,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         }
         err = cudaStreamSynchronize(stream);
         if (err != cudaSuccess) goto cleanup;
+        const int32_t preproject_worker_lane =
+            n_particles > 0 ? worker_lanes_host[0] : -1;
         for (int64_t particle = 0; particle < n_particles; ++particle)
         {
             if (reconstruction_groups_host[particle] < 0 ||
@@ -5587,6 +5589,16 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             }
             if (worker_lanes_host[particle] < 0 ||
                 worker_lanes_host[particle] >= kRelionVdamWorkerStreams)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            // A single preprojection buffer is reused particle by particle.
+            // Different worker streams could overwrite it while an earlier
+            // persistent scatter still reads it, so this optimization only
+            // accepts the single-lane serial-particle contract.
+            if (preproject_persistent_requested &&
+                worker_lanes_host[particle] != preproject_worker_lane)
             {
                 err = cudaErrorInvalidValue;
                 goto cleanup;
