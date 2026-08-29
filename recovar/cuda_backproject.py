@@ -1940,7 +1940,7 @@ def _run_vdam_external_host_replay_callback(
 
 @functools.partial(
     jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27),
+    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28),
 )
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
@@ -1971,6 +1971,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     native_trace_shape_replay: bool = False,
     parallel_worker_replay: bool | None = None,
     candidate_trace_active: bool = False,
+    persistent_serial_rotation_replay: bool = False,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Project, form residuals, and scatter VDAM rows in one native launch."""
 
@@ -2088,6 +2089,10 @@ def relion_vdam_mstep_fused_projector_x_half(
             raise TypeError("particle_start_offsets_ns must be int32")
         if particle_start_offsets_ns.shape != (n_particles,):
             raise ValueError("particle_start_offsets_ns must match the particle axis")
+    if persistent_serial_rotation_replay and not serial_rotation_replay:
+        raise ValueError(
+            "persistent serial VDAM rotations require serial_rotation_replay"
+        )
     _ensure_ffi()
 
     dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
@@ -2133,6 +2138,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         if (
             captured_rotation_replay
             or serial_rotation_replay
+            or persistent_serial_rotation_replay
             or float64_accumulator_replay
             or reverse_rotation_replay
             or rotation_replay_stride
@@ -2218,7 +2224,9 @@ def relion_vdam_mstep_fused_projector_x_half(
             reconstruction_group_count=np.int64(reconstruction_group_count),
             parallel_worker_replay=np.int64(parallel_worker_replay),
             captured_rotation_replay=np.int64(captured_rotation_replay),
-            serial_rotation_replay=np.int64(serial_rotation_replay),
+            serial_rotation_replay=np.int64(
+                2 if persistent_serial_rotation_replay else serial_rotation_replay
+            ),
             float64_accumulator_replay=np.int64(float64_accumulator_replay),
             reverse_rotation_replay=np.int64(reverse_rotation_replay),
             rotation_replay_stride=np.int64(rotation_replay_stride),

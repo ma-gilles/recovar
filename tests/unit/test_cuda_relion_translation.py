@@ -95,7 +95,9 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "if (weight >= significant_weight)" in native_kernel
     assert "weight = (weight / weight_norm) * ctf * minvsigma2;" in native_kernel
     assert "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);" in native_kernel
-    assert "const unsigned physical_image = blockIdx.x;" in native_kernel
+    assert "PersistentSerialRotations ? 0 : blockIdx.x" in native_kernel
+    assert "physical_image < physical_image_end" in native_kernel
+    assert "trace_record->image_count = rotation_count;" in native_kernel
     assert "rotation_replay_order[physical_image]" in native_kernel
     assert "trace_records + physical_image" in native_kernel
     assert "trace_record->orientation_row = image;" in native_kernel
@@ -104,11 +106,13 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     projector_launcher = source.split(
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
     )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
-    assert "Accumulator, use_captured_order, use_trace><<<" in projector_launcher
+    assert "persistent_serial><<<" in projector_launcher
+    assert "launch_runtime_sgd(std::true_type{})" in projector_launcher
+    assert "launch_runtime_sgd(std::false_type{})" in projector_launcher
     assert "std::true_type{}, std::false_type{}" in projector_launcher
     assert "std::false_type{}, std::false_type{}" in projector_launcher
     assert "grid_rotations, 128, 0, particle_streams[lane]" in projector_launcher
-    assert "serial_rotation_replay ? rotation_count : 1" in projector_launcher
+    assert "serial_rotation_replay && !persistent_serial_rotation_replay" in projector_launcher
     assert "reverse_rotation_replay ? rotation_count - 1 - launch : launch" in projector_launcher
     assert "rotation_replay_order_host[" in projector_launcher
     assert "captured_rotation_replay" in projector_launcher
@@ -162,7 +166,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "captured_worker_lanes = worker_lane_ids is not None" in projector_wrapper
     assert "parallel_worker_replay=np.int64(parallel_worker_replay)" in projector_wrapper
     assert "captured_rotation_replay=np.int64(captured_rotation_replay)" in projector_wrapper
-    assert "serial_rotation_replay=np.int64(serial_rotation_replay)" in projector_wrapper
+    assert "2 if persistent_serial_rotation_replay else serial_rotation_replay" in projector_wrapper
     assert "float64_accumulator_replay=np.int64(float64_accumulator_replay)" in projector_wrapper
     assert "reverse_rotation_replay=np.int64(reverse_rotation_replay)" in projector_wrapper
     assert "rotation_replay_stride=np.int64(rotation_replay_stride)" in projector_wrapper
@@ -805,13 +809,40 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             serial_rotation_replay=True,
             float64_accumulator_replay=True,
         )
-        jax.block_until_ready((expected, actual, f64_a, f64_b))
+        serial = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            jnp.zeros((11, 11, 11), dtype=jnp.complex64),
+            rotations,
+            image_shape,
+            volume_shape,
+            max_r,
+            4,
+            1,
+            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+            serial_rotation_replay=True,
+        )
+        persistent = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            *common,
+            jnp.zeros((11, 11, 11), dtype=jnp.complex64),
+            rotations,
+            image_shape,
+            volume_shape,
+            max_r,
+            4,
+            1,
+            worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+            serial_rotation_replay=True,
+            persistent_serial_rotation_replay=True,
+        )
+        jax.block_until_ready((expected, actual, f64_a, f64_b, serial, persistent))
 
     for expected_value, actual_value in zip(expected, actual, strict=True):
         np.testing.assert_allclose(actual_value, expected_value, rtol=0.0, atol=0.0)
     for first, second in zip(f64_a, f64_b, strict=True):
         np.testing.assert_array_equal(first, second)
         assert np.all(np.isfinite(np.asarray(first)))
+    for expected_value, actual_value in zip(serial, persistent, strict=True):
+        np.testing.assert_array_equal(actual_value, expected_value)
 
 
 @pytest.mark.gpu

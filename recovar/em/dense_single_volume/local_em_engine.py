@@ -1646,6 +1646,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     worker_lane_ids=None,
     particle_trace_ids=None,
     serial_rotation_replay=False,
+    persistent_serial_rotation_replay=False,
     float64_accumulator_replay=False,
     reverse_rotation_replay=False,
     rotation_replay_stride=0,
@@ -1831,6 +1832,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 worker_lane_ids=worker_lane_ids,
                 particle_trace_ids=particle_trace_ids,
                 serial_rotation_replay=serial_rotation_replay,
+                persistent_serial_rotation_replay=persistent_serial_rotation_replay,
                 float64_accumulator_replay=float64_accumulator_replay,
                 reverse_rotation_replay=reverse_rotation_replay,
                 rotation_replay_stride=rotation_replay_stride,
@@ -6122,6 +6124,7 @@ def run_local_em_exact(
                             candidate_trace_ids, particle_start, particle_stop
                         ),
                         serial_rotation_replay=serial_rotation_replay,
+                        persistent_serial_rotation_replay=fused_serial_rotations,
                         float64_accumulator_replay=float64_accumulator_replay,
                         reverse_rotation_replay=reverse_rotation_replay,
                         rotation_replay_stride=rotation_replay_stride,

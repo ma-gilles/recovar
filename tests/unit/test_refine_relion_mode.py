@@ -3880,6 +3880,7 @@ def test_fused_serial_vdam_particle_control_is_wired_into_grouped_path():
     assert "EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV" in grouped_vdam
     assert "chronology_serial_rotation_replay or fused_serial_rotations" in grouped_vdam
     assert "serial_rotation_replay=serial_rotation_replay" in grouped_vdam
+    assert "persistent_serial_rotation_replay=fused_serial_rotations" in grouped_vdam
     assert "fused serial VDAM BPref rotations cannot be combined" in grouped_vdam
     assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV.endswith(
         "FUSED_SERIAL_ROTATIONS"

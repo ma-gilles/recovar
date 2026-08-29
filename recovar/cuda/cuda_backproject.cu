@@ -4540,7 +4540,11 @@ __device__ __forceinline__ void relion_vdam_translate_pixel_f32(
     translated_imag = cosine * imag + sine * real;
 }
 
-template <typename Accumulator, bool CapturedOrder, bool Trace>
+template <
+    typename Accumulator,
+    bool CapturedOrder,
+    bool Trace,
+    bool PersistentSerialRotations>
 __global__ void relion_vdam_native_sgd_f32_kernel(
     RelionVdamProjectorKernel projector,
     float* image_real,
@@ -4569,6 +4573,7 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     unsigned model_y,
     int model_init_y,
     int model_init_z,
+    unsigned rotation_count,
     const int32_t* rotation_replay_order,
     VdamCandidateBlockTraceRecord* trace_records,
     std::uint64_t trace_launch_sequence,
@@ -4577,42 +4582,50 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     std::uint32_t trace_iteration)
 {
     unsigned tid = threadIdx.x;
-    const unsigned physical_image = blockIdx.x;
-    const unsigned image = CapturedOrder
-        ? static_cast<unsigned>(rotation_replay_order[physical_image])
-        : physical_image;
-    VdamCandidateBlockTraceRecord* trace_record = nullptr;
     __shared__ int trace_first_atomic_claimed;
-    if constexpr (Trace)
-    {
-        if (trace_records != nullptr)
-        {
-            trace_record = trace_records + physical_image;
-            if (tid == 0)
-            {
-                trace_first_atomic_claimed = 0;
-                trace_record->launch_sequence = trace_launch_sequence;
-                trace_record->particle_id = trace_particle_id;
-                trace_record->block_start_globaltimer = vdam_candidate_globaltimer();
-                trace_record->first_atomic_globaltimer = 0;
-                trace_record->block_end_globaltimer = 0;
-                trace_record->orientation_row = image;
-                trace_record->worker_id = trace_worker_id;
-                trace_record->class_id = 0;
-                trace_record->sm_id = vdam_candidate_smid();
-                trace_record->image_count = gridDim.x;
-                trace_record->iteration = trace_iteration;
-                trace_record->flags = std::uint32_t(1U << 2);
-                trace_record->reserved = 0;
-            }
-        }
-    }
     int image_y_half = image_y / 2;
     int max_r2_volume = max_r2 * padding_factor * padding_factor;
     __shared__ float shared_eulers[9];
     float minvsigma2, ctf, pixel_real, pixel_imag, Fweight, real, imag, weight;
-    if (tid < 9) shared_eulers[tid] = eulers[image * 9 + tid];
-    __syncthreads();
+    const unsigned physical_image_begin =
+        PersistentSerialRotations ? 0 : blockIdx.x;
+    const unsigned physical_image_end = PersistentSerialRotations
+        ? rotation_count
+        : physical_image_begin + 1;
+    for (unsigned physical_image = physical_image_begin;
+         physical_image < physical_image_end;
+         ++physical_image)
+    {
+        const unsigned image = CapturedOrder
+            ? static_cast<unsigned>(rotation_replay_order[physical_image])
+            : physical_image;
+        VdamCandidateBlockTraceRecord* trace_record = nullptr;
+        if constexpr (Trace)
+        {
+            if (trace_records != nullptr)
+            {
+                trace_record = trace_records + physical_image;
+                if (tid == 0)
+                {
+                    trace_first_atomic_claimed = 0;
+                    trace_record->launch_sequence = trace_launch_sequence;
+                    trace_record->particle_id = trace_particle_id;
+                    trace_record->block_start_globaltimer = vdam_candidate_globaltimer();
+                    trace_record->first_atomic_globaltimer = 0;
+                    trace_record->block_end_globaltimer = 0;
+                    trace_record->orientation_row = image;
+                    trace_record->worker_id = trace_worker_id;
+                    trace_record->class_id = 0;
+                    trace_record->sm_id = vdam_candidate_smid();
+                    trace_record->image_count = rotation_count;
+                    trace_record->iteration = trace_iteration;
+                    trace_record->flags = std::uint32_t(1U << 2);
+                    trace_record->reserved = 0;
+                }
+            }
+        }
+        if (tid < 9) shared_eulers[tid] = eulers[image * 9 + tid];
+        __syncthreads();
 
     int pixel_pass_count = ceilf(static_cast<float>(image_xyz) / 128.0f);
     for (unsigned pass = 0; pass < static_cast<unsigned>(pixel_pass_count); ++pass)
@@ -4739,6 +4752,11 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
                 trace_record->flags |= std::uint32_t(1U << 3);
             trace_record->block_end_globaltimer = vdam_candidate_globaltimer();
         }
+    }
+        // A kernel boundary orders the ordinary one-block replay.  Preserve
+        // that orientation-to-orientation order inside the persistent block
+        // before shared Euler and trace state are reused.
+        __syncthreads();
     }
 }
 
@@ -5044,7 +5062,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     int reconstruction_group_count,
     bool parallel_worker_replay,
     bool captured_rotation_replay,
-    bool serial_rotation_replay,
+    int serial_rotation_replay_mode,
     bool float64_accumulator_replay,
     bool reverse_rotation_replay,
     int rotation_replay_stride,
@@ -5060,6 +5078,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     std::int32_t* quiesced_prelaunch_worker_lane,
     std::int32_t* quiesced_prelaunch_reconstruction_group)
 {
+    const bool serial_rotation_replay = serial_rotation_replay_mode != 0;
+    const bool persistent_serial_rotation_replay =
+        serial_rotation_replay_mode == 2;
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * projection_padding_factor) + 0.5f));
     const int tex_x = padded_max_r + 2;
@@ -5779,10 +5800,14 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     ++quiesced_prelaunch_capture_count;
                 }
             }
-            const int64_t launch_count = serial_rotation_replay ? rotation_count : 1;
+            const int64_t launch_count =
+                serial_rotation_replay && !persistent_serial_rotation_replay
+                    ? rotation_count
+                    : 1;
             for (int64_t launch = 0; launch < launch_count; ++launch)
             {
-                int64_t rotation_offset = serial_rotation_replay
+                int64_t rotation_offset =
+                    serial_rotation_replay && !persistent_serial_rotation_replay
                     ? (reverse_rotation_replay ? rotation_count - 1 - launch : launch)
                     : 0;
                 if (captured_rotation_replay && serial_rotation_replay)
@@ -6002,8 +6027,14 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     if (trace_runtime_gap)
                         runtime_bpref_enqueue_start =
                             std::chrono::steady_clock::now();
+                    const auto launch_runtime_sgd = [&](auto persistent_tag) {
+                    constexpr bool persistent_serial =
+                        decltype(persistent_tag)::value;
                     relion_vdam_native_sgd_f32_kernel<
-                        Accumulator, use_captured_order, use_trace><<<
+                        Accumulator,
+                        use_captured_order,
+                        use_trace,
+                        persistent_serial><<<
                         grid_rotations, 128, 0, particle_streams[lane]>>>(
                         projector,
                         image_real + particle * image_stride,
@@ -6036,6 +6067,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         static_cast<unsigned>(model_y),
                         model_init_y,
                         model_init_z,
+                        static_cast<unsigned>(particle_rotation_count),
                         use_captured_order
                             ? rotation_replay_order + particle * rotation_count
                             : nullptr,
@@ -6051,6 +6083,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             : 0,
                         static_cast<std::int32_t>(lane),
                         candidate_trace_iteration);
+                    };
+                    if (persistent_serial_rotation_replay)
+                        launch_runtime_sgd(std::true_type{});
+                    else
+                        launch_runtime_sgd(std::false_type{});
                     const cudaError_t runtime_launch_error = cudaGetLastError();
                     if (trace_runtime_gap)
                     {
@@ -9787,7 +9824,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         reconstruction_group_count <= 0 ||
         (parallel_worker_replay != 0 && parallel_worker_replay != 1) ||
         (captured_rotation_replay != 0 && captured_rotation_replay != 1) ||
-        (serial_rotation_replay != 0 && serial_rotation_replay != 1) ||
+        (serial_rotation_replay < 0 || serial_rotation_replay > 2) ||
         (float64_accumulator_replay != 0 && float64_accumulator_replay != 1) ||
         (reverse_rotation_replay != 0 && reverse_rotation_replay != 1) ||
         (native_trace_shape_replay != 0 && native_trace_shape_replay != 1) ||
@@ -9797,6 +9834,9 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         rotation_replay_stride < 0 ||
         (captured_rotation_replay != 0 && reverse_rotation_replay != 0) ||
         (captured_rotation_replay != 0 && rotation_replay_stride != 0) ||
+        (serial_rotation_replay == 2 && captured_rotation_replay != 0) ||
+        (serial_rotation_replay == 2 && reverse_rotation_replay != 0) ||
+        (serial_rotation_replay == 2 && rotation_replay_stride != 0) ||
         (captured_particle_timing_replay != 0 && parallel_worker_replay != 0) ||
         (rotation_replay_stride > 0 && serial_rotation_replay == 0) ||
         (rotation_replay_stride > 0 && reverse_rotation_replay != 0))
@@ -9901,7 +9941,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<int>(reconstruction_group_count),
         parallel_worker_replay != 0,
         captured_rotation_replay != 0,
-        serial_rotation_replay != 0,
+        static_cast<int>(serial_rotation_replay),
         float64_accumulator_replay != 0,
         reverse_rotation_replay != 0,
         static_cast<int>(rotation_replay_stride),
