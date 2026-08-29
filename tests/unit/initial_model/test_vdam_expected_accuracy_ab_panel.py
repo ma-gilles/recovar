@@ -14,6 +14,8 @@ def test_expected_accuracy_ab_panel_is_same_allocation_and_fail_closed() -> None
     assert "RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY=0" in text
     assert "RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_SUBPROCESS=0" in text
     assert 'TARGET_GPU_UUID="${TARGET_GPU_UUID}"' in text
+    assert 'test "${GPU_MISS_HOLD_SECONDS}" -le 60' in text
+    assert 'sleep "${GPU_MISS_HOLD_SECONDS}"' in text
     assert 'BOUNDARY_DETERMINISTIC_CUDA=1' in text
     assert 'CAPTURE_NATIVE_REPLAY=0' in text
     assert 'bash "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch"' in text

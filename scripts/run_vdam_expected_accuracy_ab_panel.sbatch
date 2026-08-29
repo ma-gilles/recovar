@@ -32,11 +32,16 @@ NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-285}
 TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-286}
 TARGET_RELION_PERTURBATION_SOURCE=${TARGET_RELION_PERTURBATION_SOURCE:-}
+GPU_MISS_HOLD_SECONDS=${GPU_MISS_HOLD_SECONDS:-0}
 
 case "${REPEATS}" in
   ''|*[!0-9]*) echo "REPEATS must be a positive integer" >&2; exit 2 ;;
 esac
 test "${REPEATS}" -ge 1
+case "${GPU_MISS_HOLD_SECONDS}" in
+  ''|*[!0-9]*) echo "GPU_MISS_HOLD_SECONDS must be an integer from 0 through 60" >&2; exit 2 ;;
+esac
+test "${GPU_MISS_HOLD_SECONDS}" -le 60
 test ! -e "${OUTPUT_ROOT}"
 test -x "${PIXI_PY}"
 test -s "${DATA_DIR}/particles.star"
@@ -48,6 +53,9 @@ test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 visible_gpu_uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | tr -d '[:space:]')
 if [[ "${visible_gpu_uuid}" != "${TARGET_GPU_UUID}" ]]; then
   echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${visible_gpu_uuid}" >&2
+  if [[ "${GPU_MISS_HOLD_SECONDS}" -gt 0 ]]; then
+    sleep "${GPU_MISS_HOLD_SECONDS}"
+  fi
   exit 75
 fi
 
