@@ -14,6 +14,37 @@ Frozen case-definition SHA-256:
 | Same-H100 runtime | **0/20** comparable; 4.91--11.58x RELION | 20/20 comparable | 🔴 |
 | Terminal sealed audits | **20/20** | 20/20 | 🟢 |
 
+### Latest exact-oracle speed discriminator (2026-08-29)
+
+| Arm | Local numerical gate | 0--20 wall | Direct particle trajectory | Decision |
+|---|---:|---:|---:|:---:|
+| Serialized particle + rotation oracle (`1485282f8`) | accepted | median **329 s** (`327--339`) | **16/16** | 🟢 correctness oracle |
+| Shared one-launch Wavg translation loop (`fe943a1f3`) | CUDA/JAX **bitwise** | **299 s** (`-9.1%`) | first failure at iteration 4; historical `286@4`, `2903@16`, `903@18` signature | 🔴 rejected |
+
+Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
+translation `fori_loop`, rather than projector sampling, dominated the visible
+late-iteration launch stream: `loop_add_fusion_5` and
+`loop_multiply_fusion` accounted for `57.8%` of captured CUDA kernel time,
+whereas the projector texture kernel was `0.2%`. Commit `55bdf4390` therefore
+replaced one JAX launch per translation with one shared CUDA primitive; it did
+not add a VDAM-only implementation. Focused H100 jobs `13166105 / 13166219 /
+13166414` prove CUDA/JAX bitwise equality, including the float64-to-float32
+coercions already performed by the mature EM helper. The full multi-arch CUDA
+artifact is SHA-256 `fef609e5ad47...`.
+
+Exact-oracle science job `13166421` then completed iteration 20 in `299 s` on
+physical H100 `GPU-2dcba0de...`, but the direct 1--20 audit rejects it. The
+first divergence is `286@particles.128.mrcs` at iteration 4; later divergences
+are `2903@16` and `903@18`, exactly the recurring device-chronology signature.
+Audit SHA-256 is `40d7d784a150...`. Thus a bitwise local reduction is not
+sufficient when its new FFI launch changes the device issue stream immediately
+before the source-faithful shared BPref callback. Commit `941097ec2` keeps the
+primitive as opt-in `RECOVAR_RELION_WAVG_SEQUENTIAL_CUDA=1`; the qualified JAX
+launch topology remains default and the frozen v3 score is unchanged. The next
+speed candidate must live inside the already-qualified fused callback (or
+otherwise preserve its complete launch chronology), not add a neighboring
+custom call.
+
 ### Why VDAM currently trails supplied-map EM
 
 The headline scores are not a like-for-like measure of shared E-step maturity.
