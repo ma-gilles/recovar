@@ -934,6 +934,9 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         monkeypatch.delenv(
             "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS", raising=False
         )
+        monkeypatch.delenv(
+            "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS", raising=False
+        )
         monkeypatch.setenv("RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS", "1")
         precomputed_launch_serial_nonzero = (
             cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
