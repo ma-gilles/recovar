@@ -90,9 +90,12 @@ evidence, not repeat-robust production closure. Science commits `e20a73814 /
 interleave isolated no-capture, coarse-only, fused-only, and local-only arms.
 Commit `61238adba` additionally makes coarse capture passive: cached scores are
 read only after production support selection. Same-H100 discriminator
-`13132879` is queued on the pinned node with a one-GPU fail-closed UUID gate
-and four repeats per arm, matching the observed 1-in-4 branch while reducing
-the requested backfill window. Superseded resource requests `13132648 /
+`13132960` is queued on the pinned node with four repeats per arm, matching the
+observed 1-in-4 branch while reducing the requested backfill window. One-GPU
+attempt `13132879` received non-target UUID `GPU-e2c...` and exited `75` in
+zero seconds before output or science; the replacement requests the two free
+indices so the allocation includes pinned UUID `GPU-235ec...`, while the
+selector exposes only that GPU. Superseded resource requests `13132648 /
 13132747 / 13132833` were cancelled while pending; setup
 attempt `13132636` exited in one second before output or science because its
 submitted expanded Git SHA was wrong. The score must not be improved by
@@ -188,7 +191,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Same-H100 job `13132879` runs four interleaved iteration-20 repeats for each isolated no-capture, passive-coarse-only, fused-only, and local-only arm while capturing iteration 4. Classify which observer changes topology and retain the least-invasive capture that reproduces the production escape before asynchronous or 0--200 gates. |
+| ➡️ | What is next? | Same-H100 job `13132960` runs four interleaved iteration-20 repeats for each isolated no-capture, passive-coarse-only, fused-only, and local-only arm while capturing iteration 4. Classify which observer changes topology and retain the least-invasive capture that reproduces the production escape before asynchronous or 0--200 gates. |
 | 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
@@ -224,7 +227,7 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
-| Isolated iteration-4 observer discriminator | combined-capture job `13132326` completed 8/8 direct particle envelopes in `8:14`, but its local-score observer materializes a non-production tensor; exact-stop/capture separation, interleaved arms, and passive coarse observation are committed as `e20a73814 / 34b6b57a2 / 61238adba`; one-GPU fail-closed job `13132879` queued | do not treat combined-capture green as closure; identify a production-faithful red capture arm before editing numerical code |
+| Isolated iteration-4 observer discriminator | combined-capture job `13132326` completed 8/8 direct particle envelopes in `8:14`, but its local-score observer materializes a non-production tensor; exact-stop/capture separation, interleaved arms, and passive coarse observation are committed as `e20a73814 / 34b6b57a2 / 61238adba`; two-GPU allocation/one-GPU exposure job `13132960` queued after fail-closed wrong-UUID attempt `13132879` | do not treat combined-capture green as closure; identify a production-faithful red capture arm before editing numerical code |
 | Environment-unset shared canonical policy | exact-H100 job `13130772`; deterministic CUDA; four baseline plus four skip processes; all 8 direct particle reports and both map reports pass through iteration 4; worst nearest-native diameter ratio `0.6093`; aggregate SHA `8c779b2b4d27...` | the policy is active without its environment override, but this bounded panel is superseded by the red iteration-20 repeat control; frozen score unchanged |
 | Deterministic iteration-20 repeat control | exact-H100 job `13131897`; four baseline processes; particle trajectories pass `3/4`; repeat 2 fails first at particle 286 @4 and again by one particle @16/@18; direct map fails @4--20; aggregate SHA `db8662a977c0...` | canonical lane order is helpful but insufficient; hold asynchronous and 0--200 gates, capture the remaining particle-286 cutoff residue in job `13132326` |
 | Expanded expected-accuracy repeat panel | same-H100 job `13127488`; 16 baseline plus 16 skip processes; complete direct particle/map audits | baseline passes `14/16`, skip passes `15/16`; the identical iteration-4 branch occurs in both arms, so expected-accuracy execution is retired as a correction |
