@@ -101,8 +101,17 @@ subsequent one-GPU landing attempts `13133132--13133135` likewise failed closed
 in one second: two received `GPU-202f...` and two received `GPU-ddb...`. The
 desired output root remains absent. A replacement must allocate all four
 physical GPUs on the pinned node and then expose only target UUID
-`GPU-235ec...`. All-four-GPU replacement `13133259` is pending for resources;
-once allocated, the selector will expose only that target. One-GPU attempt
+`GPU-235ec...`. All-four-GPU replacement `13133259` subsequently completed on
+that exact target in `53:55`. All **16/16** direct particle trajectories pass
+through iteration 20: four repeats each for genuinely no capture, passive
+coarse-only capture, fused-only capture, and local-only capture. All four
+repeat-map panels also pass. Their worst candidate-diameter / native-diameter
+ratios are respectively `0.6081 / 0.3136 / 0.4162 / 0.6890`, and their worst
+nearest-native ratios are `0.5692 / 0.6070 / 0.6013 / 0.6180`. Aggregate SHA-256
+over the 16 particle and four map reports is `51924fe559b2334fceeb949801a2869f0daf3945d22fb14951be8fad355abe72`.
+Because the no-capture arm is also 4/4 green, this panel does not discriminate
+an observer and does not supersede the historical red production repeat.
+One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
 Superseded resource requests `13132648 /
@@ -201,7 +210,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Pending job `13133259` will run the same four interleaved iteration-20 repeats per isolated no-capture, passive-coarse-only, fused-only, and local-only arm in an all-four-GPU allocation that exposes only target UUID `GPU-235ec...`. Jobs `13132960 / 13133132--13133135` ran no science because none received that UUID. Then classify which observer changes topology and retain the least-invasive capture that reproduces the production escape before asynchronous or 0--200 gates. |
+| ➡️ | What is next? | Observer discriminator `13133259` is 16/16 particle-green and 4/4 map-panel-green, including four no-capture repeats, so no observer is causal and the historical red repeat remains authoritative. Pinned-node job `13135120` now tests the shared RELION-like BPref particle-pool width (`default` versus `3`) in four interleaved iteration-20 repeats. Dependent job `13135126` swaps green, historical-red, and native iteration-3 maps into one captured particle-286 coarse boundary to test whether the incoming map alone moves `(67,14)` across rank 100. |
 | 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
@@ -237,7 +246,7 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
-| Isolated iteration-4 observer discriminator | combined-capture job `13132326` completed 8/8 direct particle envelopes in `8:14`, but its local-score observer materializes a non-production tensor; exact-stop/capture separation, interleaved arms, and passive coarse observation are committed as `e20a73814 / 34b6b57a2 / 61238adba`; jobs `13132960 / 13133132--13133135` all failed closed on non-target UUIDs in one second and produced no science or output root; all-four-GPU target allocation `13133259` is pending | expose only `GPU-235ec...` after allocation and identify a production-faithful red capture arm before editing numerical code |
+| Isolated iteration-4 observer discriminator | combined-capture job `13132326` completed 8/8 direct particle envelopes in `8:14`, but its local-score observer materializes a non-production tensor; exact-stop/capture separation, interleaved arms, and passive coarse observation are committed as `e20a73814 / 34b6b57a2 / 61238adba`; jobs `13132960 / 13133132--13133135` all failed closed on non-target UUIDs; exact-target all-four allocation `13133259` completed all 16 no/coarse/fused/local iteration-20 trajectories and all four repeat-map panels green, aggregate SHA `51924fe559b2...` | no observer discriminates the rare branch; retain the historical red repeat and test shared BPref pool width plus an incoming-map-only coarse-cutoff counterfactual in `13135120 / 13135126` |
 | Environment-unset shared canonical policy | exact-H100 job `13130772`; deterministic CUDA; four baseline plus four skip processes; all 8 direct particle reports and both map reports pass through iteration 4; worst nearest-native diameter ratio `0.6093`; aggregate SHA `8c779b2b4d27...` | the policy is active without its environment override, but this bounded panel is superseded by the red iteration-20 repeat control; frozen score unchanged |
 | Deterministic iteration-20 repeat control | exact-H100 job `13131897`; four baseline processes; particle trajectories pass `3/4`; repeat 2 fails first at particle 286 @4 and again by one particle @16/@18; direct map fails @4--20; aggregate SHA `db8662a977c0...` | canonical lane order is helpful but insufficient; hold asynchronous and 0--200 gates, capture the remaining particle-286 cutoff residue in job `13132326` |
 | Expanded expected-accuracy repeat panel | same-H100 job `13127488`; 16 baseline plus 16 skip processes; complete direct particle/map audits | baseline passes `14/16`, skip passes `15/16`; the identical iteration-4 branch occurs in both arms, so expected-accuracy execution is retired as a correction |
