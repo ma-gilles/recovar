@@ -65,11 +65,16 @@ the candidate matches native repeat 3's Healpix order, translation range, and
 translation step through at least iteration 130. The earlier apparent update
 miss at iteration 52 was a sparse-audit artifact: that audit compared native
 52 to the previous requested checkpoint (40), not to iteration 51, while both
-engines actually updated at iteration 50. The first active-particle envelope
-miss is iteration 68, where one of 264 evaluated particles
-(`2667@particles.128.mrcs`) chooses the same orientation as repeat 3 but a
-translation displaced by exact sampling-grid steps; the particle re-enters
-the envelope at 71. Map drift remains tiny for dozens more iterations and
+engines actually updated at iteration 50. The first apparent active-particle
+envelope miss against the old four-repeat panel is iteration 68, where one of
+264 evaluated particles (`2667@particles.128.mrcs`) chooses the same
+orientation as repeat 3 but a translation displaced by exact sampling-grid
+steps. Target-H100 native repeat `13121423` supplies the missing state: across
+the old four repeats plus this new diagnostic repeat, all 264 active particles
+match at least one native state. The iteration-68 candidate map also passes
+against the new repeat at FSC-AUC `0.9999991628`. Iteration 68 is therefore
+native mode variation, not the established causal boundary. Map drift against
+the old cross-GPU repeat remains tiny for dozens more iterations and
 first crosses the fixed `0.999` gate at iteration 107 (repeat-3 FSC-AUC
 `0.9989987666`). The candidate completed all 201 science checkpoints. Against
 cross-GPU diagnostic repeat 3, map FSC-AUC reaches a minimum `0.9655810120` at
@@ -85,11 +90,11 @@ sampling-audit artifact; focused coverage passes `8/8`.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | The GF46 discrepancy is not a separate VDAM scoring formula: both observed rank-100/101 score gaps are exactly reachable from captured shared-scorer lanes. The architecture guard proves InitialModel imports EM's authoritative numerical functions by object identity. Static tracing now also records the remaining reuse gap: K=1 InitialModel uses its own local pass-2 orchestration rather than supplied-map EM's complete adaptive wrapper. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. Active particle state first leaves the old four-repeat envelope at iteration 68 (1/264 particles); the map first crosses the fixed gate at 107, bottoms at `0.9655810120` at 196, and ends at `0.9658890125`. These full-trajectory values are cross-GPU diagnostics until the replacement panel finishes. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. The old-panel iteration-68 particle miss is now covered by target-H100 native repeat `13121423`; the first genuine all-target-H100 envelope escape is not yet known. The old repeat-3 map first crosses the fixed gate at 107, bottoms at `0.9655810120` at 196, and ends at `0.9658890125`; those values remain cross-GPU diagnostics. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
-| 🟡 | Same-GPU qualification | The existing four-repeat GF46 panel was generated on H100 `GPU-97adb...`, while synchronized candidate science `13117709` ran on `GPU-235ec...`. The first replacement jobs failed before science because repeat 3 has no copied `data/` directory. Corrected focused job `13121209` has acquired exact `GPU-235ec...`; native full repeats `13121264--13121267` are chained behind it using repeat-1 data/command and each captures particle 2667 at iteration 68. Slot-holder jobs keep the non-target GPU occupied. |
-| 🔴 | First true envelope departure | The first strict scalar miss is expected angular accuracy at iteration 40, but it does not alter the operative schedule. The first scientific state miss is the newly active particle `2667@particles.128.mrcs` at iteration 68: RECOVAR and repeat 3 agree on orientation, while RECOVAR's translation differs by one/two exact effective grid steps. The state is back inside the envelope at 71; accumulated map drift crosses `0.999` at 107. |
-| ➡️ | What is next? | Let `13121209` capture native and RECOVAR coarse, local, and fused operands at the first active state departure. Jobs `13121264--13121267` then establish the required same-H100 repeat envelope. Analyze the first winner decision and correct the shared exact-local behavior; expected-accuracy per-trial capture remains the secondary scalar boundary. |
+| 🟡 | Same-GPU qualification | The existing four-repeat GF46 panel was generated on H100 `GPU-97adb...`, while synchronized candidate science `13117709` ran on `GPU-235ec...`. Autonomous target-H100 native repeat `13121423` completed all 201 checkpoints in 482 s. The other three chained attempts `13121424--13121426` and expected-accuracy attempt `13121591` received `GPU-202f...` and exited 75 before science, as required. Replacement repeat `13121963` is queued with the same immutable inputs and target-UUID gate. The earlier iteration-67 continuation `13121209` is excluded because resuming does not preserve the original minibatch/RNG history. |
+| 🟡 | First true envelope departure | Not yet established. The strict expected-accuracy scalar differs by `0.001 deg` at iteration 40 without changing the operative schedule. The apparent particle departure at iteration 68 is covered when target-H100 repeat `13121423` is added to the diagnostic native modes: **264/264** active particles match at least one native state, and the candidate/new-native map FSC-AUC is `0.9999991628`. Only the completed same-H100 four-repeat envelope can identify the first causal state escape. |
+| ➡️ | What is next? | Complete replacement target-H100 native repeats 2--4, then audit every candidate checkpoint against that unmixed panel. Capture coarse/local/fused operands at the resulting first genuine state escape and correct the shared exact-local policy rather than adding a VDAM-only duplicate. Resubmit the expected-accuracy per-trial capture after the panel. |
 | 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. Job `13117709` wrote all checkpoints 0--200; CPU audits `13120726 / 13120727 / 13120744` seal the cross-GPU diagnostic escape. Local science commit `ad2499e48` fixes the post-science capture check and immediate-previous-iteration sampling audit with `8/8` focused tests. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
@@ -261,7 +266,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 20:07 ET**
+Last scientific update: **2026-08-28 20:29 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
