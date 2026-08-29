@@ -34,6 +34,7 @@ TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-285}
 TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-286}
 TARGET_RELION_PERTURBATION_SOURCE=${TARGET_RELION_PERTURBATION_SOURCE:-}
 GPU_MISS_HOLD_SECONDS=${GPU_MISS_HOLD_SECONDS:-0}
+VDAM_BOUNDARY_DETERMINISTIC_CUDA=${VDAM_BOUNDARY_DETERMINISTIC_CUDA:-1}
 
 case "${REPEATS}" in
   ''|*[!0-9]*) echo "REPEATS must be a positive integer" >&2; exit 2 ;;
@@ -57,6 +58,10 @@ case "${GPU_MISS_HOLD_SECONDS}" in
   ''|*[!0-9]*) echo "GPU_MISS_HOLD_SECONDS must be an integer from 0 through 60" >&2; exit 2 ;;
 esac
 test "${GPU_MISS_HOLD_SECONDS}" -le 60
+case "${VDAM_BOUNDARY_DETERMINISTIC_CUDA}" in
+  0|1) ;;
+  *) echo "VDAM_BOUNDARY_DETERMINISTIC_CUDA must be 0 or 1" >&2; exit 2 ;;
+esac
 test ! -e "${OUTPUT_ROOT}"
 test -x "${PIXI_PY}"
 test -s "${DATA_DIR}/particles.star"
@@ -116,7 +121,7 @@ for repeat in $(seq 1 "${REPEATS}"); do
     CAPTURE_FUSED_SCORES=0 \
     CAPTURE_COARSE_SCORE=0 \
     CAPTURE_NATIVE_REPLAY=0 \
-    BOUNDARY_DETERMINISTIC_CUDA=1 \
+    BOUNDARY_DETERMINISTIC_CUDA="${VDAM_BOUNDARY_DETERMINISTIC_CUDA}" \
       bash "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch"
 
     printf '%s\n' "${mode}" > "${run_root}/provenance/expected_accuracy_mode.txt"

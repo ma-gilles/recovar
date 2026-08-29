@@ -30,7 +30,9 @@ def test_expected_accuracy_ab_panel_is_same_allocation_and_fail_closed() -> None
     assert 'test "${GPU_MISS_HOLD_SECONDS}" -le 60' in text
     assert 'source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"' in text
     assert 'vdam_select_target_gpu "${TARGET_GPU_UUID}" "${GPU_MISS_HOLD_SECONDS}"' in text
-    assert 'BOUNDARY_DETERMINISTIC_CUDA=1' in text
+    assert "VDAM_BOUNDARY_DETERMINISTIC_CUDA=${VDAM_BOUNDARY_DETERMINISTIC_CUDA:-1}" in text
+    assert "VDAM_BOUNDARY_DETERMINISTIC_CUDA must be 0 or 1" in text
+    assert 'BOUNDARY_DETERMINISTIC_CUDA="${VDAM_BOUNDARY_DETERMINISTIC_CUDA}"' in text
     assert 'CAPTURE_NATIVE_REPLAY=0' in text
     assert 'bash "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch"' in text
     assert 'touch "${OUTPUT_ROOT}/COMPLETED"' in text
