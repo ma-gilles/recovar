@@ -28,6 +28,7 @@ PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 VDAM_SCORECARD=${VDAM_SCORECARD:-${REPO_ROOT}/docs/math/vdam_k1_gui_default_full_suite_v1.json}
 VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
 VDAM_DEFER_AUDIT=${VDAM_DEFER_AUDIT:-1}
+NATIVE_REFERENCE_ROOT=${NATIVE_REFERENCE_ROOT:-}
 VDAM_WORKER_SCHEDULE_NPZ=${VDAM_WORKER_SCHEDULE_NPZ:-}
 VDAM_WORKER_REPLAY_TOPOLOGY=${VDAM_WORKER_REPLAY_TOPOLOGY:-}
 EXPECTED_WORKER_SCHEDULE_SHA256=${EXPECTED_WORKER_SCHEDULE_SHA256:-}
@@ -105,7 +106,8 @@ while IFS='=' read -r variable_name _; do
     case "${variable_name}" in RECOVAR_*) unset "${variable_name}" ;; esac
 done < <(env)
 
-PANEL_GPU_UUID=$("${PIXI_PY}" - "${PANEL_ROOT}" "${CASE_ID}" "${VDAM_REPEAT_COUNT}" <<'PY'
+PANEL_GPU_UUID=$("${PIXI_PY}" - "${PANEL_ROOT}" "${CASE_ID}" "${VDAM_REPEAT_COUNT}" \
+    "${NATIVE_REFERENCE_ROOT}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -113,18 +115,30 @@ from pathlib import Path
 root = Path(sys.argv[1])
 case_id = sys.argv[2]
 count = int(sys.argv[3])
-values = {
-    json.loads(
-        (root / f"repeat-{index:02d}" / case_id / "paired_gpu_uuid.json").read_text()
-    )["physical_gpu_uuid"]
-    for index in range(1, count + 1)
-}
+native_only = bool(sys.argv[4])
+values = set()
+for index in range(1, count + 1):
+    repeat = root / f"repeat-{index:02d}" / case_id
+    if native_only:
+        if not (repeat / "SCIENCE_COMPLETED").is_file():
+            raise SystemExit(f"native-only repeat is incomplete: {repeat}")
+        report = json.loads((repeat / "provenance" / "completion.json").read_text())
+        values.add(report["gpu_uuid"])
+    else:
+        report = json.loads((repeat / "paired_gpu_uuid.json").read_text())
+        values.add(report["physical_gpu_uuid"])
 if len(values) != 1:
     raise SystemExit(f"native panel spans physical GPUs: {sorted(values)}")
 print(values.pop())
 PY
 )
 test "${PANEL_GPU_UUID}" = "${TARGET_GPU_UUID}"
+if [[ -n "${NATIVE_REFERENCE_ROOT}" ]]; then
+    test -s "${NATIVE_REFERENCE_ROOT}/trajectory_audit.json"
+    test -s "${NATIVE_REFERENCE_ROOT}/run_provenance.json"
+    test -s "${NATIVE_REFERENCE_ROOT}/relion/relion_command.json"
+    test -s "${NATIVE_REFERENCE_ROOT}/data/particles.star"
+fi
 
 # A native envelope is only calibrated for the physical GPU that produced it.
 # Reuse the same fail-closed selector as the short VDAM panels.  This permits a
@@ -277,11 +291,11 @@ PY
 )
 export CANDIDATE_ROOT PANEL_ROOT FIXTURE_DIR VDAM_SCORECARD CASE_ID PIXEL_SIZE
 export VDAM_REPEAT_COUNT REPO_ROOT EXPECTED_REPO_HEAD PIXI_PY_OVERRIDE="${PIXI_PY}"
-export ANALYSIS_DIR
+export ANALYSIS_DIR NATIVE_REFERENCE_ROOT
 if [[ "${VDAM_DEFER_AUDIT}" == 1 ]]; then
     test -n "${SLURM_JOB_ID:-}"
     audit_job_id=$(sbatch --parsable --dependency="afterok:${SLURM_JOB_ID}" \
-        --export="ALL,CANDIDATE_ROOT=${CANDIDATE_ROOT},PANEL_ROOT=${PANEL_ROOT},FIXTURE_DIR=${FIXTURE_DIR},VDAM_SCORECARD=${VDAM_SCORECARD},CASE_ID=${CASE_ID},PIXEL_SIZE=${PIXEL_SIZE},VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT},REPO_ROOT=${REPO_ROOT},EXPECTED_REPO_HEAD=${EXPECTED_REPO_HEAD},PIXI_PY_OVERRIDE=${PIXI_PY},ANALYSIS_DIR=${ANALYSIS_DIR},VDAM_MARK_CANDIDATE_COMPLETE=1" \
+        --export="ALL,CANDIDATE_ROOT=${CANDIDATE_ROOT},PANEL_ROOT=${PANEL_ROOT},FIXTURE_DIR=${FIXTURE_DIR},VDAM_SCORECARD=${VDAM_SCORECARD},CASE_ID=${CASE_ID},PIXEL_SIZE=${PIXEL_SIZE},VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT},REPO_ROOT=${REPO_ROOT},EXPECTED_REPO_HEAD=${EXPECTED_REPO_HEAD},PIXI_PY_OVERRIDE=${PIXI_PY},ANALYSIS_DIR=${ANALYSIS_DIR},NATIVE_REFERENCE_ROOT=${NATIVE_REFERENCE_ROOT},VDAM_MARK_CANDIDATE_COMPLETE=1" \
         "${REPO_ROOT}/scripts/run_vdam_candidate_envelope_audits.sbatch")
     printf '{"schema":"recovar.vdam_candidate_deferred_audit.v1","science_job_id":"%s","audit_job_id":"%s"}\n' \
         "${SLURM_JOB_ID}" "${audit_job_id}" > "${PROVENANCE_DIR}/deferred_audit.json"

@@ -23,6 +23,7 @@ PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 VDAM_REPEAT_COUNT=${VDAM_REPEAT_COUNT:-4}
 ANALYSIS_DIR=${ANALYSIS_DIR:-${CANDIDATE_ROOT}/analysis/native_envelope}
 VDAM_MARK_CANDIDATE_COMPLETE=${VDAM_MARK_CANDIDATE_COMPLETE:-0}
+NATIVE_REFERENCE_ROOT=${NATIVE_REFERENCE_ROOT:-}
 
 test -x "${PIXI_PY}"
 test -s "${VDAM_SCORECARD}"
@@ -45,12 +46,28 @@ esac
 native_args=()
 for repeat_index in $(seq 1 "${VDAM_REPEAT_COUNT}"); do
     native_root=${PANEL_ROOT}/repeat-$(printf '%02d' "${repeat_index}")/${CASE_ID}
-    test -s "${native_root}/trajectory_audit.json"
-    test -s "${native_root}/particle_state_trajectory_audit.json"
-    test -s "${native_root}/run_provenance.json"
-    test -s "${native_root}/paired_gpu_uuid.json"
+    if [[ -n "${NATIVE_REFERENCE_ROOT}" ]]; then
+        test -f "${native_root}/SCIENCE_COMPLETED"
+        test -s "${native_root}/provenance/completion.json"
+        test -s "${native_root}/provenance/repo_head.txt"
+        test -s "${native_root}/provenance/static_inputs.sha256"
+    else
+        test -s "${native_root}/trajectory_audit.json"
+        test -s "${native_root}/particle_state_trajectory_audit.json"
+        test -s "${native_root}/run_provenance.json"
+        test -s "${native_root}/paired_gpu_uuid.json"
+    fi
     native_args+=(--native-root "${native_root}")
 done
+native_reference_args=()
+if [[ -n "${NATIVE_REFERENCE_ROOT}" ]]; then
+    test -s "${NATIVE_REFERENCE_ROOT}/trajectory_audit.json"
+    test -s "${NATIVE_REFERENCE_ROOT}/run_provenance.json"
+    test -s "${NATIVE_REFERENCE_ROOT}/paired_gpu_uuid.json"
+    test -s "${NATIVE_REFERENCE_ROOT}/relion/relion_command.json"
+    test -s "${NATIVE_REFERENCE_ROOT}/data/particles.star"
+    native_reference_args+=(--native-reference-root "${NATIVE_REFERENCE_ROOT}")
+fi
 
 mkdir -p "${ANALYSIS_DIR}"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
@@ -67,14 +84,14 @@ mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}" "${JAX_COMPILATION_CA
 set +e
 "${PIXI_PY}" -m scripts.audit_vdam_candidate_native_envelope \
     --scorecard "${VDAM_SCORECARD}" --case-id "${CASE_ID}" \
-    --candidate-root "${CANDIDATE_ROOT}" "${native_args[@]}" \
+    --candidate-root "${CANDIDATE_ROOT}" "${native_args[@]}" "${native_reference_args[@]}" \
     --fixture-dir "${FIXTURE_DIR}" \
     --output-json "${ANALYSIS_DIR}/candidate_native_envelope.json" \
     --output-shells-npz "${ANALYSIS_DIR}/candidate_native_envelope_shells.npz"
 map_status=$?
 "${PIXI_PY}" -m scripts.audit_vdam_candidate_state_envelope \
     --scorecard "${VDAM_SCORECARD}" --case-id "${CASE_ID}" \
-    --candidate-root "${CANDIDATE_ROOT}" "${native_args[@]}" \
+    --candidate-root "${CANDIDATE_ROOT}" "${native_args[@]}" "${native_reference_args[@]}" \
     --fixture-dir "${FIXTURE_DIR}" --pixel-size "${PIXEL_SIZE}" \
     --output-json "${ANALYSIS_DIR}/candidate_state_envelope.json"
 state_status=$?

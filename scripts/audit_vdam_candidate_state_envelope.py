@@ -485,6 +485,7 @@ def audit_candidate_state_envelope(
     case_id: str,
     candidate_root: Path,
     native_roots: list[Path],
+    native_reference_root: Path | None = None,
     fixture_dir: Path,
     pixel_size: float,
 ) -> dict[str, Any]:
@@ -502,6 +503,7 @@ def audit_candidate_state_envelope(
         suite_id=str(scorecard["suite_id"]),
         case_id=case_id,
         checkpoints=checkpoints,
+        native_reference_root=native_reference_root,
     )
     require_same_physical_gpu(candidate_provenance, native_provenance)
 
@@ -571,6 +573,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--candidate-root", type=Path, required=True)
     parser.add_argument("--native-root", type=Path, action="append", required=True)
+    parser.add_argument("--native-reference-root", type=Path)
     parser.add_argument("--fixture-dir", type=Path, required=True)
     parser.add_argument("--pixel-size", type=float, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
@@ -580,6 +583,9 @@ def main(argv: list[str] | None = None) -> int:
         case_id=args.case_id,
         candidate_root=args.candidate_root.resolve(),
         native_roots=[path.resolve() for path in args.native_root],
+        native_reference_root=(
+            None if args.native_reference_root is None else args.native_reference_root.resolve()
+        ),
         fixture_dir=args.fixture_dir.resolve(),
         pixel_size=args.pixel_size,
     )

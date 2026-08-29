@@ -13,6 +13,9 @@ def test_candidate_envelope_runner_is_fail_closed_and_runs_both_gates():
     assert "scripts.audit_vdam_candidate_native_envelope" in source
     assert "scripts.audit_vdam_candidate_state_envelope" in source
     assert 'native_args+=(--native-root "${native_root}")' in source
+    assert "NATIVE_REFERENCE_ROOT" in source
+    assert 'native_reference_args+=(--native-reference-root "${NATIVE_REFERENCE_ROOT}")' in source
+    assert 'test -f "${native_root}/SCIENCE_COMPLETED"' in source
     assert "candidate_native_envelope_shells.npz" in source
     assert "candidate_state_envelope.json" in source
     assert "JAX_PLATFORMS=cpu" in source

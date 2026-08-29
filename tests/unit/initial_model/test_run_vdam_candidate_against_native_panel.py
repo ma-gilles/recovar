@@ -31,6 +31,9 @@ def test_candidate_panel_runner_is_strict_reusable_and_fail_closed():
     assert 'vdam_verify_selected_gpu "${VISIBLE_GPU_UUID}"' in source
     assert 'selected_gpu_uuid.txt' in source
     assert 'allocated_gpu_uuids.csv' in source
+    assert "NATIVE_REFERENCE_ROOT" in source
+    assert 'repeat / "provenance" / "completion.json"' in source
+    assert 'NATIVE_REFERENCE_ROOT=${NATIVE_REFERENCE_ROOT}' in source
     assert 'case "${variable_name}" in RECOVAR_*) unset "${variable_name}"' in source
     assert source.index('case "${variable_name}" in RECOVAR_*) unset') < source.index(
         "vdam_select_target_gpu"

@@ -13,8 +13,10 @@ from typing import Any
 import numpy as np
 
 if __package__:
+    from scripts.audit_vdam_repeat_panel import RepeatPanelError, validate_additional_native_roots
     from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
 else:
+    from audit_vdam_repeat_panel import RepeatPanelError, validate_additional_native_roots
     from summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
 
 
@@ -123,45 +125,127 @@ def _candidate_provenance(candidate_root: Path) -> dict[str, str]:
     if len(cuda_rows) != 1 or _HEX64.fullmatch(cuda_rows[0]) is None:
         raise CandidateEnvelopeError("candidate provenance must contain exactly one CUDA library digest")
     gpu_uuids = sorted(set(_GPU_UUID.findall(nvidia_smi)))
-    if len(gpu_uuids) != 1:
-        raise CandidateEnvelopeError(f"candidate GPU identity is ambiguous: {gpu_uuids}")
+    selected_gpu_path = provenance / "selected_gpu_uuid.txt"
+    if selected_gpu_path.is_file():
+        physical_gpu = selected_gpu_path.read_text().strip()
+        if _GPU_UUID.fullmatch(physical_gpu) is None or physical_gpu not in gpu_uuids:
+            raise CandidateEnvelopeError(
+                f"candidate selected GPU is absent from allocation evidence: {physical_gpu!r}"
+            )
+    else:
+        if len(gpu_uuids) != 1:
+            raise CandidateEnvelopeError(f"candidate GPU identity is ambiguous: {gpu_uuids}")
+        physical_gpu = gpu_uuids[0]
     return {
         "source_head": source_head,
         "cuda_library_sha256": cuda_rows[0],
-        "physical_gpu_uuid": gpu_uuids[0],
+        "physical_gpu_uuid": physical_gpu,
         "source_format": "legacy_provenance_directory.v1",
     }
 
 
+def _paired_native_root_provenance(
+    root: Path,
+    *,
+    label: str,
+    suite_id: str,
+    case_id: str,
+    checkpoints: tuple[int, ...],
+) -> dict[str, str]:
+    trajectory = _load_json(root / "trajectory_audit.json", label=f"{label} audit")
+    provenance = _load_json(root / "run_provenance.json", label=f"{label} provenance")
+    gpu = _load_json(root / "paired_gpu_uuid.json", label=f"{label} GPU report")
+    if trajectory.get("schema") != TRAJECTORY_SCHEMA:
+        raise CandidateEnvelopeError(f"{label} trajectory schema differs")
+    if trajectory.get("suite_id") != suite_id or trajectory.get("case_id") != case_id:
+        raise CandidateEnvelopeError(f"{label} suite or case identity differs")
+    observed = tuple(int(row["iteration"]) for row in trajectory.get("checkpoints", ()))
+    if observed != checkpoints or not bool(trajectory.get("artifact_topology_exact")):
+        raise CandidateEnvelopeError(f"{label} checkpoint topology differs")
+    source_head = str(provenance.get("git_head", ""))
+    executable_hash = str(provenance.get("relion_reference", {}).get("executable_sha256", ""))
+    physical = str(gpu.get("physical_gpu_uuid", ""))
+    if _HEX40.fullmatch(source_head) is None:
+        raise CandidateEnvelopeError(f"{label} source head is invalid")
+    if _HEX64.fullmatch(executable_hash) is None:
+        raise CandidateEnvelopeError(f"{label} RELION executable hash is invalid")
+    if {
+        physical,
+        str(gpu.get("relion_gpu_uuid", "")),
+        str(gpu.get("recovar_gpu_uuid", "")),
+    } != {physical} or _GPU_UUID.fullmatch(physical) is None:
+        raise CandidateEnvelopeError(f"{label} paired GPU identity differs")
+    return {
+        "source_head": source_head,
+        "relion_executable_sha256": executable_hash,
+        "physical_gpu_uuid": physical,
+    }
+
+
 def _native_panel_provenance(
-    native_roots: list[Path], *, suite_id: str, case_id: str, checkpoints: tuple[int, ...]
+    native_roots: list[Path],
+    *,
+    suite_id: str,
+    case_id: str,
+    checkpoints: tuple[int, ...],
+    native_reference_root: Path | None = None,
 ) -> dict[str, Any]:
     if len(native_roots) < 2:
         raise CandidateEnvelopeError("native envelope requires at least two complete repeats")
+    if native_reference_root is not None:
+        reference = _paired_native_root_provenance(
+            native_reference_root,
+            label="native input reference",
+            suite_id=suite_id,
+            case_id=case_id,
+            checkpoints=checkpoints,
+        )
+        first_completion = _load_json(
+            native_roots[0] / "provenance" / "completion.json",
+            label="native-only repeat 1 completion",
+        )
+        physical_gpu = str(first_completion.get("gpu_uuid", ""))
+        if _GPU_UUID.fullmatch(physical_gpu) is None:
+            raise CandidateEnvelopeError("native-only panel physical GPU is invalid")
+        try:
+            repeats = validate_additional_native_roots(
+                native_roots,
+                reference_root=native_reference_root,
+                checkpoints=checkpoints,
+                physical_gpu_uuid=physical_gpu,
+                relion_executable_sha256=reference["relion_executable_sha256"],
+            )
+        except RepeatPanelError as exc:
+            raise CandidateEnvelopeError(f"native-only panel is invalid: {exc}") from exc
+        source_heads = {str(row["science_head"]) for row in repeats}
+        if len(source_heads) != 1 or any(_HEX40.fullmatch(value) is None for value in source_heads):
+            raise CandidateEnvelopeError(
+                f"native-only panel contains mixed or invalid source heads: {source_heads}"
+            )
+        return {
+            "repeat_count": len(native_roots),
+            "source_head": next(iter(source_heads)),
+            "input_reference_source_head": reference["source_head"],
+            "relion_executable_sha256": reference["relion_executable_sha256"],
+            "physical_gpu_uuid": physical_gpu,
+            "source_format": "native_only_science_roots.v1",
+            "native_only_repeats": repeats,
+        }
+
     source_heads: set[str] = set()
     executable_hashes: set[str] = set()
     gpu_uuids: set[str] = set()
     for index, root in enumerate(native_roots, start=1):
-        trajectory = _load_json(root / "trajectory_audit.json", label=f"native repeat {index} audit")
-        provenance = _load_json(root / "run_provenance.json", label=f"native repeat {index} provenance")
-        gpu = _load_json(root / "paired_gpu_uuid.json", label=f"native repeat {index} GPU report")
-        if trajectory.get("schema") != TRAJECTORY_SCHEMA:
-            raise CandidateEnvelopeError(f"native repeat {index} trajectory schema differs")
-        if trajectory.get("suite_id") != suite_id or trajectory.get("case_id") != case_id:
-            raise CandidateEnvelopeError(f"native repeat {index} suite or case identity differs")
-        observed = tuple(int(row["iteration"]) for row in trajectory.get("checkpoints", ()))
-        if observed != checkpoints or not bool(trajectory.get("artifact_topology_exact")):
-            raise CandidateEnvelopeError(f"native repeat {index} checkpoint topology differs")
-        source_heads.add(str(provenance.get("git_head", "")))
-        executable_hashes.add(str(provenance.get("relion_reference", {}).get("executable_sha256", "")))
-        physical = str(gpu.get("physical_gpu_uuid", ""))
-        if {
-            physical,
-            str(gpu.get("relion_gpu_uuid", "")),
-            str(gpu.get("recovar_gpu_uuid", "")),
-        } != {physical} or not physical.startswith("GPU-"):
-            raise CandidateEnvelopeError(f"native repeat {index} paired GPU identity differs")
-        gpu_uuids.add(physical)
+        provenance = _paired_native_root_provenance(
+            root,
+            label=f"native repeat {index}",
+            suite_id=suite_id,
+            case_id=case_id,
+            checkpoints=checkpoints,
+        )
+        source_heads.add(provenance["source_head"])
+        executable_hashes.add(provenance["relion_executable_sha256"])
+        gpu_uuids.add(provenance["physical_gpu_uuid"])
     if len(source_heads) != 1 or any(_HEX40.fullmatch(value) is None for value in source_heads):
         raise CandidateEnvelopeError(f"native panel contains mixed or invalid source heads: {source_heads}")
     if len(executable_hashes) != 1 or any(_HEX64.fullmatch(value) is None for value in executable_hashes):
@@ -173,6 +257,7 @@ def _native_panel_provenance(
         "source_head": next(iter(source_heads)),
         "relion_executable_sha256": next(iter(executable_hashes)),
         "physical_gpu_uuid": next(iter(gpu_uuids)),
+        "source_format": "paired_repeat_roots.v1",
     }
 
 
@@ -221,6 +306,7 @@ def audit_candidate_envelope(
     case_id: str,
     candidate_root: Path,
     native_roots: list[Path],
+    native_reference_root: Path | None = None,
     fixture_dir: Path,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     scorecard = _load_json(scorecard_path, label="scorecard")
@@ -250,7 +336,11 @@ def audit_candidate_envelope(
 
     candidate_provenance = _candidate_provenance(candidate_root)
     native_provenance = _native_panel_provenance(
-        native_roots, suite_id=str(scorecard["suite_id"]), case_id=case_id, checkpoints=checkpoints
+        native_roots,
+        suite_id=str(scorecard["suite_id"]),
+        case_id=case_id,
+        checkpoints=checkpoints,
+        native_reference_root=native_reference_root,
     )
     require_same_physical_gpu(candidate_provenance, native_provenance)
     _require_artifacts(candidate_root, "recovar", checkpoints, label="candidate")
@@ -348,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--candidate-root", type=Path, required=True)
     parser.add_argument("--native-root", type=Path, action="append", required=True)
+    parser.add_argument("--native-reference-root", type=Path)
     parser.add_argument("--fixture-dir", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-shells-npz", type=Path, required=True)
@@ -357,6 +448,9 @@ def main(argv: list[str] | None = None) -> int:
         case_id=args.case_id,
         candidate_root=args.candidate_root.resolve(),
         native_roots=[path.resolve() for path in args.native_root],
+        native_reference_root=(
+            None if args.native_reference_root is None else args.native_reference_root.resolve()
+        ),
         fixture_dir=args.fixture_dir.resolve(),
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

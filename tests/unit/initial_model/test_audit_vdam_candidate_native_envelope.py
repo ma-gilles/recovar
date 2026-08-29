@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -108,6 +109,42 @@ def _native_root(root: Path, index: int) -> Path:
     return native
 
 
+def _native_only_root(root: Path, index: int, reference: Path, *, gpu: str = "GPU-acde") -> Path:
+    native = root / f"native-only-{index}"
+    _touch_artifacts(native, "relion")
+    (native / "relion" / "run_it001_sampling.star").touch()
+    provenance = native / "provenance"
+    provenance.mkdir()
+    (native / "SCIENCE_COMPLETED").touch()
+    (provenance / "completion.json").write_text(
+        json.dumps(
+            {
+                "job_id": str(100 + index),
+                "wall_s": 10 + index,
+                "gpu_uuid": gpu,
+                "map_status": 1,
+                "particle_status": 0,
+            }
+        )
+    )
+    (provenance / "repo_head.txt").write_text("d" * 40 + "\n")
+
+    def digest(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    (provenance / "static_inputs.sha256").write_text(
+        "\n".join(
+            (
+                f"{'b' * 64}  relion_refine",
+                f"{digest(reference / 'relion' / 'relion_command.json')}  relion_command.json",
+                f"{digest(reference / 'data' / 'particles.star')}  particles.star",
+            )
+        )
+        + "\n"
+    )
+    return native
+
+
 def test_candidate_envelope_audit_is_provenance_complete_and_fail_closed(tmp_path, monkeypatch):
     scorecard = tmp_path / "scorecard.json"
     scorecard.write_text(
@@ -184,6 +221,51 @@ def test_candidate_envelope_rejects_cross_gpu_evidence():
         audit_module.require_same_physical_gpu(candidate, native)
 
 
+def test_native_panel_accepts_complete_native_only_science_roots(tmp_path):
+    reference = _native_root(tmp_path, 0)
+    (reference / "relion" / "relion_command.json").write_text("command\n")
+    (reference / "data").mkdir()
+    (reference / "data" / "particles.star").write_text("particles\n")
+    native_roots = [
+        _native_only_root(tmp_path, 1, reference),
+        _native_only_root(tmp_path, 2, reference),
+    ]
+
+    report = audit_module._native_panel_provenance(
+        native_roots,
+        suite_id="suite",
+        case_id="case",
+        checkpoints=(0, 1),
+        native_reference_root=reference,
+    )
+
+    assert report["repeat_count"] == 2
+    assert report["source_head"] == "d" * 40
+    assert report["input_reference_source_head"] == "a" * 40
+    assert report["physical_gpu_uuid"] == "GPU-acde"
+    assert report["source_format"] == "native_only_science_roots.v1"
+
+
+def test_native_only_panel_rejects_mixed_physical_gpus(tmp_path):
+    reference = _native_root(tmp_path, 0)
+    (reference / "relion" / "relion_command.json").write_text("command\n")
+    (reference / "data").mkdir()
+    (reference / "data" / "particles.star").write_text("particles\n")
+    native_roots = [
+        _native_only_root(tmp_path, 1, reference),
+        _native_only_root(tmp_path, 2, reference, gpu="GPU-other"),
+    ]
+
+    with pytest.raises(CandidateEnvelopeError, match="different physical GPU"):
+        audit_module._native_panel_provenance(
+            native_roots,
+            suite_id="suite",
+            case_id="case",
+            checkpoints=(0, 1),
+            native_reference_root=reference,
+        )
+
+
 def test_candidate_provenance_rejects_ambiguous_cuda_digest(tmp_path):
     provenance = tmp_path / "provenance"
     provenance.mkdir()
@@ -226,6 +308,23 @@ def test_candidate_provenance_accepts_current_paired_run_format(tmp_path):
         "physical_gpu_uuid": "GPU-one",
         "source_format": "paired_run_provenance.v1",
     }
+
+
+def test_candidate_provenance_uses_selected_uuid_from_multi_gpu_allocation(tmp_path):
+    provenance = tmp_path / "provenance"
+    provenance.mkdir()
+    (provenance / "repo_head.txt").write_text("a" * 40)
+    (provenance / "input_sha256.txt").write_text(
+        f"{'b' * 64}  /one/libcuda_backproject.so\n"
+    )
+    (provenance / "nvidia_smi.txt").write_text(
+        "GPU UUID : GPU-aaaa\nGPU UUID : GPU-bbbb\n"
+    )
+    (provenance / "selected_gpu_uuid.txt").write_text("GPU-bbbb\n")
+
+    report = audit_module._candidate_provenance(tmp_path)
+
+    assert report["physical_gpu_uuid"] == "GPU-bbbb"
 
 
 def test_candidate_provenance_rejects_mixed_paired_gpu_report(tmp_path):
