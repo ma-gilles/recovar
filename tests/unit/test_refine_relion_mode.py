@@ -119,9 +119,9 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
     EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
     EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
+    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
     EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
@@ -138,8 +138,9 @@ from recovar.em.dense_single_volume.local_em_engine import (
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
-    _source_faithful_bpref_particle_chunk_size,
     _source_faithful_bpref_particle_chunk_cap,
+    _source_faithful_bpref_particle_chunk_size,
+    _source_faithful_bpref_particle_slices,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_layout import (
@@ -3773,6 +3774,33 @@ def test_source_faithful_bpref_particle_chunk_cap_is_explicit(monkeypatch):
         monkeypatch.setenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, invalid)
         with pytest.raises(ValueError, match="must be a positive integer"):
             _source_faithful_bpref_particle_chunk_cap()
+
+
+def test_source_faithful_bpref_particle_slices_preserve_physical_order():
+    assert _source_faithful_bpref_particle_slices(8, None) == ((0, 8),)
+    assert _source_faithful_bpref_particle_slices(8, 3) == (
+        (0, 3),
+        (3, 6),
+        (6, 8),
+    )
+    assert _source_faithful_bpref_particle_slices(2, 3) == ((0, 2),)
+    with pytest.raises(ValueError, match="must be non-empty"):
+        _source_faithful_bpref_particle_slices(0, 3)
+    with pytest.raises(ValueError, match="must be positive"):
+        _source_faithful_bpref_particle_slices(3, 0)
+
+
+def test_source_faithful_bpref_particle_cap_is_wired_into_grouped_vdam():
+    source = inspect.getsource(run_local_em_exact)
+    start = source.index('raise RuntimeError("source VDAM physical operands were not packed")')
+    stop = source.index("elif source_faithful_bpref and sparse_big_jit_backprojection", start)
+    grouped_vdam = source[start:stop]
+
+    assert "_source_faithful_bpref_particle_chunk_cap()" in grouped_vdam
+    assert "_source_faithful_bpref_particle_slices(" in grouped_vdam
+    assert "for particle_start, particle_stop in particle_slices" in grouped_vdam
+    assert "source-faithful BPref particle chunking cannot be combined" in grouped_vdam
+    assert "_accumulate_relion_vdam_physical_particle_grid(" in grouped_vdam
 
 
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():

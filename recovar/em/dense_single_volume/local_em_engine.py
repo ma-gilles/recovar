@@ -1895,6 +1895,24 @@ def _source_faithful_bpref_particle_chunk_cap() -> int | None:
     return value
 
 
+def _source_faithful_bpref_particle_slices(
+    image_count: int,
+    max_particles: int | None,
+) -> tuple[tuple[int, int], ...]:
+    """Partition a physical particle stream without reordering it."""
+
+    image_count = int(image_count)
+    if image_count < 1:
+        raise ValueError("source-faithful BPref particle stream must be non-empty")
+    chunk_size = image_count if max_particles is None else min(image_count, int(max_particles))
+    if chunk_size < 1:
+        raise ValueError("source-faithful BPref particle chunk cap must be positive")
+    return tuple(
+        (particle_start, min(image_count, particle_start + chunk_size))
+        for particle_start in range(0, image_count, chunk_size)
+    )
+
+
 def _reconstruction_pack_large_bucket_quantum() -> int:
     raw = os.environ.get(EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV, "").strip()
     if raw:
@@ -5921,59 +5939,138 @@ def run_local_em_exact(
                     candidate_launch_counts=native_grid_counts,
                     debug_iteration=debug_iteration,
                 )
-                Ft_y, Ft_ctf = _accumulate_relion_vdam_physical_particle_grid(
-                    packed_source_vdam_images,
-                    packed_source_vdam_ctf,
-                    packed_source_vdam_minvsigma2,
-                    packed_source_vdam_posterior,
-                    relion_score_translation_angles,
-                    packed_source_vdam_reference,
-                    packed_mstep_rotations_np,
-                    reconstruction_pack_mask_jnp,
-                    Ft_y,
-                    Ft_ctf,
-                    projector_full=source_vdam_projector_full,
-                    scoring_rotations=packed_rotations_np,
-                    projector_r_max=relion_projector_r_max_big_jit,
-                    projection_padding_factor=projection_padding_factor,
-                    pixel_indices=mstep_recon_window_indices,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    max_r=mstep_adjoint_max_r,
-                    reconstruction_group_ids=bucket_reconstruction_group_ids,
-                    worker_lane_ids=_relion_vdam_worker_lanes_for_images(
-                        experiment_dataset,
-                        unpadded_bucket.image_indices,
-                        debug_iteration=debug_iteration,
-                    ),
-                    particle_trace_ids=candidate_trace_ids,
-                    serial_rotation_replay=(
-                        _relion_vdam_serial_rotation_replay()
-                        or _relion_vdam_captured_block_serial_replay()
-                    ),
-                    float64_accumulator_replay=(
-                        _relion_vdam_float64_accumulator_replay()
-                    ),
-                    reverse_rotation_replay=_relion_vdam_reverse_rotation_replay(),
-                    rotation_replay_stride=_relion_vdam_rotation_replay_stride(),
-                    rotation_replay_order=block_start_order,
-                    rotation_replay_counts=native_grid_counts,
-                    particle_start_offsets_ns=particle_start_offsets_ns,
-                    native_trace_shape_replay=(
-                        _relion_vdam_native_trace_shape_replay(
-                            debug_iteration=debug_iteration
-                        )
-                    ),
-                    materialized_rotation_replay=(
-                        _relion_vdam_materialized_native_grid_replay(
-                            debug_iteration=debug_iteration
-                        )
-                    ),
-                    particle_replay_order=particle_issue_order,
-                    candidate_trace_active=_relion_vdam_candidate_trace_active(
-                        debug_iteration=debug_iteration
-                    ),
+                worker_lane_ids = _relion_vdam_worker_lanes_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    debug_iteration=debug_iteration,
                 )
+                serial_rotation_replay = bool(
+                    _relion_vdam_serial_rotation_replay()
+                    or _relion_vdam_captured_block_serial_replay()
+                )
+                float64_accumulator_replay = _relion_vdam_float64_accumulator_replay()
+                reverse_rotation_replay = _relion_vdam_reverse_rotation_replay()
+                rotation_replay_stride = _relion_vdam_rotation_replay_stride()
+                native_trace_shape_replay = _relion_vdam_native_trace_shape_replay(
+                    debug_iteration=debug_iteration
+                )
+                materialized_rotation_replay = _relion_vdam_materialized_native_grid_replay(
+                    debug_iteration=debug_iteration
+                )
+                candidate_trace_active = _relion_vdam_candidate_trace_active(
+                    debug_iteration=debug_iteration
+                )
+                particle_chunk_cap = _source_faithful_bpref_particle_chunk_cap()
+                particle_slices = _source_faithful_bpref_particle_slices(
+                    unpadded_batch_size,
+                    particle_chunk_cap,
+                )
+                particle_chunk_size = particle_slices[0][1] - particle_slices[0][0]
+                split_particle_stream = particle_chunk_size < unpadded_batch_size
+                if split_particle_stream:
+                    if any(
+                        value is not None
+                        for value in (
+                            block_start_order,
+                            native_grid_counts,
+                            particle_start_offsets_ns,
+                            particle_issue_order,
+                        )
+                    ) or any(
+                        (
+                            serial_rotation_replay,
+                            float64_accumulator_replay,
+                            reverse_rotation_replay,
+                            native_trace_shape_replay,
+                            materialized_rotation_replay,
+                        )
+                    ):
+                        raise ValueError(
+                            "source-faithful BPref particle chunking cannot be combined "
+                            "with VDAM chronology replay"
+                        )
+                    if not logged_deferred_mstep_chunking:
+                        logger.info(
+                            "Exact local VDAM BPref particle chunking: "
+                            "particles=%d chunk_particles=%d packed_rows=%d",
+                            unpadded_batch_size,
+                            particle_chunk_size,
+                            int(packed_mstep_rotations_np.shape[1]),
+                        )
+                        logged_deferred_mstep_chunking = True
+
+                def _particle_slice(value, particle_start, particle_stop):
+                    if value is None or not split_particle_stream:
+                        return value
+                    return value[particle_start:particle_stop]
+
+                for particle_start, particle_stop in particle_slices:
+                    Ft_y, Ft_ctf = _accumulate_relion_vdam_physical_particle_grid(
+                        _particle_slice(
+                            packed_source_vdam_images, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_source_vdam_ctf, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_source_vdam_minvsigma2, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_source_vdam_posterior, particle_start, particle_stop
+                        ),
+                        relion_score_translation_angles,
+                        _particle_slice(
+                            packed_source_vdam_reference, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_mstep_rotations_np, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            reconstruction_pack_mask_jnp, particle_start, particle_stop
+                        ),
+                        Ft_y,
+                        Ft_ctf,
+                        projector_full=source_vdam_projector_full,
+                        scoring_rotations=_particle_slice(
+                            packed_rotations_np, particle_start, particle_stop
+                        ),
+                        projector_r_max=relion_projector_r_max_big_jit,
+                        projection_padding_factor=projection_padding_factor,
+                        pixel_indices=mstep_recon_window_indices,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        max_r=mstep_adjoint_max_r,
+                        reconstruction_group_ids=_particle_slice(
+                            bucket_reconstruction_group_ids,
+                            particle_start,
+                            particle_stop,
+                        ),
+                        worker_lane_ids=_particle_slice(
+                            worker_lane_ids, particle_start, particle_stop
+                        ),
+                        particle_trace_ids=_particle_slice(
+                            candidate_trace_ids, particle_start, particle_stop
+                        ),
+                        serial_rotation_replay=serial_rotation_replay,
+                        float64_accumulator_replay=float64_accumulator_replay,
+                        reverse_rotation_replay=reverse_rotation_replay,
+                        rotation_replay_stride=rotation_replay_stride,
+                        rotation_replay_order=_particle_slice(
+                            block_start_order, particle_start, particle_stop
+                        ),
+                        rotation_replay_counts=_particle_slice(
+                            native_grid_counts, particle_start, particle_stop
+                        ),
+                        particle_start_offsets_ns=_particle_slice(
+                            particle_start_offsets_ns, particle_start, particle_stop
+                        ),
+                        native_trace_shape_replay=native_trace_shape_replay,
+                        materialized_rotation_replay=materialized_rotation_replay,
+                        particle_replay_order=_particle_slice(
+                            particle_issue_order, particle_start, particle_stop
+                        ),
+                        candidate_trace_active=candidate_trace_active,
+                    )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
                 timing.adjoint_y_s += time.time() - adjoint_t0
