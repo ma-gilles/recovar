@@ -298,14 +298,29 @@ Replacement `13147336` reached the pinned GPU but exited before science because
 the isolated worktree lacked the already-qualified RELION binding artifact;
 the binding was copied with exact expected SHA-256 `77ac98f16ae9...`, and the
 stale dependency chain was cancelled. Same-H100 two-repeat science/audit
-`13147721 / 13147722` are now the active gate. A second two-repeat chain
-`13147723 / 13147724` enables EM's existing
-RELION projection cache only after the uncached hybrid passes. This is a
-high-leverage exact-path test: GF46's late iterations use only about 20 unique
-global rotations while scoring tens of thousands of local rows, with measured
-duplicate factors around `1,900--4,800x`. It can reduce the remaining
-approximately `97 s` big-JIT projector cost without adding VDAM-specific
-projection code.
+`13147721 / 13147722` pass **2/2** particle trajectories and the complete map
+envelope at walls `221 / 218 s` (median `219.5 s`). Worst
+candidate-diameter/native-diameter and nearest-native/native-diameter ratios
+are `0.1818 / 0.6286`.
+
+A second two-repeat chain `13147723 / 13147724` enabled EM's existing RELION
+projection cache. The hypothesis was attractive because GF46's late
+iterations expose about 20 global rotation IDs while scoring tens of thousands
+of local rows, with measured duplicate factors around `1,900--4,800x`.
+Production evidence rejects it here: walls regress to `251 / 255 s`, both
+particle trajectories first fail at iteration 1, and the map envelope also
+fails at iteration 1. EM's cached projection/gather path is close but not
+bitwise identical to direct projection; prior mature-EM A/Bs measured score
+perturbations around `1e-5`, and InitialModel's first branch is sensitive to
+that change. This optimization cannot be enabled for exact VDAM.
+
+The final bounded launch-overhead discriminator keeps the admitted hybrid but
+sets `CUDA_LAUNCH_BLOCKING=0`; explicit per-rotation CUDA launches still retain
+scatter order. Same-H100 science/audit `13148293 / 13148294` pass **2/2**
+particle and map trajectories at `206 / 206 s`. Worst map-diameter and
+nearest-native ratios are `0.5975 / 0.6296`. This matches the ordinary fast
+path while preserving the correctness boundary. It is now undergoing the
+required 16-repeat qualification in `13148646 / 13148647`.
 
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
@@ -314,7 +329,9 @@ projection code.
 | Persistent one-block ordered scatter | particle **4/6** extended | `308--311 s` in completed control repeats | rejected: parity failure |
 | Persistent + parallel projection | **4/4** smoke | median `311.5 s` | rejected: negligible gain |
 | Persistent + parallel residual | **1/2** | median `205 s` | rejected: parity failure |
-| EM-batched residual + launch-ordered scatter | 3/3 CUDA gate; trajectory pending | target near `205 s` plus launches | active candidate |
+| EM-batched residual + launch-ordered scatter, blocking | **2/2** | median `219.5 s` | exact fallback |
+| Same hybrid + EM projection cache | **0/2**, first fail @1 | median `253 s` | rejected: parity and runtime |
+| Same hybrid, no global launch blocking | **2/2** | median `206 s` | active 16-repeat candidate |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -414,8 +431,8 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Run the two-repeat EM-batched-residual + launch-ordered-scatter discriminator (`13147721 / 13147722`) on the pinned H100. If exact, immediately test the same hybrid with EM's shared projection cache (`13147723 / 13147724`); promote the fastest exact arm to 16 repeats before any full-200 trajectory. |
-| 🟢 | What finished? | Launch-serialized particle+rotation ordering passes **16/16** particles and maps (`13139299 / 13140157`). The apparently green persistent smoke is now rejected at **4/6** by the extended control. Parallel projection is rejected at median `311.5 s`; persistent parallel residual is fast at median `205 s` but rejected at **1/2**. The EM-batched-residual + launch-ordered-scatter hybrid passes its 3/3 H100 gate (`13146983`). |
+| ➡️ | What is next? | Finish the 16-repeat no-global-blocking hybrid qualification (`13148646 / 13148647`). A green aggregate particle/map envelope admits two independent full-200 trajectories; any repeated failure falls back to the already-green blocking hybrid before another long run. |
+| 🟢 | What finished? | The EM-batched-residual + launch-ordered-scatter hybrid passes its 3/3 H100 gate and **2/2** blocking trajectory gate at median `219.5 s`. Removing global launch blocking retains **2/2** parity and lowers the median to `206 s`, matching ordinary fast VDAM. EM's shared projection cache is rejected at **0/2** and median `253 s`. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
