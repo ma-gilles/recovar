@@ -22,6 +22,30 @@ Frozen case-definition SHA-256:
 | Shared one-launch Wavg translation loop (`fe943a1f3`) | CUDA/JAX **bitwise** | **299 s** (`-9.1%`) | first failure at iteration 4; historical `286@4`, `2903@16`, `903@18` signature | 🔴 rejected |
 | Persistent fused-BPref worker streams (`04742df83`) | focused GPU **2/2** | **297 s** (`-9.7%`) | first failure at iteration 4; same historical signature | 🔴 rejected |
 | Persistent linear callback scratch (`cb953f7cf`) | focused source **3/3**, GPU **2/2** | **194--195 s** (`-41.0%`) | two exact runs, then historical failure at iteration 4; repeat gate **1/2** | 🔴 rejected |
+| Worker-private BPref (`0c5df734b`) | paired serial oracle green | **192--212 s** | exact at 19/20 checkpoints; only `1723@19` leaves the native envelope | 🟡 active correctness target |
+
+Nsight job `13168898` profiles the persistent-scratch arm after allocator
+overhead is removed. The RELION VDAM SGD kernel accounts for **92.2%** of GPU
+time (`124.478 s`, **2,364,832** launches), while **29,657**
+`cudaStreamSynchronize` calls account for **89.9%** of CUDA API time
+(`120.787 s`). `cudaFree` falls to only **1.5%** (`2.027 s`, 15,404 calls).
+This closes allocator tuning as the main remaining speed lever: the scalable
+path must batch orientation work and retain deterministic worker-private BPref
+destinations. The supplied-map EM audit points to the same design: VDAM
+already reuses EM's active-row planner and compact candidate scorer, but EM's
+packed significant rows reach a fused indexed BPref launch whereas the exact
+VDAM callback still launches once per retained orientation.
+
+The worker-private failure is now localized more tightly than the table alone
+shows. Particle `1723@particles.128.mrcs` matches all four native references
+through iteration 18, including its pose, translation, and Pmax. At iteration
+19 the candidate and native references select the same orientation and nearly
+the same Pmax (`0.476847` candidate versus `0.476843--0.476912` native), but
+choose adjacent x translations separated by `4.25 A`: `-0.971983 A` versus
+`-5.22198 A`. Rotation concurrency and three-particle worker ownership produce
+the identical single failure, so both are exonerated. Targeted score capture
+is queued as Slurm array `13169231` on the exact physical H100 to distinguish
+a score tie from an incoming worker-lane reduction difference.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
