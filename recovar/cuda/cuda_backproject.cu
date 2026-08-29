@@ -4603,10 +4603,10 @@ __device__ __forceinline__ void relion_vdam_native_residual_f32(
     float& imag,
     float& Fweight)
 {
-    const float minvsigma2 = __ldg(&minvsigma2s[pixel]);
-    const float ctf = __ldg(&ctfs[pixel]);
-    const float pixel_real = __ldg(&image_real[pixel]);
-    const float pixel_imag = __ldg(&image_imag[pixel]);
+    float minvsigma2 = __ldg(&minvsigma2s[pixel]);
+    float ctf = __ldg(&ctfs[pixel]);
+    float pixel_real = __ldg(&image_real[pixel]);
+    float pixel_imag = __ldg(&image_imag[pixel]);
     Fweight = 0.0f;
     real = 0.0f;
     imag = 0.0f;
