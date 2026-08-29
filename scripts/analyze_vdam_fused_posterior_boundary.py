@@ -35,12 +35,32 @@ def _centered_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, 
     candidate = np.asarray(candidate, dtype=np.float64).reshape(-1)
     if reference.shape != candidate.shape or reference.size == 0:
         raise ValueError("centered score comparison requires aligned nonempty vectors")
-    difference = candidate - reference
+    finite = np.isfinite(reference) & np.isfinite(candidate)
+    nonfinite_equal = (~np.isfinite(reference)) & (~np.isfinite(candidate)) & (
+        reference == candidate
+    )
+    nonfinite_mismatch_count = int(
+        np.count_nonzero(~finite & ~nonfinite_equal)
+    )
+    if not np.any(finite):
+        return {
+            "status": "no_finite_overlap",
+            "finite_pair_count": 0,
+            "nonfinite_equal_count": int(np.count_nonzero(nonfinite_equal)),
+            "nonfinite_mismatch_count": nonfinite_mismatch_count,
+            "value_count": int(reference.size),
+        }
+    finite_reference = reference[finite]
+    finite_candidate = candidate[finite]
+    difference = finite_candidate - finite_reference
     common_offset = float(np.mean(difference, dtype=np.float64))
     centered_residual = difference - common_offset
-    centered_reference = reference - float(np.mean(reference, dtype=np.float64))
+    centered_reference = finite_reference - float(
+        np.mean(finite_reference, dtype=np.float64)
+    )
     denominator = float(np.linalg.norm(centered_reference))
     return {
+        "status": "complete" if nonfinite_mismatch_count == 0 else "nonfinite_mismatch",
         "candidate_minus_native_common_offset": common_offset,
         "relative_l2": (
             float(np.linalg.norm(centered_residual) / denominator)
@@ -50,7 +70,35 @@ def _centered_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, 
         "rms": float(np.sqrt(np.mean(centered_residual * centered_residual))),
         "max_abs": float(np.max(np.abs(centered_residual))),
         "exact_centered_count": int(np.count_nonzero(centered_residual == 0.0)),
+        "finite_pair_count": int(np.count_nonzero(finite)),
+        "nonfinite_equal_count": int(np.count_nonzero(nonfinite_equal)),
+        "nonfinite_mismatch_count": nonfinite_mismatch_count,
         "value_count": int(reference.size),
+    }
+
+
+def _rotation_support_mismatch(
+    *,
+    native_rotation_ids: np.ndarray,
+    rotation_distance: np.ndarray,
+    rotation_tolerance: float,
+) -> dict[str, object] | None:
+    """Describe selected native rotations absent from the RECOVAR support."""
+
+    selected_distance = np.asarray(rotation_distance, dtype=np.float64)[
+        np.asarray(native_rotation_ids, dtype=np.int64)
+    ]
+    unmatched = selected_distance > float(rotation_tolerance)
+    if not np.any(unmatched):
+        return None
+    selected_ids = np.asarray(native_rotation_ids, dtype=np.int64)
+    return {
+        "status": "rotation_support_mismatch",
+        "rotation_tolerance": float(rotation_tolerance),
+        "native_candidate_unmatched_count": int(np.count_nonzero(unmatched)),
+        "native_candidate_count": int(selected_ids.size),
+        "native_rotation_unmatched_ids": np.unique(selected_ids[unmatched]).tolist(),
+        "selected_rotation_distance_max": float(np.max(selected_distance)),
     }
 
 
@@ -62,6 +110,7 @@ def compare_score_spacing(
     native_log_weights: np.ndarray,
     native_combined_log_prior: np.ndarray,
     live: dict[str, np.ndarray],
+    rotation_tolerance: float = 1.0e-5,
 ) -> dict[str, object]:
     """Compare captured pre-posterior score spacing on the mapped native support."""
 
@@ -98,6 +147,18 @@ def compare_score_spacing(
     )
     if np.any(native_rotation_ids < 0) or np.any(native_rotation_ids >= nearest.size):
         raise ValueError("native score rotation id is outside the captured rotation table")
+    support_mismatch = _rotation_support_mismatch(
+        native_rotation_ids=native_rotation_ids,
+        rotation_distance=rotation_distance,
+        rotation_tolerance=rotation_tolerance,
+    )
+    if support_mismatch is not None:
+        return {
+            **support_mismatch,
+            "candidate_count": candidate_count,
+            "rotation_matrix_orientation": orientation,
+            "rotation_matrix_max_frobenius": float(np.max(rotation_distance)),
+        }
     mapped_rotations = nearest[native_rotation_ids]
 
     total_scores = np.asarray(live["pass2_scores_total"], dtype=np.float64)
@@ -173,6 +234,7 @@ def compare_posteriors(
     native_sum_weight: float,
     native_reconstruction_mask: np.ndarray,
     live: dict[str, np.ndarray],
+    rotation_tolerance: float = 1.0e-5,
 ) -> dict[str, object]:
     """Compare mapped candidate probabilities without assuming matching row order."""
 
@@ -198,6 +260,19 @@ def compare_posteriors(
     )
     if np.any(native_rotation_ids < 0) or np.any(native_rotation_ids >= nearest.size):
         raise ValueError("native candidate rotation id is outside the captured rotation table")
+    support_mismatch = _rotation_support_mismatch(
+        native_rotation_ids=native_rotation_ids,
+        rotation_distance=rotation_distance,
+        rotation_tolerance=rotation_tolerance,
+    )
+    if support_mismatch is not None:
+        return {
+            **support_mismatch,
+            "candidate_count": candidate_count,
+            "rotation_matrix_orientation": orientation,
+            "rotation_matrix_max_frobenius": float(np.max(rotation_distance)),
+            "rotation_matrix_median_frobenius": float(np.median(rotation_distance)),
+        }
 
     posterior = np.asarray(live["posterior"], dtype=np.float64)
     if posterior.ndim == 3 and posterior.shape[0] == 1:
@@ -250,6 +325,7 @@ def compare_posteriors(
     ]
 
     return {
+        "status": "complete",
         "candidate_count": candidate_count,
         "rotation_matrix_orientation": orientation,
         "rotation_matrix_max_frobenius": float(np.max(rotation_distance)),
