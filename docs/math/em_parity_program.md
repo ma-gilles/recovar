@@ -14,6 +14,33 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
+### 2026-08-29 canonical coarse cutoff qualification
+
+The first common-frame repeat escape is now causal and has a bounded shared
+correction. At iteration 4, particle `286@particles.128.mrcs` retains 101
+coarse parents in the escaping candidate versus 100 in RELION; the only extra
+parent is `(67,14)`. Captured fused-score lanes prove that canonical lane-index
+reduction reproduces RELION's support, while another legal float32 lane order
+crosses the adaptive cutoff and retains the extra parent.
+
+Expanded same-H100 job `13127488` completes 16 baseline and 16
+expected-accuracy-skip processes. Full active-particle and direct-map audits
+pass `14/16` baseline and `15/16` skip; the same iteration-4 branch occurs in
+both arms, so expected-accuracy execution is retired as a correction. Pinned
+canonical-reduction job `13128280` then completes 8+8 fresh processes in
+`14:21` on `GPU-235ec...`: all 16 particle reports and both 8-repeat map
+envelopes pass through iteration 4. Worst candidate/native map-diameter ratios
+are `0.2688 / 0.4668`, and median 0--4 wall times are `49.5 / 50.0 s`, with no
+observed bounded-panel runtime regression.
+
+Science commit `826e160c6` makes the existing shared EM/VDAM canonical
+reduction the exact coarse default while preserving environment value `0` as
+an explicit rollback. Commit `eee92e4aa` alternates repeat-panel arm order.
+The active gate is now a fresh environment-unset default qualification through
+iteration 20, followed by the unchanged full 0--200 K=1 trajectory/runtime
+gate. Frozen acceptance remains **2/20 strict** and **0/20 runtime** until that
+complete evidence passes; no tolerance, case, baseline, or denominator changed.
+
 ### 2026-08-26 GF47 cumulative state and controller precision
 
 The first GF47 particle-state split was a checkpoint-serialization defect, not

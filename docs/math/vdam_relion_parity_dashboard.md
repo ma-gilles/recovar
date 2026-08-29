@@ -30,7 +30,7 @@ fractions must not be read as the same test with different implementations.
 |---|---|---|---|
 | Starting reference | Stable supplied map | Bootstrapped from the particles | VDAM must reproduce the initial basin as well as refinement. |
 | Feedback | Scores a comparatively stable reference | Every small M-step difference becomes the next E-step input | Native-scale atomic variation can cross a later adaptive cutoff and avalanche. |
-| Shared implementation | Authoritative significance, compact sparse pass-2, local-refinement, layout, posterior, and expected-accuracy code | Imports the numerical functions by object identity, but K=1 defaults to InitialModel's separate local pass-2 orchestration instead of supplied-map EM's `run_dense_k_class_em_adaptive` policy path | Scoring kernels are reused; grid/layout preparation, grouping, and reduction policy are not yet one end-to-end shared path. |
+| Shared implementation | Authoritative significance, compact sparse pass-2, local-refinement, layout, posterior, expected-accuracy, and canonical coarse-reduction code | Imports the numerical functions by object identity, but K=1 defaults to InitialModel's separate local pass-2 orchestration instead of supplied-map EM's `run_dense_k_class_em_adaptive` policy path | Scoring and the qualified deterministic coarse reduction are shared; InitialModel-specific grouping, controller, and reconstruction remain separate. |
 | Algorithm-specific work | Conventional EM reconstruction/update path | InitialModel SGD BPref accumulation, gradient moments, pseudo-halfsets, reconstruction, and bootstrap/controller schedule | These pieces cannot simply call the supplied-map EM M-step because RELION uses a different update algorithm. |
 | Current causal boundary | Several difficult noise/topology cases still remain | One adaptive coarse-parent decision for particle 286 at iteration 4 | The local iteration-64 scorer and raw BPref width remain closed. A direct four-repeat map/particle audit now localizes the first common-frame candidate escape to one orientation flip at iteration 4. |
 | Runtime posture | Mature production path; best large run about 1.40x RELION | Reference-faithful and heavily guarded path; 4.91--11.58x | Correctness-first diagnostics and non-fused host work must be removed or optimized after a repeat-robust K=1 trajectory is sealed. |
@@ -48,10 +48,27 @@ iteration 3; at iteration 4 only particle `286@particles.128.mrcs` is outside
 every native state. Its candidate pass 1 retains 101 coarse parents versus
 RELION's 100, with one candidate-only parent `(67,14)`, centered total-score
 maximum error `2.48e-5`, and posterior TV `9.14e-7`. Fine scoring and posterior
-normalization are downstream of that support split. The next gate is repeated
-same-H100 A/B qualification of the iteration-1 expected-accuracy execution
-boundary, not another BPref or global-frame investigation. The score must not
-be improved by weakening particle gates or selecting one lucky CUDA
+normalization are downstream of that support split. Expanded same-H100 job
+`13127488` now retires the expected-accuracy execution theory: across 16
+baseline and 16 skip processes, the same iteration-4 branch appears in
+baseline repeats 3/5 and skip repeat 15. Their full active-particle and map
+audits fail only for those three runs, so skipping expected accuracy changes
+the rate from `2/16` to `1/16` but does not remove the failure.
+
+The captured four-lane reduction supplies the causal correction. RELION's
+native 100-parent support is reproduced by reducing lanes in canonical index
+order; another legal float32 lane order retains the candidate-only parent and
+produces the 101-parent support. Same-H100 job `13128280` enables that existing
+shared EM/VDAM kernel policy and completes 8 baseline plus 8 skip processes
+with **16/16 particle envelopes and both 8-repeat map envelopes green** through
+iteration 4. Worst candidate/native map-diameter ratios are `0.2688` and
+`0.4668`; median 0--4 wall times are `49.5 / 50.0 s`, so the bounded panel
+shows no runtime regression. Science commit `826e160c6` makes canonical
+reduction the shared exact-path default while preserving explicit environment
+value `0` as rollback; `eee92e4aa` interleaves future A/B arms. The next gate
+is a fresh environment-unset default qualification through iteration 20,
+followed by the unchanged complete 0--200 K=1 trajectory gate. The score must
+not be improved by weakening particle gates or selecting one lucky CUDA
 realization.
 Wholesale routing to the existing compact EM driver is already rejected:
 frozen K=1 job `12764156` reached only `0.9994907915` cross-engine FSC-AUC by
@@ -140,12 +157,12 @@ initial basins without inflating one diameter until every result passes.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. In the earliest common-frame repeat panel, candidate repeat 3 first fails at iteration 4: exactly one of 200 active particles, `286@particles.128.mrcs`, flips by `133.71 deg` while its translation remains matched. The candidate map diameter is then `13.8383x` native. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20** because the new default has not yet completed the frozen 0--200 matrix. The historical common-frame failure was one of 200 active particles at iteration 4; the bounded canonical-reduction panel closes it in 16/16 fresh processes but cannot promote a full trajectory by itself. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
-| 🔴 | First true envelope departure | Iteration **4**, particle `286@particles.128.mrcs`, in candidate repeat 3. RELION retains 100 coarse parents; RECOVAR retains 101, including candidate-only parent `(67,14)`. The centered score discrepancy is only `2.48e-5`, so a discrete adaptive-support decision amplifies a native-scale numerical residue. |
-| ➡️ | What is next? | Expanded same-H100 A/B job `13127488` runs 16 baseline and 16 expected-accuracy-skip processes through iteration 4. The preliminary 4+4 job was green in both arms, so expected-accuracy execution is not yet causal. If the expanded panel remains indistinguishable, retire that theory and move one boundary earlier without reopening BPref. |
-| 🟢 | What finished? | Direct map spread localizes the historical iteration-4 outlier to particle 286. Same-H100 job `13127124` then completed 4+4 fresh processes in 493 s: both arms pass all particle envelopes and map checkpoints through iteration 4; iteration-4 candidate/native diameter ratios are `0.1510` baseline and `0.3469` skip. Science commits `221f874a6 / 4f230659e / 196b58526` add the fail-closed analyzer and pinned A/B gate; 5 focused tests pass. No frozen acceptance rule or score changed. |
+| 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
+| ➡️ | What is next? | Run the environment-unset shared default through an interleaved repeat panel and iteration 20 on the same physical H100. If sealed, launch the unchanged 0--200 K=1 trajectory/runtime gate before changing the frozen score or expanding to K>1. |
+| 🟢 | What finished? | Job `13127488` completed 32/32 processes and rejects expected-accuracy skipping as causal (`14/16` versus `15/16` particle/map passes). Job `13128280` completed 16/16 canonical processes in `14:21`; all particle and map envelopes pass, with no observed runtime regression. Science commits `826e160c6 / eee92e4aa` promote the shared default and interleave future panels; focused shared-policy, reuse-identity, and runner tests pass. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -180,6 +197,8 @@ SHA-256 values.
 | Current readout | Evidence | Decision |
 |---|---|---|
 | Frozen score | **2/20** strict; **0/20** runtime | draft, not merge-ready |
+| Expanded expected-accuracy repeat panel | same-H100 job `13127488`; 16 baseline plus 16 skip processes; complete direct particle/map audits | baseline passes `14/16`, skip passes `15/16`; the identical iteration-4 branch occurs in both arms, so expected-accuracy execution is retired as a correction |
+| Shared canonical-reduction repeat panel | same-H100 job `13128280`; 16/16 process seals; all 16 direct particle reports and both 8-repeat map reports pass; science `826e160c6 / eee92e4aa` | promote canonical lane order only as the shared exact coarse default; keep frozen score unchanged until a fresh default 0--200 trajectory passes |
 | Shared canonical reduction qualification | production `b90f22b1c`; build/test `13107529 / 13107668`; live 0--4 `13107898`; live 0--20 `13108111` | iteration-4 causal boundary is closed in production; zero particle-state divergence through iteration 19; frozen score unchanged pending full case qualification |
 | GF46 iteration-20 controller boundary | candidate keeps sentinel accuracy `0 deg / 999 A`; native reports `2.391 deg / 1.88275 A`; candidate/native translation grids become `3.0 A / 116` versus `2.824125 A / 148` | shared E-step remains exonerated; seed all particle orientations from STAR, reuse the EM expected-accuracy implementation, and rerun the focused 0--20 gate |
 | GF46 seeded-accuracy 0--20 qualification | science/audit `13108972`; map minimum FSC-AUC `0.999999972881`; iteration-20 accuracy/grid exact; strict particle first differs @4 and optimal-offset change @18 | controller correction is retained; run repeat-distribution and exact particle-286 cutoff capture before any frozen-score promotion |
