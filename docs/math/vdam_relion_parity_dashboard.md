@@ -200,7 +200,11 @@ byte-identical in the direct kernel test. The compiled sm90 binary SHA-256 is
 `13140202` now waits for the exact target GPU after the completed oracle; its
 replacement cache-isolated audit is `13142207`. Separate 16-repeat
 fused-particle science `13139327` is running and corrected audit `13142285`
-will determine whether rotation ordering is necessary. CPU audit commit
+will determine whether rotation ordering is necessary. Its first seven
+iteration-20 processes take `192--195 s`; the five early-audited processes are
+**5/5** particle-green, including repeat positions 6 and 7 where the host one-particle
+arm recreated the historical red trajectory. This is discriminating evidence,
+but all 16 repeats and the aggregate map audit remain mandatory. CPU audit commit
 `a4a05b04c` disables RECOVAR's global JAX compilation cache so audit-only
 imports cannot load AOT artifacts compiled for another CPU feature set.
 Full-trajectory commits `974d91621 / 81f4c7670 / 64f8a9d30` add a fail-closed
@@ -208,7 +212,9 @@ ordering mode and a repeated 200-iteration runner around the existing sealed
 candidate runner; they do not duplicate an InitialModel command or science
 implementation. The optimization remains unpromoted until its trajectory
 reproduces the now-closed oracle particle/map envelope at materially lower wall
-time.
+time. The same runner is qualified directly atop particle-ordering source as
+commit `4152128ba`; two-repeat full-200 job `13142923` is dependency-gated on
+the 16-repeat aggregate audit, so it cannot run if the shorter arm fails.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -308,7 +314,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Shared commit `1485282f8` is now authoritatively **16/16** particle-green with its complete iteration-1--20 map envelope green in `13139299 / 13140157`. Less restrictive fused-particle science `13139327` is running; cache-isolated audit `13142285` tests whether particle ordering alone is sufficient at 16 repeats. Persistent one-launch optimization `f6574840b` passes focused H100 gate `13140084`; trajectory/runtime science `13140202` and corrected audit `13142207` follow on the exact target. Select the least restrictive green path, then use the new repeated full-200 gate before any default promotion. |
+| ➡️ | What is next? | Shared commit `1485282f8` is now authoritatively **16/16** particle-green with its complete iteration-1--20 map envelope green in `13139299 / 13140157`. Less restrictive fused-particle science `13139327` has completed seven runs; five early audits are green, including both historically failing repeat positions. Cache-isolated audit `13142285` still requires 16/16 particles and maps. If green, dependency-gated job `13142923` runs two complete 200-iteration trajectories from direct source head `4152128ba`. Persistent science `13140202` and audit `13142207` remain the fallback if fused particles fail. |
 | 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
