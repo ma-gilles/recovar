@@ -23,6 +23,7 @@ def _write_iteration(
     native_current_size: int = 28,
     candidate_current_resolution_angstrom: float = 20.0,
     native_current_resolution_angstrom: float = 20.0,
+    candidate_sampling_updated: bool = False,
 ) -> None:
     tag = f"{iteration:03d}"
     candidate = {
@@ -34,7 +35,7 @@ def _write_iteration(
         "n_translations": candidate_translations,
         "sampling_acc_rot": 1.823,
         "sampling_acc_trans_angstrom": 1.717,
-        "sampling_updated": False,
+        "sampling_updated": candidate_sampling_updated,
         "current_changes_optimal_offsets_angstrom": 1.25,
         "sampling_nr_iter_wo_resol_gain": 0,
         "current_size": candidate_current_size,
@@ -129,6 +130,35 @@ def test_sampling_trajectory_accepts_relion_serialization_rounding(tmp_path):
 
     assert report["result"] == "pass"
     assert all(value is None for value in report["first_mismatch"].values())
+
+
+def test_sampling_update_uses_immediately_previous_native_iteration(tmp_path):
+    candidate_dir = tmp_path / "candidate"
+    relion_dir = tmp_path / "relion"
+    candidate_dir.mkdir()
+    relion_dir.mkdir()
+    _write_iteration(candidate_dir, relion_dir, 40, native_range=6.0)
+    _write_iteration(candidate_dir, relion_dir, 51, native_range=5.0)
+    _write_iteration(
+        candidate_dir,
+        relion_dir,
+        52,
+        candidate_range=5.0,
+        native_range=5.0,
+        candidate_translations=36,
+        candidate_sampling_updated=False,
+    )
+
+    report = audit_sampling_trajectory(
+        candidate_dir,
+        relion_dir,
+        pixel_size=2.0,
+        iterations=[40, 52],
+    )
+
+    assert report["result"] == "pass"
+    assert report["iterations"][1]["candidate"]["sampling_updated"] is False
+    assert report["iterations"][1]["native"]["sampling_updated"] is False
 
 
 def test_sampling_trajectory_reports_first_orientation_prior_mode_mismatch(tmp_path):

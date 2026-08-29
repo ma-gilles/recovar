@@ -243,12 +243,15 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export TMPDIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
 export RATTLER_CACHE_DIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/rattler_cache
-export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR=${RECOVAR_CAPTURE}
-export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
-export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=${TARGET_ITERATION}
 if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR=${RECOVAR_CAPTURE}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=${TARGET_ITERATION}
   export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES=1
 else
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION
   unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES
 fi
 unset RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY
@@ -389,8 +392,8 @@ test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_class001.mrc"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_data.star"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_model.star"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_recovar_meta.json"
-test "$(find "${RECOVAR_CAPTURE}" -maxdepth 1 -type f -name 'local_fused_posterior_*.npz' | wc -l)" -eq 1
 if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  test "$(find "${RECOVAR_CAPTURE}" -maxdepth 1 -type f -name 'local_fused_posterior_*.npz' | wc -l)" -eq 1
   "${PIXI_PY}" - "${RECOVAR_CAPTURE}" <<'PY'
 import sys
 from pathlib import Path
@@ -413,6 +416,8 @@ with np.load(paths[0], allow_pickle=False) as payload:
     if payload["pass2_scores_total"].shape != payload["posterior"].shape:
         raise SystemExit("fused score/posterior capture shapes differ")
 PY
+else
+  test -z "$(find "${RECOVAR_CAPTURE}" -mindepth 1 -print -quit)"
 fi
 if [[ "${CAPTURE_LOCAL_SCORE}" == 1 ]]; then
   test "$(find "${RECOVAR_SCORE_CAPTURE}" -maxdepth 1 -type f -name 'local_score_*.npz' | wc -l)" -eq 1

@@ -595,6 +595,28 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
     assert "--nr_iter 33" not in capture
 
 
+def test_vdam_first_state_boundary_capture_disables_unrequested_fused_dump():
+    capture = (REPO_ROOT / "scripts/run_vdam_first_state_boundary_capture.sbatch").read_text()
+
+    setup = """if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR=${RECOVAR_CAPTURE}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=${TARGET_ITERATION}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES=1
+else
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES
+fi"""
+    validation = """if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  test "$(find "${RECOVAR_CAPTURE}" -maxdepth 1 -type f -name 'local_fused_posterior_*.npz' | wc -l)" -eq 1"""
+
+    assert setup in capture
+    assert validation in capture
+    assert 'test -z "$(find "${RECOVAR_CAPTURE}" -mindepth 1 -print -quit)"' in capture
+
+
 def test_vdam_sampling_gate_can_stop_at_pretransition_boundary():
     runner = (REPO_ROOT / "scripts/run_vdam_sampling_transition_gate.sbatch").read_text()
 

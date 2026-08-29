@@ -102,8 +102,7 @@ def audit_sampling_trajectory(
         raise ValueError("no positive VDAM iterations selected")
 
     rows: list[dict[str, object]] = []
-    previous_native: dict[str, float | int] | None = None
-    for iteration in iterations:
+    for row_index, iteration in enumerate(iterations):
         tag = f"{int(iteration):03d}"
         candidate_path = candidate_dir / f"run_it{tag}_recovar_meta.json"
         sampling_path = relion_dir / f"run_it{tag}_sampling.star"
@@ -130,7 +129,12 @@ def audit_sampling_trajectory(
             oversampling=oversampling,
         )
         native_updated = False
-        if previous_native is not None:
+        if row_index > 0:
+            previous_tag = f"{int(iteration) - 1:03d}"
+            previous_sampling_path = relion_dir / f"run_it{previous_tag}_sampling.star"
+            if not previous_sampling_path.is_file():
+                raise FileNotFoundError(previous_sampling_path)
+            previous_native = _native_sampling(previous_sampling_path)
             native_updated = any(
                 native[key] != previous_native[key]
                 for key in ("healpix_order", "offset_range_angstrom", "offset_step_angstrom")
@@ -183,7 +187,7 @@ def audit_sampling_trajectory(
                 atol=5.1e-7,
             ),
         }
-        if previous_native is not None:
+        if row_index > 0:
             checks["sampling_updated"] = bool(candidate["sampling_updated"]) == native_updated
 
         rows.append(
@@ -249,8 +253,6 @@ def audit_sampling_trajectory(
                 "pass": all(checks.values()),
             }
         )
-        previous_native = native
-
     check_names = sorted({name for row in rows for name in row["checks"]})
     first_mismatch = {
         name: next(
