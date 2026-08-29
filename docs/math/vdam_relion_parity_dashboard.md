@@ -237,16 +237,32 @@ persistent ordered scatter. H100 gate `13144508` passes 3/3 focused tests and
 proves byte-exact output against the persistent oracle on nonzero projector
 data; its qualified sm90 binary SHA-256 is `30e5063e8cd2...`. The first of
 four trajectory/runtime repeats in job `13144574` took `311 s`, only `1.6%`
-below the qualified persistent median, so reference projection alone is not
-yet a material runtime repair. Cache-isolated audit `13144575` remains
-dependency-held behind all four repeats. Follow-up commit `20c6e1820` makes
+below the qualified persistent median. The complete job finished `0:0` in
+`00:21:12`; cache-isolated audit `13144575` passes all **4/4** particle
+trajectories and the map envelope. Wall times are `310--314 s` (median
+`311.5 s`), worst candidate/native map-diameter ratio is `0.6014`, and worst
+nearest/native ratio is `0.6274`. Reference projection alone is therefore
+correct but rejected as a material runtime repair. Follow-up commit `20c6e1820` makes
 the optimization fail closed unless every particle uses one worker lane,
 preventing the single reusable preprojection buffer from being overwritten by
 another stream. H100 gate `13145236` passes 3/3 focused tests, including the
 multi-lane rejection and byte-exact nonzero-projector comparison; its sm90
 binary SHA-256 is `2bad97e91e27...`. Submission `13145201` failed before
-output or science because its Git pin was abbreviated incorrectly. The
-16-repeat persistent control starts after the bounded projection discriminator
+output or science because its Git pin was abbreviated incorrectly.
+
+The next bounded performance hypothesis keeps the same qualified ordered
+scatter but factors its existing RELION residual expression into one shared
+device helper. Parallel blocks materialize translated residuals and weights;
+the persistent block only replays the atomic scatter order. Commits
+`45d7aed9c / 106495c52` implement this as an opt-in diagnostic. Initial H100
+job `13145431` failed at compile time before tests because the factored image
+operands were incorrectly made const; the follow-up restores their exact
+original types. Replacement gate `13145450` passes 3/3 focused tests and
+proves the precomputed-residual output byte-exact to the persistent oracle;
+sm90 binary SHA-256 is `73a1074a99b9...`. One-repeat full iteration-20
+runtime/trajectory job `13145479` and dependent audit `13145484` are the
+cheap discriminator before any larger panel. The
+16-repeat persistent control starts after the bounded residual discriminator
 terminates. Two-repeat full-200 job `13143692` remains dependent on a green
 16-repeat aggregate audit, so it cannot run after a merely lucky four-repeat
 panel or any failed gate.
@@ -349,8 +365,8 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Finish the four-repeat parallel-projection run/audit (`13144574 / 13144575`) and the valid same-H100 persistent stage profile (`13145012`). Unless four-repeat timing becomes materially better than `316 s`, reject projection-only optimization and retain persistent ordered scatter for correctness. Then run the required 16-repeat persistent science/audit (`13143741 / 13143742`), followed only on green by two independent full 200-iteration trajectories (`13143692`). The next performance hypothesis is parallel residual formation feeding the same qualified ordered scatter, reusing the mature shared CUDA arithmetic rather than adding another InitialModel implementation. |
-| 🟢 | What finished? | Launch-serialized particle+rotation ordering passes **16/16** particles and the full iteration-1--20 map envelope (`13139299 / 13140157`). Persistent one-block rotation replay passes its focused byte-exact gate and a **4/4** trajectory/map smoke (`13140084`, `13140202 / 13142207`) at median `316 s`. Projection-only gate `13144508` is byte exact; safety follow-up `20c6e1820` and H100 gate `13145236` additionally reject unsafe multi-lane buffer reuse. |
+| ➡️ | What is next? | Finish the valid same-H100 persistent stage profile (`13145012`), then run the one-repeat parallel-residual trajectory/audit (`13145479 / 13145484`). If it is not both exact and substantially faster, the required 16-repeat persistent science/audit (`13143741 / 13143742`) proceeds unchanged; if it is, qualify that faster path over 16 repeats instead. Only a green 16-repeat aggregate audit releases two independent full 200-iteration trajectories (`13143692`). |
+| 🟢 | What finished? | Launch-serialized particle+rotation ordering passes **16/16** particles and maps (`13139299 / 13140157`). Persistent one-block replay is **4/4** at median `316 s` (`13140084`, `13140202 / 13142207`). Parallel projection remains **4/4** but is rejected at median `311.5 s` (`13144574 / 13144575`). The safer shared-helper parallel-residual prototype passes its byte-exact H100 gate (`13145450`) and is now at the bounded trajectory/runtime gate. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
