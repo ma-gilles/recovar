@@ -65,8 +65,13 @@ git -C "${REPO_ROOT}" rev-parse HEAD > "${OUTPUT_ROOT}/provenance/repo_head.txt"
 nvidia-smi -q > "${OUTPUT_ROOT}/provenance/nvidia_smi.txt"
 env | LC_ALL=C sort > "${OUTPUT_ROOT}/provenance/submission_environment.txt"
 
-for mode in baseline skip; do
-  for repeat in $(seq 1 "${REPEATS}"); do
+for repeat in $(seq 1 "${REPEATS}"); do
+  if (( repeat % 2 == 1 )); then
+    modes=(baseline skip)
+  else
+    modes=(skip baseline)
+  fi
+  for mode in "${modes[@]}"; do
     run_root=$(printf '%s/%s/repeat-%02d' "${OUTPUT_ROOT}" "${mode}" "${repeat}")
     mkdir -p "${run_root}"
     touch "${run_root}/SAFE_TO_DELETE"
@@ -76,6 +81,7 @@ for mode in baseline skip; do
       export RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY=0
     fi
     export RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_SUBPROCESS=0
+    printf '%02d\t%s\n' "${repeat}" "${mode}" >> "${OUTPUT_ROOT}/provenance/execution_order.tsv"
 
     OUTPUT_ROOT="${run_root}" \
     DATA_DIR="${DATA_DIR}" \
