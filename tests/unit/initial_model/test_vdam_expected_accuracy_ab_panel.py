@@ -68,7 +68,10 @@ def test_bpref_particle_chunk_panel_reuses_and_interleaves_the_boundary_runner()
     assert "unsupported BPref particle chunk arm" in text
     assert "duplicate BPref particle chunk arm" in text
     assert "unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE" in text
+    assert "unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES" in text
     assert "export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE=${arm}" in text
+    assert '"${arm}" == fused-serial' in text
+    assert "export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES=1" in text
     assert "VDAM_EXPECTED_ACCURACY_MODES=baseline" in text
     assert "VDAM_CAPTURE_LOCAL_SCORE=0" in text
     assert "VDAM_CAPTURE_FUSED_SCORES=0" in text

@@ -38,7 +38,8 @@ if (( ${#requested_arms[@]} < 1 )); then
 fi
 seen_arms=()
 for arm in "${requested_arms[@]}"; do
-  if [[ "${arm}" != default ]] && [[ ! "${arm}" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "${arm}" != default ]] && [[ "${arm}" != fused-serial ]] \
+      && [[ ! "${arm}" =~ ^[1-9][0-9]*$ ]]; then
     echo "unsupported BPref particle chunk arm: ${arm}" >&2
     exit 2
   fi
@@ -68,8 +69,12 @@ for repeat in $(seq 1 "${REPEATS}"); do
     printf '%02d\t%s\n' "${repeat}" "${arm}" \
       >> "${OUTPUT_ROOT}/provenance/execution_order.tsv"
     (
+      unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE
+      unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES
       if [[ "${arm}" == default ]]; then
-        unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE
+        :
+      elif [[ "${arm}" == fused-serial ]]; then
+        export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES=1
       else
         export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE=${arm}
       fi

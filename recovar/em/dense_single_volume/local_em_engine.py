@@ -340,6 +340,9 @@ EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV = "RECOVAR_EXACT_LOCAL_PACKED_NOI
 EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV = (
     "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE"
 )
+EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES"
+)
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM = 512
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM"
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
@@ -1650,6 +1653,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
     materialized_rotation_replay=False,
     particle_replay_order=None,
     candidate_trace_active=False,
+    serial_particle_accumulation=False,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
@@ -1746,6 +1750,14 @@ def _accumulate_relion_vdam_physical_particle_grid(
         posterior_over_weight_norm,
         0.0,
     )
+    if serial_particle_accumulation:
+        # One worker lane gives the fused callback the same inter-particle
+        # ordering as separate one-particle callbacks without rebuilding the
+        # projector texture and host staging allocations for every particle.
+        # Kernels for successive particles are issued to one CUDA stream; the
+        # callback's existing per-lane synchronization therefore closes each
+        # particle before the next one contributes to the shared BPref.
+        worker_lane_ids = jnp.zeros((particle_count,), dtype=jnp.int32)
     if materialized_rotation_replay:
         if rotation_replay_order is None:
             raise ValueError("materialized VDAM replay requires a captured row order")
@@ -1824,7 +1836,9 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 particle_start_offsets_ns=particle_start_offsets_ns,
                 native_trace_shape_replay=native_trace_shape_replay,
                 parallel_worker_replay=(
-                    False if particle_replay_order is not None else None
+                    False
+                    if serial_particle_accumulation or particle_replay_order is not None
+                    else None
                 ),
                 candidate_trace_active=candidate_trace_active,
             )
@@ -5961,13 +5975,21 @@ def run_local_em_exact(
                     debug_iteration=debug_iteration
                 )
                 particle_chunk_cap = _source_faithful_bpref_particle_chunk_cap()
+                fused_serial_particles = _env_flag(
+                    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV
+                )
+                if fused_serial_particles and particle_chunk_cap is not None:
+                    raise ValueError(
+                        "fused serial VDAM BPref particles cannot be combined with "
+                        "host particle chunking"
+                    )
                 particle_slices = _source_faithful_bpref_particle_slices(
                     unpadded_batch_size,
                     particle_chunk_cap,
                 )
                 particle_chunk_size = particle_slices[0][1] - particle_slices[0][0]
                 split_particle_stream = particle_chunk_size < unpadded_batch_size
-                if split_particle_stream:
+                if split_particle_stream or fused_serial_particles:
                     if any(
                         value is not None
                         for value in (
@@ -5986,9 +6008,10 @@ def run_local_em_exact(
                         )
                     ):
                         raise ValueError(
-                            "source-faithful BPref particle chunking cannot be combined "
+                            "source-faithful BPref particle ordering cannot be combined "
                             "with VDAM chronology replay"
                         )
+                if split_particle_stream:
                     if not logged_deferred_mstep_chunking:
                         logger.info(
                             "Exact local VDAM BPref particle chunking: "
@@ -5998,6 +6021,14 @@ def run_local_em_exact(
                             int(packed_mstep_rotations_np.shape[1]),
                         )
                         logged_deferred_mstep_chunking = True
+                elif fused_serial_particles and not logged_deferred_mstep_chunking:
+                    logger.info(
+                        "Exact local VDAM BPref fused serial particle ordering: "
+                        "particles=%d packed_rows=%d",
+                        unpadded_batch_size,
+                        int(packed_mstep_rotations_np.shape[1]),
+                    )
+                    logged_deferred_mstep_chunking = True
 
                 def _particle_slice(value, particle_start, particle_stop):
                     if value is None or not split_particle_stream:
@@ -6070,6 +6101,7 @@ def run_local_em_exact(
                             particle_issue_order, particle_start, particle_stop
                         ),
                         candidate_trace_active=candidate_trace_active,
+                        serial_particle_accumulation=fused_serial_particles,
                     )
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)

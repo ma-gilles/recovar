@@ -121,12 +121,14 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
     EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
     EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
     _accumulate_relion_physical_particle_grid,
+    _accumulate_relion_vdam_physical_particle_grid,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
@@ -3799,8 +3801,81 @@ def test_source_faithful_bpref_particle_cap_is_wired_into_grouped_vdam():
     assert "_source_faithful_bpref_particle_chunk_cap()" in grouped_vdam
     assert "_source_faithful_bpref_particle_slices(" in grouped_vdam
     assert "for particle_start, particle_stop in particle_slices" in grouped_vdam
-    assert "source-faithful BPref particle chunking cannot be combined" in grouped_vdam
+    assert "source-faithful BPref particle ordering cannot be combined" in grouped_vdam
     assert "_accumulate_relion_vdam_physical_particle_grid(" in grouped_vdam
+
+
+def test_fused_serial_vdam_particles_use_one_worker_lane(monkeypatch):
+    from recovar import cuda_backproject
+
+    captured = {}
+
+    def fake_fused(*args, **kwargs):
+        captured.update(kwargs)
+        return args[0], args[1], jnp.zeros((2, 3, 4), dtype=jnp.float32)
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_vdam_mstep_fused_projector_x_half",
+        fake_fused,
+    )
+    particle_count = 2
+    rotation_count = 3
+    pixel_count = 4
+    translation_count = 2
+    _accumulate_relion_vdam_physical_particle_grid(
+        jnp.ones((particle_count, pixel_count), dtype=jnp.complex64),
+        jnp.ones((particle_count, pixel_count), dtype=jnp.float32),
+        jnp.ones((particle_count, pixel_count), dtype=jnp.float32),
+        jnp.ones(
+            (particle_count, rotation_count, translation_count),
+            dtype=jnp.float32,
+        ),
+        jnp.zeros((translation_count, 2), dtype=jnp.float32),
+        jnp.zeros(
+            (particle_count, rotation_count, pixel_count),
+            dtype=jnp.complex64,
+        ),
+        jnp.broadcast_to(
+            jnp.eye(3, dtype=jnp.float32),
+            (particle_count, rotation_count, 3, 3),
+        ),
+        jnp.ones((particle_count, rotation_count), dtype=bool),
+        jnp.zeros(32, dtype=jnp.complex64),
+        jnp.zeros(32, dtype=jnp.float32),
+        projector_full=jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+        scoring_rotations=jnp.broadcast_to(
+            jnp.eye(3, dtype=jnp.float32),
+            (particle_count, rotation_count, 3, 3),
+        ),
+        projector_r_max=2,
+        pixel_indices=jnp.arange(pixel_count, dtype=jnp.int32),
+        image_shape=(4, 6),
+        volume_shape=(3, 3, 3),
+        max_r=1.0,
+        worker_lane_ids=jnp.asarray([3, 5], dtype=jnp.int32),
+        serial_particle_accumulation=True,
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(captured["worker_lane_ids"]),
+        np.zeros(particle_count, dtype=np.int32),
+    )
+    assert captured["parallel_worker_replay"] is False
+
+
+def test_fused_serial_vdam_particle_control_is_wired_into_grouped_path():
+    source = inspect.getsource(run_local_em_exact)
+    start = source.index('raise RuntimeError("source VDAM physical operands were not packed")')
+    stop = source.index("elif source_faithful_bpref and sparse_big_jit_backprojection", start)
+    grouped_vdam = source[start:stop]
+
+    assert "EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV" in grouped_vdam
+    assert "fused serial VDAM BPref particles cannot be combined" in grouped_vdam
+    assert "serial_particle_accumulation=fused_serial_particles" in grouped_vdam
+    assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV.endswith(
+        "FUSED_SERIAL_PARTICLES"
+    )
 
 
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():
