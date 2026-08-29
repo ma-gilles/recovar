@@ -216,8 +216,13 @@ implementation. The optimization remains unpromoted until its trajectory
 reproduces the now-closed oracle particle/map envelope at materially lower wall
 time. The runner is qualified directly atop persistent source as commit
 `64f8a9d30`; focused runner, routing, and shared-source coverage passes 5/5.
-Two-repeat full-200 job `13143692` is dependency-gated on persistent audit
-`13142207`, so it cannot run if the four-repeat trajectory/map gate fails.
+Four-repeat job `13140202` and audit `13142207` remain the first trajectory and
+runtime smoke. Because the rejected particle-only arm stayed green through
+seven audited processes before failing at repeat 8, promotion now requires a
+separate 16-repeat persistent qualification: science `13143741`, aggregate
+particle/map audit `13143742`. Two-repeat full-200 job `13143692` was retargeted
+to depend on that 16-repeat audit, so it cannot run after a merely lucky
+four-repeat panel or any failed aggregate gate.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
