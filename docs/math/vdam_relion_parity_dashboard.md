@@ -335,10 +335,12 @@ schedule contract passed; unchecked cases remain in the denominator. No
 tolerance, baseline, case, or acceptance definition was changed to obtain a
 pass.
 
-The separate v2 expansion snapshot remains **6/15 accepted**. It covers
-additional parameter stresses, is retained as a regression track, and cannot
-change the frozen v3 score. K>1, real-data, and runtime are likewise separate
-gates and cannot inflate K=1 correctness.
+The legacy **K=1 parameter-expansion suite** (scorecard schema v2) remains
+**6/15 accepted**. Here "v2" names only that test-matrix revision; it is not a
+VDAM algorithm or implementation version. The suite covers additional
+parameter stresses, is retained as a regression track, and cannot change the
+authoritative frozen K=1 GUI-default full-trajectory v3 score. K>1, real-data,
+and runtime are likewise separate gates and cannot inflate K=1 correctness.
 
 The checked-in scorecard, evidence, validator, and tests are:
 
