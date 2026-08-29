@@ -40,6 +40,7 @@ seen_arms=()
 for arm in "${requested_arms[@]}"; do
   if [[ "${arm}" != default ]] && [[ "${arm}" != fused-serial ]] \
       && [[ "${arm}" != fused-serial-rotations ]] \
+      && [[ "${arm}" != fused-launch-serialized-rotations ]] \
       && [[ ! "${arm}" =~ ^[1-9][0-9]*$ ]]; then
     echo "unsupported BPref particle chunk arm: ${arm}" >&2
     exit 2
@@ -73,6 +74,7 @@ for repeat in $(seq 1 "${REPEATS}"); do
       unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE
       unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES
       unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS
+      unset RECOVAR_EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS
       if [[ "${arm}" == default ]]; then
         :
       elif [[ "${arm}" == fused-serial ]]; then
@@ -80,6 +82,9 @@ for repeat in $(seq 1 "${REPEATS}"); do
       elif [[ "${arm}" == fused-serial-rotations ]]; then
         export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES=1
         export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS=1
+      elif [[ "${arm}" == fused-launch-serialized-rotations ]]; then
+        export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES=1
+        export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS=1
       else
         export RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE=${arm}
       fi

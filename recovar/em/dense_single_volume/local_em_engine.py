@@ -346,6 +346,9 @@ EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV = (
 EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV = (
     "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS"
 )
+EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS"
+)
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM = 512
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM"
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
@@ -5970,8 +5973,18 @@ def run_local_em_exact(
                 fused_serial_rotations = _env_flag(
                     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV
                 )
+                launch_serial_rotations = _env_flag(
+                    EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV
+                )
+                if fused_serial_rotations and launch_serial_rotations:
+                    raise ValueError(
+                        "persistent and launch-serialized VDAM BPref rotations "
+                        "are mutually exclusive"
+                    )
                 serial_rotation_replay = bool(
-                    chronology_serial_rotation_replay or fused_serial_rotations
+                    chronology_serial_rotation_replay
+                    or fused_serial_rotations
+                    or launch_serial_rotations
                 )
                 float64_accumulator_replay = _relion_vdam_float64_accumulator_replay()
                 reverse_rotation_replay = _relion_vdam_reverse_rotation_replay()
@@ -5989,7 +6002,7 @@ def run_local_em_exact(
                 fused_serial_particles = _env_flag(
                     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV
                 )
-                if fused_serial_rotations and (
+                if (fused_serial_rotations or launch_serial_rotations) and (
                     worker_lane_ids is not None
                     or any(
                         value is not None
@@ -6058,16 +6071,20 @@ def run_local_em_exact(
                         )
                         logged_deferred_mstep_chunking = True
                 elif (
-                    fused_serial_particles or fused_serial_rotations
+                    fused_serial_particles
+                    or fused_serial_rotations
+                    or launch_serial_rotations
                 ) and not logged_deferred_mstep_chunking:
                     logger.info(
                         "Exact local VDAM BPref fused serial ordering: "
                         "particles=%d packed_rows=%d serial_particles=%s "
-                        "serial_rotations=%s",
+                        "persistent_serial_rotations=%s "
+                        "launch_serial_rotations=%s",
                         unpadded_batch_size,
                         int(packed_mstep_rotations_np.shape[1]),
                         fused_serial_particles,
                         fused_serial_rotations,
+                        launch_serial_rotations,
                     )
                     logged_deferred_mstep_chunking = True
 

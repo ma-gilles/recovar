@@ -74,6 +74,8 @@ constexpr char kRelionVdamPreprojectPersistentRotationsEnv[] =
     "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS";
 constexpr char kRelionVdamPrecomputePersistentResidualsEnv[] =
     "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS";
+constexpr char kRelionVdamPrecomputeOrderedResidualsEnv[] =
+    "RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
@@ -5300,15 +5302,26 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         std::getenv(kRelionVdamPreprojectPersistentRotationsEnv);
     const char* precompute_persistent_residuals_value =
         std::getenv(kRelionVdamPrecomputePersistentResidualsEnv);
+    const char* precompute_ordered_residuals_value =
+        std::getenv(kRelionVdamPrecomputeOrderedResidualsEnv);
     const bool precompute_persistent_residuals_requested =
         precompute_persistent_residuals_value != nullptr &&
         precompute_persistent_residuals_value[0] != '\0' &&
         std::strcmp(precompute_persistent_residuals_value, "0") != 0;
-    const bool preproject_persistent_requested =
+    const bool precompute_ordered_residuals_requested =
+        precompute_ordered_residuals_value != nullptr &&
+        precompute_ordered_residuals_value[0] != '\0' &&
+        std::strcmp(precompute_ordered_residuals_value, "0") != 0;
+    const bool precompute_residuals_requested =
         precompute_persistent_residuals_requested ||
-        (preproject_persistent_value != nullptr &&
-         preproject_persistent_value[0] != '\0' &&
-         std::strcmp(preproject_persistent_value, "0") != 0);
+        precompute_ordered_residuals_requested;
+    const bool preproject_persistent_only_requested =
+        preproject_persistent_value != nullptr &&
+        preproject_persistent_value[0] != '\0' &&
+        std::strcmp(preproject_persistent_value, "0") != 0;
+    const bool preproject_persistent_requested =
+        precompute_residuals_requested ||
+        preproject_persistent_only_requested;
     const char* exact_wavg_predecessor_value =
         std::getenv(kRelionVdamExactWavgPredecessorEnv);
     const bool exact_wavg_predecessor_requested =
@@ -5398,10 +5411,18 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     if (wavg_bpref_host_gap_trace_requested &&
         !exact_wavg_predecessor_requested)
         return cudaErrorInvalidValue;
+    if (preproject_persistent_only_requested &&
+        !persistent_serial_rotation_replay)
+        return cudaErrorInvalidValue;
+    if (precompute_persistent_residuals_requested &&
+        !persistent_serial_rotation_replay)
+        return cudaErrorInvalidValue;
+    if (precompute_ordered_residuals_requested &&
+        (!serial_rotation_replay || persistent_serial_rotation_replay))
+        return cudaErrorInvalidValue;
     if (preproject_persistent_requested &&
-        (!persistent_serial_rotation_replay || parallel_worker_replay ||
-         captured_rotation_replay || reverse_rotation_replay ||
-         rotation_replay_stride > 0))
+        (parallel_worker_replay || captured_rotation_replay ||
+         reverse_rotation_replay || rotation_replay_stride > 0))
         return cudaErrorInvalidValue;
     cudaError_t err = cudaMalloc(
         reinterpret_cast<void**>(&real),
@@ -5544,7 +5565,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 reinterpret_cast<void**>(&preprojected_references),
                 reference_count * sizeof(float2));
             if (err != cudaSuccess) goto cleanup;
-            if (precompute_persistent_residuals_requested)
+            if (precompute_residuals_requested)
             {
                 err = cudaMalloc(
                     reinterpret_cast<void**>(&precomputed_residual_weights),
@@ -6252,10 +6273,22 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     if (trace_runtime_gap)
                         runtime_bpref_enqueue_start =
                             std::chrono::steady_clock::now();
-                    if (preproject_persistent_requested)
+                    // The launch-serialized path enters this lambda once per
+                    // rotation. Materialize the shared projection/residual
+                    // buffer only before its first ordered scatter launch;
+                    // all later launches are on the same stream.
+                    const bool materialize_ordered_operands =
+                        preproject_persistent_requested &&
+                        (persistent_serial_rotation_replay ||
+                         !serial_rotation_replay || rotation_offset == 0);
+                    if (materialize_ordered_operands)
                     {
+                        const int64_t operand_rotation_count =
+                            precompute_ordered_residuals_requested
+                                ? rotation_count
+                                : particle_rotation_count;
                         relion_vdam_native_project_f32_kernel<<<
-                            particle_rotation_count,
+                            operand_rotation_count,
                             128,
                             0,
                             particle_streams[lane]>>>(
@@ -6265,14 +6298,14 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             static_cast<unsigned>(image_w),
                             static_cast<unsigned>(image_h),
                             static_cast<unsigned>(pixel_count),
-                            static_cast<unsigned>(particle_rotation_count));
+                            static_cast<unsigned>(operand_rotation_count));
                         const cudaError_t projection_error = cudaGetLastError();
                         if (projection_error != cudaSuccess)
                             return projection_error;
-                        if (precompute_persistent_residuals_requested)
+                        if (precompute_residuals_requested)
                         {
                             relion_vdam_native_residual_f32_kernel<<<
-                                particle_rotation_count,
+                                operand_rotation_count,
                                 128,
                                 0,
                                 particle_streams[lane]>>>(
@@ -6295,7 +6328,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                 static_cast<unsigned>(image_w),
                                 static_cast<unsigned>(image_h),
                                 static_cast<unsigned>(pixel_count),
-                                static_cast<unsigned>(particle_rotation_count));
+                                static_cast<unsigned>(operand_rotation_count));
                             const cudaError_t residual_error = cudaGetLastError();
                             if (residual_error != cudaSuccess)
                                 return residual_error;
@@ -6304,6 +6337,10 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     const auto launch_runtime_sgd = [&](auto persistent_tag) {
                     constexpr bool persistent_serial =
                         decltype(persistent_tag)::value;
+                    const int64_t ordered_operand_offset =
+                        persistent_serial
+                            ? 0
+                            : rotation_offset * static_cast<int64_t>(pixel_count);
                     relion_vdam_native_sgd_f32_kernel<
                         Accumulator,
                         use_captured_order,
@@ -6311,14 +6348,14 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         persistent_serial><<<
                         grid_rotations, 128, 0, particle_streams[lane]>>>(
                         projector,
-                        precompute_persistent_residuals_requested
+                        precompute_residuals_requested
                             ? nullptr
                             : preprojected_references,
-                        precompute_persistent_residuals_requested
-                            ? preprojected_references
+                        precompute_residuals_requested
+                            ? preprojected_references + ordered_operand_offset
                             : nullptr,
-                        precompute_persistent_residuals_requested
-                            ? precomputed_residual_weights
+                        precompute_residuals_requested
+                            ? precomputed_residual_weights + ordered_operand_offset
                             : nullptr,
                         image_real + particle * image_stride,
                         image_imag + particle * image_stride,

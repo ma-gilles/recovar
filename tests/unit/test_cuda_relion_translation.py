@@ -115,6 +115,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "launch_runtime_sgd(std::false_type{})" in projector_launcher
     assert "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS" in source
     assert "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS" in source
+    assert "RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS" in source
     assert "relion_vdam_native_project_f32_kernel<<<" in projector_launcher
     assert "relion_vdam_native_residual_f32_kernel<<<" in projector_launcher
     assert "relion_vdam_native_residual_f32(" in native_kernel
@@ -868,8 +869,33 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             persistent_serial_rotation_replay=True,
             parallel_worker_replay=False,
         )
+        launch_serial_nonzero = (
+            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                *common,
+                jnp.asarray(projector_values),
+                rotations,
+                image_shape,
+                volume_shape,
+                max_r,
+                4,
+                1,
+                worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+                serial_rotation_replay=True,
+                persistent_serial_rotation_replay=False,
+                parallel_worker_replay=False,
+            )
+        )
         jax.block_until_ready(
-            (expected, actual, f64_a, f64_b, serial, persistent, persistent_nonzero)
+            (
+                expected,
+                actual,
+                f64_a,
+                f64_b,
+                serial,
+                persistent,
+                persistent_nonzero,
+                launch_serial_nonzero,
+            )
         )
         monkeypatch.setenv("RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS", "1")
         preprojected_nonzero = cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
@@ -905,6 +931,27 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             )
         )
         jax.block_until_ready(precomputed_nonzero)
+        monkeypatch.delenv(
+            "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS", raising=False
+        )
+        monkeypatch.setenv("RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS", "1")
+        precomputed_launch_serial_nonzero = (
+            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                *common,
+                jnp.asarray(projector_values),
+                rotations,
+                image_shape,
+                volume_shape,
+                max_r,
+                4,
+                1,
+                worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+                serial_rotation_replay=True,
+                persistent_serial_rotation_replay=False,
+                parallel_worker_replay=False,
+            )
+        )
+        jax.block_until_ready(precomputed_launch_serial_nonzero)
 
         multi_particle_common = (
             common[0],
@@ -948,6 +995,10 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         np.testing.assert_array_equal(actual_value, expected_value)
     for expected_value, actual_value in zip(
         persistent_nonzero, precomputed_nonzero, strict=True
+    ):
+        np.testing.assert_array_equal(actual_value, expected_value)
+    for expected_value, actual_value in zip(
+        launch_serial_nonzero, precomputed_launch_serial_nonzero, strict=True
     ):
         np.testing.assert_array_equal(actual_value, expected_value)
 
