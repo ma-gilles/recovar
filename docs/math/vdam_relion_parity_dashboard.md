@@ -417,6 +417,46 @@ design applies the same EM pair buckets to scoring only, scatters scores back
 to the original dense image order, and invokes posterior/BPref once per
 original VDAM bucket.
 
+Commit `4c419b034` implements that scoring-only variant behind an opt-in. Both
+execution orders are scientifically exact: same-H100 jobs `13160157 /
+13160789` pass all four direct iteration-1--20 particle audits for bucketed
+scoring and compact controls. Their unprofiled wall times were misleading,
+however, because the controls varied from `500 s` cold to `298 s` warm.
+Synchronized profile `13161362` resolves the comparison: scoring-only buckets
+take `244.746 s` summed expectation time versus `179.653 s` for the control
+(`+36%`), and `264 s` versus `198 s` end to end. Repeated bucket launches and
+score scatter cost more than the reduced pair work saves, so this exact
+prototype is retained as a regression track and rejected as the runtime path.
+
+The next mature-EM topology reuse keeps the fast eight worker lanes but gives
+each lane private BPref data/weight volumes, followed by a fixed lane-order
+float32 reduction through the existing InitialModel finalizer. This reuses the
+same shared CUDA callback, projector, residual, and atomic scatter; it adds no
+second VDAM numerical implementation. Commit `e958cca13` passes 38 focused
+host/topology tests and reduces GF46 wall time to `192 s` versus its paired
+serialized oracle at `327 s`. Direct audit `13161352` nevertheless rejects it:
+iterations 1--18 and 20 pass, but particle `1723@particles.128.mrcs` leaves the
+native envelope at iteration 19. Commit `c51743e25` then serializes rotations
+inside each private lane; 25 focused tests pass and its `210 s` science arm in
+job `13161617` reproduces exactly the same lone particle/iteration failure.
+Rotation concurrency is therefore exonerated. The active discriminator assigns
+consecutive three-particle groups, rather than individual particles, to private
+lanes (`0c5df734b`). Setup-only attempt `13161846` failed before science because
+the wrapper started outside the worktree; corrected job `13161927` completes in
+`212 s` but again fails only `1723@19` (direct-audit SHA-256
+`f4bde3cf44a9...`). Pool ownership is therefore also exonerated.
+
+A source audit corrects the simplifying premise behind these private-volume
+controls. RELION sets `nr_pool = --pool * --j = 24`, dynamically distributes
+one-particle tasks across eight OpenMP workers, and gives all eight workers on
+one GPU the same `MlDeviceBundle` backprojector. Its terminal host reduction is
+over device bundles, not over eight thread-private BPrefs. Worker-private
+RECOVAR remains a useful deterministic speed discriminator, but is not the
+source-faithful production design. The next candidate will reuse the same
+shared-volume callback and emulate RELION's dynamic one-particle task claiming
+inside 24-particle pool barriers; no projector, residual, posterior, or scatter
+math will be duplicated.
+
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
 | Ordinary EM-batched VDAM | historical failures recur | `203 s` profile | fast reference only |
@@ -433,6 +473,11 @@ original VDAM bucket.
 | Same compact scorer + EM-style bounded raw-diff2 chunks | 14 focused CPU + fused H100 bitwise guard + direct 1--20 audit green | compact `334 s` | memory-safe but no runtime win; exact jobs `13155522--13155525` queued |
 | Bounded compact scorer + shared EM compact float32 posterior | exact-CUDA probe + both direct 1--20 audits green | compact `332 s` vs dense `327 s` | exact smoke; rejected as speed path (`+1.5%`) |
 | Shared EM pair-count buckets around whole VDAM big-JIT | four direct 1--20 audits green | `255 s` vs warm compact control `194 s` | rejected as speed path (`+31%`); scoring-only reuse next |
+| EM pair-count buckets inside scoring only | four direct 1--20 audits green | profiled `264 s` vs `198 s`; expectation `+36%` | exact but rejected as speed path |
+| Eight worker-private BPref volumes, particle round-robin | fails only particle `1723@19`; paired oracle green | `192 s` vs paired serial `327 s` | promising speed, rejected for parity |
+| Worker-private BPref + serial rotations | same lone particle `1723@19` failure; paired oracle green | `210 s`; paired oracle `412 s` anomalous | rotation concurrency exonerated; rejected for parity |
+| Worker-private BPref + serial rotations + three-particle ownership | same lone particle `1723@19` failure | `212 s` in `13161927` | ownership exonerated; rejected for parity |
+| Source-faithful dynamic task claiming, shared BPref, 24-particle pools | four new focused tests green; CUDA build SHA `d2f24d4ae5d...` | trajectory job `13162940` running | active mature topology candidate |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -526,14 +571,14 @@ initial basins without inflating one diameter until every result passes.
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | VDAM now reuses three mature EM batching ideas behind opt-ins: compact active projection rows, the shared compact candidate-pair scorer, and compact RELION float32 posterior pruning. Bounded raw-diff2 chunks remove the iteration-17 OOM; compact posterior removes the dense CUB sort/scan while restoring probabilities to the unchanged dense BPref order. Exact-CUDA probe `13156730` is bitwise green and 15 focused CPU contracts pass. |
+| 🟢 | What improved? | VDAM now reuses mature EM's compact active projection rows, candidate-pair scorer, RELION float32 posterior pruning, pair-count planner, and eight-lane execution topology behind opt-ins. The first three are exact but do not accelerate this workload. Worker-private BPref accumulation reaches `192--210 s`, close to ordinary EM-batched VDAM's `203 s`, while retaining the shared CUDA callback/projector/scatter implementation; its remaining boundary is one particle at iteration 19. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Launch-serialized particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. Both asynchronous (**10/11**) and launch-blocked (**6/7**) eight-worker variants recreate the identical iteration-4/16/18 branch; launch blocking is therefore not a deterministic fallback. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Launch-serialized particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. Shared-volume asynchronous (**10/11**) and launch-blocked (**6/7**) variants recreate the iteration-4/16/18 branch; all three private-volume ownership/rotation variants instead miss only particle `1723` at iteration 19. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Apply EM's per-image pair-count buckets inside scoring only, scatter scores back to the original image order, then invoke posterior/BPref once per original VDAM bucket. When the exact GPU frees, retain the one target process from `13155522--13155525` against the **16/16** oracle. Independently, replace the shared-volume eight-worker atomic race with a genuinely ordered BPref design. |
-| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`; bounded compact smoke `13155593` also completes in `334 s` and passes. Posterior A/B `13157402` is exact but `+1.5%`. Whole-big-JIT pair buckets pass four direct audits but are rejected at `+31%` in both execution orders (`13158515 / 13159098`). The no-global-blocking variant remains rejected at **10/11**, the launch-blocked/ordered-residual hybrid at **6/7**, and EM's projection cache at **0/2**. |
+| ➡️ | What is next? | Implement RELION's actual shared-device topology: dynamic one-particle task claims by eight host workers inside 24-particle pool barriers, using the existing fused callback and shared BPref. Gate it first on focused source/topology tests, then direct 1--20 parity/runtime, then at least 16 repeats. Separately retain one target process from queued jobs `13155522--13155525` when that exact GPU frees. |
+| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`; bounded compact scoring and compact posterior are exact but no faster. Whole-big-JIT pair buckets regress `+31%`; synchronized scoring-only buckets regress expectation `+36%` (`13161362`). Worker-private BPref closes most of the speed gap at `192--212 s`, but ordinary, serial-rotation, and three-particle ownership variants all fail the same single `1723@19` state (`13161352 / 13161617 / 13161927`). No-global-blocking remains rejected at **10/11**, launch-blocked at **6/7**, and EM's projection cache at **0/2**. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
