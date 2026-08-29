@@ -32,24 +32,27 @@ fractions must not be read as the same test with different implementations.
 | Feedback | Scores a comparatively stable reference | Every small M-step difference becomes the next E-step input | Native-scale atomic variation can cross a later adaptive cutoff and avalanche. |
 | Shared implementation | Authoritative significance, compact sparse pass-2, local-refinement, layout, posterior, and expected-accuracy code | Imports the numerical functions by object identity, but K=1 defaults to InitialModel's separate local pass-2 orchestration instead of supplied-map EM's `run_dense_k_class_em_adaptive` policy path | Scoring kernels are reused; grid/layout preparation, grouping, and reduction policy are not yet one end-to-end shared path. |
 | Algorithm-specific work | Conventional EM reconstruction/update path | InitialModel SGD BPref accumulation, gradient moments, pseudo-halfsets, reconstruction, and bootstrap/controller schedule | These pieces cannot simply call the supplied-map EM M-step because RELION uses a different update algorithm. |
-| Current causal boundary | Several difficult noise/topology cases still remain | Native-mode admission plus an early candidate-only map-spread outlier | The local iteration-64 scorer is closed and raw BPref width is native-scale; new same-H100 native repeats also reveal globally different C1 frames from iteration 1, which cannot be mixed into a raw pose envelope without a single-transform admission check. |
+| Current causal boundary | Several difficult noise/topology cases still remain | One adaptive coarse-parent decision for particle 286 at iteration 4 | The local iteration-64 scorer and raw BPref width remain closed. A direct four-repeat map/particle audit now localizes the first common-frame candidate escape to one orientation flip at iteration 4. |
 | Runtime posture | Mature production path; best large run about 1.40x RELION | Reference-faithful and heavily guarded path; 4.91--11.58x | Correctness-first diagnostics and non-fused host work must be removed or optimized after a repeat-robust K=1 trajectory is sealed. |
 
 The practical interpretation is therefore: the mature EM numerical machinery
 has already been reused, but InitialModel still wraps it with a distinct K=1
 pass-2 policy path. The remaining correctness boundary is narrow but unusually
-sensitive. The iteration-64 operand capture and map-only counterfactual now
-exclude support, raw-score evaluation, the translation prior, posterior
-normalization, and winner selection as the local cause. Holding those live
-operands fixed and swapping only the incoming iteration-63 map reproduces the
-observed translation flip. Later matched-native-posterior and iteration-58 raw
-accumulator panels put RECOVAR's BPref width inside RELION's own repeat width;
-the raw accumulation formula/topology is therefore closed rather than the next
-correction target. The active task is to admit native repeats in a common
-global frame, then localize the candidate-only map-spread outlier that first
-appears during the opening iterations. The score must not be improved by
-weakening particle gates, mixing globally rotated trajectories, or selecting
-one lucky CUDA realization.
+sensitive. The iteration-64 operand capture and map-only counterfactual remain
+useful evidence that the later translation escape is inherited from map state,
+while matched-native-posterior and iteration-58 raw-accumulator panels keep
+RECOVAR's BPref width inside RELION's repeat width. A newer direct audit now
+supersedes iteration 64 as the first common-frame boundary: candidate and all
+four original native repeats agree on all 200 active particles through
+iteration 3; at iteration 4 only particle `286@particles.128.mrcs` is outside
+every native state. Its candidate pass 1 retains 101 coarse parents versus
+RELION's 100, with one candidate-only parent `(67,14)`, centered total-score
+maximum error `2.48e-5`, and posterior TV `9.14e-7`. Fine scoring and posterior
+normalization are downstream of that support split. The next gate is repeated
+same-H100 A/B qualification of the iteration-1 expected-accuracy execution
+boundary, not another BPref or global-frame investigation. The score must not
+be improved by weakening particle gates or selecting one lucky CUDA
+realization.
 Wholesale routing to the existing compact EM driver is already rejected:
 frozen K=1 job `12764156` reached only `0.9994907915` cross-engine FSC-AUC by
 iteration 8 and took `43.4x` RELION. Reuse work must therefore extract the
@@ -115,20 +118,21 @@ orientation for particle 927. These repeats show that four native samples
 undersample the branch distribution, but they do not relax the contract: the
 candidate must still become repeat-robust under the unchanged envelope rules.
 
-The two new native captures cannot yet be appended to the complete raw-pose
-envelope: despite byte-identical commands, seed, executable, and physical H100,
-they enter globally different C1 frames at iteration 1. Their direct map
-distances from the original native panel are about `0.9--1.1`, and all 200
-particle poses disagree in the raw frame. This is expected global-frame
-non-identifiability until a single rigid transform is proven to close both maps
-and poses; it is not evidence that 200 independent particles failed. Within
-the original common-frame panel, candidate map spread is native-scale by
-iterations 58--64 (iteration-64 candidate/native diameter ratio `0.999755`).
-One candidate repeat is nevertheless a real early robustness outlier: at
-iteration 4 the candidate diameter is `13.8383x` the original native diameter,
-remaining `6.2539x` at iteration 20 before contracting. That earliest
-common-frame outlier, not the already-qualified raw BPref formula, is the next
-state boundary to capture.
+The additional native captures do not support the earlier global-frame
+explanation. One is identical to the original native mode through iteration 4
+(direct iteration-1 map relative L2 `1.52e-7`) and branches only later. The
+problematic fifth native trajectory already differs at iteration 1, but its
+particle transforms cannot be explained by one common left or right SO(3)
+transform: the fitted residual has a roughly `10.5 deg` pose p95 and near-180
+degree tail, while translations also differ. It is a genuinely different
+native trajectory, not a globally rotated copy that can be canonicalized into
+the original narrow raw-pose panel. Within the original common-frame panel,
+candidate map spread is native-scale at iterations 1--3. At iteration 4 the
+candidate diameter becomes `13.8383x` the native diameter, entirely because
+candidate repeat 3 flips particle 286. This keeps two contracts separate:
+direct common-frame envelopes localize deterministic boundaries, while future
+mode-aware distribution tests must represent RELION's legitimate alternate
+initial basins without inflating one diameter until every result passes.
 
 ### At a glance: progress, failure, and next gate
 
@@ -136,12 +140,12 @@ state boundary to capture.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. The first genuine target-H100 active-state escape is one particle at iteration 64. The direct four-repeat audit fails 131 particle checkpoints and 94 map checkpoints; minimum best-native map FSC-AUC is `0.9392536352`. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. In the earliest common-frame repeat panel, candidate repeat 3 first fails at iteration 4: exactly one of 200 active particles, `286@particles.128.mrcs`, flips by `133.71 deg` while its translation remains matched. The candidate map diameter is then `13.8383x` native. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
-| 🔴 | First true envelope departure | In the original sealed candidate, iteration **64**, particle `927@particles.128.mrcs`. The local cause is now the incoming map: with the captured map, translation 66 wins by `+0.03949`; changing only to the original iteration-63 map makes translation 70 win by `-0.001920`, exactly reproducing the escape. The strict expected-accuracy scalar remains an earlier non-operative `0.001 deg` miss at iteration 40. |
-| ➡️ | What is next? | Prove a fail-closed single global SO(3) transform for the new native repeats before admitting them to the envelope. In the original common frame, capture iterations 1--4 of the candidate-only map-spread outlier and patch the first proven shared boundary; do not reopen the closed BPref formula or add a VDAM-only scorer. Then rerun the complete K=1 trajectory before expanding the matrix. |
-| 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. Job `13117709` wrote all checkpoints 0--200. Target captures `13123370 / 13123933 / 13123942 / 13123957` close the live iteration-64 scorer and expose broader native/candidate mode variation. Local science commits through `2fab330da` add fail-closed direct particle/map envelopes and live top-pair counterfactual replay; 12 focused tests pass. |
+| 🔴 | First true envelope departure | Iteration **4**, particle `286@particles.128.mrcs`, in candidate repeat 3. RELION retains 100 coarse parents; RECOVAR retains 101, including candidate-only parent `(67,14)`. The centered score discrepancy is only `2.48e-5`, so a discrete adaptive-support decision amplifies a native-scale numerical residue. |
+| ➡️ | What is next? | Same-H100 A/B job `13127124` runs four baseline and four expected-accuracy-skip processes through iteration 4 in one allocation. Promotion requires a repeat-level causal result, not the earlier single lucky skip. If causal, patch the smallest setup/shared boundary and rerun the complete K=1 trajectory; if not, move one boundary earlier without reopening BPref. |
+| 🟢 | What finished? | Direct map spread is green at iterations 1--3 and localizes the only iteration-4 outlier; the matching particle audit identifies exactly particle 286. Science commit `221f874a6` adds the fail-closed repeat-map analyzer (3 focused tests), and `4f230659e / 196b58526` add the pinned repeated A/B Slurm gate (2 focused tests). No frozen acceptance rule or score changed. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
@@ -312,7 +316,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 20:52 ET**
+Last scientific update: **2026-08-28 23:22 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
