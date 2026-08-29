@@ -38,7 +38,7 @@ fractions must not be read as the same test with different implementations.
 The practical interpretation is therefore: the mature EM numerical machinery
 has already been reused, but InitialModel still wraps it with a distinct K=1
 pass-2 policy path. The remaining correctness boundary is narrow but unusually
-sensitive. The iteration-68 operand capture must determine whether the first
+sensitive. The iteration-64 operand capture must determine whether the first
 winner departure originates in shared arithmetic or in that wrapper policy;
 the correction should then move behavior into the shared EM path rather than
 copying another VDAM-specific implementation. The production task also remains
@@ -78,15 +78,13 @@ localizes the first active-state escape to iteration 64: candidate particle
 `927@particles.128.mrcs` keeps the orientation selected by repeats 1/2 but its
 Y translation differs by `1.21763 A`; repeats 3/4 select other orientations.
 All active states remain inside the same-GPU envelope through iteration 63.
-Candidate maps remain above the fixed gate through iteration 106 against both
-target-H100 repeats 1 and 2, while those native maps remain mutually above the
-gate through iteration 133. Map drift against the old cross-GPU repeat remains
-tiny for dozens more iterations and
-first crosses the fixed `0.999` gate at iteration 107 (repeat-3 FSC-AUC
-`0.9989987666`). The candidate completed all 201 science checkpoints. Against
-cross-GPU diagnostic repeat 3, map FSC-AUC reaches a minimum `0.9655810120` at
-iteration 196 and ends at `0.9658890125`; the all-particle audit ends with
-2,997/3,000 states different. The Slurm wrapper exited after science because
+The completed four-repeat direct envelope confirms this boundary without
+mixing GPU contexts. The particle audit has 131 failing checkpoints: iteration
+64 is the first (`1/232` active particles outside), and iteration 200 ends with
+`996/1,000` active particles outside. The map audit has 94 failing checkpoints:
+iteration 107 is the first (best-native FSC-AUC `0.9989684087`) and the minimum
+best-native FSC-AUC is `0.9392536352`. The candidate completed all 201 science
+checkpoints. The Slurm wrapper exited after science because
 it incorrectly required a fused capture even when all capture flags were
 disabled. Local commit `ad2499e48` fixes that terminal check and the sparse
 sampling-audit artifact; focused coverage passes `8/8`.
@@ -97,11 +95,11 @@ sampling-audit artifact; focused coverage passes `8/8`.
 |:---:|---|---|
 | 🟢 | What improved? | Host-visible CUDA launch synchronization closes GF46 in two independent 0--20 runs on the exact same H100. Both retain **3,000/3,000** exact particle states at every sampled checkpoint, every controller/sampling field matches RELION, and the map FSC-AUC floors are `0.9999999999565 / 0.9999999999567`. |
 | 🟢 | What is closed? | The GF46 discrepancy is not a separate VDAM scoring formula: both observed rank-100/101 score gaps are exactly reachable from captured shared-scorer lanes. The architecture guard proves InitialModel imports EM's authoritative numerical functions by object identity. Static tracing now also records the remaining reuse gap: K=1 InitialModel uses its own local pass-2 orchestration rather than supplied-map EM's complete adaptive wrapper. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. The first genuine target-H100 active-state escape is one particle at iteration 64; candidate maps remain green against target repeats 1/2 through iteration 106. The old repeat-3 map bottoms at `0.9655810120` at 196 and ends at `0.9658890125`; those terminal values remain cross-GPU diagnostics until all four target-repeat map audits finish. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Expected angular accuracy misses the strict scalar envelope by `0.001 deg` at iterations 40 and 50, but the operative controller schedule still matches native repeat 3. The first genuine target-H100 active-state escape is one particle at iteration 64. The direct four-repeat audit fails 131 particle checkpoints and 94 map checkpoints; minimum best-native map FSC-AUC is `0.9392536352`. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
-| 🟡 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458` completed all 201 checkpoints in `482 / 485 / 484 s`; repeat 4 `13122473` is running on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
+| 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🔴 | First true envelope departure | Iteration **64**, particle `927@particles.128.mrcs`. All active states pass through 63. At 64, RECOVAR agrees with native repeats 1/2 on orientation but differs in Y translation by `1.21763 A`; repeats 3/4 choose other orientations, so none of the four native modes covers the candidate state. The strict expected-accuracy scalar remains an earlier non-operative `0.001 deg` miss at iteration 40. |
-| ➡️ | What is next? | Finish repeat 4 and the full map/state audit, then capture the autonomous native operands at iteration 64 (`13122858`) and candidate coarse/local/fused operands plus expected-accuracy inputs (`13122901`). Correct the shared exact-local decision boundary rather than adding a VDAM-only duplicate. |
+| ➡️ | What is next? | Native iteration-64 operands are sealed by job `13122858`. Candidate job `13123370` is replaying the autonomous 0--64 prefix on the identical H100 and will capture coarse/local/fused operands plus expected-accuracy inputs. Compare support, raw score, prior, posterior, and winner in that order, then correct the lowest shared exact-local boundary rather than adding a VDAM-only duplicate. |
 | 🟢 | What finished? | Synchronized short jobs `13116158 / 13116369` pass through iteration 4; full-prefix jobs `13116813 / 13117293` pass through iteration 20. Job `13117709` wrote all checkpoints 0--200; CPU audits `13120726 / 13120727 / 13120744` seal the cross-GPU diagnostic escape. Local science commit `ad2499e48` fixes the post-science capture check and immediate-previous-iteration sampling audit with `8/8` focused tests. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
@@ -301,7 +299,7 @@ accepted failure. A successful short replay never changes the 20-case score.
 
 | Priority | Case / first boundary | What is proved now | Live decisive evidence | Score impact |
 |---:|---|---|---|---|
-| 1 | GF46 first active state miss @68, particle 2667 | synchronized candidate maps and particles match the older native repeat 3 through @67; the apparent repeat-1 avalanche is native mode selection. The `0.001 deg` expected-accuracy miss at @40/@50 does not change the sampling schedule. One newly active particle leaves that four-repeat state envelope at @68 by exact translation-grid steps, temporarily re-enters at @71, and accumulated map drift crosses `0.999` at @107. The older panel is on a different physical H100, so this remains diagnostic until the same-GPU panel completes | @4 `13116158 / 13116369`; @20 `13116813 / 13117293`; live 0--200 `13117709`; expected-accuracy capture `13118846`; @68 score/operand capture `13120034`; same-H100 native `13120241--13120244`; current science `23150e50c` | audit the candidate against the new same-H100 envelope, compare native and shared-EM coarse/local/fused winner operands at @68 if the boundary persists, separately close expected-accuracy scalar parity, then rerun 0--200; no score change |
+| 1 | GF46 first active state miss @64, particle 927 | the unmixed four-repeat target-H100 panel proves every active particle remains in a native mode through @63. At @64 exactly `1/232` active particles leaves the envelope by `1.21763 A`; maps first fail at @107. The terminal direct audits count 131 particle and 94 map failures, with minimum best-native FSC-AUC `0.9392536352` | autonomous native repeats `13121423 / 13121963 / 13122458 / 13122473`; native operand capture `13122858`; live candidate operand capture `13123370`; current science `ad2499e48` | classify the @64 departure as support, raw-score, prior, posterior, or winner selection; correct the lowest shared EM function/policy responsible, then rerun 0--200; no score change |
 | 2 | GF47 systematic mode boundary @4, particle 1085 | exact E-step/operand/support chain, terminal 4x8 audit, and native-posterior replay close iteration-1 raw-BPref distribution scale. Eight native repeats choose particle modes 5:3 while four candidates choose 4:0; the decisive boundary is the rank-10 adaptive-support parent inherited through iteration-3 map/PPref | native expansion `13091586--13091618`; 4x8 audit `13092340`; matched fixed-posterior/native-posterior panels `13095568 / 13097692`; replay science `eeeceb368` | reuse the same corrected shared coarse path, then qualify 0--4/0--20 before 0--200 |
 | 3 | GF38 accuracy controller @20 | iteration-3 controller is closed; fresh 0--200 science completed in 2,110 s | audit `13018631` fails schedule @20, particle @27, map @60 | repair the iteration-20 accuracy fields, then rerun 0--200 |
 | 4 | Frozen v3 matrix | all 20 science runs and audits are terminal | **2 accepted / 18 failed / 0 pending** | every failed row remains an explicit repair target |
