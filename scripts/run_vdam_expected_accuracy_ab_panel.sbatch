@@ -27,6 +27,7 @@ set -euo pipefail
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
 REPEATS=${REPEATS:-4}
+VDAM_EXPECTED_ACCURACY_MODES=${VDAM_EXPECTED_ACCURACY_MODES:-baseline,skip}
 TARGET_ITERATION=${TARGET_ITERATION:-4}
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-285}
@@ -38,6 +39,20 @@ case "${REPEATS}" in
   ''|*[!0-9]*) echo "REPEATS must be a positive integer" >&2; exit 2 ;;
 esac
 test "${REPEATS}" -ge 1
+IFS=',' read -r -a requested_modes <<< "${VDAM_EXPECTED_ACCURACY_MODES}"
+if (( ${#requested_modes[@]} < 1 || ${#requested_modes[@]} > 2 )); then
+  echo "VDAM_EXPECTED_ACCURACY_MODES must select one or both of baseline,skip" >&2
+  exit 2
+fi
+seen_modes=()
+for mode in "${requested_modes[@]}"; do
+  case "${mode}" in baseline|skip) ;; *) echo "unsupported panel mode: ${mode}" >&2; exit 2 ;; esac
+  if [[ " ${seen_modes[*]} " == *" ${mode} "* ]]; then
+    echo "duplicate panel mode: ${mode}" >&2
+    exit 2
+  fi
+  seen_modes+=("${mode}")
+done
 case "${GPU_MISS_HOLD_SECONDS}" in
   ''|*[!0-9]*) echo "GPU_MISS_HOLD_SECONDS must be an integer from 0 through 60" >&2; exit 2 ;;
 esac
@@ -63,10 +78,10 @@ nvidia-smi -q > "${OUTPUT_ROOT}/provenance/nvidia_smi.txt"
 env | LC_ALL=C sort > "${OUTPUT_ROOT}/provenance/submission_environment.txt"
 
 for repeat in $(seq 1 "${REPEATS}"); do
-  if (( repeat % 2 == 1 )); then
-    modes=(baseline skip)
+  if (( ${#requested_modes[@]} == 2 && repeat % 2 == 0 )); then
+    modes=("${requested_modes[1]}" "${requested_modes[0]}")
   else
-    modes=(skip baseline)
+    modes=("${requested_modes[@]}")
   fi
   for mode in "${modes[@]}"; do
     run_root=$(printf '%s/%s/repeat-%02d' "${OUTPUT_ROOT}" "${mode}" "${repeat}")

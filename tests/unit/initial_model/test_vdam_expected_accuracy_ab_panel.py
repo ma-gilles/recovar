@@ -12,8 +12,13 @@ def test_expected_accuracy_ab_panel_is_same_allocation_and_fail_closed() -> None
     text = SCRIPT.read_text()
 
     assert 'for repeat in $(seq 1 "${REPEATS}")' in text
-    assert "modes=(baseline skip)" in text
-    assert "modes=(skip baseline)" in text
+    assert "VDAM_EXPECTED_ACCURACY_MODES=${VDAM_EXPECTED_ACCURACY_MODES:-baseline,skip}" in text
+    assert "requested_modes" in text
+    assert "unsupported panel mode" in text
+    assert "duplicate panel mode" in text
+    assert "repeat % 2 == 0" in text
+    assert 'modes=("${requested_modes[1]}" "${requested_modes[0]}")' in text
+    assert 'modes=("${requested_modes[@]}")' in text
     assert 'for mode in "${modes[@]}"' in text
     assert text.index('for repeat in $(seq 1 "${REPEATS}")') < text.index(
         'for mode in "${modes[@]}"'
