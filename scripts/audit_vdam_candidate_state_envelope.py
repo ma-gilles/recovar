@@ -170,6 +170,61 @@ def compare_particle_tables_to_native_set(
     }
 
 
+def audit_particle_state_checkpoints(
+    *,
+    candidate_dir: Path,
+    native_dirs: list[Path],
+    fixture: pd.DataFrame,
+    iterations: tuple[int, ...],
+) -> list[dict[str, Any]]:
+    """Audit active candidate particles against per-particle native modes.
+
+    This is the shared file-level implementation used by the frozen-suite
+    auditor and focused direct-path diagnostics.  The latter are useful while
+    a long trajectory is still being localized, but do not bypass the frozen
+    suite's provenance and controller gates.
+    """
+
+    if len(native_dirs) < 2:
+        raise CandidateStateEnvelopeError("particle envelope requires at least two native repeats")
+    if not iterations or iterations != tuple(sorted(set(iterations))) or iterations[0] <= 0:
+        raise CandidateStateEnvelopeError("particle iterations must be sorted, unique, and positive")
+    fixture_identity_column = _column(fixture, "rlnImageName")
+    rows = []
+    for iteration in iterations:
+        meta = _load_json(
+            candidate_dir / f"run_it{iteration:03d}_recovar_meta.json",
+            label=f"candidate iteration {iteration} metadata",
+        )
+        try:
+            selected = np.asarray(meta["selected_particle_ids"], dtype=np.int64)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CandidateStateEnvelopeError(
+                f"iteration {iteration} has invalid selected particle ids"
+            ) from exc
+        if selected.size == 0 or np.any(selected < 0) or np.any(selected >= len(fixture)):
+            raise CandidateStateEnvelopeError(f"iteration {iteration} has invalid selected particle ids")
+        active_ids = set(fixture.iloc[selected][fixture_identity_column].astype(str).tolist())
+        if len(active_ids) != selected.size:
+            raise CandidateStateEnvelopeError(f"iteration {iteration} selected identities are not unique")
+        candidate_table, _ = read_star(str(candidate_dir / f"run_it{iteration:03d}_data.star"))
+        native_tables = [
+            read_star(str(root / f"run_it{iteration:03d}_data.star"))[0]
+            for root in native_dirs
+        ]
+        rows.append(
+            {
+                "iteration": iteration,
+                **compare_particle_tables_to_native_set(
+                    candidate_table,
+                    native_tables,
+                    active_image_ids=active_ids,
+                ),
+            }
+        )
+    return rows
+
+
 def classify_schedule_mode_envelope(
     native_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -456,7 +511,6 @@ def audit_candidate_state_envelope(
     if materialization.get("manifest_sha256") != scorecard["source_fixture_manifest"]["sha256"]:
         raise CandidateStateEnvelopeError("fixture identity differs from the frozen scorecard")
     fixture, _ = read_star(str(fixture_dir / "particles.star"))
-    fixture_identity_column = _column(fixture, "rlnImageName")
 
     sampling_reports = [
         audit_sampling_trajectory(
@@ -467,36 +521,14 @@ def audit_candidate_state_envelope(
         )
         for root in native_roots
     ]
-    particle_rows = []
+    particle_rows = audit_particle_state_checkpoints(
+        candidate_dir=candidate_root / "recovar",
+        native_dirs=[root / "relion" for root in native_roots],
+        fixture=fixture,
+        iterations=positive_iterations,
+    )
     schedule_rows = []
     for offset, iteration in enumerate(positive_iterations):
-        meta = _load_json(
-            candidate_root / "recovar" / f"run_it{iteration:03d}_recovar_meta.json",
-            label=f"candidate iteration {iteration} metadata",
-        )
-        selected = np.asarray(meta["selected_particle_ids"], dtype=np.int64)
-        if selected.size == 0 or np.any(selected < 0) or np.any(selected >= len(fixture)):
-            raise CandidateStateEnvelopeError(f"iteration {iteration} has invalid selected particle ids")
-        active_ids = set(fixture.iloc[selected][fixture_identity_column].astype(str).tolist())
-        if len(active_ids) != selected.size:
-            raise CandidateStateEnvelopeError(f"iteration {iteration} selected identities are not unique")
-        candidate_table, _ = read_star(
-            str(candidate_root / "recovar" / f"run_it{iteration:03d}_data.star")
-        )
-        native_tables = [
-            read_star(str(root / "relion" / f"run_it{iteration:03d}_data.star"))[0]
-            for root in native_roots
-        ]
-        particle_rows.append(
-            {
-                "iteration": iteration,
-                **compare_particle_tables_to_native_set(
-                    candidate_table,
-                    native_tables,
-                    active_image_ids=active_ids,
-                ),
-            }
-        )
         schedule_rows.append(
             {
                 "iteration": iteration,
