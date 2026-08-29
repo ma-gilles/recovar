@@ -85,7 +85,12 @@ processes in `8:14`; every direct particle trajectory is inside the four-repeat
 native envelope through iteration 4. That panel enabled coarse, fused, and
 local-score capture together, however, and the local-score hook explicitly
 materializes a non-production score tensor. Its 8/8 result is diagnostic-path
-evidence, not repeat-robust production closure. Science commits `e20a73814 /
+evidence, not repeat-robust production closure. The captured parent `(67,14)`
+remains rank 101 in all eight green processes, but lies only 3--7 float32 ULPs
+below the retained rank-100 cutoff. The red production process therefore does
+not discover a missing candidate: native-scale upstream variation moves this
+existing boundary into an exact cutoff tie and retains the 101st parent.
+Science commits `e20a73814 /
 34b6b57a2` now separate capture iteration 4 from stop iteration 20 and
 interleave isolated no-capture, coarse-only, fused-only, and local-only arms.
 Commit `61238adba` additionally makes coarse capture passive: cached scores are
