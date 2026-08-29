@@ -337,6 +337,9 @@ EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR = 1.25
 # i.e. about a 512 MB complex64 projection temporary before JAX overhead.
 EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV = "RECOVAR_EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS"
+EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE"
+)
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM = 512
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM"
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
@@ -1855,6 +1858,7 @@ def _source_faithful_bpref_particle_chunk_size(
     rotation_count: int,
     n_recon_pixels: int,
     max_gb: float,
+    max_particles: int | None = None,
 ) -> int:
     """Bound deferred BPref operands while preserving particle-major order.
 
@@ -1866,7 +1870,29 @@ def _source_faithful_bpref_particle_chunk_size(
 
     bytes_per_particle = max(1, int(rotation_count)) * max(1, int(n_recon_pixels)) * 12
     cap_bytes = max(0, int(float(max_gb) * 1e9))
-    return min(max(1, int(image_count)), max(1, cap_bytes // bytes_per_particle))
+    chunk_size = min(max(1, int(image_count)), max(1, cap_bytes // bytes_per_particle))
+    if max_particles is not None:
+        if int(max_particles) < 1:
+            raise ValueError("source-faithful BPref particle chunk cap must be positive")
+        chunk_size = min(chunk_size, int(max_particles))
+    return chunk_size
+
+
+def _source_faithful_bpref_particle_chunk_cap() -> int | None:
+    raw = os.environ.get(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV} must be a positive integer"
+        ) from exc
+    if value < 1:
+        raise ValueError(
+            f"{EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV} must be a positive integer"
+        )
+    return value
 
 
 def _reconstruction_pack_large_bucket_quantum() -> int:
@@ -5649,6 +5675,7 @@ def run_local_em_exact(
                     rotation_count=int(packed_rotations_np.shape[1]),
                     n_recon_pixels=n_recon_pixels,
                     max_gb=sparse_big_jit_mstep_cap_gb,
+                    max_particles=_source_faithful_bpref_particle_chunk_cap(),
                 )
                 if particle_chunk_size < unpadded_batch_size and not logged_deferred_mstep_chunking:
                     logger.info(

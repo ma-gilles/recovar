@@ -119,6 +119,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
     EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
     EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
@@ -138,6 +139,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
     _source_faithful_bpref_particle_chunk_size,
+    _source_faithful_bpref_particle_chunk_cap,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_layout import (
@@ -3751,6 +3753,26 @@ def test_source_faithful_bpref_chunks_only_particle_axis_to_memory_cap():
         n_recon_pixels=n_recon_pixels,
         max_gb=0.0,
     ) == 1
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+        max_particles=3,
+    ) == 3
+
+
+def test_source_faithful_bpref_particle_chunk_cap_is_explicit(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, raising=False)
+    assert _source_faithful_bpref_particle_chunk_cap() is None
+
+    monkeypatch.setenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, "3")
+    assert _source_faithful_bpref_particle_chunk_cap() == 3
+
+    for invalid in ("0", "-1", "three"):
+        monkeypatch.setenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, invalid)
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            _source_faithful_bpref_particle_chunk_cap()
 
 
 def test_pad_local_big_jit_image_axis_masks_dummy_rows():
