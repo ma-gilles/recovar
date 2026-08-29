@@ -404,6 +404,19 @@ runtime path. Its first
 submission `13157301` stopped before science when the SHA gate detected the
 mutated CUDA source.
 
+Commit `62b715d51` then reuses EM's per-image pair-count planner while keeping
+VDAM particle order and three-particle pool boundaries. Ten focused VDAM
+contracts, three affected shared/local-bucket regressions, and lint pass. Both
+orders of the same-H100 A/B are scientifically green: jobs `13158515 /
+13159098` give zero failures in all four direct 1--20 audits. Runtime rejects
+outer-bucket splitting, however. Once caches are warm, pair buckets take
+`255 s` versus compact control `194 s` (`+31%`); the first order similarly
+measures `256 / 197 s`. Splitting the whole big-JIT repeats projection and
+BPref boundaries, overwhelming the scoring reduction. The retained next
+design applies the same EM pair buckets to scoring only, scatters scores back
+to the original dense image order, and invokes posterior/BPref once per
+original VDAM bucket.
+
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
 | Ordinary EM-batched VDAM | historical failures recur | `203 s` profile | fast reference only |
@@ -419,6 +432,7 @@ mutated CUDA source.
 | Exact 16/16 oracle + shared EM compact candidate pairs | dense control passes all checkpoints; initial compact arm OOM @17 | dense `334 s`; compact incomplete | pair-pixel gather was unbounded |
 | Same compact scorer + EM-style bounded raw-diff2 chunks | 14 focused CPU + fused H100 bitwise guard + direct 1--20 audit green | compact `334 s` | memory-safe but no runtime win; exact jobs `13155522--13155525` queued |
 | Bounded compact scorer + shared EM compact float32 posterior | exact-CUDA probe + both direct 1--20 audits green | compact `332 s` vs dense `327 s` | exact smoke; rejected as speed path (`+1.5%`) |
+| Shared EM pair-count buckets around whole VDAM big-JIT | four direct 1--20 audits green | `255 s` vs warm compact control `194 s` | rejected as speed path (`+31%`); scoring-only reuse next |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -518,8 +532,8 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Apply EM's per-image pair-count bucketing to scoring only while preserving the original dense BPref image/orientation order; the posterior-only reuse is exact but not faster. When the exact GPU frees, retain the one target process from `13155522--13155525` against the **16/16** oracle. Independently, replace the shared-volume eight-worker atomic race with a genuinely ordered BPref design. |
-| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`. Bounded compact smoke `13155593` also completes in `334 s`, passes the direct 1--20 audit, and proves the OOM fixed. Same-node posterior A/B `13157402` passes both direct audits but measures `332 s` compact versus `327 s` dense, so compact posterior is scientifically green but not a speed win. The no-global-blocking variant remains rejected at **10/11**, the launch-blocked/ordered-residual hybrid at **6/7**, and EM's projection cache at **0/2**. |
+| ➡️ | What is next? | Apply EM's per-image pair-count buckets inside scoring only, scatter scores back to the original image order, then invoke posterior/BPref once per original VDAM bucket. When the exact GPU frees, retain the one target process from `13155522--13155525` against the **16/16** oracle. Independently, replace the shared-volume eight-worker atomic race with a genuinely ordered BPref design. |
+| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`; bounded compact smoke `13155593` also completes in `334 s` and passes. Posterior A/B `13157402` is exact but `+1.5%`. Whole-big-JIT pair buckets pass four direct audits but are rejected at `+31%` in both execution orders (`13158515 / 13159098`). The no-global-blocking variant remains rejected at **10/11**, the launch-blocked/ordered-residual hybrid at **6/7**, and EM's projection cache at **0/2**. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
