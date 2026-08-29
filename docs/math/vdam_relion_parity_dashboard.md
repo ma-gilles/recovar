@@ -366,9 +366,11 @@ reuse mature EM's total-hypothesis cap at the shared scorer boundary. They
 chunk only raw diff2 gathers, preserve one global per-image RELION minimum,
 and leave VDAM's image/BPref order unchanged. Fourteen focused CPU contracts
 pass, including bitwise bounded/unbounded equality, and fused-CUDA H100 job
-`13155391` passes its bitwise `lax.map` guard. A free-H100 compact smoke
-trajectory is running as `13155593`; exact-reference-GPU jobs
-`13155522--13155525` are queued because all four GPUs on that node are
+`13155391` passes its bitwise `lax.map` guard. Free-H100 compact smoke
+`13155593` crosses the former iteration-17 OOM boundary, completes iteration
+20 in `334 s`, and passes the direct 1--20 audit with zero failures (audit
+SHA-256 `f56f07ac9466...`). Exact-reference-GPU jobs
+`13155522--13155525` remain queued because all four GPUs on that node are
 currently allocated. Separately,
 the mature EM compact native reduction now casts x64 probabilities only at its
 float32 FFI boundary (`9f6379baa`); CPU coverage passes and H100 job `13152925`
@@ -376,8 +378,26 @@ passes its 2/2 optional x-half guards.
 
 The CUDA unit gate changed the checksum of the earlier reusable test-library
 copy, so that file is excluded from science. The next panels instead pin a
-fresh read-only recovery from `13154000`'s sealed run-local binary at exact
-SHA-256 `8dca3db09ae1...`; both panel entry and exit verify that digest.
+fresh recovery from `13154000`'s sealed run-local binary at exact SHA-256
+`8dca3db09ae1...`; both panel entry and exit verify that digest. The original
+recovery was subsequently mutated by a CUDA unit import and is also excluded.
+Science panels now read a second sealed `8dca...` copy from a non-writable
+directory and import only a run-local staged copy.
+
+Same-node profiles `13155996 / 13156053` show why bounded compact scoring does
+not yet close runtime. Over 20 expectations, compact takes `313.523 s` versus
+`307.497 s` dense. The entire `+6.026 s` regression is inside big-JIT
+(`100.703 s` versus `94.519 s`); source-faithful BPref is unchanged at
+`155.038 / 154.972 s`. Compact scoring therefore remains a memory fix, not a
+speed win. The next mature-EM reuse moves RELION float32 posterior
+normalization/pruning into compact pair space while scattering final
+reconstruction probabilities back to the original dense BPref order. Exact
+CUDA probe `13156730` is bitwise green for normalized weights, pruning mask,
+significant count, denominator, and threshold. Commit `a9fb069e7` wires that
+shared posterior behind the existing opt-in; 15 focused CPU contracts pass.
+Same-node full-trajectory dense/compact gate `13157402` is running. Its first
+submission `13157301` stopped before science when the SHA gate detected the
+mutated CUDA source.
 
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
@@ -392,7 +412,8 @@ SHA-256 `8dca3db09ae1...`; both panel entry and exit verify that digest.
 | Blocking hybrid, expanded qualification | **6/7** directly audited; repeat 7 fails @4/16/18 | `224--226 s` first repeats | rejected; science/audit cancelled |
 | Blocking hybrid + compact valid projection rows | seven focused contracts + CPU equivalence green | not run | dependent H100 gate `13150548 / 13150559` cancelled after baseline failure |
 | Exact 16/16 oracle + shared EM compact candidate pairs | dense control passes all checkpoints; initial compact arm OOM @17 | dense `334 s`; compact incomplete | pair-pixel gather was unbounded |
-| Same compact scorer + EM-style bounded raw-diff2 chunks | 14 focused CPU + 1 fused H100 bitwise guard green | trajectory running | smoke `13155593`; exact jobs `13155522--13155525` queued |
+| Same compact scorer + EM-style bounded raw-diff2 chunks | 14 focused CPU + fused H100 bitwise guard + direct 1--20 audit green | compact `334 s` | memory-safe but no runtime win; exact jobs `13155522--13155525` queued |
+| Bounded compact scorer + shared EM compact float32 posterior | exact-CUDA posterior probe bitwise green; 15 focused CPU contracts green | A/B running | same-node full-trajectory gate `13157402` |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -486,14 +507,14 @@ initial basins without inflating one diameter until every result passes.
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | VDAM now has opt-in paths for two mature EM batching ideas: compact active projection rows and EM's shared compact candidate-pair scorer. The latter attacks roughly `5.67M` rectangular late-iteration slots with about `48k` valid pairs while restoring the existing dense downstream interface. After the first compact trajectory exposed an iteration-17 OOM, the shared scorer now also reuses EM's total-hypothesis memory cap while preserving global RELION score normalization. Fourteen focused CPU contracts and fused H100 job `13155391` are green. |
+| 🟢 | What improved? | VDAM now reuses three mature EM batching ideas behind opt-ins: compact active projection rows, the shared compact candidate-pair scorer, and compact RELION float32 posterior pruning. Bounded raw-diff2 chunks remove the iteration-17 OOM; compact posterior removes the dense CUB sort/scan while restoring probabilities to the unchanged dense BPref order. Exact-CUDA probe `13156730` is bitwise green and 15 focused CPU contracts pass. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Launch-serialized particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. Both asynchronous (**10/11**) and launch-blocked (**6/7**) eight-worker variants recreate the identical iteration-4/16/18 branch; launch blocking is therefore not a deterministic fallback. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Finish compact smoke `13155593` to close the OOM/runtime gate, then directly audit it. When the exact GPU frees, run `13155522--13155525` against the **16/16** oracle and retain only the target-GPU process. Expand repeats only if compact parity and runtime are green, then combine it with compact projection rows. Independently, replace the shared-volume eight-worker atomic race with a genuinely ordered BPref design; environment-level launch blocking is closed as insufficient. |
-| 🟢 | What finished? | The unchanged dense arm at exact source/CUDA identity passes every checkpoint in `334 s` under job `13154000`. The first compact arm's `18.99 GiB` OOM is localized and repaired with bounded raw-diff2 chunks; CPU bitwise coverage and fused H100 job `13155391` pass. The no-global-blocking variant remains rejected at **10/11**, the launch-blocked/ordered-residual hybrid at **6/7**, and EM's projection cache at **0/2**. |
+| ➡️ | What is next? | Complete same-node dense/compact posterior gate `13157402`, directly audit both arms, and accept only a zero-failure speed win. When the exact GPU frees, retain the one target process from `13155522--13155525` against the **16/16** oracle. If compact posterior is exact but still not faster, apply EM's per-image pair-count bucketing to scoring only while preserving the original dense BPref image/orientation order. Independently, replace the shared-volume eight-worker atomic race with a genuinely ordered BPref design. |
+| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`. Bounded compact smoke `13155593` also completes in `334 s`, passes the direct 1--20 audit, and proves the OOM fixed; same-node profiles localize its `+6.0 s` regression entirely to big-JIT while BPref remains unchanged. The no-global-blocking variant remains rejected at **10/11**, the launch-blocked/ordered-residual hybrid at **6/7**, and EM's projection cache at **0/2**. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
