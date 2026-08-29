@@ -228,8 +228,12 @@ only the ordinary fused arm because Slurm parsed the comma in the exported arm
 list as another export separator. It is not a paired comparison. The valid
 ordinary-arm measurement is `203 s` wall, with `178.21 s` summed expectation
 time; sparse pass 2 accounts for `146.87 s`, while the M-step itself accounts
-for only `2.96 s`. Persistent-only replacement profile `13145012` is queued
-on the same physical H100.
+for only `2.96 s`. Persistent-only replacement profile `13145012` completed
+on the same physical H100 in `313 s`. Its summed expectation time is
+`293.99 s`, including `263.73 s` in sparse pass 2; pass 1 is `24.20 s` and the
+M-step is `2.87 s`. Thus **116.86 s of the 115.78 s expectation regression is
+localized to sparse pass 2**, while pass 1 and reconstruction are unchanged
+within run noise.
 
 Opt-in commit `6d96acbf1` reuses the exact RELION projector in a parallel
 materialization kernel and feeds those float32 references to the same
@@ -365,7 +369,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Finish the valid same-H100 persistent stage profile (`13145012`), then run the one-repeat parallel-residual trajectory/audit (`13145479 / 13145484`). If it is not both exact and substantially faster, the required 16-repeat persistent science/audit (`13143741 / 13143742`) proceeds unchanged; if it is, qualify that faster path over 16 repeats instead. Only a green 16-repeat aggregate audit releases two independent full 200-iteration trajectories (`13143692`). |
+| ➡️ | What is next? | Finish the one-repeat parallel-residual trajectory/audit (`13145479 / 13145484`) against the now-measured sparse-pass-2 bottleneck. If it is not both exact and substantially faster, release the held 16-repeat persistent science/audit (`13143741 / 13143742`) unchanged; if it is, qualify that faster path over 16 repeats instead. Only a green 16-repeat aggregate audit releases two independent full 200-iteration trajectories (`13143692`). |
 | 🟢 | What finished? | Launch-serialized particle+rotation ordering passes **16/16** particles and maps (`13139299 / 13140157`). Persistent one-block replay is **4/4** at median `316 s` (`13140084`, `13140202 / 13142207`). Parallel projection remains **4/4** but is rejected at median `311.5 s` (`13144574 / 13144575`). The safer shared-helper parallel-residual prototype passes its byte-exact H100 gate (`13145450`) and is now at the bounded trajectory/runtime gate. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
