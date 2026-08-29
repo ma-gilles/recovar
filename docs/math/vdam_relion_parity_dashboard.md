@@ -457,6 +457,29 @@ shared-volume callback and emulate RELION's dynamic one-particle task claiming
 inside 24-particle pool barriers; no projector, residual, posterior, or scatter
 math will be duplicated.
 
+Commit `0db45336b` implements that source-faithful topology as an opt-in on the
+exact `1485282f8` lineage. It keeps the existing shared EM/VDAM callback,
+projector, residual, posterior, and atomic-scatter implementation; the only new
+mechanism is an eight-thread atomic task distributor with 24-particle pool
+barriers. Four focused topology tests pass, and the H100-only CUDA build is
+sealed at SHA-256 `d2f24d4ae5d...`. Deterministic same-H100 trajectory
+`13162940` passes the direct particle-state envelope at every iteration 1--20:
+zero failures across 200 particles and all four native repeats (audit SHA-256
+`11a4fddc1a9b...`). Its `407 s` wall is nevertheless slower than the exact
+serialized median of `329 s`. The leading explanation is the interaction
+between eight dynamic host claimants and global `CUDA_LAUNCH_BLOCKING=1`, not
+duplicated numerical work. Identical-build nonblocking discriminator
+`13163318` also passes all direct iteration-1--20 checkpoints with zero
+failures (audit SHA-256 `e5de030a1d6d...`). Its cold wall is `386 s`, but the
+iteration timestamp profile separates a `138 s` first-iteration compile from
+much faster late iterations: iterations 15--20 take `10--12 s` each versus
+`34--52 s` with launch blocking. Expanded 16-process qualification
+`13163796` is running on the same physical H100. Setup-only allocation
+`13163719` and companion allocations `13163797--13163799` exited `75` in
+2--3 seconds after receiving other GPU UUIDs; none ran science. The candidate
+cannot be promoted from one green realization because the earlier asynchronous
+shared-volume design first failed at repeat 9/11.
+
 | Exact GF46 speed discriminator | Correctness evidence | Wall time | Decision |
 |---|---:|---:|---|
 | Ordinary EM-batched VDAM | historical failures recur | `203 s` profile | fast reference only |
@@ -477,7 +500,8 @@ math will be duplicated.
 | Eight worker-private BPref volumes, particle round-robin | fails only particle `1723@19`; paired oracle green | `192 s` vs paired serial `327 s` | promising speed, rejected for parity |
 | Worker-private BPref + serial rotations | same lone particle `1723@19` failure; paired oracle green | `210 s`; paired oracle `412 s` anomalous | rotation concurrency exonerated; rejected for parity |
 | Worker-private BPref + serial rotations + three-particle ownership | same lone particle `1723@19` failure | `212 s` in `13161927` | ownership exonerated; rejected for parity |
-| Source-faithful dynamic task claiming, shared BPref, 24-particle pools | four new focused tests green; CUDA build SHA `d2f24d4ae5d...` | trajectory job `13162940` running | active mature topology candidate |
+| Source-faithful dynamic task claiming, shared BPref, 24-particle pools, blocking | direct 1--20 audit green: 0 failures over 200 particles x 20 iterations; SHA `11a4fddc1a9b...` | `407 s` in `13162940` | exact smoke, rejected as speed path under launch blocking |
+| Same source-faithful dynamic topology, nonblocking | direct 1--20 audit green: 0 failures; SHA `e5de030a1d6d...` | cold `386 s`; late iterations 15--20 `10--12 s` each | 16-process exact-H100 qualification `13163796` running |
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -571,14 +595,14 @@ initial basins without inflating one diameter until every result passes.
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | VDAM now reuses mature EM's compact active projection rows, candidate-pair scorer, RELION float32 posterior pruning, pair-count planner, and eight-lane execution topology behind opt-ins. The first three are exact but do not accelerate this workload. Worker-private BPref accumulation reaches `192--210 s`, close to ordinary EM-batched VDAM's `203 s`, while retaining the shared CUDA callback/projector/scatter implementation; its remaining boundary is one particle at iteration 19. |
+| 🟢 | What improved? | VDAM now reuses mature EM's compact active projection rows, candidate-pair scorer, RELION float32 posterior pruning, pair-count planner, and shared CUDA callback/projector/scatter implementation. The first three are exact but do not accelerate this workload. The new source-faithful shared-BPref dynamic worker topology passes every direct checkpoint through iteration 20; its blocking form is slow, so the identical nonblocking form is being tested. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
 | 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Launch-serialized particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. Shared-volume asynchronous (**10/11**) and launch-blocked (**6/7**) variants recreate the iteration-4/16/18 branch; all three private-volume ownership/rotation variants instead miss only particle `1723` at iteration 19. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Implement RELION's actual shared-device topology: dynamic one-particle task claims by eight host workers inside 24-particle pool barriers, using the existing fused callback and shared BPref. Gate it first on focused source/topology tests, then direct 1--20 parity/runtime, then at least 16 repeats. Separately retain one target process from queued jobs `13155522--13155525` when that exact GPU frees. |
-| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`; bounded compact scoring and compact posterior are exact but no faster. Whole-big-JIT pair buckets regress `+31%`; synchronized scoring-only buckets regress expectation `+36%` (`13161362`). Worker-private BPref closes most of the speed gap at `192--212 s`, but ordinary, serial-rotation, and three-particle ownership variants all fail the same single `1723@19` state (`13161352 / 13161617 / 13161927`). No-global-blocking remains rejected at **10/11**, launch-blocked at **6/7**, and EM's projection cache at **0/2**. |
+| ➡️ | What is next? | Monitor and directly audit all 16 fresh nonblocking dynamic-worker processes in `13163796`; stop at the first failure. If all pass, compare warm execution and compilation separately, then run a complete 200-iteration trajectory before any frozen-suite promotion. If one fails, align callback bucket boundaries to RELION's outer 24-particle pool phase before changing numerical kernels. |
+| 🟢 | What finished? | Dense exact control `13154000` passes every checkpoint in `334 s`; bounded compact scoring and compact posterior are exact but no faster. Whole-big-JIT pair buckets regress `+31%`; synchronized scoring-only buckets regress expectation `+36%` (`13161362`). Worker-private BPref closes most of the speed gap at `192--212 s`, but all ownership/rotation variants fail the same `1723@19` state. Source-faithful shared-BPref dynamic claiming closes both blocking and nonblocking direct 1--20 smokes (`13162940 / 13163318`); blocking takes `407 s`, while nonblocking takes a cold `386 s` and cuts late-iteration time by roughly 3--4x. No-global-blocking remains rejected at **10/11**, launch-blocked at **6/7**, and EM's projection cache at **0/2**. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
