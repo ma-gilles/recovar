@@ -72,6 +72,8 @@ constexpr char kRelionVdamWavgBprefHostGapTraceParticleEnv[] =
     "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE_PARTICLE_ID";
 constexpr char kRelionVdamPreprojectPersistentRotationsEnv[] =
     "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS";
+constexpr char kRelionVdamPrecomputePersistentResidualsEnv[] =
+    "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
@@ -4580,6 +4582,117 @@ __device__ __forceinline__ void relion_vdam_translate_pixel_f32(
     translated_imag = cosine * imag + sine * real;
 }
 
+__device__ __forceinline__ void relion_vdam_native_residual_f32(
+    unsigned image,
+    unsigned pixel,
+    int x,
+    int y,
+    float reference_real,
+    float reference_imag,
+    const float* image_real,
+    const float* image_imag,
+    const float* translation_x,
+    const float* translation_y,
+    const float* weights,
+    const float* minvsigma2s,
+    const float* ctfs,
+    unsigned long translation_count,
+    float significant_weight,
+    float weight_norm,
+    float& real,
+    float& imag,
+    float& Fweight)
+{
+    const float minvsigma2 = __ldg(&minvsigma2s[pixel]);
+    const float ctf = __ldg(&ctfs[pixel]);
+    const float pixel_real = __ldg(&image_real[pixel]);
+    const float pixel_imag = __ldg(&image_imag[pixel]);
+    Fweight = 0.0f;
+    real = 0.0f;
+    imag = 0.0f;
+    reference_real *= ctf;
+    reference_imag *= ctf;
+    float translated_real;
+    float translated_imag;
+    for (unsigned long translation = 0; translation < translation_count;
+         ++translation)
+    {
+        float weight = weights[image * translation_count + translation];
+        if (weight >= significant_weight)
+        {
+            weight = (weight / weight_norm) * ctf * minvsigma2;
+            Fweight += weight * ctf;
+            relion_vdam_translate_pixel_f32(
+                x,
+                y,
+                translation_x[translation],
+                translation_y[translation],
+                pixel_real,
+                pixel_imag,
+                translated_real,
+                translated_imag);
+            real += (translated_real - reference_real) * weight;
+            imag += (translated_imag - reference_imag) * weight;
+        }
+    }
+}
+
+__global__ void relion_vdam_native_residual_f32_kernel(
+    float2* references_and_residuals,
+    float* residual_weights,
+    const float* image_real,
+    const float* image_imag,
+    const float* translation_x,
+    const float* translation_y,
+    const float* weights,
+    const float* minvsigma2s,
+    const float* ctfs,
+    unsigned long translation_count,
+    float significant_weight,
+    float weight_norm,
+    unsigned image_x,
+    unsigned image_y,
+    unsigned image_xyz,
+    unsigned rotation_count)
+{
+    const unsigned image = blockIdx.x;
+    if (image >= rotation_count) return;
+    const int image_y_half = image_y / 2;
+    for (unsigned pixel = threadIdx.x; pixel < image_xyz; pixel += blockDim.x)
+    {
+        const int x = pixel % image_x;
+        int y = static_cast<int>(pixel / image_x);
+        if (y > image_y_half) y -= image_y;
+        const unsigned output = image * image_xyz + pixel;
+        const float2 reference = references_and_residuals[output];
+        float real;
+        float imag;
+        float Fweight;
+        relion_vdam_native_residual_f32(
+            image,
+            pixel,
+            x,
+            y,
+            reference.x,
+            reference.y,
+            image_real,
+            image_imag,
+            translation_x,
+            translation_y,
+            weights,
+            minvsigma2s,
+            ctfs,
+            translation_count,
+            significant_weight,
+            weight_norm,
+            real,
+            imag,
+            Fweight);
+        references_and_residuals[output] = make_float2(real, imag);
+        residual_weights[output] = Fweight;
+    }
+}
+
 template <
     typename Accumulator,
     bool CapturedOrder,
@@ -4588,6 +4701,8 @@ template <
 __global__ void relion_vdam_native_sgd_f32_kernel(
     RelionVdamProjectorKernel projector,
     const float2* preprojected_references,
+    const float2* precomputed_residuals,
+    const float* precomputed_residual_weights,
     float* image_real,
     float* image_imag,
     float* translation_x,
@@ -4627,7 +4742,9 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     int image_y_half = image_y / 2;
     int max_r2_volume = max_r2 * padding_factor * padding_factor;
     __shared__ float shared_eulers[9];
-    float minvsigma2, ctf, pixel_real, pixel_imag, Fweight, real, imag, weight;
+    float Fweight;
+    float real;
+    float imag;
     const unsigned physical_image_begin =
         PersistentSerialRotations ? 0 : blockIdx.x;
     const unsigned physical_image_end = PersistentSerialRotations
@@ -4677,62 +4794,61 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
         int y = static_cast<int>(pixel / image_x);
         if (y > image_y_half) y -= image_y;
 
-        float reference_real;
-        float reference_imag;
-        if (preprojected_references != nullptr)
+        if (precomputed_residuals != nullptr)
         {
-            const float2 reference =
-                preprojected_references[image * image_xyz + pixel];
-            reference_real = reference.x;
-            reference_imag = reference.y;
+            const unsigned residual_index = image * image_xyz + pixel;
+            const float2 residual = precomputed_residuals[residual_index];
+            real = residual.x;
+            imag = residual.y;
+            Fweight = precomputed_residual_weights[residual_index];
         }
         else
         {
-            reference_real = 0.0f;
-            reference_imag = 0.0f;
-            projector.project3Dmodel(
-                x,
-                y,
-                shared_eulers[0],
-                shared_eulers[1],
-                shared_eulers[3],
-                shared_eulers[4],
-                shared_eulers[6],
-                shared_eulers[7],
-                reference_real,
-                reference_imag);
-        }
-
-        minvsigma2 = __ldg(&minvsigma2s[pixel]);
-        ctf = __ldg(&ctfs[pixel]);
-        pixel_real = __ldg(&image_real[pixel]);
-        pixel_imag = __ldg(&image_imag[pixel]);
-        Fweight = 0.0f;
-        real = 0.0f;
-        imag = 0.0f;
-        reference_real *= ctf;
-        reference_imag *= ctf;
-        float translated_real, translated_imag;
-
-        for (unsigned long translation = 0; translation < translation_count; ++translation)
-        {
-            weight = weights[image * translation_count + translation];
-            if (weight >= significant_weight)
+            float reference_real;
+            float reference_imag;
+            if (preprojected_references != nullptr)
             {
-                weight = (weight / weight_norm) * ctf * minvsigma2;
-                Fweight += weight * ctf;
-                relion_vdam_translate_pixel_f32(
+                const float2 reference =
+                    preprojected_references[image * image_xyz + pixel];
+                reference_real = reference.x;
+                reference_imag = reference.y;
+            }
+            else
+            {
+                reference_real = 0.0f;
+                reference_imag = 0.0f;
+                projector.project3Dmodel(
                     x,
                     y,
-                    translation_x[translation],
-                    translation_y[translation],
-                    pixel_real,
-                    pixel_imag,
-                    translated_real,
-                    translated_imag);
-                real += (translated_real - reference_real) * weight;
-                imag += (translated_imag - reference_imag) * weight;
+                    shared_eulers[0],
+                    shared_eulers[1],
+                    shared_eulers[3],
+                    shared_eulers[4],
+                    shared_eulers[6],
+                    shared_eulers[7],
+                    reference_real,
+                    reference_imag);
             }
+            relion_vdam_native_residual_f32(
+                image,
+                pixel,
+                x,
+                y,
+                reference_real,
+                reference_imag,
+                image_real,
+                image_imag,
+                translation_x,
+                translation_y,
+                weights,
+                minvsigma2s,
+                ctfs,
+                translation_count,
+                significant_weight,
+                weight_norm,
+                real,
+                imag,
+                Fweight);
         }
 
         if (Fweight > 0.0f)
@@ -5150,6 +5266,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     float* translation_y = nullptr;
     float* wavg_dummy_outputs = nullptr;
     float2* preprojected_references = nullptr;
+    float* precomputed_residual_weights = nullptr;
     cudaArray_t array_real = nullptr;
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
@@ -5181,10 +5298,17 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         exact_native_ptx_path != nullptr && exact_native_ptx_path[0] != '\0';
     const char* preproject_persistent_value =
         std::getenv(kRelionVdamPreprojectPersistentRotationsEnv);
+    const char* precompute_persistent_residuals_value =
+        std::getenv(kRelionVdamPrecomputePersistentResidualsEnv);
+    const bool precompute_persistent_residuals_requested =
+        precompute_persistent_residuals_value != nullptr &&
+        precompute_persistent_residuals_value[0] != '\0' &&
+        std::strcmp(precompute_persistent_residuals_value, "0") != 0;
     const bool preproject_persistent_requested =
-        preproject_persistent_value != nullptr &&
-        preproject_persistent_value[0] != '\0' &&
-        std::strcmp(preproject_persistent_value, "0") != 0;
+        precompute_persistent_residuals_requested ||
+        (preproject_persistent_value != nullptr &&
+         preproject_persistent_value[0] != '\0' &&
+         std::strcmp(preproject_persistent_value, "0") != 0);
     const char* exact_wavg_predecessor_value =
         std::getenv(kRelionVdamExactWavgPredecessorEnv);
     const bool exact_wavg_predecessor_requested =
@@ -5420,6 +5544,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 reinterpret_cast<void**>(&preprojected_references),
                 reference_count * sizeof(float2));
             if (err != cudaSuccess) goto cleanup;
+            if (precompute_persistent_residuals_requested)
+            {
+                err = cudaMalloc(
+                    reinterpret_cast<void**>(&precomputed_residual_weights),
+                    reference_count * sizeof(float));
+                if (err != cudaSuccess) goto cleanup;
+            }
         }
         if (exact_wavg_predecessor_requested)
         {
@@ -6138,6 +6269,37 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         const cudaError_t projection_error = cudaGetLastError();
                         if (projection_error != cudaSuccess)
                             return projection_error;
+                        if (precompute_persistent_residuals_requested)
+                        {
+                            relion_vdam_native_residual_f32_kernel<<<
+                                particle_rotation_count,
+                                128,
+                                0,
+                                particle_streams[lane]>>>(
+                                preprojected_references,
+                                precomputed_residual_weights,
+                                image_real + particle * image_stride,
+                                image_imag + particle * image_stride,
+                                translation_x,
+                                translation_y,
+                                const_cast<float*>(
+                                    posterior_over_weight_norm +
+                                    particle * posterior_stride),
+                                const_cast<float*>(
+                                    minvsigma2 + particle * image_stride),
+                                const_cast<float*>(
+                                    ctf + particle * image_stride),
+                                static_cast<unsigned long>(translation_count),
+                                significant_weight,
+                                weight_norm,
+                                static_cast<unsigned>(image_w),
+                                static_cast<unsigned>(image_h),
+                                static_cast<unsigned>(pixel_count),
+                                static_cast<unsigned>(particle_rotation_count));
+                            const cudaError_t residual_error = cudaGetLastError();
+                            if (residual_error != cudaSuccess)
+                                return residual_error;
+                        }
                     }
                     const auto launch_runtime_sgd = [&](auto persistent_tag) {
                     constexpr bool persistent_serial =
@@ -6149,7 +6311,15 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         persistent_serial><<<
                         grid_rotations, 128, 0, particle_streams[lane]>>>(
                         projector,
-                        preprojected_references,
+                        precompute_persistent_residuals_requested
+                            ? nullptr
+                            : preprojected_references,
+                        precompute_persistent_residuals_requested
+                            ? preprojected_references
+                            : nullptr,
+                        precompute_persistent_residuals_requested
+                            ? precomputed_residual_weights
+                            : nullptr,
                         image_real + particle * image_stride,
                         image_imag + particle * image_stride,
                         translation_x,
@@ -6479,6 +6649,7 @@ cleanup:
     if (translation_x) cudaFree(translation_x);
     if (translation_y) cudaFree(translation_y);
     if (wavg_dummy_outputs) cudaFree(wavg_dummy_outputs);
+    if (precomputed_residual_weights) cudaFree(precomputed_residual_weights);
     if (preprojected_references) cudaFree(preprojected_references);
     if (real) cudaFree(real);
     if (imag) cudaFree(imag);

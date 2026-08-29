@@ -87,13 +87,16 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     native_kernel = source.split(
         "__global__ void relion_vdam_native_sgd_f32_kernel(", 1
     )[1].split("__global__ void relion_vdam_denominator_after_sgd_f32_kernel", 1)[0]
+    native_residual = source.split(
+        "__device__ __forceinline__ void relion_vdam_native_residual_f32(", 1
+    )[1].split("__global__ void relion_vdam_native_residual_f32_kernel", 1)[0]
     assert "RelionVdamProjectorKernel projector" in native_kernel
     assert "float* image_real" in native_kernel
     assert "float* image_imag" in native_kernel
     assert "float* translation_x" in native_kernel
     assert "float* translation_y" in native_kernel
-    assert "if (weight >= significant_weight)" in native_kernel
-    assert "weight = (weight / weight_norm) * ctf * minvsigma2;" in native_kernel
+    assert "if (weight >= significant_weight)" in native_residual
+    assert "weight = (weight / weight_norm) * ctf * minvsigma2;" in native_residual
     assert "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);" in native_kernel
     assert "PersistentSerialRotations ? 0 : blockIdx.x" in native_kernel
     assert "preprojected_references[image * image_xyz + pixel]" in native_kernel
@@ -111,7 +114,11 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "launch_runtime_sgd(std::true_type{})" in projector_launcher
     assert "launch_runtime_sgd(std::false_type{})" in projector_launcher
     assert "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS" in source
+    assert "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS" in source
     assert "relion_vdam_native_project_f32_kernel<<<" in projector_launcher
+    assert "relion_vdam_native_residual_f32_kernel<<<" in projector_launcher
+    assert "relion_vdam_native_residual_f32(" in native_kernel
+    assert "const float2* precomputed_residuals" in native_kernel
     assert "preproject_persistent_requested &&" in projector_launcher
     assert "const int32_t preproject_worker_lane" in projector_launcher
     assert (
@@ -880,6 +887,24 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
             parallel_worker_replay=False,
         )
         jax.block_until_ready(preprojected_nonzero)
+        monkeypatch.setenv("RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS", "1")
+        precomputed_nonzero = (
+            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                *common,
+                jnp.asarray(projector_values),
+                rotations,
+                image_shape,
+                volume_shape,
+                max_r,
+                4,
+                1,
+                worker_lane_ids=jnp.zeros((1,), dtype=jnp.int32),
+                serial_rotation_replay=True,
+                persistent_serial_rotation_replay=True,
+                parallel_worker_replay=False,
+            )
+        )
+        jax.block_until_ready(precomputed_nonzero)
 
         multi_particle_common = (
             common[0],
@@ -919,6 +944,10 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         np.testing.assert_array_equal(actual_value, expected_value)
     for expected_value, actual_value in zip(
         persistent_nonzero, preprojected_nonzero, strict=True
+    ):
+        np.testing.assert_array_equal(actual_value, expected_value)
+    for expected_value, actual_value in zip(
+        persistent_nonzero, precomputed_nonzero, strict=True
     ):
         np.testing.assert_array_equal(actual_value, expected_value)
 
