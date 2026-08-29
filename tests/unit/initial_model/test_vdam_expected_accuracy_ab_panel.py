@@ -33,6 +33,12 @@ def test_expected_accuracy_ab_panel_is_same_allocation_and_fail_closed() -> None
     assert "VDAM_BOUNDARY_DETERMINISTIC_CUDA=${VDAM_BOUNDARY_DETERMINISTIC_CUDA:-1}" in text
     assert "VDAM_BOUNDARY_DETERMINISTIC_CUDA must be 0 or 1" in text
     assert 'BOUNDARY_DETERMINISTIC_CUDA="${VDAM_BOUNDARY_DETERMINISTIC_CUDA}"' in text
+    assert "VDAM_CAPTURE_LOCAL_SCORE=${VDAM_CAPTURE_LOCAL_SCORE:-0}" in text
+    assert "VDAM_CAPTURE_FUSED_SCORES=${VDAM_CAPTURE_FUSED_SCORES:-0}" in text
+    assert "VDAM_CAPTURE_COARSE_SCORE=${VDAM_CAPTURE_COARSE_SCORE:-0}" in text
+    assert 'CAPTURE_LOCAL_SCORE="${VDAM_CAPTURE_LOCAL_SCORE}"' in text
+    assert 'CAPTURE_FUSED_SCORES="${VDAM_CAPTURE_FUSED_SCORES}"' in text
+    assert 'CAPTURE_COARSE_SCORE="${VDAM_CAPTURE_COARSE_SCORE}"' in text
     assert 'CAPTURE_NATIVE_REPLAY=0' in text
     assert 'bash "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch"' in text
     assert 'touch "${OUTPUT_ROOT}/COMPLETED"' in text
