@@ -175,6 +175,28 @@ gate. Admission attempts `13138767 / 13139266` exited in two/three seconds
 before science because of an abbreviated Git pin and then a missing worktree
 RELION binding; the replacement pins the full SHA and the qualified binding
 digest.
+The replacement has now completed five science repeats at `329--331 s` each;
+independent early direct audits are particle-green at every iteration 1--20
+for all **5/5**. This is interim evidence only: the earlier host-isolation arm
+looked green at 4/4 before failing at 14/16, so promotion still requires all 16
+repeats plus the complete particle/map audit. Pending audit `13139300` was
+cancelled before execution after a source audit found that its parser admitted
+`fused-serial` but not `fused-serial-rotations`; audit-only commit `f0ffa280e`
+adds the missing arm and focused coverage passes 7/7. Correct replacement
+audit `13140157` depends on the unchanged science job.
+
+The serialized correctness arm pays one CUDA kernel launch per orientation.
+Local performance commit `f6574840b` instead loops those orientations in one
+persistent one-block launch per particle, retaining the existing residual,
+translation, and eight-neighbour atomic scatter statements with an explicit
+orientation barrier. Focused H100 gate `13140084` passes all three source,
+routing, and numerical tests; persistent and launch-serialized outputs are
+byte-identical in the direct kernel test. The compiled sm90 binary SHA-256 is
+`e222e3a211bc...`. Exact-target four-repeat trajectory/runtime discriminator
+`13140202` and durable audit `13140204` wait behind the 16-repeat oracle. This
+optimization remains unpromoted until the slower oracle is 16/16 green and the
+persistent trajectory reproduces its particle/map envelope at materially lower
+wall time.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
@@ -274,7 +296,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Expanded host-isolation job `13136895` is only **14/16**: repeats 6/7 reproduce the complete historical red signature. Interleaved `13136896 / 13137252` then gives host **3/4** versus fused-particle **4/4**, so callback context matters but four repeats do not seal it. Shared commit `1485282f8` combines one-lane particle order with the existing one-orientation fused CUDA launch policy. Exact-target jobs `13139299 / 13139300` must pass all 16 particle trajectories and the map envelope; separate fused-particle jobs `13139327 / 13139328` test whether the stronger rotation ordering is necessary. |
+| ➡️ | What is next? | Expanded host-isolation job `13136895` is only **14/16**: repeats 6/7 reproduce the complete historical red signature. Interleaved `13136896 / 13137252` then gives host **3/4** versus fused-particle **4/4**, so callback context matters but four repeats do not seal it. Shared commit `1485282f8` combines one-lane particle order with the existing one-orientation fused CUDA launch policy. Exact-target science `13139299` is interim **5/5** particle-green but must reach 16/16 and pass replacement audit `13140157`; separate fused-particle jobs `13139327 / 13139328` test whether rotation ordering is necessary. Persistent one-launch optimization `f6574840b` passes focused H100 gate `13140084`; trajectory/runtime jobs `13140202 / 13140204` are queued behind the oracle. |
 | 🟢 | What finished? | Job `13127488` rejects expected-accuracy skipping as causal. Job `13128280` passes all 16 explicit-canonical processes. Job `13130772` then passes all eight environment-unset canonical-default particle audits and both map panels through iteration 4 under deterministic CUDA, proving the shared kernel policy is active without its environment override. Science commits `826e160c6 / eee92e4aa / f46290fb3 / c6ada08b0 / fb195ee33 / 1c61c3e3f` promote the shared default, pin one physical GPU, reuse the full-run selector, admit provenance-complete native-only panels, and avoid retired-arm compute; the latest focused slice is 28/28 green. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
@@ -453,7 +475,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-28 23:27 ET**
+Last scientific update: **2026-08-29 07:10 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
