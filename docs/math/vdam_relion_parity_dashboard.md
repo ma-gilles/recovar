@@ -197,24 +197,27 @@ orientation barrier. Focused H100 gate `13140084` passes all three source,
 routing, and numerical tests; persistent and launch-serialized outputs are
 byte-identical in the direct kernel test. The compiled sm90 binary SHA-256 is
 `e222e3a211bc...`. Exact-target four-repeat trajectory/runtime discriminator
-`13140202` now waits for the exact target GPU after the completed oracle; its
-replacement cache-isolated audit is `13142207`. Separate 16-repeat
-fused-particle science `13139327` is running and corrected audit `13142285`
-will determine whether rotation ordering is necessary. Its first seven
-iteration-20 processes take `192--195 s`; the five early-audited processes are
-**5/5** particle-green, including repeat positions 6 and 7 where the host one-particle
-arm recreated the historical red trajectory. This is discriminating evidence,
-but all 16 repeats and the aggregate map audit remain mandatory. CPU audit commit
-`a4a05b04c` disables RECOVAR's global JAX compilation cache so audit-only
-imports cannot load AOT artifacts compiled for another CPU feature set.
+`13140202` started on the qualified GPU after the particle-only arm released
+it; its replacement cache-isolated audit is `13142207`. The separate
+16-repeat fused-particle science job `13139327` initially completed ten
+iteration-20 processes in `188--195 s`, but a direct audit of repeat 8
+reproduced the complete historical red signature: particle `286` escapes the
+four-repeat native envelope at iteration 4, particle `2903` at iteration 16,
+and particle `903` at iteration 18. The particle-only policy is therefore
+rejected. Its remaining science, aggregate audit `13142285`, and dependent
+full-200 job `13142923` were cancelled before consuming further qualification
+compute. CPU audit commit `a4a05b04c` disables RECOVAR's global JAX compilation
+cache so audit-only imports cannot load AOT artifacts compiled for another CPU
+feature set.
 Full-trajectory commits `974d91621 / 81f4c7670 / 64f8a9d30` add a fail-closed
 ordering mode and a repeated 200-iteration runner around the existing sealed
 candidate runner; they do not duplicate an InitialModel command or science
 implementation. The optimization remains unpromoted until its trajectory
 reproduces the now-closed oracle particle/map envelope at materially lower wall
-time. The same runner is qualified directly atop particle-ordering source as
-commit `4152128ba`; two-repeat full-200 job `13142923` is dependency-gated on
-the 16-repeat aggregate audit, so it cannot run if the shorter arm fails.
+time. The runner is qualified directly atop persistent source as commit
+`64f8a9d30`; focused runner, routing, and shared-source coverage passes 5/5.
+Two-repeat full-200 job `13143692` is dependency-gated on persistent audit
+`13142207`, so it cannot run if the four-repeat trajectory/map gate fails.
 One-GPU attempt
 `13132879` previously received non-target UUID
 `GPU-e2c...` and exited `75` in zero seconds before output or science.
