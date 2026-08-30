@@ -23,6 +23,8 @@ Frozen case-definition SHA-256:
 | Persistent fused-BPref worker streams (`04742df83`) | focused GPU **2/2** | **297 s** (`-9.7%`) | first failure at iteration 4; same historical signature | 🔴 rejected |
 | Persistent linear callback scratch (`cb953f7cf`) | focused source **3/3**, GPU **2/2** | **194--195 s** (`-41.0%`) | two exact runs, then historical failure at iteration 4; repeat gate **1/2** | 🔴 rejected |
 | Worker-private BPref (`0c5df734b`) | paired serial oracle green | **192--212 s** | exact at 19/20 checkpoints; only `1723@19` leaves the native envelope | 🟡 active correctness target |
+| Particle-private BPref (`c494837c6`) | focused **8/8** | **188 s**; **211 s** with serialized rotations | both arms fail only `1723@19` | 🔴 rejected |
+| Single-stream serial enqueue (`60fab4e4a`) | focused source contract green; H100 build `13170878` | iteration-1--20 job `13171030` active | queues the accepted global particle/orientation order with one terminal stream barrier | 🟡 active speed discriminator |
 
 Nsight job `13168898` profiles the persistent-scratch arm after allocator
 overhead is removed. The RELION VDAM SGD kernel accounts for **92.2%** of GPU
@@ -74,16 +76,28 @@ merge: serial float64, pairwise float32, and pairwise float64. Slurm array
 all three arms fail exactly the same lone `1723@19` envelope check. Terminal
 lane-reduction order and precision are therefore exonerated.
 
-The remaining reorder happens inside each private lane, which still combines
-many particles before the terminal merge. Commit `c494837c6` adds the next
-bounded discriminator: one private BPref destination per physical particle,
-parallel use of the unchanged shared fused callback, then source-order
-reduction. Its focused gate passes 8/8; GF46 iteration-1--20 job `13170536`
-is active. This per-particle allocation is diagnostic. If causal, the
-production design will use bounded consecutive particle segments rather than
-an unbounded volume per particle. Default serial-float32 worker-private
-behavior remains unchanged, and neither arm can alter the frozen v3 score
-without repeat and full-trajectory qualification.
+The remaining reorder inside each private lane is now also exonerated. Commit
+`c494837c6` assigns one private BPref destination per physical particle, uses
+the unchanged shared fused callback in parallel, then reduces those volumes in
+source order. Its focused gate passes 8/8. GF46 job `13170536` completes in
+`188 s` and fails only `1723@19`; adding serialized orientations in job
+`13170626` completes in `211 s` and fails the identical checkpoint. Thus
+cross-particle atomics, worker mixing, orientation concurrency, terminal merge
+order, and terminal precision cannot individually or jointly recover the
+accepted trajectory once contributions have been regrouped into private
+partials.
+
+The speed work therefore returns to the accepted shared accumulator and exact
+global source order. Source audit shows that rotations are already enqueued
+without intermediate barriers; the remaining hot synchronization is the
+per-particle lane barrier. Commit `60fab4e4a` adds a fail-closed diagnostic
+that accepts only one worker lane, queues every particle and orientation on
+that one CUDA stream, and synchronizes once at the callback boundary. CUDA
+stream ordering preserves the accepted scatter sequence without private
+partial reductions. The focused source contract passes; H100 build `13170878`
+is green with binary SHA-256 `0010b33ebb39...`, and exact GF46 trajectory job
+`13171030` is active. The frozen v3 score remains unchanged pending trajectory
+and repeat qualification.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
@@ -742,7 +756,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Return to EM-style worker-private deterministic BPref reduction and localize its single remaining `1723@19` failure. Shared-volume timing mimicry is now closed: allocation/stream/Wavg scheduling changes can be fast and locally exact, but they do not eliminate repeat-dependent atomics. The worker-private arm is the smallest stable failure surface at near-target runtime. |
+| ➡️ | What is next? | Qualify the single-stream enqueue arm: it preserves the accepted direct shared-volume order while applying EM's batched-enqueue principle to remove per-particle host barriers. If iteration 1--20 is exact and materially faster than `329 s`, run repeat qualification and only then a full 200-iteration trajectory. |
 | 🟢 | What finished? | Persistent scratch reached **194--195 s** and passed two exact trajectories (`13168384_4`, repeat 1 of `13168680_0`), but repeat 2 reproduced `286@4 / 2903@16 / 903@18`; its repeat gate is **1/2**, so full-200 dependency `13168744` was cancelled. Dense exact control passes in `334 s`. Worker-private BPref reaches `192--212 s` and misses only `1723@19`; dynamic shared-BPref, CUDA Wavg, and persistent streams all reproduce the historical branch. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
