@@ -495,6 +495,30 @@ def test_configure_relion_image_mask_forwards_image_backend():
     assert calls["fourier_backend"] == "relion_cuda"
 
 
+def test_native_driver_reuses_shared_em_raw_image_cache(monkeypatch):
+    dataset = SimpleNamespace(tilt_series_flag=False)
+    main_star = pd.DataFrame(index=[0])
+    calls = []
+
+    class CacheObserved(RuntimeError):
+        pass
+
+    monkeypatch.setattr(driver, "read_star", lambda _path: (main_star, None))
+    monkeypatch.setattr(driver, "load_dataset", lambda *args, **kwargs: dataset)
+    monkeypatch.setattr(driver, "_configure_relion_image_mask", lambda ds, opts: calls.append(("mask", ds)))
+
+    def observe_cache(datasets):
+        calls.append(("cache", datasets))
+        raise CacheObserved
+
+    monkeypatch.setattr(driver, "_maybe_cache_raw_image_loaders", observe_cache)
+
+    with pytest.raises(CacheObserved):
+        driver.run_native_initial_model(driver.NativeInitialModelOptions(fn_img="particles.star"))
+
+    assert calls == [("mask", dataset), ("cache", [dataset])]
+
+
 def test_initial_sampling_state_uses_relion_angstrom_internal_units():
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
