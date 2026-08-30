@@ -5939,7 +5939,7 @@ def run_local_em_exact(
                     ),
                     debug_iteration=debug_iteration,
                 )
-                native_grid_counts = _relion_vdam_native_grid_counts_for_images(
+                captured_native_grid_counts = _relion_vdam_native_grid_counts_for_images(
                     experiment_dataset,
                     unpadded_bucket.image_indices,
                     rotation_count=packed_mstep_rotations_np.shape[1],
@@ -5950,9 +5950,9 @@ def run_local_em_exact(
                     ),
                     debug_iteration=debug_iteration,
                 )
-                native_grid_counts = _source_faithful_bpref_rotation_launch_counts(
+                rotation_launch_counts = _source_faithful_bpref_rotation_launch_counts(
                     reconstruction_pack_mask_np,
-                    native_grid_counts,
+                    captured_native_grid_counts,
                 )
                 particle_issue_order = _relion_vdam_particle_issue_order_for_images(
                     experiment_dataset,
@@ -5991,7 +5991,7 @@ def run_local_em_exact(
                         if bucket_reconstruction_group_ids is None
                         else bucket_reconstruction_group_ids[:unpadded_batch_size]
                     ),
-                    candidate_launch_counts=native_grid_counts,
+                    candidate_launch_counts=rotation_launch_counts,
                     debug_iteration=debug_iteration,
                 )
                 worker_lane_ids = _relion_vdam_worker_lanes_for_images(
@@ -6041,7 +6041,7 @@ def run_local_em_exact(
                         value is not None
                         for value in (
                             block_start_order,
-                            native_grid_counts,
+                            captured_native_grid_counts,
                             particle_start_offsets_ns,
                             particle_issue_order,
                         )
@@ -6076,7 +6076,7 @@ def run_local_em_exact(
                         value is not None
                         for value in (
                             block_start_order,
-                            native_grid_counts,
+                            captured_native_grid_counts,
                             particle_start_offsets_ns,
                             particle_issue_order,
                         )
@@ -6182,7 +6182,7 @@ def run_local_em_exact(
                             block_start_order, particle_start, particle_stop
                         ),
                         rotation_replay_counts=_particle_slice(
-                            native_grid_counts, particle_start, particle_stop
+                            rotation_launch_counts, particle_start, particle_stop
                         ),
                         particle_start_offsets_ns=_particle_slice(
                             particle_start_offsets_ns, particle_start, particle_stop
