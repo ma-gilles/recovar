@@ -14,6 +14,34 @@ Frozen case-definition SHA-256:
 | Same-H100 runtime | **0/20** comparable; 4.91--11.58x RELION | 20/20 comparable | 🔴 |
 | Terminal sealed audits | **20/20** | 20/20 | 🟢 |
 
+### At a glance (2026-08-30)
+
+| Question | Current answer |
+|---|---|
+| What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. The speed-neutral posterior batching, coarse-bookkeeping fusion, and raw-image cache probes are reverted at `274e4062d`. |
+| What is running now? | No speed job. The exact-control raw-cache discriminator was stopped after its iteration-20 decision; the next job will start from the reverted accepted path. |
+| Did the latest short gate improve? | No. The provisional unprofiled **178 s** result was confounded by a different CUDA build/flag set. With the control's exact CUDA SHA, pixi interpreter, performance flags, physical H100, and profiling, cumulative pre-artifact time is **172.20 s** versus **169.40 s** (`+1.7%`, worse). All four native audits still have zero divergent particles through iteration 20. |
+| Where is correctness stuck? | The frozen v3 K=1 score is still **2/20 complete strict trajectories**. Long-run controller/map drift, not fixed-state scorer arithmetic, remains the correctness boundary. |
+| Where is speed stuck? | Warm expectation remains dominant. The cached path removes repeated file reads, but pass 1, exact-local pass 2, current-size executable churn, and ordered BPref work remain much larger than the outer VDAM M-step. |
+| What happens next? | Profile the reverted accepted path and reuse EM's static-shape/big-JIT scheduling where exact ordering permits. Do not retry raw caching, posterior batching, coarse bookkeeping fusion, or local-bucket unification on GF46. |
+
+#### Current speed decision ledger
+
+| Shared EM idea | Direct/focused gate | Trajectory gate | Same-H100 wall | Decision |
+|---|---:|---:|---:|:---:|
+| Denominator-only residual reuse (`db9c2b330`) | exact | 20/20 short; established 80-step envelope | **182 s / 648 s** at 20/80 | 🟢 accepted baseline |
+| Batch posterior rows (`4c4163239`) | 7/7 exact | 20/20 short; first 80-step misses at `33/33/33/23` | **183 s / 664 s** | 🔴 reverted: slower at 80 |
+| Exact coarse pass-1 bookkeeping fusion (`832d043d9`) | bitwise | 20/20 against four repeats | **184 s** at 20 | 🔴 reverted: speed-neutral |
+| Shared mature-EM raw-image cache (`9cb34ddf2`) | 4/4 focused CPU | 20/20 against four repeats | exact-control profiled pre-artifact **172.20 s** vs **169.40 s** | 🔴 reverted by `274e4062d`: `+1.7%` slower |
+
+Raw-cache discriminator `13191733` used the control CUDA binary SHA-256
+`47b51660a0fbd991f862ee1054ea756f3a1cc65ceb1275eaf2fcb74dc3d038f6`,
+the exact control performance flags/interpreter, and physical H100
+`GPU-ef985070-011e-0782-6f0a-94b053dcc120`. It was stopped after writing
+iteration 27 once the iteration-20 performance decision was available. The
+four through-20 audit reports and profiled metadata are retained under
+`/scratch/gpfs/GILLES/mg6942/vdam_runs/vdam_gf46_shared_raw_cache80_retry5_exact_control_9cb34ddf2_20260830`.
+
 ### Latest exact-oracle speed discriminator (2026-08-29)
 
 | Arm | Local numerical gate | 0--20 wall | Direct particle trajectory | Decision |
