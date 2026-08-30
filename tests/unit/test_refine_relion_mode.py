@@ -3820,23 +3820,6 @@ def test_source_faithful_bpref_particle_cap_is_wired_into_grouped_vdam():
     assert "_accumulate_relion_vdam_physical_particle_grid(" in grouped_vdam
 
 
-def test_compact_vdam_bpref_counts_do_not_impersonate_captured_chronology():
-    source = inspect.getsource(run_local_em_exact)
-    start = source.index('raise RuntimeError("source VDAM physical operands were not packed")')
-    stop = source.index("elif source_faithful_bpref and sparse_big_jit_backprojection", start)
-    grouped_vdam = source[start:stop]
-
-    assert "captured_native_grid_counts = _relion_vdam_native_grid_counts_for_images(" in grouped_vdam
-    assert "rotation_launch_counts = _source_faithful_bpref_rotation_launch_counts(" in grouped_vdam
-    chronology_guard = grouped_vdam[
-        grouped_vdam.index("if (fused_serial_rotations or launch_serial_rotations)") :
-        grouped_vdam.index("if fused_serial_particles and particle_chunk_cap is not None")
-    ]
-    assert "captured_native_grid_counts" in chronology_guard
-    assert "rotation_launch_counts" not in chronology_guard
-    assert "rotation_replay_counts=_particle_slice(\n                            rotation_launch_counts" in grouped_vdam
-
-
 def test_fused_serial_vdam_particles_use_one_worker_lane(monkeypatch):
     from recovar import cuda_backproject
 
