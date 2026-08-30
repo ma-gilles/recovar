@@ -7684,7 +7684,13 @@ void relion_coarse_diff2_projector_f32_kernel(
         rotation_offset + block_in_batch * EULERS_PER_BLOCK;
     if (batch >= batch_size) return;
 
+    constexpr int pixels_per_chunk =
+        kRelionCoarseDiff2BlockSize / kRelionCoarsePrefetchFraction;
     __shared__ float shared_rotations[EULERS_PER_BLOCK * 6];
+    __shared__ float2 shared_references[
+        pixels_per_chunk * EULERS_PER_BLOCK];
+    __shared__ float2 shared_images[kRelionCoarseDiff2BlockSize];
+    __shared__ float shared_weights[kRelionCoarseDiff2BlockSize];
     __shared__ float shared_lane_partials[
         CANONICAL_REDUCTION ? EULERS_PER_BLOCK * kRelionCoarseDiff2BlockSize : 1];
     for (int index = threadIdx.x; index < EULERS_PER_BLOCK * 6; index += blockDim.x) {
@@ -7703,17 +7709,96 @@ void relion_coarse_diff2_projector_f32_kernel(
     const int active_lanes = kRelionCoarseDiff2BlockSize / translation_count;
     const int current_half_width = current_size / 2 + 1;
     const int current_max_r = current_size / 2;
+    const int full_pixel_count = current_size * current_half_width;
+    const int padded_pixel_count =
+        ((full_pixel_count + kRelionCoarseDiff2BlockSize - 1) /
+         kRelionCoarseDiff2BlockSize) *
+        kRelionCoarseDiff2BlockSize;
     const float tx = translation_angles[2 * translation];
     const float ty = translation_angles[2 * translation + 1];
     float lane_sums[EULERS_PER_BLOCK] = {0.0f};
 
-    if (lane < active_lanes) {
-        constexpr int pixels_per_chunk =
-            kRelionCoarseDiff2BlockSize / kRelionCoarsePrefetchFraction;
-        const int full_pixel_count = current_size * current_half_width;
-        for (int chunk_start = 0;
-             chunk_start < full_pixel_count;
-             chunk_start += pixels_per_chunk) {
+    // RELION projects each pixel/orientation pair once per block, stages the
+    // result in shared memory, and reuses it for every translation lane.  The
+    // previous fused implementation repeated the same texture projection in
+    // every translation lane, which dominated InitialModel's coarse pass.
+    for (int chunk_start = 0;
+         chunk_start < padded_pixel_count;
+         chunk_start += pixels_per_chunk) {
+        __syncthreads();
+
+        const int reference_full_pixel =
+            chunk_start + threadIdx.x / kRelionCoarsePrefetchFraction;
+        const int reference_x = reference_full_pixel % current_half_width;
+        const int reference_native_y = reference_full_pixel / current_half_width;
+        const int reference_y = reference_native_y > current_max_r
+            ? reference_native_y - current_size
+            : reference_native_y;
+        for (int local_rotation =
+                 threadIdx.x % kRelionCoarsePrefetchFraction;
+             local_rotation < EULERS_PER_BLOCK;
+             local_rotation += kRelionCoarsePrefetchFraction) {
+            const int rotation = rotation_start + local_rotation;
+            float2 reference = make_float2(0.0f, 0.0f);
+            if (reference_full_pixel < full_pixel_count &&
+                rotation < rotation_offset + rotation_count) {
+                const float* R = &shared_rotations[local_rotation * 6];
+                const float rk0 = R[3] * static_cast<float>(reference_x)
+                    + R[0] * static_cast<float>(reference_y);
+                const float rk1 = R[4] * static_cast<float>(reference_x)
+                    + R[1] * static_cast<float>(reference_y);
+                const float rk2 = R[5] * static_cast<float>(reference_x)
+                    + R[2] * static_cast<float>(reference_y);
+                if (static_cast<int>(rk0 * rk0 + rk1 * rk1 + rk2 * rk2)
+                    <= model_max_r2) {
+                    float xp = rk0;
+                    float yp = rk1;
+                    float zp = rk2;
+                    float imag_sign = 1.0f;
+                    if (xp < 0.0f) {
+                        xp = -xp;
+                        yp = -yp;
+                        zp = -zp;
+                        imag_sign = -1.0f;
+                    }
+                    reference.x = projector_scale * tex3D<float>(
+                        tex_real,
+                        xp + 0.5f,
+                        yp - static_cast<float>(tex_yinit) + 0.5f,
+                        zp - static_cast<float>(tex_zinit) + 0.5f);
+                    reference.y = projector_scale * imag_sign * tex3D<float>(
+                        tex_imag,
+                        xp + 0.5f,
+                        yp - static_cast<float>(tex_yinit) + 0.5f,
+                        zp - static_cast<float>(tex_zinit) + 0.5f);
+                }
+            }
+            shared_references[
+                (threadIdx.x / kRelionCoarsePrefetchFraction) *
+                    EULERS_PER_BLOCK +
+                local_rotation] = reference;
+        }
+
+        if (chunk_start % kRelionCoarseDiff2BlockSize == 0) {
+            const int image_full_pixel = chunk_start + threadIdx.x;
+            const int compact_pixel = image_full_pixel < full_pixel_count
+                ? full_to_compact[image_full_pixel]
+                : -1;
+            float2 image_value = make_float2(0.0f, 0.0f);
+            float pixel_weight = 0.0f;
+            if (compact_pixel >= 0 && compact_pixel < compact_pixel_count) {
+                image_value =
+                    images[batch * compact_pixel_count + compact_pixel];
+                pixel_weight =
+                    weight[batch * compact_pixel_count + compact_pixel];
+            }
+            shared_images[threadIdx.x] = image_value;
+            shared_weights[threadIdx.x] = pixel_weight;
+        }
+
+        __syncthreads();
+
+        if (lane < active_lanes) {
             for (int pixel_in_chunk = lane;
                  pixel_in_chunk < pixels_per_chunk;
                  pixel_in_chunk += active_lanes) {
@@ -7727,12 +7812,12 @@ void relion_coarse_diff2_projector_f32_kernel(
                 const int y = native_y > current_max_r
                     ? native_y - current_size
                     : native_y;
-                const float2 image_value =
-                    images[batch * compact_pixel_count + compact_pixel];
+                const int shared_pixel =
+                    pixel_in_chunk +
+                    chunk_start % kRelionCoarseDiff2BlockSize;
                 const float2 shifted = relion_score_translate_f32(
-                    image_value, x, y, tx, ty);
-                const float pixel_weight =
-                    weight[batch * compact_pixel_count + compact_pixel];
+                    shared_images[shared_pixel], x, y, tx, ty);
+                const float pixel_weight = shared_weights[shared_pixel];
 
                 #pragma unroll
                 for (int local_rotation = 0;
@@ -7740,39 +7825,9 @@ void relion_coarse_diff2_projector_f32_kernel(
                      ++local_rotation) {
                     const int rotation = rotation_start + local_rotation;
                     if (rotation >= rotation_offset + rotation_count) continue;
-                    const float* R = &shared_rotations[local_rotation * 6];
-                    const float rk0 = R[3] * static_cast<float>(x)
-                        + R[0] * static_cast<float>(y);
-                    const float rk1 = R[4] * static_cast<float>(x)
-                        + R[1] * static_cast<float>(y);
-                    const float rk2 = R[5] * static_cast<float>(x)
-                        + R[2] * static_cast<float>(y);
-                    float2 reference = make_float2(0.0f, 0.0f);
-                    if (static_cast<int>(rk0 * rk0 + rk1 * rk1 + rk2 * rk2)
-                        <= model_max_r2) {
-                        float xp = rk0;
-                        float yp = rk1;
-                        float zp = rk2;
-                        float imag_sign = 1.0f;
-                        if (xp < 0.0f) {
-                            xp = -xp;
-                            yp = -yp;
-                            zp = -zp;
-                            imag_sign = -1.0f;
-                        }
-                        reference.x = projector_scale * tex3D<float>(
-                            tex_real,
-                            xp + 0.5f,
-                            yp - static_cast<float>(tex_yinit) + 0.5f,
-                            zp - static_cast<float>(tex_zinit) + 0.5f);
-                        reference.y = projector_scale * imag_sign * tex3D<float>(
-                            tex_imag,
-                            xp + 0.5f,
-                            yp - static_cast<float>(tex_yinit) + 0.5f,
-                            zp - static_cast<float>(tex_zinit) + 0.5f);
-                    }
                     lane_sums[local_rotation] = relion_fine_diff2_update_f32(
-                        reference,
+                        shared_references[
+                            pixel_in_chunk * EULERS_PER_BLOCK + local_rotation],
                         shifted,
                         pixel_weight,
                         lane_sums[local_rotation]);

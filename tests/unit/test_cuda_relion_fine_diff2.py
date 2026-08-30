@@ -252,6 +252,12 @@ def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation
     launcher_start = source.index("launch_relion_coarse_diff2_projector_f32")
     launcher = source[launcher_start : source.index("__global__", launcher_start)]
     assert "shared_rotations[EULERS_PER_BLOCK * 6]" in block
+    assert "shared_references[" in block
+    assert "shared_images[kRelionCoarseDiff2BlockSize]" in block
+    assert "shared_weights[kRelionCoarseDiff2BlockSize]" in block
+    assert "threadIdx.x / kRelionCoarsePrefetchFraction" in block
+    assert "threadIdx.x % kRelionCoarsePrefetchFraction" in block
+    assert "pixel_in_chunk * EULERS_PER_BLOCK + local_rotation" in block
     assert "relion_score_translate_f32(" in block
     assert "tex3D<float>(" in block
     assert "projector_scale * tex3D<float>(" in block
