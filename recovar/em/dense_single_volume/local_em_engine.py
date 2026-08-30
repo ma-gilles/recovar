@@ -349,6 +349,9 @@ EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV = (
 EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV = (
     "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS"
 )
+EXACT_LOCAL_SOURCE_BPREF_COMPACT_ROTATION_LAUNCHES_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_COMPACT_ROTATION_LAUNCHES"
+)
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM = 512
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM"
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
@@ -1933,6 +1936,32 @@ def _source_faithful_bpref_particle_slices(
         (particle_start, min(image_count, particle_start + chunk_size))
         for particle_start in range(0, image_count, chunk_size)
     )
+
+
+def _source_faithful_bpref_rotation_launch_counts(
+    reconstruction_pack_mask: np.ndarray,
+    captured_counts: np.ndarray | None,
+) -> np.ndarray | None:
+    """Optionally omit padded tail launches from the physical VDAM callback.
+
+    The shared EM reconstruction packer places every contributing rotation at
+    the front of each particle row.  The fused VDAM callback already accepts a
+    per-particle grid count, so it can avoid launching the remaining padded
+    no-op rows without introducing another packing or backprojection path.
+    Captured native-grid diagnostics retain their sealed counts unchanged.
+    """
+
+    if captured_counts is not None:
+        return np.asarray(captured_counts, dtype=np.int32)
+    if not _env_flag(EXACT_LOCAL_SOURCE_BPREF_COMPACT_ROTATION_LAUNCHES_ENV):
+        return None
+    pack_mask = np.asarray(reconstruction_pack_mask, dtype=bool)
+    if pack_mask.ndim != 2 or pack_mask.shape[0] < 1 or pack_mask.shape[1] < 1:
+        raise ValueError("VDAM compact BPref launch mask must be a nonempty matrix")
+    counts = np.sum(pack_mask, axis=1, dtype=np.int32)
+    # The native callback requires at least one launched block per particle.
+    # An all-zero particle therefore keeps one proven no-op row.
+    return np.maximum(counts, 1).astype(np.int32, copy=False)
 
 
 def _reconstruction_pack_large_bucket_quantum() -> int:
@@ -5920,6 +5949,10 @@ def run_local_em_exact(
                         dtype=np.int64,
                     ),
                     debug_iteration=debug_iteration,
+                )
+                native_grid_counts = _source_faithful_bpref_rotation_launch_counts(
+                    reconstruction_pack_mask_np,
+                    native_grid_counts,
                 )
                 particle_issue_order = _relion_vdam_particle_issue_order_for_images(
                     experiment_dataset,
