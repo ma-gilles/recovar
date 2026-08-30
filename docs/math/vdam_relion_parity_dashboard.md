@@ -26,6 +26,10 @@ Frozen case-definition SHA-256:
 | Particle-private BPref (`c494837c6`) | focused **8/8** | **188 s**; **211 s** with serialized rotations | both arms fail only `1723@19` | 🔴 rejected |
 | Single-stream serial enqueue (`60fab4e4a`) | focused source contract green; H100 build `13170878` | **322 s**; direct envelope **20/20** | exact, but only `-2.1%` versus the `329 s` oracle median | 🔴 rejected as speed solution |
 | EM-batched residuals + one-lane ordered scatter (`ef1f737c6`) | batched residual/scatter gate green | **211--225 s** | initial **20/20**; cross-H100 stress **3/4**, failing arm has historical signature | 🟡 same-H100 repeat gate active |
+| EM-batched residuals + fixed warp-phased scatter (`ecab47c05`) | focused gate green | **204--206 s** | cross-H100 **4/4** and direct maps **4/4** through iteration 20; first long particle-envelope escape at iteration 42 | 🟡 full-200 gate running |
+| Persistent rotation replay + fixed warp phases (`bb1f732b4`) | focused gate green | **201 s**; **182 s** with 80M projection cap | cross-H100 replay reproduces `286@4 / 2903@16 / 903@18` | 🔴 rejected |
+| Fixed warp launch replay + 80M projection cap (`ecab47c05`) | direct envelope **20/20** | **269 s** | parity-safe but `+31.9%` versus the qualified 204 s arm | 🔴 rejected |
+| Fixed warp persistent replay + 1 GB projection cache (`bb1f732b4`) | process complete | **232 s** | slower than the uncached 201 s arm | 🔴 rejected |
 
 Nsight job `13168898` profiles the persistent-scratch arm after allocator
 overhead is removed. The RELION VDAM SGD kernel accounts for **92.2%** of GPU
@@ -147,10 +151,45 @@ zero failures at all 20 checkpoints in every repeat. RECOVAR walls are
 `204--206 s`, versus `211--225 s` and 3/4 for the unphased arm. Per-repeat
 audit SHA-256 values begin `4459c2e16794 / 37f1d8f07cbd /
 6afff9d120b9 / 58d7aa356272`. This strongly identifies intra-block warp
-scheduling as the recurring portability cause, but remains diagnostic because
-the native envelope's frozen GPU differs. True 200-iteration trajectory and
-runtime job `13173720` is queued; the frozen score and same-device gate stay
-unchanged until full and same-device qualification close.
+scheduling as the recurring portability cause. The four candidate map
+trajectories are also inside the direct four-native L2 spread at every
+iteration through 20 (SHA-256 `56406762b1a8...`). At iterations 1, 4, and 20,
+the candidate-to-nearest-native distances are only `0.633x`, `0.125--0.145x`,
+and `0.067--0.155x` of the native repeat diameter. The result remains
+diagnostic because the native envelope's frozen GPU differs.
+
+The longer audit finds that iteration-20 closure is necessary but not
+sufficient. Direct active-particle state remains within the four-native
+envelope through iteration 41, first leaves it at iteration 42 for one
+particle, rejoins at iterations 43--45, then escapes continuously from 46--60
+(SHA-256 `f48ad4884851...`). Map FSC-AUC against native repeat 1 remains
+`0.99999994` at iteration 40 and `0.99999944` at iteration 50, but falls to
+`0.98831` at iteration 60, `0.98272` at iteration 80, and `0.88881` at
+iteration 100 (SHA-256 `d4124cb4b505...`). The adaptive controller exposes
+the accumulating residue earlier: optimal-offset change first differs at
+iteration 33, expected rotation accuracy at 40, offset range at 50, and
+translation accuracy/step at 60. Thus the robust short-run scatter still
+crosses a nonlinear controller boundary near iteration 60; no frozen score is
+promoted. True iteration-200 runtime job `13173720` is running while the full
+trajectory artifacts are retained for the repair panel.
+
+The mature-EM performance probes are now bounded. A 1 GB exact projection
+cache increases the persistent arm from `201 s` to `232 s`, so projection
+reuse is not the limiting cost for this small VDAM subset. Raising the shared
+x-half projection cap from 40M to 80M row-pixels reduces persistent bucket
+count from 84 to 68 and wall from `201 s` to `182 s`, but that arm is not
+cross-GPU stable. Applying the same 80M cap to the qualified launch-ordered
+scatter passes all 20 direct particle checkpoints (audit job `13175325`,
+SHA-256 `9ef7ddaf9a38...`) but regresses wall to `269 s`; expectation alone is
+`248.18 s`, versus only `2.87 s` for the outer InitialModel M-step. The mature
+40M cap therefore remains authoritative. The next arm (`8fe75a0c3`) keeps
+EM-style precomputed residuals and one persistent block per particle, but adds
+an explicit device-memory fence between rotations to emulate the visibility
+boundary of separate launches without paying one host launch per rotation.
+Its sm90 binary is SHA-256 `7169d7dd4a0f...`; build/source/wiring gate
+`13175533` and explicit focused GPU gate `13175573` pass (3/3). It is opt-in
+and unpromoted pending cross-H100 array `13175618` and long-trajectory
+qualification.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
