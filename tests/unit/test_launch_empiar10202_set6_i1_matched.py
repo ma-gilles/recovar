@@ -116,6 +116,8 @@ def test_recovar_commands_are_autonomous_matched_i1() -> None:
     full = MODULE._recovar_command(repo, full_data, Path("/out/full"), smoke=False)
 
     for command, data in ((smoke, smoke_data), (full, full_data)):
+        assert command[5:7] == ("-m", "scripts.run_full_refinement")
+        assert not any(token.endswith("/scripts/run_full_refinement.py") for token in command)
         assert _option(command, "--sym") == "I1"
         assert _option(command, "--n_classes") == "1"
         assert _option(command, "--initial-pose-source") == "input-star"
