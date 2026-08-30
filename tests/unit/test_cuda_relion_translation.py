@@ -110,12 +110,29 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     projector_launcher = source.split(
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
     )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
-    assert "persistent_serial><<<" in projector_launcher
-    assert "launch_runtime_sgd(std::true_type{})" in projector_launcher
-    assert "launch_runtime_sgd(std::false_type{})" in projector_launcher
+    assert "persistent_serial," in projector_launcher
+    assert "fixed_warp_order><<<" in projector_launcher
+    assert (
+        "launch_runtime_sgd(std::false_type{}, std::true_type{})"
+        in projector_launcher
+    )
+    assert (
+        "launch_runtime_sgd(std::true_type{}, std::false_type{})"
+        in projector_launcher
+    )
+    assert (
+        "launch_runtime_sgd(std::false_type{}, std::false_type{})"
+        in projector_launcher
+    )
     assert "RECOVAR_VDAM_PREPROJECT_PERSISTENT_ROTATIONS" in source
     assert "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS" in source
     assert "RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS" in source
+    assert "RECOVAR_VDAM_FIXED_WARP_ORDER_SCATTER" in source
+    assert (
+        "for (unsigned active_warp = 0; active_warp < 4; ++active_warp)"
+        in native_kernel
+    )
+    assert "scatter_pixel && tid / 32 == active_warp" in native_kernel
     assert "relion_vdam_native_project_f32_kernel<<<" in projector_launcher
     assert "relion_vdam_native_residual_f32_kernel<<<" in projector_launcher
     assert "relion_vdam_native_residual_f32(" in native_kernel

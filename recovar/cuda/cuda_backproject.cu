@@ -76,6 +76,8 @@ constexpr char kRelionVdamPrecomputePersistentResidualsEnv[] =
     "RECOVAR_VDAM_PRECOMPUTE_PERSISTENT_RESIDUALS";
 constexpr char kRelionVdamPrecomputeOrderedResidualsEnv[] =
     "RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS";
+constexpr char kRelionVdamFixedWarpOrderScatterEnv[] =
+    "RECOVAR_VDAM_FIXED_WARP_ORDER_SCATTER";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
@@ -4699,7 +4701,8 @@ template <
     typename Accumulator,
     bool CapturedOrder,
     bool Trace,
-    bool PersistentSerialRotations>
+    bool PersistentSerialRotations,
+    bool FixedWarpOrderScatter>
 __global__ void relion_vdam_native_sgd_f32_kernel(
     RelionVdamProjectorKernel projector,
     const float2* preprojected_references,
@@ -4787,105 +4790,130 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
         if (tid < 9) shared_eulers[tid] = eulers[image * 9 + tid];
         __syncthreads();
 
-    int pixel_pass_count = ceilf(static_cast<float>(image_xyz) / 128.0f);
-    for (unsigned pass = 0; pass < static_cast<unsigned>(pixel_pass_count); ++pass)
-    {
-        unsigned pixel = pass * 128 + tid;
-        if (pixel >= image_xyz) continue;
-        int x = pixel % image_x;
-        int y = static_cast<int>(pixel / image_x);
-        if (y > image_y_half) y -= image_y;
-
-        if (precomputed_residuals != nullptr)
+        int pixel_pass_count = ceilf(static_cast<float>(image_xyz) / 128.0f);
+        for (unsigned pass = 0;
+             pass < static_cast<unsigned>(pixel_pass_count);
+             ++pass)
         {
-            const unsigned residual_index = image * image_xyz + pixel;
-            const float2 residual = precomputed_residuals[residual_index];
-            real = residual.x;
-            imag = residual.y;
-            Fweight = precomputed_residual_weights[residual_index];
-        }
-        else
-        {
-            float reference_real;
-            float reference_imag;
-            if (preprojected_references != nullptr)
+            unsigned pixel = pass * 128 + tid;
+            bool scatter_pixel = pixel < image_xyz;
+            int x = 0;
+            int y = 0;
+            int x0 = 0;
+            int x1 = 0;
+            int y0 = 0;
+            int y1 = 0;
+            int z0 = 0;
+            int z1 = 0;
+            float fx = 0.0f;
+            float fy = 0.0f;
+            float fz = 0.0f;
+            float mfx = 0.0f;
+            float mfy = 0.0f;
+            float mfz = 0.0f;
+            if (scatter_pixel)
             {
-                const float2 reference =
-                    preprojected_references[image * image_xyz + pixel];
-                reference_real = reference.x;
-                reference_imag = reference.y;
-            }
-            else
-            {
-                reference_real = 0.0f;
-                reference_imag = 0.0f;
-                projector.project3Dmodel(
-                    x,
-                    y,
-                    shared_eulers[0],
-                    shared_eulers[1],
-                    shared_eulers[3],
-                    shared_eulers[4],
-                    shared_eulers[6],
-                    shared_eulers[7],
-                    reference_real,
-                    reference_imag);
-            }
-            relion_vdam_native_residual_f32(
-                image,
-                pixel,
-                x,
-                y,
-                reference_real,
-                reference_imag,
-                image_real,
-                image_imag,
-                translation_x,
-                translation_y,
-                weights,
-                minvsigma2s,
-                ctfs,
-                translation_count,
-                significant_weight,
-                weight_norm,
-                real,
-                imag,
-                Fweight);
-        }
+                x = pixel % image_x;
+                y = static_cast<int>(pixel / image_x);
+                if (y > image_y_half) y -= image_y;
 
-        if (Fweight > 0.0f)
-        {
-            float xp = (shared_eulers[0] * x + shared_eulers[1] * y) * padding_factor;
-            float yp = (shared_eulers[3] * x + shared_eulers[4] * y) * padding_factor;
-            float zp = (shared_eulers[6] * x + shared_eulers[7] * y) * padding_factor;
-            if ((xp * xp + yp * yp + zp * zp) > max_r2_volume) continue;
-            if (xp < 0.0f)
-            {
-                xp = -xp;
-                yp = -yp;
-                zp = -zp;
-                imag = -imag;
-            }
-            if constexpr (Trace)
-                if (trace_record != nullptr && trace_first_atomic_claimed == 0 &&
-                    atomicCAS(&trace_first_atomic_claimed, 0, 1) == 0)
-                    trace_record->first_atomic_globaltimer =
-                        vdam_candidate_globaltimer();
+                if (precomputed_residuals != nullptr)
+                {
+                    const unsigned residual_index = image * image_xyz + pixel;
+                    const float2 residual = precomputed_residuals[residual_index];
+                    real = residual.x;
+                    imag = residual.y;
+                    Fweight = precomputed_residual_weights[residual_index];
+                }
+                else
+                {
+                    float reference_real;
+                    float reference_imag;
+                    if (preprojected_references != nullptr)
+                    {
+                        const float2 reference =
+                            preprojected_references[image * image_xyz + pixel];
+                        reference_real = reference.x;
+                        reference_imag = reference.y;
+                    }
+                    else
+                    {
+                        reference_real = 0.0f;
+                        reference_imag = 0.0f;
+                        projector.project3Dmodel(
+                            x,
+                            y,
+                            shared_eulers[0],
+                            shared_eulers[1],
+                            shared_eulers[3],
+                            shared_eulers[4],
+                            shared_eulers[6],
+                            shared_eulers[7],
+                            reference_real,
+                            reference_imag);
+                    }
+                    relion_vdam_native_residual_f32(
+                        image,
+                        pixel,
+                        x,
+                        y,
+                        reference_real,
+                        reference_imag,
+                        image_real,
+                        image_imag,
+                        translation_x,
+                        translation_y,
+                        weights,
+                        minvsigma2s,
+                        ctfs,
+                        translation_count,
+                        significant_weight,
+                        weight_norm,
+                        real,
+                        imag,
+                        Fweight);
+                }
 
-            int x0 = floorf(xp);
-            float fx = xp - x0;
-            int x1 = x0 + 1;
-            int y0 = floorf(yp);
-            float fy = yp - y0;
-            y0 -= model_init_y;
-            int y1 = y0 + 1;
-            int z0 = floorf(zp);
-            float fz = zp - z0;
-            z0 -= model_init_z;
-            int z1 = z0 + 1;
-            float mfx = 1.0f - fx;
-            float mfy = 1.0f - fy;
-            float mfz = 1.0f - fz;
+                scatter_pixel = Fweight > 0.0f;
+                if (scatter_pixel)
+                {
+                    float xp =
+                        (shared_eulers[0] * x + shared_eulers[1] * y) *
+                        padding_factor;
+                    float yp =
+                        (shared_eulers[3] * x + shared_eulers[4] * y) *
+                        padding_factor;
+                    float zp =
+                        (shared_eulers[6] * x + shared_eulers[7] * y) *
+                        padding_factor;
+                    scatter_pixel =
+                        (xp * xp + yp * yp + zp * zp) <= max_r2_volume;
+                    if (scatter_pixel)
+                    {
+                        if (xp < 0.0f)
+                        {
+                            xp = -xp;
+                            yp = -yp;
+                            zp = -zp;
+                            imag = -imag;
+                        }
+                        x0 = floorf(xp);
+                        fx = xp - x0;
+                        x1 = x0 + 1;
+                        y0 = floorf(yp);
+                        fy = yp - y0;
+                        y0 -= model_init_y;
+                        y1 = y0 + 1;
+                        z0 = floorf(zp);
+                        fz = zp - z0;
+                        z0 -= model_init_z;
+                        z1 = z0 + 1;
+                        mfx = 1.0f - fx;
+                        mfy = 1.0f - fy;
+                        mfz = 1.0f - fz;
+                    }
+                }
+            }
 
 #define RELION_VDAM_NATIVE_ATOMIC_TRIPLET(Z, Y, X, COEFFICIENT)                    \
     atomicAdd(&model_real[(Z) * model_x * model_y + (Y) * model_x + (X)],          \
@@ -4894,26 +4922,49 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
               static_cast<Accumulator>((COEFFICIENT) * imag));                      \
     atomicAdd(&model_weight[(Z) * model_x * model_y + (Y) * model_x + (X)],        \
               static_cast<Accumulator>((COEFFICIENT) * Fweight))
+#define RELION_VDAM_NATIVE_SCATTER_PIXEL()                                          \
+    if constexpr (Trace)                                                            \
+        if (trace_record != nullptr && trace_first_atomic_claimed == 0 &&           \
+            atomicCAS(&trace_first_atomic_claimed, 0, 1) == 0)                      \
+            trace_record->first_atomic_globaltimer = vdam_candidate_globaltimer();  \
+    float dd000 = mfz * mfy * mfx;                                                  \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);                           \
+    float dd001 = mfz * mfy * fx;                                                   \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x1, dd001);                           \
+    float dd010 = mfz * fy * mfx;                                                   \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y1, x0, dd010);                           \
+    float dd011 = mfz * fy * fx;                                                    \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y1, x1, dd011);                           \
+    float dd100 = fz * mfy * mfx;                                                   \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y0, x0, dd100);                           \
+    float dd101 = fz * mfy * fx;                                                    \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y0, x1, dd101);                           \
+    float dd110 = fz * fy * mfx;                                                    \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x0, dd110);                           \
+    float dd111 = fz * fy * fx;                                                     \
+    RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111)
 
-            float dd000 = mfz * mfy * mfx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);
-            float dd001 = mfz * mfy * fx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x1, dd001);
-            float dd010 = mfz * fy * mfx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y1, x0, dd010);
-            float dd011 = mfz * fy * fx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y1, x1, dd011);
-            float dd100 = fz * mfy * mfx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y0, x0, dd100);
-            float dd101 = fz * mfy * fx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y0, x1, dd101);
-            float dd110 = fz * fy * mfx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x0, dd110);
-            float dd111 = fz * fy * fx;
-            RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);
+            if constexpr (FixedWarpOrderScatter)
+            {
+                // Preserve the parallel preparation used by the mature EM
+                // path, but make the contended reduction order independent
+                // of the scheduler. A block has exactly four 32-thread warps.
+                for (unsigned active_warp = 0; active_warp < 4; ++active_warp)
+                {
+                    if (scatter_pixel && tid / 32 == active_warp)
+                    {
+                        RELION_VDAM_NATIVE_SCATTER_PIXEL();
+                    }
+                    __syncthreads();
+                }
+            }
+            else if (scatter_pixel)
+            {
+                RELION_VDAM_NATIVE_SCATTER_PIXEL();
+            }
+#undef RELION_VDAM_NATIVE_SCATTER_PIXEL
 #undef RELION_VDAM_NATIVE_ATOMIC_TRIPLET
         }
-    }
     if constexpr (Trace)
     {
         __syncthreads();
@@ -5312,6 +5363,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         precompute_ordered_residuals_value != nullptr &&
         precompute_ordered_residuals_value[0] != '\0' &&
         std::strcmp(precompute_ordered_residuals_value, "0") != 0;
+    const char* fixed_warp_order_scatter_value =
+        std::getenv(kRelionVdamFixedWarpOrderScatterEnv);
+    const bool fixed_warp_order_scatter_requested =
+        fixed_warp_order_scatter_value != nullptr &&
+        fixed_warp_order_scatter_value[0] != '\0' &&
+        std::strcmp(fixed_warp_order_scatter_value, "0") != 0;
     const bool precompute_residuals_requested =
         precompute_persistent_residuals_requested ||
         precompute_ordered_residuals_requested;
@@ -5419,6 +5476,11 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         return cudaErrorInvalidValue;
     if (precompute_ordered_residuals_requested &&
         (!serial_rotation_replay || persistent_serial_rotation_replay))
+        return cudaErrorInvalidValue;
+    if (fixed_warp_order_scatter_requested &&
+        (!precompute_ordered_residuals_requested ||
+         persistent_serial_rotation_replay || parallel_worker_replay ||
+         exact_native_ptx_requested || device_trace_requested))
         return cudaErrorInvalidValue;
     if (preproject_persistent_requested &&
         (parallel_worker_replay || captured_rotation_replay ||
@@ -6334,9 +6396,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                 return residual_error;
                         }
                     }
-                    const auto launch_runtime_sgd = [&](auto persistent_tag) {
+                    const auto launch_runtime_sgd = [&](
+                        auto persistent_tag, auto fixed_warp_order_tag) {
                     constexpr bool persistent_serial =
                         decltype(persistent_tag)::value;
+                    constexpr bool fixed_warp_order =
+                        decltype(fixed_warp_order_tag)::value;
                     const int64_t ordered_operand_offset =
                         persistent_serial
                             ? 0
@@ -6345,7 +6410,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         Accumulator,
                         use_captured_order,
                         use_trace,
-                        persistent_serial><<<
+                        persistent_serial,
+                        fixed_warp_order><<<
                         grid_rotations, 128, 0, particle_streams[lane]>>>(
                         projector,
                         precompute_residuals_requested
@@ -6404,10 +6470,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         static_cast<std::int32_t>(lane),
                         candidate_trace_iteration);
                     };
-                    if (persistent_serial_rotation_replay)
-                        launch_runtime_sgd(std::true_type{});
+                    if (fixed_warp_order_scatter_requested)
+                        launch_runtime_sgd(std::false_type{}, std::true_type{});
+                    else if (persistent_serial_rotation_replay)
+                        launch_runtime_sgd(std::true_type{}, std::false_type{});
                     else
-                        launch_runtime_sgd(std::false_type{});
+                        launch_runtime_sgd(std::false_type{}, std::false_type{});
                     const cudaError_t runtime_launch_error = cudaGetLastError();
                     if (trace_runtime_gap)
                     {
