@@ -295,8 +295,23 @@ that active rows are bitwise identical to an unpadded call (binary SHA-256
 checkpoints (audit SHA-256 `f2c25c39e8f...`) in **205 s**, versus **207 s** for
 the matching native-texture control; pass 1 is **19.08 s** versus **19.90 s**.
 The low-order gain is deliberately not extrapolated. Order-3 profile job
-`13180468` is the bounded discriminator because the selected 180-particle
-halfset otherwise executes at the shared 258-row safe shape.
+`13180468` completes 80 iterations in **989 s**, a **4.7%** improvement over
+the 1,038-second native-texture control. The late discriminator is effectively
+tied: iterations 61--80 take **447.5 s** expectation with **240.5 s** in pass
+1, versus **450.7 / 240.5 s** in the control. Its direct envelope is likewise
+identical to that control: **44/80**, first failing at iteration 42 and then
+46--80 (audit SHA-256 `5a7d142b3f31...`). Skipping padded particles is a safe
+shared micro-optimization, but it does not remove the dominant order-3 work.
+
+RELION's pinned source exposes a more consequential scheduling difference:
+GUI defaults `--j 8 --pool 3` form a 24-particle pool, while eight host threads
+dynamically claim one particle at a time and use `cudaStreamPerThread`.
+RECOVAR's exact native coarse launcher instead uses one JAX stream. Commit
+`c99b8ad7d` adds an explicit shared-CUDA worker-stream diagnostic without
+combining particles into one grid. H100 job `13180537` proves eight-worker and
+serial active-row outputs are bitwise identical on the focused kernel fixture
+(binary SHA-256 `e906539a246c...`); trajectory/runtime job `13180590` is the
+first science discriminator.
 
 The second test enables EM's shared local-bucket unification. Job `13177559`
 also passes all 20 direct particle checkpoints (report SHA-256
