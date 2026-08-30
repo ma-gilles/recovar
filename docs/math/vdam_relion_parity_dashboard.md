@@ -44,8 +44,36 @@ the same Pmax (`0.476847` candidate versus `0.476843--0.476912` native), but
 choose adjacent x translations separated by `4.25 A`: `-0.971983 A` versus
 `-5.22198 A`. Rotation concurrency and three-particle worker ownership produce
 the identical single failure, so both are exonerated. Targeted score capture
-is queued as Slurm array `13169231` on the exact physical H100 to distinguish
-a score tie from an incoming worker-lane reduction difference.
+is queued as Slurm array `13169231` on the exact physical H100; it is waiting
+for an unrelated user job on that device and has not consumed science time.
+
+Preliminary capture `13169408` on another H100 reproduces the exact failing
+translation and localizes the decision to one float32 score step. The same
+rotation receives equal translation priors; candidate translation index `58`
+beats RELION's index `56` by only `1.52587890625e-5 = 2^-16`. Direct float64,
+NumPy-float32, and RELION-shaped reduction replays all retain index `58` for
+the captured candidate map, so this is not a posterior, normalization, or tie
+policy defect. The sealed fused-posterior artifact is SHA-256
+`6cf07a9c888400749346d1808793eb01c0a5644d03ebc38f2a0360983e92cded`.
+
+Live-map counterfactual job `13169828` closes the causal boundary. Holding the
+captured image, CTF/noise weights, rotation, translations, and exact CUDA pair
+reducer fixed, the worker-private iteration-18 map selects index `58` by
+`+1.52587890625e-5`; all four independent native iteration-18 maps select
+index `56`, with margins from `-3.0517578125e-5` to
+`-3.0517578125e-4`. Their projected references differ from the live candidate
+projection by `2.89e-5--3.51e-5` relative L2. The incoming reconstructed map,
+not the scorer, is therefore causal.
+
+Commit `2ade0394f` starts the bounded repair panel in isolated worktree
+`recovar_vdam_worker_private_reducer_panel_20260829`. It keeps the mature
+shared EM/VDAM projector, posterior, fused callback, and exact CUDA binary
+unchanged and varies only the deterministic eight-private-volume terminal
+merge: serial float64, pairwise float32, and pairwise float64. Slurm array
+`13170146` runs focused reducer tests plus complete iteration-1--20 particle
+envelopes against four native repeats. Default serial-float32 behavior remains
+unchanged, and none of these arms can alter the frozen v3 score unless it first
+passes repeat and full-trajectory qualification.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
