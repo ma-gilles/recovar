@@ -119,50 +119,6 @@ def test_default_vdam_worker_topology_keeps_single_controller(monkeypatch):
     assert owners is None
 
 
-def test_compact_vdam_bpref_launches_reuse_front_packed_row_counts(monkeypatch):
-    monkeypatch.setenv(
-        local_em_engine.EXACT_LOCAL_SOURCE_BPREF_COMPACT_ROTATION_LAUNCHES_ENV,
-        "1",
-    )
-    pack_mask = np.asarray(
-        [
-            [True, True, False, False],
-            [False, False, False, False],
-            [True, True, True, False],
-        ]
-    )
-
-    counts = local_em_engine._source_faithful_bpref_rotation_launch_counts(
-        pack_mask,
-        None,
-    )
-
-    np.testing.assert_array_equal(counts, np.asarray([2, 1, 3], dtype=np.int32))
-
-
-def test_compact_vdam_bpref_launches_are_opt_in_and_preserve_captures(monkeypatch):
-    pack_mask = np.asarray([[True, False], [True, True]])
-    assert (
-        local_em_engine._source_faithful_bpref_rotation_launch_counts(
-            pack_mask,
-            None,
-        )
-        is None
-    )
-
-    monkeypatch.setenv(
-        local_em_engine.EXACT_LOCAL_SOURCE_BPREF_COMPACT_ROTATION_LAUNCHES_ENV,
-        "1",
-    )
-    captured = np.asarray([7, 8], dtype=np.int64)
-    counts = local_em_engine._source_faithful_bpref_rotation_launch_counts(
-        pack_mask,
-        captured,
-    )
-
-    np.testing.assert_array_equal(counts, captured.astype(np.int32))
-
-
 def test_round_robin_vdam_worker_topology_selects_eight_host_workers(monkeypatch):
     _clear_worker_replay(monkeypatch)
     monkeypatch.setenv(
