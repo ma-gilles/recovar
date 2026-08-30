@@ -23,10 +23,14 @@ particle checkpoints in 191 s, and profile job `13181815` completes 80
 iterations in 942 s versus 1,202 s for the qualified control. Its 46/80
 native-repeat envelope is not worse than the control's 44/80. Composing the
 native-texture coarse scorer is rejected by job `13182286` (949 s, 44/80,
-first miss at 42). The next single hypothesis is shared low-cardinality
-exact-local shape bucketing: reduce repeated JAX compilation signatures
-without changing candidates, score arithmetic, or BPref ordering. No
-frozen-suite score changes.
+first miss at 42). Shared radix-4 local buckets (`01ec47787`) reduce the first
+80-step wall again to 894 s, but that process reproduces the historical
+`286@4 / 2903@16 / 903@18` branch. Radix and Wavg bucket shapes are identical
+through iteration 16, so the iteration-4 escape is process-level trajectory
+variance rather than a causal padding regression. The active single
+hypothesis is matched same-H100 repeat stability: three additional radix runs
+are job `13183470`, followed by a matched Wavg-only panel. No frozen-suite
+score changes.
 
 ### 2026-08-29 canonical coarse cutoff qualification
 

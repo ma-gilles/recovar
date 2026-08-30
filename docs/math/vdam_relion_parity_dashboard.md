@@ -37,6 +37,7 @@ Frozen case-definition SHA-256:
 | Persistent rotations + labeled fixed-tree reduction (`77d9ed01a`) | focused source + H100 gate green | **66.7 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than fixed-warp launches |
 | Shared EM native-texture coarse scorer (`ecab47c05`) | direct particle envelope **20/20** | **207 s** through 20; **1,038 s** through 80 | order-3 pass 1 remains **240.5 s** at 61--80 | 🔴 only 13.6% faster through 80; does not close late coarse cost |
 | Shared EM exact sequential-Wavg FFI (`6ecfd0b76`) | CUDA/JAX **bitwise**; direct particle envelope **20/20** | **191 s** through 20; **942 s** through 80 | 80-step envelope **46/80**, first miss @47; qualified control is 44/80, first miss @42 | 🟡 **21.6%** faster through 80; long/runtime gate active |
+| Shared EM radix-4 local buckets + Wavg (`01ec47787`) | focused **12/12**; admission envelope **20/20** | **192 s** through 20; **894 s** through 80 | first 80-step run **23/80**, historical `286@4 / 2903@16 / 903@18`; shapes identical to Wavg through @16 | 🟡 another **5.1%** faster; matched repeat gate active |
 | Native-texture + sequential-Wavg (`6ecfd0b76`) | direct particle envelope **20/20** | **200 s** through 20; **949 s** through 80 | 80-step envelope **44/80**, first miss @42 | 🔴 rejected: `+0.7%` wall and earlier divergence versus Wavg-only |
 | Exact native-texture reference cache (`85536d695`) | CUDA direct/cached score **bitwise**; particle **20/20** | **209 s** through 20; profile80 job `13178973` | audit SHA-256 `aa18c10d1d26...`; unchanged EM fused-translation scorer | 🟡 order-3 speed gate active |
 | Shared EM unified local bucket shapes (`ecab47c05`) | direct particle envelope **20/20** | **208 s** through 20 | audit SHA-256 `7d38a268864...` | 🔴 inert on GF46; buckets were already unified |
@@ -388,6 +389,29 @@ audit accepts **44/80** checkpoints and first misses at iteration 42, versus
 runtime benefit and returns the trajectory to the qualified control's earlier
 escape. It remains an isolated regression track and is not part of the active
 speed branch. Profile summary SHA-256 is `269fe573b98b...`.
+
+Commit `01ec47787` then reuses EM's static-shape bucket abstraction more
+aggressively. Opt-in `RECOVAR_EXACT_LOCAL_BUCKET_RADIX=4` maps adjacent
+power-of-two local-support widths into radix-4 classes while leaving real
+candidates and masks unchanged. Twelve focused CPU guards and Ruff pass.
+Admission job `13182769` passes **20/20** direct checkpoints in **192 s**;
+the earlier `13182753` stopped before science because the fresh worktree lacked
+the pinned RELION binding. Through the admission run, execution signatures
+fall from 13 to 12, pass 2 from `149.9` to `141.4 s`, and big-JIT from `82.1`
+to `77.5 s`.
+
+The 80-step profile `13182844` completes in **894 s**, another **48 s / 5.1%**
+below Wavg-only and **308 s / 25.6%** below the qualified control. Expectation
+is `847.1 s`; pass 2 `455.9 s`; big-JIT `263.6 s`; packing `31.5 s`; and
+ordered backprojection `76.1 s`. The first direct audit accepts only **23/80**
+and reproduces the historical `286@4 / 2903@16 / 903@18` branch. Crucially,
+radix-4 and Wavg-only have identical bucket shapes through iteration 16;
+radix first changes a 512-row bucket to 1024 at iteration 18. The iteration-4
+escape therefore cannot be attributed to radix padding and instead exposes
+the known process-level CUDA trajectory variance. Runtime is promising but
+unqualified. Same-H100 three-repeat job `13183470` is the active radix gate;
+a matched Wavg-only repeat gate follows before either arm is promoted. Profile
+and audit SHA-256 values are `a7228f650815...` and `46ccee8ea0cd...`.
 
 ### Why VDAM currently trails supplied-map EM
 
