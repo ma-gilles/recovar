@@ -1335,18 +1335,14 @@ def relion_translate_score_f32(
 
 @jax.jit
 def relion_exponentiate_f32(values: jax.Array, add: jax.Array) -> jax.Array:
-    """Apply RELION's row-wise fine-weight ``expf(value + add)`` CUDA kernel."""
+    """Apply RELION's fine-weight ``expf(value + add)`` CUDA kernel."""
 
     if values.dtype != jnp.float32:
         raise TypeError(f"values must be float32, got {values.dtype}")
-    if values.ndim not in (1, 2) or any(size < 1 for size in values.shape):
-        raise ValueError(f"values must be a nonempty 1-D or 2-D array, got {values.shape}")
-    expected_add_shape = () if values.ndim == 1 else (values.shape[0],)
-    if add.dtype != jnp.float32 or add.shape != expected_add_shape:
-        raise TypeError(
-            "add must be float32 with one value per row, got "
-            f"{add.dtype} {add.shape} for values {values.shape}"
-        )
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if add.dtype != jnp.float32 or add.ndim != 0:
+        raise TypeError(f"add must be a float32 scalar, got {add.dtype} {add.shape}")
     if jax.default_backend() != "gpu":
         raise RuntimeError("RELION float32 exponentiation requires a JAX GPU backend")
     if not custom_cuda_requested():
@@ -1363,17 +1359,15 @@ def relion_exponentiate_f32(values: jax.Array, add: jax.Array) -> jax.Array:
 
 @jax.jit
 def relion_divide_f32(values: jax.Array, divisor: jax.Array) -> jax.Array:
-    """Apply RELION's row-wise CUDA ``float / float`` normalization."""
+    """Apply RELION's CUDA ``float / float`` posterior normalization."""
 
     if values.dtype != jnp.float32:
         raise TypeError(f"values must be float32, got {values.dtype}")
-    if values.ndim not in (1, 2) or any(size < 1 for size in values.shape):
-        raise ValueError(f"values must be a nonempty 1-D or 2-D array, got {values.shape}")
-    expected_divisor_shape = () if values.ndim == 1 else (values.shape[0],)
-    if divisor.dtype != jnp.float32 or divisor.shape != expected_divisor_shape:
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if divisor.dtype != jnp.float32 or divisor.ndim != 0:
         raise TypeError(
-            "divisor must be float32 with one value per row, got "
-            f"{divisor.dtype} {divisor.shape} for values {values.shape}"
+            f"divisor must be a float32 scalar, got {divisor.dtype} {divisor.shape}"
         )
     if jax.default_backend() != "gpu":
         raise RuntimeError("RELION float32 division requires a JAX GPU backend")
@@ -1391,20 +1385,19 @@ def relion_divide_f32(values: jax.Array, divisor: jax.Array) -> jax.Array:
 
 @jax.jit
 def relion_cub_sort_scan_f32(values: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """Sort and inclusively scan float32 rows with RELION's CUB calls.
+    """Sort and inclusively scan one float32 vector with RELION's CUB calls.
 
     This is a strict diagnostic primitive for the coarse-significance boundary.
     RELION invokes ``cub::DeviceRadixSort::SortKeys`` followed by
     ``cub::DeviceScan::InclusiveSum`` on each particle's positive weights.
     Keeping both intermediate arrays observable lets parity tests identify a
-    sort discrepancy separately from a scan discrepancy. For a matrix, all
-    rows share one CUB scratch allocation while retaining sequential row order.
+    sort discrepancy separately from a scan discrepancy.
     """
 
     if values.dtype != jnp.float32:
         raise TypeError(f"values must be float32, got {values.dtype}")
-    if values.ndim not in (1, 2) or any(size < 1 for size in values.shape):
-        raise ValueError(f"values must be a nonempty 1-D or 2-D array, got {values.shape}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
     if jax.default_backend() != "gpu":
         raise RuntimeError("RELION CUB sort/scan requires a JAX GPU backend")
     if not custom_cuda_requested():
