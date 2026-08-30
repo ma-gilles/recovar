@@ -60,6 +60,7 @@ These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts a
 | `13210232` | `diagnostic` | **EXPECTED FAIL-CLOSED** | HYPOTHESIS REJECTED | failed | none | cold_a PASS and warm_a PASS with pair_a 0->4823 then byte-stable 4823->4823; cold_b FAIL@4 and warm_b FAIL@4 with pair_b 0->4676 then byte-stable 4676->4676. Wrapper FAILED as an expected fail-closed hypothesis rejection, not a new scorecard failure. |
 | `13211317` | `diagnostic` | **INVALID/SUPERSEDED** | INVALID | failed | none | Prior ordered-shell attempt is INVALID/SUPERSEDED by valid same-cache job 13211719; it carries no parity inference or score impact. |
 | `13211719` | `diagnostic` | **EXPECTED HYPOTHESIS REJECTION** | HYPOTHESIS REJECTED | failed | none | Valid A/B execution used one canonical cache: A populated 0->377 and A-after/B-before/B-after were byte-identical. Repeatability failed scientifically: one float32 ULP first appears in an E-step posterior scalar, followed by ordered-noise and both-half BPref differences; the target stack stayed exact. |
+| `13212500` | `diagnostic` | **INVALID HARNESS** | INVALID | cancelled | none | Cancelled before science after the loader treated the qualified CUDA library as stale and launched make/nvcc against that source artifact. The library bytes stayed unchanged, but a source-side .build.lock was created. INVALID HARNESS: no A/B result, runtime result, or promotion. |
 
 Job `13209422` warm-cache additions included: `run_local_bucket_big_jit`, `relion_coarse_diff2_projector_f32`, `coarse posterior`, `relion_vdam_mstep_fused_projector_x_half`. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_profilematched_39a38f9d6_20260830/analysis/arms.tsv`.
 
@@ -100,6 +101,12 @@ The Slurm `FAILED 1:0` terminal state is an **expected scientific-gate hypothesi
 Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_ordered_noise_shell_samecache_3b5afd98e_20260830T1847ET/analysis/repeatability.json` (SHA-256 `a3c544602c9845e7c514393e6e20b47d153d23ec8b8757c0a60d1b17d5fe2619`); `analysis/jax_cache_validation.json` (SHA-256 `da25be1dbd38b4940fa5e673081136c808d8240fb9e939fd6863408fdaa24794`); log SHA-256 `fedbccb441958eb01a4609c6e7ea12d062d5724afcb706c7a86c04869780dbb4`.
 
 **Conclusion:** identical persistent-cache bytes do not guarantee exact ordered-shell replay. The first captured upstream difference is one float32 ULP in an E-step posterior scalar; discrete selection is still exact before differences become visible in ordered noise and both-half BPref.
+
+### Invalid speed-gate attempt: job `13212500`
+
+Cancelled after 00:04:23 before any A/B science or timing result. The loader treated the qualified CUDA library as stale and launched `make`/`nvcc` against the source artifact. Its bytes remained unchanged at SHA-256 `a548e44d81adcad7d0356ad369d8cfd23aae7404c1383b1ca2cf85967e77241b`, but it created `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_ordered_scatter_graph_gate_6b5e6568a_20260830/.build.lock`. The attempt is **INVALID HARNESS** and authorizes no 80-iteration promotion.
+
+Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_sig_bucket_ab_73945d69f_20260830T1900ET/trials/cold/control/runner.log` (SHA-256 `693ca77cb8a01ad7dc78b282df19f7df8c5ef4bc624ad2c9f99ef365b508fc04`); Slurm log SHA-256 `f39303615d8f692e242f0df8116649139e9d47d4bc78ad5186b2a2f82c47eed3`.
 
 ## Speed snapshot
 

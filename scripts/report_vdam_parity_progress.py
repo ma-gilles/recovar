@@ -51,6 +51,7 @@ ACTIVE_DIAGNOSTIC_POLICY = {
         "failed",
         "EXPECTED HYPOTHESIS REJECTION",
     ),
+    "13212500": ("invalid_harness", "invalid", "cancelled", "INVALID HARNESS"),
 }
 CRITICAL_CACHE_MISS_JOBS = frozenset({"13208734", "13208735", "13209422"})
 PROFILE_MATCHED_EVIDENCE = {
@@ -258,6 +259,49 @@ ORDERED_SHELL_EVIDENCE = {
     "mstep": {"exact": False, "nonexact_field_count": 16},
     "target_stack": {"stack_index": 286, "exact": True},
 }
+INVALID_SPEED_HARNESS_EVIDENCE = {
+    "invalid_reason": "automatic_cuda_rebuild_targeted_qualified_source_artifact",
+    "source_head": "73945d69f6e7c609e6830dc65d5de84c63434d5b",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-sig-bucket-ab-13212500.out",
+    "evidence_sha256": "f39303615d8f692e242f0df8116649139e9d47d4bc78ad5186b2a2f82c47eed3",
+    "evidence_root": (
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+        "vdam_gf01_sig_bucket_ab_73945d69f_20260830T1900ET"
+    ),
+    "runner_log": "trials/cold/control/runner.log",
+    "runner_log_sha256": "693ca77cb8a01ad7dc78b282df19f7df8c5ef4bc624ad2c9f99ef365b508fc04",
+    "command_report": "trials/cold/control/command.json",
+    "command_report_sha256": "d2461dc96dc202fcd5765a274d44bb1985f087b1559534965391f7115e1ff0ab",
+    "native_provenance": "provenance/native_extensions.json",
+    "native_provenance_sha256": "3290d654e5b143d719fa90734ffa66cce9f0d7d495097c6fd57c5df78cb2e65c",
+    "source_cuda_library": {
+        "path": (
+            "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+            "vdam_ordered_scatter_graph_gate_6b5e6568a_20260830/libcuda_backproject.so"
+        ),
+        "sha256": "a548e44d81adcad7d0356ad369d8cfd23aae7404c1383b1ca2cf85967e77241b",
+        "size": 8403456,
+        "inode": 239857888,
+        "mtime": "2026-08-30T13:10:53.397799229-04:00",
+        "bytes_unchanged_after_cancellation": True,
+    },
+    "source_build_lock": {
+        "path": (
+            "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+            "vdam_ordered_scatter_graph_gate_6b5e6568a_20260830/.build.lock"
+        ),
+        "created_at": "2026-08-30T19:04:15.109070000-04:00",
+    },
+    "slurm": {
+        "terminal_state": "CANCELLED by 230216",
+        "exit_code": "0:0",
+        "elapsed": "00:04:23",
+        "max_rss": "2439592K",
+    },
+    "science_result_recorded": False,
+    "runtime_result_recorded": False,
+    "promotion_authorized": False,
+}
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -421,6 +465,12 @@ def _validate_active_diagnostics(scorecard: dict[str, Any]) -> None:
     _require(
         {key: ordered_shell.get(key) for key in ORDERED_SHELL_EVIDENCE} == ORDERED_SHELL_EVIDENCE,
         "13211719: ordered-shell evidence changed",
+    )
+    invalid_speed = next(row for row in diagnostics if row["job_id"] == "13212500")
+    _require(
+        {key: invalid_speed.get(key) for key in INVALID_SPEED_HARNESS_EVIDENCE}
+        == INVALID_SPEED_HARNESS_EVIDENCE,
+        "13212500: invalid speed-harness evidence changed",
     )
 
 
@@ -706,8 +756,23 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         ]
     )
     speed = scorecard["speed_snapshot"]
+    invalid_speed = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13212500")
+    source_cuda = invalid_speed["source_cuda_library"]
+    source_lock = invalid_speed["source_build_lock"]
     lines.extend(
         [
+            "",
+            "### Invalid speed-gate attempt: job `13212500`",
+            "",
+            f"Cancelled after {invalid_speed['slurm']['elapsed']} before any A/B science or timing result. "
+            "The loader treated the qualified CUDA library as stale and launched `make`/`nvcc` against the "
+            "source artifact. Its bytes remained unchanged at "
+            f"SHA-256 `{source_cuda['sha256']}`, but it created `{source_lock['path']}`. "
+            "The attempt is **INVALID HARNESS** and authorizes no 80-iteration promotion.",
+            "",
+            f"Evidence: `{invalid_speed['evidence_root']}/{invalid_speed['runner_log']}` "
+            f"(SHA-256 `{invalid_speed['runner_log_sha256']}`); Slurm log SHA-256 "
+            f"`{invalid_speed['evidence_sha256']}`.",
             "",
             "## Speed snapshot",
             "",

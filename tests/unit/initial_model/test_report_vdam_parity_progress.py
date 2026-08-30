@@ -193,6 +193,30 @@ def test_ordered_shell_hypothesis_rejection_is_valid_and_non_scoring() -> None:
     assert job["evidence_sha256"] in rendered
 
 
+def test_invalid_speed_harness_evidence_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    job = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13212500")
+    job["promotion_authorized"] = True
+    with pytest.raises(ValueError, match="13212500: invalid speed-harness evidence changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_invalid_speed_harness_is_visible_and_non_scoring() -> None:
+    loaded = progress_mod.load_and_validate()
+    job = next(row for row in loaded["active_diagnostics"] if row["job_id"] == "13212500")
+    rendered = progress_mod.render_markdown(loaded)
+
+    assert job["science_result_recorded"] is False
+    assert job["runtime_result_recorded"] is False
+    assert job["promotion_authorized"] is False
+    assert "`13212500` | `diagnostic` | **INVALID HARNESS** | INVALID | cancelled | none" in rendered
+    assert "### Invalid speed-gate attempt: job `13212500`" in rendered
+    assert "before any A/B science or timing result" in rendered
+    assert "launched `make`/`nvcc` against the source artifact" in rendered
+    assert job["source_cuda_library"]["sha256"] in rendered
+    assert job["runner_log_sha256"] in rendered
+    assert "authorizes no 80-iteration promotion" in rendered
+
+
 def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:
     loaded = progress_mod.load_and_validate()
     v2 = next(row for row in loaded["secondary_tracks"] if row["id"] == "legacy_parameter_expansion_v2")
