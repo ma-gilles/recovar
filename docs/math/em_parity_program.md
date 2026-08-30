@@ -14,6 +14,20 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
+### 2026-08-30 shared-EM Wavg speed qualification
+
+Shared-EM commit `6ecfd0b76` replaces the exact local Wavg translation loop
+with one CUDA FFI that retains storage-order float32 accumulation. Focused
+H100 job `13181568` is bitwise, GF46 job `13181665` passes 20/20 direct
+particle checkpoints in 191 s, and profile job `13181815` completes 80
+iterations in 942 s versus 1,202 s for the qualified control. Its 46/80
+native-repeat envelope is not worse than the control's 44/80. Composing the
+native-texture coarse scorer is rejected by job `13182286` (949 s, 44/80,
+first miss at 42). The next single hypothesis is shared low-cardinality
+exact-local shape bucketing: reduce repeated JAX compilation signatures
+without changing candidates, score arithmetic, or BPref ordering. No
+frozen-suite score changes.
+
 ### 2026-08-29 canonical coarse cutoff qualification
 
 The first common-frame repeat escape is now causal and has a bounded shared
