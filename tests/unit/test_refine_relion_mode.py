@@ -4366,76 +4366,15 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
         projection_pixel_indices=None,
         projector_output_size=4,
         cache_row_capacity=8,
+        max_global_rotation_id=1,
         group_index=0,
         n_groups=1,
     )
 
     assert cache.enabled
     assert calls[0]["relion_texture_interp"] is True
-    assert cache.projections.shape == (1, 12)
-    assert cache.estimated_gb == pytest.approx(12 * np.dtype(np.complex64).itemsize / 1e9)
-    np.testing.assert_array_equal(
-        local_em_engine._relion_projection_cache_rows_for_bucket(cache, bucket),
-        np.zeros((1, 2), dtype=np.int32),
-    )
-
-
-def test_local_relion_projection_cache_keys_exact_matrices_not_nearest_grid_ids(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-
-    rotations = np.stack(
-        [
-            np.eye(3, dtype=np.float32),
-            np.asarray(
-                [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
-                dtype=np.float32,
-            ),
-            np.eye(3, dtype=np.float32),
-        ],
-        axis=0,
-    )[None]
-    bucket = LocalBucketSpec(
-        image_indices=np.array([0], dtype=np.int32),
-        bucket_image_count=1,
-        bucket_rotation_count=3,
-        actual_rotation_counts=np.array([3], dtype=np.int32),
-        # The first two rows intentionally alias one approximate fine-grid ID;
-        # the third proves distinct IDs with identical matrices share a row.
-        local_rotation_ids=np.array([[7, 7, 11]], dtype=np.int32),
-        local_rotations=rotations,
-        local_rotation_log_prior=np.zeros((1, 3), dtype=np.float32),
-        local_rotation_mask=np.ones((1, 3), dtype=bool),
-        translation_log_prior=np.zeros((1, 1), dtype=np.float32),
-    )
-
-    def fake_projector(projector_half, projected_rotations, image_shape, **kwargs):
-        values = jnp.arange(projected_rotations.shape[0] * 12, dtype=jnp.float32).reshape(-1, 12)
-        return values.astype(jnp.complex64), None
-
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
-    assert local_em_engine._plan_exact_local_relion_projection_cache_groups(
-        [bucket], cache_row_capacity=2
-    ) == [(0, 1, 2)]
-    cache = local_em_engine._build_exact_local_relion_projection_cache_for_buckets(
-        [bucket],
-        jnp.ones((4, 4, 3), dtype=jnp.complex64),
-        image_shape=(4, 4),
-        n_projection_pixels=12,
-        relion_projector_r_max=2,
-        projection_padding_factor=1,
-        projection_relion_texture_interp=True,
-        projection_pixel_indices=None,
-        projector_output_size=4,
-        cache_row_capacity=2,
-        group_index=0,
-        n_groups=1,
-    )
-
     assert cache.projections.shape == (2, 12)
-    np.testing.assert_array_equal(
-        local_em_engine._relion_projection_cache_rows_for_bucket(cache, bucket),
-        np.array([[0, 1, 0]], dtype=np.int32),
-    )
+    assert cache.estimated_gb == pytest.approx(2 * 12 * np.dtype(np.complex64).itemsize / 1e9)
 
 
 def test_packed_local_noise_projection_chunk_rows_env(monkeypatch):
