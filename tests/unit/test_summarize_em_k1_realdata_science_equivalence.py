@@ -635,6 +635,10 @@ def test_live_markdown_reports_route_resolutions_and_key_metrics(tmp_path: Path)
     assert "| `empiar-10202-set06-k1-I1` | pass | pass | `raw_canonical` | pass |" in markdown
     assert "2.865 | 2.865" in markdown
     assert "0.990000 | 0.990000 | 0.000000" in markdown
+    assert "threshold at shell 81 on" in markdown
+    assert "10073 and shell 49 on 10345" in markdown
+    assert "6.568 A and 8.235 A" in markdown
+    assert "3.8 A sharpened full-complex map" in markdown
     assert "EMD-9012 records 1.86 A" in markdown
 
 

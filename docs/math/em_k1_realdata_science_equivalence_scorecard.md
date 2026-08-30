@@ -32,6 +32,33 @@ descendant commit and do not count in the PR #158 scoring denominator.
 | `empiar-10073-native-c1` | pass | 0.002646 | 0.001260 | 0.969136 | 0.940802 |
 | `empiar-10345-native-c1` | pass | 0.003242 | 0.000165 | 0.975610 | 0.965089 |
 
+These are deliberately parity-calibration refinements, not reproductions of
+the deposited publication workflows. Both engines crossed the
+three-consecutive-shell unmasked half-map FSC 1/7 threshold at shell 81 on
+10073 and shell 49 on 10345. Under the frozen resolution formula, these are
+6.568 A and 8.235 A, respectively. They are worse than the 3.7 A deposited
+resolution for [EMD-8012](https://www.ebi.ac.uk/emdb/EMD-8012) and the 3.51 A
+focused resolution for [EMD-20795](https://www.ebi.ac.uk/emdb/EMD-20795),
+which also deposits a 3.8 A sharpened full-complex map.
+
+The absolute gap is expected from the frozen calibration protocol. For 10073,
+normalization intentionally drops the supplied refined Euler angles and
+origins. The 10345 source STAR has no Euler columns and only zero or invalid
+in-plane origins. Both engines therefore start from the same newly generated
+de-novo K=1 model, and the reported maps and FSCs are unmasked, unsharpened,
+and unpostprocessed. The deposited 10073 workflow instead used EMD-2966
+low-pass filtered to 60 A. The exact published 10345 complex did not use 3D
+classification, but its final maps used non-uniform and local-resolution
+refinement, local-resolution estimation, sharpening, and local filtering;
+the deposited primary map is a focused refinement. C1 is the appropriate
+symmetry for both calibration datasets and is not the cause of the gap.
+
+Accordingly, these cases establish that RECOVAR and RELION reach essentially
+the same reconstruction under the matched protocol. They do not establish
+that this intentionally stripped-down protocol reproduces the published
+reconstruction. Absolute high-resolution achievement is tested separately by
+the frozen 10202 case below.
+
 ## Fixed scoring case
 
 Equivalence and absolute high-resolution achievement are reported
