@@ -14,23 +14,42 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
-### 2026-08-30 shared-EM Wavg speed qualification
+### 2026-08-30 shared-EM batching and coarse-prefetch speed qualification
 
-Shared-EM commit `6ecfd0b76` replaces the exact local Wavg translation loop
-with one CUDA FFI that retains storage-order float32 accumulation. Focused
-H100 job `13181568` is bitwise, GF46 job `13181665` passes 20/20 direct
-particle checkpoints in 191 s, and profile job `13181815` completes 80
-iterations in 942 s versus 1,202 s for the qualified control. Its 46/80
-native-repeat envelope is not worse than the control's 44/80. Composing the
-native-texture coarse scorer is rejected by job `13182286` (949 s, 44/80,
-first miss at 42). Shared radix-4 local buckets (`01ec47787`) reduce the first
-80-step wall again to 894 s, but that process reproduces the historical
-`286@4 / 2903@16 / 903@18` branch. Radix and Wavg bucket shapes are identical
-through iteration 16, so the iteration-4 escape is process-level trajectory
-variance rather than a causal padding regression. The active single
-hypothesis is matched same-H100 repeat stability: three additional radix runs
-are job `13183470`, followed by a matched Wavg-only panel. No frozen-suite
-score changes.
+The speed branch is deliberately changing authoritative shared EM kernels,
+not adding VDAM copies. Shared-EM commit `6ecfd0b76` replaces the exact local
+Wavg translation loop with one CUDA FFI that retains storage-order float32
+accumulation. Focused H100 job `13181568` is bitwise, GF46 job `13181665`
+passes 20/20 direct particle checkpoints in 191 s, and profile job `13181815`
+completes 80 iterations in 942 s versus 1,202 s for the qualified control.
+
+Shared radix-4 local buckets (`01ec47787`) reduce the 80-step wall to 894 s.
+The completed same-H100 repeat panels show broad overlap rather than a causal
+trajectory effect: radix accepts `46/80`, `46/80`, and `68/80`; matched
+Wavg-only accepts `23/80`, `65/80`, and `65/80`. Thus radix is retained as a
+real shape/compile speed improvement, but neither arm is a reliability fix.
+
+Commit `8e228bf67` applies RELION's coarse batching idea directly to the shared
+`relion_coarse_diff2_projector_f32_kernel`: each pixel/orientation projection
+is loaded once into shared memory and reused by all translation lanes. It
+preserves each lane's pixel order and canonical reduction. Baseline/candidate
+CUDA job `13185485` is bitwise over **261,740** float32 values across five
+boundary cases (report SHA-256 `c4e52c2f7242...`). Admission job `13185475`
+passes **20/20** direct checkpoints in **184 s**. The matched 80-step profile
+`13185742` completes in **657 s**, down **237 s / 26.5%** from radix and
+**545 s / 45.3%** from the qualified 1,202 s control. Expectation is 615.0 s;
+pass 1 falls from 360.0 to **128.9 s / -64.2%**, while pass 2 is unchanged at
+455.2 s. The direct audit accepts **44/80**, first missing at iteration 42,
+inside the completed control distributions; it is not a correctness
+promotion. Profile/audit SHA-256 values are `df37ad57599c...` and
+`495babb65a1c...`.
+
+The active single performance hypothesis now moves to shared pass 2, which is
+69% of the candidate wall and contains 263.1 s of big-JIT work, 76.7 s of
+ordered backprojection, and 32.1 s of packing. First inspect and reuse the
+mature supplied-map EM batching path; do not create a VDAM-only scorer. The
+frozen score remains **2/20 strict** and runtime remains **0/20**. No generic
+RECOVAR suite was run and no tolerance, case, baseline, or denominator changed.
 
 ### 2026-08-29 canonical coarse cutoff qualification
 

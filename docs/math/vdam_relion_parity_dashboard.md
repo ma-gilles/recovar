@@ -413,6 +413,43 @@ unqualified. Same-H100 three-repeat job `13183470` is the active radix gate;
 a matched Wavg-only repeat gate follows before either arm is promoted. Profile
 and audit SHA-256 values are `a7228f650815...` and `46ccee8ea0cd...`.
 
+Both repeat gates are now complete. Radix accepts **46/80, 46/80, and 68/80**;
+matched Wavg-only accepts **23/80, 65/80, and 65/80** on the same target H100.
+The distributions overlap and both reproduce known native-legal branches, so
+the evidence supports radix's runtime improvement but not a reliability claim.
+
+The next shared-EM optimization (`8e228bf67`) follows RELION's coarse batching:
+`relion_coarse_diff2_projector_f32_kernel` now loads each pixel/orientation
+projection once into shared memory and reuses it across translation lanes.
+This is the authoritative EM/VDAM kernel, not a VDAM copy. The lane-local pixel
+order, score update, and canonical reduction are unchanged. H100 binary A/B
+job `13185485` reports **0 mismatches / 261,740 float32 values** across five
+cases, including non-multiple-of-128 image slabs, sparse compact rows, and a
+one-active-lane tail. Report SHA-256 is `c4e52c2f7242...`.
+
+Admission job `13185475` passes **20/20** direct checkpoints in **184 s**.
+Profile job `13185742` completes 80 iterations in **657 s**, a **237 s / 26.5%**
+improvement over radix and **545 s / 45.3%** over the qualified control. The
+gain is isolated to coarse pass 1, which falls from `360.0` to **128.9 s**
+(`-64.2%`); pass 2 remains `455.2 s`. The direct audit accepts **44/80** and
+first leaves the four-repeat native envelope at iteration 42. This is inside
+the broad matched-control distributions and the local CUDA boundary is
+bitwise, so it is a qualified performance result but not a reliability or
+frozen-score promotion. Profile and audit SHA-256 values are
+`df37ad57599c...` and `495babb65a1c...`.
+
+| Shared path | 80-step wall (s) | Pass 1 (s) | Pass 2 (s) | Direct audit |
+|---|---:|---:|---:|---:|
+| Qualified control | 1,202 | -- | 717.3 | 44/80 |
+| CUDA Wavg | 942 | 362.6 | 507.8 | 46/80 |
+| Radix-4 buckets | 894 | 360.0 | 455.9 | 23/80; repeats 46/46/68 |
+| Coarse shared prefetch | **657** | **128.9** | 455.2 | 44/80 |
+
+Pass 2 is now the dominant runtime target: big-JIT `263.1 s`, ordered
+backprojection `76.7 s`, and packing `32.1 s`. The next implementation gate is
+to reuse mature supplied-map EM pass-2 batching inside the shared path while
+preserving the already-qualified arithmetic and launch chronology.
+
 ### Why VDAM currently trails supplied-map EM
 
 The headline scores are not a like-for-like measure of shared E-step maturity.
@@ -1040,14 +1077,14 @@ initial basins without inflating one diameter until every result passes.
 
 | Status | Question | Readout |
 |:---:|---|---|
-| 🟢 | What improved? | VDAM reuses mature EM's compact active projection rows, candidate-pair scorer, RELION float32 posterior pruning, pair-count planner, shared source-order Wavg helper, and shared CUDA callback/projector/scatter implementation. Exact serial particle+rotation replay now passes **16/16** through iteration 20. The shared one-launch CUDA Wavg arm is locally bitwise and reduces wall time from **329 s to 299 s**, but trajectory qualification correctly rejected its changed launch chronology. |
+| 🟢 | What improved? | VDAM uses the authoritative EM scoring/reduction kernels rather than copies. Shared CUDA Wavg, radix-4 shape buckets, and RELION-style coarse projection prefetch reduce the matched 80-step wall from **1,202 s to 657 s (-45.3%)**. Coarse pass 1 falls from **360.0 s to 128.9 s (-64.2%)** versus the preceding radix arm. The new kernel is bitwise over **261,740** baseline/candidate values. |
 | 🟢 | What is closed? | Support, fine-score evaluation, translation prior, posterior normalization, and winner selection are excluded at the iteration-64 escape. A production replay closes the captured projection at relative L2 `2.36e-8`; swapping only the incoming map flips the exact top pair and reproduces the escaped translation. InitialModel imports EM's authoritative numerical functions by object identity. Native-posterior replay separately restores raw-BPref width to **0.81--1.07x native**. |
-| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. Launch-serialized particle+rotation ordering closes the exact failure case at **16/16**, but its `329 s` median is too slow and it has not yet passed a complete 200-iteration trajectory. Shared-volume asynchronous (**10/11**) and launch-blocked (**6/7**) variants recreate the iteration-4/16/18 branch; all three private-volume ownership/rotation variants instead miss only particle `1723` at iteration 19. |
+| 🔴 | What still fails? | The frozen score remains **2/20 strict** and runtime remains **0/20**. The optimized 80-step audit is **44/80**, first miss 42; matched Wavg/radix repeats span 23--68 accepted checkpoints, so process-level long-trajectory reliability remains unresolved. Runtime is much better but pass 2 still costs **455.2 s** and no complete 0--200 runtime gate has passed. |
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Finish same-H100 repeat qualification of EM-batched residual preparation plus one-lane ordered scatter (`13171963`). If green, run the first full 200-iteration candidate; if red, localize the remaining intra-block atomic-order sensitivity before spending full-trajectory compute. |
-| 🟢 | What finished? | Persistent scratch reached **194--195 s** and passed two exact trajectories (`13168384_4`, repeat 1 of `13168680_0`), but repeat 2 reproduced `286@4 / 2903@16 / 903@18`; its repeat gate is **1/2**, so full-200 dependency `13168744` was cancelled. Dense exact control passes in `334 s`. Worker-private BPref reaches `192--212 s` and misses only `1723@19`; dynamic shared-BPref, CUDA Wavg, and persistent streams all reproduce the historical branch. |
+| ➡️ | What is next? | Profile and reuse mature supplied-map EM pass-2 batching in the shared path. Pass 2 is now 69% of candidate wall: big-JIT **263.1 s**, ordered backprojection **76.7 s**, packing **32.1 s**. Keep one measurable optimization hypothesis at a time, then rerun binary parity, 20-step admission, and matched 80-step profiling before a 0--200 gate. |
+| 🟢 | What finished? | Same-H100 repeat qualification is complete: radix **46/46/68**, matched Wavg **23/65/65**. The overlap rules out a reliability claim but does not reject radix's speed gain. Coarse shared prefetch then passed binary parity (`13185485`), 20/20 admission (`13185475`), and reduced the 80-step profile to **657 s** (`13185742`). |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
 Progress against the unchanged denominator is **0 -> 2 strict passes**. A
