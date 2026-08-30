@@ -311,7 +311,12 @@ RECOVAR's exact native coarse launcher instead uses one JAX stream. Commit
 combining particles into one grid. H100 job `13180537` proves eight-worker and
 serial active-row outputs are bitwise identical on the focused kernel fixture
 (binary SHA-256 `e906539a246c...`); trajectory/runtime job `13180590` is the
-first science discriminator.
+first science discriminator. It passes all **20/20** direct particle
+checkpoints (audit SHA-256 `26da78705a2d...`) but takes **204 s**, statistically
+tied with the 205-second serial tail-skip control; pass 1 is unchanged at
+**19.10 s**. A complete orientation grid for one particle already occupies the
+H100 well enough that inter-particle streams do not add useful throughput.
+This arm is rejected at the short gate; no order-80 allocation is justified.
 
 The second test enables EM's shared local-bucket unification. Job `13177559`
 also passes all 20 direct particle checkpoints (report SHA-256
