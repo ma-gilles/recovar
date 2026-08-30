@@ -531,6 +531,9 @@ _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
 _TARGET_RELION_COARSE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_fused_translate_rectangular_f32"
 )
+_TARGET_RELION_PROJECTOR_HALF_TEXTURE_F32 = (
+    "cuda_relion_projector_half_texture_f32"
+)
 _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_native_texture_rectangular_f32"
 )
@@ -611,6 +614,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_COARSE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
         "RelionCoarseDiff2FusedTranslateRectangularF32",
+    ),
+    (
+        _TARGET_RELION_PROJECTOR_HALF_TEXTURE_F32,
+        "RelionProjectorHalfTextureF32",
     ),
     (
         _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
@@ -1899,9 +1906,110 @@ def relion_coarse_normalized_cc_pairs_f32(
     )
 
 
-@functools.partial(jax.jit, static_argnums=(6, 7, 8, 9))
+@functools.partial(
+    jax.jit,
+    static_argnames=(
+        "current_size",
+        "padding_factor",
+        "projector_max_r",
+        "projector_scale",
+    ),
+)
+def relion_projector_half_texture_f32(
+    projector_half: jax.Array,
+    rotation_matrices: jax.Array,
+    *,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+    projector_scale: float = 1.0,
+) -> jax.Array:
+    """Project native RELION half storage through one interleaved texture.
+
+    The output is a centered-row, rfft-packed square image for every input
+    rotation. Keeping ``Projector::data`` in ``(z, y, x-half)`` form avoids a
+    full cubic JAX expansion and the split real/imaginary texture staging used
+    by the legacy generic projector.
+    """
+
+    projector_half = jnp.asarray(projector_half)
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    current_size = int(current_size)
+    padding_factor = int(padding_factor)
+    projector_max_r = int(projector_max_r)
+    projector_scale = float(projector_scale)
+    expected_pad = 2 * projector_max_r * padding_factor + 3
+    expected_shape = (
+        expected_pad,
+        expected_pad,
+        projector_max_r * padding_factor + 2,
+    )
+    if projector_half.dtype != jnp.complex64:
+        raise TypeError(
+            f"RELION half-texture projector must be complex64, got {projector_half.dtype}"
+        )
+    if rotation_matrices.dtype != jnp.float32:
+        raise TypeError(
+            "RELION half-texture rotations must be float32, got "
+            f"{rotation_matrices.dtype}"
+        )
+    if (
+        current_size <= 0
+        or padding_factor <= 0
+        or projector_max_r <= 0
+        or projector_half.shape != expected_shape
+        or rotation_matrices.ndim != 3
+        or rotation_matrices.shape[0] <= 0
+        or rotation_matrices.shape[1:] != (3, 3)
+    ):
+        raise ValueError(
+            "RELION half-texture projection operands have inconsistent shapes: "
+            f"projector={projector_half.shape}, expected={expected_shape}, "
+            f"rotations={rotation_matrices.shape}, current_size={current_size}"
+        )
+    if not np.isfinite(projector_scale):
+        raise ValueError(f"projector_scale must be finite, got {projector_scale}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION half-texture projection requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION half-texture projection requires the custom CUDA extension"
+        )
+    _ensure_ffi()
+    compact_rotations = _rot_to_compact(rotation_matrices, jnp.float32)
+    output_type = jax.ShapeDtypeStruct(
+        (
+            rotation_matrices.shape[0],
+            current_size * (current_size // 2 + 1),
+        ),
+        jnp.complex64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_PROJECTOR_HALF_TEXTURE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(
+        projector_half,
+        compact_rotations,
+        current_size=np.int64(current_size),
+        padding_factor=np.int64(padding_factor),
+        projector_max_r=np.int64(projector_max_r),
+        projector_scale=np.float32(projector_scale),
+    )
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=(
+        "current_size",
+        "padding_factor",
+        "projector_max_r",
+        "return_components",
+        "projector_scale",
+    ),
+)
 def relion_coarse_normalized_cc_native_texture_pairs_f32(
-    projector_full: jax.Array,
+    projector_half: jax.Array,
     rotation_matrices: jax.Array,
     shifted_image: jax.Array,
     score_weight: jax.Array,
@@ -1913,18 +2021,19 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
     return_components: bool = False,
     translation_angles: jax.Array | None = None,
     numerator_weight: jax.Array | None = None,
+    projector_scale: float = 1.0,
 ) -> jax.Array:
     """Evaluate bounded normalized-CC pairs from RELION's CUDA texture.
 
     Each row is one candidate. Its projection is sampled from
-    ``projector_full`` inside the same 128-thread CUDA block that contracts the
+    ``projector_half`` inside the same 128-thread CUDA block that contracts the
     normalized-CC numerator and reference norm. When ``translation_angles`` is
     supplied, the image is translated in that same block with RELION's
     coarse-kernel ``sincosf`` arithmetic. This avoids materializing a RECOVAR
     projection or translated image at a different arithmetic boundary.
     """
 
-    projector_full = jnp.asarray(projector_full)
+    projector_half = jnp.asarray(projector_half)
     rotation_matrices = jnp.asarray(rotation_matrices)
     shifted_image = jnp.asarray(shifted_image)
     score_weight = jnp.asarray(score_weight)
@@ -1942,7 +2051,7 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
     else:
         numerator_weight = jnp.asarray(numerator_weight)
     for name, value, dtype in (
-        ("projector_full", projector_full, jnp.complex64),
+        ("projector_half", projector_half, jnp.complex64),
         ("rotation_matrices", rotation_matrices, jnp.float32),
         ("shifted_image", shifted_image, jnp.complex64),
         ("score_weight", score_weight, jnp.float32),
@@ -1954,10 +2063,13 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
         if value.dtype != dtype:
             raise TypeError(f"{name} must be {dtype}, got {value.dtype}")
     if (
-        projector_full.ndim != 3
-        or projector_full.shape[0] <= 0
-        or projector_full.shape[1:]
-        != (projector_full.shape[0], projector_full.shape[0])
+        projector_half.ndim != 3
+        or projector_half.shape
+        != (
+            2 * int(projector_max_r) * int(padding_factor) + 3,
+            2 * int(projector_max_r) * int(padding_factor) + 3,
+            int(projector_max_r) * int(padding_factor) + 2,
+        )
         or rotation_matrices.ndim != 3
         or rotation_matrices.shape[1:] != (3, 3)
         or rotation_matrices.shape[0] <= 0
@@ -1976,7 +2088,7 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
     ):
         raise ValueError(
             "native texture normalized-CC pair operands have inconsistent shapes: "
-            f"projector={projector_full.shape}, rotations={rotation_matrices.shape}, "
+            f"projector={projector_half.shape}, rotations={rotation_matrices.shape}, "
             f"image={shifted_image.shape}, weight={score_weight.shape}, "
             f"half_weights={half_weights.shape}, lookup={packed_to_compact.shape}",
         )
@@ -1988,6 +2100,9 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
         raise RuntimeError(
             "RELION native texture normalized-CC pairs require the custom CUDA extension"
         )
+    projector_scale = float(projector_scale)
+    if not np.isfinite(projector_scale):
+        raise ValueError(f"projector_scale must be finite, got {projector_scale}")
     _ensure_ffi()
     eulers = jnp.swapaxes(rotation_matrices, -1, -2).reshape(
         rotation_matrices.shape[0], 9
@@ -1998,7 +2113,7 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
         out_type,
         vmap_method="sequential",
     )(
-        projector_full,
+        projector_half,
         eulers,
         shifted_image,
         translation_angles,
@@ -2009,13 +2124,22 @@ def relion_coarse_normalized_cc_native_texture_pairs_f32(
         current_size=np.int64(current_size),
         padding_factor=np.int64(padding_factor),
         projector_max_r=np.int64(projector_max_r),
+        projector_scale=np.float32(projector_scale),
     )
     return components if return_components else components[:, 0]
 
 
-@functools.partial(jax.jit, static_argnums=(7, 8, 9))
+@functools.partial(
+    jax.jit,
+    static_argnames=(
+        "current_size",
+        "padding_factor",
+        "projector_max_r",
+        "projector_scale",
+    ),
+)
 def relion_coarse_diff2_native_texture_rectangular_f32(
-    projector_full: jax.Array,
+    projector_half: jax.Array,
     rotation_matrices: jax.Array,
     image: jax.Array,
     translation_angles: jax.Array,
@@ -2025,27 +2149,28 @@ def relion_coarse_diff2_native_texture_rectangular_f32(
     current_size: int,
     padding_factor: int,
     projector_max_r: int,
+    projector_scale: float = 1.0,
 ) -> jax.Array:
     """Run RELION's fused texture-projection coarse Gaussian topology.
 
     This diagnostic mirrors ``cuda_kernel_diff2_coarse<true, false, 128,
     16, 4>``: it loads 16 Euler matrices into shared memory, projects the
     reference from a CUDA texture, translates each image, and accumulates the
-    coarse score in one kernel. ``projector_full`` is the centered full-cube
-    embedding of RELION ``Projector::data`` and must already carry the dense
-    scorer scale.
+    coarse score in one kernel. ``projector_half`` is RELION
+    ``Projector::data`` in its native ``(z, y, x-half)`` layout. The CUDA
+    texture fill applies ``projector_scale`` before interpolation.
     """
 
-    projector_full = jnp.asarray(projector_full)
+    projector_half = jnp.asarray(projector_half)
     rotation_matrices = jnp.asarray(rotation_matrices)
     image = jnp.asarray(image)
     translation_angles = jnp.asarray(translation_angles)
     weight = jnp.asarray(weight)
     initial_diff2 = jnp.asarray(initial_diff2)
     full_to_compact = jnp.asarray(full_to_compact)
-    if projector_full.dtype != jnp.complex64:
+    if projector_half.dtype != jnp.complex64:
         raise TypeError(
-            f"projector_full must be complex64, got {projector_full.dtype}"
+            f"projector_half must be complex64, got {projector_half.dtype}"
         )
     if rotation_matrices.dtype != jnp.float32:
         raise TypeError(
@@ -2065,10 +2190,13 @@ def relion_coarse_diff2_native_texture_rectangular_f32(
             f"full_to_compact must be int32, got {full_to_compact.dtype}"
         )
     if (
-        projector_full.ndim != 3
-        or projector_full.shape[0] <= 0
-        or projector_full.shape[1:]
-        != (projector_full.shape[0], projector_full.shape[0])
+        projector_half.ndim != 3
+        or projector_half.shape
+        != (
+            2 * int(projector_max_r) * int(padding_factor) + 3,
+            2 * int(projector_max_r) * int(padding_factor) + 3,
+            int(projector_max_r) * int(padding_factor) + 2,
+        )
         or rotation_matrices.ndim != 3
         or rotation_matrices.shape[1:] != (3, 3)
         or rotation_matrices.shape[0] <= 0
@@ -2089,7 +2217,7 @@ def relion_coarse_diff2_native_texture_rectangular_f32(
     ):
         raise ValueError(
             "native texture coarse diff2 operands have inconsistent shapes: "
-            f"projector={projector_full.shape}, rotations={rotation_matrices.shape}, "
+            f"projector={projector_half.shape}, rotations={rotation_matrices.shape}, "
             f"image={image.shape}, translations={translation_angles.shape}, "
             f"weight={weight.shape}, initial={initial_diff2.shape}, "
             f"lookup={full_to_compact.shape}"
@@ -2100,6 +2228,9 @@ def relion_coarse_diff2_native_texture_rectangular_f32(
         raise RuntimeError(
             "RELION native texture coarse diff2 was explicitly requested but custom CUDA is disabled"
         )
+    projector_scale = float(projector_scale)
+    if not np.isfinite(projector_scale):
+        raise ValueError(f"projector_scale must be finite, got {projector_scale}")
     _ensure_ffi()
 
     # RELION stores its scorer Euler matrices as a row-major transpose of the
@@ -2116,7 +2247,7 @@ def relion_coarse_diff2_native_texture_rectangular_f32(
         out_type,
         vmap_method="sequential",
     )(
-        projector_full,
+        projector_half,
         eulers,
         image,
         translation_angles,
@@ -2126,6 +2257,7 @@ def relion_coarse_diff2_native_texture_rectangular_f32(
         current_size=np.int64(current_size),
         padding_factor=np.int64(padding_factor),
         projector_max_r=np.int64(projector_max_r),
+        projector_scale=np.float32(projector_scale),
     )
 
 
@@ -2280,10 +2412,15 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
 
 @functools.partial(
     jax.jit,
-    static_argnames=("current_size", "padding_factor", "projector_max_r"),
+    static_argnames=(
+        "current_size",
+        "padding_factor",
+        "projector_max_r",
+        "projector_scale",
+    ),
 )
 def relion_fine_diff2_native_texture_rectangular_f32(
-    projector_full: jax.Array,
+    projector_half: jax.Array,
     rotation_matrices: jax.Array,
     image: jax.Array,
     translation_angles: jax.Array,
@@ -2294,10 +2431,11 @@ def relion_fine_diff2_native_texture_rectangular_f32(
     current_size: int,
     padding_factor: int,
     projector_max_r: int,
+    projector_scale: float = 1.0,
 ) -> jax.Array:
     """Evaluate RELION fine diff2 with native texture projection.
 
-    Shapes are ``projector_full=(P,P,P)``,
+    Shapes are ``projector_half=(P,P,P//2+1)``,
     ``rotation_matrices=(B,R,3,3)``, ``image=(B,N)``,
     ``translation_angles=(T,2)``, ``weight=(B,N)``,
     ``initial_diff2=(B,)``, and ``full_to_compact=(F,)``.  Projection,
@@ -2307,17 +2445,17 @@ def relion_fine_diff2_native_texture_rectangular_f32(
     ``(B,R,T)``.
     """
 
-    projector_full = jnp.asarray(projector_full)
+    projector_half = jnp.asarray(projector_half)
     rotation_matrices = jnp.asarray(rotation_matrices)
     image = jnp.asarray(image)
     translation_angles = jnp.asarray(translation_angles)
     weight = jnp.asarray(weight)
     initial_diff2 = jnp.asarray(initial_diff2)
     full_to_compact = jnp.asarray(full_to_compact)
-    if projector_full.dtype != jnp.complex64 or image.dtype != jnp.complex64:
+    if projector_half.dtype != jnp.complex64 or image.dtype != jnp.complex64:
         raise TypeError(
             "native-texture RELION fine diff2 projector/image must be "
-            f"complex64, got {projector_full.dtype} and {image.dtype}"
+            f"complex64, got {projector_half.dtype} and {image.dtype}"
         )
     if (
         rotation_matrices.dtype != jnp.float32
@@ -2335,9 +2473,13 @@ def relion_fine_diff2_native_texture_rectangular_f32(
             f"{full_to_compact.dtype}"
         )
     if (
-        projector_full.ndim != 3
-        or projector_full.shape[0] <= 0
-        or projector_full.shape[1:] != (projector_full.shape[0], projector_full.shape[0])
+        projector_half.ndim != 3
+        or projector_half.shape
+        != (
+            2 * int(projector_max_r) * int(padding_factor) + 3,
+            2 * int(projector_max_r) * int(padding_factor) + 3,
+            int(projector_max_r) * int(padding_factor) + 2,
+        )
         or rotation_matrices.ndim != 4
         or rotation_matrices.shape[2:] != (3, 3)
         or image.ndim != 2
@@ -2357,7 +2499,7 @@ def relion_fine_diff2_native_texture_rectangular_f32(
     ):
         raise ValueError(
             "native-texture RELION fine diff2 operands have inconsistent "
-            f"shapes: projector={projector_full.shape}, "
+            f"shapes: projector={projector_half.shape}, "
             f"rotations={rotation_matrices.shape}, image={image.shape}, "
             f"angles={translation_angles.shape}, weight={weight.shape}, "
             f"initial={initial_diff2.shape}, lookup={full_to_compact.shape}"
@@ -2383,6 +2525,9 @@ def relion_fine_diff2_native_texture_rectangular_f32(
             "native-texture RELION fine diff2 was explicitly requested but "
             "custom CUDA is disabled"
         )
+    projector_scale = float(projector_scale)
+    if not np.isfinite(projector_scale):
+        raise ValueError(f"projector_scale must be finite, got {projector_scale}")
     _ensure_ffi()
 
     out_type = jax.ShapeDtypeStruct(
@@ -2398,7 +2543,7 @@ def relion_fine_diff2_native_texture_rectangular_f32(
         out_type,
         vmap_method="sequential",
     )(
-        projector_full,
+        projector_half,
         rotation_matrices,
         image,
         translation_angles,
@@ -2408,6 +2553,7 @@ def relion_fine_diff2_native_texture_rectangular_f32(
         current_size=current_size,
         padding_factor=padding_factor,
         projector_max_r=projector_max_r,
+        projector_scale=np.float32(projector_scale),
     )
 
 

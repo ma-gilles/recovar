@@ -15,13 +15,13 @@ import numpy as np
 from recovar import cuda_backproject
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block,
-    relion_projector_half_to_texture_full,
+    select_relion_projector_half_for_class,
 )
+from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
 )
-from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.initial_model.dense_adapter import (
     reference_to_relion_projector_half_maps,
 )
@@ -218,11 +218,7 @@ def analyze(
             current_size=current_size,
             padding_factor=2,
         )
-        projector_full = np.asarray(
-            relion_projector_half_to_texture_full(jnp.asarray(ppref[0]))
-            * jnp.asarray(_dense_projection_scale(native_map.shape[:2]), dtype=jnp.float32),
-            dtype=np.complex64,
-        )
+        projector_scale = float(_dense_projection_scale(native_map.shape[:2]))
         translation_angles = _relion_translation_angles_f32(
             translation_source,
             native_map.shape[:2],
@@ -231,7 +227,10 @@ def analyze(
         # RELION coarse specialization has 16 Euler matrices per block; a
         # two-rotation panel changes code generation and atomic scheduling.
         values = cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
-            jnp.asarray(projector_full),
+            jnp.asarray(
+                select_relion_projector_half_for_class(ppref, 0, 1),
+                dtype=jnp.complex64,
+            ),
             jnp.asarray(rotations),
             jnp.asarray(unshifted[None]),
             jnp.asarray(translation_angles, dtype=jnp.float32),
@@ -241,6 +240,7 @@ def analyze(
             current_size,
             2,
             int(r_max),
+            projector_scale=projector_scale,
         )[0]
         return np.asarray(jax.block_until_ready(values), dtype=np.float32)
 

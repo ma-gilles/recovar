@@ -256,7 +256,7 @@ def test_relion_coarse_native_texture_rescore_exposes_reduced_components():
     if jax.default_backend() != "gpu" or not cuda_backproject.custom_cuda_requested():
         pytest.skip("native RELION texture rescore requires the custom CUDA GPU path")
 
-    projector = jnp.ones((5, 5, 5), dtype=jnp.complex64) * (1.0 + 1.0j)
+    projector = jnp.ones((5, 5, 3), dtype=jnp.complex64) * (1.0 + 1.0j)
     rotations = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3))
     shifted = jnp.ones((2, 4), dtype=jnp.complex64)
     score_weight = jnp.ones((2, 4), dtype=jnp.float32)

@@ -13,9 +13,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.projection import (
-    relion_projector_half_to_texture_full,
-)
 from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
@@ -133,13 +130,11 @@ def analyze(
         np.asarray(recovar["translation_phase_source"], dtype=np.float64),
         (physical_image_size, physical_image_size),
     )
-    projector_full = np.asarray(
-        relion_projector_half_to_texture_full(jnp.asarray(ppref))
-        * jnp.asarray(_dense_projection_scale((physical_image_size, physical_image_size)), dtype=jnp.float32),
-        dtype=np.complex64,
+    projector_scale = float(
+        _dense_projection_scale((physical_image_size, physical_image_size))
     )
     diff2 = cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
-        jnp.asarray(projector_full),
+        jnp.asarray(ppref, dtype=jnp.complex64),
         jnp.asarray(rotations),
         jnp.asarray(unshifted[None]),
         jnp.asarray(translation_angles, dtype=jnp.float32),
@@ -149,6 +144,7 @@ def analyze(
         current_size,
         2,
         int(ppref_metadata["r_max"]),
+        projector_scale=projector_scale,
     )[0]
     candidate_diff2 = np.asarray(jax.block_until_ready(diff2), dtype=np.float32)
     candidate_scores = -candidate_diff2

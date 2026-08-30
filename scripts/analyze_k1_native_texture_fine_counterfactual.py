@@ -16,7 +16,7 @@ import numpy as np
 from recovar import cuda_backproject
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block,
-    relion_projector_half_to_texture_full,
+    select_relion_projector_half_for_class,
 )
 from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -196,15 +196,16 @@ def analyze(
         current_size=projector_current_size,
         padding_factor=padding_factor,
     )
-    texture_full = relion_projector_half_to_texture_full(
-        jnp.asarray(projector_half[0], dtype=jnp.complex64)
+    texture_half = jnp.asarray(
+        select_relion_projector_half_for_class(projector_half, 0, 1),
+        dtype=jnp.complex64,
     )
-    texture_full = texture_full * np.float32(
+    projector_scale = float(
         _dense_projection_scale((physical_image_size, physical_image_size))
     )
     rebuilt_generic_projection = np.asarray(
         compute_relion_projector_projections_block(
-            jnp.asarray(projector_half[0], dtype=jnp.complex64),
+            texture_half,
             jnp.asarray(rotations, dtype=jnp.float32),
             (physical_image_size, physical_image_size),
             r_max=int(projector_r_max),
@@ -243,7 +244,7 @@ def analyze(
     def texture_score(rotation_operand: np.ndarray) -> np.ndarray:
         result = np.asarray(
             cuda_backproject.relion_fine_diff2_native_texture_rectangular_f32(
-                texture_full,
+                texture_half,
                 jnp.asarray(rotation_operand[None, ...], dtype=jnp.float32),
                 jnp.asarray(image),
                 jnp.asarray(translation_angles),
@@ -253,6 +254,7 @@ def analyze(
                 current_size=current_size,
                 padding_factor=padding_factor,
                 projector_max_r=int(projector_r_max),
+                projector_scale=projector_scale,
             )
         )[0]
         _require(
@@ -299,7 +301,7 @@ def analyze(
 
     def probe_projected_reference(rotation_operand: np.ndarray) -> np.ndarray:
         common = {
-            "projector_full": texture_full,
+            "projector_half": texture_half,
             "rotation_matrices": jnp.asarray(
                 rotation_operand[probe_rotation_rows], dtype=jnp.float32
             ),
@@ -309,6 +311,7 @@ def analyze(
             "current_size": current_size,
             "padding_factor": padding_factor,
             "projector_max_r": int(projector_r_max),
+            "projector_scale": projector_scale,
             "return_components": True,
             "translation_angles": jnp.asarray(probe_angles),
             "numerator_weight": jnp.asarray(probe_selector),
@@ -429,7 +432,7 @@ def analyze(
             "padding_factor": int(padding_factor),
             "projector_current_size": int(projector_current_size),
             "projector_r_max": int(projector_r_max),
-            "projector_half_shape": list(projector_half[0].shape),
+            "projector_half_shape": list(texture_half.shape),
             "dense_projection_scale": float(
                 _dense_projection_scale((physical_image_size, physical_image_size))
             ),

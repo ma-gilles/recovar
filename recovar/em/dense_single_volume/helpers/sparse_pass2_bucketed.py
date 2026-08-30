@@ -113,6 +113,9 @@ from recovar.em.dense_single_volume.helpers.projection import (
 from recovar.em.dense_single_volume.helpers.projection import (
     relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
+from recovar.em.dense_single_volume.helpers.projection import (
+    select_relion_projector_half_for_class as _select_projector_half_for_class,
+)
 from recovar.em.dense_single_volume.helpers.significance import (
     ComplementSignificantSampleIndices,
 )
@@ -4236,11 +4239,11 @@ def _projection_budget_pixels_for_pass(
     """Effective projection pixels for the sparse pass-2 projection cap.
 
     Windowed sparse pass-2 only keeps score/reconstruction rows after
-    projection, but RELION's centered Projector handoff currently materializes
-    full-half intermediates before gathering the requested windows. Budget that
-    path with extra headroom for the centered-row scatter, dense scaling, and
-    other live pass-2 buffers so huge one-image compact-pair buckets still split
-    before the projection helper allocates.
+    projection, but RELION's compact texture kernel still emits the complete
+    current-size half image before gathering the requested windows. Budget that
+    output plus extra headroom for the gather, dense scaling, and other live
+    pass-2 buffers so huge one-image compact-pair buckets still split before the
+    projection helper allocates.
     """
 
     pixels = int(n_half_pixels)
@@ -16143,13 +16146,24 @@ def compute_k_class_pass2_stats_sparse_fused(
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half = jnp.asarray(relion_projector_half)
-        if relion_projector_half.ndim == 3 and n_classes == 1:
-            relion_projector_half = relion_projector_half[None, ...]
-        if relion_projector_half.ndim != 4 or int(relion_projector_half.shape[0]) != n_classes:
+        valid_singleton = relion_projector_half.ndim == 3 and n_classes == 1
+        valid_class_axis = (
+            relion_projector_half.ndim == 4
+            and int(relion_projector_half.shape[0]) == n_classes
+        )
+        if not (valid_singleton or valid_class_axis):
             raise ValueError(
                 "relion_projector_half must have shape "
-                f"({n_classes}, z, y, x_half), got {relion_projector_half.shape}",
+                f"({n_classes}, z, y, x_half), or (z, y, x_half) for K=1; "
+                f"got {relion_projector_half.shape}",
+            )
+        if n_classes == 1:
+            relion_projector_half = jnp.asarray(
+                _select_projector_half_for_class(
+                    relion_projector_half,
+                    0,
+                    1,
+                ),
             )
     shared_noise_variance = _shared_k_class_noise_variance(noise_variance, n_classes)
     if shared_noise_variance is None:
@@ -16987,7 +17001,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                         max_projected_rotations=max_projected_rotations_per_projection_call,
                         output_complex_dtype=precision_policy.score_complex_dtype,
                         output_abs2_dtype=precision_policy.score_real_dtype,
-                        relion_projector_half=relion_projector_half[class_index] if use_relion_projector else None,
+                        relion_projector_half=_select_projector_half_for_class(
+                            relion_projector_half,
+                            class_index,
+                            n_classes,
+                        ),
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                         **projection_kwargs,
@@ -17008,7 +17026,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                         max_projected_rotations=max_projected_rotations_per_projection_call,
                         output_complex_dtype=precision_policy.score_complex_dtype,
                         output_abs2_dtype=precision_policy.score_real_dtype,
-                        relion_projector_half=relion_projector_half[class_index] if use_relion_projector else None,
+                        relion_projector_half=_select_projector_half_for_class(
+                            relion_projector_half,
+                            class_index,
+                            n_classes,
+                        ),
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                         **projection_kwargs,
@@ -17615,7 +17637,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                             max_projected_rotations=max_projected_rotations_per_projection_call,
                             output_complex_dtype=precision_policy.score_complex_dtype,
                             output_abs2_dtype=None,
-                            relion_projector_half=relion_projector_half[class_index] if use_relion_projector else None,
+                            relion_projector_half=_select_projector_half_for_class(
+                                relion_projector_half,
+                                class_index,
+                                n_classes,
+                            ),
                             relion_projector_r_max=relion_projector_r_max,
                             projection_padding_factor=projection_padding_factor,
                             **projection_kwargs,
@@ -17636,7 +17662,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 max_projected_rotations=max_projected_rotations_per_projection_call,
                                 output_complex_dtype=precision_policy.score_complex_dtype,
                                 output_abs2_dtype=precision_policy.score_real_dtype,
-                                relion_projector_half=relion_projector_half[class_index] if use_relion_projector else None,
+                                relion_projector_half=_select_projector_half_for_class(
+                                    relion_projector_half,
+                                    class_index,
+                                    n_classes,
+                                ),
                                 relion_projector_r_max=relion_projector_r_max,
                                 projection_padding_factor=projection_padding_factor,
                                 **projection_kwargs,
@@ -17655,7 +17685,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                         max_projected_rotations=max_projected_rotations_per_projection_call,
                         output_complex_dtype=precision_policy.score_complex_dtype,
                         output_abs2_dtype=precision_policy.score_real_dtype,
-                        relion_projector_half=relion_projector_half[class_index] if use_relion_projector else None,
+                        relion_projector_half=_select_projector_half_for_class(
+                            relion_projector_half,
+                            class_index,
+                            n_classes,
+                        ),
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                         **projection_kwargs,
@@ -17926,7 +17960,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     max_projected_rotations=max_projected_rotations_per_projection_call,
                     output_complex_dtype=precision_policy.score_complex_dtype,
                     output_abs2_dtype=None,
-                    relion_projector_half=relion_projector_half[class_index] if use_relion_projector else None,
+                    relion_projector_half=_select_projector_half_for_class(
+                        relion_projector_half,
+                        class_index,
+                        n_classes,
+                    ),
                     relion_projector_r_max=relion_projector_r_max,
                     projection_padding_factor=projection_padding_factor,
                     **projection_kwargs,

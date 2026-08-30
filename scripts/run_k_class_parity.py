@@ -1213,6 +1213,9 @@ def main() -> None:
         relion_translation_search_base,
     )
     from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats_sparse
+    from recovar.em.dense_single_volume.helpers.projection import (
+        select_relion_projector_half_for_class,
+    )
     from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
     from recovar.em.dense_single_volume.iteration_loop import RELION_MINRES_MAP, _reconstruct_volume_eager
     from recovar.em.dense_single_volume.k_class import (
@@ -1689,7 +1692,11 @@ def main() -> None:
                     random_perturbation=random_perturbation,
                     normalization_log_z=normalization_log_z,
                     normalization_score_mode="gaussian",
-                    relion_projector_half=relion_projector_half_by_class[class_index],
+                    relion_projector_half=select_relion_projector_half_for_class(
+                        relion_projector_half_by_class,
+                        class_index,
+                        n_classes,
+                    ),
                     relion_projector_r_max=relion_projector_r_max,
                 )[:2]
                 sparse_Ft_y.append(class_Ft_y)

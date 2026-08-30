@@ -87,7 +87,8 @@ def _relion_coarse_normalized_cc_rescore(
     half_weights,
     fftw_order,
     *,
-    projector_full=None,
+    projector_half=None,
+    projector_scale=1.0,
     rotation_matrices=None,
     current_size=None,
     padding_factor=None,
@@ -112,7 +113,7 @@ def _relion_coarse_normalized_cc_rescore(
             f"rank-2-or-higher shape, got {shifted.shape} and "
             f"{score_weight.shape}",
         )
-    native_texture_requested = projector_full is not None
+    native_texture_requested = projector_half is not None
     native_texture_args = (
         rotation_matrices,
         current_size,
@@ -175,7 +176,7 @@ def _relion_coarse_normalized_cc_rescore(
                     )
                 native_scores = (
                     cuda_backproject.relion_coarse_normalized_cc_native_texture_pairs_f32(
-                        jnp.asarray(projector_full, dtype=jnp.complex64),
+                        jnp.asarray(projector_half, dtype=jnp.complex64),
                         rotations.reshape(-1, 3, 3),
                         shifted.reshape(-1, n_pixels),
                         score_weight.reshape(-1, n_pixels),
@@ -186,6 +187,7 @@ def _relion_coarse_normalized_cc_rescore(
                         int(projector_max_r),
                         translation_angles=candidate_translation_angles,
                         numerator_weight=native_numerator_weight,
+                        projector_scale=projector_scale,
                     )
                 )
                 return native_scores.reshape(leading_shape)

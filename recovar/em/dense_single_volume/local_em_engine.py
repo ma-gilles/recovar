@@ -94,6 +94,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
     relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
+    select_relion_projector_half_for_class as _select_projector_half_for_class,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
@@ -1039,14 +1040,12 @@ def _project_local_bucket(
     if relion_projector_half is not None:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        relion_projector_half = _select_projector_half_for_class(
+            relion_projector_half,
+            0,
+            1,
+        )
         relion_projector_half = jnp.asarray(relion_projector_half)
-        if relion_projector_half.ndim == 4:
-            if int(relion_projector_half.shape[0]) != 1:
-                raise ValueError(
-                    "local RELION projector path expected a single-class projector slab, "
-                    f"got {relion_projector_half.shape}",
-                )
-            relion_projector_half = relion_projector_half[0]
         if relion_projector_half.ndim != 3:
             raise ValueError(
                 "local RELION projector path expected Projector::data shape (z, y, x_half), "
@@ -1206,14 +1205,12 @@ def _project_packed_noise_rows(
     if relion_projector_half is not None:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        relion_projector_half = _select_projector_half_for_class(
+            relion_projector_half,
+            0,
+            1,
+        )
         relion_projector_half = jnp.asarray(relion_projector_half)
-        if relion_projector_half.ndim == 4:
-            if int(relion_projector_half.shape[0]) != 1:
-                raise ValueError(
-                    "local RELION projector path expected a single-class projector slab, "
-                    f"got {relion_projector_half.shape}",
-                )
-            relion_projector_half = relion_projector_half[0]
         if relion_projector_half.ndim != 3:
             raise ValueError(
                 "local RELION projector path expected Projector::data shape (z, y, x_half), "
@@ -2815,14 +2812,13 @@ def run_local_em_exact(
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half_big_jit = jnp.asarray(relion_projector_half)
-        if relion_projector_half_big_jit.ndim == 4:
-            if int(relion_projector_half_big_jit.shape[0]) != 1:
-                raise ValueError(
-                    "local RELION projector big-JIT path expected a single-class projector slab, "
-                    f"got {relion_projector_half_big_jit.shape}",
-                )
-            relion_projector_half_big_jit = relion_projector_half_big_jit[0]
+        relion_projector_half = _select_projector_half_for_class(
+            relion_projector_half,
+            0,
+            1,
+        )
+        relion_projector_half = jnp.asarray(relion_projector_half)
+        relion_projector_half_big_jit = relion_projector_half
         if relion_projector_half_big_jit.ndim != 3:
             raise ValueError(
                 "local RELION projector big-JIT path expected Projector::data shape (z, y, x_half), "

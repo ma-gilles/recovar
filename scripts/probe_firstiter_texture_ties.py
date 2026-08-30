@@ -22,8 +22,8 @@ from recovar.cuda_backproject import project
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block,
     relion_projector_half_to_texture_full,
+    select_relion_projector_half_for_class,
 )
-
 
 DEFAULT_ORIGINAL_INDICES = (1087, 1280, 1794, 431, 2693)
 
@@ -67,7 +67,14 @@ def run_probe(root: Path, original_indices: tuple[int, ...]) -> dict[str, object
     current_size = int(cache["current_size"])
     padding_factor = int(cache["padding_factor"])
     r_max = int(cache["projector_r_max"])
-    full_projector = relion_projector_half_to_texture_full(jnp.asarray(projector_half[0]))
+    selected_projector_half = select_relion_projector_half_for_class(
+        projector_half,
+        0,
+        1,
+    )
+    full_projector = relion_projector_half_to_texture_full(
+        jnp.asarray(selected_projector_half)
+    )
     projector_size = int(full_projector.shape[0])
 
     results: dict[str, object] = {
@@ -104,7 +111,7 @@ def run_probe(root: Path, original_indices: tuple[int, ...]) -> dict[str, object
         texture_indices = _window_to_texture_rows(scores["window_indices"], 128, current_size)
         direct_projections = direct_projections[:, texture_indices]
         production_full, _ = compute_relion_projector_projections_block(
-            jnp.asarray(projector_half[0]),
+            jnp.asarray(selected_projector_half),
             rotations,
             (128, 128),
             r_max=r_max,

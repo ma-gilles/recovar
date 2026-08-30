@@ -3674,7 +3674,7 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
         n_half=12,
         half_weights=jnp.ones(12, dtype=jnp.float32),
         precision_policy=DensePrecisionPolicy(use_float64_scoring=False),
-        relion_projector_half=jnp.ones((1, 4, 4, 3), dtype=jnp.complex64),
+        relion_projector_half=np.ones((1, 4, 4, 3), dtype=np.complex64),
         relion_projector_r_max=2,
         projection_padding_factor=1,
     )
@@ -4066,7 +4066,7 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
         n_half=40,
         half_weights=jnp.ones(40, dtype=jnp.float32),
         precision_policy=DensePrecisionPolicy(use_float64_scoring=False),
-        relion_projector_half=jnp.ones((1, 8, 8, 5), dtype=jnp.complex64),
+        relion_projector_half=np.ones((1, 8, 8, 5), dtype=np.complex64),
         relion_projector_r_max=4,
         projection_padding_factor=1,
     )
@@ -4105,7 +4105,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
         n_half=12,
         precision_policy=DensePrecisionPolicy(use_float64_scoring=False),
         reconstruction_pack_mask_jnp=jnp.array([[True, False]]),
-        relion_projector_half=jnp.ones((1, 4, 4, 3), dtype=jnp.complex64),
+        relion_projector_half=np.ones((1, 4, 4, 3), dtype=np.complex64),
         relion_projector_r_max=2,
         projection_padding_factor=1,
     )
@@ -7860,7 +7860,10 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
 
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=565)
-    relion_projector_half = centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE))[None]
+    relion_projector_half = np.asarray(
+        centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE)),
+        dtype=np.complex64,
+    )[None]
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=567)
@@ -7943,7 +7946,10 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
 
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=568)
-    relion_projector_half = centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE))[None]
+    relion_projector_half = np.asarray(
+        centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE)),
+        dtype=np.complex64,
+    )[None]
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=569)
@@ -11136,7 +11142,7 @@ class TestRelionModeSmokeTest:
             image_batch_size=dataset.n_units,
             rotation_block_size=2,
             current_size=None,
-            relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
+            relion_projector_half=np.zeros((1, 3, 3, 2), dtype=np.complex64),
             relion_projector_r_max=1,
             relion_projector_texture_interp=False,
             collect_significance=False,
@@ -11190,7 +11196,7 @@ class TestRelionModeSmokeTest:
             rotation_block_size=2,
             current_size=current_size,
             half_spectrum_scoring=True,
-            relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
+            relion_projector_half=np.zeros((1, 3, 3, 2), dtype=np.complex64),
             relion_projector_r_max=1,
             relion_projector_texture_interp=True,
             collect_significance=False,
@@ -11277,9 +11283,9 @@ class TestRelionModeSmokeTest:
                 current_size=6,
                 half_spectrum_scoring=True,
                 square_window=False,
-                relion_projector_half=jnp.zeros(
+                relion_projector_half=np.zeros(
                     (1, 3, 3, 2),
-                    dtype=jnp.complex64,
+                    dtype=np.complex64,
                 ),
                 relion_projector_r_max=1,
                 relion_projector_texture_interp=True,
@@ -11822,7 +11828,9 @@ class TestRelionModeSmokeTest:
             _fftw_order,
             **kwargs,
         ):
-            assert kwargs["projector_full"] is not None
+            assert kwargs["projector_half"] is not None
+            assert np.isfinite(kwargs["projector_scale"])
+            assert kwargs["projector_scale"] == -(IMAGE_SHAPE[0] ** 2)
             assert kwargs["rotation_matrices"].shape[-2:] == (3, 3)
             scores = jnp.asarray(rescored_scores, dtype=jnp.float32)
             return jnp.broadcast_to(scores, shifted_candidates.shape[:2])
@@ -11857,7 +11865,7 @@ class TestRelionModeSmokeTest:
             rotation_block_size=2,
             current_size=6,
             half_spectrum_scoring=True,
-            relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
+            relion_projector_half=np.zeros((1, 3, 3, 2), dtype=np.complex64),
             relion_projector_r_max=1,
             relion_projector_texture_interp=True,
             score_mode="normalized_cc",

@@ -11,11 +11,51 @@ import numpy as np
 
 from recovar import core
 from recovar.cuda_backproject import cuda_available as _cuda_projection_available
-from recovar.cuda_backproject import project_indexed
+from recovar.cuda_backproject import project_indexed, relion_projector_half_texture_f32
 from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 
 DEFAULT_PROJECTION_MAX_R = object()
 _RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
+
+
+def select_relion_projector_half_for_class(
+    value,
+    class_index: int,
+    n_classes: int,
+):
+    """Select one RELION projector before transferring it to the device.
+
+    Production projector slabs are NumPy arrays.  Preserve a host view for
+    both singleton reshape and K-class indexing so only the selected 3-D slab
+    reaches ``jnp.asarray`` in its consumer.  A traced JAX value may reshape
+    inside its enclosing compilation.  Reject eager 4-D JAX arrays because
+    even a logically shape-only reshape can allocate a second device buffer.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, (np.ndarray, jax.Array, jax.core.Tracer)):
+        value_array = value
+    else:
+        value_array = np.asarray(value)
+    if value_array.ndim >= 4 and int(value_array.shape[0]) == int(n_classes):
+        if isinstance(value_array, jax.Array) and not isinstance(
+            value_array,
+            jax.core.Tracer,
+        ):
+            raise ValueError(
+                "RELION projector class selection must occur before eager "
+                "device transfer; pass the NumPy host array or select inside "
+                "an enclosing jax.jit trace",
+            )
+        if int(n_classes) == 1:
+            if int(class_index) != 0:
+                raise IndexError("a singleton RELION projector only has class index 0")
+            if isinstance(value_array, jax.core.Tracer):
+                return jnp.reshape(value_array, value_array.shape[1:])
+            return np.reshape(value_array, value_array.shape[1:])
+        return value_array[int(class_index)]
+    return value
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4))
@@ -37,13 +77,15 @@ def project_relion_projector_half_spectrum(
     from recovar.core.relion_project import relion_project_half
 
     image_size = int(image_shape[0])
-    project_one = lambda R: relion_project_half(
-        volume_relion_half,
-        R,
-        image_size,
-        int(r_max),
-        int(padding_factor),
-    )
+    def project_one(rotation):
+        return relion_project_half(
+            volume_relion_half,
+            rotation,
+            image_size,
+            int(r_max),
+            int(padding_factor),
+        )
+
     proj_fftw = jax.vmap(project_one)(rotations_block)
 
     return proj_fftw.reshape((rotations_block.shape[0], -1))
@@ -297,21 +339,18 @@ def _project_relion_projector_texture(
     image_shape,
     *,
     r_max: int,
+    padding_factor: int,
     projector_output_size: int,
     pixel_indices=None,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
 
-    projector_full = relion_projector_half_to_texture_full(volume_relion_half)
-    pad_size = int(projector_full.shape[0])
-    projection_crop = project_half_spectrum(
-        projector_full.reshape(-1),
-        rotations_block,
-        (int(projector_output_size), int(projector_output_size)),
-        (pad_size, pad_size, pad_size),
-        "linear_interp",
-        max_r=float(r_max),
-        relion_texture_interp=True,
+    projection_crop = relion_projector_half_texture_f32(
+        jnp.asarray(volume_relion_half, dtype=jnp.complex64),
+        jnp.asarray(rotations_block, dtype=jnp.float32),
+        current_size=int(projector_output_size),
+        padding_factor=int(padding_factor),
+        projector_max_r=int(r_max),
     )
     if pixel_indices is not None:
         return _texture_centered_crop_at_indices(
@@ -371,6 +410,7 @@ def compute_relion_projector_projections_block(
             )
         texture_kwargs = {
             "r_max": int(r_max),
+            "padding_factor": int(padding_factor),
             "projector_output_size": resolved_output_size,
         }
         if centered_rows and pixel_indices is not None:

@@ -2075,6 +2075,153 @@ fill_relion_texture_compact_kernel(
     imag[idx] = im;
 }
 
+/* Native RELION projectors already have exactly the compact texture layout:
+ * (z, y, x-half), with x-half contiguous.  Populate one interleaved float2
+ * CUDA array directly instead of expanding the half projector to a full cube
+ * and then duplicating it into split real/imaginary staging allocations. */
+__global__ void __launch_bounds__(BLOCK_SIZE)
+fill_relion_half_texture_surface_f32_kernel(
+    const float2* __restrict__ projector_half,
+    cudaSurfaceObject_t surface,
+    int64_t texture_voxels,
+    int tex_x,
+    int tex_y,
+    float projector_scale)
+{
+    const int64_t index =
+        static_cast<int64_t>(blockIdx.x) * BLOCK_SIZE + threadIdx.x;
+    if (index >= texture_voxels) return;
+
+    const int x = static_cast<int>(index % tex_x);
+    const int64_t yz = index / tex_x;
+    const int y = static_cast<int>(yz % tex_y);
+    const int z = static_cast<int>(yz / tex_y);
+    const float2 value = projector_half[index];
+    const float2 scaled = make_float2(
+        __fmul_rn(value.x, projector_scale),
+        __fmul_rn(value.y, projector_scale));
+    surf3Dwrite(scaled, surface, x * static_cast<int>(sizeof(float2)), y, z);
+}
+
+struct RelionHalfTextureF32 {
+    cudaArray_t array = nullptr;
+    cudaSurfaceObject_t surface = 0;
+    cudaTextureObject_t texture = 0;
+};
+
+cudaError_t destroy_relion_half_texture_f32(RelionHalfTextureF32* texture)
+{
+    cudaError_t err = cudaSuccess;
+    if (texture->texture) {
+        const cudaError_t cleanup_err = cudaDestroyTextureObject(texture->texture);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
+    if (texture->surface) {
+        const cudaError_t cleanup_err = cudaDestroySurfaceObject(texture->surface);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
+    if (texture->array) {
+        const cudaError_t cleanup_err = cudaFreeArray(texture->array);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
+    texture->texture = 0;
+    texture->surface = 0;
+    texture->array = nullptr;
+    return err;
+}
+
+cudaError_t synchronize_and_destroy_relion_half_texture_f32(
+    cudaStream_t stream,
+    RelionHalfTextureF32* texture,
+    cudaError_t first_err)
+{
+    cudaError_t err = first_err;
+    if (texture->texture || texture->surface || texture->array) {
+        const cudaError_t sync_err = cudaStreamSynchronize(stream);
+        if (err == cudaSuccess) err = sync_err;
+    }
+    const cudaError_t cleanup_err = destroy_relion_half_texture_f32(texture);
+    if (err == cudaSuccess) err = cleanup_err;
+    return err;
+}
+
+cudaError_t create_relion_half_texture_f32(
+    cudaStream_t stream,
+    const float2* projector_half,
+    int tex_x,
+    int tex_y,
+    int tex_z,
+    float projector_scale,
+    RelionHalfTextureF32* texture)
+{
+    const cudaChannelFormatDesc desc = cudaCreateChannelDesc<float2>();
+    const cudaExtent extent = make_cudaExtent(
+        static_cast<size_t>(tex_x),
+        static_cast<size_t>(tex_y),
+        static_cast<size_t>(tex_z));
+    cudaError_t err = cudaMalloc3DArray(
+        &texture->array,
+        &desc,
+        extent,
+        cudaArraySurfaceLoadStore);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    cudaResourceDesc resource;
+    memset(&resource, 0, sizeof(resource));
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = texture->array;
+    err = cudaCreateSurfaceObject(&texture->surface, &resource);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    const int64_t texture_voxels =
+        static_cast<int64_t>(tex_x) * tex_y * tex_z;
+    const int64_t block_count =
+        (texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    fill_relion_half_texture_surface_f32_kernel<<<
+        static_cast<unsigned int>(block_count), BLOCK_SIZE, 0, stream>>>(
+            projector_half,
+            texture->surface,
+            texture_voxels,
+            tex_x,
+            tex_y,
+            projector_scale);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        return synchronize_and_destroy_relion_half_texture_f32(
+            stream,
+            texture,
+            err);
+    }
+
+    cudaTextureDesc texture_desc;
+    memset(&texture_desc, 0, sizeof(texture_desc));
+    texture_desc.filterMode = cudaFilterModeLinear;
+    texture_desc.readMode = cudaReadModeElementType;
+    texture_desc.normalizedCoords = false;
+    texture_desc.addressMode[0] = cudaAddressModeClamp;
+    texture_desc.addressMode[1] = cudaAddressModeClamp;
+    texture_desc.addressMode[2] = cudaAddressModeClamp;
+    err = cudaCreateTextureObject(
+        &texture->texture, &resource, &texture_desc, nullptr);
+    if (err != cudaSuccess) {
+        /* The surface-fill kernel is asynchronous.  If texture creation
+         * fails, wait for that queued writer before destroying its surface
+         * and array.  Preserve the first error while still attempting every
+         * cleanup operation. */
+        return synchronize_and_destroy_relion_half_texture_f32(
+            stream,
+            texture,
+            err);
+    }
+    return cudaSuccess;
+}
+
 template <bool HALF_IMG>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_texture_kernel(
@@ -2142,6 +2289,133 @@ project_texture_kernel(
     const float re = tex3D<float>(texReal, xp + 0.5f, yp - (float)tex_yinit + 0.5f, zp - (float)tex_zinit + 0.5f);
     const float im = imag_sign * tex3D<float>(texImag, xp + 0.5f, yp - (float)tex_yinit + 0.5f, zp - (float)tex_zinit + 0.5f);
     img2[img_off] = make_float2(re, im);
+}
+
+template <bool HALF_IMG>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+project_relion_half_texture_f32_kernel(
+    cudaTextureObject_t texture,
+    float2* __restrict__ image,
+    const float* __restrict__ rotations,
+    int n_pixels,
+    int image_h,
+    int image_w,
+    int tex_y_init,
+    int tex_z_init,
+    int padding_factor,
+    int max_r2_padded)
+{
+    __shared__ float rotation[6];
+
+    const int image_index = blockIdx.x;
+    const int pixel = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+    if (threadIdx.x < 6)
+        rotation[threadIdx.x] = rotations[image_index * 6 + threadIdx.x];
+    __syncthreads();
+    if (pixel >= n_pixels) return;
+
+    const int row = pixel / image_w;
+    const int column = pixel % image_w;
+    const float source_y = static_cast<float>(
+        row == 0 ? image_h / 2 : row - image_h / 2);
+    const float source_x = HALF_IMG
+        ? static_cast<float>(column)
+        : static_cast<float>(column - image_w / 2);
+
+    const float model_x =
+        (rotation[3] * source_x + rotation[0] * source_y) *
+        static_cast<float>(padding_factor);
+    const float model_y =
+        (rotation[4] * source_x + rotation[1] * source_y) *
+        static_cast<float>(padding_factor);
+    const float model_z =
+        (rotation[5] * source_x + rotation[2] * source_y) *
+        static_cast<float>(padding_factor);
+    const int64_t output_index =
+        static_cast<int64_t>(image_index) * n_pixels + pixel;
+    const float radius_squared =
+        model_x * model_x + model_y * model_y + model_z * model_z;
+    if (!isfinite(radius_squared) || radius_squared >= 2147483648.0f ||
+        static_cast<int>(radius_squared) > max_r2_padded) {
+        image[output_index] = make_float2(0.0f, 0.0f);
+        return;
+    }
+
+    float texture_x = model_x;
+    float texture_y = model_y;
+    float texture_z = model_z;
+    float imag_sign = 1.0f;
+    if (texture_x < 0.0f) {
+        texture_x = -texture_x;
+        texture_y = -texture_y;
+        texture_z = -texture_z;
+        imag_sign = -1.0f;
+    }
+    float2 value = tex3D<float2>(
+        texture,
+        texture_x + 0.5f,
+        texture_y - static_cast<float>(tex_y_init) + 0.5f,
+        texture_z - static_cast<float>(tex_z_init) + 0.5f);
+    value.y *= imag_sign;
+    image[output_index] = value;
+}
+
+cudaError_t launch_relion_projector_half_texture_f32(
+    cudaStream_t stream,
+    const float2* projector_half,
+    float2* image,
+    const float* rotations,
+    int64_t n_images,
+    int64_t image_h,
+    int64_t image_w,
+    int padding_factor,
+    int projector_max_r,
+    float projector_scale)
+{
+    if (n_images == 0 || image_h == 0 || image_w == 0) return cudaSuccess;
+    const int padded_max_r = projector_max_r * padding_factor;
+    const int tex_x = padded_max_r + 2;
+    const int tex_y = 2 * padded_max_r + 3;
+    const int tex_z = 2 * padded_max_r + 3;
+    const int tex_y_init = -(padded_max_r + 1);
+    const int tex_z_init = -(padded_max_r + 1);
+    const int64_t n_pixels = image_h * image_w;
+    RelionHalfTextureF32 projector_texture;
+    cudaError_t err = create_relion_half_texture_f32(
+        stream,
+        projector_half,
+        tex_x,
+        tex_y,
+        tex_z,
+        projector_scale,
+        &projector_texture);
+    if (err != cudaSuccess) goto cleanup;
+
+    {
+        dim3 grid(
+            static_cast<unsigned int>(n_images),
+            static_cast<unsigned int>((n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE));
+        dim3 block(BLOCK_SIZE);
+        project_relion_half_texture_f32_kernel<true><<<grid, block, 0, stream>>>(
+            projector_texture.texture,
+            image,
+            rotations,
+            static_cast<int>(n_pixels),
+            static_cast<int>(image_h),
+            static_cast<int>(image_w),
+            tex_y_init,
+            tex_z_init,
+            padding_factor,
+            padded_max_r * padded_max_r);
+        err = cudaGetLastError();
+        if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+    }
+
+cleanup:
+    return synchronize_and_destroy_relion_half_texture_f32(
+        stream,
+        &projector_texture,
+        err);
 }
 
 /* Match RELION's Wavg A2 topology: one block per orientation, one thread per
@@ -4554,8 +4828,7 @@ void relion_coarse_diff2_fused_translate_rectangular_f32_kernel(
 }
 
 __device__ __forceinline__ float2 relion_coarse_project_texture_f32(
-    cudaTextureObject_t tex_real,
-    cudaTextureObject_t tex_imag,
+    cudaTextureObject_t texture,
     int x,
     int y,
     const float* euler,
@@ -4568,8 +4841,11 @@ __device__ __forceinline__ float2 relion_coarse_project_texture_f32(
     float xp = (euler[0] * x + euler[1] * y) * padding_factor;
     float yp = (euler[3] * x + euler[4] * y) * padding_factor;
     float zp = (euler[6] * x + euler[7] * y) * padding_factor;
-    const int r2 = static_cast<int>(xp * xp + yp * yp + zp * zp);
-    if (r2 > max_r2_padded) return make_float2(0.0f, 0.0f);
+    const float radius_squared = xp * xp + yp * yp + zp * zp;
+    if (!isfinite(radius_squared) || radius_squared >= 2147483648.0f ||
+        static_cast<int>(radius_squared) > max_r2_padded) {
+        return make_float2(0.0f, 0.0f);
+    }
 
     float imag_sign = 1.0f;
     if (xp < 0.0f) {
@@ -4578,17 +4854,13 @@ __device__ __forceinline__ float2 relion_coarse_project_texture_f32(
         zp = -zp;
         imag_sign = -1.0f;
     }
-    const float real = tex3D<float>(
-        tex_real,
+    float2 value = tex3D<float2>(
+        texture,
         xp + 0.5f,
         yp - static_cast<float>(tex_y_init) + 0.5f,
         zp - static_cast<float>(tex_z_init) + 0.5f);
-    const float imag = imag_sign * tex3D<float>(
-        tex_imag,
-        xp + 0.5f,
-        yp - static_cast<float>(tex_y_init) + 0.5f,
-        zp - static_cast<float>(tex_z_init) + 0.5f);
-    return make_float2(real, imag);
+    value.y = imag_sign * value.y;
+    return value;
 }
 
 /* Bounded normalized-CC replay for candidate pairs.  Projection and scoring
@@ -4597,8 +4869,7 @@ __device__ __forceinline__ float2 relion_coarse_project_texture_f32(
  * production coarse kernel. */
 __global__ __launch_bounds__(kRelionCoarseDiff2BlockSize)
 void relion_coarse_normalized_cc_native_texture_pairs_f32_kernel(
-    cudaTextureObject_t tex_real,
-    cudaTextureObject_t tex_imag,
+    cudaTextureObject_t texture,
     const float* eulers,
     const float2* unshifted_image,
     const float* translation_angles,
@@ -4634,8 +4905,7 @@ void relion_coarse_normalized_cc_native_texture_pairs_f32_kernel(
         int y = static_cast<int>(packed_pixel / current_half_width);
         if (y > current_size / 2) y -= current_size;
         const float2 reference_value = relion_coarse_project_texture_f32(
-            tex_real,
-            tex_imag,
+            texture,
             x,
             y,
             euler,
@@ -4698,8 +4968,7 @@ void relion_coarse_normalized_cc_native_texture_pairs_f32_kernel(
  * source. */
 __global__ __launch_bounds__(kRelionCoarseDiff2BlockSize)
 void relion_coarse_diff2_native_texture_rectangular_f32_kernel(
-    cudaTextureObject_t tex_real,
-    cudaTextureObject_t tex_imag,
+    cudaTextureObject_t texture,
     const float* eulers,
     const float2* image,
     const float* translation_angles,
@@ -4774,8 +5043,7 @@ void relion_coarse_diff2_native_texture_rectangular_f32_kernel(
             if (reference_full_pixel < full_pixel_count &&
                 rotation < rotation_count) {
                 value = relion_coarse_project_texture_f32(
-                    tex_real,
-                    tex_imag,
+                    texture,
                     x,
                     y,
                     &shared_eulers[rotation_offset * 9],
@@ -5057,7 +5325,7 @@ cudaError_t launch_relion_coarse_diff2_fused_translate_rectangular_f32(
 
 cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
     cudaStream_t stream,
-    const float2* projector_full,
+    const float2* projector_half,
     const float* eulers,
     const float2* image,
     const float* translation_angles,
@@ -5065,7 +5333,6 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
     const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
-    int64_t projector_size,
     int64_t batch_size,
     int64_t rotation_count,
     int64_t translation_count,
@@ -5073,7 +5340,8 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
     int64_t full_pixel_count,
     int current_size,
     int padding_factor,
-    int projector_max_r)
+    int projector_max_r,
+    float projector_scale)
 {
     const int64_t output_count =
         batch_size * rotation_count * translation_count;
@@ -5088,14 +5356,7 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
     const int tex_z = 2 * padded_max_r + 3;
     const int tex_y_init = -(padded_max_r + 1);
     const int tex_z_init = -(padded_max_r + 1);
-    const int64_t texture_voxels =
-        static_cast<int64_t>(tex_x) * tex_y * tex_z;
-    float* real = nullptr;
-    float* imag = nullptr;
-    cudaArray_t array_real = nullptr;
-    cudaArray_t array_imag = nullptr;
-    cudaTextureObject_t texture_real = 0;
-    cudaTextureObject_t texture_imag = 0;
+    RelionHalfTextureF32 projector_texture;
     float* particle_output = nullptr;
 
     const int64_t hypotheses_per_particle =
@@ -5105,90 +5366,15 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
         static_cast<size_t>(hypotheses_per_particle) * sizeof(float));
     if (err != cudaSuccess) goto cleanup;
 
-    err = cudaMalloc(
-        reinterpret_cast<void**>(&real),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+    err = create_relion_half_texture_f32(
+        stream,
+        projector_half,
+        tex_x,
+        tex_y,
+        tex_z,
+        projector_scale,
+        &projector_texture);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(
-        reinterpret_cast<void**>(&imag),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
-    if (err != cudaSuccess) goto cleanup;
-
-    {
-        dim3 block(BLOCK_SIZE);
-        dim3 grid(static_cast<unsigned int>(
-            (texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE));
-        fill_relion_texture_compact_kernel<float><<<grid, block, 0, stream>>>(
-            reinterpret_cast<const float*>(projector_full),
-            real,
-            imag,
-            tex_x,
-            tex_y,
-            tex_z,
-            tex_y_init,
-            tex_z_init,
-            static_cast<int>(projector_size),
-            static_cast<int>(projector_size),
-            static_cast<int>(projector_size));
-        err = cudaGetLastError();
-        if (err != cudaSuccess) goto cleanup;
-    }
-
-    {
-        cudaChannelFormatDesc desc = cudaCreateChannelDesc(
-            32, 0, 0, 0, cudaChannelFormatKindFloat);
-        cudaExtent extent = make_cudaExtent(
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y),
-            static_cast<size_t>(tex_z));
-        err = cudaMalloc3DArray(&array_real, &desc, extent);
-        if (err != cudaSuccess) goto cleanup;
-        err = cudaMalloc3DArray(&array_imag, &desc, extent);
-        if (err != cudaSuccess) goto cleanup;
-
-        cudaMemcpy3DParms copy_params = {0};
-        copy_params.extent = extent;
-        copy_params.kind = cudaMemcpyDeviceToDevice;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            real,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_real;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            imag,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_imag;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
-
-        cudaResourceDesc resource_real;
-        cudaResourceDesc resource_imag;
-        cudaTextureDesc texture_desc;
-        memset(&resource_real, 0, sizeof(resource_real));
-        memset(&resource_imag, 0, sizeof(resource_imag));
-        memset(&texture_desc, 0, sizeof(texture_desc));
-        resource_real.resType = cudaResourceTypeArray;
-        resource_real.res.array.array = array_real;
-        resource_imag.resType = cudaResourceTypeArray;
-        resource_imag.res.array.array = array_imag;
-        texture_desc.filterMode = cudaFilterModeLinear;
-        texture_desc.readMode = cudaReadModeElementType;
-        texture_desc.normalizedCoords = false;
-        texture_desc.addressMode[0] = cudaAddressModeClamp;
-        texture_desc.addressMode[1] = cudaAddressModeClamp;
-        texture_desc.addressMode[2] = cudaAddressModeClamp;
-        err = cudaCreateTextureObject(
-            &texture_real, &resource_real, &texture_desc, nullptr);
-        if (err != cudaSuccess) goto cleanup;
-        err = cudaCreateTextureObject(
-            &texture_imag, &resource_imag, &texture_desc, nullptr);
-        if (err != cudaSuccess) goto cleanup;
-    }
 
     {
         const int64_t rotation_blocks =
@@ -5235,8 +5421,7 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
                 kRelionCoarseDiff2BlockSize,
                 0,
                 stream>>>(
-                    texture_real,
-                    texture_imag,
+                    projector_texture.texture,
                     eulers,
                     image + batch * compact_pixel_count,
                     translation_angles,
@@ -5268,19 +5453,20 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
     }
 
 cleanup:
-    if (texture_real) cudaDestroyTextureObject(texture_real);
-    if (texture_imag) cudaDestroyTextureObject(texture_imag);
-    if (array_real) cudaFreeArray(array_real);
-    if (array_imag) cudaFreeArray(array_imag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
-    if (particle_output) cudaFree(particle_output);
+    err = synchronize_and_destroy_relion_half_texture_f32(
+        stream,
+        &projector_texture,
+        err);
+    if (particle_output) {
+        const cudaError_t cleanup_err = cudaFree(particle_output);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
     return err;
 }
 
 cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
     cudaStream_t stream,
-    const float2* projector_full,
+    const float2* projector_half,
     const float* eulers,
     const float2* unshifted_image,
     const float* translation_angles,
@@ -5289,13 +5475,13 @@ cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
     const float* half_weights,
     const int32_t* packed_to_compact,
     float* output,
-    int64_t projector_size,
     int64_t candidate_count,
     int64_t compact_pixel_count,
     int64_t packed_pixel_count,
     int current_size,
     int padding_factor,
-    int projector_max_r)
+    int projector_max_r,
+    float projector_scale)
 {
     if (candidate_count == 0) return cudaSuccess;
 
@@ -5306,106 +5492,23 @@ cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
     const int tex_z = 2 * padded_max_r + 3;
     const int tex_y_init = -(padded_max_r + 1);
     const int tex_z_init = -(padded_max_r + 1);
-    const int64_t texture_voxels =
-        static_cast<int64_t>(tex_x) * tex_y * tex_z;
-    float* real = nullptr;
-    float* imag = nullptr;
-    cudaArray_t array_real = nullptr;
-    cudaArray_t array_imag = nullptr;
-    cudaTextureObject_t texture_real = 0;
-    cudaTextureObject_t texture_imag = 0;
-    cudaError_t err = cudaMalloc(
-        reinterpret_cast<void**>(&real),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+    RelionHalfTextureF32 projector_texture;
+    cudaError_t err = create_relion_half_texture_f32(
+        stream,
+        projector_half,
+        tex_x,
+        tex_y,
+        tex_z,
+        projector_scale,
+        &projector_texture);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(
-        reinterpret_cast<void**>(&imag),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
-    if (err != cudaSuccess) goto cleanup;
-
-    {
-        dim3 block(BLOCK_SIZE);
-        dim3 grid(static_cast<unsigned int>(
-            (texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE));
-        fill_relion_texture_compact_kernel<float><<<grid, block, 0, stream>>>(
-            reinterpret_cast<const float*>(projector_full),
-            real,
-            imag,
-            tex_x,
-            tex_y,
-            tex_z,
-            tex_y_init,
-            tex_z_init,
-            static_cast<int>(projector_size),
-            static_cast<int>(projector_size),
-            static_cast<int>(projector_size));
-        err = cudaGetLastError();
-        if (err != cudaSuccess) goto cleanup;
-    }
-
-    {
-        cudaChannelFormatDesc desc = cudaCreateChannelDesc(
-            32, 0, 0, 0, cudaChannelFormatKindFloat);
-        cudaExtent extent = make_cudaExtent(
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y),
-            static_cast<size_t>(tex_z));
-        err = cudaMalloc3DArray(&array_real, &desc, extent);
-        if (err != cudaSuccess) goto cleanup;
-        err = cudaMalloc3DArray(&array_imag, &desc, extent);
-        if (err != cudaSuccess) goto cleanup;
-
-        cudaMemcpy3DParms copy_params = {0};
-        copy_params.extent = extent;
-        copy_params.kind = cudaMemcpyDeviceToDevice;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            real,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_real;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            imag,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_imag;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
-
-        cudaResourceDesc resource_real;
-        cudaResourceDesc resource_imag;
-        cudaTextureDesc texture_desc;
-        memset(&resource_real, 0, sizeof(resource_real));
-        memset(&resource_imag, 0, sizeof(resource_imag));
-        memset(&texture_desc, 0, sizeof(texture_desc));
-        resource_real.resType = cudaResourceTypeArray;
-        resource_real.res.array.array = array_real;
-        resource_imag.resType = cudaResourceTypeArray;
-        resource_imag.res.array.array = array_imag;
-        texture_desc.filterMode = cudaFilterModeLinear;
-        texture_desc.readMode = cudaReadModeElementType;
-        texture_desc.normalizedCoords = false;
-        texture_desc.addressMode[0] = cudaAddressModeClamp;
-        texture_desc.addressMode[1] = cudaAddressModeClamp;
-        texture_desc.addressMode[2] = cudaAddressModeClamp;
-        err = cudaCreateTextureObject(
-            &texture_real, &resource_real, &texture_desc, nullptr);
-        if (err != cudaSuccess) goto cleanup;
-        err = cudaCreateTextureObject(
-            &texture_imag, &resource_imag, &texture_desc, nullptr);
-        if (err != cudaSuccess) goto cleanup;
-    }
 
     relion_coarse_normalized_cc_native_texture_pairs_f32_kernel<<<
         static_cast<unsigned int>(candidate_count),
         kRelionCoarseDiff2BlockSize,
         0,
         stream>>>(
-            texture_real,
-            texture_imag,
+            projector_texture.texture,
             eulers,
             unshifted_image,
             translation_angles,
@@ -5426,12 +5529,10 @@ cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
     if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
 
 cleanup:
-    if (texture_real) cudaDestroyTextureObject(texture_real);
-    if (texture_imag) cudaDestroyTextureObject(texture_imag);
-    if (array_real) cudaFreeArray(array_real);
-    if (array_imag) cudaFreeArray(array_imag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
+    err = synchronize_and_destroy_relion_half_texture_f32(
+        stream,
+        &projector_texture,
+        err);
     return err;
 }
 
@@ -5645,8 +5746,7 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
  * the otherwise exact fine reduction tree. */
 __global__ __launch_bounds__(kRelionFineDiff2BlockSize)
 void relion_fine_diff2_native_texture_rectangular_f32_kernel(
-    cudaTextureObject_t tex_real,
-    cudaTextureObject_t tex_imag,
+    cudaTextureObject_t texture,
     const float* eulers,
     const float2* image,
     const float* translation_angles,
@@ -5703,8 +5803,7 @@ void relion_fine_diff2_native_texture_rectangular_f32_kernel(
                 int y = static_cast<int>(full_pixel / current_half_width);
                 if (y > current_size / 2) y -= current_size;
                 const float2 reference_value = relion_coarse_project_texture_f32(
-                    tex_real,
-                    tex_imag,
+                    texture,
                     x,
                     y,
                     euler,
@@ -5869,7 +5968,7 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
 
 cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
     cudaStream_t stream,
-    const float2* projector_full,
+    const float2* projector_half,
     const float* eulers,
     const float2* image,
     const float* translation_angles,
@@ -5877,7 +5976,6 @@ cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
     const float* initial_diff2,
     const int32_t* full_to_compact,
     float* output,
-    int64_t projector_size,
     int64_t batch_size,
     int64_t rotation_count,
     int64_t translation_count,
@@ -5885,7 +5983,8 @@ cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
     int64_t full_pixel_count,
     int current_size,
     int padding_factor,
-    int projector_max_r)
+    int projector_max_r,
+    float projector_scale)
 {
     const int64_t hypotheses_per_particle =
         rotation_count * translation_count;
@@ -5899,104 +5998,22 @@ cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
     const int tex_z = 2 * padded_max_r + 3;
     const int tex_y_init = -(padded_max_r + 1);
     const int tex_z_init = -(padded_max_r + 1);
-    const int64_t texture_voxels =
-        static_cast<int64_t>(tex_x) * tex_y * tex_z;
-    float* real = nullptr;
-    float* imag = nullptr;
     float* particle_output = nullptr;
-    cudaArray_t array_real = nullptr;
-    cudaArray_t array_imag = nullptr;
-    cudaTextureObject_t texture_real = 0;
-    cudaTextureObject_t texture_imag = 0;
+    RelionHalfTextureF32 projector_texture;
 
     err = cudaMalloc(
         reinterpret_cast<void**>(&particle_output),
         static_cast<size_t>(hypotheses_per_particle) * sizeof(float));
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(
-        reinterpret_cast<void**>(&real),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
+    err = create_relion_half_texture_f32(
+        stream,
+        projector_half,
+        tex_x,
+        tex_y,
+        tex_z,
+        projector_scale,
+        &projector_texture);
     if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(
-        reinterpret_cast<void**>(&imag),
-        static_cast<size_t>(texture_voxels) * sizeof(float));
-    if (err != cudaSuccess) goto cleanup;
-
-    {
-        dim3 block(BLOCK_SIZE);
-        dim3 grid(static_cast<unsigned int>(
-            (texture_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE));
-        fill_relion_texture_compact_kernel<float><<<grid, block, 0, stream>>>(
-            reinterpret_cast<const float*>(projector_full),
-            real,
-            imag,
-            tex_x,
-            tex_y,
-            tex_z,
-            tex_y_init,
-            tex_z_init,
-            static_cast<int>(projector_size),
-            static_cast<int>(projector_size),
-            static_cast<int>(projector_size));
-        err = cudaGetLastError();
-        if (err != cudaSuccess) goto cleanup;
-    }
-
-    {
-        cudaChannelFormatDesc desc = cudaCreateChannelDesc(
-            32, 0, 0, 0, cudaChannelFormatKindFloat);
-        cudaExtent extent = make_cudaExtent(
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y),
-            static_cast<size_t>(tex_z));
-        err = cudaMalloc3DArray(&array_real, &desc, extent);
-        if (err != cudaSuccess) goto cleanup;
-        err = cudaMalloc3DArray(&array_imag, &desc, extent);
-        if (err != cudaSuccess) goto cleanup;
-
-        cudaMemcpy3DParms copy_params = {0};
-        copy_params.extent = extent;
-        copy_params.kind = cudaMemcpyDeviceToDevice;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            real,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_real;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
-        copy_params.srcPtr = make_cudaPitchedPtr(
-            imag,
-            static_cast<size_t>(tex_x) * sizeof(float),
-            static_cast<size_t>(tex_x),
-            static_cast<size_t>(tex_y));
-        copy_params.dstArray = array_imag;
-        err = cudaMemcpy3DAsync(&copy_params, stream);
-        if (err != cudaSuccess) goto cleanup;
-
-        cudaResourceDesc resource_real;
-        cudaResourceDesc resource_imag;
-        cudaTextureDesc texture_desc;
-        memset(&resource_real, 0, sizeof(resource_real));
-        memset(&resource_imag, 0, sizeof(resource_imag));
-        memset(&texture_desc, 0, sizeof(texture_desc));
-        resource_real.resType = cudaResourceTypeArray;
-        resource_real.res.array.array = array_real;
-        resource_imag.resType = cudaResourceTypeArray;
-        resource_imag.res.array.array = array_imag;
-        texture_desc.filterMode = cudaFilterModeLinear;
-        texture_desc.readMode = cudaReadModeElementType;
-        texture_desc.normalizedCoords = false;
-        texture_desc.addressMode[0] = cudaAddressModeClamp;
-        texture_desc.addressMode[1] = cudaAddressModeClamp;
-        texture_desc.addressMode[2] = cudaAddressModeClamp;
-        err = cudaCreateTextureObject(
-            &texture_real, &resource_real, &texture_desc, nullptr);
-        if (err != cudaSuccess) goto cleanup;
-        err = cudaCreateTextureObject(
-            &texture_imag, &resource_imag, &texture_desc, nullptr);
-        if (err != cudaSuccess) goto cleanup;
-    }
 
     {
         const int64_t translation_chunks =
@@ -6021,8 +6038,7 @@ cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
                 kRelionFineDiff2BlockSize,
                 0,
                 stream>>>(
-                    texture_real,
-                    texture_imag,
+                    projector_texture.texture,
                     eulers + batch * rotation_count * 9,
                     image + batch * compact_pixel_count,
                     translation_angles,
@@ -6054,13 +6070,14 @@ cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
     }
 
 cleanup:
-    if (texture_real) cudaDestroyTextureObject(texture_real);
-    if (texture_imag) cudaDestroyTextureObject(texture_imag);
-    if (array_real) cudaFreeArray(array_real);
-    if (array_imag) cudaFreeArray(array_imag);
-    if (real) cudaFree(real);
-    if (imag) cudaFree(imag);
-    if (particle_output) cudaFree(particle_output);
+    err = synchronize_and_destroy_relion_half_texture_f32(
+        stream,
+        &projector_texture,
+        err);
+    if (particle_output) {
+        const cudaError_t cleanup_err = cudaFree(particle_output);
+        if (err == cudaSuccess) err = cleanup_err;
+    }
     return err;
 }
 
@@ -7201,12 +7218,119 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+struct RelionHalfTextureGeometry {
+    int64_t padded_max_r;
+    int64_t projector_size;
+    int64_t projector_half_x;
+    int64_t image_pixels;
+};
+
+bool validate_relion_half_texture_geometry(
+    int64_t current_size,
+    int64_t padding_factor,
+    int64_t projector_max_r,
+    RelionHalfTextureGeometry* geometry)
+{
+    const int64_t int_max =
+        static_cast<int64_t>(std::numeric_limits<int>::max());
+    /* Every launcher stores the squared padded radius in an int and forms
+     * texture y/z as 2 * padded_max_r + 3.  Validate against the tighter
+     * radius-square limit before evaluating either product. */
+    constexpr int64_t max_padded_radius_with_int_square = 46340;
+    if (current_size <= 0 || current_size > int_max ||
+        padding_factor <= 0 || padding_factor > int_max ||
+        projector_max_r <= 0 || projector_max_r > int_max ||
+        projector_max_r >
+            max_padded_radius_with_int_square / padding_factor)
+        return false;
+
+    const int64_t padded_max_r = projector_max_r * padding_factor;
+    if (padded_max_r > (int_max - 3) / 2) return false;
+    const int64_t image_half_x = current_size / 2 + 1;
+    if (current_size > int_max / image_half_x) return false;
+
+    geometry->padded_max_r = padded_max_r;
+    geometry->projector_size = 2 * padded_max_r + 3;
+    geometry->projector_half_x = padded_max_r + 2;
+    geometry->image_pixels = current_size * image_half_x;
+    return true;
+}
+
+ffi::Error RelionProjectorHalfTextureF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    int64_t padding_factor,
+    int64_t projector_max_r,
+    float projector_scale,
+    ffi::AnyBuffer projector_half,
+    ffi::AnyBuffer rotations,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (projector_half.element_type() != ffi::DataType::C64 ||
+        output->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorHalfTextureF32: projector/output must be C64");
+    if (rotations.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorHalfTextureF32: rotations must be F32");
+
+    const auto projector_dims = projector_half.dimensions();
+    const auto rotation_dims = rotations.dimensions();
+    const auto output_dims = output->dimensions();
+    RelionHalfTextureGeometry geometry;
+    const int64_t int_max = static_cast<int64_t>(std::numeric_limits<int>::max());
+    if (!validate_relion_half_texture_geometry(
+            current_size, padding_factor, projector_max_r, &geometry) ||
+        !std::isfinite(projector_scale) ||
+        projector_dims.size() != 3 ||
+        projector_dims[0] != geometry.projector_size ||
+        projector_dims[1] != geometry.projector_size ||
+        projector_dims[2] != geometry.projector_half_x ||
+        rotation_dims.size() != 2 || rotation_dims[0] <= 0 ||
+        rotation_dims[0] > int_max || rotation_dims[1] != 6 ||
+        output_dims.size() != 2 || output_dims[0] != rotation_dims[0] ||
+        output_dims[1] != geometry.image_pixels)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorHalfTextureF32: inconsistent operand shapes");
+
+    cudaError_t err = launch_relion_projector_half_texture_f32(
+        stream,
+        reinterpret_cast<const float2*>(projector_half.untyped_data()),
+        reinterpret_cast<float2*>(output->untyped_data()),
+        static_cast<const float*>(rotations.untyped_data()),
+        rotation_dims[0],
+        current_size,
+        current_size / 2 + 1,
+        static_cast<int>(padding_factor),
+        static_cast<int>(projector_max_r),
+        projector_scale);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionProjectorHalfTextureF32,
+    RelionProjectorHalfTextureF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Attr<int64_t>("padding_factor")
+        .Attr<int64_t>("projector_max_r")
+        .Attr<float>("projector_scale")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
     cudaStream_t stream,
     int64_t current_size,
     int64_t padding_factor,
     int64_t projector_max_r,
-    ffi::AnyBuffer projector_full,
+    float projector_scale,
+    ffi::AnyBuffer projector_half,
     ffi::AnyBuffer eulers,
     ffi::AnyBuffer image,
     ffi::AnyBuffer translation_angles,
@@ -7215,7 +7339,7 @@ ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
     ffi::AnyBuffer full_to_compact,
     ffi::Result<ffi::AnyBuffer> output)
 {
-    if (projector_full.element_type() != ffi::DataType::C64 ||
+    if (projector_half.element_type() != ffi::DataType::C64 ||
         image.element_type() != ffi::DataType::C64)
         return ffi::Error::InvalidArgument(
             "RelionCoarseDiff2NativeTextureRectangularF32: projector/image must be C64");
@@ -7230,7 +7354,7 @@ ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
         return ffi::Error::InvalidArgument(
             "RelionCoarseDiff2NativeTextureRectangularF32: lookup must be S32");
 
-    const auto projector_dims = projector_full.dimensions();
+    const auto projector_dims = projector_half.dimensions();
     const auto euler_dims = eulers.dimensions();
     const auto image_dims = image.dimensions();
     const auto angle_dims = translation_angles.dimensions();
@@ -7238,12 +7362,14 @@ ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
     const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
-    const int64_t expected_full_pixels =
-        current_size * (current_size / 2 + 1);
-    if (current_size <= 0 || padding_factor <= 0 || projector_max_r <= 0 ||
-        projector_dims.size() != 3 || projector_dims[0] <= 0 ||
-        projector_dims[1] != projector_dims[0] ||
-        projector_dims[2] != projector_dims[0] ||
+    RelionHalfTextureGeometry geometry;
+    if (!validate_relion_half_texture_geometry(
+            current_size, padding_factor, projector_max_r, &geometry) ||
+        !std::isfinite(projector_scale) ||
+        projector_dims.size() != 3 ||
+        projector_dims[0] != geometry.projector_size ||
+        projector_dims[1] != geometry.projector_size ||
+        projector_dims[2] != geometry.projector_half_x ||
         euler_dims.size() != 2 || euler_dims[0] <= 0 ||
         euler_dims[1] != 9 || image_dims.size() != 2 ||
         image_dims[0] <= 0 || image_dims[1] <= 0 ||
@@ -7252,7 +7378,7 @@ ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
         weight_dims.size() != 2 || weight_dims[0] != image_dims[0] ||
         weight_dims[1] != image_dims[1] || initial_dims.size() != 1 ||
         initial_dims[0] != image_dims[0] || lookup_dims.size() != 1 ||
-        lookup_dims[0] != expected_full_pixels || output_dims.size() != 3 ||
+        lookup_dims[0] != geometry.image_pixels || output_dims.size() != 3 ||
         output_dims[0] != image_dims[0] ||
         output_dims[1] != euler_dims[0] ||
         output_dims[2] != angle_dims[0])
@@ -7268,7 +7394,7 @@ ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
     cudaError_t err =
         launch_relion_coarse_diff2_native_texture_rectangular_f32(
             stream,
-            reinterpret_cast<const float2*>(projector_full.untyped_data()),
+            reinterpret_cast<const float2*>(projector_half.untyped_data()),
             static_cast<const float*>(eulers.untyped_data()),
             reinterpret_cast<const float2*>(image.untyped_data()),
             static_cast<const float*>(translation_angles.untyped_data()),
@@ -7276,7 +7402,6 @@ ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
             static_cast<const float*>(initial_diff2.untyped_data()),
             static_cast<const int32_t*>(full_to_compact.untyped_data()),
             static_cast<float*>(output->untyped_data()),
-            projector_dims[0],
             image_dims[0],
             euler_dims[0],
             angle_dims[0],
@@ -7284,7 +7409,8 @@ ffi::Error RelionCoarseDiff2NativeTextureRectangularF32Impl(
             lookup_dims[0],
             static_cast<int>(current_size),
             static_cast<int>(padding_factor),
-            static_cast<int>(projector_max_r));
+            static_cast<int>(projector_max_r),
+            projector_scale);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
@@ -7299,6 +7425,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("current_size")
         .Attr<int64_t>("padding_factor")
         .Attr<int64_t>("projector_max_r")
+        .Attr<float>("projector_scale")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -7392,7 +7519,8 @@ ffi::Error RelionCoarseNormalizedCcNativeTexturePairsF32Impl(
     int64_t current_size,
     int64_t padding_factor,
     int64_t projector_max_r,
-    ffi::AnyBuffer projector_full,
+    float projector_scale,
+    ffi::AnyBuffer projector_half,
     ffi::AnyBuffer eulers,
     ffi::AnyBuffer unshifted_image,
     ffi::AnyBuffer translation_angles,
@@ -7402,7 +7530,7 @@ ffi::Error RelionCoarseNormalizedCcNativeTexturePairsF32Impl(
     ffi::AnyBuffer packed_to_compact,
     ffi::Result<ffi::AnyBuffer> output)
 {
-    if (projector_full.element_type() != ffi::DataType::C64 ||
+    if (projector_half.element_type() != ffi::DataType::C64 ||
         unshifted_image.element_type() != ffi::DataType::C64)
         return ffi::Error::InvalidArgument(
             "RelionCoarseNormalizedCcNativeTexturePairsF32: projector/image must be C64");
@@ -7418,7 +7546,7 @@ ffi::Error RelionCoarseNormalizedCcNativeTexturePairsF32Impl(
         return ffi::Error::InvalidArgument(
             "RelionCoarseNormalizedCcNativeTexturePairsF32: lookup must be S32");
 
-    const auto projector_dims = projector_full.dimensions();
+    const auto projector_dims = projector_half.dimensions();
     const auto euler_dims = eulers.dimensions();
     const auto image_dims = unshifted_image.dimensions();
     const auto angle_dims = translation_angles.dimensions();
@@ -7427,12 +7555,14 @@ ffi::Error RelionCoarseNormalizedCcNativeTexturePairsF32Impl(
     const auto half_weight_dims = half_weights.dimensions();
     const auto lookup_dims = packed_to_compact.dimensions();
     const auto output_dims = output->dimensions();
-    const int64_t expected_packed_pixels =
-        current_size * (current_size / 2 + 1);
-    if (current_size <= 0 || padding_factor <= 0 || projector_max_r <= 0 ||
-        projector_dims.size() != 3 || projector_dims[0] <= 0 ||
-        projector_dims[1] != projector_dims[0] ||
-        projector_dims[2] != projector_dims[0] ||
+    RelionHalfTextureGeometry geometry;
+    if (!validate_relion_half_texture_geometry(
+            current_size, padding_factor, projector_max_r, &geometry) ||
+        !std::isfinite(projector_scale) ||
+        projector_dims.size() != 3 ||
+        projector_dims[0] != geometry.projector_size ||
+        projector_dims[1] != geometry.projector_size ||
+        projector_dims[2] != geometry.projector_half_x ||
         euler_dims.size() != 2 || euler_dims[0] <= 0 ||
         euler_dims[1] != 9 || image_dims.size() != 2 ||
         image_dims[0] != euler_dims[0] || image_dims[1] <= 0 ||
@@ -7447,7 +7577,7 @@ ffi::Error RelionCoarseNormalizedCcNativeTexturePairsF32Impl(
         half_weight_dims.size() != 1 ||
         half_weight_dims[0] != image_dims[1] ||
         lookup_dims.size() != 1 ||
-        lookup_dims[0] != expected_packed_pixels ||
+        lookup_dims[0] != geometry.image_pixels ||
         output_dims.size() != 2 || output_dims[0] != image_dims[0] ||
         output_dims[1] != 3)
         return ffi::Error::InvalidArgument(
@@ -7459,7 +7589,7 @@ ffi::Error RelionCoarseNormalizedCcNativeTexturePairsF32Impl(
     cudaError_t err =
         launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
             stream,
-            reinterpret_cast<const float2*>(projector_full.untyped_data()),
+            reinterpret_cast<const float2*>(projector_half.untyped_data()),
             static_cast<const float*>(eulers.untyped_data()),
             reinterpret_cast<const float2*>(unshifted_image.untyped_data()),
             static_cast<const float*>(translation_angles.untyped_data()),
@@ -7468,13 +7598,13 @@ ffi::Error RelionCoarseNormalizedCcNativeTexturePairsF32Impl(
             static_cast<const float*>(half_weights.untyped_data()),
             static_cast<const int32_t*>(packed_to_compact.untyped_data()),
             static_cast<float*>(output->untyped_data()),
-            projector_dims[0],
             image_dims[0],
             image_dims[1],
             lookup_dims[0],
             static_cast<int>(current_size),
             static_cast<int>(padding_factor),
-            static_cast<int>(projector_max_r));
+            static_cast<int>(projector_max_r),
+            projector_scale);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
@@ -7489,6 +7619,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("current_size")
         .Attr<int64_t>("padding_factor")
         .Attr<int64_t>("projector_max_r")
+        .Attr<float>("projector_scale")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -7671,7 +7802,8 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
     int64_t current_size,
     int64_t padding_factor,
     int64_t projector_max_r,
-    ffi::AnyBuffer projector_full,
+    float projector_scale,
+    ffi::AnyBuffer projector_half,
     ffi::AnyBuffer eulers,
     ffi::AnyBuffer image,
     ffi::AnyBuffer translation_angles,
@@ -7680,7 +7812,7 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
     ffi::AnyBuffer full_to_compact,
     ffi::Result<ffi::AnyBuffer> output)
 {
-    if (projector_full.element_type() != ffi::DataType::C64 ||
+    if (projector_half.element_type() != ffi::DataType::C64 ||
         image.element_type() != ffi::DataType::C64)
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2NativeTextureRectangularF32: projector/image must be C64");
@@ -7695,7 +7827,7 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2NativeTextureRectangularF32: lookup must be S32");
 
-    const auto projector_dims = projector_full.dimensions();
+    const auto projector_dims = projector_half.dimensions();
     const auto euler_dims = eulers.dimensions();
     const auto image_dims = image.dimensions();
     const auto angle_dims = translation_angles.dimensions();
@@ -7703,12 +7835,14 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
     const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
-    const int64_t expected_full_pixels =
-        current_size * (current_size / 2 + 1);
-    if (current_size <= 0 || padding_factor <= 0 || projector_max_r <= 0 ||
-        projector_dims.size() != 3 || projector_dims[0] <= 0 ||
-        projector_dims[1] != projector_dims[0] ||
-        projector_dims[2] != projector_dims[0] ||
+    RelionHalfTextureGeometry geometry;
+    if (!validate_relion_half_texture_geometry(
+            current_size, padding_factor, projector_max_r, &geometry) ||
+        !std::isfinite(projector_scale) ||
+        projector_dims.size() != 3 ||
+        projector_dims[0] != geometry.projector_size ||
+        projector_dims[1] != geometry.projector_size ||
+        projector_dims[2] != geometry.projector_half_x ||
         euler_dims.size() != 4 || euler_dims[0] <= 0 ||
         euler_dims[1] <= 0 || euler_dims[2] != 3 || euler_dims[3] != 3 ||
         image_dims.size() != 2 || image_dims[0] != euler_dims[0] ||
@@ -7717,7 +7851,7 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
         weight_dims.size() != 2 || weight_dims[0] != image_dims[0] ||
         weight_dims[1] != image_dims[1] || initial_dims.size() != 1 ||
         initial_dims[0] != image_dims[0] || lookup_dims.size() != 1 ||
-        lookup_dims[0] != expected_full_pixels || output_dims.size() != 3 ||
+        lookup_dims[0] != geometry.image_pixels || output_dims.size() != 3 ||
         output_dims[0] != image_dims[0] ||
         output_dims[1] != euler_dims[1] ||
         output_dims[2] != angle_dims[0])
@@ -7734,7 +7868,7 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
     cudaError_t err =
         launch_relion_fine_diff2_native_texture_rectangular_f32(
             stream,
-            reinterpret_cast<const float2*>(projector_full.untyped_data()),
+            reinterpret_cast<const float2*>(projector_half.untyped_data()),
             static_cast<const float*>(eulers.untyped_data()),
             reinterpret_cast<const float2*>(image.untyped_data()),
             static_cast<const float*>(translation_angles.untyped_data()),
@@ -7742,7 +7876,6 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
             static_cast<const float*>(initial_diff2.untyped_data()),
             static_cast<const int32_t*>(full_to_compact.untyped_data()),
             static_cast<float*>(output->untyped_data()),
-            projector_dims[0],
             image_dims[0],
             euler_dims[1],
             angle_dims[0],
@@ -7750,7 +7883,8 @@ ffi::Error RelionFineDiff2NativeTextureRectangularF32Impl(
             lookup_dims[0],
             static_cast<int>(current_size),
             static_cast<int>(padding_factor),
-            static_cast<int>(projector_max_r));
+            static_cast<int>(projector_max_r),
+            projector_scale);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
@@ -7765,6 +7899,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("current_size")
         .Attr<int64_t>("padding_factor")
         .Attr<int64_t>("projector_max_r")
+        .Attr<float>("projector_scale")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

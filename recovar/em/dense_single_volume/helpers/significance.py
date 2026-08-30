@@ -15,7 +15,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
-from recovar.em.dense_single_volume.helpers.projection import compute_projections_block
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_projections_block,
+    select_relion_projector_half_for_class,
+)
 from recovar.em.dense_single_volume.helpers.scoring import (
     _e_step_block_scores,
     _e_step_block_scores_windowed,
@@ -778,7 +781,8 @@ def _maybe_dump_tree_rescore_batch(
     n_trans,
     half_weights,
     packed_to_compact,
-    projector_full,
+    projector_half,
+    projector_scale,
     current_size,
     padding_factor,
     projector_max_r,
@@ -843,7 +847,8 @@ def _maybe_dump_tree_rescore_batch(
             rotation_matrices=np.asarray(rotation_matrices[row], dtype=np.float32),
             half_weights=np.asarray(half_weights, dtype=np.float32),
             packed_to_compact=np.asarray(packed_to_compact, dtype=np.int32),
-            projector_full=np.asarray(projector_full, dtype=np.complex64),
+            projector_half=np.asarray(projector_half, dtype=np.complex64),
+            projector_scale=np.float32(projector_scale),
             current_size=np.int64(current_size),
             padding_factor=np.int64(padding_factor),
             projector_max_r=np.int64(projector_max_r),
@@ -2101,11 +2106,24 @@ def _compute_k_class_significance_batched(
     if use_relion_projector and relion_projector_r_max is None:
         raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
     if use_relion_projector:
-        relion_projector_half = jnp.asarray(relion_projector_half)
-        if relion_projector_half.ndim != 4 or int(relion_projector_half.shape[0]) != n_classes:
+        valid_singleton = relion_projector_half.ndim == 3 and n_classes == 1
+        valid_class_axis = (
+            relion_projector_half.ndim == 4
+            and int(relion_projector_half.shape[0]) == n_classes
+        )
+        if not (valid_singleton or valid_class_axis):
             raise ValueError(
                 "relion_projector_half must have shape "
-                f"({n_classes}, z, y, x_half), got {relion_projector_half.shape}",
+                f"({n_classes}, z, y, x_half), or (z, y, x_half) for K=1; "
+                f"got {relion_projector_half.shape}",
+            )
+        if n_classes == 1:
+            relion_projector_half = jnp.asarray(
+                select_relion_projector_half_for_class(
+                    relion_projector_half,
+                    0,
+                    1,
+                ),
             )
     if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
@@ -2270,7 +2288,8 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_score_active_mask = None
     coarse_gaussian_window_positions = None
     coarse_gaussian_powerclass = None
-    coarse_gaussian_projector_full = None
+    coarse_gaussian_projector_half = None
+    coarse_gaussian_projector_scale = None
     if coarse_gaussian_ffi_enabled:
         if n_classes != 1:
             raise ValueError(
@@ -2389,14 +2408,16 @@ def _compute_k_class_significance_batched(
                 ),
             )
         if coarse_gaussian_native_texture_enabled:
-            from recovar.em.dense_single_volume.helpers.projection import (
-                relion_projector_half_to_texture_full,
+            # Dropping a leading singleton class axis is a shape-only view.
+            # Keep Projector::data in its native half layout and let the CUDA
+            # texture-fill kernel apply the existing float32 dense scale.
+            coarse_gaussian_projector_half = select_relion_projector_half_for_class(
+                relion_projector_half,
+                0,
+                1,
             )
-
-            coarse_gaussian_projector_full = jnp.asarray(
-                relion_projector_half_to_texture_full(relion_projector_half[0])
-                * jnp.asarray(_dense_projection_scale(image_shape), dtype=jnp.float32),
-                dtype=jnp.complex64,
+            coarse_gaussian_projector_scale = float(
+                _dense_projection_scale(image_shape)
             )
             logger.warning(
                 "K=1 RELION native texture coarse scoring enabled (%s): "
@@ -2437,9 +2458,6 @@ def _compute_k_class_significance_batched(
                 "half-spectrum scoring",
             )
         from recovar import cuda_backproject
-        from recovar.em.dense_single_volume.helpers.projection import (
-            relion_projector_half_to_texture_full,
-        )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
@@ -2456,11 +2474,12 @@ def _compute_k_class_significance_batched(
                 f"{_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV} requires "
                 "the custom CUDA backend",
             )
-        coarse_gaussian_projector_full = jnp.asarray(
-            relion_projector_half_to_texture_full(relion_projector_half[0])
-            * jnp.asarray(_dense_projection_scale(image_shape), dtype=jnp.float32),
-            dtype=jnp.complex64,
+        coarse_gaussian_projector_half = select_relion_projector_half_for_class(
+            relion_projector_half,
+            0,
+            1,
         )
+        coarse_gaussian_projector_scale = float(_dense_projection_scale(image_shape))
         score_size = int(image_shape[0]) if current_size is None else int(current_size)
         score_indices_np = (
             np.arange(n_half, dtype=np.int32)
@@ -2614,6 +2633,11 @@ def _compute_k_class_significance_batched(
 
     def _project_block(class_index, mean_for_proj, rots_b):
         if use_relion_projector:
+            class_projector_half = select_relion_projector_half_for_class(
+                relion_projector_half,
+                class_index,
+                n_classes,
+            )
             projector_kwargs = {}
             if current_size is not None:
                 projector_kwargs["projector_output_size"] = int(current_size)
@@ -2621,7 +2645,7 @@ def _compute_k_class_significance_batched(
                 projector_kwargs["pixel_indices"] = projector_compact_indices
             if coarse_texture_interp:
                 proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
-                    relion_projector_half[class_index],
+                    class_projector_half,
                     rots_b,
                     image_shape,
                     r_max=int(relion_projector_r_max),
@@ -2633,7 +2657,7 @@ def _compute_k_class_significance_batched(
                 )
             else:
                 proj_half_b = _project_relion_projector_manual(
-                    relion_projector_half[class_index],
+                    class_projector_half,
                     rots_b,
                     image_shape,
                     int(relion_projector_r_max),
@@ -2658,7 +2682,7 @@ def _compute_k_class_significance_batched(
             from recovar import cuda_backproject
 
             diff2 = cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
-                coarse_gaussian_projector_full,
+                coarse_gaussian_projector_half,
                 jnp.asarray(rots_b, dtype=jnp.float32),
                 coarse_gaussian_unshifted_corrected,
                 coarse_gaussian_translation_angles,
@@ -2668,6 +2692,7 @@ def _compute_k_class_significance_batched(
                 int(image_shape[0]) if current_size is None else int(current_size),
                 int(projection_padding_factor),
                 int(relion_projector_r_max),
+                projector_scale=coarse_gaussian_projector_scale,
             )
             return -diff2
         proj_half_b, proj_abs2_half_b = _project_block(class_index, mean_for_proj, rots_b)
@@ -3548,7 +3573,8 @@ def _compute_k_class_significance_batched(
                     None,
                     half_weights_windowed if use_window else half_weights,
                     tree_rescore_fftw_order,
-                    projector_full=coarse_gaussian_projector_full,
+                    projector_half=coarse_gaussian_projector_half,
+                    projector_scale=coarse_gaussian_projector_scale,
                     rotation_matrices=candidate_rotations,
                     translation_angles=candidate_translation_angles,
                     current_size=score_size,
@@ -3586,7 +3612,8 @@ def _compute_k_class_significance_batched(
                         half_weights_windowed if use_window else half_weights
                     ),
                     packed_to_compact=tree_rescore_fftw_order,
-                    projector_full=coarse_gaussian_projector_full,
+                    projector_half=coarse_gaussian_projector_half,
+                    projector_scale=coarse_gaussian_projector_scale,
                     current_size=score_size,
                     padding_factor=projection_padding_factor,
                     projector_max_r=relion_projector_r_max,

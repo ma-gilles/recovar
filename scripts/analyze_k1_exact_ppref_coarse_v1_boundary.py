@@ -15,7 +15,6 @@ import numpy as np
 from recovar import cuda_backproject
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block,
-    relion_projector_half_to_texture_full,
 )
 from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -194,18 +193,13 @@ def analyze(
         np.asarray(recovar["translation_phase_source"], dtype=np.float64),
         (physical_image_size, physical_image_size),
     )
-    projector_full = np.asarray(
-        relion_projector_half_to_texture_full(jnp.asarray(ppref))
-        * jnp.asarray(
-            _dense_projection_scale((physical_image_size, physical_image_size)),
-            dtype=jnp.float32,
-        ),
-        dtype=np.complex64,
+    projector_scale = float(
+        _dense_projection_scale((physical_image_size, physical_image_size))
     )
     native_texture_diff2 = np.asarray(
         jax.block_until_ready(
             cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
-                jnp.asarray(projector_full),
+                jnp.asarray(ppref, dtype=jnp.complex64),
                 jnp.asarray(rotations),
                 jnp.asarray(unshifted[None]),
                 jnp.asarray(translation_angles, dtype=jnp.float32),
@@ -215,6 +209,7 @@ def analyze(
                 current_size,
                 2,
                 int(ppref_metadata["r_max"]),
+                projector_scale=projector_scale,
             )[0]
         ),
         dtype=np.float32,
@@ -253,7 +248,7 @@ def analyze(
     model_window_texture_diff2 = np.asarray(
         jax.block_until_ready(
             cuda_backproject.relion_coarse_diff2_native_texture_rectangular_f32(
-                jnp.asarray(projector_full),
+                jnp.asarray(ppref, dtype=jnp.complex64),
                 jnp.asarray(rotations),
                 jnp.asarray(unshifted[model_window_subset][None]),
                 jnp.asarray(translation_angles, dtype=jnp.float32),
@@ -263,6 +258,7 @@ def analyze(
                 projector_size,
                 2,
                 int(ppref_metadata["r_max"]),
+                projector_scale=projector_scale,
             )[0]
         ),
         dtype=np.float32,

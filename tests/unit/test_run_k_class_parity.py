@@ -454,7 +454,7 @@ def test_k_class_replay_uses_exact_relion_projector_for_scoring():
     assert "projection_padding_factor=args.projection_padding_factor" in source
     assert "relion_projector_half=relion_projector_half_by_class" in source
     assert "relion_projector_r_max=relion_projector_r_max" in source
-    assert "relion_projector_half=relion_projector_half_by_class[class_index]" in source
+    assert "relion_projector_half=select_relion_projector_half_for_class(" in source
 
 
 def test_relion_adaptive_coarse_image_size_matches_replay_case8():

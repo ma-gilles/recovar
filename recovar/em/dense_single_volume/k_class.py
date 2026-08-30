@@ -17,6 +17,9 @@ from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
 from .helpers.half_volume_mstep import relion_backprojector_volume_shape
+from .helpers.projection import (
+    select_relion_projector_half_for_class as _select_projector_half_for_class,
+)
 from .helpers.significance import ComplementSignificantSampleIndices, significant_sample_count
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
@@ -484,15 +487,6 @@ def _select_class_value(value, class_index: int, n_classes: int):
     return value
 
 
-def _select_projector_half_for_class(value, class_index: int, n_classes: int):
-    if value is None:
-        return None
-    value_array = jnp.asarray(value)
-    if value_array.ndim >= 4 and int(value_array.shape[0]) == n_classes:
-        return value_array[class_index]
-    return value
-
-
 def _select_required_class_value(value, class_index: int, n_classes: int, name: str):
     value_array = jnp.asarray(value)
     if value_array.ndim < 2 or int(value_array.shape[0]) != n_classes:
@@ -577,9 +571,11 @@ def _local_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
     kwargs["include_unweighted_norm_high_shell"] = class_index == 0
     projector_half = kwargs.get("relion_projector_half")
     if projector_half is not None:
-        projector_half_arr = jnp.asarray(projector_half)
-        if projector_half_arr.ndim >= 4 and int(projector_half_arr.shape[0]) == n_classes:
-            kwargs["relion_projector_half"] = projector_half_arr[class_index]
+        kwargs["relion_projector_half"] = _select_projector_half_for_class(
+            projector_half,
+            class_index,
+            n_classes,
+        )
     scale_dvp = kwargs.get("scale_correction_data_vs_prior")
     if scale_dvp is not None:
         kwargs["scale_correction_data_vs_prior"] = _select_class_value(
