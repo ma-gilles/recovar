@@ -18,12 +18,12 @@ Frozen case-definition SHA-256:
 
 | Question | Current answer |
 |---|---|
-| What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. The speed-neutral posterior batching, coarse-bookkeeping fusion, and raw-image cache probes are reverted at `274e4062d`. |
-| What is running now? | No speed job. The exact-control raw-cache discriminator was stopped after its iteration-20 decision; the next job will start from the reverted accepted path. |
+| What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. Posterior batching, coarse-bookkeeping fusion, raw-image caching, and compact BPref tail launches are rejected speed probes and are reverted. |
+| What is running now? | No speed job. Compact BPref launch counts completed their exact same-H100 iteration-20 decision and are being reverted as speed-negative. |
 | Did the latest short gate improve? | No. The provisional unprofiled **178 s** result was confounded by a different CUDA build/flag set. With the control's exact CUDA SHA, pixi interpreter, performance flags, physical H100, and profiling, cumulative pre-artifact time is **172.20 s** versus **169.40 s** (`+1.7%`, worse). All four native audits still have zero divergent particles through iteration 20. |
 | Where is correctness stuck? | The frozen v3 K=1 score is still **2/20 complete strict trajectories**. Long-run controller/map drift, not fixed-state scorer arithmetic, remains the correctness boundary. |
 | Where is speed stuck? | Warm expectation remains dominant. The cached path removes repeated file reads, but pass 1, exact-local pass 2, current-size executable churn, and ordered BPref work remain much larger than the outer VDAM M-step. |
-| What happens next? | Profile the reverted accepted path and reuse EM's static-shape/big-JIT scheduling where exact ordering permits. Do not retry raw caching, posterior batching, coarse bookkeeping fusion, or local-bucket unification on GF46. |
+| What happens next? | Keep the accepted source-faithful BPref topology and target exact-local pass-2 executable/current-size shape churn using EM's static-shape/big-JIT scheduling. Do not retry raw caching, posterior batching, coarse bookkeeping fusion, local-bucket unification, or padded BPref tail compaction on GF46. |
 
 #### Current speed decision ledger
 
@@ -33,6 +33,7 @@ Frozen case-definition SHA-256:
 | Batch posterior rows (`4c4163239`) | 7/7 exact | 20/20 short; first 80-step misses at `33/33/33/23` | **183 s / 664 s** | 🔴 reverted: slower at 80 |
 | Exact coarse pass-1 bookkeeping fusion (`832d043d9`) | bitwise | 20/20 against four repeats | **184 s** at 20 | 🔴 reverted: speed-neutral |
 | Shared mature-EM raw-image cache (`9cb34ddf2`) | 4/4 focused CPU | 20/20 against four repeats | exact-control profiled pre-artifact **172.20 s** vs **169.40 s** | 🔴 reverted by `274e4062d`: `+1.7%` slower |
+| EM significant-row compact BPref launch counts (`9c17c6024 / dd33cf053`) | CPU **25/25**; H100 shortened-grid buffers byte-exact **3/3** | particle **4 x 20/20**; maps **4 x 20/20**, minimum FSC-AUC `0.999999999782` | **191 s** vs **182 s**; pre-artifact **176.36 s** vs **168.18 s** | 🔴 rejected: `+4.9%` pre-artifact, BPref unchanged |
 
 Raw-cache discriminator `13191733` used the control CUDA binary SHA-256
 `47b51660a0fbd991f862ee1054ea756f3a1cc65ceb1275eaf2fcb74dc3d038f6`,
@@ -41,6 +42,24 @@ the exact control performance flags/interpreter, and physical H100
 iteration 27 once the iteration-20 performance decision was available. The
 four through-20 audit reports and profiled metadata are retained under
 `/scratch/gpfs/GILLES/mg6942/vdam_runs/vdam_gf46_shared_raw_cache80_retry5_exact_control_9cb34ddf2_20260830`.
+
+Compact-launch H100 gate `13192276` proves byte-exact equivalence between the
+full zero-padded and shortened per-particle VDAM grids; its CUDA binary SHA-256
+is `2a5f4facaed8...`. Exact-control GF46 job `13192408` used the same physical
+H100 `GPU-ef985070...`, qualified CUDA binary `47b51660...`, pixi interpreter,
+profile flags, and fixture as the 182-second denominator-only control. All four
+native particle audits have zero divergent particles through iteration 20;
+all four 20-checkpoint map audits pass, with minimum FSC-AUC
+`0.999999999782`. The science wall is **191 s**, pre-artifact time is
+**176.36 s** versus **168.18 s**, pass 1 is `19.40 s` versus `17.86 s`, pass 2
+is `145.95 s` versus `140.00 s`, and halfset-0 BPref is `35.68 s` versus
+`35.15 s`. The feature therefore removes logical padding without removing the
+dominant work and is rejected as a speed path. Setup job `13192338` failed
+closed before iteration 1 because compact counts initially shared the captured
+chronology variable; `dd33cf053` separates those identities and adds the
+regression guard. Broad precursor gate `13192228` passed the relevant GPU test
+but failed an unrelated stale source-string assertion; it is superseded by the
+isolated clean gate.
 
 ### Latest exact-oracle speed discriminator (2026-08-29)
 
