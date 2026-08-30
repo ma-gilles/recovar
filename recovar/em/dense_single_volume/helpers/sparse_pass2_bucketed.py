@@ -253,6 +253,7 @@ _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
 )
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
+_RELION_WAVG_SEQUENTIAL_CUDA_ENV = "RECOVAR_K1_RELION_WAVG_SEQUENTIAL_CUDA"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
 _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
     "RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET"
@@ -5031,7 +5032,7 @@ def _relion_wavg_atomic_triplet_terms(
 
 
 @jax.jit
-def _relion_wavg_sequential_triplet_terms(
+def _relion_wavg_sequential_triplet_terms_jax(
     proj,
     raw_ctf,
     scale,
@@ -5117,6 +5118,41 @@ def _relion_wavg_sequential_triplet_terms(
     xa = (xa_raw / safe_scale[:, None, None]).astype(jnp.float32)
     aa = (aa_raw / (safe_scale[:, None, None] ** 2)).astype(jnp.float32)
     return jnp.stack((xa, aa, diff2), axis=-1)
+
+
+def _relion_wavg_sequential_triplet_terms(
+    proj,
+    raw_ctf,
+    scale,
+    raw_shifted_images,
+    posterior,
+):
+    """Dispatch the shared Wavg translation-order reduction.
+
+    The CUDA path is an explicit performance discriminator.  It keeps the
+    same image/rotation/pixel ownership and sequential translation arithmetic
+    as the JAX reference while avoiding one XLA loop-body launch per
+    translation.  Both local EM and VDAM reach this helper through the shared
+    exact-local pass-2 implementation.
+    """
+
+    if _env_flag_enabled(_RELION_WAVG_SEQUENTIAL_CUDA_ENV, default=False):
+        from recovar import cuda_backproject
+
+        return cuda_backproject.relion_wavg_sequential_triplet_f32(
+            jnp.asarray(proj, dtype=jnp.complex64),
+            jnp.asarray(raw_ctf, dtype=jnp.float32),
+            jnp.asarray(scale, dtype=jnp.float32).reshape(-1),
+            jnp.asarray(raw_shifted_images, dtype=jnp.complex64),
+            jnp.asarray(posterior, dtype=jnp.float32),
+        )
+    return _relion_wavg_sequential_triplet_terms_jax(
+        proj,
+        raw_ctf,
+        scale,
+        raw_shifted_images,
+        posterior,
+    )
 
 
 def _replace_low_shell_noise_with_relion_wavg_direct_residual(

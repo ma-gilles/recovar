@@ -298,6 +298,45 @@ def test_wavg_sequential_triplet_matches_relion_translation_loop():
     np.testing.assert_array_equal(result, expected)
 
 
+def test_wavg_sequential_triplet_cuda_dispatch_is_explicit(monkeypatch):
+    from recovar import cuda_backproject
+
+    projections = jnp.ones((1, 2, 3), dtype=jnp.complex64)
+    raw_ctf = jnp.ones((1, 3), dtype=jnp.float32)
+    scale = jnp.ones((1,), dtype=jnp.float32)
+    shifted = jnp.ones((1, 4, 3), dtype=jnp.complex64)
+    posterior = jnp.ones((1, 2, 4), dtype=jnp.float32)
+    sentinel = jnp.arange(18, dtype=jnp.float32).reshape(1, 2, 3, 3)
+    captured = {}
+
+    def fake_cuda(*operands):
+        captured["shapes"] = tuple(value.shape for value in operands)
+        return sentinel
+
+    monkeypatch.setenv("RECOVAR_K1_RELION_WAVG_SEQUENTIAL_CUDA", "1")
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_wavg_sequential_triplet_f32",
+        fake_cuda,
+    )
+    actual = _relion_wavg_sequential_triplet_terms(
+        projections,
+        raw_ctf,
+        scale,
+        shifted,
+        posterior,
+    )
+
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(sentinel))
+    assert captured["shapes"] == (
+        (1, 2, 3),
+        (1, 3),
+        (1,),
+        (1, 4, 3),
+        (1, 2, 4),
+    )
+
+
 def test_direct_wavg_residual_replaces_only_complete_low_shells():
     residual = np.asarray([100.0, 200.0, 300.0, 400.0])
     image_power = np.asarray([10.0, 20.0, 30.0, 40.0])

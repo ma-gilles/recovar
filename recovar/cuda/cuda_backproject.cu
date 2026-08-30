@@ -2360,6 +2360,105 @@ cudaError_t launch_relion_wavg_rotation_atomic_triplet_add_f32(
     return cudaGetLastError();
 }
 
+/* Keep RELION's per-rotation, per-pixel Wavg translation reduction inside one
+ * CUDA thread.  The corresponding JAX reference deliberately uses a
+ * translation-order fori_loop; lowering that loop emits multiple loop-body
+ * kernel launches for every local-search bucket.  Explicit round-to-nearest
+ * operations here retain the same non-contracted float32 arithmetic. */
+__global__ void __launch_bounds__(256)
+relion_wavg_sequential_triplet_f32_kernel(
+    const float2* __restrict__ projections,
+    const float* __restrict__ raw_ctf,
+    const float* __restrict__ scale,
+    const float2* __restrict__ shifted_images,
+    const float* __restrict__ posterior,
+    float* __restrict__ output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count)
+{
+    const int64_t output_row =
+        static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int64_t output_count = batch_size * rotation_count * pixel_count;
+    if (output_row >= output_count) return;
+
+    const int64_t pixel = output_row % pixel_count;
+    const int64_t batch_rotation = output_row / pixel_count;
+    const int64_t rotation = batch_rotation % rotation_count;
+    const int64_t batch = batch_rotation / rotation_count;
+    const float batch_scale = scale[batch];
+    const float ctf_with_scale = __fmul_rn(
+        raw_ctf[batch * pixel_count + pixel], batch_scale);
+    const float2 projection = projections[output_row];
+    const float ref_real = __fmul_rn(projection.x, ctf_with_scale);
+    const float ref_imag = __fmul_rn(projection.y, ctf_with_scale);
+    const float ref_abs2 = __fadd_rn(
+        __fmul_rn(ref_real, ref_real),
+        __fmul_rn(ref_imag, ref_imag));
+
+    float xa_raw = 0.0f;
+    float aa_raw = 0.0f;
+    float diff2 = 0.0f;
+    const int64_t posterior_base =
+        (batch * rotation_count + rotation) * translation_count;
+    const int64_t shifted_base = batch * translation_count * pixel_count;
+    for (int64_t translation = 0; translation < translation_count; ++translation)
+    {
+        const float weight = posterior[posterior_base + translation];
+        const float2 translated = shifted_images[
+            shifted_base + translation * pixel_count + pixel];
+        const float diff_real = __fsub_rn(ref_real, translated.x);
+        const float diff_imag = __fsub_rn(ref_imag, translated.y);
+        const float diff_abs2 = __fadd_rn(
+            __fmul_rn(diff_real, diff_real),
+            __fmul_rn(diff_imag, diff_imag));
+        const float cross = __fadd_rn(
+            __fmul_rn(ref_real, translated.x),
+            __fmul_rn(ref_imag, translated.y));
+        xa_raw = __fadd_rn(xa_raw, __fmul_rn(weight, cross));
+        aa_raw = __fadd_rn(aa_raw, __fmul_rn(weight, ref_abs2));
+        diff2 = __fadd_rn(diff2, __fmul_rn(weight, diff_abs2));
+    }
+
+    const float safe_scale = fmaxf(batch_scale, 1.0e-30f);
+    const int64_t output_base = output_row * 3;
+    output[output_base] = __fmul_rn(xa_raw, __frcp_rn(safe_scale));
+    output[output_base + 1] = __fmul_rn(
+        aa_raw, __frcp_rn(__fmul_rn(safe_scale, safe_scale)));
+    output[output_base + 2] = diff2;
+}
+
+cudaError_t launch_relion_wavg_sequential_triplet_f32(
+    cudaStream_t stream,
+    const float2* projections,
+    const float* raw_ctf,
+    const float* scale,
+    const float2* shifted_images,
+    const float* posterior,
+    float* output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count)
+{
+    const int64_t output_count = batch_size * rotation_count * pixel_count;
+    if (output_count == 0) return cudaSuccess;
+    const int blocks = static_cast<int>((output_count + 255) / 256);
+    relion_wavg_sequential_triplet_f32_kernel<<<blocks, 256, 0, stream>>>(
+        projections,
+        raw_ctf,
+        scale,
+        shifted_images,
+        posterior,
+        output,
+        batch_size,
+        rotation_count,
+        translation_count,
+        pixel_count);
+    return cudaGetLastError();
+}
+
 template <bool HALF_IMG>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_texture_double_kernel(
@@ -12575,6 +12674,91 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionWavgRotationAtomicTripletAddF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionWavgSequentialTripletF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer projections,
+    ffi::AnyBuffer raw_ctf,
+    ffi::AnyBuffer scale,
+    ffi::AnyBuffer shifted_images,
+    ffi::AnyBuffer posterior,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (projections.element_type() != ffi::DataType::C64 ||
+        raw_ctf.element_type() != ffi::DataType::F32 ||
+        scale.element_type() != ffi::DataType::F32 ||
+        shifted_images.element_type() != ffi::DataType::C64 ||
+        posterior.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialTripletF32: expected C64 projections/shifted "
+            "images and F32 CTF/scale/posterior/output");
+
+    const auto projection_dims = projections.dimensions();
+    const auto ctf_dims = raw_ctf.dimensions();
+    const auto scale_dims = scale.dimensions();
+    const auto shifted_dims = shifted_images.dimensions();
+    const auto posterior_dims = posterior.dimensions();
+    const auto output_dims = output->dimensions();
+    if (projection_dims.size() != 3 || ctf_dims.size() != 2 ||
+        scale_dims.size() != 1 || shifted_dims.size() != 3 ||
+        posterior_dims.size() != 3 || output_dims.size() != 4 ||
+        output_dims[3] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialTripletF32: expected projections[B,R,P], "
+            "CTF[B,P], scale[B], shifted[B,T,P], posterior[B,R,T], and "
+            "output[B,R,P,3]");
+
+    const int64_t batch_size = projection_dims[0];
+    const int64_t rotation_count = projection_dims[1];
+    const int64_t pixel_count = projection_dims[2];
+    const int64_t translation_count = shifted_dims[1];
+    if (batch_size <= 0 || rotation_count <= 0 || translation_count <= 0 ||
+        pixel_count <= 0 ||
+        ctf_dims[0] != batch_size || ctf_dims[1] != pixel_count ||
+        scale_dims[0] != batch_size ||
+        shifted_dims[0] != batch_size || shifted_dims[2] != pixel_count ||
+        posterior_dims[0] != batch_size ||
+        posterior_dims[1] != rotation_count ||
+        posterior_dims[2] != translation_count ||
+        output_dims[0] != batch_size ||
+        output_dims[1] != rotation_count ||
+        output_dims[2] != pixel_count)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialTripletF32: input/output dimensions do not match");
+
+    const int64_t output_count = batch_size * rotation_count * pixel_count;
+    if (output_count > static_cast<int64_t>(std::numeric_limits<int>::max()) * 256)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialTripletF32: output exceeds CUDA grid bounds");
+    cudaError_t err = launch_relion_wavg_sequential_triplet_f32(
+        stream,
+        reinterpret_cast<const float2*>(projections.untyped_data()),
+        static_cast<const float*>(raw_ctf.untyped_data()),
+        static_cast<const float*>(scale.untyped_data()),
+        reinterpret_cast<const float2*>(shifted_images.untyped_data()),
+        static_cast<const float*>(posterior.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        batch_size,
+        rotation_count,
+        translation_count,
+        pixel_count);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgSequentialTripletF32,
+    RelionWavgSequentialTripletF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>());

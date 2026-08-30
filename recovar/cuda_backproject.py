@@ -583,6 +583,9 @@ _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32 = (
     "cuda_relion_wavg_rotation_atomic_triplet_add_f32"
 )
+_TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32 = (
+    "cuda_relion_wavg_sequential_triplet_f32"
+)
 _TARGET_DUAL_WEIGHTED_SUMS_F32 = "cuda_dual_weighted_sums_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
@@ -683,6 +686,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
         "RelionWavgRotationAtomicTripletAddF32",
+    ),
+    (
+        _TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32,
+        "RelionWavgSequentialTripletF32",
     ),
     (_TARGET_DUAL_WEIGHTED_SUMS_F32, "DualWeightedSumsF32"),
 )
@@ -4031,6 +4038,79 @@ def relion_wavg_rotation_atomic_triplet_add_f32(
         input_output_aliases={1: 0},
         vmap_method="sequential",
     )(terms, accumulator)
+
+
+@jax.jit
+def relion_wavg_sequential_triplet_f32(
+    projections: jax.Array,
+    raw_ctf: jax.Array,
+    scale: jax.Array,
+    shifted_images: jax.Array,
+    posterior: jax.Array,
+) -> jax.Array:
+    """Accumulate RELION Wavg triplets in translation-storage order.
+
+    One CUDA thread owns one ``[image, rotation, pixel]`` output and visits
+    translations sequentially.  This preserves the float32 arithmetic and
+    ordering of RELION's Wavg loop without lowering the translation loop to a
+    sequence of separate XLA loop-body kernel launches.
+    """
+
+    _ensure_ffi()
+    projections = jnp.asarray(projections)
+    raw_ctf = jnp.asarray(raw_ctf)
+    scale = jnp.asarray(scale)
+    shifted_images = jnp.asarray(shifted_images)
+    posterior = jnp.asarray(posterior)
+    if projections.dtype != jnp.complex64 or projections.ndim != 3:
+        raise ValueError(
+            "relion_wavg_sequential_triplet_f32 expects complex64 "
+            "projections[B,R,P]"
+        )
+    batch_size, rotation_count, pixel_count = projections.shape
+    if raw_ctf.dtype != jnp.float32 or raw_ctf.shape != (batch_size, pixel_count):
+        raise ValueError(
+            "relion_wavg_sequential_triplet_f32 expects float32 raw_ctf[B,P]"
+        )
+    if scale.dtype != jnp.float32 or scale.shape != (batch_size,):
+        raise ValueError(
+            "relion_wavg_sequential_triplet_f32 expects float32 scale[B]"
+        )
+    if shifted_images.dtype != jnp.complex64 or shifted_images.ndim != 3:
+        raise ValueError(
+            "relion_wavg_sequential_triplet_f32 expects complex64 "
+            "shifted_images[B,T,P]"
+        )
+    if shifted_images.shape[0] != batch_size or shifted_images.shape[2] != pixel_count:
+        raise ValueError(
+            "relion_wavg_sequential_triplet_f32 shifted-image batch/pixel axes "
+            "must match projections"
+        )
+    translation_count = shifted_images.shape[1]
+    if posterior.dtype != jnp.float32 or posterior.shape != (
+        batch_size,
+        rotation_count,
+        translation_count,
+    ):
+        raise ValueError(
+            "relion_wavg_sequential_triplet_f32 expects float32 posterior[B,R,T]"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION Wavg sequential accumulation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION Wavg sequential accumulation was requested but custom CUDA is disabled"
+        )
+
+    output_type = jax.ShapeDtypeStruct(
+        (batch_size, rotation_count, pixel_count, 3),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32,
+        output_type,
+        vmap_method="sequential",
+    )(projections, raw_ctf, scale, shifted_images, posterior)
 
 
 @jax.jit

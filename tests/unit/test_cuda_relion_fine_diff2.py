@@ -909,6 +909,54 @@ def test_relion_powerclass_highres_matches_single_block_tree_bitwise(
     )
 
 
+@pytest.mark.gpu
+def test_relion_wavg_sequential_triplet_matches_jax_loop_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_wavg_sequential_triplet_terms_jax,
+    )
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(47)
+    batch_size, rotation_count, translation_count, pixel_count = 3, 7, 11, 37
+    projections = (
+        rng.normal(0.0, 0.8, (batch_size, rotation_count, pixel_count))
+        + 1j * rng.normal(0.0, 0.8, (batch_size, rotation_count, pixel_count))
+    ).astype(np.complex64)
+    raw_ctf = rng.normal(0.0, 0.7, (batch_size, pixel_count)).astype(np.float32)
+    scale = rng.uniform(0.25, 2.0, batch_size).astype(np.float32)
+    shifted = (
+        rng.normal(0.0, 1.1, (batch_size, translation_count, pixel_count))
+        + 1j * rng.normal(0.0, 1.1, (batch_size, translation_count, pixel_count))
+    ).astype(np.complex64)
+    posterior = rng.uniform(
+        0.0,
+        1.0,
+        (batch_size, rotation_count, translation_count),
+    ).astype(np.float32)
+    posterior[:, :, ::5] = 0.0
+
+    with jax.default_device(gpu_device):
+        operands = tuple(
+            jnp.asarray(value)
+            for value in (projections, raw_ctf, scale, shifted, posterior)
+        )
+        expected = _relion_wavg_sequential_triplet_terms_jax(*operands)
+        actual = cuda_backproject.relion_wavg_sequential_triplet_f32(*operands)
+        expected, actual = jax.block_until_ready((expected, actual))
+
+    np.testing.assert_array_equal(
+        np.asarray(actual).view(np.uint32),
+        np.asarray(expected).view(np.uint32),
+    )
+
+
 @pytest.mark.parametrize(
     "function_name",
     ["relion_fine_diff2_rectangular_f32", "relion_fine_diff2_pairs_f32"],
