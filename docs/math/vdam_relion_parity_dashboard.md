@@ -36,7 +36,7 @@ Frozen case-definition SHA-256:
 | Persistent rotations + ordered warp coalescing (`9265597b7`) | focused source + H100 gate green | **277 s** through 20 | direct particle envelope **20/20** | 🔴 exact smoke, slower than 204 s arm |
 | Persistent rotations + labeled fixed-tree reduction (`77d9ed01a`) | focused source + H100 gate green | **66.7 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than fixed-warp launches |
 | Shared EM native-texture coarse scorer (`ecab47c05`) | direct particle envelope **20/20** | **207 s** through 20; **1,038 s** through 80 | order-3 pass 1 remains **240.5 s** at 61--80 | 🔴 only 13.6% faster through 80; does not close late coarse cost |
-| Exact native-texture reference cache (`85536d695`) | CUDA direct/cached score **bitwise** | 20-iteration science job `13178326` | one shared projection per orientation grid; unchanged EM fused-translation scorer | 🟡 active speed/parity gate |
+| Exact native-texture reference cache (`85536d695`) | CUDA direct/cached score **bitwise**; particle **20/20** | **209 s** through 20; profile80 job `13178973` | audit SHA-256 `aa18c10d1d26...`; unchanged EM fused-translation scorer | 🟡 order-3 speed gate active |
 | Shared EM unified local bucket shapes (`ecab47c05`) | direct particle envelope **20/20** | **208 s** through 20 | audit SHA-256 `7d38a268864...` | 🔴 inert on GF46; buckets were already unified |
 
 Nsight job `13168898` profiles the persistent-scratch arm after allocator
@@ -262,9 +262,16 @@ native-texture reference once per orientation grid, then feeds the existing EM
 fused-translation scorer for each image batch. H100 build/GPU gate `13178026`
 proves direct native-texture versus cached projection/scoring output is bitwise
 identical; three focused source/flag/fail-closed tests also pass. The cache is
-explicit opt-in and guarded by a 48 GiB cache-plus-score budget. GF46
-20-iteration parity/runtime job `13178326` is the active science gate; no
-default change or long allocation is made before that trajectory passes.
+explicit opt-in and guarded by a 48 GiB cache-plus-score budget. The first
+submission `13178326` stops before science because the isolated worktree lacks
+the qualified local RELION-binding artifact. Corrected GF46 job `13178575`
+completes through iteration 20 in **209 s** and passes all **20/20** direct
+particle checkpoints against the four native repeats (audit SHA-256
+`aa18c10d1d26...`). Its expectation time is **190.9 s**, statistically tied
+with the direct native-texture arm's **189.0 s**, so projection reuse is not a
+low-order speed win. The order-3 profile job `13178973` is the bounded scaling
+discriminator; no default change or full-trajectory allocation is made before
+that result.
 
 The second test enables EM's shared local-bucket unification. Job `13177559`
 also passes all 20 direct particle checkpoints (report SHA-256
