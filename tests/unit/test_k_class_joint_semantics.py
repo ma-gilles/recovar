@@ -15,10 +15,14 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_translation_angles_f32,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.iteration_loop import (
+    _build_firstiter_cc_pass2_grids,
+    _combine_optional_half_accumulators,
+)
 from recovar.em.dense_single_volume.k_class import (
-    _ClassFineGridSignificanceMask,
     _assemble_result,
     _build_fine_grid_significance_mask,
+    _ClassFineGridSignificanceMask,
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
     _expand_subset_noise_stats,
@@ -29,10 +33,6 @@ from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
-)
-from recovar.em.dense_single_volume.iteration_loop import (
-    _build_firstiter_cc_pass2_grids,
-    _combine_optional_half_accumulators,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
@@ -918,6 +918,121 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
     assert calls[0]["translation_phase_source"] is phase_source
     np.testing.assert_array_equal(result.class_assignments, np.asarray([1, 0, 1], dtype=np.int32))
     np.testing.assert_array_equal(result.per_class_hard_assignments, np.asarray([[4, 5, 6], [7, 8, 9]], dtype=np.int32))
+
+
+@pytest.mark.parametrize("texture_interp", [True, False])
+def test_firstiter_score_probe_compacts_relion_projector_on_host(
+    monkeypatch,
+    caplog,
+    texture_interp,
+):
+    from recovar.em.dense_single_volume.helpers import significance as significance_module
+
+    calls = []
+
+    class TinyDataset:
+        n_units = 2
+        image_shape = (16, 16)
+
+    def fake_compute_significance(*args, **kwargs):
+        calls.append(kwargs)
+        return (
+            None,
+            None,
+            None,
+            np.zeros(TinyDataset.n_units, dtype=np.int32),
+            None,
+            {
+                "class_log_evidence_per_image": np.zeros((1, TinyDataset.n_units)),
+                "class_hard_assignments": np.zeros((1, TinyDataset.n_units), dtype=np.int32),
+                "class_best_log_score_per_image": np.zeros(
+                    (1, TinyDataset.n_units),
+                    dtype=np.float32,
+                ),
+                "class_assignments": np.zeros(TinyDataset.n_units, dtype=np.int32),
+            },
+        )
+
+    monkeypatch.setattr(
+        significance_module,
+        "_compute_k_class_significance_batched",
+        fake_compute_significance,
+    )
+    caplog.set_level("INFO", logger=k_class_module.__name__)
+    padding_factor = 2
+    projector_r_max = 6
+    padded_r_max = padding_factor * projector_r_max
+    projector_size = 2 * (padded_r_max + 1) + 1
+    projector = np.arange(
+        projector_size * projector_size * (padded_r_max + 2),
+        dtype=np.float32,
+    ).reshape(1, projector_size, projector_size, padded_r_max + 2).astype(np.complex64)
+
+    k_class_module._run_dense_k_class_score_probe(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(1, dtype=jnp.float32),
+        np.zeros((1, 3, 3), dtype=np.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        "linear_interp",
+        class_log_priors=np.zeros(1, dtype=np.float64),
+        relion_firstiter_score_mode="normalized_cc",
+        relion_firstiter_winner_take_all=True,
+        current_size=6,
+        half_spectrum_scoring=True,
+        projection_padding_factor=padding_factor,
+        coarse_relion_projector_texture_interp=texture_interp,
+        relion_projector_half=projector,
+        relion_projector_r_max=projector_r_max,
+    )
+
+    assert len(calls) == 1
+    compact = calls[0]["relion_projector_half"]
+    if not texture_interp:
+        assert compact is projector
+        assert calls[0]["relion_projector_r_max"] == projector_r_max
+        assert "RELION firstiter-CC coarse PPref host compaction" not in caplog.text
+        return
+    assert isinstance(compact, np.ndarray)
+    assert compact.flags.c_contiguous
+    assert not np.shares_memory(compact, projector)
+    # The 6x4 normalized-CC square reaches (ky, kx)=(3, 3), whose
+    # radius-squared is 18.  The strict enclosing integer radius is 5.
+    assert calls[0]["relion_projector_r_max"] == 5
+    assert compact.shape == (23, 23, 12)
+    np.testing.assert_array_equal(compact, projector[0, 2:25, 2:25, :12])
+    assert projector.shape == (1, 27, 27, 14)
+    assert (
+        "RELION firstiter-CC coarse PPref host compaction: "
+        "r_max=6->5 shape=(27, 27, 14)->(23, 23, 12)"
+    ) in caplog.text
+
+
+def test_relion_projector_compaction_rejects_post_transfer_jax_array():
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compact_relion_projector_half_for_centered_indices,
+    )
+
+    projector = jnp.zeros((27, 27, 14), dtype=jnp.complex64)
+    with pytest.raises(TypeError, match="NumPy host array"):
+        compact_relion_projector_half_for_centered_indices(
+            projector,
+            np.asarray([8 * 9 + 3], dtype=np.int32),
+            (16, 16),
+            r_max=6,
+            padding_factor=2,
+        )
+    projector_host = np.zeros((27, 27, 14), dtype=np.complex64)
+    for invalid_image_shape in ((15, 16), (16, 14)):
+        with pytest.raises(ValueError, match="positive even square"):
+            compact_relion_projector_half_for_centered_indices(
+                projector_host,
+                np.asarray([0], dtype=np.int32),
+                invalid_image_shape,
+                r_max=6,
+                padding_factor=2,
+            )
 
 
 def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypatch):

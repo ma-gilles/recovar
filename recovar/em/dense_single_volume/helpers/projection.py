@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from functools import partial
 
@@ -16,6 +17,101 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_value
 
 DEFAULT_PROJECTION_MAX_R = object()
 _RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
+
+
+def compact_relion_projector_half_for_centered_indices(
+    projector_half,
+    pixel_indices,
+    image_shape,
+    *,
+    r_max: int,
+    padding_factor: int,
+):
+    """Materialize the smallest host PPref slab covering score pixels.
+
+    RELION's first-iteration normalized-CC pass scores a small square Fourier
+    window even when ``Projector::data`` was built for the full image box.
+    Copy only the centered y/z region and nonnegative-x prefix that can be
+    sampled by those pixels, retaining the standard one-voxel interpolation
+    halo.  The returned radius is strictly larger than every consumed image
+    radius, so the compact texture's model-sphere cutoff remains inactive for
+    the complete score window.
+
+    This helper intentionally accepts a NumPy host array.  Compacting after an
+    eager JAX transfer would leave the full projector resident on the device,
+    defeating the memory bound this operation provides.
+    """
+
+    if not isinstance(projector_half, np.ndarray):
+        raise TypeError("RELION projector compaction requires a NumPy host array")
+    if projector_half.ndim != 3:
+        raise ValueError(
+            "RELION projector compaction expects one (z, y, x-half) slab, "
+            f"got {projector_half.shape}",
+        )
+    r_max = int(r_max)
+    padding_factor = int(padding_factor)
+    if r_max <= 0 or padding_factor <= 0:
+        raise ValueError(
+            f"r_max and padding_factor must be positive, got {r_max} and {padding_factor}",
+        )
+    padded_r_max = r_max * padding_factor
+    expected_size = 2 * (padded_r_max + 1) + 1
+    expected_shape = (expected_size, expected_size, padded_r_max + 2)
+    if projector_half.shape != expected_shape:
+        raise ValueError(
+            "RELION projector shape does not match r_max/padding_factor: "
+            f"got {projector_half.shape}, expected {expected_shape}",
+        )
+
+    image_height, image_width = (int(value) for value in image_shape)
+    if (
+        image_height <= 0
+        or image_width <= 0
+        or image_height != image_width
+        or image_height % 2
+        or image_width % 2
+    ):
+        raise ValueError(f"expected a positive even square image shape, got {image_shape}")
+    indices = np.asarray(pixel_indices, dtype=np.int64).reshape(-1)
+    if indices.size == 0:
+        raise ValueError("RELION projector compaction requires at least one pixel index")
+    image_half_width = image_width // 2 + 1
+    if np.any(indices < 0) or np.any(indices >= image_height * image_half_width):
+        raise ValueError("RELION projector compaction pixel indices exceed the half image")
+    rows = indices // image_half_width
+    columns = indices - rows * image_half_width
+    centered_rows = rows - image_height // 2
+    max_radius_squared = int(np.max(centered_rows * centered_rows + columns * columns))
+    # ``isqrt(max_r2) + 1`` is a strict radius bound, including when the
+    # farthest score pixel lies exactly on an integer-radius shell.
+    compact_r_max = min(r_max, max(1, math.isqrt(max_radius_squared) + 1))
+    if compact_r_max == r_max:
+        return projector_half, r_max
+
+    compact_padded_r_max = compact_r_max * padding_factor
+    source_center = padded_r_max + 1
+    compact_center = compact_padded_r_max + 1
+    start = source_center - compact_center
+    stop = source_center + compact_center + 1
+    compact = np.ascontiguousarray(
+        projector_half[
+            start:stop,
+            start:stop,
+            : compact_padded_r_max + 2,
+        ],
+    )
+    expected_compact_shape = (
+        2 * compact_center + 1,
+        2 * compact_center + 1,
+        compact_padded_r_max + 2,
+    )
+    if compact.shape != expected_compact_shape:
+        raise RuntimeError(
+            "internal RELION projector compaction shape mismatch: "
+            f"got {compact.shape}, expected {expected_compact_shape}",
+        )
+    return compact, compact_r_max
 
 
 def select_relion_projector_half_for_class(

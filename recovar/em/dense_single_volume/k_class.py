@@ -17,6 +17,7 @@ from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
 from .helpers.half_volume_mstep import relion_backprojector_volume_shape
+from .helpers.projection import compact_relion_projector_half_for_centered_indices
 from .helpers.projection import (
     select_relion_projector_half_for_class as _select_projector_half_for_class,
 )
@@ -1591,6 +1592,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
 
     from .helpers.significance import (
         _compute_k_class_significance_batched,
+        _global_pass1_relion_projector_texture_enabled,
         _significance_debug_dump_matches,
     )
 
@@ -1598,6 +1600,59 @@ def _run_dense_k_class_joint_firstiter_score_probe(
     n_classes = int(means_array.shape[0])
     n_rot = int(np.asarray(rotations).shape[0])
     n_images = _dataset_image_count(experiment_dataset)
+
+    # Keep the full Projector::data host slab for fine scoring, but transfer
+    # only the centered support consumed by this coarse normalized-CC probe.
+    # At box 800, staging the full PPref plus its CUDA texture can otherwise
+    # exhaust an 80-GB device before the first particle is scored.
+    score_projector_half = engine_kwargs.get("relion_projector_half")
+    score_projector_r_max = engine_kwargs.get("relion_projector_r_max")
+    score_texture_interp = engine_kwargs.get(
+        "coarse_relion_projector_texture_interp",
+        False,
+    )
+    if score_texture_interp is None:
+        score_texture_interp = _global_pass1_relion_projector_texture_enabled()
+    if score_projector_half is not None and n_classes == 1 and score_texture_interp:
+        from .helpers.fourier_window import make_fourier_window_spec
+
+        image_shape = tuple(int(value) for value in experiment_dataset.image_shape)
+        n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+        score_window = make_fourier_window_spec(
+            image_shape,
+            engine_kwargs.get("current_size"),
+            n_half,
+            square=bool(engine_kwargs.get("square_window", False)),
+            include_recon_window=False,
+            score_square=True,
+            score_include_dc=True,
+        )
+        if score_window.score_indices_np is not None:
+            score_projector_half = _select_projector_half_for_class(
+                score_projector_half,
+                0,
+                1,
+            )
+            original_projector_shape = tuple(int(value) for value in score_projector_half.shape)
+            original_projector_r_max = int(score_projector_r_max)
+            score_projector_half, score_projector_r_max = (
+                compact_relion_projector_half_for_centered_indices(
+                    score_projector_half,
+                    score_window.score_indices_np,
+                    image_shape,
+                    r_max=int(score_projector_r_max),
+                    padding_factor=int(engine_kwargs.get("projection_padding_factor", 1)),
+                )
+            )
+            logger.info(
+                "RELION firstiter-CC coarse PPref host compaction: "
+                "r_max=%d->%d shape=%s->%s allocated=%.4f GiB",
+                original_projector_r_max,
+                int(score_projector_r_max),
+                original_projector_shape,
+                tuple(int(value) for value in score_projector_half.shape),
+                float(score_projector_half.nbytes / 2**30),
+            )
 
     # RELION's iter-1 firstiter_cc path performs WTA on raw normalized-CC
     # scores before the non-firstiter prior-weighting branch is reached.
@@ -1626,8 +1681,8 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         do_gridding_correction=bool(engine_kwargs.get("do_gridding_correction", False)),
         square_window=bool(engine_kwargs.get("square_window", False)),
         use_float64_scoring=bool(engine_kwargs.get("use_float64_scoring", False)),
-        relion_projector_half=engine_kwargs.get("relion_projector_half"),
-        relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
+        relion_projector_half=score_projector_half,
+        relion_projector_r_max=score_projector_r_max,
         relion_projector_texture_interp=engine_kwargs.get(
             "coarse_relion_projector_texture_interp",
             False,

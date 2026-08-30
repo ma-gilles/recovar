@@ -1027,6 +1027,89 @@ def test_relion_half_texture_projection_matches_legacy_full_staging_bitwise(
 
 
 @pytest.mark.gpu
+def test_relion_half_texture_projection_is_bitwise_invariant_to_host_support_crop(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """Compacting PPref to every consumed square pixel must preserve bits."""
+
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        make_fourier_window_spec,
+    )
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compact_relion_projector_half_for_centered_indices,
+        compute_relion_projector_projections_block,
+    )
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    image_shape = (16, 16)
+    current_size = 6
+    padding_factor = 2
+    projector_r_max = 7
+    padded_r_max = projector_r_max * padding_factor
+    projector_size = 2 * (padded_r_max + 1) + 1
+    rng = np.random.default_rng(193)
+    projector = (
+        rng.normal(0, 0.02, (projector_size, projector_size, padded_r_max + 2))
+        + 1j * rng.normal(0, 0.02, (projector_size, projector_size, padded_r_max + 2))
+    ).astype(np.complex64)
+    window = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        image_shape[0] * (image_shape[1] // 2 + 1),
+        include_recon_window=False,
+        score_square=True,
+        score_include_dc=True,
+    )
+    compact, compact_r_max = compact_relion_projector_half_for_centered_indices(
+        projector,
+        window.score_indices_np,
+        image_shape,
+        r_max=projector_r_max,
+        padding_factor=padding_factor,
+    )
+    assert compact_r_max == 5
+    assert compact.shape == (23, 23, 12)
+    rotations = _off_grid_so3_rotations()
+
+    common = dict(
+        image_shape=image_shape,
+        padding_factor=padding_factor,
+        centered_rows=True,
+        dense_scale=True,
+        projector_output_size=current_size,
+        pixel_indices=window.score_indices_np,
+        relion_texture_interp=True,
+    )
+    with jax.default_device(gpu_device):
+        full_projection, full_abs2 = compute_relion_projector_projections_block(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            r_max=projector_r_max,
+            **common,
+        )
+        compact_projection, compact_abs2 = compute_relion_projector_projections_block(
+            jnp.asarray(compact),
+            jnp.asarray(rotations),
+            r_max=compact_r_max,
+            **common,
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(compact_projection).view(np.uint32),
+        np.asarray(full_projection).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact_abs2).view(np.uint32),
+        np.asarray(full_abs2).view(np.uint32),
+    )
+
+
+@pytest.mark.gpu
 def test_relion_coarse_native_texture_is_bitwise_batch_context_invariant(
     monkeypatch,
     custom_cuda_lib,
