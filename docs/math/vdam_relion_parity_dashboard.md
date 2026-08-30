@@ -119,7 +119,10 @@ reduction from the `329 s` oracle median.
 Cross-device stress array `13171748` then completes at `211--225 s` on four
 different H100 UUIDs. Three runs pass; the fourth reproduces exactly
 `286@4 / 2903@16 / 903@18`, so the stress result is **3/4** (summary SHA-256
-`f0499b7aa65c...`). This is useful portability evidence but is not the frozen
+`f0499b7aa65c...`). Despite those three particle-state escapes, the failing
+run's maps pass the complete four-native envelope at all 20 checkpoints;
+minimum best-native FSC-AUC is `0.999999968977` and the map-envelope SHA-256 is
+`417b55885df6...`. This is useful portability evidence but is not the frozen
 same-device repeat gate: the native envelope was generated on physical H100
 `GPU-235ec3bc...`. Same-H100 four-repeat qualification `13171963` is queued on
 that device. The candidate remains unpromoted pending that result.
