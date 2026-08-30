@@ -26,10 +26,14 @@ Frozen case-definition SHA-256:
 | Particle-private BPref (`c494837c6`) | focused **8/8** | **188 s**; **211 s** with serialized rotations | both arms fail only `1723@19` | 🔴 rejected |
 | Single-stream serial enqueue (`60fab4e4a`) | focused source contract green; H100 build `13170878` | **322 s**; direct envelope **20/20** | exact, but only `-2.1%` versus the `329 s` oracle median | 🔴 rejected as speed solution |
 | EM-batched residuals + one-lane ordered scatter (`ef1f737c6`) | batched residual/scatter gate green | **211--225 s** | initial **20/20**; cross-H100 stress **3/4**, failing arm has historical signature | 🟡 same-H100 repeat gate active |
-| EM-batched residuals + fixed warp-phased scatter (`ecab47c05`) | focused gate green | **204--206 s** | cross-H100 **4/4** and direct maps **4/4** through iteration 20; first long particle-envelope escape at iteration 42 | 🟡 full-200 gate running |
+| EM-batched residuals + fixed warp-phased scatter (`ecab47c05`) | focused gate green | **204--206 s** through 20; **5,004 s** through 200 | cross-H100 **4/4** through 20; full run first fails at 42 and fails continuously from 46--200 | 🔴 long trajectory/runtime rejected |
 | Persistent rotation replay + fixed warp phases (`bb1f732b4`) | focused gate green | **201 s**; **182 s** with 80M projection cap | cross-H100 replay reproduces `286@4 / 2903@16 / 903@18` | 🔴 rejected |
 | Fixed warp launch replay + 80M projection cap (`ecab47c05`) | direct envelope **20/20** | **269 s** | parity-safe but `+31.9%` versus the qualified 204 s arm | 🔴 rejected |
 | Fixed warp persistent replay + 1 GB projection cache (`bb1f732b4`) | process complete | **232 s** | slower than the uncached 201 s arm | 🔴 rejected |
+| Persistent rotations + device fence (`8fe75a0c3`) | focused GPU **3/3** | **159 s for iteration 1** | cross-H100 array stopped after the speed discriminator | 🔴 rejected: fence cost |
+| Persistent rotations + ordered collision lanes (`6a201243a`) | focused GPU green | **458 s** through 20 | direct particle envelope **20/20** | 🔴 rejected: synchronization cost |
+| Persistent rotations + one conflict leader (`2396a2b49`) | focused GPU green | **84 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than ordered launches |
+| Persistent rotations + ordered warp coalescing (`9265597b7`) | focused source + H100 gate green | **277 s** through 20 | direct particle envelope **20/20** | 🔴 exact smoke, slower than 204 s arm |
 
 Nsight job `13168898` profiles the persistent-scratch arm after allocator
 overhead is removed. The RELION VDAM SGD kernel accounts for **92.2%** of GPU
@@ -158,20 +162,32 @@ the candidate-to-nearest-native distances are only `0.633x`, `0.125--0.145x`,
 and `0.067--0.155x` of the native repeat diameter. The result remains
 diagnostic because the native envelope's frozen GPU differs.
 
-The longer audit finds that iteration-20 closure is necessary but not
-sufficient. Direct active-particle state remains within the four-native
+The completed 200-iteration audit finds that iteration-20 closure is necessary
+but not sufficient. Direct active-particle state remains within the four-native
 envelope through iteration 41, first leaves it at iteration 42 for one
-particle, rejoins at iterations 43--45, then escapes continuously from 46--60
-(SHA-256 `f48ad4884851...`). Map FSC-AUC against native repeat 1 remains
+particle, rejoins at iterations 43--45, then escapes continuously from 46--200.
+There are **156 failing checkpoints**, and all 1,000 particles are outside the
+four-repeat native envelope at iteration 200. The complete run takes **5,004 s**
+in job `13173720`, versus **480.65 s** for native RELION on the same case: a
+**10.41x** runtime ratio. Map FSC-AUC against native repeat 1 remains
 `0.99999994` at iteration 40 and `0.99999944` at iteration 50, but falls to
 `0.98831` at iteration 60, `0.98272` at iteration 80, and `0.88881` at
 iteration 100 (SHA-256 `d4124cb4b505...`). The adaptive controller exposes
 the accumulating residue earlier: optimal-offset change first differs at
 iteration 33, expected rotation accuracy at 40, offset range at 50, and
-translation accuracy/step at 60. Thus the robust short-run scatter still
-crosses a nonlinear controller boundary near iteration 60; no frozen score is
-promoted. True iteration-200 runtime job `13173720` is running while the full
-trajectory artifacts are retained for the repair panel.
+translation accuracy/step at 60. Four complete controller audits confirm the
+first pairwise mismatch at iteration 33 against native repeats 1--3 and at
+iteration 23 against native repeat 4; the first field is the optimal-offset
+change/counter, before any search-grid topology change. Thus the robust
+short-run scatter still crosses a nonlinear controller boundary near iteration
+60; no frozen score is promoted. Full particle report
+`direct-state-envelope-it200.json`, four sampling reports, all maps, and every
+numbered checkpoint are retained under the job output root. Signed FSC repeat-
+envelope audit `13176780` passes all 21 sampled checkpoints through iteration
+200. The candidate-to-nearest-native FSC distance is `0.952x` of the native
+diameter at iteration 1, `0.185x` at 20, and `0.150x` at 200. Thus particle
+realizations become unsupported pointwise while the reconstructed maps remain
+inside RELION's own long-run repeat distribution.
 
 The mature-EM performance probes are now bounded. A 1 GB exact projection
 cache increases the persistent arm from `201 s` to `232 s`, so projection
@@ -187,9 +203,22 @@ EM-style precomputed residuals and one persistent block per particle, but adds
 an explicit device-memory fence between rotations to emulate the visibility
 boundary of separate launches without paying one host launch per rotation.
 Its sm90 binary is SHA-256 `7169d7dd4a0f...`; build/source/wiring gate
-`13175533` and explicit focused GPU gate `13175573` pass (3/3). It is opt-in
-and unpromoted pending cross-H100 array `13175618` and long-trajectory
-qualification.
+`13175533` and explicit focused GPU gate `13175573` pass (3/3). The cross-H100
+array was stopped after iteration 1 required **159 s**, more than four times
+the qualified launch-ordered iteration-1 time. The fence arm is rejected.
+
+Two bounded intra-warp ordering designs then tested whether persistent rotation
+batching could retain the qualified scatter order. Serializing only lanes that
+hit the same voxel (`6a201243a`) passes all 20 direct particle checkpoints but
+takes **458 s**, so collision synchronization overwhelms the saved launches.
+Having one lane replay each collision group (`2396a2b49`) is worse at **84 s**
+for iteration 1 and was stopped. The current `9265597b7` discriminator instead
+adds colliding contributions in ascending lane order with warp shuffles and
+issues one atomic triplet per group. This is explicitly diagnostic because
+coalescing changes float32 parenthesization. Focused source/H100 gates and all
+20 direct particle checkpoints pass, but job `13176704` takes **277 s**, 36%
+slower than the qualified 204 s launch-ordered arm. It is rejected as the speed
+path without spending a repeat panel.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
