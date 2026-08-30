@@ -216,6 +216,84 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "_build_reconstruction_pack_indices(" in engine_source
 
 
+def test_relion_vdam_ordered_scatter_cuda_graph_is_opt_in_and_fail_closed():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "recovar"
+        / "cuda"
+        / "cuda_backproject.cu"
+    ).read_text()
+    launcher = source.split(
+        "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
+    )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
+
+    assert '"RECOVAR_VDAM_ORDERED_SCATTER_CUDA_GRAPH"' in source
+    fail_closed = launcher.split(
+        "if (ordered_scatter_cuda_graph_requested &&", 1
+    )[1].split("return cudaErrorInvalidValue;", 1)[0]
+    for required_mode in (
+        "!serial_rotation_replay",
+        "persistent_serial_rotation_replay",
+        "!precompute_ordered_residuals_requested",
+        "!fixed_warp_order_scatter_requested",
+        "parallel_worker_replay",
+        "captured_rotation_replay",
+        "float64_accumulator_replay",
+        "reverse_rotation_replay",
+        "rotation_replay_stride != 0",
+        "device_trace_requested",
+        "captured_particle_timing_replay",
+        "quiesced_prelaunch_capture_requested",
+        "exact_native_ptx_requested",
+        "exact_wavg_predecessor_requested",
+        "runtime_bpref_with_exact_wavg_requested",
+        "wavg_bpref_host_gap_requested",
+        "wavg_bpref_host_gap_trace_requested",
+    ):
+        assert required_mode in fail_closed
+
+    fixed_warp_helper = launcher.split(
+        "const auto launch_precomputed_fixed_warp_scatter =", 1
+    )[1].split("if (ordered_scatter_cuda_graph_requested)", 1)[0]
+    graph_path = launcher.split(
+        "// The graph keeps every ordinary launch boundary", 1
+    )[1].split("const int64_t launch_count =", 1)[0]
+    before_capture, capture_and_replay = graph_path.split(
+        "cudaStreamBeginCapture(", 1
+    )
+    capture_region = capture_and_replay.split("cudaStreamEndCapture(", 1)[0]
+    assert "ordered_scatter_graph_eulers" in before_capture
+    assert "cudaMemcpyDeviceToDevice" in before_capture
+    assert "relion_vdam_native_project_f32_kernel<<<" in before_capture
+    assert "relion_vdam_native_residual_f32_kernel<<<" in before_capture
+    assert "relion_vdam_native_project_f32_kernel<<<" not in capture_region
+    assert "relion_vdam_native_residual_f32_kernel<<<" not in capture_region
+    assert "for (int64_t rotation_offset = 0;" in capture_region
+    assert "rotation_offset < rotation_count" in capture_region
+    assert capture_region.count("launch_precomputed_fixed_warp_scatter(") == 1
+    assert "ordered_scatter_graph_eulers" in capture_region
+    assert "static_cast<unsigned>(rotation_count)" in capture_region
+    assert "relion_vdam_native_sgd_f32_kernel<" in fixed_warp_helper
+    assert "true><<<" in fixed_warp_helper
+    assert "1, 128, 0, particle_streams[lane]" in fixed_warp_helper
+    assert "scatter_eulers + rotation_offset * 9" in fixed_warp_helper
+    assert (
+        "precomputed_residual_weights + ordered_operand_offset"
+        in fixed_warp_helper
+    )
+    ordinary_launch = launcher.split(
+        "const auto launch_runtime_sgd =", 1
+    )[1].split("const bool use_captured_order =", 1)[0]
+    assert "return launch_precomputed_fixed_warp_scatter(" in ordinary_launch
+    assert "projector_eulers + particle * euler_stride" in ordinary_launch
+    assert "cudaGraphGetNodes(" in graph_path
+    assert "captured_node_count != static_cast<size_t>(rotation_count)" in graph_path
+    assert "cudaGraphInstantiate(" in graph_path
+    assert "cudaGraphLaunch(" in graph_path
+    assert "cudaGraphExecDestroy(" in launcher
+    assert "cudaGraphDestroy(" in launcher
+
+
 def test_relion_vdam_exact_native_ptx_discriminator_is_opt_in_and_fail_closed():
     source = (
         Path(__file__).resolve().parents[2]
@@ -1092,6 +1170,127 @@ def test_relion_vdam_mstep_fused_projector_zero_matches_preprojected_zero(
         launch_serial_nonzero, precomputed_launch_serial_nonzero, strict=True
     ):
         np.testing.assert_array_equal(actual_value, expected_value)
+
+
+@pytest.mark.gpu
+def test_relion_vdam_ordered_scatter_cuda_graph_matches_launch_serial(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    monkeypatch.setenv("RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS", "1")
+    monkeypatch.setenv("RECOVAR_VDAM_FIXED_WARP_ORDER_SCATTER", "1")
+    monkeypatch.delenv("RECOVAR_VDAM_ORDERED_SCATTER_CUDA_GRAPH", raising=False)
+
+    image_shape = (8, 8)
+    volume_shape = (11, 11, 11)
+    max_r = 4.0
+    half_width = image_shape[1] // 2 + 1
+    pixel_indices = np.arange(image_shape[0] * half_width, dtype=np.int32)
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    n_particles = 4
+    rotation_count = 3
+    translation_count = 3
+    rng = np.random.default_rng(9059)
+    images = (
+        rng.normal(size=(n_particles, pixel_indices.size))
+        + 1j * rng.normal(size=(n_particles, pixel_indices.size))
+    ).astype(np.complex64)
+    ctf = rng.uniform(0.25, 1.25, size=images.shape).astype(np.float32)
+    minvsigma2 = rng.uniform(0.5, 2.0, size=images.shape).astype(np.float32)
+    posterior = rng.uniform(
+        0.0,
+        0.5,
+        size=(n_particles, rotation_count, translation_count),
+    ).astype(np.float32)
+    valid_rotation_counts = np.asarray([3, 1, 2, 3], dtype=np.int32)
+    for particle, valid_count in enumerate(valid_rotation_counts):
+        posterior[particle, valid_count:, :] = 0.0
+    translation_angles = np.asarray(
+        [[0.0, 0.0], [0.01, -0.02], [-0.03, 0.015]],
+        dtype=np.float32,
+    )
+    rotations = np.empty(
+        (n_particles, rotation_count, 3, 3),
+        dtype=np.float32,
+    )
+    for particle in range(n_particles):
+        for rotation in range(rotation_count):
+            angle = np.float32(0.07 * (1 + particle * rotation_count + rotation))
+            cosine = np.float32(np.cos(angle))
+            sine = np.float32(np.sin(angle))
+            rotations[particle, rotation] = np.asarray(
+                [
+                    [cosine, -sine, 0.0],
+                    [sine, cosine, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float32,
+            )
+    projector = (
+        rng.normal(size=volume_shape) + 1j * rng.normal(size=volume_shape)
+    ).astype(np.complex64) * np.float32(1.0e-3)
+    reconstruction_group_ids = np.asarray([0, 1, 0, 1], dtype=np.int32)
+
+    with jax.default_device(gpu_device):
+        arguments = (
+            jnp.zeros((2, volume_size), dtype=jnp.complex64),
+            jnp.zeros((2, volume_size), dtype=jnp.float32),
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(translation_angles),
+            jnp.asarray(pixel_indices),
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            image_shape,
+            volume_shape,
+            max_r,
+            4,
+            1,
+        )
+        options = {
+            "reconstruction_group_ids": jnp.asarray(reconstruction_group_ids),
+            "worker_lane_ids": jnp.zeros((n_particles,), dtype=jnp.int32),
+            "rotation_replay_counts": jnp.asarray(valid_rotation_counts),
+            "serial_rotation_replay": True,
+            "persistent_serial_rotation_replay": False,
+            "parallel_worker_replay": False,
+        }
+        launch_serial = (
+            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                *arguments,
+                **options,
+            )
+        )
+        jax.block_until_ready(launch_serial)
+
+        monkeypatch.setenv("RECOVAR_VDAM_ORDERED_SCATTER_CUDA_GRAPH", "1")
+        graph_replay = (
+            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+                *arguments,
+                **options,
+            )
+        )
+        jax.block_until_ready(graph_replay)
+
+    for expected, actual in zip(launch_serial, graph_replay, strict=True):
+        expected_array = np.ascontiguousarray(np.asarray(expected))
+        actual_array = np.ascontiguousarray(np.asarray(actual))
+        assert np.all(np.isfinite(expected_array))
+        assert np.all(np.isfinite(actual_array))
+        np.testing.assert_array_equal(
+            actual_array.view(np.uint32),
+            expected_array.view(np.uint32),
+        )
+    assert np.count_nonzero(np.asarray(graph_replay[0])) > 0
+    assert np.count_nonzero(np.asarray(graph_replay[1])) > 0
 
 
 @pytest.mark.gpu

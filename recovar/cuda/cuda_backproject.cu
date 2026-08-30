@@ -78,6 +78,8 @@ constexpr char kRelionVdamPrecomputeOrderedResidualsEnv[] =
     "RECOVAR_VDAM_PRECOMPUTE_ORDERED_RESIDUALS";
 constexpr char kRelionVdamFixedWarpOrderScatterEnv[] =
     "RECOVAR_VDAM_FIXED_WARP_ORDER_SCATTER";
+constexpr char kRelionVdamOrderedScatterCudaGraphEnv[] =
+    "RECOVAR_VDAM_ORDERED_SCATTER_CUDA_GRAPH";
 constexpr char kRelionVdamExactNativePtxKernel[] =
     "_Z29cuda_kernel_backproject3D_SGDILb0ELb0EEv18AccProjectorKernel"
     "PfS1_S1_S1_S1_S1_S1_S1_mffS1_S1_S1_S1_iifjjjjjjii";
@@ -5451,6 +5453,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     float* wavg_dummy_outputs = nullptr;
     float2* preprojected_references = nullptr;
     float* precomputed_residual_weights = nullptr;
+    float* ordered_scatter_graph_eulers = nullptr;
+    cudaGraph_t* ordered_scatter_graphs = nullptr;
+    cudaGraphExec_t* ordered_scatter_graph_execs = nullptr;
     cudaArray_t array_real = nullptr;
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
@@ -5500,6 +5505,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         fixed_warp_order_scatter_value != nullptr &&
         fixed_warp_order_scatter_value[0] != '\0' &&
         std::strcmp(fixed_warp_order_scatter_value, "0") != 0;
+    const char* ordered_scatter_cuda_graph_value =
+        std::getenv(kRelionVdamOrderedScatterCudaGraphEnv);
+    const bool ordered_scatter_cuda_graph_requested =
+        ordered_scatter_cuda_graph_value != nullptr &&
+        ordered_scatter_cuda_graph_value[0] != '\0' &&
+        std::strcmp(ordered_scatter_cuda_graph_value, "0") != 0;
     const bool precompute_residuals_requested =
         precompute_persistent_residuals_requested ||
         precompute_ordered_residuals_requested;
@@ -5612,6 +5623,22 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         (!precompute_ordered_residuals_requested ||
          persistent_serial_rotation_replay || parallel_worker_replay ||
          exact_native_ptx_requested || device_trace_requested))
+        return cudaErrorInvalidValue;
+    // CUDA Graph replay is an optimization of one qualified source topology,
+    // not a new replay mode.  Keep it fail-closed so every captured node is the
+    // existing one-block fixed-warp scatter, in the existing padded row order.
+    if (ordered_scatter_cuda_graph_requested &&
+        (!serial_rotation_replay || persistent_serial_rotation_replay ||
+         !precompute_ordered_residuals_requested ||
+         !fixed_warp_order_scatter_requested || parallel_worker_replay ||
+         captured_rotation_replay || float64_accumulator_replay ||
+         reverse_rotation_replay || rotation_replay_stride != 0 ||
+         device_trace_requested || captured_particle_timing_replay ||
+         quiesced_prelaunch_capture_requested || exact_native_ptx_requested ||
+         exact_wavg_predecessor_requested ||
+         runtime_bpref_with_exact_wavg_requested ||
+         wavg_bpref_host_gap_requested ||
+         wavg_bpref_host_gap_trace_requested))
         return cudaErrorInvalidValue;
     if (preproject_persistent_requested &&
         (parallel_worker_replay || captured_rotation_replay ||
@@ -5764,6 +5791,33 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     reinterpret_cast<void**>(&precomputed_residual_weights),
                     reference_count * sizeof(float));
                 if (err != cudaSuccess) goto cleanup;
+            }
+        }
+        if (ordered_scatter_cuda_graph_requested)
+        {
+            const size_t euler_value_count =
+                static_cast<size_t>(rotation_count) * 9;
+            if (rotation_count > 0 &&
+                euler_value_count / static_cast<size_t>(rotation_count) != 9)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
+            err = cudaMalloc(
+                reinterpret_cast<void**>(&ordered_scatter_graph_eulers),
+                euler_value_count * sizeof(float));
+            if (err != cudaSuccess) goto cleanup;
+            ordered_scatter_graphs = static_cast<cudaGraph_t*>(std::calloc(
+                static_cast<size_t>(reconstruction_group_count),
+                sizeof(cudaGraph_t)));
+            ordered_scatter_graph_execs = static_cast<cudaGraphExec_t*>(std::calloc(
+                static_cast<size_t>(reconstruction_group_count),
+                sizeof(cudaGraphExec_t)));
+            if (ordered_scatter_graphs == nullptr ||
+                ordered_scatter_graph_execs == nullptr)
+            {
+                err = cudaErrorMemoryAllocation;
+                goto cleanup;
             }
         }
         if (exact_wavg_predecessor_requested)
@@ -6239,6 +6293,178 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     ++quiesced_prelaunch_capture_count;
                 }
             }
+            const auto launch_precomputed_fixed_warp_scatter = [&](
+                const float* scatter_eulers,
+                int64_t rotation_offset,
+                unsigned scatter_rotation_count) -> cudaError_t {
+                const int64_t ordered_operand_offset =
+                    rotation_offset * static_cast<int64_t>(pixel_count);
+                relion_vdam_native_sgd_f32_kernel<
+                    Accumulator,
+                    false,
+                    false,
+                    false,
+                    true><<<
+                    1, 128, 0, particle_streams[lane]>>>(
+                    projector,
+                    nullptr,
+                    preprojected_references + ordered_operand_offset,
+                    precomputed_residual_weights + ordered_operand_offset,
+                    image_real + particle * image_stride,
+                    image_imag + particle * image_stride,
+                    translation_x,
+                    translation_y,
+                    nullptr,
+                    const_cast<float*>(
+                        posterior_over_weight_norm + particle * posterior_stride +
+                        rotation_offset * translation_count),
+                    const_cast<float*>(minvsigma2 + particle * image_stride),
+                    const_cast<float*>(ctf + particle * image_stride),
+                    static_cast<unsigned long>(translation_count),
+                    significant_weight,
+                    weight_norm,
+                    const_cast<float*>(scatter_eulers + rotation_offset * 9),
+                    accumulator_real + accumulator_offset,
+                    accumulator_imag + accumulator_offset,
+                    accumulator_weight + accumulator_offset,
+                    static_cast<int>(sqrtf(max_r2) + 0.5f),
+                    static_cast<int>(max_r2),
+                    static_cast<float>(upsampling),
+                    static_cast<unsigned>(image_w),
+                    static_cast<unsigned>(image_h),
+                    1,
+                    static_cast<unsigned>(pixel_count),
+                    static_cast<unsigned>(model_x),
+                    static_cast<unsigned>(model_y),
+                    model_init_y,
+                    model_init_z,
+                    scatter_rotation_count,
+                    nullptr,
+                    nullptr,
+                    0,
+                    0,
+                    static_cast<std::int32_t>(lane),
+                    0);
+                return cudaGetLastError();
+            };
+            if (ordered_scatter_cuda_graph_requested)
+            {
+                // The graph keeps every ordinary launch boundary as a separate
+                // node.  Only particle-varying Euler bytes are staged; ordered
+                // residual buffers and the selected group's accumulators are
+                // already stable for the lifetime of this callback.
+                cudaError_t graph_error = cudaMemcpyAsync(
+                    ordered_scatter_graph_eulers,
+                    projector_eulers + particle * euler_stride,
+                    static_cast<size_t>(euler_stride) * sizeof(float),
+                    cudaMemcpyDeviceToDevice,
+                    particle_streams[lane]);
+                if (graph_error != cudaSuccess) return graph_error;
+
+                relion_vdam_native_project_f32_kernel<<<
+                    rotation_count,
+                    128,
+                    0,
+                    particle_streams[lane]>>>(
+                        projector,
+                        ordered_scatter_graph_eulers,
+                        preprojected_references,
+                        static_cast<unsigned>(image_w),
+                        static_cast<unsigned>(image_h),
+                        static_cast<unsigned>(pixel_count),
+                        static_cast<unsigned>(rotation_count));
+                graph_error = cudaGetLastError();
+                if (graph_error != cudaSuccess) return graph_error;
+                relion_vdam_native_residual_f32_kernel<<<
+                    rotation_count,
+                    128,
+                    0,
+                    particle_streams[lane]>>>(
+                        preprojected_references,
+                        precomputed_residual_weights,
+                        image_real + particle * image_stride,
+                        image_imag + particle * image_stride,
+                        translation_x,
+                        translation_y,
+                        const_cast<float*>(
+                            posterior_over_weight_norm +
+                            particle * posterior_stride),
+                        const_cast<float*>(minvsigma2 + particle * image_stride),
+                        const_cast<float*>(ctf + particle * image_stride),
+                        static_cast<unsigned long>(translation_count),
+                        significant_weight,
+                        weight_norm,
+                        static_cast<unsigned>(image_w),
+                        static_cast<unsigned>(image_h),
+                        static_cast<unsigned>(pixel_count),
+                        static_cast<unsigned>(rotation_count));
+                graph_error = cudaGetLastError();
+                if (graph_error != cudaSuccess) return graph_error;
+
+                const int reconstruction_group =
+                    reconstruction_groups_host[particle];
+                if (ordered_scatter_graph_execs[reconstruction_group] == nullptr)
+                {
+                    graph_error = cudaStreamBeginCapture(
+                        particle_streams[lane],
+                        cudaStreamCaptureModeThreadLocal);
+                    if (graph_error != cudaSuccess) return graph_error;
+
+                    cudaError_t captured_launch_error = cudaSuccess;
+                    for (int64_t rotation_offset = 0;
+                         rotation_offset < rotation_count;
+                         ++rotation_offset)
+                    {
+                        // This kernel neither traces nor loops over the count.
+                        // Use padded R so the graph is reusable for unequal
+                        // per-particle valid-row masks.
+                        captured_launch_error =
+                            launch_precomputed_fixed_warp_scatter(
+                                ordered_scatter_graph_eulers,
+                                rotation_offset,
+                                static_cast<unsigned>(rotation_count));
+                        if (captured_launch_error != cudaSuccess) break;
+                    }
+
+                    cudaGraph_t captured_graph = nullptr;
+                    const cudaError_t end_capture_error = cudaStreamEndCapture(
+                        particle_streams[lane], &captured_graph);
+                    if (captured_launch_error != cudaSuccess)
+                    {
+                        if (captured_graph != nullptr)
+                            cudaGraphDestroy(captured_graph);
+                        return captured_launch_error;
+                    }
+                    if (end_capture_error != cudaSuccess)
+                    {
+                        if (captured_graph != nullptr)
+                            cudaGraphDestroy(captured_graph);
+                        return end_capture_error;
+                    }
+                    size_t captured_node_count = 0;
+                    graph_error = cudaGraphGetNodes(
+                        captured_graph, nullptr, &captured_node_count);
+                    if (graph_error != cudaSuccess ||
+                        captured_node_count != static_cast<size_t>(rotation_count))
+                    {
+                        cudaGraphDestroy(captured_graph);
+                        return graph_error != cudaSuccess
+                            ? graph_error
+                            : cudaErrorInvalidValue;
+                    }
+                    ordered_scatter_graphs[reconstruction_group] = captured_graph;
+                    graph_error = cudaGraphInstantiate(
+                        &ordered_scatter_graph_execs[reconstruction_group],
+                        captured_graph,
+                        nullptr,
+                        nullptr,
+                        0);
+                    if (graph_error != cudaSuccess) return graph_error;
+                }
+                return cudaGraphLaunch(
+                    ordered_scatter_graph_execs[reconstruction_group],
+                    particle_streams[lane]);
+            }
             const int64_t launch_count =
                 serial_rotation_replay && !persistent_serial_rotation_replay
                     ? rotation_count
@@ -6528,86 +6754,112 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         }
                     }
                     const auto launch_runtime_sgd = [&](
-                        auto persistent_tag, auto fixed_warp_order_tag) {
-                    constexpr bool persistent_serial =
-                        decltype(persistent_tag)::value;
-                    constexpr bool fixed_warp_order =
-                        decltype(fixed_warp_order_tag)::value;
-                    const int64_t ordered_operand_offset =
-                        persistent_serial
-                            ? 0
-                            : rotation_offset * static_cast<int64_t>(pixel_count);
-                    relion_vdam_native_sgd_f32_kernel<
-                        Accumulator,
-                        use_captured_order,
-                        use_trace,
-                        persistent_serial,
-                        fixed_warp_order><<<
-                        grid_rotations, 128, 0, particle_streams[lane]>>>(
-                        projector,
-                        precompute_residuals_requested
-                            ? nullptr
-                            : preprojected_references,
-                        precompute_residuals_requested
-                            ? preprojected_references + ordered_operand_offset
-                            : nullptr,
-                        precompute_residuals_requested
-                            ? precomputed_residual_weights + ordered_operand_offset
-                            : nullptr,
-                        image_real + particle * image_stride,
-                        image_imag + particle * image_stride,
-                        translation_x,
-                        translation_y,
-                        nullptr,
-                        const_cast<float*>(
-                            posterior_over_weight_norm + particle * posterior_stride +
-                            rotation_offset * translation_count),
-                        const_cast<float*>(minvsigma2 + particle * image_stride),
-                        const_cast<float*>(ctf + particle * image_stride),
-                        static_cast<unsigned long>(translation_count),
-                        significant_weight,
-                        weight_norm,
-                        const_cast<float*>(
-                            projector_eulers + particle * euler_stride +
-                            rotation_offset * 9),
-                        accumulator_real + accumulator_offset,
-                        accumulator_imag + accumulator_offset,
-                        accumulator_weight + accumulator_offset,
-                        static_cast<int>(sqrtf(max_r2) + 0.5f),
-                        static_cast<int>(max_r2),
-                        static_cast<float>(upsampling),
-                        static_cast<unsigned>(image_w),
-                        static_cast<unsigned>(image_h),
-                        1,
-                        static_cast<unsigned>(pixel_count),
-                        static_cast<unsigned>(model_x),
-                        static_cast<unsigned>(model_y),
-                        model_init_y,
-                        model_init_z,
-                        static_cast<unsigned>(particle_rotation_count),
-                        use_captured_order
-                            ? rotation_replay_order + particle * rotation_count
-                            : nullptr,
-                        use_trace
-                            ? candidate_trace_records + particle * rotation_count
-                            : nullptr,
-                        trace_launch_sequence,
-                        use_trace
-                            ? (candidate_trace_requested
-                                ? static_cast<std::int64_t>(
-                                    particle_trace_ids_host[particle])
-                                : particle)
-                            : 0,
-                        static_cast<std::int32_t>(lane),
-                        candidate_trace_iteration);
+                        auto persistent_tag,
+                        auto fixed_warp_order_tag) -> cudaError_t {
+                        constexpr bool persistent_serial =
+                            decltype(persistent_tag)::value;
+                        constexpr bool fixed_warp_order =
+                            decltype(fixed_warp_order_tag)::value;
+                        if constexpr (fixed_warp_order)
+                        {
+                            if constexpr (
+                                use_captured_order || use_trace ||
+                                persistent_serial)
+                                return cudaErrorInvalidValue;
+                            return launch_precomputed_fixed_warp_scatter(
+                                projector_eulers + particle * euler_stride,
+                                rotation_offset,
+                                static_cast<unsigned>(particle_rotation_count));
+                        }
+                        else
+                        {
+                            const int64_t ordered_operand_offset =
+                                persistent_serial
+                                    ? 0
+                                    : rotation_offset *
+                                        static_cast<int64_t>(pixel_count);
+                            relion_vdam_native_sgd_f32_kernel<
+                                Accumulator,
+                                use_captured_order,
+                                use_trace,
+                                persistent_serial,
+                                fixed_warp_order><<<
+                                grid_rotations, 128, 0, particle_streams[lane]>>>(
+                                projector,
+                                precompute_residuals_requested
+                                    ? nullptr
+                                    : preprojected_references,
+                                precompute_residuals_requested
+                                    ? preprojected_references +
+                                        ordered_operand_offset
+                                    : nullptr,
+                                precompute_residuals_requested
+                                    ? precomputed_residual_weights +
+                                        ordered_operand_offset
+                                    : nullptr,
+                                image_real + particle * image_stride,
+                                image_imag + particle * image_stride,
+                                translation_x,
+                                translation_y,
+                                nullptr,
+                                const_cast<float*>(
+                                    posterior_over_weight_norm +
+                                    particle * posterior_stride +
+                                    rotation_offset * translation_count),
+                                const_cast<float*>(
+                                    minvsigma2 + particle * image_stride),
+                                const_cast<float*>(
+                                    ctf + particle * image_stride),
+                                static_cast<unsigned long>(translation_count),
+                                significant_weight,
+                                weight_norm,
+                                const_cast<float*>(
+                                    projector_eulers +
+                                    particle * euler_stride +
+                                    rotation_offset * 9),
+                                accumulator_real + accumulator_offset,
+                                accumulator_imag + accumulator_offset,
+                                accumulator_weight + accumulator_offset,
+                                static_cast<int>(sqrtf(max_r2) + 0.5f),
+                                static_cast<int>(max_r2),
+                                static_cast<float>(upsampling),
+                                static_cast<unsigned>(image_w),
+                                static_cast<unsigned>(image_h),
+                                1,
+                                static_cast<unsigned>(pixel_count),
+                                static_cast<unsigned>(model_x),
+                                static_cast<unsigned>(model_y),
+                                model_init_y,
+                                model_init_z,
+                                static_cast<unsigned>(particle_rotation_count),
+                                use_captured_order
+                                    ? rotation_replay_order + particle * rotation_count
+                                    : nullptr,
+                                use_trace
+                                    ? candidate_trace_records + particle * rotation_count
+                                    : nullptr,
+                                trace_launch_sequence,
+                                use_trace
+                                    ? (candidate_trace_requested
+                                        ? static_cast<std::int64_t>(
+                                            particle_trace_ids_host[particle])
+                                        : particle)
+                                    : 0,
+                                static_cast<std::int32_t>(lane),
+                                candidate_trace_iteration);
+                            return cudaGetLastError();
+                        }
                     };
+                    cudaError_t runtime_launch_error = cudaSuccess;
                     if (fixed_warp_order_scatter_requested)
-                        launch_runtime_sgd(std::false_type{}, std::true_type{});
+                        runtime_launch_error =
+                            launch_runtime_sgd(std::false_type{}, std::true_type{});
                     else if (persistent_serial_rotation_replay)
-                        launch_runtime_sgd(std::true_type{}, std::false_type{});
+                        runtime_launch_error =
+                            launch_runtime_sgd(std::true_type{}, std::false_type{});
                     else
-                        launch_runtime_sgd(std::false_type{}, std::false_type{});
-                    const cudaError_t runtime_launch_error = cudaGetLastError();
+                        runtime_launch_error =
+                            launch_runtime_sgd(std::false_type{}, std::false_type{});
                     if (trace_runtime_gap)
                     {
                         const auto runtime_bpref_enqueue_end =
@@ -6854,6 +7106,20 @@ cleanup:
             err = report_relion_vdam_driver_error(
                 "module cleanup", driver_result);
     }
+    if (ordered_scatter_graph_execs != nullptr)
+    {
+        for (int group = 0; group < reconstruction_group_count; ++group)
+            if (ordered_scatter_graph_execs[group] != nullptr)
+                cudaGraphExecDestroy(ordered_scatter_graph_execs[group]);
+        std::free(ordered_scatter_graph_execs);
+    }
+    if (ordered_scatter_graphs != nullptr)
+    {
+        for (int group = 0; group < reconstruction_group_count; ++group)
+            if (ordered_scatter_graphs[group] != nullptr)
+                cudaGraphDestroy(ordered_scatter_graphs[group]);
+        std::free(ordered_scatter_graphs);
+    }
     for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
         if (particle_streams[lane]) cudaStreamDestroy(particle_streams[lane]);
     if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
@@ -6878,6 +7144,7 @@ cleanup:
     if (wavg_dummy_outputs) cudaFree(wavg_dummy_outputs);
     if (precomputed_residual_weights) cudaFree(precomputed_residual_weights);
     if (preprojected_references) cudaFree(preprojected_references);
+    if (ordered_scatter_graph_eulers) cudaFree(ordered_scatter_graph_eulers);
     if (real) cudaFree(real);
     if (imag) cudaFree(imag);
     return err;
