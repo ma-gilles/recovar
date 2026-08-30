@@ -132,6 +132,67 @@
         ]
       },
       "note": "fresh_a science PASS through iteration 4 (audit_status 0; cache 0->435), but warm80_a added 435 entries to the sealed 5037-entry cache, including critical science keys; cancelled at 2:23 INVALID with no parity inference."
+    },
+    {
+      "job_id": "13210232",
+      "label": "same-path independently compiled cache A/B discriminator",
+      "role": "diagnostic",
+      "status": "expected_fail_closed",
+      "scientific_outcome": "hypothesis_rejected",
+      "scheduler_state": "failed",
+      "score_impact": "none",
+      "wrapper_outcome": "failed",
+      "wrapper_failure_expected": true,
+      "scorecard_failure": false,
+      "hypothesis": "long_run_cache_reuse_or_deserialization_is_necessary",
+      "hypothesis_result": "rejected",
+      "source_head": "ee673be1f3c6a5182a917d97691efe07ffbd5e4d",
+      "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13210232.out",
+      "evidence_sha256": "3ab442553e78735d03feac43237e91b32caec70381507b50faab5994031f2016",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_samepath_ee673be1f_20260830",
+      "summary_report": "analysis/cache_history_summary.json",
+      "summary_report_sha256": "cb13a0d710936a6234dfa242e392b021d0b7f52565eb287b0d32dd14fb8a4782",
+      "arms_report": "analysis/arms.tsv",
+      "arms_report_sha256": "28a5d2518ee7a46972d4d3456f0ef288b66fdab58d1e30806d06c52731a78ed9",
+      "native_envelope_reports": {
+        "cold_a": {"path": "analysis/cold_a_native_particle_envelope.json", "sha256": "a09c0f28cbbdfd26afab46a90782216cc9eab7fe5567de08837513e5b873f00a"},
+        "warm_a": {"path": "analysis/warm_a_native_particle_envelope.json", "sha256": "332ab30f757a4d0ac59317fa0f2a2410e7bd17a41d9123b3fb20557937d0064d"},
+        "cold_b": {"path": "analysis/cold_b_native_particle_envelope.json", "sha256": "4840df859813fd758e1dfc8e00788a14bef7769512153a758b21979c71b34fbd"},
+        "warm_b": {"path": "analysis/warm_b_native_particle_envelope.json", "sha256": "418dc0eff9c0ec5ffa3376826acbd6a1955ca45d30a3a2c2c601bd57f5dceb38"}
+      },
+      "pairs": [
+        {
+          "id": "pair_a",
+          "cold": {"arm": "cold_a", "result": "pass", "first_failure_iteration": null, "audit_status": 0, "cache_entries_before": 0, "cache_entries_after": 4823},
+          "warm": {"arm": "warm_a", "result": "pass", "first_failure_iteration": null, "audit_status": 0, "cache_entries_before": 4823, "cache_entries_after": 4823, "cache_byte_stable": true}
+        },
+        {
+          "id": "pair_b",
+          "cold": {"arm": "cold_b", "result": "fail", "first_failure_iteration": 4, "audit_status": 1, "cache_entries_before": 0, "cache_entries_after": 4676},
+          "warm": {"arm": "warm_b", "result": "fail", "first_failure_iteration": 4, "audit_status": 1, "cache_entries_before": 4676, "cache_entries_after": 4676, "cache_byte_stable": true}
+        }
+      ],
+      "particle_boundary": {
+        "particle": "286@particles.128.mrcs",
+        "red_pose_exact_match_historical_graph_pair": true
+      },
+      "conclusion": {
+        "long_run_cache_reuse_or_deserialization_necessary": false,
+        "remaining_boundary": ["compile_or_autotune_variant", "runtime_reduction"],
+        "interpretation": "Pair-stable independently compiled cache outcomes reject long-run reuse/deserialization as necessary while leaving compile/autotune variant versus runtime reduction unresolved."
+      },
+      "note": "cold_a PASS and warm_a PASS with pair_a 0->4823 then byte-stable 4823->4823; cold_b FAIL@4 and warm_b FAIL@4 with pair_b 0->4676 then byte-stable 4676->4676. Wrapper FAILED as an expected fail-closed hypothesis rejection, not a new scorecard failure."
+    },
+    {
+      "job_id": "13211317",
+      "label": "ordered-shell boundary diagnostic",
+      "role": "diagnostic",
+      "status": "diagnostic_running",
+      "scientific_outcome": "pending",
+      "scheduler_state": "running",
+      "score_impact": "none",
+      "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ordered-noise-13211317.out",
+      "note": "Ordered-shell diagnostic is running; no terminal scientific result is claimed."
     }
   ],
   "speed_snapshot": {
@@ -174,10 +235,12 @@
   ],
   "next_gate": {
     "harness_fix_commit": "381bf7949",
-    "diagnostic_head": "39a38f9d6",
-    "hypothesis": "The cache-history contrast remains untested because every warm-cache arm compiled critical science keys.",
-    "supporting_pattern": "The exact-profile warm cache contains the critical science keys and remains unchanged during warm A/B; fresh A/B are green and warmed A/B are red.",
-    "fallback": "Until a sealed cache remains unchanged, cache causality is unevaluated and the diagnostic permits no parity inference.",
+    "prior_profile_matched_head": "39a38f9d6",
+    "pair_stable_head": "ee673be1f",
+    "ordered_shell_job": "13211317",
+    "hypothesis": "Job 13210232 rejects long-run cache reuse/deserialization as a necessary condition for the GF46 iteration-4 split.",
+    "evidence_pattern": "pair_a is PASS/PASS across cold/warm with byte-stable reuse; pair_b is FAIL@4/FAIL@4 across cold/warm with byte-stable reuse.",
+    "narrowed_boundary": "Pair-stable independently compiled cache outcomes leave compile/autotune variant versus runtime reduction as the narrowed boundary; ordered-shell job 13211317 is running.",
     "production_change_authorized": false
   },
   "history": [

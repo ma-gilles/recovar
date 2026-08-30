@@ -43,6 +43,8 @@ ACTIVE_DIAGNOSTIC_POLICY = {
     "13208734": ("invalid", "invalid", "cancelled", "INVALID"),
     "13208735": ("invalid", "invalid", "cancelled", "INVALID"),
     "13209422": ("invalid", "invalid", "cancelled", "INVALID"),
+    "13210232": ("expected_fail_closed", "hypothesis_rejected", "failed", "EXPECTED FAIL-CLOSED"),
+    "13211317": ("diagnostic_running", "pending", "running", "DIAGNOSTIC/RUNNING"),
 }
 CRITICAL_CACHE_MISS_JOBS = frozenset({"13208734", "13208735", "13209422"})
 PROFILE_MATCHED_EVIDENCE = {
@@ -74,6 +76,93 @@ PROFILE_MATCHED_EVIDENCE = {
             "coarse posterior",
             "relion_vdam_mstep_fused_projector_x_half",
         ],
+    },
+}
+PAIR_STABLE_EVIDENCE = {
+    "wrapper_outcome": "failed",
+    "wrapper_failure_expected": True,
+    "scorecard_failure": False,
+    "hypothesis": "long_run_cache_reuse_or_deserialization_is_necessary",
+    "hypothesis_result": "rejected",
+    "source_head": "ee673be1f3c6a5182a917d97691efe07ffbd5e4d",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13210232.out",
+    "evidence_sha256": "3ab442553e78735d03feac43237e91b32caec70381507b50faab5994031f2016",
+    "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_samepath_ee673be1f_20260830",
+    "summary_report": "analysis/cache_history_summary.json",
+    "summary_report_sha256": "cb13a0d710936a6234dfa242e392b021d0b7f52565eb287b0d32dd14fb8a4782",
+    "arms_report": "analysis/arms.tsv",
+    "arms_report_sha256": "28a5d2518ee7a46972d4d3456f0ef288b66fdab58d1e30806d06c52731a78ed9",
+    "native_envelope_reports": {
+        "cold_a": {
+            "path": "analysis/cold_a_native_particle_envelope.json",
+            "sha256": "a09c0f28cbbdfd26afab46a90782216cc9eab7fe5567de08837513e5b873f00a",
+        },
+        "warm_a": {
+            "path": "analysis/warm_a_native_particle_envelope.json",
+            "sha256": "332ab30f757a4d0ac59317fa0f2a2410e7bd17a41d9123b3fb20557937d0064d",
+        },
+        "cold_b": {
+            "path": "analysis/cold_b_native_particle_envelope.json",
+            "sha256": "4840df859813fd758e1dfc8e00788a14bef7769512153a758b21979c71b34fbd",
+        },
+        "warm_b": {
+            "path": "analysis/warm_b_native_particle_envelope.json",
+            "sha256": "418dc0eff9c0ec5ffa3376826acbd6a1955ca45d30a3a2c2c601bd57f5dceb38",
+        },
+    },
+    "pairs": [
+        {
+            "id": "pair_a",
+            "cold": {
+                "arm": "cold_a",
+                "result": "pass",
+                "first_failure_iteration": None,
+                "audit_status": 0,
+                "cache_entries_before": 0,
+                "cache_entries_after": 4823,
+            },
+            "warm": {
+                "arm": "warm_a",
+                "result": "pass",
+                "first_failure_iteration": None,
+                "audit_status": 0,
+                "cache_entries_before": 4823,
+                "cache_entries_after": 4823,
+                "cache_byte_stable": True,
+            },
+        },
+        {
+            "id": "pair_b",
+            "cold": {
+                "arm": "cold_b",
+                "result": "fail",
+                "first_failure_iteration": 4,
+                "audit_status": 1,
+                "cache_entries_before": 0,
+                "cache_entries_after": 4676,
+            },
+            "warm": {
+                "arm": "warm_b",
+                "result": "fail",
+                "first_failure_iteration": 4,
+                "audit_status": 1,
+                "cache_entries_before": 4676,
+                "cache_entries_after": 4676,
+                "cache_byte_stable": True,
+            },
+        },
+    ],
+    "particle_boundary": {
+        "particle": "286@particles.128.mrcs",
+        "red_pose_exact_match_historical_graph_pair": True,
+    },
+    "conclusion": {
+        "long_run_cache_reuse_or_deserialization_necessary": False,
+        "remaining_boundary": ["compile_or_autotune_variant", "runtime_reduction"],
+        "interpretation": (
+            "Pair-stable independently compiled cache outcomes reject long-run reuse/deserialization as necessary "
+            "while leaving compile/autotune variant versus runtime reduction unresolved."
+        ),
     },
 }
 EVIDENCE_SOURCE_POLICY = {
@@ -216,10 +305,21 @@ def _validate_active_diagnostics(scorecard: dict[str, Any]) -> None:
                 row.get("invalid_reason") == "warm_cache_compiled_critical_science_keys",
                 f"{job_id}: invalid cache-miss reason changed",
             )
-    profile_matched = diagnostics[-1]
+    profile_matched = next(row for row in diagnostics if row["job_id"] == "13209422")
     _require(
         {key: profile_matched.get(key) for key in PROFILE_MATCHED_EVIDENCE} == PROFILE_MATCHED_EVIDENCE,
         "13209422: profile-matched evidence changed",
+    )
+    pair_stable = next(row for row in diagnostics if row["job_id"] == "13210232")
+    _require(
+        {key: pair_stable.get(key) for key in PAIR_STABLE_EVIDENCE} == PAIR_STABLE_EVIDENCE,
+        "13210232: pair-stable evidence changed",
+    )
+    ordered_shell = next(row for row in diagnostics if row["job_id"] == "13211317")
+    _require(
+        ordered_shell.get("evidence")
+        == "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ordered-noise-13211317.out",
+        "13211317: ordered-shell evidence changed",
     )
 
 
@@ -308,7 +408,9 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
     _require(
         isinstance(next_gate, dict)
         and next_gate.get("harness_fix_commit") == "381bf7949"
-        and next_gate.get("diagnostic_head") == "39a38f9d6"
+        and next_gate.get("prior_profile_matched_head") == "39a38f9d6"
+        and next_gate.get("pair_stable_head") == "ee673be1f"
+        and next_gate.get("ordered_shell_job") == "13211317"
         and next_gate.get("production_change_authorized") is False,
         "cache discriminator gate changed",
     )
@@ -386,9 +488,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## Active cache discriminator",
+            "## Active boundary diagnostics",
             "",
-            "These are scheduler/causal diagnostics, not v3 score entries. INVALID cache attempts permit no parity inference.",
+            "These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts, expected fail-closed "
+            "hypothesis rejections, and running jobs have no score impact.",
             "",
             "| Job | Role | Status | Scientific outcome | Scheduler state | Score impact | Interpretation |",
             "|---:|---|---|---|---|---|---|",
@@ -398,16 +501,53 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         display_status = ACTIVE_DIAGNOSTIC_POLICY[row["job_id"]][3]
         lines.append(
             f"| `{row['job_id']}` | `{row['role']}` | **{display_status}** | "
-            f"{row['scientific_outcome'].upper()} | {row['scheduler_state'].replace('_', '-')} | "
+            f"{row['scientific_outcome'].replace('_', ' ').upper()} | "
+            f"{row['scheduler_state'].replace('_', '-')} | "
             f"{row['score_impact']} | {row['note']} |"
         )
-    profile_matched = scorecard["active_diagnostics"][-1]
+    profile_matched = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13209422")
     critical_keys = ", ".join(f"`{key}`" for key in profile_matched["warm80_a"]["critical_keys_compiled"])
     lines.extend(
         [
             "",
             f"Job `13209422` warm-cache additions included: {critical_keys}. Evidence: "
             f"`{profile_matched['evidence_root']}/{profile_matched['arms_report']}`.",
+        ]
+    )
+    pair_stable = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13210232")
+    lines.extend(
+        [
+            "",
+            "### Pair-stable cache result: job `13210232`",
+            "",
+            "| Pair | Cold arm | Warm arm | Cache transitions | Warm bytes |",
+            "|---|---:|---:|---|---:|",
+        ]
+    )
+    for pair in pair_stable["pairs"]:
+        cold = pair["cold"]
+        warm = pair["warm"]
+        lines.append(
+            f"| `{pair['id']}` | `{cold['arm']}` {_gate_text(cold)} | `{warm['arm']}` {_gate_text(warm)} | "
+            f"{cold['cache_entries_before']}->{cold['cache_entries_after']}; "
+            f"{warm['cache_entries_before']}->{warm['cache_entries_after']} | "
+            f"{'byte-stable' if warm['cache_byte_stable'] else 'changed'} |"
+        )
+    particle = pair_stable["particle_boundary"]
+    conclusion = pair_stable["conclusion"]
+    remaining = " versus ".join(value.replace("_", " ") for value in conclusion["remaining_boundary"])
+    lines.extend(
+        [
+            "",
+            f"Particle `{particle['particle']}` has the exact historical graph-pair red pose. The wrapper "
+            "**FAILED as an expected fail-closed hypothesis rejection**; this is not a new scorecard failure.",
+            "",
+            f"Evidence: `{pair_stable['evidence_root']}/{pair_stable['summary_report']}` "
+            f"(SHA-256 `{pair_stable['summary_report_sha256']}`).",
+            "",
+            "**Conclusion:** long-run cache reuse/deserialization is not necessary. Pair-stable independently "
+            f"compiled cache outcomes narrow the unresolved boundary to **{remaining}**. Ordered-shell job "
+            "`13211317` is **DIAGNOSTIC/RUNNING** with no terminal scientific result.",
         ]
     )
     speed = scorecard["speed_snapshot"]
@@ -472,10 +612,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             gate["hypothesis"],
             "",
-            f"Harness fix `{gate['harness_fix_commit']}` and diagnostic head `{gate['diagnostic_head']}` target "
-            "the exact-profile node/UUID discriminator. "
-            f"Cache causality requires this balanced exact-device pattern: **{gate['supporting_pattern']}** "
-            f"{gate['fallback']} No cache-disable or production arithmetic change is authorized by this snapshot.",
+            f"Pair-stable head `{gate['pair_stable_head']}` follows prior profile-matched head "
+            f"`{gate['prior_profile_matched_head']}` (harness fix `{gate['harness_fix_commit']}`). Evidence: "
+            f"**{gate['evidence_pattern']}** {gate['narrowed_boundary']} No cache-disable or production "
+            "arithmetic change is authorized by this snapshot.",
             "",
             "## Evidence and reproducibility",
             "",

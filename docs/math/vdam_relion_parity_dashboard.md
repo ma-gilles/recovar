@@ -42,9 +42,9 @@ Strict correctness is the conjunction of map, particle-state, and pre-divergence
 | `vdam-gf61` | 101 | low noise; Kent poses | FAIL@41 | FAIL@40 | FAIL@40 | 6.40x FAIL | FAIL | `v3_original` |
 | `vdam-gf62` | 101 | Kent poses; junk particles; translations | PASS | PASS | FAIL@20 | 7.21x FAIL | FAIL | `v3_original` |
 
-## Active cache discriminator
+## Active boundary diagnostics
 
-These are scheduler/causal diagnostics, not v3 score entries. INVALID cache attempts permit no parity inference.
+These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts, expected fail-closed hypothesis rejections, and running jobs have no score impact.
 
 | Job | Role | Status | Scientific outcome | Scheduler state | Score impact | Interpretation |
 |---:|---|---|---|---|---|---|
@@ -57,8 +57,23 @@ These are scheduler/causal diagnostics, not v3 score entries. INVALID cache atte
 | `13208734` | `diagnostic` | **INVALID** | INVALID | cancelled | none | A warm-cache arm compiled critical science keys; cancelled INVALID with no parity inference. |
 | `13208735` | `diagnostic` | **INVALID** | INVALID | cancelled | none | A warm-cache arm compiled critical science keys; cancelled INVALID with no parity inference. |
 | `13209422` | `diagnostic` | **INVALID** | INVALID | cancelled | none | fresh_a science PASS through iteration 4 (audit_status 0; cache 0->435), but warm80_a added 435 entries to the sealed 5037-entry cache, including critical science keys; cancelled at 2:23 INVALID with no parity inference. |
+| `13210232` | `diagnostic` | **EXPECTED FAIL-CLOSED** | HYPOTHESIS REJECTED | failed | none | cold_a PASS and warm_a PASS with pair_a 0->4823 then byte-stable 4823->4823; cold_b FAIL@4 and warm_b FAIL@4 with pair_b 0->4676 then byte-stable 4676->4676. Wrapper FAILED as an expected fail-closed hypothesis rejection, not a new scorecard failure. |
+| `13211317` | `diagnostic` | **DIAGNOSTIC/RUNNING** | PENDING | running | none | Ordered-shell diagnostic is running; no terminal scientific result is claimed. |
 
 Job `13209422` warm-cache additions included: `run_local_bucket_big_jit`, `relion_coarse_diff2_projector_f32`, `coarse posterior`, `relion_vdam_mstep_fused_projector_x_half`. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_profilematched_39a38f9d6_20260830/analysis/arms.tsv`.
+
+### Pair-stable cache result: job `13210232`
+
+| Pair | Cold arm | Warm arm | Cache transitions | Warm bytes |
+|---|---:|---:|---|---:|
+| `pair_a` | `cold_a` PASS | `warm_a` PASS | 0->4823; 4823->4823 | byte-stable |
+| `pair_b` | `cold_b` FAIL@4 | `warm_b` FAIL@4 | 0->4676; 4676->4676 | byte-stable |
+
+Particle `286@particles.128.mrcs` has the exact historical graph-pair red pose. The wrapper **FAILED as an expected fail-closed hypothesis rejection**; this is not a new scorecard failure.
+
+Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_samepath_ee673be1f_20260830/analysis/cache_history_summary.json` (SHA-256 `cb13a0d710936a6234dfa242e392b021d0b7f52565eb287b0d32dd14fb8a4782`).
+
+**Conclusion:** long-run cache reuse/deserialization is not necessary. Pair-stable independently compiled cache outcomes narrow the unresolved boundary to **compile or autotune variant versus runtime reduction**. Ordered-shell job `13211317` is **DIAGNOSTIC/RUNNING** with no terminal scientific result.
 
 ## Speed snapshot
 
@@ -90,9 +105,9 @@ CLI and GUI both default to `relion_fast`. The `reference` mode is diagnostic. T
 
 ## Current hypothesis and next gate
 
-The cache-history contrast remains untested because every warm-cache arm compiled critical science keys.
+Job 13210232 rejects long-run cache reuse/deserialization as a necessary condition for the GF46 iteration-4 split.
 
-Harness fix `381bf7949` and diagnostic head `39a38f9d6` target the exact-profile node/UUID discriminator. Cache causality requires this balanced exact-device pattern: **The exact-profile warm cache contains the critical science keys and remains unchanged during warm A/B; fresh A/B are green and warmed A/B are red.** Until a sealed cache remains unchanged, cache causality is unevaluated and the diagnostic permits no parity inference. No cache-disable or production arithmetic change is authorized by this snapshot.
+Pair-stable head `ee673be1f` follows prior profile-matched head `39a38f9d6` (harness fix `381bf7949`). Evidence: **pair_a is PASS/PASS across cold/warm with byte-stable reuse; pair_b is FAIL@4/FAIL@4 across cold/warm with byte-stable reuse.** Pair-stable independently compiled cache outcomes leave compile/autotune variant versus runtime reduction as the narrowed boundary; ordered-shell job 13211317 is running. No cache-disable or production arithmetic change is authorized by this snapshot.
 
 ## Evidence and reproducibility
 

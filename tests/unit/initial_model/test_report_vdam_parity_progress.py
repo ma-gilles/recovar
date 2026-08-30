@@ -122,7 +122,7 @@ def test_terminal_cache_attempts_render_as_invalid_without_parity_inference(scor
     assert "fresh_a science PASS through iteration 4" in rendered
     assert "`run_local_bucket_big_jit`" in rendered
     assert "`relion_vdam_mstep_fused_projector_x_half`" in rendered
-    assert "INVALID cache attempts permit no parity inference" in rendered
+    assert "INVALID attempts, expected fail-closed hypothesis rejections" in rendered
 
 
 def test_profile_matched_cache_evidence_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
@@ -130,6 +130,26 @@ def test_profile_matched_cache_evidence_is_fail_closed(tmp_path: Path, scorecard
     job["warm80_a"]["cache_entries_added"] = 0
     with pytest.raises(ValueError, match="profile-matched evidence changed"):
         progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_pair_stable_cache_evidence_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    job = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13210232")
+    job["pairs"][1]["warm"]["result"] = "pass"
+    with pytest.raises(ValueError, match="pair-stable evidence changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_pair_stable_hypothesis_rejection_is_non_scoring() -> None:
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert "`13210232` | `diagnostic` | **EXPECTED FAIL-CLOSED** | HYPOTHESIS REJECTED" in rendered
+    assert "`pair_a` | `cold_a` PASS | `warm_a` PASS | 0->4823; 4823->4823 | byte-stable" in rendered
+    assert "`pair_b` | `cold_b` FAIL@4 | `warm_b` FAIL@4 | 0->4676; 4676->4676 | byte-stable" in rendered
+    assert "exact historical graph-pair red pose" in rendered
+    assert "not a new scorecard failure" in rendered
+    assert "analysis/cache_history_summary.json" in rendered
+    assert "long-run cache reuse/deserialization is not necessary" in rendered
+    assert "compile or autotune variant versus runtime reduction" in rendered
+    assert "`13211317` is **DIAGNOSTIC/RUNNING**" in rendered
 
 
 def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:
