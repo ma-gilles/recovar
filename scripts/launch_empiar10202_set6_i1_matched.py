@@ -25,6 +25,13 @@ from typing import Any, Callable, Sequence
 import mrcfile
 import numpy as np
 
+# Launch planning and integrity checks are CPU-only.  Importing the RECOVAR
+# STAR reader otherwise initializes every visible login-node GPU through the
+# package import, even though this process never performs a JAX computation.
+# The generated Slurm scripts explicitly clear all JAX_* variables before
+# starting either refinement, so this cannot change the submitted engines.
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 from recovar.data_io.starfile import read_star
 
 SCHEMA = "recovar.empiar10202_set6_i1_matched_launch.v1"

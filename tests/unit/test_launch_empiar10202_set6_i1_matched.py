@@ -109,6 +109,7 @@ def test_balanced_smoke_star_is_stable_and_preserves_source_order(tmp_path: Path
 
 
 def test_recovar_commands_are_autonomous_matched_i1() -> None:
+    assert MODULE.os.environ["JAX_PLATFORMS"] == "cpu"
     repo = Path("/sealed/subject")
     smoke_data = Path("/sealed/smoke")
     full_data = Path("/sealed/full")
