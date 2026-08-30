@@ -141,9 +141,16 @@ The corrected GF46 job `13173098` completes iteration 20 in **204 s** on
 physical H100 `GPU-ef985070...` and passes all **20/20** direct particle-state
 checkpoints against all four native repeats. Audit `13173349` is green with
 SHA-256 `f88bb3e59593...`; no particle escapes at iterations 4, 16, or 18.
-This is one-repeat diagnostic evidence, not promotion. Cross-H100 four-repeat
-stress array `13173387` is running; the frozen score and same-device gate stay
-unchanged until repeated qualification closes.
+Cross-H100 stress array `13173387` then passes **4/4** complete particle-state
+trajectories on four distinct physical H100s; audit array `13173547` reports
+zero failures at all 20 checkpoints in every repeat. RECOVAR walls are
+`204--206 s`, versus `211--225 s` and 3/4 for the unphased arm. Per-repeat
+audit SHA-256 values begin `4459c2e16794 / 37f1d8f07cbd /
+6afff9d120b9 / 58d7aa356272`. This strongly identifies intra-block warp
+scheduling as the recurring portability cause, but remains diagnostic because
+the native envelope's frozen GPU differs. True 200-iteration trajectory and
+runtime job `13173720` is queued; the frozen score and same-device gate stay
+unchanged until full and same-device qualification close.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
