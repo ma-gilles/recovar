@@ -122,7 +122,7 @@ def test_terminal_cache_attempts_render_as_invalid_without_parity_inference(scor
     assert "fresh_a science PASS through iteration 4" in rendered
     assert "`run_local_bucket_big_jit`" in rendered
     assert "`relion_vdam_mstep_fused_projector_x_half`" in rendered
-    assert "INVALID attempts, expected fail-closed hypothesis rejections" in rendered
+    assert "INVALID attempts and expected hypothesis rejections" in rendered
 
 
 def test_profile_matched_cache_evidence_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
@@ -149,7 +149,48 @@ def test_pair_stable_hypothesis_rejection_is_non_scoring() -> None:
     assert "analysis/cache_history_summary.json" in rendered
     assert "long-run cache reuse/deserialization is not necessary" in rendered
     assert "compile or autotune variant versus runtime reduction" in rendered
-    assert "`13211317` is **DIAGNOSTIC/RUNNING**" in rendered
+    assert "`13211317` is **INVALID/SUPERSEDED**" in rendered
+
+
+def test_ordered_shell_same_cache_evidence_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    job = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13211719")
+    job["cache_validation"]["manifest_sha256"]["ordered_b_before"] = "0" * 64
+    with pytest.raises(ValueError, match="13211719: ordered-shell evidence changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_ordered_shell_hypothesis_rejection_is_valid_and_non_scoring() -> None:
+    loaded = progress_mod.load_and_validate()
+    job = next(row for row in loaded["active_diagnostics"] if row["job_id"] == "13211719")
+    rendered = progress_mod.render_markdown(loaded)
+
+    assert job["execution_valid"] is True
+    assert job["arm_success_markers"] is True
+    assert job["score_impact"] == "none"
+    assert "`13211317` | `diagnostic` | **INVALID/SUPERSEDED** | INVALID | failed | none" in rendered
+    assert (
+        "`13211719` | `diagnostic` | **EXPECTED HYPOTHESIS REJECTION** | HYPOTHESIS REJECTED | failed | none"
+        in rendered
+    )
+    assert "### Valid same-cache ordered-shell result: job `13211719`" in rendered
+    assert "| A before | 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |" in rendered
+    assert "| A after | 377 | `2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5` |" in rendered
+    assert "| B before | 377 | `2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5` |" in rendered
+    assert "| B after | 377 | `2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5` |" in rendered
+    assert "B added 0 files and changed 0 files" in rendered
+    assert "particle ID `2896` / selected index `178`" in rendered
+    assert "1.1641532182693481e-10 (1 float32 ULP)" in rendered
+    assert "pose / rotation / translation / class exact" in rendered
+    assert "| ordered image power | 27/65 shells | 512.0 |" in rendered
+    assert "| ordered sigma numerator | 1/65 shells | 0.00390625 |" in rendered
+    assert "| final noise | 24/65 shells | 0.001562500001455192 |" in rendered
+    assert "| live BPref | both halves; 12 fields | h0 0.0234375; h1 0.0107421875" in rendered
+    assert "target stack `286` exact" in rendered
+    assert "expected scientific-gate hypothesis rejection" in rendered
+    assert "not a frozen-score failure" in rendered
+    assert job["repeatability_report_sha256"] in rendered
+    assert job["cache_report_sha256"] in rendered
+    assert job["evidence_sha256"] in rendered
 
 
 def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:

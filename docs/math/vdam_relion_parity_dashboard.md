@@ -44,7 +44,7 @@ Strict correctness is the conjunction of map, particle-state, and pre-divergence
 
 ## Active boundary diagnostics
 
-These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts, expected fail-closed hypothesis rejections, and running jobs have no score impact.
+These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts and expected hypothesis rejections have no score impact.
 
 | Job | Role | Status | Scientific outcome | Scheduler state | Score impact | Interpretation |
 |---:|---|---|---|---|---|---|
@@ -58,7 +58,8 @@ These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts, 
 | `13208735` | `diagnostic` | **INVALID** | INVALID | cancelled | none | A warm-cache arm compiled critical science keys; cancelled INVALID with no parity inference. |
 | `13209422` | `diagnostic` | **INVALID** | INVALID | cancelled | none | fresh_a science PASS through iteration 4 (audit_status 0; cache 0->435), but warm80_a added 435 entries to the sealed 5037-entry cache, including critical science keys; cancelled at 2:23 INVALID with no parity inference. |
 | `13210232` | `diagnostic` | **EXPECTED FAIL-CLOSED** | HYPOTHESIS REJECTED | failed | none | cold_a PASS and warm_a PASS with pair_a 0->4823 then byte-stable 4823->4823; cold_b FAIL@4 and warm_b FAIL@4 with pair_b 0->4676 then byte-stable 4676->4676. Wrapper FAILED as an expected fail-closed hypothesis rejection, not a new scorecard failure. |
-| `13211317` | `diagnostic` | **DIAGNOSTIC/RUNNING** | PENDING | running | none | Ordered-shell diagnostic is running; no terminal scientific result is claimed. |
+| `13211317` | `diagnostic` | **INVALID/SUPERSEDED** | INVALID | failed | none | Prior ordered-shell attempt is INVALID/SUPERSEDED by valid same-cache job 13211719; it carries no parity inference or score impact. |
+| `13211719` | `diagnostic` | **EXPECTED HYPOTHESIS REJECTION** | HYPOTHESIS REJECTED | failed | none | Valid A/B execution used one canonical cache: A populated 0->377 and A-after/B-before/B-after were byte-identical. Repeatability failed scientifically: one float32 ULP first appears in an E-step posterior scalar, followed by ordered-noise and both-half BPref differences; the target stack stayed exact. |
 
 Job `13209422` warm-cache additions included: `run_local_bucket_big_jit`, `relion_coarse_diff2_projector_f32`, `coarse posterior`, `relion_vdam_mstep_fused_projector_x_half`. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_profilematched_39a38f9d6_20260830/analysis/arms.tsv`.
 
@@ -73,7 +74,32 @@ Particle `286@particles.128.mrcs` has the exact historical graph-pair red pose. 
 
 Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_samepath_ee673be1f_20260830/analysis/cache_history_summary.json` (SHA-256 `cb13a0d710936a6234dfa242e392b021d0b7f52565eb287b0d32dd14fb8a4782`).
 
-**Conclusion:** long-run cache reuse/deserialization is not necessary. Pair-stable independently compiled cache outcomes narrow the unresolved boundary to **compile or autotune variant versus runtime reduction**. Ordered-shell job `13211317` is **DIAGNOSTIC/RUNNING** with no terminal scientific result.
+**Conclusion:** long-run cache reuse/deserialization is not necessary. Pair-stable independently compiled cache outcomes narrow the unresolved boundary to **compile or autotune variant versus runtime reduction**. Prior ordered-shell attempt `13211317` is **INVALID/SUPERSEDED** by the valid result below.
+
+### Valid same-cache ordered-shell result: job `13211719`
+
+| Cache snapshot | Files | Manifest SHA-256 |
+|---|---:|---|
+| A before | 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| A after | 377 | `2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5` |
+| B before | 377 | `2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5` |
+| B after | 377 | `2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5` |
+
+Both arms used one canonical cache; B added 0 files and changed 0 files. A-after, B-before, and B-after are byte-stable.
+
+| Earliest / downstream boundary | Nonexact extent | Maximum absolute difference | Exact companion |
+|---|---:|---:|---|
+| E-step `max_posterior_per_image` | particle ID `2896` / selected index `178` | 1.1641532182693481e-10 (1 float32 ULP) | pose / rotation / translation / class exact |
+| ordered image power | 27/65 shells | 512.0 | - |
+| ordered sigma numerator | 1/65 shells | 0.00390625 | - |
+| final noise | 24/65 shells | 0.001562500001455192 | - |
+| live BPref | both halves; 12 fields | h0 0.0234375; h1 0.0107421875 | target stack `286` exact |
+
+The Slurm `FAILED 1:0` terminal state is an **expected scientific-gate hypothesis rejection**: both arms completed, the execution and cache proof are valid, and this is not a frozen-score failure.
+
+Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_ordered_noise_shell_samecache_3b5afd98e_20260830T1847ET/analysis/repeatability.json` (SHA-256 `a3c544602c9845e7c514393e6e20b47d153d23ec8b8757c0a60d1b17d5fe2619`); `analysis/jax_cache_validation.json` (SHA-256 `da25be1dbd38b4940fa5e673081136c808d8240fb9e939fd6863408fdaa24794`); log SHA-256 `fedbccb441958eb01a4609c6e7ea12d062d5724afcb706c7a86c04869780dbb4`.
+
+**Conclusion:** identical persistent-cache bytes do not guarantee exact ordered-shell replay. The first captured upstream difference is one float32 ULP in an E-step posterior scalar; discrete selection is still exact before differences become visible in ordered noise and both-half BPref.
 
 ## Speed snapshot
 
@@ -105,9 +131,9 @@ CLI and GUI both default to `relion_fast`. The `reference` mode is diagnostic. T
 
 ## Current hypothesis and next gate
 
-Job 13210232 rejects long-run cache reuse/deserialization as a necessary condition for the GF46 iteration-4 split.
+Job 13211719 rejects same-cache reuse as sufficient for exact ordered-shell repeatability: the earliest captured difference is one float32 ULP in an E-step max-posterior scalar.
 
-Pair-stable head `ee673be1f` follows prior profile-matched head `39a38f9d6` (harness fix `381bf7949`). Evidence: **pair_a is PASS/PASS across cold/warm with byte-stable reuse; pair_b is FAIL@4/FAIL@4 across cold/warm with byte-stable reuse.** Pair-stable independently compiled cache outcomes leave compile/autotune variant versus runtime reduction as the narrowed boundary; ordered-shell job 13211317 is running. No cache-disable or production arithmetic change is authorized by this snapshot.
+Ordered-shell head `3b5afd98e` follows pre-diagnostic head `94bc7d890`; pair-stable head `ee673be1f` follows prior profile-matched head `39a38f9d6` (harness fix `381bf7949`). Evidence: **A populated the canonical cache 0->377; A-after, B-before, and B-after share manifest SHA-256 2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5 with no B additions or changes.** Cache identity is proven. Pose, rotation, translation, and class selection remain exact while the one-ULP posterior difference feeds ordered noise and both-half BPref differences. The next discriminator remains compile/autotune variant versus runtime reduction at or before this E-step scalar. No cache-disable or production arithmetic change is authorized by this snapshot.
 
 ## Evidence and reproducibility
 

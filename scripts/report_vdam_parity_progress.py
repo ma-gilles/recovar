@@ -44,7 +44,13 @@ ACTIVE_DIAGNOSTIC_POLICY = {
     "13208735": ("invalid", "invalid", "cancelled", "INVALID"),
     "13209422": ("invalid", "invalid", "cancelled", "INVALID"),
     "13210232": ("expected_fail_closed", "hypothesis_rejected", "failed", "EXPECTED FAIL-CLOSED"),
-    "13211317": ("diagnostic_running", "pending", "running", "DIAGNOSTIC/RUNNING"),
+    "13211317": ("invalid_superseded", "invalid", "failed", "INVALID/SUPERSEDED"),
+    "13211719": (
+        "expected_hypothesis_rejection",
+        "hypothesis_rejected",
+        "failed",
+        "EXPECTED HYPOTHESIS REJECTION",
+    ),
 }
 CRITICAL_CACHE_MISS_JOBS = frozenset({"13208734", "13208735", "13209422"})
 PROFILE_MATCHED_EVIDENCE = {
@@ -164,6 +170,93 @@ PAIR_STABLE_EVIDENCE = {
             "while leaving compile/autotune variant versus runtime reduction unresolved."
         ),
     },
+}
+SUPERSEDED_ORDERED_SHELL_EVIDENCE = {
+    "invalid_reason": "superseded_by_valid_same_cache_job",
+    "superseded_by": "13211719",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ordered-noise-13211317.out",
+    "evidence_sha256": "fedbccb441958eb01a4609c6e7ea12d062d5724afcb706c7a86c04869780dbb4",
+}
+ORDERED_SHELL_EVIDENCE = {
+    "wrapper_outcome": "failed_expected_scientific_gate",
+    "execution_valid": True,
+    "arm_success_markers": True,
+    "scorecard_failure": False,
+    "hypothesis": "same_cache_ordered_shell_repeatability",
+    "hypothesis_result": "rejected",
+    "source_head": "3b5afd98e8be29a7c631bf7116f0345834274ceb",
+    "pre_diagnostic_head": "94bc7d890472641b02491ec6ef746677dd0f05d8",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ordered-noise-13211719.out",
+    "evidence_sha256": "fedbccb441958eb01a4609c6e7ea12d062d5724afcb706c7a86c04869780dbb4",
+    "evidence_root": (
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+        "vdam_gf46_ordered_noise_shell_samecache_3b5afd98e_20260830T1847ET"
+    ),
+    "repeatability_report": "analysis/repeatability.json",
+    "repeatability_report_sha256": "a3c544602c9845e7c514393e6e20b47d153d23ec8b8757c0a60d1b17d5fe2619",
+    "cache_report": "analysis/jax_cache_validation.json",
+    "cache_report_sha256": "da25be1dbd38b4940fa5e673081136c808d8240fb9e939fd6863408fdaa24794",
+    "slurm": {
+        "terminal_state": "FAILED 1:0",
+        "elapsed": "00:04:32",
+        "max_rss": "2421072K",
+    },
+    "cache_validation": {
+        "result": "pass",
+        "canonical_path": (
+            "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+            "vdam_gf46_ordered_noise_shell_samecache_3b5afd98e_20260830T1847ET/jax_cache"
+        ),
+        "manifest_line_counts": {
+            "ordered_a_before": 0,
+            "ordered_a_after": 377,
+            "ordered_b_before": 377,
+            "ordered_b_after": 377,
+        },
+        "manifest_sha256": {
+            "ordered_a_before": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "ordered_a_after": "2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5",
+            "ordered_b_before": "2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5",
+            "ordered_b_after": "2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5",
+        },
+        "arm_paths_match": True,
+        "arm_b_added_files": 0,
+        "arm_b_changed_files": 0,
+        "arm_b_byte_stable": True,
+    },
+    "earliest_captured_nonexact": {
+        "stage": "E-step",
+        "field": "max_posterior_per_image",
+        "dtype": "float32",
+        "ulps": 1,
+        "max_abs": 1.1641532182693481e-10,
+        "particle_id": 2896,
+        "selected_index": 178,
+        "pose_exact": True,
+        "rotation_exact": True,
+        "translation_exact": True,
+        "class_exact": True,
+    },
+    "ordered_noise": {
+        "image_power": {"nonexact_shells": 27, "shells": 65, "max_abs": 512.0},
+        "sigma2_noise_numerator": {"nonexact_shells": 1, "shells": 65, "max_abs": 0.00390625},
+        "final_sigma2_noise": {
+            "nonexact_shells": 24,
+            "shells": 65,
+            "max_abs": 0.0015625000014551915,
+        },
+    },
+    "bpref": {
+        "exact": False,
+        "nonexact_field_count": 12,
+        "nonexact_halves": [0, 1],
+        "per_half": {
+            "0": {"nonexact_fields": 6, "max_abs": 0.0234375},
+            "1": {"nonexact_fields": 6, "max_abs": 0.0107421875},
+        },
+    },
+    "mstep": {"exact": False, "nonexact_field_count": 16},
+    "target_stack": {"stack_index": 286, "exact": True},
 }
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
@@ -315,11 +408,19 @@ def _validate_active_diagnostics(scorecard: dict[str, Any]) -> None:
         {key: pair_stable.get(key) for key in PAIR_STABLE_EVIDENCE} == PAIR_STABLE_EVIDENCE,
         "13210232: pair-stable evidence changed",
     )
-    ordered_shell = next(row for row in diagnostics if row["job_id"] == "13211317")
+    superseded_ordered_shell = next(row for row in diagnostics if row["job_id"] == "13211317")
     _require(
-        ordered_shell.get("evidence")
-        == "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ordered-noise-13211317.out",
-        "13211317: ordered-shell evidence changed",
+        {
+            key: superseded_ordered_shell.get(key)
+            for key in SUPERSEDED_ORDERED_SHELL_EVIDENCE
+        }
+        == SUPERSEDED_ORDERED_SHELL_EVIDENCE,
+        "13211317: superseded ordered-shell evidence changed",
+    )
+    ordered_shell = next(row for row in diagnostics if row["job_id"] == "13211719")
+    _require(
+        {key: ordered_shell.get(key) for key in ORDERED_SHELL_EVIDENCE} == ORDERED_SHELL_EVIDENCE,
+        "13211719: ordered-shell evidence changed",
     )
 
 
@@ -410,7 +511,9 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and next_gate.get("harness_fix_commit") == "381bf7949"
         and next_gate.get("prior_profile_matched_head") == "39a38f9d6"
         and next_gate.get("pair_stable_head") == "ee673be1f"
-        and next_gate.get("ordered_shell_job") == "13211317"
+        and next_gate.get("ordered_shell_job") == "13211719"
+        and next_gate.get("ordered_shell_head") == "3b5afd98e"
+        and next_gate.get("pre_diagnostic_head") == "94bc7d890"
         and next_gate.get("production_change_authorized") is False,
         "cache discriminator gate changed",
     )
@@ -490,8 +593,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Active boundary diagnostics",
             "",
-            "These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts, expected fail-closed "
-            "hypothesis rejections, and running jobs have no score impact.",
+            "These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts and expected "
+            "hypothesis rejections have no score impact.",
             "",
             "| Job | Role | Status | Scientific outcome | Scheduler state | Score impact | Interpretation |",
             "|---:|---|---|---|---|---|---|",
@@ -546,8 +649,60 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"(SHA-256 `{pair_stable['summary_report_sha256']}`).",
             "",
             "**Conclusion:** long-run cache reuse/deserialization is not necessary. Pair-stable independently "
-            f"compiled cache outcomes narrow the unresolved boundary to **{remaining}**. Ordered-shell job "
-            "`13211317` is **DIAGNOSTIC/RUNNING** with no terminal scientific result.",
+            f"compiled cache outcomes narrow the unresolved boundary to **{remaining}**. Prior ordered-shell "
+            "attempt `13211317` is **INVALID/SUPERSEDED** by the valid result below.",
+        ]
+    )
+    ordered_shell = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13211719")
+    cache = ordered_shell["cache_validation"]
+    counts = cache["manifest_line_counts"]
+    manifests = cache["manifest_sha256"]
+    earliest = ordered_shell["earliest_captured_nonexact"]
+    noise = ordered_shell["ordered_noise"]
+    bpref = ordered_shell["bpref"]
+    lines.extend(
+        [
+            "",
+            "### Valid same-cache ordered-shell result: job `13211719`",
+            "",
+            "| Cache snapshot | Files | Manifest SHA-256 |",
+            "|---|---:|---|",
+            f"| A before | {counts['ordered_a_before']} | `{manifests['ordered_a_before']}` |",
+            f"| A after | {counts['ordered_a_after']} | `{manifests['ordered_a_after']}` |",
+            f"| B before | {counts['ordered_b_before']} | `{manifests['ordered_b_before']}` |",
+            f"| B after | {counts['ordered_b_after']} | `{manifests['ordered_b_after']}` |",
+            "",
+            f"Both arms used one canonical cache; B added {cache['arm_b_added_files']} files and changed "
+            f"{cache['arm_b_changed_files']} files. A-after, B-before, and B-after are byte-stable.",
+            "",
+            "| Earliest / downstream boundary | Nonexact extent | Maximum absolute difference | Exact companion |",
+            "|---|---:|---:|---|",
+            f"| E-step `{earliest['field']}` | particle ID `{earliest['particle_id']}` / selected index "
+            f"`{earliest['selected_index']}` | {earliest['max_abs']:.17g} "
+            f"({earliest['ulps']} float32 ULP) | pose / rotation / translation / class exact |",
+            f"| ordered image power | {noise['image_power']['nonexact_shells']}/"
+            f"{noise['image_power']['shells']} shells | {noise['image_power']['max_abs']:.1f} | - |",
+            f"| ordered sigma numerator | {noise['sigma2_noise_numerator']['nonexact_shells']}/"
+            f"{noise['sigma2_noise_numerator']['shells']} shells | "
+            f"{noise['sigma2_noise_numerator']['max_abs']:.8f} | - |",
+            f"| final noise | {noise['final_sigma2_noise']['nonexact_shells']}/"
+            f"{noise['final_sigma2_noise']['shells']} shells | "
+            f"{noise['final_sigma2_noise']['max_abs']:.16g} | - |",
+            f"| live BPref | both halves; {bpref['nonexact_field_count']} fields | "
+            f"h0 {bpref['per_half']['0']['max_abs']}; h1 {bpref['per_half']['1']['max_abs']} | "
+            f"target stack `{ordered_shell['target_stack']['stack_index']}` exact |",
+            "",
+            "The Slurm `FAILED 1:0` terminal state is an **expected scientific-gate hypothesis rejection**: "
+            "both arms completed, the execution and cache proof are valid, and this is not a frozen-score failure.",
+            "",
+            f"Evidence: `{ordered_shell['evidence_root']}/{ordered_shell['repeatability_report']}` "
+            f"(SHA-256 `{ordered_shell['repeatability_report_sha256']}`); "
+            f"`{ordered_shell['cache_report']}` (SHA-256 `{ordered_shell['cache_report_sha256']}`); "
+            f"log SHA-256 `{ordered_shell['evidence_sha256']}`.",
+            "",
+            "**Conclusion:** identical persistent-cache bytes do not guarantee exact ordered-shell replay. "
+            "The first captured upstream difference is one float32 ULP in an E-step posterior scalar; discrete "
+            "selection is still exact before differences become visible in ordered noise and both-half BPref.",
         ]
     )
     speed = scorecard["speed_snapshot"]
@@ -612,8 +767,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             gate["hypothesis"],
             "",
-            f"Pair-stable head `{gate['pair_stable_head']}` follows prior profile-matched head "
-            f"`{gate['prior_profile_matched_head']}` (harness fix `{gate['harness_fix_commit']}`). Evidence: "
+            f"Ordered-shell head `{gate['ordered_shell_head']}` follows pre-diagnostic head "
+            f"`{gate['pre_diagnostic_head']}`; pair-stable head `{gate['pair_stable_head']}` follows prior "
+            f"profile-matched head `{gate['prior_profile_matched_head']}` (harness fix "
+            f"`{gate['harness_fix_commit']}`). Evidence: "
             f"**{gate['evidence_pattern']}** {gate['narrowed_boundary']} No cache-disable or production "
             "arithmetic change is authorized by this snapshot.",
             "",

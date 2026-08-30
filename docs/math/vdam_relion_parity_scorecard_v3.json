@@ -185,14 +185,96 @@
     },
     {
       "job_id": "13211317",
-      "label": "ordered-shell boundary diagnostic",
+      "label": "superseded ordered-shell boundary attempt",
       "role": "diagnostic",
-      "status": "diagnostic_running",
-      "scientific_outcome": "pending",
-      "scheduler_state": "running",
+      "status": "invalid_superseded",
+      "scientific_outcome": "invalid",
+      "scheduler_state": "failed",
       "score_impact": "none",
+      "invalid_reason": "superseded_by_valid_same_cache_job",
+      "superseded_by": "13211719",
       "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ordered-noise-13211317.out",
-      "note": "Ordered-shell diagnostic is running; no terminal scientific result is claimed."
+      "evidence_sha256": "fedbccb441958eb01a4609c6e7ea12d062d5724afcb706c7a86c04869780dbb4",
+      "note": "Prior ordered-shell attempt is INVALID/SUPERSEDED by valid same-cache job 13211719; it carries no parity inference or score impact."
+    },
+    {
+      "job_id": "13211719",
+      "label": "valid same-cache ordered-shell repeatability discriminator",
+      "role": "diagnostic",
+      "status": "expected_hypothesis_rejection",
+      "scientific_outcome": "hypothesis_rejected",
+      "scheduler_state": "failed",
+      "score_impact": "none",
+      "wrapper_outcome": "failed_expected_scientific_gate",
+      "execution_valid": true,
+      "arm_success_markers": true,
+      "scorecard_failure": false,
+      "hypothesis": "same_cache_ordered_shell_repeatability",
+      "hypothesis_result": "rejected",
+      "source_head": "3b5afd98e8be29a7c631bf7116f0345834274ceb",
+      "pre_diagnostic_head": "94bc7d890472641b02491ec6ef746677dd0f05d8",
+      "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-ordered-noise-13211719.out",
+      "evidence_sha256": "fedbccb441958eb01a4609c6e7ea12d062d5724afcb706c7a86c04869780dbb4",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_ordered_noise_shell_samecache_3b5afd98e_20260830T1847ET",
+      "repeatability_report": "analysis/repeatability.json",
+      "repeatability_report_sha256": "a3c544602c9845e7c514393e6e20b47d153d23ec8b8757c0a60d1b17d5fe2619",
+      "cache_report": "analysis/jax_cache_validation.json",
+      "cache_report_sha256": "da25be1dbd38b4940fa5e673081136c808d8240fb9e939fd6863408fdaa24794",
+      "slurm": {
+        "terminal_state": "FAILED 1:0",
+        "elapsed": "00:04:32",
+        "max_rss": "2421072K"
+      },
+      "cache_validation": {
+        "result": "pass",
+        "canonical_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_ordered_noise_shell_samecache_3b5afd98e_20260830T1847ET/jax_cache",
+        "manifest_line_counts": {
+          "ordered_a_before": 0,
+          "ordered_a_after": 377,
+          "ordered_b_before": 377,
+          "ordered_b_after": 377
+        },
+        "manifest_sha256": {
+          "ordered_a_before": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "ordered_a_after": "2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5",
+          "ordered_b_before": "2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5",
+          "ordered_b_after": "2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5"
+        },
+        "arm_paths_match": true,
+        "arm_b_added_files": 0,
+        "arm_b_changed_files": 0,
+        "arm_b_byte_stable": true
+      },
+      "earliest_captured_nonexact": {
+        "stage": "E-step",
+        "field": "max_posterior_per_image",
+        "dtype": "float32",
+        "ulps": 1,
+        "max_abs": 1.1641532182693481e-10,
+        "particle_id": 2896,
+        "selected_index": 178,
+        "pose_exact": true,
+        "rotation_exact": true,
+        "translation_exact": true,
+        "class_exact": true
+      },
+      "ordered_noise": {
+        "image_power": {"nonexact_shells": 27, "shells": 65, "max_abs": 512.0},
+        "sigma2_noise_numerator": {"nonexact_shells": 1, "shells": 65, "max_abs": 0.00390625},
+        "final_sigma2_noise": {"nonexact_shells": 24, "shells": 65, "max_abs": 0.0015625000014551915}
+      },
+      "bpref": {
+        "exact": false,
+        "nonexact_field_count": 12,
+        "nonexact_halves": [0, 1],
+        "per_half": {
+          "0": {"nonexact_fields": 6, "max_abs": 0.0234375},
+          "1": {"nonexact_fields": 6, "max_abs": 0.0107421875}
+        }
+      },
+      "mstep": {"exact": false, "nonexact_field_count": 16},
+      "target_stack": {"stack_index": 286, "exact": true},
+      "note": "Valid A/B execution used one canonical cache: A populated 0->377 and A-after/B-before/B-after were byte-identical. Repeatability failed scientifically: one float32 ULP first appears in an E-step posterior scalar, followed by ordered-noise and both-half BPref differences; the target stack stayed exact."
     }
   ],
   "speed_snapshot": {
@@ -237,10 +319,12 @@
     "harness_fix_commit": "381bf7949",
     "prior_profile_matched_head": "39a38f9d6",
     "pair_stable_head": "ee673be1f",
-    "ordered_shell_job": "13211317",
-    "hypothesis": "Job 13210232 rejects long-run cache reuse/deserialization as a necessary condition for the GF46 iteration-4 split.",
-    "evidence_pattern": "pair_a is PASS/PASS across cold/warm with byte-stable reuse; pair_b is FAIL@4/FAIL@4 across cold/warm with byte-stable reuse.",
-    "narrowed_boundary": "Pair-stable independently compiled cache outcomes leave compile/autotune variant versus runtime reduction as the narrowed boundary; ordered-shell job 13211317 is running.",
+    "ordered_shell_job": "13211719",
+    "ordered_shell_head": "3b5afd98e",
+    "pre_diagnostic_head": "94bc7d890",
+    "hypothesis": "Job 13211719 rejects same-cache reuse as sufficient for exact ordered-shell repeatability: the earliest captured difference is one float32 ULP in an E-step max-posterior scalar.",
+    "evidence_pattern": "A populated the canonical cache 0->377; A-after, B-before, and B-after share manifest SHA-256 2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5 with no B additions or changes.",
+    "narrowed_boundary": "Cache identity is proven. Pose, rotation, translation, and class selection remain exact while the one-ULP posterior difference feeds ordered noise and both-half BPref differences. The next discriminator remains compile/autotune variant versus runtime reduction at or before this E-step scalar.",
     "production_change_authorized": false
   },
   "history": [
