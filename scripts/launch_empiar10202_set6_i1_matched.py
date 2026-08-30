@@ -80,11 +80,12 @@ RELION_BIND_DIR = Path(
 )
 RELION_BIND_SHA256 = "82b0a8cf2c189463f9cf0181099f4e92ce4365cce3819463c27af44b3c1014a2"
 CUDA_LIBRARY = Path(
-    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/"
-    "pr158_symmetry_h100_gate_r3_20260830/libcuda_backproject_sm90.so"
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "pr158_box800_texture_memory_20260830/lib/"
+    "libcuda_backproject-2249bf352-r3-sealed-sm90.so"
 )
-CUDA_LIBRARY_SHA256 = "e637d87a8ed9fff1c5b7007747e3a6781db021966e099e9a18023b99e7e67fa4"
-CUDA_SOURCE_SHA256 = "da15a71d23a35e541cc95fd25279d6b1f80c1e7cf5be451497c6756d1b621a4b"
+CUDA_LIBRARY_SHA256 = "47a8a5c7878e7ea1f242942918a40d57da6b78ebd791339bd3ac70ec1ae395ac"
+CUDA_SOURCE_SHA256 = "4238bc4eb344c0e4bb12989a0b41fdcf62c455164ab207e3add44612f377ee9a"
 
 RELION_CUDA_LIB_DIR = Path("/usr/local/cuda-12/targets/x86_64-linux/lib")
 RELION_MPI_LIB_DIR = Path("/usr/local/openmpi/cuda-12.6/4.1.6/gcc/lib64")

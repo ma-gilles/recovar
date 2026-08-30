@@ -3,7 +3,7 @@
   "suite": {
     "id": "pr158-k1-realdata-science-equivalence-v1",
     "subject_pr": 158,
-    "subject_commit": "a087087cc722dbff2fb7079648b4f5f782162895",
+    "subject_commit": "2249bf352377aae85ef9f3d378eda86dadef671f",
     "scoring_denominator": 1,
     "scoring_case_ids": [
       "empiar-10202-set06-k1-I1"
@@ -59,7 +59,7 @@
       "role": "scoring",
       "dataset": "10202",
       "requires_execution_binding": true,
-      "expected_subject_commit": "a087087cc722dbff2fb7079648b4f5f782162895",
+      "expected_subject_commit": "2249bf352377aae85ef9f3d378eda86dadef671f",
       "status": "ready_to_launch",
       "scope": "06_Final_Stack only; image set 07 is excluded",
       "rejected_artifacts": [

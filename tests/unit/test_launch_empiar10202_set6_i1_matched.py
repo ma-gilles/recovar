@@ -320,6 +320,6 @@ def test_resolved_job_artifacts_are_canonical(tmp_path: Path) -> None:
 
 
 def test_native_pins_name_sm90_library() -> None:
-    assert MODULE.CUDA_LIBRARY.name == "libcuda_backproject_sm90.so"
-    assert MODULE.CUDA_LIBRARY_SHA256 == "e637d87a8ed9fff1c5b7007747e3a6781db021966e099e9a18023b99e7e67fa4"
+    assert MODULE.CUDA_LIBRARY.name == "libcuda_backproject-2249bf352-r3-sealed-sm90.so"
+    assert MODULE.CUDA_LIBRARY_SHA256 == "47a8a5c7878e7ea1f242942918a40d57da6b78ebd791339bd3ac70ec1ae395ac"
     assert MODULE.RELION_BIND_SHA256 == "82b0a8cf2c189463f9cf0181099f4e92ce4365cce3819463c27af44b3c1014a2"

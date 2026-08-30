@@ -38,12 +38,12 @@ ALLOWED_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex")
 LAUNCHER = Path(__file__).resolve().with_name("launch_empiar10202_set6_i1_matched.py")
 SUBJECT_REPO = Path(
     "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/"
-    "recovar_pr158_symmetry_subject_a087087cc_20260830"
+    "recovar_pr158_box800_subject_2249bf352_20260830"
 )
-SUBJECT_COMMIT = "a087087cc722dbff2fb7079648b4f5f782162895"
-SUBJECT_TREE = "3aef52255d81e1298ced20ee2e0ee6b50735c61d"
+SUBJECT_COMMIT = "2249bf352377aae85ef9f3d378eda86dadef671f"
+SUBJECT_TREE = "4573e7561741eb4120e585730fd73663da7c382c"
 SUBJECT_DRIVER_SHA256 = "40affc02cb772fdee9d73777395d2321faa8d8677515a9fde6defc53b6795293"
-SUBJECT_CUDA_SOURCE_SHA256 = "da15a71d23a35e541cc95fd25279d6b1f80c1e7cf5be451497c6756d1b621a4b"
+SUBJECT_CUDA_SOURCE_SHA256 = "4238bc4eb344c0e4bb12989a0b41fdcf62c455164ab207e3add44612f377ee9a"
 PREPARED_STAR_SHA256 = "d66afb3001e6e43463fb699804fe8b50f8cef1f2ccd9730f5275955b6be7b512"
 PREPARATION_MANIFEST = Path(
     "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
@@ -80,10 +80,11 @@ RELION_SOURCE = Path(
 )
 RELION_SOURCE_COMMIT = "d476e6f6a4f1f37627c06ace5227fc374c0c2b05"
 CUDA_LIBRARY = Path(
-    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/"
-    "pr158_symmetry_h100_gate_r3_20260830/libcuda_backproject_sm90.so"
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "pr158_box800_texture_memory_20260830/lib/"
+    "libcuda_backproject-2249bf352-r3-sealed-sm90.so"
 )
-CUDA_LIBRARY_SHA256 = "e637d87a8ed9fff1c5b7007747e3a6781db021966e099e9a18023b99e7e67fa4"
+CUDA_LIBRARY_SHA256 = "47a8a5c7878e7ea1f242942918a40d57da6b78ebd791339bd3ac70ec1ae395ac"
 RELION_CUDA_LIB_DIR = Path("/usr/local/cuda-12/targets/x86_64-linux/lib")
 RELION_MPI_LIB_DIR = Path("/usr/local/openmpi/cuda-12.6/4.1.6/gcc/lib64")
 SYMMETRY_CONTRACT = {
@@ -106,10 +107,10 @@ FINAL_ENVIRONMENT_TEXT = (
     "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=unset\n"
 )
 SLURM_TEMPLATE_SHA256 = {
-    "recovar_smoke": "ec2c26930d3c403b92e8e7a4c3bccd32e7c65836dcb9b384a7a565af434c7011",
-    "relion_smoke": "738d6446e2ddee09956b6809420cfb21e6a5fae5dabac7089788ff461158af3b",
-    "recovar_full": "c96aad453a5500dec6dd0d243b678aeeebeada492aa932b628b1288fb7d4db16",
-    "relion_full": "bd2b53105ab29681f12fa0deeb7623b97ff2a12a8cdfa985be942e95a9b912fd",
+    "recovar_smoke": "72dad390b3714eca443ee433629cacae5fd1dbe3c28055d02b910ffbd91f534f",
+    "relion_smoke": "5934121c2bcddc29b3c776edd9138d862aa72c19fdb69bb1a73086f8ee1fe22e",
+    "recovar_full": "61b9e97d0c500b542298743ab7cb08e7eb9f916aa10c7badf52f5b2c1bbfc08c",
+    "relion_full": "31695769b117d62c72b8aa0c4a741a62d832b88f53d0c7b0951d30d2f4d49ed9",
 }
 EXPECTED_SCIENTIFIC_CONTRACT = {
     "dataset": "EMPIAR-10202",
