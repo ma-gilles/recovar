@@ -25,6 +25,7 @@ Frozen case-definition SHA-256:
 | Worker-private BPref (`0c5df734b`) | paired serial oracle green | **192--212 s** | exact at 19/20 checkpoints; only `1723@19` leaves the native envelope | 🟡 active correctness target |
 | Particle-private BPref (`c494837c6`) | focused **8/8** | **188 s**; **211 s** with serialized rotations | both arms fail only `1723@19` | 🔴 rejected |
 | Single-stream serial enqueue (`60fab4e4a`) | focused source contract green; H100 build `13170878` | **322 s**; direct envelope **20/20** | exact, but only `-2.1%` versus the `329 s` oracle median | 🔴 rejected as speed solution |
+| EM-batched residuals + one-lane ordered scatter (`ef1f737c6`) | batched residual/scatter gate green | **211--225 s** | initial **20/20**; cross-H100 stress **3/4**, failing arm has historical signature | 🟡 same-H100 repeat gate active |
 
 Nsight job `13168898` profiles the persistent-scratch arm after allocator
 overhead is removed. The RELION VDAM SGD kernel accounts for **92.2%** of GPU
@@ -105,6 +106,23 @@ percentage was host API time largely overlapped with the under-filled serial
 GPU kernels. The next speed design must move packed orientation work onto the
 device, as mature EM does, while explicitly preserving direct-accumulator
 destination order; host-side enqueue batching alone cannot close the gap.
+
+The first combined EM-style design reuses the already-qualified parallel
+projection/residual materializer from `ef1f737c6`, but forces one worker lane
+and retains one final scatter launch per orientation in source order. It does
+not introduce another scorer, projector, residual expression, or BPref
+scatter. H100 build `13171488` is green with binary SHA-256
+`0f4b8aa67bf5...`. Initial GF46 job `13171574` completes in `219 s` and passes
+all 20 direct checkpoints (audit SHA-256 `9c3553a7ef38...`), a **33.4%**
+reduction from the `329 s` oracle median.
+
+Cross-device stress array `13171748` then completes at `211--225 s` on four
+different H100 UUIDs. Three runs pass; the fourth reproduces exactly
+`286@4 / 2903@16 / 903@18`, so the stress result is **3/4** (summary SHA-256
+`f0499b7aa65c...`). This is useful portability evidence but is not the frozen
+same-device repeat gate: the native envelope was generated on physical H100
+`GPU-235ec3bc...`. Same-H100 four-repeat qualification `13171963` is queued on
+that device. The candidate remains unpromoted pending that result.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
@@ -763,7 +781,7 @@ initial basins without inflating one diameter until every result passes.
 | 🟡 | Why did the paired audit look red? | RELION's own four frozen repeats occupy different long-trajectory branches. Candidate versus repeat 1 grows from 1 to 178 particle differences by iteration 57, but candidate versus repeat 3 has **0/3,000** mismatches at both iterations 33 and 57; its repeat-3 map FSC-AUC remains above `0.99999999995`. The native-repeat envelope, not one arbitrarily selected repeat, is the fail-closed scoring contract. |
 | 🟢 | Same-GPU qualification | Autonomous target-H100 native repeats `13121423 / 13121963 / 13122458 / 13122473` completed all 201 checkpoints in `482 / 485 / 484 / 484 s` on the same `GPU-235ec...`. Attempts assigned another UUID exit 75 before science. The earlier iteration-67 continuation `13121209` remains excluded because resuming does not preserve the original minibatch/RNG history. |
 | 🟢 | Closed bounded boundary | Historical iteration **4**, particle `286@particles.128.mrcs`: native retains 100 coarse parents while the noncanonical candidate can retain 101, including `(67,14)`. Canonical lane-index reduction reproduces native support; job `13128280` then passes all particles and maps in 16/16 fresh processes. |
-| ➡️ | What is next? | Reuse mature EM's packed significant-row/indexed-BPref design below the callback: batch device arithmetic across orientations, then enforce deterministic source order per destination during the final accumulation. Simple barrier removal is exact but too slow; private partial-volume regrouping is fast but changes the map. |
+| ➡️ | What is next? | Finish same-H100 repeat qualification of EM-batched residual preparation plus one-lane ordered scatter (`13171963`). If green, run the first full 200-iteration candidate; if red, localize the remaining intra-block atomic-order sensitivity before spending full-trajectory compute. |
 | 🟢 | What finished? | Persistent scratch reached **194--195 s** and passed two exact trajectories (`13168384_4`, repeat 1 of `13168680_0`), but repeat 2 reproduced `286@4 / 2903@16 / 903@18`; its repeat gate is **1/2**, so full-200 dependency `13168744` was cancelled. Dense exact control passes in `334 s`. Worker-private BPref reaches `192--212 s` and misses only `1723@19`; dynamic shared-BPref, CUDA Wavg, and persistent streams all reproduce the historical branch. |
 | ⚪ | Score impact | Diagnostic-only: frozen score remains **2/20** and runtime remains **0/20**. No case, tolerance, denominator, or existing acceptance rule changed. |
 
