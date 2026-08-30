@@ -148,8 +148,10 @@ from recovar.em.dense_single_volume.local_em_engine import (
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_layout import (
+    EXACT_LOCAL_BUCKET_RADIX_ENV,
     LocalBucketSpec,
     LocalHypothesisLayout,
+    _exact_bucket_rotation_size,
     _selected_rotation_matrices,
     bucket_local_hypothesis_layout,
     build_local_adaptive_pass2_hypothesis_layout,
@@ -3384,6 +3386,17 @@ def test_relion_mstep_generation_keeps_source_eulers_float64_until_host_inverse(
 def test_exact_local_fine_grid_precompute_auto_policy():
     assert iteration_loop_module._precompute_exact_local_fine_grid_enabled(5)
     assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(6)
+
+
+def test_exact_local_bucket_radix_can_collapse_adjacent_power_two_shapes(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_BUCKET_RADIX_ENV, "4")
+
+    assert _exact_bucket_rotation_size(32, 5000) == 64
+    assert _exact_bucket_rotation_size(64, 5000) == 64
+    assert _exact_bucket_rotation_size(128, 5000) == 256
+    assert _exact_bucket_rotation_size(256, 5000) == 256
+    assert _exact_bucket_rotation_size(512, 5000) == 1024
+    assert _exact_bucket_rotation_size(1024, 5000) == 1024
 
 
 def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods_without_4096_floor():

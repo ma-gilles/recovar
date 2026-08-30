@@ -10,7 +10,7 @@ import numpy as np
 from recovar import utils
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
-from recovar.em.dense_single_volume.shape_buckets import coarse_bucket
+from recovar.em.dense_single_volume.shape_buckets import coarse_bucket, power_bucket
 from recovar.em.sampling import (
     _normalized_log_weights,
     _wrapped_abs_diff_deg,
@@ -25,6 +25,7 @@ from recovar.em.sampling import (
 )
 
 EXACT_LOCAL_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM"
+EXACT_LOCAL_BUCKET_RADIX_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_RADIX"
 EXACT_LOCAL_BUCKET_MIN_QUANTUM = 256
 
 
@@ -48,6 +49,18 @@ def _exact_bucket_rotation_size(
         return 1
     engine_cap = int(_local_search_engine_rotation_block_size(rotation_block_size))
     if local_rotation_count <= engine_cap:
+        bucket_radix = int(os.environ.get(EXACT_LOCAL_BUCKET_RADIX_ENV, "2"))
+        if bucket_radix < 2:
+            raise ValueError(f"{EXACT_LOCAL_BUCKET_RADIX_ENV} must be at least 2")
+        if bucket_radix != 2:
+            return int(
+                power_bucket(
+                    local_rotation_count,
+                    base=bucket_radix,
+                    minimum=16,
+                    maximum=engine_cap,
+                ),
+            )
         return int(
             coarse_bucket(
                 local_rotation_count,
