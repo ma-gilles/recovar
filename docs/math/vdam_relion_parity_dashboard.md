@@ -288,8 +288,15 @@ wall to **202 s** and fails the strict particle envelope at iterations 4, 16,
 and 18 (**17/20**, audit SHA-256 `c5a2a94cbbf...`). Changing the compiled batch
 shape is therefore rejected. The follow-up keeps the established shared-EM
 shape and launch order while skipping only synthetic repeated rows inside the
-serial native coarse launcher; it must pass a GPU bitwise test and the 20-step
-trajectory before any longer allocation.
+serial native coarse launcher. Commit `fd3104ec6` implements that explicit
+opt-in in the shared coarse CUDA path. H100 build/test job `13179996` proves
+that active rows are bitwise identical to an unpadded call (binary SHA-256
+`0d43c4fdee26...`). Job `13180072` then passes all **20/20** direct particle
+checkpoints (audit SHA-256 `f2c25c39e8f...`) in **205 s**, versus **207 s** for
+the matching native-texture control; pass 1 is **19.08 s** versus **19.90 s**.
+The low-order gain is deliberately not extrapolated. Order-3 profile job
+`13180468` is the bounded discriminator because the selected 180-particle
+halfset otherwise executes at the shared 258-row safe shape.
 
 The second test enables EM's shared local-bucket unification. Job `13177559`
 also passes all 20 direct particle checkpoints (report SHA-256
