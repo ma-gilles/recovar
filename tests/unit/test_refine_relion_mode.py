@@ -8259,7 +8259,10 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
     ):
         assert fused_guard in source_ordered_block
     assert "cuda_backproject.relion_vdam_mstep_fused_x_half(" in source_ordered_block
-    assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_ordered_block
+    assert "cuda_backproject.relion_vdam_mstep_denominator_f32(" in source_ordered_block
+    assert "elif return_source_vdam_operands:" in source_ordered_block
+    assert "not disable_adjoint_y or not disable_adjoint_ctf" in source_ordered_block
+    assert "summed = jnp.zeros_like(proj_for_noise)" not in source_ordered_block
     assert "elif mstep_subtract_ctf_projection:" in source_ordered_block
 
     engine_src = inspect.getsource(local_em_engine.run_local_em_exact)
@@ -8272,7 +8275,7 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
         "_accumulate_relion_vdam_physical_particle_grid(",
         "relion_projector_half_to_texture_full(",
         "projector_full=source_vdam_projector_full",
-        "scoring_rotations=packed_rotations_np",
+        "packed_rotations_np, particle_start, particle_stop",
     ):
         assert route_guard in engine_src
     accumulator_src = inspect.getsource(

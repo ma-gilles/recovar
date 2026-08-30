@@ -97,7 +97,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "float* translation_y" in native_kernel
     assert "if (weight >= significant_weight)" in native_residual
     assert "weight = (weight / weight_norm) * ctf * minvsigma2;" in native_residual
-    assert "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111);" in native_kernel
+    assert "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z1, y1, x1, dd111)" in native_kernel
     assert "PersistentSerialRotations ? 0 : blockIdx.x" in native_kernel
     assert "preprojected_references[image * image_xyz + pixel]" in native_kernel
     assert "physical_image < physical_image_end" in native_kernel
@@ -158,7 +158,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     assert "seen[rotation] = 1" in projector_launcher
     assert "logical_lane + lane_wave * stride" in projector_launcher
     assert "rotation_offset * translation_count" in projector_launcher
-    assert "relion_vdam_denominator_after_sgd_f32_kernel<<<" in projector_launcher
+    assert "launch_relion_vdam_mstep_denominator_f32(" in projector_launcher
     assert "constexpr int kRelionVdamWorkerStreams = 8" in projector_launcher
     assert "const int lane = worker_lanes_host[particle]" in projector_launcher
     assert "if (lane_started[lane])" in projector_launcher
@@ -466,6 +466,17 @@ def test_relion_vdam_mstep_sums_f32_validates_reference_shape():
         )
 
 
+def test_relion_vdam_mstep_denominator_f32_validates_batch_shape():
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(ValueError, match="posterior batch dimension must match ctf"):
+        cuda_backproject.relion_vdam_mstep_denominator_f32.__wrapped__(
+            jnp.ones((2, 3), dtype=jnp.float32),
+            jnp.ones((2, 3), dtype=jnp.float32),
+            jnp.ones((1, 4, 5), dtype=jnp.float32),
+        )
+
+
 def test_relion_vdam_mstep_fused_x_half_validates_reference_shape():
     import recovar.cuda_backproject as cuda_backproject
 
@@ -593,6 +604,66 @@ def test_relion_vdam_mstep_sums_f32_matches_source_order_and_translation(
 
     np.testing.assert_allclose(np.asarray(actual_num), expected_num, rtol=0.0, atol=2e-6)
     np.testing.assert_allclose(np.asarray(actual_den), expected_den, rtol=0.0, atol=2e-6)
+
+
+@pytest.mark.gpu
+def test_relion_vdam_mstep_denominator_f32_is_bitwise_equal_to_full_reducer(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    rng = np.random.default_rng(9127)
+    n_particles, n_rotations, n_translations, n_pixels = 2, 3, 7, 137
+    images = (
+        rng.normal(size=(n_particles, n_pixels))
+        + 1j * rng.normal(size=(n_particles, n_pixels))
+    ).astype(np.complex64)
+    ctf = rng.uniform(-1.5, 1.5, size=images.shape).astype(np.float32)
+    minvsigma2 = rng.uniform(0.125, 2.0, size=images.shape).astype(np.float32)
+    posterior = rng.uniform(
+        0.0,
+        0.5,
+        size=(n_particles, n_rotations, n_translations),
+    ).astype(np.float32)
+    posterior[0, 1, ::2] = 0.0
+    translations = rng.uniform(
+        -0.05,
+        0.05,
+        size=(n_translations, 2),
+    ).astype(np.float32)
+    reference = (
+        rng.normal(size=(n_particles, n_rotations, n_pixels))
+        + 1j * rng.normal(size=(n_particles, n_rotations, n_pixels))
+    ).astype(np.complex64)
+
+    with jax.default_device(gpu_device):
+        _, full_denominator = cuda_backproject.relion_vdam_mstep_sums_f32(
+            jnp.asarray(images),
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+            jnp.asarray(translations),
+            jnp.arange(n_pixels, dtype=jnp.int32),
+            jnp.asarray(reference),
+            (16, 16),
+        )
+        denominator_only = cuda_backproject.relion_vdam_mstep_denominator_f32(
+            jnp.asarray(ctf),
+            jnp.asarray(minvsigma2),
+            jnp.asarray(posterior),
+        )
+        jax.block_until_ready((full_denominator, denominator_only))
+
+    np.testing.assert_array_equal(
+        np.asarray(denominator_only).view(np.uint32),
+        np.asarray(full_denominator).view(np.uint32),
+    )
 
 
 @pytest.mark.gpu

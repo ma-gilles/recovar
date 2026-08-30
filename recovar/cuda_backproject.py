@@ -543,6 +543,9 @@ _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
+_TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
+    "cuda_relion_vdam_mstep_denominator_f32"
+)
 _TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF = "cuda_relion_vdam_mstep_fused_x_half"
 _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF = (
     "cuda_relion_vdam_mstep_fused_projector_x_half"
@@ -630,6 +633,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_RELION_TRANSLATE_BPREF_F32, "RelionTranslateBprefF32"),
     (_TARGET_RELION_BPREF_OPERANDS_F32, "RelionBprefOperandsF32"),
     (_TARGET_RELION_VDAM_MSTEP_SUMS_F32, "RelionVdamMstepSumsF32"),
+    (
+        _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32,
+        "RelionVdamMstepDenominatorF32",
+    ),
     (_TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF, "RelionVdamMstepFusedXHalf"),
     (
         _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
@@ -1644,6 +1651,60 @@ def relion_vdam_mstep_sums_f32(
         reference,
         image_h=np.int64(image_h),
         image_half_width=np.int64(image_w // 2 + 1),
+    )
+
+
+@jax.jit
+def relion_vdam_mstep_denominator_f32(
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior_over_weight_norm: jax.Array,
+) -> jax.Array:
+    """Reduce the RELION VDAM denominator without materializing its numerator.
+
+    This exposes the denominator pass already shared by the fused VDAM scatter.
+    Translation weights are consumed sequentially in RELION statement order.
+    """
+
+    for name, value in (
+        ("ctf", ctf),
+        ("minvsigma2", minvsigma2),
+        ("posterior_over_weight_norm", posterior_over_weight_norm),
+    ):
+        if value.dtype != jnp.float32:
+            raise TypeError(f"{name} must be float32, got {value.dtype}")
+    if ctf.ndim != 2:
+        raise ValueError(f"ctf must have shape (batch, pixels), got {ctf.shape}")
+    if minvsigma2.shape != ctf.shape:
+        raise ValueError("minvsigma2 must have the same shape as ctf")
+    if posterior_over_weight_norm.ndim != 3:
+        raise ValueError(
+            "posterior_over_weight_norm must have shape "
+            "(batch, rotations, translations)"
+        )
+    if posterior_over_weight_norm.shape[0] != ctf.shape[0]:
+        raise ValueError("posterior batch dimension must match ctf")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION VDAM M-step denominator requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION VDAM M-step denominator was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    output_shape = (
+        ctf.shape[0],
+        posterior_over_weight_norm.shape[1],
+        ctf.shape[1],
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32,
+        jax.ShapeDtypeStruct(output_shape, jnp.float32),
+        vmap_method="sequential",
+    )(
+        ctf,
+        minvsigma2,
+        posterior_over_weight_norm,
     )
 
 

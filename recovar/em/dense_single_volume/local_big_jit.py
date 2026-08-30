@@ -1743,6 +1743,16 @@ def run_local_bucket_big_jit(
                 recon_volume_shape,
                 float(mstep_max_r),
             )
+        elif return_source_vdam_operands:
+            # The source-faithful outer scatter recomputes the residual
+            # numerator in physical RELION launch order.  Only its denominator
+            # is consumed inside this JIT for the noise statistics, so avoid a
+            # duplicate image translation/reference subtraction pass here.
+            ctf_probs = cuda_backproject.relion_vdam_mstep_denominator_f32(
+                bpref_ctf,
+                jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
+                jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+            )
         else:
             summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
                 jnp.asarray(
@@ -1769,7 +1779,9 @@ def run_local_bucket_big_jit(
         summed = summed - frefctf_delta
 
     flat_ctf_probs = ctf_probs.reshape(batch_size * local_rotations.shape[1], ctf_probs.shape[-1])
-    if not source_ordered_vdam_scattered:
+    if not source_ordered_vdam_scattered and (
+        not disable_adjoint_y or not disable_adjoint_ctf
+    ):
         flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
         Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
             flat_summed,

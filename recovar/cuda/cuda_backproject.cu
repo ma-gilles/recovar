@@ -5125,6 +5125,38 @@ __global__ void relion_vdam_denominator_after_sgd_f32_kernel(
     denominator[output] = Fweight;
 }
 
+cudaError_t launch_relion_vdam_mstep_denominator_f32(
+    cudaStream_t stream,
+    const float* ctf,
+    const float* minvsigma2,
+    const float* posterior,
+    float* denominator,
+    int64_t particle_count,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_count)
+{
+    const int64_t denominator_count =
+        particle_count * rotation_count * pixel_count;
+    if (denominator_count == 0) return cudaSuccess;
+    constexpr int block_size = 256;
+    relion_vdam_denominator_after_sgd_f32_kernel<<<
+        static_cast<unsigned int>(
+            (denominator_count + block_size - 1) / block_size),
+        block_size,
+        0,
+        stream>>>(
+        ctf,
+        minvsigma2,
+        posterior,
+        denominator,
+        particle_count,
+        rotation_count,
+        translation_count,
+        pixel_count);
+    return cudaGetLastError();
+}
+
 template <bool INLINE_PROJECTOR>
 __global__ void relion_vdam_mstep_fused_x_half_kernel(
     const float2* images,
@@ -6796,26 +6828,17 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             err = cudaGetLastError();
             if (err != cudaSuccess) goto cleanup;
         }
-        {
-            const int64_t denominator_count =
-                n_particles * rotation_count * pixel_count;
-            relion_vdam_denominator_after_sgd_f32_kernel<<<
-                static_cast<unsigned int>(
-                    (denominator_count + BLOCK_SIZE - 1) / BLOCK_SIZE),
-                BLOCK_SIZE,
-                0,
-                stream>>>(
-                    ctf,
-                    minvsigma2,
-                    posterior_over_weight_norm,
-                    denominator_sum,
-                    n_particles,
-                    rotation_count,
-                    translation_count,
-                    pixel_count);
-            err = cudaGetLastError();
-            if (err != cudaSuccess) goto cleanup;
-        }
+        err = launch_relion_vdam_mstep_denominator_f32(
+            stream,
+            ctf,
+            minvsigma2,
+            posterior_over_weight_norm,
+            denominator_sum,
+            n_particles,
+            rotation_count,
+            translation_count,
+            pixel_count);
+        if (err != cudaSuccess) goto cleanup;
         err = cudaStreamSynchronize(stream);
     }
 
@@ -10158,6 +10181,66 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionVdamMstepDenominatorF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior_over_weight_norm,
+    ffi::Result<ffi::AnyBuffer> denominator_sum)
+{
+    if (ctf.element_type() != ffi::DataType::F32 ||
+        minvsigma2.element_type() != ffi::DataType::F32 ||
+        posterior_over_weight_norm.element_type() != ffi::DataType::F32 ||
+        denominator_sum->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepDenominatorF32: inputs/output must be F32");
+
+    const auto ctf_dims = ctf.dimensions();
+    const auto noise_dims = minvsigma2.dimensions();
+    const auto posterior_dims = posterior_over_weight_norm.dimensions();
+    const auto denominator_dims = denominator_sum->dimensions();
+    if (ctf_dims.size() != 2 || ctf_dims[0] <= 0 || ctf_dims[1] <= 0 ||
+        noise_dims.size() != 2 || noise_dims[0] != ctf_dims[0] ||
+        noise_dims[1] != ctf_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepDenominatorF32: ctf/minvsigma2 must have matching (B,P) shapes");
+    if (posterior_dims.size() != 3 || posterior_dims[0] != ctf_dims[0] ||
+        posterior_dims[1] <= 0 || posterior_dims[2] <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepDenominatorF32: posterior must have shape (B,R,T)");
+    if (denominator_dims.size() != 3 ||
+        denominator_dims[0] != posterior_dims[0] ||
+        denominator_dims[1] != posterior_dims[1] ||
+        denominator_dims[2] != ctf_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepDenominatorF32: output must have shape (B,R,P)");
+
+    cudaError_t err = launch_relion_vdam_mstep_denominator_f32(
+        stream,
+        static_cast<const float*>(ctf.untyped_data()),
+        static_cast<const float*>(minvsigma2.untyped_data()),
+        static_cast<const float*>(posterior_over_weight_norm.untyped_data()),
+        static_cast<float*>(denominator_sum->untyped_data()),
+        ctf_dims[0],
+        posterior_dims[1],
+        posterior_dims[2],
+        ctf_dims[1]);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionVdamMstepDenominatorF32, RelionVdamMstepDenominatorF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
 
