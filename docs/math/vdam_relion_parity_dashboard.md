@@ -19,11 +19,11 @@ Frozen case-definition SHA-256:
 | Question | Current answer |
 |---|---|
 | What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. Posterior batching, coarse-bookkeeping fusion, raw-image caching, and compact BPref tail launches are rejected speed probes and are reverted. |
-| What is running now? | No speed job. The mature-EM projection-cache retry completed its paired same-H100 decision and is reverted at source head `dd36bb5d1`; the accepted path is clean. |
+| What is running now? | No speed job is active. Balanced same-H100 job `13198427` rejected 80M exact-local x-half projection microbatches: the timed arm was slower than 40M after both executable palettes were warm. Source defaults and the frozen score are unchanged. |
 | Did the latest short gate improve? | No. Exact matrix keys remove the cache's large wrong-ID failure, but the remaining cached gather/execution path flips two near-tie particles at iteration 1 and then fails all 20 checkpoints. The uncached control on the identical physical H100 passes the four-repeat native envelope **20/20** with zero mismatches. |
 | Where is correctness stuck? | The frozen v3 K=1 score is still **2/20 complete strict trajectories**. Long-run controller/map drift, not fixed-state scorer arithmetic, remains the correctness boundary. |
 | Where is speed stuck? | Warm expectation remains dominant. The cached path removes repeated file reads, but pass 1, exact-local pass 2, current-size executable churn, and ordered BPref work remain much larger than the outer VDAM M-step. |
-| What happens next? | Keep the accepted source-faithful BPref topology and target exact-local pass-2 executable/current-size shape churn using EM's static-shape/big-JIT scheduling. Do not retry projection/raw caching, posterior batching, coarse bookkeeping fusion, local-bucket unification, or padded BPref tail compaction on GF46. |
+| What happens next? | Keep the proven 40M boundary and target exact current-size executable churn without padding score/BPref reductions. The cheapest next discriminator should separate first-signature compile/cache cost from warm execution for the 30 Fourier current sizes. Do not retry larger projection microbatches, projection/raw caching, posterior batching, coarse bookkeeping fusion, local-bucket unification, or padded BPref tail compaction on GF46. |
 
 #### Current speed decision ledger
 
@@ -35,6 +35,25 @@ Frozen case-definition SHA-256:
 | Shared mature-EM raw-image cache (`9cb34ddf2`) | 4/4 focused CPU | 20/20 against four repeats | exact-control profiled pre-artifact **172.20 s** vs **169.40 s** | 🔴 reverted by `274e4062d`: `+1.7%` slower |
 | EM significant-row compact BPref launch counts (`9c17c6024 / dd33cf053`) | CPU **25/25**; H100 shortened-grid buffers byte-exact **3/3** | particle **4 x 20/20**; maps **4 x 20/20**, minimum FSC-AUC `0.999999999782` | **191 s** vs **182 s**; pre-artifact **176.36 s** vs **168.18 s** | 🔴 rejected and reverted at `0a1ac0eb5`: `+4.9%` pre-artifact, BPref unchanged |
 | EM exact-local projection cache, compact storage + exact matrix keys (`464c5d2b4 / e2d2e5b5d`) | CPU focused **3/3**; H100 **4/4**; duplicate projections byte-exact | cached **0/20**, first fail @1; paired uncached **20/20** | cached **223 s**, uncached **197 s** on `GPU-97adb...` | 🔴 rejected and reverted at `dd36bb5d1`: cache path flips exact fine-score ties and is slower |
+| EM larger x-half projection microbatches, 80M vs 40M row-pixels | existing planner guards; unchanged source | 80M admission `13197301`: direct particle envelope **20/20**, candidate-vs-control iteration 1 exact; timed 80M/control coverage **46/80 vs 44/80** | balanced timed wall **318 s vs 304 s** on one H100/cache | 🔴 rejected: `+4.6%` slower |
+
+Balanced job `13198427` completed `0:0` in `29:58` on `della-h19g3`, physical
+H100 `GPU-97adb339-219f-d72d-11c9-74dc92fcff8c`, from immutable source
+`b6e2578e3`. It ran warm-40M, warm-80M, timed-80M, then timed-40M with one
+shared JAX cache. The warm walls were `659 / 497 s`, demonstrating the large
+cache-placement bias that made an unbalanced comparison unsafe. After both
+palettes were warm, 80M took **318 s** and 40M **304 s**. Timed 80M also
+increased expectation `278.58 / 264.71 s`, pass 2 `172.57 / 161.02 s`,
+halfset-0 big-JIT `87.96 / 82.62 s`, and packing `9.45 / 8.18 s`; its smaller
+bucket count did not reduce warm execution. Direct four-native particle audits
+accept `46/80` 80M checkpoints (first miss 47) and `44/80` control checkpoints
+(first miss 42), so no correctness regression is attributed to the batching
+arm, but the runtime hypothesis is rejected. Report SHA-256 values are
+`360cb58af1d7...` / `17d8bf52857e...` for the particle audits and
+`66aa25bf6ef2...` / `0f64d802bd90...` for the profile summaries. Artifacts are
+under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_xhalf_projection40m80m_pair80_b6e2578e3_20260830`.
+The proven 40M default remains authoritative; no frozen score cell changes.
 
 Raw-cache discriminator `13191733` used the control CUDA binary SHA-256
 `47b51660a0fbd991f862ee1054ea756f3a1cc65ceb1275eaf2fcb74dc3d038f6`,
@@ -1351,7 +1370,7 @@ pre-divergence schedule gates; runtime remains open for every row.
 | [ ] | GF61 | 101 | low noise, Kent | fail @41 | fail @40 | fail @40 | 6.40x | **FAIL** |
 | [ ] | GF62 | 101 | Kent, junk particles, translations | pass | pass | fail @20 | 7.21x | **FAIL: controller/runtime** |
 
-Last scientific update: **2026-08-29 07:10 ET**
+Last scientific update: **2026-08-30 12:06 ET**
 
 Tracking branch: `codex/vdam-relion-parity-20260820`
 
