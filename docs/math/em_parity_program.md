@@ -44,12 +44,45 @@ inside the completed control distributions; it is not a correctness
 promotion. Profile/audit SHA-256 values are `df37ad57599c...` and
 `495babb65a1c...`.
 
-The active single performance hypothesis now moves to shared pass 2, which is
-69% of the candidate wall and contains 263.1 s of big-JIT work, 76.7 s of
-ordered backprojection, and 32.1 s of packing. First inspect and reuse the
-mature supplied-map EM batching path; do not create a VDAM-only scorer. The
-frozen score remains **2/20 strict** and runtime remains **0/20**. No generic
-RECOVAR suite was run and no tolerance, case, baseline, or denominator changed.
+A controlled two-process cache pair in one Slurm allocation now separates
+compilation from steady execution without changing the candidate. Job
+`13186431` ran both 80-step processes on physical H100
+`GPU-97adb339...`, immutable head `1622cc7a0`, and one shared, initially empty
+JAX cache. The cold arm took **702 s** and the warm arm **372 s**, a
+**330 s / 47.0%** within-allocation reduction. Cold/warm expectation was
+`659.1 / 329.0 s`; pass 1 `137.9 / 89.4 s`; pass 2 `488.9 / 210.2 s`;
+big-JIT `278.2 / 112.9 s`; packing `35.9 / 11.8 s`; and ordered
+backprojection `79.2 / 47.6 s`. The first process created 75 big-JIT cache
+signatures; the second needed 12 additional signatures because its legal
+trajectory visited different bucket/current-size combinations. Direct audits
+accept **23/80** and **43/80**, both inside the completed matched-control
+range rather than a new correctness boundary. Profile SHA-256 values are
+`26e309e5ee20... / 5cc141a47d25...`; audit SHA-256 values are
+`c53ff97ee339... / 3b6665a2f3de...`.
+
+Four native RELION runs reach iteration 80 in `59 / 61 / 60 / 60 s` and
+finish iteration 200 in `481 / 482 / 481 / 482 s`. The warm RECOVAR prefix is
+therefore still about **6.2x** the native 0--80 median, although this comparison
+is across physical H100s; only the 702-to-372 cache delta is a controlled
+same-allocation result.
+
+Source inspection against mature supplied-map EM closes the code-reuse audit:
+VDAM already shares EM's stable image-axis padding, radix rotation buckets,
+compact active-row planner/scorer, exact fine-diff2 CUDA boundary, and fused
+sequential-Wavg reducer. The remaining semantic split is deliberate:
+source-faithful VDAM returns physical operands and uses ordered RELION BPref
+scatter, whereas supplied-map EM can use its fused indexed BPref launch.
+Historical persistent/private-accumulator attempts were faster but failed the
+unchanged trajectory gate, so they are not candidates for silent reuse.
+
+The active single performance hypothesis is now that the **warm** residual is
+split between useful exact pass-2 CUDA work and a small number of new
+current-size/bucket compilations. The next bounded measurement is a warm-cache
+Nsight trace with compilation reported separately. It must identify the
+dominant repeated kernel/API boundary before changing either shape capacity or
+ordered BPref scheduling; no VDAM-only scorer will be added. The frozen score
+remains **2/20 strict** and runtime remains **0/20**. No generic RECOVAR suite
+was run and no tolerance, case, baseline, or denominator changed.
 
 ### 2026-08-29 canonical coarse cutoff qualification
 

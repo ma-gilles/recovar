@@ -444,11 +444,26 @@ frozen-score promotion. Profile and audit SHA-256 values are
 | CUDA Wavg | 942 | 362.6 | 507.8 | 46/80 |
 | Radix-4 buckets | 894 | 360.0 | 455.9 | 23/80; repeats 46/46/68 |
 | Coarse shared prefetch | **657** | **128.9** | 455.2 | 44/80 |
+| Coarse prefetch, paired cold cache | 702 | 137.9 | 488.9 | 23/80 |
+| Coarse prefetch, paired warm cache | **372** | **89.4** | **210.2** | 43/80 |
 
-Pass 2 is now the dominant runtime target: big-JIT `263.1 s`, ordered
-backprojection `76.7 s`, and packing `32.1 s`. The next implementation gate is
-to reuse mature supplied-map EM pass-2 batching inside the shared path while
-preserving the already-qualified arithmetic and launch chronology.
+The cache pair is Slurm `13186431`, with both arms in one allocation on
+`GPU-97adb339...`. Reusing the initially empty cache cuts wall by **47.0%**
+(`702 -> 372 s`), big-JIT by **59.4%** (`278.2 -> 112.9 s`), and packing by
+**67.1%** (`35.9 -> 11.8 s`). It does not close runtime: four native RELION
+prefixes reach iteration 80 in `59--61 s`, so the warm candidate remains about
+**6.2x** the native median across physical H100s. The cold/warm direct audits
+accept 23/80 and 43/80, within the prior 23--68 control spread.
+
+The shared-code audit finds no missing parallel VDAM implementation to copy.
+Both modes already use EM's stable bucket padding, compact active rows, exact
+fine scorer, and fused sequential-Wavg helper. The remaining split is the
+science-critical BPref destination/order: VDAM uses physical source operands
+and ordered scatter; supplied-map EM can use fused indexed BPref. Earlier
+persistent and private-volume variants changed long trajectories and remain
+rejected. The next gate is therefore a warm-cache GPU trace that distinguishes
+repeated exact CUDA work from the 12 new trajectory-specific compile
+signatures before one shared implementation change is selected.
 
 ### Why VDAM currently trails supplied-map EM
 
