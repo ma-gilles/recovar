@@ -7,6 +7,7 @@ SCRIPT = Path("scripts/run_vdam_expected_accuracy_ab_panel.sbatch")
 GPU_HELPER = Path("scripts/vdam_gpu_selection.sh")
 BOUNDARY_SCRIPT = Path("scripts/run_vdam_first_state_boundary_capture.sbatch")
 BPREF_CHUNK_SCRIPT = Path("scripts/run_vdam_bpref_particle_chunk_panel.sbatch")
+WARM_NSYS_SCRIPT = Path("scripts/run_vdam_warm_cache_nsys_pair.sbatch")
 
 
 def test_expected_accuracy_ab_panel_is_same_allocation_and_fail_closed() -> None:
@@ -67,6 +68,38 @@ def test_boundary_runner_allows_a_pinned_shared_jax_cache() -> None:
         "${VDAM_JAX_COMPILATION_CACHE_DIR:-${OUTPUT_ROOT}/jax_cache}"
     ) in text
     assert 'touch "${JAX_COMPILATION_CACHE_DIR}/SAFE_TO_DELETE"' in text
+
+
+def test_boundary_runner_supports_a_bounded_delayed_nsys_trace() -> None:
+    text = BOUNDARY_SCRIPT.read_text()
+
+    assert "VDAM_NSYS_OUTPUT=${VDAM_NSYS_OUTPUT:-}" in text
+    assert '[[ "${VDAM_NSYS_OUTPUT}" = /* ]]' in text
+    assert 'test -x "${VDAM_NSYS_BIN}"' in text
+    assert '--trace=cuda,nvtx,osrt' in text
+    assert '--sample=none' in text
+    assert '--cpuctxsw=none' in text
+    assert '--kill=none' in text
+    assert '"--delay=${VDAM_NSYS_DELAY_S}"' in text
+    assert '"--duration=${VDAM_NSYS_DURATION_S}"' in text
+    assert 'test -s "${VDAM_NSYS_OUTPUT}.nsys-rep"' in text
+    assert '"${RUN_COMMAND[@]}"' in text
+
+
+def test_warm_nsys_pair_reuses_one_cache_and_profiles_only_repeat_two() -> None:
+    text = WARM_NSYS_SCRIPT.read_text()
+
+    assert 'for repeat in 1 2' in text
+    assert 'shared_cache=${OUTPUT_ROOT}_jax_cache' in text
+    assert 'touch "${OUTPUT_ROOT}/SAFE_TO_DELETE" "${shared_cache}/SAFE_TO_DELETE"' in text
+    assert 'if [[ "${repeat}" == 2 ]]' in text
+    assert 'nsys_output=${run_root}/nsight/vdam_warm' in text
+    assert 'VDAM_JAX_COMPILATION_CACHE_DIR="${shared_cache}"' in text
+    assert 'VDAM_NSYS_OUTPUT="${nsys_output}"' in text
+    assert 'TARGET_GPU_UUID="${selected_gpu_uuid}"' in text
+    assert 'CAPTURE_NATIVE_REPLAY=0' in text
+    assert 'bash "${REPO_ROOT}/scripts/run_vdam_first_state_boundary_capture.sbatch"' in text
+    assert 'touch "${OUTPUT_ROOT}/COMPLETED"' in text
 
 
 def test_bpref_particle_chunk_panel_reuses_and_interleaves_the_boundary_runner() -> None:

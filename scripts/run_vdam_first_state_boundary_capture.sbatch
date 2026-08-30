@@ -49,6 +49,27 @@ case "${BOUNDARY_DETERMINISTIC_CUDA}" in
   0|1) ;;
   *) echo "BOUNDARY_DETERMINISTIC_CUDA must be 0 or 1" >&2; exit 2 ;;
 esac
+VDAM_NSYS_OUTPUT=${VDAM_NSYS_OUTPUT:-}
+VDAM_NSYS_BIN=${VDAM_NSYS_BIN:-/opt/nvidia/nsight-systems/2025.3.2/target-linux-x64/nsys}
+VDAM_NSYS_DELAY_S=${VDAM_NSYS_DELAY_S:-120}
+VDAM_NSYS_DURATION_S=${VDAM_NSYS_DURATION_S:-120}
+if [[ -n "${VDAM_NSYS_OUTPUT}" ]]; then
+  [[ "${VDAM_NSYS_OUTPUT}" = /* ]] || {
+    echo "VDAM_NSYS_OUTPUT must be an absolute output base" >&2
+    exit 2
+  }
+  test -x "${VDAM_NSYS_BIN}"
+  [[ "${VDAM_NSYS_DELAY_S}" =~ ^[0-9]+$ ]] || {
+    echo "VDAM_NSYS_DELAY_S must be a non-negative integer" >&2
+    exit 2
+  }
+  [[ "${VDAM_NSYS_DURATION_S}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "VDAM_NSYS_DURATION_S must be a positive integer" >&2
+    exit 2
+  }
+  mkdir -p "$(dirname "${VDAM_NSYS_OUTPUT}")"
+  test ! -e "${VDAM_NSYS_OUTPUT}.nsys-rep"
+fi
 RELION_BINARY=${RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
 REFERENCE_RELION_DIR=${REFERENCE_RELION_DIR:-$(dirname "${RELION_OPTIMISER}")}
 NATIVE_ROOT=${OUTPUT_ROOT}/native_continuation
@@ -382,11 +403,33 @@ sha256sum "${STATIC_INPUTS[@]}" > "${PROVENANCE}/static_inputs.sha256"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 
 start_epoch=$(date +%s)
+RUN_COMMAND=("${COMMAND[@]}")
+if [[ -n "${VDAM_NSYS_OUTPUT}" ]]; then
+  "${VDAM_NSYS_BIN}" --version > "${PROVENANCE}/nsys_version.txt"
+  RUN_COMMAND=(
+    "${VDAM_NSYS_BIN}" profile
+    --trace=cuda,nvtx,osrt
+    --sample=none
+    --cpuctxsw=none
+    --kill=none
+    --force-overwrite=true
+    "--delay=${VDAM_NSYS_DELAY_S}"
+    "--duration=${VDAM_NSYS_DURATION_S}"
+    -o "${VDAM_NSYS_OUTPUT}"
+    "${COMMAND[@]}"
+  )
+  printf '%q ' "${RUN_COMMAND[@]}" > "${PROVENANCE}/nsys_command.sh"
+  printf '\n' >> "${PROVENANCE}/nsys_command.sh"
+fi
 (
   cd "${REPO_ROOT}"
-  "${COMMAND[@]}"
+  "${RUN_COMMAND[@]}"
 ) > "${RECOVAR_ROOT}/runner.stdout" 2> "${RECOVAR_ROOT}/runner.stderr"
 wall_s=$(( $(date +%s) - start_epoch ))
+
+if [[ -n "${VDAM_NSYS_OUTPUT}" ]]; then
+  test -s "${VDAM_NSYS_OUTPUT}.nsys-rep"
+fi
 
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_class001.mrc"
 test -s "${RECOVAR_ROOT}/run_it${iteration_tag}_data.star"
@@ -446,7 +489,8 @@ test "$(sha256sum "${CUDA_SOURCE_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUD
   "${CAPTURE_COARSE_SCORE}" "${CAPTURE_NATIVE_REPLAY}" "${wall_s}" "${CASE_ID}" \
   "${VDAM_SCORECARD}" "${TARGET_RELION_PERTURBATION}" \
   "${TARGET_RELION_PERTURBATION_SOURCE}" \
-  "${BOUNDARY_DETERMINISTIC_CUDA}" <<'PY'
+  "${BOUNDARY_DETERMINISTIC_CUDA}" "${VDAM_NSYS_OUTPUT}" \
+  "${VDAM_NSYS_DELAY_S}" "${VDAM_NSYS_DURATION_S}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -471,6 +515,9 @@ payload = {
     "target_relion_perturbation_source": sys.argv[18],
     "deterministic_cuda": bool(int(sys.argv[19])),
     "cuda_launch_blocking": int(sys.argv[19]),
+    "nsys_output": sys.argv[20] or None,
+    "nsys_delay_s": int(sys.argv[21]) if sys.argv[20] else None,
+    "nsys_duration_s": int(sys.argv[22]) if sys.argv[20] else None,
 }
 Path(sys.argv[1]).write_text(
     json.dumps(payload, indent=2, sort_keys=True) + "\n"
