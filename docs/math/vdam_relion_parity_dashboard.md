@@ -34,6 +34,9 @@ Frozen case-definition SHA-256:
 | Persistent rotations + ordered collision lanes (`6a201243a`) | focused GPU green | **458 s** through 20 | direct particle envelope **20/20** | 🔴 rejected: synchronization cost |
 | Persistent rotations + one conflict leader (`2396a2b49`) | focused GPU green | **84 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than ordered launches |
 | Persistent rotations + ordered warp coalescing (`9265597b7`) | focused source + H100 gate green | **277 s** through 20 | direct particle envelope **20/20** | 🔴 exact smoke, slower than 204 s arm |
+| Persistent rotations + labeled fixed-tree reduction (`77d9ed01a`) | focused source + H100 gate green | **66.7 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than fixed-warp launches |
+| Shared EM native-texture coarse scorer (`ecab47c05`) | direct particle envelope **20/20** | **207 s** through 20 | audit SHA-256 `0e28f7f689e...` | 🟡 trajectory-safe, no short-run wall improvement |
+| Shared EM unified local bucket shapes (`ecab47c05`) | direct particle envelope **20/20** | **208 s** through 20 | audit SHA-256 `7d38a268864...` | 🔴 inert on GF46; buckets were already unified |
 
 Nsight job `13168898` profiles the persistent-scratch arm after allocator
 overhead is removed. The RELION VDAM SGD kernel accounts for **92.2%** of GPU
@@ -219,6 +222,48 @@ coalescing changes float32 parenthesization. Focused source/H100 gates and all
 20 direct particle checkpoints pass, but job `13176704` takes **277 s**, 36%
 slower than the qualified 204 s launch-ordered arm. It is rejected as the speed
 path without spending a repeat panel.
+
+The final persistent-scatter probe imports EM's fixed reduction-tree idea more
+literally. Commit `77d9ed01a` partitions equal destination labels inside each
+warp and uses a cooperative-groups tree reduction before one atomic triplet per
+label. Its focused source and H100 gates pass, but job `13177231` needs **66.7
+s** for iteration 1 versus about **37 s** for the qualified fixed-warp launch
+path. The job was stopped after that discriminator; no trajectory claim is
+made and the arm is rejected.
+
+Profile job `13176992` completes 80 iterations in **1,202 s** and separates the
+remaining cost from the already-fast InitialModel outer update. Across those
+iterations, expectation takes **1,156.1 s** while M-step takes only **13.2 s**.
+Sparse pass 1 contributes **403.8 s** and pass 2 **717.3 s**. The shared
+halfset-0 big-JIT accounts for **407.4 s**, with packing at **69.3 s** and
+ordered backprojection at **113.0 s**. In iterations 61--80, after Healpix
+order 3 is active and the selected subset grows from 208 to 360 particles,
+pass 1 becomes the largest phase (**242.2 s** of **454.0 s** expectation).
+This rejects scatter-only work as sufficient to close the runtime gap: the next
+bounded tests must reduce shared coarse scoring and JAX executable-shape churn.
+
+The first such test enables the existing shared EM native-texture coarse scorer
+rather than adding a VDAM implementation. Job `13177324` passes every direct
+particle checkpoint through iteration 20 against the four native repeats
+(report SHA-256 `0e28f7f689e...`) but takes **207 s**, statistically tied with
+the qualified **204--206 s** arm. Selected phase samples that looked about 2x
+faster did not survive the end-to-end wall measurement, showing that JAX
+compilation/cache placement confounded the short profile. A profile through
+iteration 80 is the required discriminator for the order-3 coarse-search
+regime; no default changes on the short result.
+
+The second test enables EM's shared local-bucket unification. Job `13177559`
+also passes all 20 direct particle checkpoints (report SHA-256
+`7d38a268864...`) but its end-to-end wall is **208 s**, again no improvement
+over the qualified arm. A post-run signature audit shows why: every GF46 chunk
+within a given iteration already has one common padded rotation size, and the
+engine already pads final image chunks to their planned batch shape. The lower
+profile counters in this run are therefore cache/device variation, not work
+removed by the switch. Redundant 80-iteration job `13177685` was canceled
+before allocation. The baseline still encounters 30 distinct Fourier current
+sizes, and **334.3 / 407.4 s** of halfset-0 big-JIT time occurs on the first
+encounter with an executable signature. Fourier-window/current-size shape
+stability is therefore the next implementation target.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
