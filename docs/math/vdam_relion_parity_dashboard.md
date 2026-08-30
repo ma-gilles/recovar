@@ -35,7 +35,8 @@ Frozen case-definition SHA-256:
 | Persistent rotations + one conflict leader (`2396a2b49`) | focused GPU green | **84 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than ordered launches |
 | Persistent rotations + ordered warp coalescing (`9265597b7`) | focused source + H100 gate green | **277 s** through 20 | direct particle envelope **20/20** | 🔴 exact smoke, slower than 204 s arm |
 | Persistent rotations + labeled fixed-tree reduction (`77d9ed01a`) | focused source + H100 gate green | **66.7 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than fixed-warp launches |
-| Shared EM native-texture coarse scorer (`ecab47c05`) | direct particle envelope **20/20** | **207 s** through 20 | audit SHA-256 `0e28f7f689e...` | 🟡 trajectory-safe, no short-run wall improvement |
+| Shared EM native-texture coarse scorer (`ecab47c05`) | direct particle envelope **20/20** | **207 s** through 20; **1,038 s** through 80 | order-3 pass 1 remains **240.5 s** at 61--80 | 🔴 only 13.6% faster through 80; does not close late coarse cost |
+| Exact native-texture reference cache (`85536d695`) | CUDA direct/cached score **bitwise** | 20-iteration science job `13178326` | one shared projection per orientation grid; unchanged EM fused-translation scorer | 🟡 active speed/parity gate |
 | Shared EM unified local bucket shapes (`ecab47c05`) | direct particle envelope **20/20** | **208 s** through 20 | audit SHA-256 `7d38a268864...` | 🔴 inert on GF46; buckets were already unified |
 
 Nsight job `13168898` profiles the persistent-scratch arm after allocator
@@ -246,11 +247,24 @@ The first such test enables the existing shared EM native-texture coarse scorer
 rather than adding a VDAM implementation. Job `13177324` passes every direct
 particle checkpoint through iteration 20 against the four native repeats
 (report SHA-256 `0e28f7f689e...`) but takes **207 s**, statistically tied with
-the qualified **204--206 s** arm. Selected phase samples that looked about 2x
-faster did not survive the end-to-end wall measurement, showing that JAX
-compilation/cache placement confounded the short profile. A profile through
-iteration 80 is the required discriminator for the order-3 coarse-search
-regime; no default changes on the short result.
+the qualified **204--206 s** arm. The definitive profile job `13177526`
+completes iteration 80 in **1,038 s**, only **13.6%** faster than the **1,202 s**
+control. Expectation totals **993.8 s**: pass 1 is **382.3 s**, pass 2 is
+**577.6 s**, and halfset-0 big-JIT is **345.8 s**. At order 3 in iterations
+61--80, pass 1 still takes **240.5 s** and total expectation **450.7 s**, versus
+**242.2 s / 454.0 s** in the control. The apparent early improvement is mostly
+JAX compilation/cache placement; switching scorer variants does not remove the
+late repeated projection work.
+
+Commit `85536d695` therefore adds a bounded cache building block to the shared
+EM coarse path, not to VDAM orchestration. It materializes the exact
+native-texture reference once per orientation grid, then feeds the existing EM
+fused-translation scorer for each image batch. H100 build/GPU gate `13178026`
+proves direct native-texture versus cached projection/scoring output is bitwise
+identical; three focused source/flag/fail-closed tests also pass. The cache is
+explicit opt-in and guarded by a 48 GiB cache-plus-score budget. GF46
+20-iteration parity/runtime job `13178326` is the active science gate; no
+default change or long allocation is made before that trajectory passes.
 
 The second test enables EM's shared local-bucket unification. Job `13177559`
 also passes all 20 direct particle checkpoints (report SHA-256
