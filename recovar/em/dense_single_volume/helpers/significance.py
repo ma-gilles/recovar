@@ -735,81 +735,6 @@ def _fused_score_priors_logsumexp_block(
     return scores, class_max, class_sum, global_max, global_sum
 
 
-@partial(
-    jax.jit,
-    static_argnames=(
-        "current_size",
-        "physical_image_size",
-        "model_max_r",
-        "canonical_reduction",
-    ),
-)
-def _fused_relion_coarse_score_priors_logsumexp_block(
-    projector_full,
-    rotations,
-    unshifted_corrected,
-    translation_angles,
-    pixel_weight,
-    initial_diff2,
-    full_to_compact,
-    rotation_log_prior_block,
-    translation_log_prior_per_image,
-    class_log_prior_scalar,
-    valid_rotation_count,
-    class_max,
-    class_sum,
-    global_max,
-    global_sum,
-    *,
-    current_size: int,
-    physical_image_size: int,
-    model_max_r: int,
-    canonical_reduction: bool,
-):
-    """Fuse the shared exact coarse scorer with pass-1 bookkeeping.
-
-    The CUDA scorer remains the authoritative RELION arithmetic boundary.  This
-    wrapper only keeps the already-existing padding mask, prior additions, and
-    streaming log-sum-exp updates in the same compiled dispatch.  Returning the
-    raw pre-prior scores preserves the exact float32 support/min-diff2 route.
-    """
-
-    from recovar import cuda_backproject
-
-    diff2 = cuda_backproject.relion_coarse_diff2_projector_f32(
-        projector_full,
-        jnp.asarray(rotations, dtype=jnp.float32),
-        jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
-        jnp.asarray(translation_angles, dtype=jnp.float32),
-        jnp.asarray(pixel_weight, dtype=jnp.float32),
-        jnp.asarray(initial_diff2, dtype=jnp.float32),
-        jnp.asarray(full_to_compact, dtype=jnp.int32),
-        current_size=int(current_size),
-        physical_image_size=int(physical_image_size),
-        model_max_r=int(model_max_r),
-        canonical_reduction=bool(canonical_reduction),
-    )
-    raw_scores = -diff2
-    valid = jnp.arange(raw_scores.shape[1])[None, :, None] < valid_rotation_count
-    raw_scores = jnp.where(valid, raw_scores, -jnp.inf)
-
-    scores = raw_scores + jnp.asarray(
-        class_log_prior_scalar,
-        dtype=raw_scores.dtype,
-    )
-    scores = scores + jnp.asarray(
-        rotation_log_prior_block,
-        dtype=raw_scores.dtype,
-    )[None, :, None]
-    scores = scores + jnp.asarray(
-        translation_log_prior_per_image,
-        dtype=raw_scores.dtype,
-    )[:, None, :]
-    class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
-    global_max, global_sum = _update_logsumexp(global_max, global_sum, scores)
-    return raw_scores, scores, class_max, class_sum, global_max, global_sum
-
-
 def _significance_score_cache_enabled(n_images, n_classes, n_rot, n_trans, *, use_float64_scoring: bool) -> bool:
     """Whether to keep pass-1 score blocks for reuse in pass 2.
 
@@ -3453,16 +3378,7 @@ def _compute_k_class_significance_batched(
             and dump_target_pre_prior_blocks_per_class is None
             and dump_target_with_prior_blocks_per_class is None
         )
-        use_fused_relion_coarse_pass1 = (
-            _pass1_fused_enabled()
-            and score_mode == "gaussian"
-            and coarse_fused_projector_enabled
-            and dump_target_pre_prior_blocks_per_class is None
-            and dump_target_with_prior_blocks_per_class is None
-        )
-        if passive_score_dump and (
-            use_fused_pass1 or use_fused_relion_coarse_pass1
-        ):
+        if passive_score_dump and use_fused_pass1:
             raise RuntimeError(
                 f"{_SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV}=1 does not support "
                 "the fused pass-1 diagnostic path"
@@ -3480,7 +3396,7 @@ def _compute_k_class_significance_batched(
         )
 
         # Precompute fused-path inputs once per batch (constant across class/block).
-        if use_fused_pass1 or use_fused_relion_coarse_pass1:
+        if use_fused_pass1:
             _fused_half_weights = half_weights_windowed if use_window else half_weights
             _fused_max_r_static = projection_kwargs.get("max_r", None) if use_window else None
             _fused_window_indices = window_indices if use_window else jnp.zeros(0, dtype=jnp.int32)
@@ -3501,59 +3417,7 @@ def _compute_k_class_significance_batched(
             for block_index in range(n_blocks):
                 r0 = block_index * rotation_block_size
                 r1 = r0 + rotation_block_size
-                if use_fused_relion_coarse_pass1:
-                    valid_count = jnp.asarray(
-                        min(rotation_block_size, n_rot - r0),
-                        dtype=jnp.int32,
-                    )
-                    if rotation_log_prior_padded is None:
-                        rot_lp_block = jnp.zeros(
-                            rotation_block_size,
-                            dtype=jnp.float32,
-                        )
-                    else:
-                        rot_lp_block = jnp.asarray(
-                            rotation_log_prior_padded[class_index, r0:r1],
-                            dtype=jnp.float32,
-                        )
-                    (
-                        raw_scores,
-                        scores,
-                        class_max,
-                        class_sum,
-                        global_max,
-                        global_sum,
-                    ) = _fused_relion_coarse_score_priors_logsumexp_block(
-                        coarse_gaussian_projector_full_by_class[class_index],
-                        rotations_padded[r0:r1],
-                        coarse_gaussian_unshifted_corrected,
-                        coarse_gaussian_translation_angles,
-                        coarse_gaussian_pixel_weight,
-                        coarse_gaussian_initial_diff2,
-                        coarse_gaussian_full_to_compact,
-                        rot_lp_block,
-                        _fused_trans_lp_per_image,
-                        float(class_log_priors_np[class_index]),
-                        valid_count,
-                        class_max,
-                        class_sum,
-                        global_max,
-                        global_sum,
-                        current_size=int(score_size),
-                        physical_image_size=int(image_shape[0]),
-                        model_max_r=int(relion_projector_r_max),
-                        canonical_reduction=bool(
-                            coarse_canonical_reduction_enabled
-                        ),
-                    )
-                    if relion_raw_score_max is not None:
-                        relion_raw_score_max = jnp.maximum(
-                            relion_raw_score_max,
-                            jnp.max(raw_scores.reshape(batch_size, -1), axis=1),
-                        )
-                    if cached_score_blocks is not None:
-                        cached_score_blocks.append(scores)
-                elif use_fused_pass1:
+                if use_fused_pass1:
                     valid_count = jnp.asarray(min(rotation_block_size, n_rot - r0), dtype=jnp.int32)
                     if rotation_log_prior_padded is None:
                         rot_lp_block = jnp.zeros(rotation_block_size, dtype=jnp.float32)
