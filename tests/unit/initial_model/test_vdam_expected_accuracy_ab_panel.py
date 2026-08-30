@@ -59,6 +59,16 @@ def test_expected_accuracy_ab_panel_records_provenance_and_disposable_markers() 
     assert 'printf \'%s\\n\' "${mode}"' in text
 
 
+def test_boundary_runner_allows_a_pinned_shared_jax_cache() -> None:
+    text = BOUNDARY_SCRIPT.read_text()
+
+    assert (
+        "export JAX_COMPILATION_CACHE_DIR="
+        "${VDAM_JAX_COMPILATION_CACHE_DIR:-${OUTPUT_ROOT}/jax_cache}"
+    ) in text
+    assert 'touch "${JAX_COMPILATION_CACHE_DIR}/SAFE_TO_DELETE"' in text
+
+
 def test_bpref_particle_chunk_panel_reuses_and_interleaves_the_boundary_runner() -> None:
     text = BPREF_CHUNK_SCRIPT.read_text()
 
