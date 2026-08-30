@@ -269,9 +269,27 @@ completes through iteration 20 in **209 s** and passes all **20/20** direct
 particle checkpoints against the four native repeats (audit SHA-256
 `aa18c10d1d26...`). Its expectation time is **190.9 s**, statistically tied
 with the direct native-texture arm's **189.0 s**, so projection reuse is not a
-low-order speed win. The order-3 profile job `13178973` is the bounded scaling
-discriminator; no default change or full-trajectory allocation is made before
-that result.
+low-order speed win. The order-3 profile job `13178973` completes 80 iterations
+in **973 s**, a bounded **6.3%** wall improvement over the matching 1,038-second
+native-texture control. Expectation is **931.7 s** (pass 1 **367.6 s**, pass 2
+**533.0 s**); iterations 61--80 still consume **431.2 s**, including **240.3
+s** in pass 1. The direct particle envelope accepts **66/80** checkpoints,
+first failing at iteration 66 and then 68--80 (audit SHA-256
+`e9b8a5a97e74...`). This is better diagnostic coverage than the qualified
+profile's first failure at iteration 42, but it remains a separate regression
+track and cannot promote correctness. The cache is therefore retained as an
+exact, modest shared-EM building block, not treated as the speed solution or a
+default.
+
+An EM-style smaller pass-1 image-batch palette then tests whether VDAM's short
+stochastic halfsets are over-padded by the large-dataset tail policy. Job
+`13179322` reduces pass 1 from **20.6 s** to **17.3 s**, but only moves total
+wall to **202 s** and fails the strict particle envelope at iterations 4, 16,
+and 18 (**17/20**, audit SHA-256 `c5a2a94cbbf...`). Changing the compiled batch
+shape is therefore rejected. The follow-up keeps the established shared-EM
+shape and launch order while skipping only synthetic repeated rows inside the
+serial native coarse launcher; it must pass a GPU bitwise test and the 20-step
+trajectory before any longer allocation.
 
 The second test enables EM's shared local-bucket unification. Job `13177559`
 also passes all 20 direct particle checkpoints (report SHA-256
