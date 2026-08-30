@@ -110,13 +110,13 @@ def relion_cuda_f32_coarse_posterior(
 
         use_native_cuda = cuda_backproject.custom_cuda_requested()
     if use_native_cuda:
-        raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
+        raw_weights = cuda_backproject.relion_exponentiate_f32(
             jnp.where(finite, scores_f32, -jnp.inf),
             exponent_add,
         )
-        sorted_weights, cumulative = jax.vmap(
-            cuda_backproject.relion_cub_sort_scan_f32,
-        )(raw_weights)
+        sorted_weights, cumulative = cuda_backproject.relion_cub_sort_scan_f32(
+            raw_weights
+        )
     else:
         shifted = jnp.where(
             finite,
@@ -179,7 +179,7 @@ def relion_cuda_f32_coarse_posterior(
         )
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
     if use_native_cuda:
-        probabilities = jax.vmap(cuda_backproject.relion_divide_f32)(
+        probabilities = cuda_backproject.relion_divide_f32(
             raw_weights,
             safe_sum_weight,
         )

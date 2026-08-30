@@ -9694,13 +9694,22 @@ ffi::Error RelionCubSortScanF32Impl(
     auto input_dims = values.dimensions();
     auto sorted_dims = sorted->dimensions();
     auto cumulative_dims = cumulative->dimensions();
-    if (input_dims.size() != 1 || input_dims[0] < 1 ||
-        sorted_dims.size() != 1 || sorted_dims[0] != input_dims[0] ||
-        cumulative_dims.size() != 1 || cumulative_dims[0] != input_dims[0])
+    const bool vector_shape =
+        input_dims.size() == 1 && input_dims[0] >= 1 &&
+        sorted_dims.size() == 1 && sorted_dims[0] == input_dims[0] &&
+        cumulative_dims.size() == 1 && cumulative_dims[0] == input_dims[0];
+    const bool matrix_shape =
+        input_dims.size() == 2 && input_dims[0] >= 1 && input_dims[1] >= 1 &&
+        sorted_dims.size() == 2 && sorted_dims[0] == input_dims[0] &&
+        sorted_dims[1] == input_dims[1] &&
+        cumulative_dims.size() == 2 && cumulative_dims[0] == input_dims[0] &&
+        cumulative_dims[1] == input_dims[1];
+    if (!vector_shape && !matrix_shape)
         return ffi::Error::InvalidArgument(
-            "RelionCubSortScanF32: input and outputs must have the same nonempty 1-D shape");
+            "RelionCubSortScanF32: input and outputs must have the same nonempty 1-D or 2-D shape");
 
-    const int64_t count = input_dims[0];
+    const int64_t row_count = matrix_shape ? input_dims[0] : 1;
+    const int64_t count = matrix_shape ? input_dims[1] : input_dims[0];
     if (count > static_cast<int64_t>(std::numeric_limits<int>::max()))
         return ffi::Error::InvalidArgument(
             "RelionCubSortScanF32: vector is too large for CUB's item count");
@@ -9729,12 +9738,17 @@ ffi::Error RelionCubSortScanF32Impl(
         return ffi::Error::Internal(
             std::string("RelionCubSortScanF32 cudaMalloc: ") + cudaGetErrorString(err));
 
-    err = cub::DeviceRadixSort::SortKeys(
-        temporary, sort_bytes, input_ptr, sorted_ptr, static_cast<int>(count),
-        0, sizeof(float) * 8, stream);
-    if (err == cudaSuccess)
-        err = relion_ampere_inclusive_sum_f32(
-            temporary, scan_bytes, sorted_ptr, cumulative_ptr, static_cast<int>(count), stream);
+    for (int64_t row = 0; row < row_count && err == cudaSuccess; ++row)
+    {
+        const int64_t offset = row * count;
+        err = cub::DeviceRadixSort::SortKeys(
+            temporary, sort_bytes, input_ptr + offset, sorted_ptr + offset,
+            static_cast<int>(count), 0, sizeof(float) * 8, stream);
+        if (err == cudaSuccess)
+            err = relion_ampere_inclusive_sum_f32(
+                temporary, scan_bytes, sorted_ptr + offset, cumulative_ptr + offset,
+                static_cast<int>(count), stream);
+    }
     cudaError_t free_error = cudaFree(temporary);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
@@ -9749,12 +9763,13 @@ __global__ void relion_exponentiate_f32_kernel(
     const float* values,
     const float* add,
     float* output,
-    int64_t count)
+    int64_t row_size,
+    int64_t total_count)
 {
     const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (index >= count)
+    if (index >= total_count)
         return;
-    const float exponent = values[index] + add[0];
+    const float exponent = values[index] + add[index / row_size];
     output[index] = exponent < -88.0f ? 0.0f : expf(exponent);
 }
 
@@ -9773,20 +9788,28 @@ ffi::Error RelionExponentiateF32Impl(
     auto value_dims = values.dimensions();
     auto add_dims = add.dimensions();
     auto output_dims = output->dimensions();
-    if (value_dims.size() != 1 || value_dims[0] < 1 ||
-        add_dims.size() != 0 || output_dims.size() != 1 ||
-        output_dims[0] != value_dims[0])
+    const bool vector_shape =
+        value_dims.size() == 1 && value_dims[0] >= 1 && add_dims.size() == 0 &&
+        output_dims.size() == 1 && output_dims[0] == value_dims[0];
+    const bool matrix_shape =
+        value_dims.size() == 2 && value_dims[0] >= 1 && value_dims[1] >= 1 &&
+        add_dims.size() == 1 && add_dims[0] == value_dims[0] &&
+        output_dims.size() == 2 && output_dims[0] == value_dims[0] &&
+        output_dims[1] == value_dims[1];
+    if (!vector_shape && !matrix_shape)
         return ffi::Error::InvalidArgument(
-            "RelionExponentiateF32: values/output must be matching nonempty 1-D arrays and add a scalar");
+            "RelionExponentiateF32: values/output must be matching nonempty 1-D or 2-D arrays and add must contain one value per row");
 
-    const int64_t count = value_dims[0];
+    const int64_t row_size = matrix_shape ? value_dims[1] : value_dims[0];
+    const int64_t total_count = (matrix_shape ? value_dims[0] : 1) * row_size;
     constexpr int threads = 256;
-    const int blocks = static_cast<int>((count + threads - 1) / threads);
+    const int blocks = static_cast<int>((total_count + threads - 1) / threads);
     relion_exponentiate_f32_kernel<<<blocks, threads, 0, stream>>>(
         static_cast<const float*>(values.untyped_data()),
         static_cast<const float*>(add.untyped_data()),
         static_cast<float*>(output->untyped_data()),
-        count);
+        row_size,
+        total_count);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
         return ffi::Error::Internal(
@@ -9807,11 +9830,12 @@ __global__ void relion_divide_f32_kernel(
     const float* values,
     const float* divisor,
     float* output,
-    int64_t count)
+    int64_t row_size,
+    int64_t total_count)
 {
     const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (index < count)
-        output[index] = values[index] / divisor[0];
+    if (index < total_count)
+        output[index] = values[index] / divisor[index / row_size];
 }
 
 ffi::Error RelionDivideF32Impl(
@@ -9829,20 +9853,28 @@ ffi::Error RelionDivideF32Impl(
     auto value_dims = values.dimensions();
     auto divisor_dims = divisor.dimensions();
     auto output_dims = output->dimensions();
-    if (value_dims.size() != 1 || value_dims[0] < 1 ||
-        divisor_dims.size() != 0 || output_dims.size() != 1 ||
-        output_dims[0] != value_dims[0])
+    const bool vector_shape =
+        value_dims.size() == 1 && value_dims[0] >= 1 && divisor_dims.size() == 0 &&
+        output_dims.size() == 1 && output_dims[0] == value_dims[0];
+    const bool matrix_shape =
+        value_dims.size() == 2 && value_dims[0] >= 1 && value_dims[1] >= 1 &&
+        divisor_dims.size() == 1 && divisor_dims[0] == value_dims[0] &&
+        output_dims.size() == 2 && output_dims[0] == value_dims[0] &&
+        output_dims[1] == value_dims[1];
+    if (!vector_shape && !matrix_shape)
         return ffi::Error::InvalidArgument(
-            "RelionDivideF32: values/output must be matching nonempty 1-D arrays and divisor a scalar");
+            "RelionDivideF32: values/output must be matching nonempty 1-D or 2-D arrays and divisor must contain one value per row");
 
-    const int64_t count = value_dims[0];
+    const int64_t row_size = matrix_shape ? value_dims[1] : value_dims[0];
+    const int64_t total_count = (matrix_shape ? value_dims[0] : 1) * row_size;
     constexpr int threads = 256;
-    const int blocks = static_cast<int>((count + threads - 1) / threads);
+    const int blocks = static_cast<int>((total_count + threads - 1) / threads);
     relion_divide_f32_kernel<<<blocks, threads, 0, stream>>>(
         static_cast<const float*>(values.untyped_data()),
         static_cast<const float*>(divisor.untyped_data()),
         static_cast<float*>(output->untyped_data()),
-        count);
+        row_size,
+        total_count);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess)
         return ffi::Error::Internal(
