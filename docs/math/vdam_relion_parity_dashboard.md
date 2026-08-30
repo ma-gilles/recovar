@@ -127,6 +127,24 @@ same-device repeat gate: the native envelope was generated on physical H100
 `GPU-235ec3bc...`. Same-H100 four-repeat qualification `13171963` is queued on
 that device. The candidate remains unpromoted pending that result.
 
+The next bounded discriminator localizes the residual portability failure to
+atomic ordering inside one 128-thread scatter block. Commit `ecab47c05` keeps
+the EM-style parallel projection/residual materialization and the existing
+VDAM eight-neighbour scatter, but gives the block's four warps a fixed phase
+order at each pixel pass. It is opt-in and fail-closed unless the qualified
+single-lane, launch-serialized, precomputed-residual topology is active. H100
+build `13172738` is green with sm90 binary SHA-256 `e82ac33db321...`; build
+`13172701` failed before compilation because `nvcc` was absent from the batch
+PATH. Admission jobs `13172940 / 13173040` also stopped before science on
+harness setup (source-library variable, then missing worktree RELION binding).
+The corrected GF46 job `13173098` completes iteration 20 in **204 s** on
+physical H100 `GPU-ef985070...` and passes all **20/20** direct particle-state
+checkpoints against all four native repeats. Audit `13173349` is green with
+SHA-256 `f88bb3e59593...`; no particle escapes at iterations 4, 16, or 18.
+This is one-repeat diagnostic evidence, not promotion. Cross-H100 four-repeat
+stress array `13173387` is running; the frozen score and same-device gate stay
+unchanged until repeated qualification closes.
+
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
 late-iteration launch stream: `loop_add_fusion_5` and
