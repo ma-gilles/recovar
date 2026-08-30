@@ -36,6 +36,8 @@ Frozen case-definition SHA-256:
 | Persistent rotations + ordered warp coalescing (`9265597b7`) | focused source + H100 gate green | **277 s** through 20 | direct particle envelope **20/20** | 🔴 exact smoke, slower than 204 s arm |
 | Persistent rotations + labeled fixed-tree reduction (`77d9ed01a`) | focused source + H100 gate green | **66.7 s for iteration 1** | speed discriminator stopped after iteration 1 | 🔴 rejected: slower than fixed-warp launches |
 | Shared EM native-texture coarse scorer (`ecab47c05`) | direct particle envelope **20/20** | **207 s** through 20; **1,038 s** through 80 | order-3 pass 1 remains **240.5 s** at 61--80 | 🔴 only 13.6% faster through 80; does not close late coarse cost |
+| Shared EM exact sequential-Wavg FFI (`6ecfd0b76`) | CUDA/JAX **bitwise**; direct particle envelope **20/20** | **191 s** through 20; **942 s** through 80 | 80-step envelope **46/80**, first miss @47; qualified control is 44/80, first miss @42 | 🟡 **21.6%** faster through 80; long/runtime gate active |
+| Native-texture + sequential-Wavg (`6ecfd0b76`) | direct particle envelope **20/20** | **200 s** through 20; **949 s** through 80 | 80-step envelope **44/80**, first miss @42 | 🔴 rejected: `+0.7%` wall and earlier divergence versus Wavg-only |
 | Exact native-texture reference cache (`85536d695`) | CUDA direct/cached score **bitwise**; particle **20/20** | **209 s** through 20; profile80 job `13178973` | audit SHA-256 `aa18c10d1d26...`; unchanged EM fused-translation scorer | 🟡 order-3 speed gate active |
 | Shared EM unified local bucket shapes (`ecab47c05`) | direct particle envelope **20/20** | **208 s** through 20 | audit SHA-256 `7d38a268864...` | 🔴 inert on GF46; buckets were already unified |
 
@@ -354,6 +356,38 @@ launch topology remains default and the frozen v3 score is unchanged. The next
 speed candidate must live inside the already-qualified fused callback (or
 otherwise preserve its complete launch chronology), not add a neighboring
 custom call.
+
+The accepted fixed-warp launch topology makes it possible to revisit that
+shared bottleneck without the earlier iteration-4 chronology failure. Commit
+`6ecfd0b76` adds one shared EM CUDA FFI in place of the helper's translation
+loop: one thread owns each `(image, rotation, pixel)` output and visits all
+translations in storage order. The CUDA tail deliberately uses reciprocal
+then multiply, matching XLA's float32 division lowering. Focused H100 job
+`13181568` is bitwise for every AA/XA/noise scalar; the multi-architecture
+binary is SHA-256 `0eecc08f8496...`.
+
+GF46 admission job `13181665` passes all **20/20** direct particle checkpoints
+and reduces wall from **204--206 s** to **191 s**. Profile job `13181815`
+completes 80 iterations in **942 s**, down **260 s / 21.6%** from the qualified
+`1,202 s` control and **96 s / 9.2%** from the native-texture-only arm. Total
+expectation falls from `1,156.1` to `901.5 s`; pass 2 from `717.3` to
+`507.8 s`; shared big-JIT from `407.4` to `296.7 s`; packing from `69.3` to
+`38.4 s`; and ordered backprojection from `113.0` to `84.7 s`. The direct
+80-checkpoint audit accepts **46/80**, first missing at iteration 47, versus
+**44/80** and first miss at iteration 42 for the qualified control. This is a
+performance improvement without a trajectory regression, but it does not
+promote the frozen score or close the long/runtime gates.
+
+The first composition with EM's shared native-texture coarse scorer is green
+through **20/20** direct checkpoints in job `13182189`, but the larger-grid
+gate rejects it. Job `13182286` completes 80 iterations in **949 s**, versus
+**942 s** for Wavg-only. Expectation is `902.4` versus `901.5 s`; pass 1 is
+`363.1` versus `362.6 s`; and pass 2 is `508.3` versus `507.8 s`. Its direct
+audit accepts **44/80** checkpoints and first misses at iteration 42, versus
+**46/80** and first miss at 47 for Wavg-only. Native texture therefore adds no
+runtime benefit and returns the trajectory to the qualified control's earlier
+escape. It remains an isolated regression track and is not part of the active
+speed branch. Profile summary SHA-256 is `269fe573b98b...`.
 
 ### Why VDAM currently trails supplied-map EM
 
