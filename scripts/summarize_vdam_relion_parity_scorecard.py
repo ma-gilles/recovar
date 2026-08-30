@@ -193,6 +193,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     lines = [
         "# RECOVAR / RELION VDAM InitialModel parity scorecard",
         "",
+        "> **Legacy, non-authoritative short-prefix suite.** This fixed12 v1 board covers only "
+        "iterations 0, 1, 2, 4, and 8; it does not report the frozen v3 20-case, iteration 0--200 score. "
+        "See `docs/math/vdam_relion_parity_dashboard.md` for authoritative status.",
+        "",
         f"**Fixed-suite score: {counts['pass']} / {FROZEN_DENOMINATOR} passing "
         f"({evaluated} / {FROZEN_DENOMINATOR} evaluated).**",
         "",

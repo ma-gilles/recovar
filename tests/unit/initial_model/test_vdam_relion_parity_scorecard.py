@@ -182,6 +182,8 @@ def test_future_history_rows_need_immutable_evidence(tmp_path: Path, scorecard: 
 
 def test_renderer_exposes_fixed_denominator_and_metric_policy(scorecard: dict) -> None:
     rendered = scorecard_mod.render_markdown(scorecard_mod.load_and_validate())
+    assert "Legacy, non-authoritative short-prefix suite" in rendered
+    assert "vdam_relion_parity_dashboard.md" in rendered
     assert "12 / 12 passing" in rendered
     assert "iterations `0`, `1`, `2`, `4`, and `8`" in rendered
     assert "Map correlation is not computed or gated" in rendered

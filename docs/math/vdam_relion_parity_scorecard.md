@@ -1,5 +1,7 @@
 # RECOVAR / RELION VDAM InitialModel parity scorecard
 
+> **Legacy, non-authoritative short-prefix suite.** This fixed12 v1 board covers only iterations 0, 1, 2, 4, and 8; it does not report the frozen v3 20-case, iteration 0--200 score. See `docs/math/vdam_relion_parity_dashboard.md` for authoritative status.
+
 **Fixed-suite score: 12 / 12 passing (12 / 12 evaluated).**
 
 Suite: `vdam-k1-gui-grid0-fixed12` (version 1; denominator frozen at 12).

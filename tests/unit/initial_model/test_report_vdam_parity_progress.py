@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import copy
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from scripts import report_vdam_parity_progress as progress_mod
+
+
+@pytest.fixture
+def scorecard() -> dict:
+    return json.loads(progress_mod.DEFAULT_SCORECARD.read_text())
+
+
+def _write(tmp_path: Path, value: dict) -> Path:
+    path = tmp_path / "vdam-progress.json"
+    path.write_text(json.dumps(value, indent=2) + "\n")
+    return path
+
+
+def test_checked_v3_scorecard_replays_frozen_panels() -> None:
+    loaded = progress_mod.load_and_validate()
+    progress = progress_mod.build_progress(loaded)
+    assert progress["accepted_cases"] == ["vdam-gf44", "vdam-gf45"]
+    assert progress["failure_counts"] == {"map": 15, "particle": 14, "schedule": 7}
+    assert {row["id"]: row["passed"] for row in loaded["panels"]} == {
+        "k1_strict_correctness": 2,
+        "map_trajectory": 5,
+        "particle_trajectory": 6,
+        "predivergence_schedule": 13,
+        "runtime_comparable": 0,
+        "terminal_audits": 20,
+    }
+
+
+def test_suite_definition_identity_and_bytes_are_frozen() -> None:
+    assert progress_mod.sha256_file(progress_mod.REPO_ROOT / progress_mod.SUITE_DEFINITION_PATH) == (
+        progress_mod.SUITE_DEFINITION_SHA256
+    )
+    loaded = progress_mod.load_and_validate()
+    assert loaded["suite_id"] == "vdam-k1-full-trajectory-expansion-v3"
+    assert loaded["frozen_denominator"] == 20
+
+
+def test_scientific_evidence_identity_is_immutable(tmp_path: Path, scorecard: dict) -> None:
+    scorecard["evidence_sources"]["gf43_seeded"]["map_report_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="evidence identity changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_false_strict_pass_is_rejected(tmp_path: Path, scorecard: dict) -> None:
+    failed = next(case for case in scorecard["cases"] if case["id"] == "vdam-gf43")
+    failed["strict_result"] = "pass"
+    with pytest.raises(ValueError, match="strict result does not replay its gates"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_passing_gate_cannot_retain_failure_iteration(tmp_path: Path, scorecard: dict) -> None:
+    passed = next(case for case in scorecard["cases"] if case["id"] == "vdam-gf44")
+    passed["map"]["first_failure_iteration"] = 200
+    with pytest.raises(ValueError, match="passing map gate has a failure iteration"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_failing_gate_needs_bounded_failure_iteration(tmp_path: Path, scorecard: dict) -> None:
+    failed = next(case for case in scorecard["cases"] if case["id"] == "vdam-gf43")
+    failed["map"]["first_failure_iteration"] = 201
+    with pytest.raises(ValueError, match=r"needs an iteration in \[0, 200\]"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_panel_cannot_inflate_or_change_denominator(tmp_path: Path, scorecard: dict) -> None:
+    inflated = copy.deepcopy(scorecard)
+    inflated["panels"][0]["passed"] = 3
+    with pytest.raises(ValueError, match="count does not replay cases"):
+        progress_mod.load_and_validate(_write(tmp_path, inflated))
+    scorecard["panels"][0]["denominator"] = 21
+    with pytest.raises(ValueError, match="denominator changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_runtime_cannot_change_strict_correctness(tmp_path: Path, scorecard: dict) -> None:
+    accepted = next(case for case in scorecard["cases"] if case["id"] == "vdam-gf44")
+    accepted["runtime"] = {"ratio_vs_relion": 1.0, "result": "pass"}
+    scorecard["panels"][4]["passed"] = 1
+    loaded = progress_mod.load_and_validate(_write(tmp_path, scorecard))
+    assert loaded["cases"][1]["strict_result"] == "pass"
+    assert loaded["panels"][0]["passed"] == 2
+    assert loaded["panels"][4]["passed"] == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("role", "release_gate"),
+        ("status", "pass"),
+        ("scientific_outcome", "fail"),
+        ("scheduler_state", "completed"),
+        ("score_impact", "strict"),
+    ],
+)
+def test_diagnostic_roles_and_outcomes_are_independent(
+    tmp_path: Path, scorecard: dict, field: str, replacement: str
+) -> None:
+    job = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13206294")
+    job[field] = replacement
+    with pytest.raises(ValueError):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_pending_jobs_cannot_be_rendered_as_terminal(scorecard: dict) -> None:
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert "`13208186` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
+    assert "`13208265` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
+    assert "`13208734` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
+    assert "`13208735` | `diagnostic` | **PENDING** | PENDING | pending" in rendered
+    assert "no terminal result is claimed" in rendered
+
+
+def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:
+    loaded = progress_mod.load_and_validate()
+    v2 = next(row for row in loaded["secondary_tracks"] if row["id"] == "legacy_parameter_expansion_v2")
+    assert (v2["passed"], v2["denominator"], v2["score_impact"]) == (6, 15, "none")
+    assert next(row for row in loaded["panels"] if row["id"] == "k1_strict_correctness")["passed"] == 2
+
+
+def test_dashboard_is_compact_and_exposes_shared_em_reuse() -> None:
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert len(rendered.splitlines()) < 200
+    assert "Authoritative v3 status — NOT READY" in rendered
+    assert "Strict K=1 correctness is **2 / 20**" in rendered
+    assert "runtime parity is **0 / 20**" in rendered
+    assert "coarse projector/scorer | yes" in rendered
+    assert "does not carry duplicate projector" in rendered
+
+
+def test_cli_check_accepts_generated_dashboard() -> None:
+    result = subprocess.run(
+        [sys.executable, str(progress_mod.__file__), "--check"],
+        cwd=progress_mod.REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
