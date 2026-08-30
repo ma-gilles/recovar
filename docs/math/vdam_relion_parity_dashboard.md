@@ -70,10 +70,20 @@ Commit `2ade0394f` starts the bounded repair panel in isolated worktree
 shared EM/VDAM projector, posterior, fused callback, and exact CUDA binary
 unchanged and varies only the deterministic eight-private-volume terminal
 merge: serial float64, pairwise float32, and pairwise float64. Slurm array
-`13170146` runs focused reducer tests plus complete iteration-1--20 particle
-envelopes against four native repeats. Default serial-float32 behavior remains
-unchanged, and none of these arms can alter the frozen v3 score unless it first
-passes repeat and full-trajectory qualification.
+`13170146` passes 6/6 focused tests per arm and completes in `187--191 s`, but
+all three arms fail exactly the same lone `1723@19` envelope check. Terminal
+lane-reduction order and precision are therefore exonerated.
+
+The remaining reorder happens inside each private lane, which still combines
+many particles before the terminal merge. Commit `c494837c6` adds the next
+bounded discriminator: one private BPref destination per physical particle,
+parallel use of the unchanged shared fused callback, then source-order
+reduction. Its focused gate passes 8/8; GF46 iteration-1--20 job `13170536`
+is active. This per-particle allocation is diagnostic. If causal, the
+production design will use bounded consecutive particle segments rather than
+an unbounded volume per particle. Default serial-float32 worker-private
+behavior remains unchanged, and neither arm can alter the frozen v3 score
+without repeat and full-trajectory qualification.
 
 Nsight job `13165358` showed that the mature shared EM/VDAM Wavg helper's
 translation `fori_loop`, rather than projector sampling, dominated the visible
