@@ -19,7 +19,7 @@ Frozen case-definition SHA-256:
 | Question | Current answer |
 |---|---|
 | What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. Posterior batching, coarse-bookkeeping fusion, raw-image caching, and compact BPref tail launches are rejected speed probes and are reverted. |
-| What is running now? | No speed job. Compact BPref launch counts completed their exact same-H100 iteration-20 decision and are being reverted as speed-negative. |
+| What is running now? | No speed job. Compact BPref launch counts completed their exact same-H100 iteration-20 decision and are reverted at source head `0a1ac0eb5`; the accepted path is clean. |
 | Did the latest short gate improve? | No. The provisional unprofiled **178 s** result was confounded by a different CUDA build/flag set. With the control's exact CUDA SHA, pixi interpreter, performance flags, physical H100, and profiling, cumulative pre-artifact time is **172.20 s** versus **169.40 s** (`+1.7%`, worse). All four native audits still have zero divergent particles through iteration 20. |
 | Where is correctness stuck? | The frozen v3 K=1 score is still **2/20 complete strict trajectories**. Long-run controller/map drift, not fixed-state scorer arithmetic, remains the correctness boundary. |
 | Where is speed stuck? | Warm expectation remains dominant. The cached path removes repeated file reads, but pass 1, exact-local pass 2, current-size executable churn, and ordered BPref work remain much larger than the outer VDAM M-step. |
@@ -33,7 +33,7 @@ Frozen case-definition SHA-256:
 | Batch posterior rows (`4c4163239`) | 7/7 exact | 20/20 short; first 80-step misses at `33/33/33/23` | **183 s / 664 s** | 🔴 reverted: slower at 80 |
 | Exact coarse pass-1 bookkeeping fusion (`832d043d9`) | bitwise | 20/20 against four repeats | **184 s** at 20 | 🔴 reverted: speed-neutral |
 | Shared mature-EM raw-image cache (`9cb34ddf2`) | 4/4 focused CPU | 20/20 against four repeats | exact-control profiled pre-artifact **172.20 s** vs **169.40 s** | 🔴 reverted by `274e4062d`: `+1.7%` slower |
-| EM significant-row compact BPref launch counts (`9c17c6024 / dd33cf053`) | CPU **25/25**; H100 shortened-grid buffers byte-exact **3/3** | particle **4 x 20/20**; maps **4 x 20/20**, minimum FSC-AUC `0.999999999782` | **191 s** vs **182 s**; pre-artifact **176.36 s** vs **168.18 s** | 🔴 rejected: `+4.9%` pre-artifact, BPref unchanged |
+| EM significant-row compact BPref launch counts (`9c17c6024 / dd33cf053`) | CPU **25/25**; H100 shortened-grid buffers byte-exact **3/3** | particle **4 x 20/20**; maps **4 x 20/20**, minimum FSC-AUC `0.999999999782` | **191 s** vs **182 s**; pre-artifact **176.36 s** vs **168.18 s** | 🔴 rejected and reverted at `0a1ac0eb5`: `+4.9%` pre-artifact, BPref unchanged |
 
 Raw-cache discriminator `13191733` used the control CUDA binary SHA-256
 `47b51660a0fbd991f862ee1054ea756f3a1cc65ceb1275eaf2fcb74dc3d038f6`,
