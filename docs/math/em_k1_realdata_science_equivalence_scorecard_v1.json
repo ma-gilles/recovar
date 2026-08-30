@@ -1,0 +1,206 @@
+{
+  "schema": "recovar.em_k1_realdata_science_equivalence_scorecard.v1",
+  "suite": {
+    "id": "pr158-k1-realdata-science-equivalence-v1",
+    "subject_pr": 158,
+    "subject_commit": "a087087cc722dbff2fb7079648b4f5f782162895",
+    "scoring_denominator": 1,
+    "scoring_case_ids": [
+      "empiar-10202-set06-k1-I1"
+    ],
+    "calibration_case_ids": [
+      "empiar-10073-native-c1",
+      "empiar-10345-native-c1"
+    ]
+  },
+  "metric_policy": {
+    "half_map_quality": "mandatory unmasked unaligned within-engine split-half FSC",
+    "cross_engine_acceptance": "raw canonical FSC gates OR pinned continuous proper-SO(3)+translation FSC gates",
+    "joint_band": "shells 1 through one shell before the earlier first three-shell-sustained within-engine half-map FSC crossing below 1/7",
+    "resolution_formula": "box_size * voxel_size_angstrom / crossing_shell",
+    "proper_alignment_can_rescue_cross_engine_only": true,
+    "masked_fsc_is_supporting_only": true,
+    "mirror_sign_scale_forbidden": true,
+    "strict_full_spectrum_parity_is_separate": true,
+    "target_high_resolution_is_independent": true,
+    "target_overall_requires_equivalence_and_high_resolution": true
+  },
+  "thresholds": {
+    "fsc_threshold": 0.14285714285714285,
+    "crossing_consecutive_shells": 3,
+    "half_resolution_ratio_max": 1.05,
+    "half_curve_rmse_max": 0.02,
+    "half_band_auc_abs_delta_max": 0.02,
+    "merged_cross_engine_band_auc_min": 0.95,
+    "each_half_cross_engine_band_auc_min": 0.9
+  },
+  "target_high_resolution_gate": {
+    "case_id": "empiar-10202-set06-k1-I1",
+    "each_engine_resolution_angstrom_max": 3.0,
+    "reference": {
+      "entry": "EMD-9012",
+      "deposited_validation_resolution_angstrom": 1.86,
+      "emdb_calculated_unmasked_half_map_resolution_angstrom": 1.94
+    }
+  },
+  "collector": {
+    "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/scripts/collect_metrics.py",
+    "sha256": "63d1a8f9f0a772ef0db45d7417902f36cbde884b309fa6e94d69bdfe2edf2d88",
+    "schema": "recovar-relion-realdata-metrics-v2"
+  },
+  "diagnostic_producer": {
+    "path": "scripts/collect_em_k1_science_diagnostics.py",
+    "sha256": "01b432c5c735a060f69d55569c897ac42aca8c2af6c3fa3a23b334fb2378ac9c",
+    "schema": "recovar.em_k1_science_diagnostics.v1"
+  },
+  "cases": [
+    {
+      "id": "empiar-10202-set06-k1-I1",
+      "role": "scoring",
+      "dataset": "10202",
+      "requires_execution_binding": true,
+      "expected_subject_commit": "a087087cc722dbff2fb7079648b4f5f782162895",
+      "status": "ready_to_launch",
+      "scope": "06_Final_Stack only; image set 07 is excluded",
+      "rejected_artifacts": [
+        {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10202/inputs/particles.native.star",
+          "sha256": "c13cb927bb9cdffbd85fc2909a79196e44f5ce1836f8ba74b1d1b33c144edb11",
+          "reason": "drops deposited Euler angles/shifts and rerandomizes the deposited half assignment"
+        }
+      ],
+      "refinement_contract": {
+        "k": 1,
+        "same_particles_and_order": true,
+        "same_metadata": true,
+        "same_initial_reference_canonical_array": true,
+        "same_half_assignment": true,
+        "prepared_star_preserves_source_particle_order": true,
+        "prepared_star_preserves_source_half_assignment": true,
+        "prepared_star_preserves_source_pose_shift_metadata": true,
+        "autonomous_refinement": true,
+        "fixed_poses": false,
+        "local_only": false,
+        "forced_final_after_nonconvergence": false,
+        "same_exact_symmetry_operator_set": true
+      },
+      "input_contract": {
+        "particle_count": 30515,
+        "box_size": 800,
+        "voxel_size_angstrom": 0.788,
+        "source_star": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/2017-12-27_MagCorrect_Frames05-19_Numbered_adjusted.star",
+          "sha256": "5b89aa3f2f4c66c40820952982f67dd0ba3d46864c65b5eb35e16b1fe4d11cdb"
+        },
+        "prepared_star_sha256": "d66afb3001e6e43463fb699804fe8b50f8cef1f2ccd9730f5275955b6be7b512",
+        "poses_pkl": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/poses.pkl",
+          "sha256": "f52394a1ea41f442fdcbf37e4808aa878f52ab033f875aa81d623c5bc9a2b238"
+        },
+        "ctf_pkl": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/ctf.pkl",
+          "sha256": "62ad1941816e33668051230faa30f970630de4e57508a943f3dd962f87e2fcbb"
+        },
+        "particle_stack": {
+          "path": "/home/mg6942/mytigress/10202/06_Final_Stack/2017-12-27_MagCorrect_Frames05-19.mrcs",
+          "size_bytes": 78118401024,
+          "header_1mib_sha256": "9fc0bdfb6369ba423f519d11fb4bfed8f3dce353903fd667ce3fb1a0ff5cbe32",
+          "sha256": "8eecf0fbf8e645ac51feff278a86e43e7e4be117921333dc6d3e22e52a628453"
+        },
+        "half_assignment_sha256": "1a06a8e0fccc553a99ecbdd24b21115b2b20b14cd1ae267310c6d4fe449d054f",
+        "half_assignment_encoding": "bytes(int(rlnRandomSubset)) in source STAR row order; one uint8 byte per particle",
+        "half_assignment_bytes": 30515,
+        "half1_count": 15258,
+        "half2_count": 15257,
+        "initial_reference": {
+          "relion_file_sha256": "4f83710c999276d4f65cff586266ee121f271e8bed382dba329b384860af96bb",
+          "recovar_frame_file_sha256": "d77516a08e5e3ccdef07d9039e36d65b174afe5d56fe20d7775eef188d2e6cc6",
+          "canonical_array_sha256": "b617f90d55ef4b7a637bd495397f2c6f291371263f66b16a7fbc020bf6dbad09",
+          "exact_gate": "numpy.array_equal(load_mrc(recovar_frame_file), load_relion_volume(relion_file))"
+        },
+        "symmetry": {
+          "family": "icosahedral",
+          "requested_label": "I1",
+          "label": "I1",
+          "forbidden_bare_alias": "I (RELION canonicalizes it to I2)",
+          "operator_count": 60,
+          "operator_order": "identity at index 0, then RELION SymList::get_matrices(isym) for isym=0..58",
+          "left_operator_policy": "all left operators are identity and are not applied in BPref reconstruction",
+          "hash_encoding": "float64 rounded to 12 decimals, stacked [left,right], little-endian C-order bytes",
+          "operators_sha256": "093a0876b93610ec141c87840ae3ff4dc4491b27dec87143558358ef556557b8"
+        }
+      },
+      "pending_contract_fields": []
+    },
+    {
+      "id": "empiar-10073-native-c1",
+      "role": "calibration",
+      "dataset": "10073",
+      "subject_commit": "8502fc50c7f68b8c6f696874f60b6041e9d5d308",
+      "slurm_job_id": 13093155,
+      "input_contract": {
+        "particle_count": 138899,
+        "box_size": 380,
+        "voxel_size_angstrom": 1.4000112000896008,
+        "prepared_star_sha256": "8de0193587c6f8fe9dbed4f5fc1796f991bf160cfddd2374d42464f06afffd9c"
+      },
+      "artifacts": {
+        "metrics_json": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10073/metrics/metrics.json",
+          "sha256": "d6e433705e61bddd1dfac27d50d0c3be902151d1f255da76d14ec22ac6a14143"
+        },
+        "fsc_curves_npz": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10073/metrics/fsc_curves.npz",
+          "sha256": "fe778f507acdd53801cf5f3b930a73ebbaa57ac882a6667e4ad99f0e52f6bd75"
+        },
+        "benchmark_manifest": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/benchmark_manifest.json",
+          "sha256": "be256a4ce193dbd746aacd25a49acc98388b3139355cee3390218bad86a4a684"
+        }
+      },
+      "expected_metrics": {
+        "half_resolution_ratio": 1.0,
+        "half_curve_rmse": 0.0026455725424715543,
+        "half_band_auc_abs_delta": 0.001260334145823827,
+        "merged_cross_engine_band_auc": 0.9691362193064661,
+        "half1_cross_engine_band_auc": 0.9408020515354473,
+        "half2_cross_engine_band_auc": 0.9415304729655856
+      }
+    },
+    {
+      "id": "empiar-10345-native-c1",
+      "role": "calibration",
+      "dataset": "10345",
+      "subject_commit": "8502fc50c7f68b8c6f696874f60b6041e9d5d308",
+      "slurm_job_id": 13093157,
+      "input_contract": {
+        "particle_count": 84266,
+        "box_size": 300,
+        "voxel_size_angstrom": 1.3450000882656308,
+        "prepared_star_sha256": "a0a31fd6e67f5e7f1a0cd20120d4da11218962e75d127d4ec8690e37a3658dd6"
+      },
+      "artifacts": {
+        "metrics_json": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10345/metrics/metrics.json",
+          "sha256": "bcdb907be4c7b63045dffa4209451c693c0f8d0359ab1427a12463347d192177"
+        },
+        "fsc_curves_npz": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/per_dataset/10345/metrics/fsc_curves.npz",
+          "sha256": "a06566e1dc22503267387428cd33621d207feedcf70441f09be5bca8ed5b9bf5"
+        },
+        "benchmark_manifest": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/benchmark_manifest.json",
+          "sha256": "be256a4ce193dbd746aacd25a49acc98388b3139355cee3390218bad86a4a684"
+        }
+      },
+      "expected_metrics": {
+        "half_resolution_ratio": 1.0,
+        "half_curve_rmse": 0.0032422560066216687,
+        "half_band_auc_abs_delta": 0.00016541951190840454,
+        "merged_cross_engine_band_auc": 0.9756097026599992,
+        "half1_cross_engine_band_auc": 0.9658667061929587,
+        "half2_cross_engine_band_auc": 0.9650894354317021
+      }
+    }
+  ]
+}
