@@ -19,11 +19,11 @@ Frozen case-definition SHA-256:
 | Question | Current answer |
 |---|---|
 | What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. Posterior batching, coarse-bookkeeping fusion, raw-image caching, and compact BPref tail launches are rejected speed probes and are reverted. |
-| What is running now? | No speed job. Compact BPref launch counts completed their exact same-H100 iteration-20 decision and are reverted at source head `0a1ac0eb5`; the accepted path is clean. |
-| Did the latest short gate improve? | No. The provisional unprofiled **178 s** result was confounded by a different CUDA build/flag set. With the control's exact CUDA SHA, pixi interpreter, performance flags, physical H100, and profiling, cumulative pre-artifact time is **172.20 s** versus **169.40 s** (`+1.7%`, worse). All four native audits still have zero divergent particles through iteration 20. |
+| What is running now? | No speed job. The mature-EM projection-cache retry completed its paired same-H100 decision and is reverted at source head `dd36bb5d1`; the accepted path is clean. |
+| Did the latest short gate improve? | No. Exact matrix keys remove the cache's large wrong-ID failure, but the remaining cached gather/execution path flips two near-tie particles at iteration 1 and then fails all 20 checkpoints. The uncached control on the identical physical H100 passes the four-repeat native envelope **20/20** with zero mismatches. |
 | Where is correctness stuck? | The frozen v3 K=1 score is still **2/20 complete strict trajectories**. Long-run controller/map drift, not fixed-state scorer arithmetic, remains the correctness boundary. |
 | Where is speed stuck? | Warm expectation remains dominant. The cached path removes repeated file reads, but pass 1, exact-local pass 2, current-size executable churn, and ordered BPref work remain much larger than the outer VDAM M-step. |
-| What happens next? | Keep the accepted source-faithful BPref topology and target exact-local pass-2 executable/current-size shape churn using EM's static-shape/big-JIT scheduling. Do not retry raw caching, posterior batching, coarse bookkeeping fusion, local-bucket unification, or padded BPref tail compaction on GF46. |
+| What happens next? | Keep the accepted source-faithful BPref topology and target exact-local pass-2 executable/current-size shape churn using EM's static-shape/big-JIT scheduling. Do not retry projection/raw caching, posterior batching, coarse bookkeeping fusion, local-bucket unification, or padded BPref tail compaction on GF46. |
 
 #### Current speed decision ledger
 
@@ -34,6 +34,7 @@ Frozen case-definition SHA-256:
 | Exact coarse pass-1 bookkeeping fusion (`832d043d9`) | bitwise | 20/20 against four repeats | **184 s** at 20 | 🔴 reverted: speed-neutral |
 | Shared mature-EM raw-image cache (`9cb34ddf2`) | 4/4 focused CPU | 20/20 against four repeats | exact-control profiled pre-artifact **172.20 s** vs **169.40 s** | 🔴 reverted by `274e4062d`: `+1.7%` slower |
 | EM significant-row compact BPref launch counts (`9c17c6024 / dd33cf053`) | CPU **25/25**; H100 shortened-grid buffers byte-exact **3/3** | particle **4 x 20/20**; maps **4 x 20/20**, minimum FSC-AUC `0.999999999782` | **191 s** vs **182 s**; pre-artifact **176.36 s** vs **168.18 s** | 🔴 rejected and reverted at `0a1ac0eb5`: `+4.9%` pre-artifact, BPref unchanged |
+| EM exact-local projection cache, compact storage + exact matrix keys (`464c5d2b4 / e2d2e5b5d`) | CPU focused **3/3**; H100 **4/4**; duplicate projections byte-exact | cached **0/20**, first fail @1; paired uncached **20/20** | cached **223 s**, uncached **197 s** on `GPU-97adb...` | 🔴 rejected and reverted at `dd36bb5d1`: cache path flips exact fine-score ties and is slower |
 
 Raw-cache discriminator `13191733` used the control CUDA binary SHA-256
 `47b51660a0fbd991f862ee1054ea756f3a1cc65ceb1275eaf2fcb74dc3d038f6`,
@@ -60,6 +61,29 @@ chronology variable; `dd33cf053` separates those identities and adds the
 regression guard. Broad precursor gate `13192228` passed the relevant GPU test
 but failed an unrelated stale source-string assertion; it is superseded by the
 isolated clean gate.
+
+The projection-cache retry first fixed a real shared-EM defect: adaptive
+oversampled matrices cannot be keyed by their approximate nearest-grid IDs.
+Across complete order-1/2/3 child grids, those IDs alias respectively
+`192 / 1,536 / 36,864` distinct float32 rotation matrices. Commit
+`e2d2e5b5d` keyed cache rows by the exact scorer matrix, while `464c5d2b4`
+removed the previous fixed-capacity host/GPU allocation. H100 gate `13195602`
+passes **4/4**, including byte-exact duplicate projection rows and cached versus
+uncached local-EM coverage.
+
+The real GF46 paired gate nevertheless rejects the optimization. Cached job
+`13196189` completed through iteration 20 in **223 s** on physical H100
+`GPU-97adb339-219f-d72d-11c9-74dc92fcff8c`; its four-native direct particle
+envelope fails **20/20**, beginning with two near-tie particles at iteration 1
+(report SHA-256 `20416744cfe2...`). Uncached control `13196508` used the same
+source, CUDA binary SHA-256 `47b51660...`, physical H100, fixture, perturbation,
+and flags, completed in **197 s**, and passes **20/20** with zero mismatches
+(report SHA-256 `30f7704d04fa...`). A direct cached-versus-uncached iteration-1
+audit isolates exactly the same two flips (SHA-256 `29df221b91b9...`). Thus
+matrix-key repair closes the gross identity bug, but cache gather/execution
+order still changes exact fine-score tie resolution and adds 13.2% wall time.
+Commits `c67bd538c / dd36bb5d1` revert both cache prototypes; the focused
+projection-row exactness test remains as regression evidence.
 
 ### Latest exact-oracle speed discriminator (2026-08-29)
 
