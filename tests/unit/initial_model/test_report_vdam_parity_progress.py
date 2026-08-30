@@ -112,13 +112,24 @@ def test_diagnostic_roles_and_outcomes_are_independent(
         progress_mod.load_and_validate(_write(tmp_path, scorecard))
 
 
-def test_pending_jobs_cannot_be_rendered_as_terminal(scorecard: dict) -> None:
+def test_terminal_cache_attempts_render_as_invalid_without_parity_inference(scorecard: dict) -> None:
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
     assert "`13208186` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
     assert "`13208265` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
     assert "`13208734` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
-    assert "`13208735` | `diagnostic` | **PENDING** | PENDING | pending" in rendered
-    assert "no terminal result is claimed" in rendered
+    assert "`13208735` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
+    assert "`13209422` | `diagnostic` | **INVALID** | INVALID | cancelled" in rendered
+    assert "fresh_a science PASS through iteration 4" in rendered
+    assert "`run_local_bucket_big_jit`" in rendered
+    assert "`relion_vdam_mstep_fused_projector_x_half`" in rendered
+    assert "INVALID cache attempts permit no parity inference" in rendered
+
+
+def test_profile_matched_cache_evidence_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    job = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13209422")
+    job["warm80_a"]["cache_entries_added"] = 0
+    with pytest.raises(ValueError, match="profile-matched evidence changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
 
 
 def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:

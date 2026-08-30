@@ -91,8 +91,48 @@
     {"job_id": "13208089", "label": "cross-device cache-history attempt", "role": "diagnostic", "status": "invalid_setup", "scientific_outcome": "invalid", "scheduler_state": "failed_setup", "score_impact": "none", "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13208089.out", "note": "Missing worktree RELION binding invalidated setup."},
     {"job_id": "13208186", "label": "exact-device cache-history attempt", "role": "diagnostic", "status": "invalid", "scientific_outcome": "invalid", "scheduler_state": "cancelled", "score_impact": "none", "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13208186.out", "note": "Cancelled before science because duplicate-cache GPFS setup was too slow; no causal result."},
     {"job_id": "13208265", "label": "cross-device cache-history attempt", "role": "diagnostic", "status": "invalid", "scientific_outcome": "invalid", "scheduler_state": "cancelled", "score_impact": "none", "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13208265.out", "note": "Cancelled before science because duplicate-cache GPFS setup was too slow; no causal result."},
-    {"job_id": "13208734", "label": "cross-H100 cache-history retry", "role": "diagnostic", "status": "invalid", "scientific_outcome": "invalid", "scheduler_state": "cancelled", "score_impact": "none", "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13208734.out", "note": "fresh_a science PASS and grew cache 0->435, but warm80_a immediately grew 5037->5429 on della-h19g4; cancelled as a cross-node cache miss with no causal parity inference."},
-    {"job_id": "13208735", "label": "exact same-node and UUID cache-history discriminator", "role": "diagnostic", "status": "pending", "scientific_outcome": "pending", "scheduler_state": "pending", "score_impact": "none", "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13208735.out", "note": "Pending afterany:13208110 on the exact same node and GPU UUID; no terminal result is claimed."}
+    {"job_id": "13208734", "label": "cross-H100 cache-history retry", "role": "diagnostic", "status": "invalid", "scientific_outcome": "invalid", "scheduler_state": "cancelled", "score_impact": "none", "invalid_reason": "warm_cache_compiled_critical_science_keys", "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13208734.out", "note": "A warm-cache arm compiled critical science keys; cancelled INVALID with no parity inference."},
+    {"job_id": "13208735", "label": "exact same-node and UUID cache-history retry", "role": "diagnostic", "status": "invalid", "scientific_outcome": "invalid", "scheduler_state": "cancelled", "score_impact": "none", "invalid_reason": "warm_cache_compiled_critical_science_keys", "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13208735.out", "note": "A warm-cache arm compiled critical science keys; cancelled INVALID with no parity inference."},
+    {
+      "job_id": "13209422",
+      "label": "profile-matched exact-node and UUID cache-history retry",
+      "role": "diagnostic",
+      "status": "invalid",
+      "scientific_outcome": "invalid",
+      "scheduler_state": "cancelled",
+      "score_impact": "none",
+      "invalid_reason": "warm_cache_compiled_critical_science_keys",
+      "diagnostic_head": "39a38f9d6",
+      "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13209422.out",
+      "evidence_sha256": "4a73824d224b89e05cb98a2887ac024ed1ad40afe96ce0e416d4b1fa5a7cf3d4",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_profilematched_39a38f9d6_20260830",
+      "arms_report": "analysis/arms.tsv",
+      "arms_report_sha256": "5ecba0675af414edd40720b8635c440a349965a1fe365411e245891bbb72c413",
+      "fresh_a_native_envelope_report": "analysis/fresh_a_native_particle_envelope.json",
+      "fresh_a_native_envelope_sha256": "a75464214b57024c76fc39eea41a08c6bd1e0a6ed67ad38ea56c838521c099ac",
+      "warm80_a_native_envelope_report": "analysis/warm80_a_native_particle_envelope.json",
+      "warm80_a_native_envelope_sha256": "d830c3c65fac69d1a97d48d6d2e06afa296e827252a9aefed60ec05a7a34f9c3",
+      "elapsed": "2:23",
+      "fresh_a": {
+        "scientific_outcome": "pass",
+        "native_envelope": "pass_through_iteration_4",
+        "audit_status": 0,
+        "cache_entries_before": 0,
+        "cache_entries_after": 435
+      },
+      "warm80_a": {
+        "scientific_outcome": "invalid",
+        "cache_entries_before": 5037,
+        "cache_entries_added": 435,
+        "critical_keys_compiled": [
+          "run_local_bucket_big_jit",
+          "relion_coarse_diff2_projector_f32",
+          "coarse posterior",
+          "relion_vdam_mstep_fused_projector_x_half"
+        ]
+      },
+      "note": "fresh_a science PASS through iteration 4 (audit_status 0; cache 0->435), but warm80_a added 435 entries to the sealed 5037-entry cache, including critical science keys; cancelled at 2:23 INVALID with no parity inference."
+    }
   ],
   "speed_snapshot": {
     "role": "diagnostic_performance",
@@ -134,9 +174,10 @@
   ],
   "next_gate": {
     "harness_fix_commit": "381bf7949",
-    "hypothesis": "Exact source/device cache history may explain the GF46 full-start discontinuity; otherwise investigate runtime reduction nondeterminism.",
-    "supporting_pattern": "Fresh A/B green, warmed A/B red, and an unchanged warmed cache on the exact device.",
-    "fallback": "If that balanced pattern is absent or mixed, move to runtime reduction nondeterminism.",
+    "diagnostic_head": "39a38f9d6",
+    "hypothesis": "The cache-history contrast remains untested because every warm-cache arm compiled critical science keys.",
+    "supporting_pattern": "The exact-profile warm cache contains the critical science keys and remains unchanged during warm A/B; fresh A/B are green and warmed A/B are red.",
+    "fallback": "Until a sealed cache remains unchanged, cache causality is unevaluated and the diagnostic permits no parity inference.",
     "production_change_authorized": false
   },
   "history": [

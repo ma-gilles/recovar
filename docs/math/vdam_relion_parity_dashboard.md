@@ -44,7 +44,7 @@ Strict correctness is the conjunction of map, particle-state, and pre-divergence
 
 ## Active cache discriminator
 
-These are scheduler/causal diagnostics, not v3 score entries. Pending or running jobs have no terminal claim.
+These are scheduler/causal diagnostics, not v3 score entries. INVALID cache attempts permit no parity inference.
 
 | Job | Role | Status | Scientific outcome | Scheduler state | Score impact | Interpretation |
 |---:|---|---|---|---|---|---|
@@ -54,8 +54,11 @@ These are scheduler/causal diagnostics, not v3 score entries. Pending or running
 | `13208089` | `diagnostic` | **INVALID setup** | INVALID | failed-setup | none | Missing worktree RELION binding invalidated setup. |
 | `13208186` | `diagnostic` | **INVALID** | INVALID | cancelled | none | Cancelled before science because duplicate-cache GPFS setup was too slow; no causal result. |
 | `13208265` | `diagnostic` | **INVALID** | INVALID | cancelled | none | Cancelled before science because duplicate-cache GPFS setup was too slow; no causal result. |
-| `13208734` | `diagnostic` | **INVALID** | INVALID | cancelled | none | fresh_a science PASS and grew cache 0->435, but warm80_a immediately grew 5037->5429 on della-h19g4; cancelled as a cross-node cache miss with no causal parity inference. |
-| `13208735` | `diagnostic` | **PENDING** | PENDING | pending | none | Pending afterany:13208110 on the exact same node and GPU UUID; no terminal result is claimed. |
+| `13208734` | `diagnostic` | **INVALID** | INVALID | cancelled | none | A warm-cache arm compiled critical science keys; cancelled INVALID with no parity inference. |
+| `13208735` | `diagnostic` | **INVALID** | INVALID | cancelled | none | A warm-cache arm compiled critical science keys; cancelled INVALID with no parity inference. |
+| `13209422` | `diagnostic` | **INVALID** | INVALID | cancelled | none | fresh_a science PASS through iteration 4 (audit_status 0; cache 0->435), but warm80_a added 435 entries to the sealed 5037-entry cache, including critical science keys; cancelled at 2:23 INVALID with no parity inference. |
+
+Job `13209422` warm-cache additions included: `run_local_bucket_big_jit`, `relion_coarse_diff2_projector_f32`, `coarse posterior`, `relion_vdam_mstep_fused_projector_x_half`. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_profilematched_39a38f9d6_20260830/analysis/arms.tsv`.
 
 ## Speed snapshot
 
@@ -87,9 +90,9 @@ CLI and GUI both default to `relion_fast`. The `reference` mode is diagnostic. T
 
 ## Current hypothesis and next gate
 
-Exact source/device cache history may explain the GF46 full-start discontinuity; otherwise investigate runtime reduction nondeterminism.
+The cache-history contrast remains untested because every warm-cache arm compiled critical science keys.
 
-Harness fix `381bf7949` now targets the exact-node/UUID discriminator. Cache causality requires this balanced exact-device pattern: **Fresh A/B green, warmed A/B red, and an unchanged warmed cache on the exact device.** If that balanced pattern is absent or mixed, move to runtime reduction nondeterminism. No cache-disable or production arithmetic change is authorized by this snapshot.
+Harness fix `381bf7949` and diagnostic head `39a38f9d6` target the exact-profile node/UUID discriminator. Cache causality requires this balanced exact-device pattern: **The exact-profile warm cache contains the critical science keys and remains unchanged during warm A/B; fresh A/B are green and warmed A/B are red.** Until a sealed cache remains unchanged, cache causality is unevaluated and the diagnostic permits no parity inference. No cache-disable or production arithmetic change is authorized by this snapshot.
 
 ## Evidence and reproducibility
 

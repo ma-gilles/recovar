@@ -41,7 +41,40 @@ ACTIVE_DIAGNOSTIC_POLICY = {
     "13208186": ("invalid", "invalid", "cancelled", "INVALID"),
     "13208265": ("invalid", "invalid", "cancelled", "INVALID"),
     "13208734": ("invalid", "invalid", "cancelled", "INVALID"),
-    "13208735": ("pending", "pending", "pending", "PENDING"),
+    "13208735": ("invalid", "invalid", "cancelled", "INVALID"),
+    "13209422": ("invalid", "invalid", "cancelled", "INVALID"),
+}
+CRITICAL_CACHE_MISS_JOBS = frozenset({"13208734", "13208735", "13209422"})
+PROFILE_MATCHED_EVIDENCE = {
+    "diagnostic_head": "39a38f9d6",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-history-13209422.out",
+    "evidence_sha256": "4a73824d224b89e05cb98a2887ac024ed1ad40afe96ce0e416d4b1fa5a7cf3d4",
+    "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_profilematched_39a38f9d6_20260830",
+    "arms_report": "analysis/arms.tsv",
+    "arms_report_sha256": "5ecba0675af414edd40720b8635c440a349965a1fe365411e245891bbb72c413",
+    "fresh_a_native_envelope_report": "analysis/fresh_a_native_particle_envelope.json",
+    "fresh_a_native_envelope_sha256": "a75464214b57024c76fc39eea41a08c6bd1e0a6ed67ad38ea56c838521c099ac",
+    "warm80_a_native_envelope_report": "analysis/warm80_a_native_particle_envelope.json",
+    "warm80_a_native_envelope_sha256": "d830c3c65fac69d1a97d48d6d2e06afa296e827252a9aefed60ec05a7a34f9c3",
+    "elapsed": "2:23",
+    "fresh_a": {
+        "scientific_outcome": "pass",
+        "native_envelope": "pass_through_iteration_4",
+        "audit_status": 0,
+        "cache_entries_before": 0,
+        "cache_entries_after": 435,
+    },
+    "warm80_a": {
+        "scientific_outcome": "invalid",
+        "cache_entries_before": 5037,
+        "cache_entries_added": 435,
+        "critical_keys_compiled": [
+            "run_local_bucket_big_jit",
+            "relion_coarse_diff2_projector_f32",
+            "coarse posterior",
+            "relion_vdam_mstep_fused_projector_x_half",
+        ],
+    },
 }
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
@@ -178,6 +211,16 @@ def _validate_active_diagnostics(scorecard: dict[str, Any]) -> None:
         _require(row.get("scientific_outcome") == science, f"{job_id}: scientific outcome changed")
         _require(row.get("scheduler_state") == scheduler, f"{job_id}: scheduler state changed")
         _require(row.get("score_impact") == "none", f"{job_id}: diagnostic cannot affect score")
+        if job_id in CRITICAL_CACHE_MISS_JOBS:
+            _require(
+                row.get("invalid_reason") == "warm_cache_compiled_critical_science_keys",
+                f"{job_id}: invalid cache-miss reason changed",
+            )
+    profile_matched = diagnostics[-1]
+    _require(
+        {key: profile_matched.get(key) for key in PROFILE_MATCHED_EVIDENCE} == PROFILE_MATCHED_EVIDENCE,
+        "13209422: profile-matched evidence changed",
+    )
 
 
 def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
@@ -265,6 +308,7 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
     _require(
         isinstance(next_gate, dict)
         and next_gate.get("harness_fix_commit") == "381bf7949"
+        and next_gate.get("diagnostic_head") == "39a38f9d6"
         and next_gate.get("production_change_authorized") is False,
         "cache discriminator gate changed",
     )
@@ -344,7 +388,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Active cache discriminator",
             "",
-            "These are scheduler/causal diagnostics, not v3 score entries. Pending or running jobs have no terminal claim.",
+            "These are scheduler/causal diagnostics, not v3 score entries. INVALID cache attempts permit no parity inference.",
             "",
             "| Job | Role | Status | Scientific outcome | Scheduler state | Score impact | Interpretation |",
             "|---:|---|---|---|---|---|---|",
@@ -357,6 +401,15 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"{row['scientific_outcome'].upper()} | {row['scheduler_state'].replace('_', '-')} | "
             f"{row['score_impact']} | {row['note']} |"
         )
+    profile_matched = scorecard["active_diagnostics"][-1]
+    critical_keys = ", ".join(f"`{key}`" for key in profile_matched["warm80_a"]["critical_keys_compiled"])
+    lines.extend(
+        [
+            "",
+            f"Job `13209422` warm-cache additions included: {critical_keys}. Evidence: "
+            f"`{profile_matched['evidence_root']}/{profile_matched['arms_report']}`.",
+        ]
+    )
     speed = scorecard["speed_snapshot"]
     lines.extend(
         [
@@ -419,7 +472,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             gate["hypothesis"],
             "",
-            f"Harness fix `{gate['harness_fix_commit']}` now targets the exact-node/UUID discriminator. "
+            f"Harness fix `{gate['harness_fix_commit']}` and diagnostic head `{gate['diagnostic_head']}` target "
+            "the exact-profile node/UUID discriminator. "
             f"Cache causality requires this balanced exact-device pattern: **{gate['supporting_pattern']}** "
             f"{gate['fallback']} No cache-disable or production arithmetic change is authorized by this snapshot.",
             "",
