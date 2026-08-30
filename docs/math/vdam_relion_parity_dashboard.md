@@ -18,12 +18,12 @@ Frozen case-definition SHA-256:
 
 | Question | Current answer |
 |---|---|
-| What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. Commit `6b5e6568a` adds an opt-in CUDA-graph replay of the existing source-ordered fixed-warp BPref scatter; it remains a yellow candidate until the balanced 80-step gate closes. Posterior batching, coarse-bookkeeping fusion, raw-image caching, and compact BPref tail launches are rejected and reverted. |
-| What is running now? | Balanced same-H100 80-step promotion job **`13203664`** is live in the bias-resistant order warm control -> warm graph -> timed graph -> timed control. The four arms share one JAX cache; the graph flag is the only intended difference. |
-| Did the latest short gate improve? | **Yes.** H100 gate `13201584` is raw-bit exact. Balanced 20-step job `13201671` takes **79 s graph / 82 s control (-3.7%)**; ordered BPref falls **24.59 -> 22.28 s (-9.4%)**. Candidate/control maps pass **20/20** at minimum FSC-AUC `0.999999999941`; the four-native map and particle envelopes both pass **20/20** with zero particle mismatches. |
+| What is accepted in code? | Shared EM/VDAM coarse projection reuse and denominator-only pass-2 residual evaluation. Commit `6b5e6568a` adds exact CUDA-graph replay of the source-ordered fixed-warp BPref scatter; same-H100 job `13203664` admits it as parity-neutral after **80/80** discrete particle and **81/81** map checkpoints. Commit `36103aaa2` makes the six accepted K=1 controls plus graph one typed CLI/GUI `relion_fast` default, with an explicit graph-off `reference` path. |
+| What is running now? | No GPU science job. The complete `13203664` admission bundle is sealed under `analysis/admission80` with all **19/19** payload checksums verified. The typed policy is committed locally after **28/28** focused tests and a successful production GUI build; iteration-4 correctness diagnosis is active. |
+| Did the latest speed gate improve? | **Yes, modestly.** Balanced 80-step job `13203664` takes **291 s graph / 293 s control (-0.7%)**. Ordered BPref falls **39.45 -> 36.66 s (-7.1%)** and is faster in **79/80** iterations; pass 2 falls **150.68 -> 148.53 s (-1.4%)** while big-JIT is flat. The earlier 20-step gate was **79 / 82 s (-3.7%)**. |
 | Where is correctness stuck? | The frozen v3 K=1 score is still **2/20 complete strict trajectories**. Long-run controller/map drift, not fixed-state scorer arithmetic, remains the correctness boundary. |
-| Where is speed stuck? | The graph removes host launch overhead but only closes about 3--4% end to end. Exact-local pass 2 still dominates; big-JIT, packing, and roughly 30 current-size executable signatures are unchanged. |
-| What happens next? | Finish `13203664`. Promote graph replay only if its timed 80-step arm stays faster and remains inside the native particle/map envelope. Then target exact current-size executable churn without padding score/BPref reductions. Do not retry larger projection microbatches, projection/raw caching, posterior batching, coarse bookkeeping fusion, local-bucket unification, or padded BPref tail compaction on GF46. |
+| Where is speed stuck? | Graph replay removes measurable ordered-scatter launch overhead, but only closes **0.7%** end to end at 80 steps. Exact-local pass 2 still dominates; big-JIT, packing, and roughly 30 current-size executable signatures are unchanged. A synchronous `.lower().compile()` prewarm was inspected and rejected as inert because it merely moves the same compile onto the same critical path. |
+| What happens next? | Return to the first GF46 native-state failure at iteration 4 (`286@particles.128.mrcs`) and then the continuous failures from iteration 34 onward. Keep exact-signature compilation as a design target only if compilation can overlap independent work without changing scientific shapes. Do not retry larger projection microbatches, projection/raw caching, posterior batching, coarse bookkeeping fusion, local-bucket unification, or padded BPref tail compaction on GF46. |
 
 #### Current speed decision ledger
 
@@ -36,7 +36,7 @@ Frozen case-definition SHA-256:
 | EM significant-row compact BPref launch counts (`9c17c6024 / dd33cf053`) | CPU **25/25**; H100 shortened-grid buffers byte-exact **3/3** | particle **4 x 20/20**; maps **4 x 20/20**, minimum FSC-AUC `0.999999999782` | **191 s** vs **182 s**; pre-artifact **176.36 s** vs **168.18 s** | 🔴 rejected and reverted at `0a1ac0eb5`: `+4.9%` pre-artifact, BPref unchanged |
 | EM exact-local projection cache, compact storage + exact matrix keys (`464c5d2b4 / e2d2e5b5d`) | CPU focused **3/3**; H100 **4/4**; duplicate projections byte-exact | cached **0/20**, first fail @1; paired uncached **20/20** | cached **223 s**, uncached **197 s** on `GPU-97adb...` | 🔴 rejected and reverted at `dd36bb5d1`: cache path flips exact fine-score ties and is slower |
 | EM larger x-half projection microbatches, 80M vs 40M row-pixels | existing planner guards; unchanged source | 80M admission `13197301`: direct particle envelope **20/20**, candidate-vs-control iteration 1 exact; timed 80M/control coverage **46/80 vs 44/80** | balanced timed wall **318 s vs 304 s** on one H100/cache | 🔴 rejected: `+4.6%` slower |
-| EM launch amortization via exact ordered-scatter CUDA Graph (`6b5e6568a`) | source guards **4/4**; H100 raw-bit gate `13201584` **2/2** | candidate/control **20/20**; four-native map **20/20**, particle **20/20**, zero mismatches | **79 s vs 82 s**; ordered BPref **22.28 s vs 24.59 s** | 🟡 80-step job `13203664` running; not default yet |
+| EM launch amortization via exact ordered-scatter CUDA Graph (`6b5e6568a`) | source guards **4/4**; H100 raw-bit gate `13201584` **2/2** | candidate/control particle **80/80**, maps **81/81**; four-native maps **81/81**; native particle coverage is the same red **23/80** for graph and control | **291 s vs 293 s**; ordered BPref **36.66 s vs 39.45 s** | 🟢 admitted; default `relion_fast` wiring in `36103aaa2` |
 
 #### Ordered-scatter CUDA Graph admission (2026-08-30)
 
@@ -48,15 +48,43 @@ Frozen case-definition SHA-256:
 | Targeted timing | ordered backprojection **22.285 / 24.593 s (-9.39%)**; pass 2 **50.798 / 53.146 s (-4.42%)**; big-JIT and packing flat | 🟢 |
 | Direct candidate/control science | particle state **20/20**, zero pose/translation/class differences; maps **20/20**, minimum FSC-AUC `0.999999999941` | 🟢 |
 | Four-native GF46 envelope | maps **20/20**, minimum best-native FSC-AUC `0.999999999950`; particles **20/20**, zero mismatches | 🟢 |
-| Balanced 80-step promotion | Slurm `13203664`, warm control -> warm graph -> timed graph -> timed control | 🟡 |
+| Balanced 80-step runtime | Slurm `13203664`: **291 s graph / 293 s control (-0.68%)**; pre-artifact **270.28 / 271.70 s (-0.53%)** | 🟢 |
+| Targeted 80-step timing | ordered BPref **36.660 / 39.447 s (-7.07%)**, faster **79/80**; pass 2 **148.529 / 150.684 s (-1.43%)**; big-JIT **74.973 / 75.107 s** | 🟢 |
+| Direct graph/control science | particle states **80/80**, zero pose/translation/class differences; maps **81/81**, minimum FSC-AUC `0.999999999954` | 🟢 |
+| Four-native GF46 maps | **81/81**, minimum best-native FSC-AUC `0.999727544658`; late trajectory follows native repeat 3 | 🟢 |
+| Four-native GF46 particles | graph and control have the identical **23/80** pass vector, first fail at iteration 4 and all 34--80 fail | 🔴 existing controller/particle parity gap; not graph-induced |
+
+#### Typed InitialModel execution policy (`36103aaa2`)
+
+| User selection | Resolved behavior | Qualification |
+|---|---|:---:|
+| K=1 `relion_fast` (CLI/GUI default) | Fused source-order particles, launch-serialized rotations, ordered residuals, fixed-warp scatter, sequential CUDA Wavg, radix-4 buckets, admitted CUDA Graph | 🟢 paired speed/science gate complete |
+| K=1 `reference` | Graph off, radix-2 buckets, JAX Wavg, optimized topology switches explicitly disabled | 🟡 slower diagnostic comparison |
+| K>1 `relion_fast` + `auto`/`compact` | K=1 fast switches dormant and graph off; provenance records `dormant_unqualified_k_gt_1` | 🟡 K>1 gate still required |
+| K>1 `relion_fast` + `local` | Fails closed with an explicit unqualified-topology error | 🟢 no silent unsupported path |
+| Direct programmatic `legacy_env` | Preserves historical parity scripts that intentionally set individual discriminator variables | ⚪ internal only; absent from CLI/GUI |
+
+Focused verification is **28/28 passed** across policy resolution, CLI defaults
+and overrides, GUI command construction, validation, and submission. Ruff is
+clean on changed source/new tests, `git diff --check` is clean, and the Vite
+production build succeeds. The generic RECOVAR test suites were intentionally
+not run because they are outside this VDAM gate.
 
 Source is immutable commit `6b5e6568a4d2d05f9ac70f4a6bee9cfb450e94a8`.
 The qualified CUDA binary SHA-256 is
 `a548e44d81adcad7d0356ad369d8cfd23aae7404c1383b1ca2cf85967e77241b`.
 The 20-step artifacts and audits are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_ordered_scatter_graph_pair20_6b5e6568a_20260830`.
-This gate changes no frozen v3 score cell and does not yet enable the graph by
-default; the 80-step result controls promotion.
+The 80-step artifacts are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_ordered_scatter_graph_pair80_6b5e6568a_20260830`.
+Its `analysis/admission80` directory contains 19 sealed report/payload files
+plus `SHA256SUMS`; `sha256sum -c` passes all entries. The result summary is
+SHA-256 `d7593bbe1d6cb0f7e135b7f7d51d317240248fbb55fd493b171eda5c1a45c903`
+and the checksum manifest is
+`5f71363e6557179ccc75521556266190e264980caf44f519f0c36f3a215e52ee`.
+This gate changes no frozen v3 score cell. It admits graph replay only as a
+parity-neutral speed primitive inside the typed `relion_fast` policy; the red
+23/80 native particle envelope remains a separate correctness blocker.
 
 Balanced job `13198427` completed `0:0` in `29:58` on `della-h19g3`, physical
 H100 `GPU-97adb339-219f-d72d-11c9-74dc92fcff8c`, from immutable source
