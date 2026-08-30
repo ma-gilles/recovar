@@ -2215,7 +2215,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
             f"{row_count} rows but capacity is {int(cache_row_capacity)}"
         )
     id_map_row_count = int(max(max_global_rotation_id + 1, int(np.max(valid_ids)) + 1))
-    estimated_gb = float(cache_row_capacity * n_projection_pixels * np.dtype(np.complex64).itemsize / 1e9)
+    allocated_gb = float(row_count * n_projection_pixels * np.dtype(np.complex64).itemsize / 1e9)
 
     cache_t0 = time.time()
     cache_rotations = valid_rotations[first_positions]
@@ -2223,17 +2223,23 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     id_map[unique_ids] = np.arange(row_count, dtype=np.int32)
 
     chunk_rows = _exact_local_relion_projection_cache_chunk_rows(n_projection_pixels)
-    host_cache = np.empty((cache_row_capacity, n_projection_pixels), dtype=np.complex64)
+    # The cap is a planning limit, not an allocation shape.  Staging the full
+    # cap made a five-row VDAM cache copy up to a gigabyte of uninitialised
+    # host memory to the GPU.  The surrounding local big-JIT is already
+    # specialised to this iteration's Fourier window, so retaining only the
+    # rows actually addressed by ``id_map`` does not introduce an additional
+    # trajectory-wide shape boundary.
+    host_cache = np.empty((row_count, n_projection_pixels), dtype=np.complex64)
     logger.info(
         "Exact local RELION projection cache group %d/%d build: rows=%d capacity=%d "
-        "id_map_rows=%d projection_pixels=%d estimated=%.2f GB chunk_rows=%d buckets=%d",
+        "id_map_rows=%d projection_pixels=%d allocated=%.4f GB chunk_rows=%d buckets=%d",
         int(group_index) + 1,
         int(n_groups),
         row_count,
         int(cache_row_capacity),
         id_map_row_count,
         n_projection_pixels,
-        estimated_gb,
+        allocated_gb,
         int(chunk_rows),
         len(bucket_specs),
     )
@@ -2266,14 +2272,14 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     build_s = time.time() - cache_t0
     logger.info(
         "Exact local RELION projection cache group %d/%d ready: rows=%d capacity=%d "
-        "id_map_rows=%d projection_pixels=%d estimated=%.2f GB build=%.1fs",
+        "id_map_rows=%d projection_pixels=%d allocated=%.4f GB build=%.1fs",
         int(group_index) + 1,
         int(n_groups),
         row_count,
         int(cache_row_capacity),
         id_map_row_count,
         n_projection_pixels,
-        estimated_gb,
+        allocated_gb,
         build_s,
     )
     return _LocalRelionProjectionCache(
@@ -2283,7 +2289,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
         row_count=row_count,
         id_map_row_count=id_map_row_count,
         n_projection_pixels=n_projection_pixels,
-        estimated_gb=estimated_gb,
+        estimated_gb=allocated_gb,
         build_s=build_s,
     )
 

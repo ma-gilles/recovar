@@ -4365,7 +4365,7 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
         projection_relion_texture_interp=True,
         projection_pixel_indices=None,
         projector_output_size=4,
-        cache_row_capacity=2,
+        cache_row_capacity=8,
         max_global_rotation_id=1,
         group_index=0,
         n_groups=1,
@@ -4373,6 +4373,8 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
 
     assert cache.enabled
     assert calls[0]["relion_texture_interp"] is True
+    assert cache.projections.shape == (2, 12)
+    assert cache.estimated_gb == pytest.approx(2 * 12 * np.dtype(np.complex64).itemsize / 1e9)
 
 
 def test_packed_local_noise_projection_chunk_rows_env(monkeypatch):
