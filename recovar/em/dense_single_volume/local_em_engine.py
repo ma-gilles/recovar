@@ -1538,6 +1538,7 @@ class _LocalRelionProjectionCache:
     projections: jnp.ndarray
     id_map: jnp.ndarray
     enabled: bool
+    rotation_key_to_row: dict[bytes, int] | None = None
     row_count: int = 0
     id_map_row_count: int = 0
     n_projection_pixels: int = 0
@@ -2106,6 +2107,22 @@ def _bucket_valid_rotation_ids(bucket: LocalBucketSpec) -> np.ndarray:
     return np.unique(ids[mask])
 
 
+def _relion_projection_cache_rotation_key(rotation: np.ndarray) -> bytes:
+    """Return the exact scorer-matrix identity used by the projection cache."""
+
+    return np.ascontiguousarray(rotation, dtype=np.float32).tobytes()
+
+
+def _bucket_valid_projection_rotation_keys(bucket: LocalBucketSpec) -> set[bytes]:
+    rotations = np.asarray(bucket.local_rotations, dtype=np.float32)
+    ids = np.asarray(bucket.local_rotation_ids, dtype=np.int64)
+    mask = np.asarray(bucket.local_rotation_mask, dtype=bool) & (ids >= 0)
+    return {
+        _relion_projection_cache_rotation_key(rotation)
+        for rotation in rotations[mask]
+    }
+
+
 def _bucket_rotation_id_center(bucket: LocalBucketSpec) -> int:
     ids = _bucket_valid_rotation_ids(bucket)
     if ids.size == 0:
@@ -2150,24 +2167,24 @@ def _plan_exact_local_relion_projection_cache_groups(
 
     groups: list[tuple[int, int, int]] = []
     start = 0
-    active_ids: set[int] = set()
+    active_keys: set[bytes] = set()
     for bucket_index, bucket in enumerate(bucket_specs):
-        bucket_ids = set(int(x) for x in _bucket_valid_rotation_ids(bucket).tolist())
-        if len(bucket_ids) > cache_row_capacity:
+        bucket_keys = _bucket_valid_projection_rotation_keys(bucket)
+        if len(bucket_keys) > cache_row_capacity:
             logger.info(
                 "Exact local RELION projection cache disabled: one bucket needs %d rows, cap is %d",
-                len(bucket_ids),
+                len(bucket_keys),
                 cache_row_capacity,
             )
             return []
-        if active_ids and len(active_ids | bucket_ids) > cache_row_capacity:
-            groups.append((start, bucket_index, len(active_ids)))
+        if active_keys and len(active_keys | bucket_keys) > cache_row_capacity:
+            groups.append((start, bucket_index, len(active_keys)))
             start = bucket_index
-            active_ids = set(bucket_ids)
+            active_keys = set(bucket_keys)
         else:
-            active_ids |= bucket_ids
-    if active_ids or start < len(bucket_specs):
-        groups.append((start, len(bucket_specs), len(active_ids)))
+            active_keys |= bucket_keys
+    if active_keys or start < len(bucket_specs):
+        groups.append((start, len(bucket_specs), len(active_keys)))
     return groups
 
 
@@ -2183,7 +2200,6 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     projection_pixel_indices,
     projector_output_size: int,
     cache_row_capacity: int,
-    max_global_rotation_id: int,
     group_index: int,
     n_groups: int,
     projection_mask_current_image_disk: bool = True,
@@ -2193,34 +2209,40 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     if cache_row_capacity <= 0 or not bucket_specs:
         return _disabled_relion_projection_cache()
 
-    ids_parts = []
     rotation_parts = []
     for bucket in bucket_specs:
         ids = np.asarray(bucket.local_rotation_ids, dtype=np.int64)
         mask = np.asarray(bucket.local_rotation_mask, dtype=bool) & (ids >= 0)
         if not np.any(mask):
             continue
-        ids_parts.append(ids[mask])
         rotation_parts.append(np.asarray(bucket.local_rotations, dtype=np.float32)[mask])
-    if not ids_parts:
+    if not rotation_parts:
         return _disabled_relion_projection_cache()
 
-    valid_ids = np.concatenate(ids_parts, axis=0)
     valid_rotations = np.concatenate(rotation_parts, axis=0)
-    unique_ids, first_positions = np.unique(valid_ids, return_index=True)
-    row_count = int(unique_ids.size)
+    rotation_key_to_row: dict[bytes, int] = {}
+    cache_rotation_rows = []
+    for rotation in valid_rotations:
+        key = _relion_projection_cache_rotation_key(rotation)
+        if key not in rotation_key_to_row:
+            rotation_key_to_row[key] = len(cache_rotation_rows)
+            cache_rotation_rows.append(rotation)
+    cache_rotations = np.asarray(cache_rotation_rows, dtype=np.float32)
+    row_count = int(cache_rotations.shape[0])
     if row_count > int(cache_row_capacity):
         raise RuntimeError(
             "internal projection-cache planner error: group has "
             f"{row_count} rows but capacity is {int(cache_row_capacity)}"
         )
-    id_map_row_count = int(max(max_global_rotation_id + 1, int(np.max(valid_ids)) + 1))
+    id_map_row_count = row_count
     allocated_gb = float(row_count * n_projection_pixels * np.dtype(np.complex64).itemsize / 1e9)
 
     cache_t0 = time.time()
-    cache_rotations = valid_rotations[first_positions]
-    id_map = np.zeros(id_map_row_count, dtype=np.int32)
-    id_map[unique_ids] = np.arange(row_count, dtype=np.int32)
+    # ``local_big_jit`` retains the shared indexed-cache interface.  Bucket
+    # rows are mapped from their exact float32 matrices before dispatch, so an
+    # identity device map is sufficient and avoids using approximate nearest-
+    # grid IDs as cache identities.
+    id_map = np.arange(row_count, dtype=np.int32)
 
     chunk_rows = _exact_local_relion_projection_cache_chunk_rows(n_projection_pixels)
     # The cap is a planning limit, not an allocation shape.  Staging the full
@@ -2286,12 +2308,34 @@ def _build_exact_local_relion_projection_cache_for_buckets(
         projections=projections,
         id_map=id_map_jnp,
         enabled=True,
+        rotation_key_to_row=rotation_key_to_row,
         row_count=row_count,
         id_map_row_count=id_map_row_count,
         n_projection_pixels=n_projection_pixels,
         estimated_gb=allocated_gb,
         build_s=build_s,
     )
+
+
+def _relion_projection_cache_rows_for_bucket(
+    cache: _LocalRelionProjectionCache,
+    bucket: LocalBucketSpec,
+) -> np.ndarray:
+    """Map padded bucket rotations to exact cached projection rows."""
+
+    if not cache.enabled or cache.rotation_key_to_row is None:
+        return np.asarray(bucket.local_rotation_ids, dtype=np.int32)
+    rotations = np.asarray(bucket.local_rotations, dtype=np.float32)
+    ids = np.asarray(bucket.local_rotation_ids, dtype=np.int64)
+    mask = np.asarray(bucket.local_rotation_mask, dtype=bool) & (ids >= 0)
+    rows = np.zeros(ids.shape, dtype=np.int32)
+    for index in zip(*np.nonzero(mask)):
+        key = _relion_projection_cache_rotation_key(rotations[index])
+        try:
+            rows[index] = cache.rotation_key_to_row[key]
+        except KeyError as exc:
+            raise RuntimeError("projection-cache bucket rotation is absent from its planned group") from exc
+    return rows
 
 
 def _adjoint_slice_volume_maybe_windowed_row_chunks(
@@ -4464,20 +4508,14 @@ def run_local_em_exact(
                 max(row_count for _, _, row_count in relion_projection_cache_groups)
             )
             relion_projection_cache_n_projection_pixels = int(window_spec.n_projection)
-            valid_layout_ids = np.asarray(local_layout.rotation_ids_flat, dtype=np.int64)
-            valid_layout_ids = valid_layout_ids[valid_layout_ids >= 0]
-            relion_projection_cache_id_map_rows = (
-                int(np.max(valid_layout_ids)) + 1 if valid_layout_ids.size else 1
-            )
             logger.info(
                 "Exact local RELION projection cache groups enabled: groups=%d capacity_rows=%d "
-                "requested_rows=%d cap=%.2f GB projection_pixels=%d id_map_rows=%d",
+                "requested_rows=%d cap=%.2f GB projection_pixels=%d",
                 len(relion_projection_cache_groups),
                 relion_projection_cache_capacity_rows,
                 int(requested_cache_rows),
                 float(relion_projection_cache_cap_gb),
                 relion_projection_cache_n_projection_pixels,
-                relion_projection_cache_id_map_rows,
             )
     if use_big_jit_buckets and not use_relion_projector and not projection_relion_texture_interp:
         mean_for_proj_big_jit = fourier_transform_utils.full_volume_to_half_volume(
@@ -4529,7 +4567,6 @@ def run_local_em_exact(
                 projection_pixel_indices=jnp.asarray(window_spec.projection_indices, dtype=jnp.int32),
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(relion_projection_cache_capacity_rows),
-                max_global_rotation_id=max(relion_projection_cache_id_map_rows - 1, 0),
                 group_index=relion_projection_cache_group_cursor,
                 n_groups=len(relion_projection_cache_groups),
             )
@@ -4537,6 +4574,10 @@ def run_local_em_exact(
             relion_projection_cache_groups_built += int(relion_projection_cache.enabled)
             relion_projection_cache_total_build_s += float(relion_projection_cache.build_s)
             relion_projection_cache_max_rows = max(relion_projection_cache_max_rows, int(relion_projection_cache.row_count))
+            relion_projection_cache_id_map_rows = max(
+                relion_projection_cache_id_map_rows,
+                int(relion_projection_cache.id_map_row_count),
+            )
             relion_projection_cache_max_estimated_gb = max(
                 relion_projection_cache_max_estimated_gb,
                 float(relion_projection_cache.estimated_gb),
@@ -4972,7 +5013,10 @@ def run_local_em_exact(
                 big_jit_projection_recon_take_arg,
                 relion_projection_cache.projections,
                 relion_projection_cache.id_map,
-                jnp.asarray(bucket.local_rotation_ids, dtype=jnp.int32),
+                jnp.asarray(
+                    _relion_projection_cache_rows_for_bucket(relion_projection_cache, bucket),
+                    dtype=jnp.int32,
+                ),
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(_local_mstep_rotations(bucket)),
                 local_rotation_log_prior_arg,
