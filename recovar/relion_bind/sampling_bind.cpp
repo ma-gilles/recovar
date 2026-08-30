@@ -9,8 +9,131 @@
 #include <pybind11/stl.h>
 #include <src/healpix_sampling.h>
 #include <src/euler.h>
+#include <src/symmetries.h>
 
 namespace py = pybind11;
+
+
+static HealpixSampling make_3d_sampling(
+    int healpix_order,
+    double psi_step,
+    const std::string& symmetry
+) {
+    if (healpix_order < 0)
+        throw std::runtime_error("healpix_order must be nonnegative");
+
+    SymList symmetry_list;
+    int point_group = 0;
+    int point_group_order = 0;
+    if (!symmetry_list.isSymmetryGroup(symmetry, point_group, point_group_order))
+        throw std::runtime_error("unrecognized RELION point-group symmetry: " + symmetry);
+    if (point_group == pg_I5 || point_group == pg_I5H)
+        throw std::runtime_error("RELION recognizes I5/I5H but does not implement them");
+
+    HealpixSampling sampling;
+    sampling.clear();
+    sampling.is_3D = true;
+    sampling.isRelax = false;
+    sampling.fn_sym = symmetry;
+    sampling.healpix_order = healpix_order;
+    sampling.limit_tilt = 90.0;
+    sampling.psi_step = psi_step;
+    if (sampling.psi_step < 0.0)
+        sampling.psi_step = 360.0 / (6 * ROUND(std::pow(2., healpix_order)));
+    sampling.healpix_base.Set(healpix_order, NEST);
+    sampling.initialiseSymMats(
+        sampling.fn_sym,
+        sampling.pgGroup,
+        sampling.pgOrder,
+        sampling.R_repository,
+        sampling.L_repository);
+    sampling.setOrientations(healpix_order, sampling.psi_step);
+    return sampling;
+}
+
+
+static py::dict get_symmetry_operators(const std::string& symmetry) {
+    SymList symmetry_list;
+    int point_group = 0;
+    int point_group_order = 0;
+    if (!symmetry_list.isSymmetryGroup(symmetry, point_group, point_group_order))
+        throw std::runtime_error("unrecognized RELION point-group symmetry: " + symmetry);
+    if (point_group == pg_I5 || point_group == pg_I5H)
+        throw std::runtime_error("RELION recognizes I5/I5H but does not implement them");
+    // C1 has only the implicit identity operator.  Avoid asking SymList to
+    // locate a symmetry-definition file for the default case: RELION's
+    // symmetry-file search depends on the process environment and C1
+    // refinement has historically been portable without that dependency.
+    const bool is_identity_group = point_group == pg_CN && point_group_order == 1;
+    if (!is_identity_group)
+        symmetry_list.read_sym_file(symmetry);
+
+    const long count = is_identity_group ? 1 : static_cast<long>(symmetry_list.SymsNo()) + 1;
+    py::array_t<double> left({count, (long)3, (long)3});
+    py::array_t<double> right({count, (long)3, (long)3});
+    auto left_view = left.mutable_unchecked<3>();
+    auto right_view = right.mutable_unchecked<3>();
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+            const double value = row == col ? 1.0 : 0.0;
+            left_view(0, row, col) = value;
+            right_view(0, row, col) = value;
+        }
+    }
+
+    Matrix2D<RFLOAT> L(4, 4), R(4, 4);
+    for (long index = 1; index < count; ++index) {
+        symmetry_list.get_matrices(static_cast<int>(index - 1), L, R);
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                left_view(index, row, col) = static_cast<double>(L(row, col));
+                right_view(index, row, col) = static_cast<double>(R(row, col));
+            }
+        }
+    }
+
+    py::dict result;
+    result["left"] = std::move(left);
+    result["right"] = std::move(right);
+    result["point_group"] = point_group;
+    result["point_group_order"] = point_group_order;
+    return result;
+}
+
+
+static py::dict get_healpix_sampling_metadata(
+    int healpix_order,
+    double psi_step,
+    const std::string& symmetry
+) {
+    HealpixSampling sampling = make_3d_sampling(healpix_order, psi_step, symmetry);
+    const long direction_count = static_cast<long>(sampling.rot_angles.size());
+    const long psi_count = static_cast<long>(sampling.psi_angles.size());
+    py::array_t<int64_t> directions_ipix({direction_count});
+    py::array_t<double> rot({direction_count});
+    py::array_t<double> tilt({direction_count});
+    py::array_t<double> psi({psi_count});
+    auto ipix_view = directions_ipix.mutable_unchecked<1>();
+    auto rot_view = rot.mutable_unchecked<1>();
+    auto tilt_view = tilt.mutable_unchecked<1>();
+    auto psi_view = psi.mutable_unchecked<1>();
+    for (long index = 0; index < direction_count; ++index) {
+        ipix_view(index) = static_cast<int64_t>(sampling.directions_ipix[index]);
+        rot_view(index) = static_cast<double>(sampling.rot_angles[index]);
+        tilt_view(index) = static_cast<double>(sampling.tilt_angles[index]);
+    }
+    for (long index = 0; index < psi_count; ++index)
+        psi_view(index) = static_cast<double>(sampling.psi_angles[index]);
+
+    py::dict result;
+    result["directions_ipix"] = std::move(directions_ipix);
+    result["rot"] = std::move(rot);
+    result["tilt"] = std::move(tilt);
+    result["psi"] = std::move(psi);
+    result["point_group"] = sampling.pgGroup;
+    result["point_group_order"] = sampling.pgOrder;
+    return result;
+}
 
 
 /**
@@ -21,7 +144,22 @@ namespace py = pybind11;
  * which may fail when the working directory lacks RELION's symmetry files.
  * For C1 symmetry, removeSymmetryEquivalentPoints is a no-op anyway.
  */
-static py::array_t<double> get_healpix_directions(int healpix_order) {
+static py::array_t<double> get_healpix_directions(
+    int healpix_order,
+    const std::string& symmetry
+) {
+    if (symmetry != "C1" && symmetry != "c1") {
+        HealpixSampling sampling = make_3d_sampling(healpix_order, -1.0, symmetry);
+        const long count = static_cast<long>(sampling.rot_angles.size());
+        py::array_t<double> result({count, (long)2});
+        auto r = result.mutable_unchecked<2>();
+        for (long index = 0; index < count; ++index) {
+            r(index, 0) = sampling.rot_angles[index];
+            r(index, 1) = sampling.tilt_angles[index];
+        }
+        return result;
+    }
+
     Healpix_Base hpx(healpix_order, NEST);
     long npix = hpx.Npix();
 
@@ -45,30 +183,55 @@ static py::array_t<double> get_healpix_directions(int healpix_order) {
  * Get full coarse grid: (rot, tilt, psi) for given healpix_order + psi_step.
  * Returns (n_dir * n_psi, 3) array of [rot, tilt, psi] in degrees.
  */
-static py::array_t<double> get_coarse_orientations(int healpix_order, double psi_step) {
-    Healpix_Base hpx(healpix_order, NEST);
-    long npix = hpx.Npix();
+static py::array_t<double> get_coarse_orientations(
+    int healpix_order,
+    double psi_step,
+    const std::string& symmetry
+) {
+    if (symmetry == "C1" || symmetry == "c1") {
+        // Keep the pre-symmetry C1 implementation byte-for-byte.  This path
+        // is used by strict numerical-parity gates and must not inherit any
+        // changed floating-point evaluation order from HealpixSampling.
+        Healpix_Base hpx(healpix_order, NEST);
+        const long npix = hpx.Npix();
+        if (psi_step < 0)
+            psi_step = 360.0 / (6 * ROUND(std::pow(2., healpix_order)));
+        const int nr_psi = CEIL(360.0 / psi_step);
+        psi_step = 360.0 / static_cast<double>(nr_psi);
 
-    if (psi_step < 0)
-        psi_step = 360.0 / (6 * ROUND(std::pow(2., healpix_order)));
+        py::array_t<double> result({npix * nr_psi, (long)3});
+        auto r = result.mutable_unchecked<2>();
+        long idx = 0;
+        for (long ipix = 0; ipix < npix; ++ipix) {
+            double zz, phi;
+            hpx.pix2ang_z_phi(ipix, zz, phi);
+            double rot = RAD2DEG(phi);
+            const double tilt = ACOSD(zz);
+            if (rot > 180.0)
+                rot -= 360.0;
+            for (int ipsi = 0; ipsi < nr_psi; ++ipsi) {
+                r(idx, 0) = rot;
+                r(idx, 1) = tilt;
+                r(idx, 2) = ipsi * psi_step;
+                ++idx;
+            }
+        }
+        return result;
+    }
 
-    int nr_psi = CEIL(360.0 / psi_step);
-    psi_step = 360.0 / (double)nr_psi;
+    HealpixSampling sampling = make_3d_sampling(healpix_order, psi_step, symmetry);
+    const long npix = static_cast<long>(sampling.rot_angles.size());
+    const int nr_psi = static_cast<int>(sampling.psi_angles.size());
 
     long n_total = npix * nr_psi;
     py::array_t<double> result({n_total, (long)3});
     auto r = result.mutable_unchecked<2>();
     long idx = 0;
-    for (long ipix = 0; ipix < npix; ipix++) {
-        double zz, phi;
-        hpx.pix2ang_z_phi(ipix, zz, phi);
-        double rot = RAD2DEG(phi);
-        double tilt = ACOSD(zz);
-        if (rot > 180.0) rot -= 360.0;
+    for (long idir = 0; idir < npix; idir++) {
         for (int ipsi = 0; ipsi < nr_psi; ipsi++) {
-            r(idx, 0) = rot;
-            r(idx, 1) = tilt;
-            r(idx, 2) = ipsi * psi_step;
+            r(idx, 0) = sampling.rot_angles[idir];
+            r(idx, 1) = sampling.tilt_angles[idir];
+            r(idx, 2) = sampling.psi_angles[ipsi];
             idx++;
         }
     }
@@ -88,8 +251,41 @@ static py::array_t<double> get_oversampled_orientations(
     int oversampling_order,
     long idir,
     long ipsi,
-    double random_perturbation
+    double random_perturbation,
+    const std::string& symmetry
 ) {
+    if (symmetry != "C1" && symmetry != "c1") {
+        HealpixSampling sampling = make_3d_sampling(healpix_order, -1.0, symmetry);
+        if (idir < 0 || idir >= static_cast<long>(sampling.rot_angles.size()))
+            throw std::runtime_error("idir out of range");
+        if (ipsi < 0 || ipsi >= static_cast<long>(sampling.psi_angles.size()))
+            throw std::runtime_error("ipsi out of range");
+        sampling.random_perturbation = random_perturbation;
+        std::vector<RFLOAT> my_rot, my_tilt, my_psi;
+        std::vector<int> pointer_dir_nonzeroprior, pointer_psi_nonzeroprior;
+        std::vector<RFLOAT> directions_prior, psi_prior;
+        sampling.getOrientations(
+            idir,
+            ipsi,
+            oversampling_order,
+            my_rot,
+            my_tilt,
+            my_psi,
+            pointer_dir_nonzeroprior,
+            directions_prior,
+            pointer_psi_nonzeroprior,
+            psi_prior);
+        const long count = static_cast<long>(my_rot.size());
+        py::array_t<double> result({count, (long)3});
+        auto r = result.mutable_unchecked<2>();
+        for (long index = 0; index < count; ++index) {
+            r(index, 0) = my_rot[index];
+            r(index, 1) = my_tilt[index];
+            r(index, 2) = my_psi[index];
+        }
+        return result;
+    }
+
     Healpix_Base hpx_coarse(healpix_order, NEST);
 
     double psi_step = 360.0 / (6 * ROUND(std::pow(2., healpix_order)));
@@ -315,6 +511,7 @@ static double get_angular_sampling(int healpix_order, int adaptive_oversampling)
 void init_sampling_bindings(py::module_ &m) {
     m.def("get_healpix_directions", &get_healpix_directions,
           py::arg("healpix_order"),
+          py::arg("symmetry") = "C1",
           R"doc(
 Get HEALPix direction grid (rot, tilt) for C1 symmetry.
 Returns (n_directions, 2) with [rot, tilt] in degrees.
@@ -323,8 +520,9 @@ Returns (n_directions, 2) with [rot, tilt] in degrees.
     m.def("get_coarse_orientations", &get_coarse_orientations,
           py::arg("healpix_order"),
           py::arg("psi_step") = -1.0,
+          py::arg("symmetry") = "C1",
           R"doc(
-Get full coarse orientation grid (rot, tilt, psi) for C1 symmetry.
+Get full coarse orientation grid (rot, tilt, psi) for a RELION symmetry.
 psi_step < 0 uses RELION's default: 360 / (6 * 2^order).
 Returns (n_total, 3) with [rot, tilt, psi] in degrees.
 )doc");
@@ -335,6 +533,7 @@ Returns (n_total, 3) with [rot, tilt, psi] in degrees.
           py::arg("idir"),
           py::arg("ipsi"),
           py::arg("random_perturbation") = 0.0,
+          py::arg("symmetry") = "C1",
           R"doc(
 Get oversampled orientations for a coarse (idir, ipsi) pair.
 Returns (n_oversampled, 3) with [rot, tilt, psi] in degrees.
@@ -372,4 +571,26 @@ Returns (n_oversampled, 2) with [x, y] in pixels.
           py::arg("healpix_order"),
           py::arg("adaptive_oversampling") = 0,
           "Angular sampling step in degrees for given order + oversampling.");
+
+    m.def("get_symmetry_operators", &get_symmetry_operators,
+          py::arg("symmetry"),
+          R"doc(
+Return RELION's ordered point-group operators, including identity first.
+
+The result contains ``left`` and ``right`` arrays with shape ``(n, 3, 3)``
+for RELION's ``E' = L E R`` convention, plus the integer point-group code and
+order. RELION's internal ``SymList`` omits identity; this binding prepends it.
+)doc");
+
+    m.def("get_healpix_sampling_metadata", &get_healpix_sampling_metadata,
+          py::arg("healpix_order"),
+          py::arg("psi_step") = -1.0,
+          py::arg("symmetry") = "C1",
+          R"doc(
+Return RELION's symmetry-reduced coarse sampling axes and source indices.
+
+``directions_ipix`` contains each retained direction's original NEST HEALPix
+pixel. ``rot`` and ``tilt`` index those retained ASU rows; ``psi`` is the
+independent in-plane axis.
+)doc");
 }

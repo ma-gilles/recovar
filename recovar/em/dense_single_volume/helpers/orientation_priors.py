@@ -143,10 +143,14 @@ def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=N
     return (prior - old_offset).astype(np.float32)
 
 
-def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
+def collapse_rotation_posterior_to_direction_prior(
+    rotation_posterior_sums,
+    healpix_order,
+    symmetry: str = "C1",
+):
     """Collapse per-rotation posterior mass onto RELION's HEALPix directions."""
     rotation_posterior_sums = np.asarray(rotation_posterior_sums, dtype=np.float64).reshape(-1)
-    n_rot = rotation_grid_size(healpix_order)
+    n_rot = rotation_grid_size(healpix_order, symmetry)
     if rotation_posterior_sums.shape[0] != n_rot:
         raise ValueError(
             f"rotation_posterior_sums must have shape ({n_rot},), got {rotation_posterior_sums.shape}",
@@ -163,9 +167,48 @@ def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, heal
     return direction_weights.astype(np.float32)
 
 
-def infer_direction_prior_healpix_order(direction_prior):
+def infer_direction_prior_healpix_order(
+    direction_prior,
+    symmetry: str = "C1",
+    *,
+    expected_order: int | None = None,
+):
     """Infer HEALPix order from a RELION direction-prior vector length."""
     n_pixels = int(np.asarray(direction_prior).reshape(-1).shape[0])
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    if symmetry != "C1":
+        from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
+
+        def _direction_count(order: int) -> int | None:
+            try:
+                return rotation_grid_size(order, symmetry) // rotation_grid_n_in_planes(order)
+            except ValueError:
+                return None
+
+        if expected_order is not None:
+            expected_order = int(expected_order)
+            if _direction_count(expected_order) == n_pixels:
+                return expected_order
+        maximum_order = max(10, 0 if expected_order is None else expected_order + 3)
+        matches = [
+            order
+            for order in range(maximum_order + 1)
+            if _direction_count(order) == n_pixels
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise ValueError(
+                f"Cannot infer {symmetry} HEALPix order from direction prior of length {n_pixels}"
+            )
+        raise ValueError(
+            f"Ambiguous {symmetry} HEALPix order for direction prior of length {n_pixels}: "
+            f"matches {matches}; provide expected_order"
+        )
+
+    # Preserve the historical C1 inference path exactly.
     order = 0
     while hp.nside2npix(2**order) < n_pixels:
         order += 1
@@ -284,9 +327,97 @@ def class_weights_from_direction_prior(direction_prior, n_classes):
     return None
 
 
-def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order):
+def _fold_direction_vectors_to_asu(query_vectors, target_order, symmetry):
+    """Map direction vectors to compact RELION ASU rows at ``target_order``."""
+
+    from recovar.em.sampling import build_local_search_grid_metadata
+    from recovar.em.symmetry import rotational_operators
+
+    query_vectors = np.asarray(query_vectors, dtype=np.float64).reshape(-1, 3)
+    target = build_local_search_grid_metadata(int(target_order), symmetry=symmetry)
+    target_pixels = np.asarray(target["directions_ipix"], dtype=np.int64)
+    nside = 2 ** int(target_order)
+    pixel_to_compact = np.full(hp.nside2npix(nside), -1, dtype=np.int64)
+    pixel_to_compact[target_pixels] = np.arange(target_pixels.size, dtype=np.int64)
+    mapped = np.full(query_vectors.shape[0], -1, dtype=np.int64)
+    operators = rotational_operators(symmetry, dtype=np.float64)
+    for operator in operators:
+        transformed = np.einsum("ij,bj->bi", operator, query_vectors)
+        pixels = hp.vec2pix(
+            nside,
+            transformed[:, 0],
+            transformed[:, 1],
+            transformed[:, 2],
+            nest=True,
+        )
+        candidates = pixel_to_compact[pixels]
+        accept = (mapped < 0) & (candidates >= 0)
+        mapped[accept] = candidates[accept]
+        if np.all(mapped >= 0):
+            break
+
+    # ASU boundary rounding can leave a small number of vectors without a
+    # pixel hit. Resolve only those rows by the same symmetry-minimized angular
+    # distance used by local search, avoiding a dense all-grid allocation in
+    # the common path.
+    missing = np.flatnonzero(mapped < 0)
+    if missing.size:
+        target_vectors = np.asarray(target["dir_vecs"], dtype=np.float64)
+        for query_index in missing:
+            best_scores = np.full(target_vectors.shape[0], -np.inf, dtype=np.float64)
+            query = query_vectors[query_index]
+            for operator in operators:
+                best_scores = np.maximum(best_scores, target_vectors @ (operator @ query))
+            mapped[query_index] = int(np.argmax(best_scores))
+    return mapped
+
+
+def remap_direction_prior_to_healpix_order(
+    direction_prior,
+    src_order,
+    dst_order,
+    symmetry: str = "C1",
+):
     """Remap a RELION direction prior between HEALPix orders."""
     direction_prior = np.asarray(direction_prior, dtype=np.float64).reshape(-1)
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    if symmetry != "C1":
+        from recovar.em.sampling import build_local_search_grid_metadata
+
+        source = build_local_search_grid_metadata(int(src_order), symmetry=symmetry)
+        destination = build_local_search_grid_metadata(int(dst_order), symmetry=symmetry)
+        if direction_prior.shape != (int(source["n_pixels"]),):
+            raise ValueError(
+                f"{symmetry} direction prior at HEALPix order {src_order} must have "
+                f"shape {(int(source['n_pixels']),)}, got {direction_prior.shape}"
+            )
+        if src_order == dst_order:
+            out = direction_prior.copy()
+        elif src_order > dst_order:
+            dst_idx = _fold_direction_vectors_to_asu(
+                source["dir_vecs"],
+                dst_order,
+                symmetry,
+            )
+            out = np.zeros(int(destination["n_pixels"]), dtype=np.float64)
+            np.add.at(out, dst_idx, direction_prior)
+        else:
+            src_idx = _fold_direction_vectors_to_asu(
+                destination["dir_vecs"],
+                src_order,
+                symmetry,
+            )
+            out = direction_prior[src_idx]
+        total = float(out.sum())
+        if total <= 0.0 or not np.isfinite(total):
+            out.fill(1.0 / max(out.shape[0], 1))
+        else:
+            out /= total
+        return out.astype(np.float32)
+
+    # Preserve the historical C1 mapping exactly.
     if src_order == dst_order:
         out = direction_prior.copy()
     elif src_order > dst_order:
@@ -306,7 +437,12 @@ def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order
     return out.astype(np.float32)
 
 
-def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None):
+def make_relion_direction_log_prior(
+    direction_prior,
+    healpix_order,
+    rotations=None,
+    symmetry: str = "C1",
+):
     """Expand RELION's learned ``pdf_direction`` onto a rotation grid.
 
     When ``rotations`` is omitted, the prior is expanded onto RELION's
@@ -318,7 +454,7 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
     path used in refinement.
     """
     direction_prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
-    n_rot = rotation_grid_size(healpix_order)
+    n_rot = rotation_grid_size(healpix_order, symmetry)
     n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
     if direction_prior.shape[0] != n_pixels:
         raise ValueError(
@@ -337,12 +473,19 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
         norms = np.linalg.norm(view_dirs, axis=1, keepdims=True)
         norms = np.where(norms > 1e-12, norms, 1.0)
         view_dirs = view_dirs / norms
-        pixel_idx = hp.vec2pix(
-            2**healpix_order,
-            view_dirs[:, 0],
-            view_dirs[:, 1],
-            view_dirs[:, 2],
-        )
+        if symmetry == "C1":
+            pixel_idx = hp.vec2pix(
+                2**healpix_order,
+                view_dirs[:, 0],
+                view_dirs[:, 1],
+                view_dirs[:, 2],
+            )
+        else:
+            pixel_idx = _fold_direction_vectors_to_asu(
+                view_dirs,
+                healpix_order,
+                symmetry,
+            )
 
     prior_for_rotations = direction_prior[pixel_idx]
     log_prior = np.full(prior_for_rotations.shape, -np.inf, dtype=np.float32)

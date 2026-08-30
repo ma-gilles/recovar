@@ -930,6 +930,8 @@ class FinalManifestReplay(NamedTuple):
     completed_relion_iteration: int
     current_size: int
     healpix_order: int
+    symmetry_label: str
+    symmetry_operator_sha256: str
     fsc: np.ndarray
     ave_pmax: float
     means: tuple[np.ndarray, np.ndarray]
@@ -972,15 +974,30 @@ _FINAL_MANIFEST_REQUIRED_FIELDS = frozenset(
         "local_search",
         "iteration",
         "half_index",
+        "symmetry_label",
+        "symmetry_operator_sha256",
     }
+)
+_FINAL_MANIFEST_SYMMETRY_FIELDS = frozenset(
+    {"symmetry_label", "symmetry_operator_sha256"}
 )
 
 
 def _load_final_manifest_replay(
     manifest_dir: str | Path,
     source_results: str | Path,
+    *,
+    expected_symmetry: str = "C1",
 ) -> FinalManifestReplay:
     """Load and cross-check a final-only replay boundary without inference."""
+
+    from recovar.em.symmetry import (
+        canonicalize_rotational_symmetry,
+        symmetry_operator_sha256,
+    )
+
+    expected_symmetry = canonicalize_rotational_symmetry(expected_symmetry)
+    expected_operator_sha256 = symmetry_operator_sha256(expected_symmetry)
 
     manifest_dir = Path(manifest_dir).expanduser().resolve()
     source_results_path = Path(source_results).expanduser().resolve()
@@ -995,12 +1012,27 @@ def _load_final_manifest_replay(
         )
 
     payloads: list[dict[str, np.ndarray]] = []
+    legacy_c1_payloads: list[bool] = []
     for expected_half, path in enumerate(manifest_paths):
         with np.load(path, allow_pickle=False) as archive:
-            missing = sorted(_FINAL_MANIFEST_REQUIRED_FIELDS - set(archive.files))
-            if missing:
-                raise ValueError(f"{path} is missing final-manifest fields: {missing}")
-            payload = {field: np.asarray(archive[field]) for field in _FINAL_MANIFEST_REQUIRED_FIELDS}
+            archive_fields = set(archive.files)
+            missing_fields = _FINAL_MANIFEST_REQUIRED_FIELDS - archive_fields
+            legacy_c1 = missing_fields == _FINAL_MANIFEST_SYMMETRY_FIELDS
+            if missing_fields and not (legacy_c1 and expected_symmetry == "C1"):
+                raise ValueError(
+                    f"{path} is missing final-manifest fields: {sorted(missing_fields)}"
+                )
+            payload = {
+                field: np.asarray(archive[field])
+                for field in _FINAL_MANIFEST_REQUIRED_FIELDS
+                if field in archive_fields
+            }
+        if legacy_c1:
+            payload["symmetry_label"] = np.asarray("C1")
+            payload["symmetry_operator_sha256"] = np.asarray(
+                expected_operator_sha256
+            )
+        legacy_c1_payloads.append(legacy_c1)
         observed_half = int(payload["half_index"].item())
         if observed_half != expected_half:
             raise ValueError(
@@ -1012,6 +1044,38 @@ def _load_final_manifest_replay(
             if not bool(payload[flag].item()):
                 raise ValueError(f"{path} requires {flag}=true for this replay")
         payloads.append(payload)
+
+    if any(legacy_c1_payloads) and not all(legacy_c1_payloads):
+        raise ValueError("final manifests mix legacy C1 and symmetry-aware schemas")
+
+    observed_symmetry = str(payloads[0]["symmetry_label"].item())
+    canonical_observed_symmetry = canonicalize_rotational_symmetry(observed_symmetry)
+    if observed_symmetry != canonical_observed_symmetry:
+        raise ValueError(
+            "final manifest symmetry label is not canonical: "
+            f"observed={observed_symmetry!r}, canonical={canonical_observed_symmetry!r}"
+        )
+    observed_operator_sha256 = str(
+        payloads[0]["symmetry_operator_sha256"].item()
+    )
+    canonical_observed_operator_sha256 = symmetry_operator_sha256(
+        canonical_observed_symmetry
+    )
+    if observed_operator_sha256 != canonical_observed_operator_sha256:
+        raise ValueError(
+            "final manifest symmetry operator hash does not match the canonical "
+            f"{canonical_observed_symmetry} operators"
+        )
+    if canonical_observed_symmetry != expected_symmetry:
+        raise ValueError(
+            "final manifest symmetry does not match requested runtime symmetry: "
+            f"manifest={canonical_observed_symmetry}, runtime={expected_symmetry}"
+        )
+    if observed_operator_sha256 != expected_operator_sha256:
+        raise ValueError(
+            "final manifest symmetry operator hash does not match requested runtime "
+            f"symmetry {expected_symmetry}"
+        )
 
     shared_fields = (
         "effective_rotations",
@@ -1026,6 +1090,8 @@ def _load_final_manifest_replay(
         "perturbation_factor",
         "perturbation_applied",
         "perturbation_relion_iteration",
+        "symmetry_label",
+        "symmetry_operator_sha256",
     )
     for field in shared_fields:
         if not np.array_equal(payloads[0][field], payloads[1][field]):
@@ -1102,6 +1168,45 @@ def _load_final_manifest_replay(
             raise ValueError("diagnostic final-manifest translation-sigma trajectory is misaligned")
         translation_sigma_angstrom_per_half = tuple(float(value) for value in sigma_history[-1])
         tau2_fudge = float(np.asarray(results["tau2_fudge"]).item())
+        result_symmetry_fields = {
+            "symmetry_label",
+            "symmetry_operator_sha256",
+        }
+        present_result_symmetry_fields = result_symmetry_fields.intersection(
+            results.files
+        )
+        if (
+            present_result_symmetry_fields
+            and present_result_symmetry_fields != result_symmetry_fields
+        ):
+            missing_result_symmetry = sorted(
+                result_symmetry_fields - present_result_symmetry_fields
+            )
+            raise ValueError(
+                "diagnostic final-manifest source results are missing symmetry "
+                f"fields: {missing_result_symmetry}"
+            )
+        if present_result_symmetry_fields:
+            results_symmetry = str(np.asarray(results["symmetry_label"]).item())
+            results_operator_sha256 = str(
+                np.asarray(results["symmetry_operator_sha256"]).item()
+            )
+            if results_symmetry != canonical_observed_symmetry:
+                raise ValueError(
+                    "diagnostic final-manifest source-results symmetry disagrees "
+                    f"with manifests: results={results_symmetry}, "
+                    f"manifests={canonical_observed_symmetry}"
+                )
+            if results_operator_sha256 != observed_operator_sha256:
+                raise ValueError(
+                    "diagnostic final-manifest source-results symmetry operator "
+                    "hash disagrees with manifests"
+                )
+        elif expected_symmetry != "C1":
+            raise ValueError(
+                "non-C1 diagnostic final-manifest source results are missing "
+                "symmetry provenance"
+            )
 
     for half in range(2):
         row_count = int(payloads[half]["image_corrections"].shape[0])
@@ -1142,6 +1247,8 @@ def _load_final_manifest_replay(
         completed_relion_iteration=completed_relion_iteration,
         current_size=int(current_sizes[-1]),
         healpix_order=int(healpix_orders[-1]),
+        symmetry_label=canonical_observed_symmetry,
+        symmetry_operator_sha256=observed_operator_sha256,
         fsc=fsc,
         ave_pmax=float(ave_pmax_trajectory[-1]),
         means=tuple(payload["mean_vol_ft"] for payload in payloads),
@@ -1176,6 +1283,223 @@ def _particle_identity_rows(particles, *, label: str) -> dict[tuple[int, str], i
     if len(set(identities)) != len(identities):
         raise ValueError(f"{label} contains duplicate rlnImageName/stack identities")
     return {identity: row for row, identity in enumerate(identities)}
+
+
+def _load_input_star_previous_best_poses(
+    input_particles,
+    relion_halfset_particles,
+    half1_idx,
+    half2_idx,
+    *,
+    voxel_size: float,
+):
+    """Load deposited poses in the exact half-local order used by refinement.
+
+    ``half1_idx`` and ``half2_idx`` index the RECOVAR input particle table,
+    whereas ``--relion_half_sets`` may be in a different row order.  Bind the
+    two tables by full RELION image identity and fail closed if the supplied
+    split is stale, incomplete, or inconsistent with the half-local layout.
+    Translations are returned in pixels, matching ``ReplayState`` and RELION's
+    previous-best-pose convention.
+    """
+
+    input_rows = _particle_identity_rows(
+        input_particles,
+        label="RECOVAR input STAR",
+    )
+    halfset_rows = _particle_identity_rows(
+        relion_halfset_particles,
+        label="RELION half-set STAR",
+    )
+    if set(input_rows) != set(halfset_rows):
+        missing = len(set(input_rows) - set(halfset_rows))
+        extra = len(set(halfset_rows) - set(input_rows))
+        raise ValueError(
+            "RELION half-set STAR and RECOVAR input STAR do not contain the "
+            "same rlnImageName/stack identities "
+            f"(missing={missing}, extra={extra})",
+        )
+
+    n_particles = len(input_particles)
+    if len(input_rows) != n_particles:
+        raise ValueError("RECOVAR input STAR identity count does not match its particle rows")
+
+    half_indices = []
+    for label, values in (("half1_idx", half1_idx), ("half2_idx", half2_idx)):
+        indices = np.asarray(values, dtype=np.int64)
+        if indices.ndim != 1:
+            raise ValueError(f"{label} must be one-dimensional, got {indices.shape}")
+        if indices.size and (
+            int(np.min(indices)) < 0 or int(np.max(indices)) >= n_particles
+        ):
+            raise ValueError(f"{label} contains an out-of-bounds RECOVAR particle row")
+        if np.unique(indices).size != indices.size:
+            raise ValueError(f"{label} contains duplicate RECOVAR particle rows")
+        half_indices.append(indices)
+    if np.intersect1d(half_indices[0], half_indices[1]).size:
+        raise ValueError("half1_idx and half2_idx overlap")
+    combined_indices = np.concatenate(half_indices)
+    if combined_indices.size != n_particles or not np.array_equal(
+        np.sort(combined_indices),
+        np.arange(n_particles, dtype=np.int64),
+    ):
+        raise ValueError(
+            "half1_idx and half2_idx must form an exact partition of the input STAR rows",
+        )
+
+    if "rlnRandomSubset" not in relion_halfset_particles.columns:
+        raise ValueError("RELION half-set STAR is missing rlnRandomSubset")
+    random_subsets = np.asarray(
+        relion_halfset_particles["rlnRandomSubset"],
+        dtype=np.int64,
+    ).reshape(-1)
+    if random_subsets.shape != (len(relion_halfset_particles),):
+        raise ValueError("RELION half-set rlnRandomSubset has an invalid shape")
+    if not np.all(np.isin(random_subsets, (1, 2))):
+        raise ValueError("RELION half-set rlnRandomSubset values must be 1 or 2")
+
+    identities_by_input_row = [None] * n_particles
+    for identity, row in input_rows.items():
+        identities_by_input_row[row] = identity
+    for half, indices in enumerate(half_indices, start=1):
+        supplied_subsets = np.asarray(
+            [random_subsets[halfset_rows[identities_by_input_row[int(row)]]] for row in indices],
+            dtype=np.int64,
+        )
+        if not np.all(supplied_subsets == half):
+            bad_rows = indices[supplied_subsets != half]
+            raise ValueError(
+                f"half{half}_idx disagrees with RELION rlnRandomSubset for "
+                f"{bad_rows.size} input rows",
+            )
+
+    def _numeric_columns(columns, *, field: str) -> np.ndarray:
+        missing = [column for column in columns if column not in input_particles.columns]
+        if missing:
+            raise ValueError(
+                f"RECOVAR input STAR is missing {field} columns: {', '.join(missing)}",
+            )
+        try:
+            values = np.stack(
+                [np.asarray(input_particles[column], dtype=np.float64) for column in columns],
+                axis=1,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"RECOVAR input STAR {field} columns must be numeric") from exc
+        expected_shape = (n_particles, len(columns))
+        if values.shape != expected_shape:
+            raise ValueError(
+                f"RECOVAR input STAR {field} array has shape {values.shape}, "
+                f"expected {expected_shape}",
+            )
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"RECOVAR input STAR {field} values must be finite")
+        return values
+
+    eulers = _numeric_columns(
+        ("rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"),
+        field="Euler-angle",
+    )
+
+    angstrom_columns = ("rlnOriginXAngst", "rlnOriginYAngst")
+    pixel_columns = ("rlnOriginX", "rlnOriginY")
+    has_angstrom = [column in input_particles.columns for column in angstrom_columns]
+    has_pixels = [column in input_particles.columns for column in pixel_columns]
+    if any(has_angstrom) and not all(has_angstrom):
+        raise ValueError("RECOVAR input STAR must provide both rlnOriginXAngst and rlnOriginYAngst")
+    if any(has_pixels) and not all(has_pixels):
+        raise ValueError("RECOVAR input STAR must provide both rlnOriginX and rlnOriginY")
+    if all(has_angstrom):
+        if not np.isfinite(voxel_size) or float(voxel_size) <= 0.0:
+            raise ValueError("voxel_size must be positive and finite for Angstrom origins")
+        translations = _numeric_columns(
+            angstrom_columns,
+            field="Angstrom-origin",
+        ) / float(voxel_size)
+        translation_units = "angstrom"
+    elif all(has_pixels):
+        translations = _numeric_columns(pixel_columns, field="pixel-origin")
+        translation_units = "pixel"
+    else:
+        translations = np.zeros((n_particles, 2), dtype=np.float64)
+        translation_units = "implicit_zero"
+
+    eulers_per_half = [
+        np.ascontiguousarray(eulers[indices], dtype=np.float32)
+        for indices in half_indices
+    ]
+    translations_per_half = [
+        np.ascontiguousarray(translations[indices], dtype=np.float32)
+        for indices in half_indices
+    ]
+    for half, (half_eulers, half_translations, indices) in enumerate(
+        zip(eulers_per_half, translations_per_half, half_indices, strict=True),
+        start=1,
+    ):
+        if half_eulers.shape != (indices.size, 3):
+            raise ValueError(f"half-{half} input Euler array has an invalid shape")
+        if half_translations.shape != (indices.size, 2):
+            raise ValueError(f"half-{half} input translation array has an invalid shape")
+        if not np.all(np.isfinite(half_eulers)) or not np.all(np.isfinite(half_translations)):
+            raise ValueError(f"half-{half} input poses are not finite after float32 conversion")
+
+    return {
+        "iteration": "input_star",
+        "previous_best_rotation_eulers": eulers_per_half,
+        "previous_best_translations": translations_per_half,
+        "translation_units": translation_units,
+    }
+
+
+def _add_initial_pose_source_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--initial-pose-source",
+        choices=("auto", "input-star", "none"),
+        default="auto",
+        help=(
+            "Initial previous-best poses for a fresh K=1 refinement. 'auto' "
+            "loads Euler angles and origins from <data_dir>/particles.star when "
+            "--relion_half_sets supplies the matched random halves; 'input-star' "
+            "requires that production path explicitly; 'none' preserves an "
+            "unseeded search. Diagnostic/replay pose sources retain ownership."
+        ),
+    )
+
+
+def _resolve_input_star_pose_seed(
+    requested_source: str,
+    *,
+    n_classes: int,
+    init_relion_iteration: int,
+    has_relion_half_sets: bool,
+    has_competing_pose_source: bool,
+    diagnostic_single_half: bool,
+) -> bool:
+    """Resolve the production input-STAR pose seed or reject ambiguous use."""
+
+    source = str(requested_source).strip().lower()
+    if source not in {"auto", "input-star", "none"}:
+        raise ValueError(f"unsupported initial pose source {requested_source!r}")
+    if source == "none":
+        return False
+
+    incompatibilities = []
+    if int(n_classes) != 1:
+        incompatibilities.append("it is K=1-only")
+    if int(init_relion_iteration) != 0:
+        incompatibilities.append("it requires a fresh --init_relion_iteration 0 run")
+    if not bool(has_relion_half_sets):
+        incompatibilities.append("it requires --relion_half_sets")
+    if bool(has_competing_pose_source):
+        incompatibilities.append("a diagnostic/replay pose source already owns initialization")
+    if bool(diagnostic_single_half):
+        incompatibilities.append("it requires both gold-standard halves")
+
+    if source == "auto":
+        return not incompatibilities
+    if incompatibilities:
+        raise ValueError("--initial-pose-source input-star " + "; ".join(incompatibilities))
+    return True
 
 
 def _resolve_native_group_layout(
@@ -2747,6 +3071,14 @@ def main():
         "pass 2 evaluates healpix_order + adaptive_oversampling.",
     )
     parser.add_argument(
+        "--sym",
+        default="C1",
+        help=(
+            "RELION proper rotational point group: Cn, Dn, T, O, or "
+            "I/I1/I2/I3/I4. Mirror and inversion groups fail closed."
+        ),
+    )
+    parser.add_argument(
         "--max_healpix_order",
         type=int,
         default=None,
@@ -3186,6 +3518,7 @@ def main():
             "<data_dir>/reference_init.mrc when omitted."
         ),
     )
+    _add_initial_pose_source_argument(parser)
     parser.add_argument(
         "--init_previous_best_poses_npz",
         default=None,
@@ -3374,6 +3707,7 @@ def main():
             final_manifest_replay = _load_final_manifest_replay(
                 args.diagnostic_final_manifest_dir,
                 args.diagnostic_final_source_results,
+                expected_symmetry=args.sym,
             )
         except (OSError, TypeError, ValueError) as exc:
             raise SystemExit(f"Invalid diagnostic final-manifest replay: {exc}") from exc
@@ -3390,11 +3724,12 @@ def main():
             )
         logger.warning(
             "Diagnostic final-manifest replay loaded: manifests=%s source_results=%s "
-            "source_git=%s completed_relion_iteration=%d",
+            "source_git=%s completed_relion_iteration=%d symmetry=%s",
             [str(path) for path in final_manifest_replay.manifest_paths],
             final_manifest_replay.source_results_path,
             final_manifest_replay.source_git_commit,
             final_manifest_replay.completed_relion_iteration,
+            final_manifest_replay.symmetry_label,
         )
 
     frozen_boundary = None
@@ -4073,7 +4408,7 @@ def main():
             if relion_firstiter_ini_high_angstrom is None:
                 logger.info(
                     "RELION firstiter_cc: no positive --ini_high found in %s; "
-                    "not applying post-iter1 ini_high low-pass",
+                    "falling back to fresh-run --init_resolution",
                     optimiser_star,
                 )
             else:
@@ -4082,6 +4417,13 @@ def main():
                     float(relion_firstiter_ini_high_angstrom),
                     optimiser_star,
                 )
+    if args.firstiter_cc and relion_firstiter_ini_high_angstrom is None:
+        relion_firstiter_ini_high_angstrom = float(args.init_resolution)
+        logger.info(
+            "RELION firstiter_cc: using fresh-run --init_resolution %.2f A "
+            "for the post-iter1 ini_high low-pass",
+            relion_firstiter_ini_high_angstrom,
+        )
     if args.max_significants is None and optimiser_star is not None:
         relion_max_significants = _load_relion_max_significants(optimiser_star)
         if relion_max_significants is not None:
@@ -4294,9 +4636,36 @@ def main():
         max_healpix_order_source,
     )
 
-    rotations = get_relion_rotation_grid(rotation_grid_order).astype(np.float32)
+    from recovar.em.symmetry import (
+        canonicalize_rotational_symmetry,
+        parse_rotational_symmetry,
+        relion_point_group_code,
+        symmetry_operator_sha256,
+    )
+
+    symmetry = canonicalize_rotational_symmetry(args.sym)
+    parsed_symmetry = parse_rotational_symmetry(symmetry)
+    symmetry_point_group, symmetry_point_group_order = relion_point_group_code(symmetry)
+    symmetry_provenance = {
+        "label": symmetry,
+        "family": parsed_symmetry.family,
+        "operator_count": int(parsed_symmetry.operator_count),
+        "operator_sha256": symmetry_operator_sha256(symmetry),
+        "relion_point_group": int(symmetry_point_group),
+        "relion_point_group_order": int(symmetry_point_group_order),
+    }
+    rotations = get_relion_rotation_grid(
+        rotation_grid_order,
+        symmetry=symmetry,
+    ).astype(np.float32)
     translations = get_translation_grid(args.offset_range, args.offset_step).astype(np.float32)
-    logger.info("Rotation grid: %d rotations (healpix_order=%d)", rotations.shape[0], rotation_grid_order)
+    logger.info(
+        "Rotation grid: %d rotations (healpix_order=%d symmetry=%s)",
+        rotations.shape[0],
+        rotation_grid_order,
+        symmetry,
+    )
+    logger.info("Symmetry provenance: %s", symmetry_provenance)
     logger.info(
         "Translation grid: %d translations (range=%.1f, step=%.1f)",
         translations.shape[0],
@@ -4637,6 +5006,7 @@ def main():
         RefinementSchedule,
         RelionParityOptions,
         ReplayState,
+        SymmetryOptions,
     )
 
     experiment_datasets = [ds_half1, ds_half2]
@@ -4975,7 +5345,29 @@ def main():
         "unseeded" if effective_perturb_seed is None else str(effective_perturb_seed),
         " (explicit)" if args.perturb_seed is not None else " (from --seed)",
     )
+    has_competing_initial_pose_source = bool(
+        final_manifest_replay is not None
+        or frozen_boundary is not None
+        or args.init_previous_best_poses_npz is not None
+        or args.relion_init_dir is not None
+        or args.perturb_replay_relion_dir is not None
+    )
+    try:
+        use_input_star_pose_seed = _resolve_input_star_pose_seed(
+            args.initial_pose_source,
+            n_classes=args.n_classes,
+            init_relion_iteration=args.init_relion_iteration,
+            has_relion_half_sets=args.relion_half_sets is not None,
+            has_competing_pose_source=has_competing_initial_pose_source,
+            diagnostic_single_half=args.diagnostic_single_half,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"Invalid initial pose source: {exc}") from exc
+
     init_previous_best_poses = None
+    resolved_initial_pose_source = "none"
+    initial_pose_source_path = None
+    initial_pose_source_sha256 = None
     if final_manifest_replay is not None:
         init_previous_best_poses = {
             "iteration": f"{final_manifest_replay.completed_relion_iteration - 1:03d}",
@@ -4986,6 +5378,7 @@ def main():
                 final_manifest_replay.previous_best_translations
             ),
         }
+        resolved_initial_pose_source = "diagnostic_final_manifest"
         logger.info(
             "Diagnostic final-only previous poses loaded from %s",
             final_manifest_replay.source_results_path,
@@ -5000,15 +5393,45 @@ def main():
                 frozen_boundary.previous_best_translations
             ),
         }
+        resolved_initial_pose_source = "frozen_boundary"
     elif args.init_previous_best_poses_npz is not None:
         init_previous_best_poses = _load_init_previous_best_poses_npz(
             args.init_previous_best_poses_npz,
             args.init_previous_best_poses_iter,
         )
+        resolved_initial_pose_source = "diagnostic_npz"
+        initial_pose_source_path = Path(args.init_previous_best_poses_npz).expanduser().resolve()
+        initial_pose_source_sha256 = _sha256_file(initial_pose_source_path)
         logger.info(
             "Diagnostic local-search seed: loaded previous best poses from %s (iter=%s; half sizes=%s)",
             args.init_previous_best_poses_npz,
             init_previous_best_poses["iteration"],
+            [
+                int(arr.shape[0])
+                for arr in init_previous_best_poses["previous_best_rotation_eulers"]
+            ],
+        )
+    elif use_input_star_pose_seed:
+        input_pose_path = (Path(args.data_dir) / "particles.star").resolve()
+        try:
+            init_previous_best_poses = _load_input_star_previous_best_poses(
+                our_particles,
+                relion_particles,
+                half1_idx,
+                half2_idx,
+                voxel_size=ds.voxel_size,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid input-STAR pose initialization: {exc}") from exc
+        resolved_initial_pose_source = "input_star"
+        initial_pose_source_path = input_pose_path
+        initial_pose_source_sha256 = _sha256_file(input_pose_path)
+        logger.info(
+            "Production fresh-run pose initialization: source=%s sha256=%s "
+            "translation_units=%s half_sizes=%s",
+            input_pose_path,
+            initial_pose_source_sha256,
+            init_previous_best_poses["translation_units"],
             [
                 int(arr.shape[0])
                 for arr in init_previous_best_poses["previous_best_rotation_eulers"]
@@ -5125,6 +5548,7 @@ def main():
             k_class=KClassOptions(
                 n_classes=args.n_classes,
             ),
+            symmetry=SymmetryOptions(point_group=symmetry),
             replay=ReplayState(
                 init_reference_real=init_reference_real_for_projector,
                 init_refinement_state_fields=(
@@ -5248,6 +5672,13 @@ def main():
             "jax_devices": [str(device) for device in jax.devices()],
             "data_dir": str(Path(args.data_dir).resolve()),
             "output_dir": str(Path(args.output).resolve()),
+            "initial_pose_source_requested": str(args.initial_pose_source),
+            "initial_pose_source_resolved": resolved_initial_pose_source,
+            "initial_pose_source_path": (
+                None if initial_pose_source_path is None else str(initial_pose_source_path)
+            ),
+            "initial_pose_source_sha256": initial_pose_source_sha256,
+            "symmetry": symmetry_provenance,
             "timing_dir": str(timing_dir_path.resolve()) if timing_dir_path is not None else None,
             "total_time_s": float(total_time),
             "current_sizes": [int(x) for x in result.get("current_sizes", [])],
@@ -5347,6 +5778,18 @@ def main():
         "tau2_fudge_source": np.asarray(tau2_fudge_source),
         "particle_diameter_ang": (np.float64(particle_diameter_ang) if particle_diameter_ang is not None else np.nan),
         "firstiter_cc_effective": np.bool_(bool(args.firstiter_cc)),
+        "initial_pose_source_requested": np.asarray(str(args.initial_pose_source)),
+        "initial_pose_source_resolved": np.asarray(resolved_initial_pose_source),
+        "initial_pose_source_path": np.asarray(
+            "" if initial_pose_source_path is None else str(initial_pose_source_path)
+        ),
+        "initial_pose_source_sha256": np.asarray(initial_pose_source_sha256 or ""),
+        "symmetry_label": np.asarray(symmetry),
+        "symmetry_family": np.asarray(parsed_symmetry.family),
+        "symmetry_operator_count": np.int64(parsed_symmetry.operator_count),
+        "symmetry_operator_sha256": np.asarray(symmetry_provenance["operator_sha256"]),
+        "symmetry_relion_point_group": np.int64(symmetry_point_group),
+        "symmetry_relion_point_group_order": np.int64(symmetry_point_group_order),
         "half1_indices": half1_idx,
         "half2_indices": half2_idx,
         "perturb_replay_restart_state_iterations": np.asarray(
@@ -5894,6 +6337,13 @@ def main():
             "jax_devices": [str(device) for device in jax.devices()],
             "data_dir": str(Path(args.data_dir).resolve()),
             "output_dir": str(Path(args.output).resolve()),
+            "initial_pose_source_requested": str(args.initial_pose_source),
+            "initial_pose_source_resolved": resolved_initial_pose_source,
+            "initial_pose_source_path": (
+                None if initial_pose_source_path is None else str(initial_pose_source_path)
+            ),
+            "initial_pose_source_sha256": initial_pose_source_sha256,
+            "symmetry": symmetry_provenance,
             "timing_dir": str(timing_dir_path.resolve()) if timing_dir_path is not None else None,
             "max_iter": int(args.max_iter),
             "n_iterations_emitted": int(len(result.get("current_sizes", []))),

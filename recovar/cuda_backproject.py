@@ -511,6 +511,9 @@ _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE = "cuda_relion_fused_x_half_bp_signatur
 _TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF = (
     "cuda_relion_firstiter_bpref_fused_x_half"
 )
+_TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF = (
+    "cuda_relion_point_group_symmetrise_bpref"
+)
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
     "cuda_relion_preprocess_real_f32_native_lane"
@@ -580,6 +583,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_FUSED_X_HALF_BP_SIGNATURE,
         "RelionFusedXHalfBackprojectSignature",
+    ),
+    (
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF,
+        "RelionPointGroupSymmetriseBpref",
     ),
     (_TARGET_RELION_PREPROCESS_REAL_F32, "RelionPreprocessRealF32"),
     (
@@ -1162,6 +1169,117 @@ def backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4))
+def relion_point_group_symmetrise_bpref(
+    data_volume: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply RELION's x=0 and point-group BPref finalisation on CUDA.
+
+    ``data_volume`` and ``weight_volume`` are flat RELION BackProjector
+    accumulators whose logical storage order is ``(z, y, xhalf)``.  The
+    identity-inclusive ``right_operators`` must be in the order returned by
+    RELION's ``SymList``.  Each CUDA thread owns one output voxel and streams
+    over the operators, so this does not materialise one rotated accumulator
+    per symmetry mate.
+
+    The kernel reads the input through RELION's summed (not averaged) x=0
+    Hermitian-plane rule before applying point-group interpolation.  This
+    fuses the two source-ordered operations without a full-size intermediate.
+    Callers implementing C1 compatibility should bypass this primitive and
+    use their pre-existing x=0 path so the historical result remains bitwise
+    unchanged.
+    """
+
+    volume_shape = tuple(int(value) for value in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic 3-D grid, "
+            f"got {volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive grid, "
+            f"got {volume_shape}"
+        )
+
+    support_radius = int(support_radius)
+    maximum_supported_radius = volume_shape[0] // 2 - 1
+    if support_radius < 0 or support_radius > maximum_supported_radius:
+        raise ValueError(
+            "RELION point-group BPref support radius must leave its one-voxel "
+            f"interpolation margin: got {support_radius} for {volume_shape} "
+            f"(maximum {maximum_supported_radius})"
+        )
+
+    expected_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    if data_volume.ndim != 1 or data_volume.shape != (expected_size,):
+        raise ValueError(
+            "RELION point-group data accumulator must be flat with shape "
+            f"{(expected_size,)}, got {data_volume.shape}"
+        )
+    if weight_volume.ndim != 1 or weight_volume.shape != (expected_size,):
+        raise ValueError(
+            "RELION point-group weight accumulator must be flat with shape "
+            f"{(expected_size,)}, got {weight_volume.shape}"
+        )
+
+    if data_volume.dtype == jnp.dtype(jnp.complex64):
+        real_dtype = jnp.dtype(jnp.float32)
+    elif data_volume.dtype == jnp.dtype(jnp.complex128):
+        real_dtype = jnp.dtype(jnp.float64)
+    else:
+        raise TypeError(
+            "RELION point-group data accumulator must be complex64 or complex128, "
+            f"got {data_volume.dtype}"
+        )
+    if weight_volume.dtype != real_dtype:
+        raise TypeError(
+            "RELION point-group weight dtype must match the data component dtype, "
+            f"got data={data_volume.dtype}, weight={weight_volume.dtype}"
+        )
+    if right_operators.ndim != 3 or right_operators.shape[1:] != (3, 3):
+        raise ValueError(
+            "RELION point-group operators must have shape (n, 3, 3), "
+            f"got {right_operators.shape}"
+        )
+    if right_operators.shape[0] < 1:
+        raise ValueError("RELION point-group operators must include identity first")
+    if right_operators.dtype != real_dtype:
+        raise TypeError(
+            "RELION point-group operator dtype must match the accumulator component dtype, "
+            f"got operators={right_operators.dtype}, data={data_volume.dtype}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION point-group BPref symmetry requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION point-group BPref symmetry was requested but custom CUDA is disabled"
+        )
+
+    _ensure_ffi()
+    output_types = (
+        jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),
+        jax.ShapeDtypeStruct(weight_volume.shape, weight_volume.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF,
+        output_types,
+        vmap_method="sequential",
+    )(
+        data_volume,
+        weight_volume,
+        right_operators,
+        full_z=np.int64(volume_shape[0]),
+        full_y=np.int64(volume_shape[1]),
+        full_x=np.int64(volume_shape[2]),
+        support_radius=np.int64(support_radius),
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(2,))

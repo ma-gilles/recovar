@@ -72,7 +72,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
+    finalize_half_volume_bpref,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
@@ -1698,6 +1698,7 @@ def _prepare_per_image_pass2_inputs(
     fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
     relion_parent_execution_order=False,
+    symmetry_label: str = "C1",
 ):
     """Compute per-image oversampled rotations / parent maps / candidate masks.
 
@@ -1705,7 +1706,21 @@ def _prepare_per_image_pass2_inputs(
     :func:`compute_pass2_stats_sparse_perimage_reference` exactly so the
     batched path is a strict per-image equivalent.
     """
-    from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
+    from recovar.em.sampling import (
+        get_oversampled_rotation_grid_from_samples,
+        rotation_grid_n_in_planes,
+        rotation_grid_size,
+    )
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry_label = canonicalize_rotational_symmetry(symmetry_label)
+    if symmetry_label != "C1":
+        expected_coarse_rot = rotation_grid_size(nside_level, symmetry_label)
+        if int(n_coarse_rot) != int(expected_coarse_rot):
+            raise ValueError(
+                f"{symmetry_label} sparse pass-2 coarse rotation count mismatch: "
+                f"{n_coarse_rot} != {expected_coarse_rot}"
+            )
 
     n_images = len(significant_sample_indices)
     per_image_oversampled_rots = []
@@ -1760,8 +1775,8 @@ def _prepare_per_image_pass2_inputs(
         if not relion_parent_execution_order:
             return rotations, parent_map, rotation_indices
         parent_ids = np.asarray(parent_ids, dtype=np.int64).reshape(-1)
-        n_pixels = 12 * (2 ** int(nside_level)) ** 2
-        n_psi = 6 * 2 ** int(nside_level)
+        n_psi = rotation_grid_n_in_planes(nside_level)
+        n_pixels = int(n_coarse_rot) // int(n_psi)
         if parent_ids.shape != np.asarray(parent_map).shape:
             raise ValueError("RELION parent execution keys must match fine rotations")
         if parent_ids.size and (
@@ -1824,6 +1839,11 @@ def _prepare_per_image_pass2_inputs(
                         oversampling_order=oversampling_order,
                         random_perturbation=random_perturbation,
                         return_rotation_indices=True,
+                        **(
+                            {"symmetry": symmetry_label}
+                            if symmetry_label != "C1"
+                            else {}
+                        ),
                     )
                     full_support_rotation_cache = (
                         np.asarray(full_rots, dtype=np.float32),
@@ -1850,6 +1870,11 @@ def _prepare_per_image_pass2_inputs(
                 oversampling_order=oversampling_order,
                 random_perturbation=random_perturbation,
                 return_rotation_indices=True,
+                **(
+                    {"symmetry": symmetry_label}
+                    if symmetry_label != "C1"
+                    else {}
+                ),
             )
             oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
             parent_map = np.asarray(parent_map, dtype=np.int32)
@@ -11854,6 +11879,7 @@ def compute_pass2_stats_sparse_bucketed(
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
     relion_translation_angle_scale: float = 1.0,
+    symmetry_label: str = "C1",
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -11990,7 +12016,7 @@ def compute_pass2_stats_sparse_bucketed(
 
     n_images = experiment_dataset.n_units
     n_coarse_trans = int(np.asarray(translations).shape[0])
-    n_coarse_rot = rotation_grid_size(nside_level)
+    n_coarse_rot = rotation_grid_size(nside_level, symmetry_label)
 
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
@@ -12181,6 +12207,11 @@ def compute_pass2_stats_sparse_bucketed(
         fine_rotation_parent_override=fine_rotation_parent_override,
         relion_parent_execution_order=_relion_fine_parent_execution_order_enabled(
             use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
+        ),
+        **(
+            {"symmetry_label": symmetry_label}
+            if symmetry_label != "C1"
+            else {}
         ),
     )
     prep_s = time.time() - prep_t0
@@ -15879,12 +15910,14 @@ def compute_pass2_stats_sparse_bucketed(
             recon_volume_shape=recon_volume_shape,
             stage="pre_x0",
         )
-        Ft_y_total, Ft_ctf_total = enforce_half_volume_x0(
+        Ft_y_total, Ft_ctf_total = finalize_half_volume_bpref(
             Ft_y_total,
             Ft_ctf_total,
             recon_volume_shape,
             logger=logger,
             label="Sparse pass-2",
+            symmetry_label=symmetry_label,
+            relion_x_half=use_relion_x_half_mstep,
         )
         _maybe_dump_native_half_mstep(
             Ft_y_total,
@@ -16046,6 +16079,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
     relion_translation_angle_scale: float = 1.0,
+    symmetry_label: str = "C1",
 ) -> SparseKClassPass2FusedResult:
     """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
 
@@ -16123,7 +16157,7 @@ def compute_k_class_pass2_stats_sparse_fused(
 
     n_images = int(experiment_dataset.n_units)
     n_coarse_trans = int(np.asarray(translations).shape[0])
-    n_coarse_rot = rotation_grid_size(nside_level)
+    n_coarse_rot = rotation_grid_size(nside_level, symmetry_label)
     if not hasattr(experiment_dataset, "image_shape") or not hasattr(experiment_dataset, "volume_shape"):
         raise NotImplementedError("fused sparse K-class pass-2 requires dataset image_shape and volume_shape")
     image_shape = experiment_dataset.image_shape
@@ -16291,6 +16325,11 @@ def compute_k_class_pass2_stats_sparse_fused(
             fine_rotations_override=fine_rotations_override,
             fine_mstep_rotations_override=fine_mstep_rotations_override,
             fine_rotation_parent_override=fine_rotation_parent_override,
+            **(
+                {"symmetry_label": symmetry_label}
+                if symmetry_label != "C1"
+                else {}
+            ),
         )
         for class_index in range(n_classes)
     ]
@@ -19367,12 +19406,14 @@ def compute_k_class_pass2_stats_sparse_fused(
                 recon_volume_shape=recon_volume_shape,
                 stage=f"fused_class{class_index + 1}_pre_x0",
             )
-            class_Ft_y, class_Ft_ctf = enforce_half_volume_x0(
+            class_Ft_y, class_Ft_ctf = finalize_half_volume_bpref(
                 class_Ft_y,
                 class_Ft_ctf,
                 recon_volume_shape,
                 logger=logger,
                 label=f"Sparse fused K-class pass-2 class {class_index + 1}",
+                symmetry_label=symmetry_label,
+                relion_x_half=use_relion_x_half_mstep,
             )
             _maybe_dump_native_half_mstep(
                 class_Ft_y,

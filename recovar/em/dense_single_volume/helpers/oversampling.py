@@ -491,6 +491,7 @@ def compute_pass2_stats(
     square_window=False,
     random_perturbation=0.0,
     translation_prior_centers=None,
+    symmetry_label: str = "C1",
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
@@ -646,6 +647,7 @@ def compute_pass2_stats(
         oversampling_order=oversampling_order,
         random_perturbation=random_perturbation,
         return_rotation_indices=return_rotation_indices,
+        symmetry=symmetry_label,
     )
     if return_rotation_indices:
         oversampled_rots, parent_map, oversampled_rot_indices = oversampled_outputs
@@ -715,6 +717,7 @@ def compute_pass2_stats(
         use_float64_scoring=use_float64_scoring,
         do_gridding_correction=do_gridding_correction,
         square_window=square_window,
+        symmetry_label=symmetry_label,
     )
 
     # Unpack: run_em returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
@@ -822,6 +825,7 @@ def compute_pass2_stats_sparse(
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
     relion_translation_angle_scale: float = 1.0,
+    symmetry_label: str = "C1",
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -976,6 +980,7 @@ def compute_pass2_stats_sparse(
             preserve_bpref_particle_order=preserve_bpref_particle_order,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             relion_translation_angle_scale=relion_translation_angle_scale,
+            symmetry_label=symmetry_label,
         )
 
     if relion_projector_half is not None:
@@ -1025,6 +1030,7 @@ def compute_pass2_stats_sparse(
         relion_half_volume_mstep=relion_half_volume_mstep,
         relion_firstiter_score_mode=relion_firstiter_score_mode,
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+        symmetry_label=symmetry_label,
     )
 
 
@@ -1065,6 +1071,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
     relion_half_volume_mstep=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
+    symmetry_label: str = "C1",
 ):
     """Per-image reference implementation for sparse pass-2.
 
@@ -1093,7 +1100,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
 
     n_images = experiment_dataset.n_units
     n_coarse_trans = int(np.asarray(translations).shape[0])
-    n_coarse_rot = rotation_grid_size(nside_level)
+    n_coarse_rot = rotation_grid_size(nside_level, symmetry_label)
     recon_vol_size = experiment_dataset.volume_size * reconstruction_padding_factor**3
     Ft_y_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
     Ft_ctf_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
@@ -1169,6 +1176,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
             oversampling_order=oversampling_order,
             random_perturbation=random_perturbation,
             return_rotation_indices=True,
+            symmetry=symmetry_label,
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
         parent_map = np.asarray(parent_map, dtype=np.int32)
@@ -1248,6 +1256,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
             relion_half_volume_mstep=relion_half_volume_mstep,
             relion_firstiter_score_mode=relion_firstiter_score_mode,
             relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+            symmetry_label=symmetry_label,
         )
 
         # Unpack return based on flags

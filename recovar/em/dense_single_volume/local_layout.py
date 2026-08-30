@@ -23,6 +23,7 @@ from recovar.em.sampling import (
     rotation_grid_size,
     rotation_indices_to_relion_eulers,
 )
+from recovar.em.symmetry import canonicalize_rotational_symmetry, rotational_operators
 
 EXACT_LOCAL_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM"
 EXACT_LOCAL_BUCKET_MIN_QUANTUM = 256
@@ -107,6 +108,7 @@ class LocalHypothesisLayout:
     rotation_posterior_ids_flat: np.ndarray | None = None
     sample_mask_flat: np.ndarray | None = None
     mstep_rotations_flat: np.ndarray | None = None
+    symmetry: str = "C1"
 
     @property
     def n_images(self) -> int:
@@ -146,7 +148,11 @@ def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, gr
         if "eulers_full" in grid_metadata:
             prior_eulers = np.asarray(grid_metadata["eulers_full"], dtype=np.float32)[prior_rotations.astype(np.int64)]
         else:
-            prior_eulers = rotation_indices_to_relion_eulers(prior_rotations.astype(np.int64), healpix_order)
+            prior_eulers = rotation_indices_to_relion_eulers(
+                prior_rotations.astype(np.int64),
+                healpix_order,
+                symmetry=str(grid_metadata.get("symmetry", "C1")),
+            )
         prior_rotation_mats = utils.R_from_relion(prior_eulers, degrees=True)
         return np.asarray(prior_eulers, dtype=np.float32), np.asarray(prior_rotation_mats, dtype=np.float64)
     if prior_rotations.ndim == 2 and prior_rotations.shape[-1] == 3:
@@ -187,6 +193,8 @@ def _build_factorized_local_entries(
     dir_vecs = np.asarray(grid_metadata["dir_vecs"], dtype=np.float64)
     psi_deg_grid = np.asarray(grid_metadata["psi_deg"], dtype=np.float64)
     n_pixels = int(grid_metadata["n_pixels"])
+    symmetry = canonicalize_rotational_symmetry(str(grid_metadata.get("symmetry", "C1")))
+    symmetry_operators = None if symmetry == "C1" else rotational_operators(symmetry, dtype=np.float64)
 
     prior_dir_vecs = np.asarray(prior_rotation_mats[:, 2, :], dtype=np.float64)
     prior_dir_norm = np.linalg.norm(prior_dir_vecs, axis=1, keepdims=True)
@@ -220,7 +228,20 @@ def _build_factorized_local_entries(
     for chunk_start in range(0, n_images, chunk_size):
         chunk_stop = min(n_images, chunk_start + chunk_size)
         if sigma_rot_deg > 0.0:
-            dots = np.clip(prior_dir_vecs[chunk_start:chunk_stop] @ dir_vecs.T, -1.0, 1.0)
+            if symmetry_operators is None:
+                dots = prior_dir_vecs[chunk_start:chunk_stop] @ dir_vecs.T
+            else:
+                dots = np.max(
+                    np.einsum(
+                        "di,sij,bj->bsd",
+                        dir_vecs,
+                        symmetry_operators,
+                        prior_dir_vecs[chunk_start:chunk_stop],
+                        optimize=True,
+                    ),
+                    axis=1,
+                )
+            dots = np.clip(dots, -1.0, 1.0)
             diffang_chunk = np.rad2deg(np.arccos(dots))
         else:
             diffang_chunk = None
@@ -291,7 +312,16 @@ def _build_parent_expanded_local_entries(
     rotation_log_prior: np.ndarray | None = None,
     random_perturbation: float = 0.0,
     generate_relion_mstep_rotations: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    symmetry: str = "C1",
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
     """Build RELION-style local support by expanding selected coarse parents.
 
     RELION local search first calls
@@ -312,11 +342,12 @@ def _build_parent_expanded_local_entries(
             f"got fine_healpix_order={fine_healpix_order}, oversampling_order={oversampling_order}"
         )
 
-    parent_metadata = build_local_search_grid_metadata(parent_order)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    parent_metadata = build_local_search_grid_metadata(parent_order, symmetry=symmetry)
     rotation_log_prior_np = None
     if rotation_log_prior is not None:
         rotation_log_prior_np = np.asarray(rotation_log_prior, dtype=np.float32)
-        expected_parent_size = rotation_grid_size(parent_order)
+        expected_parent_size = rotation_grid_size(parent_order, symmetry)
         if rotation_log_prior_np.shape[0] != expected_parent_size:
             raise ValueError(
                 "rotation_log_prior must have one value per parent-grid rotation "
@@ -337,6 +368,7 @@ def _build_parent_expanded_local_entries(
     log_prior_parts: list[np.ndarray] = []
     rotations_parts: list[np.ndarray] = []
     mstep_rotations_parts: list[np.ndarray] = []
+    posterior_ids_parts: list[np.ndarray] = []
     running_offset = 0
 
     for image_idx in range(n_images):
@@ -354,6 +386,7 @@ def _build_parent_expanded_local_entries(
             return_rotation_indices=True,
             return_mstep_rotations=bool(generate_relion_mstep_rotations),
             rotation_index_order="recovar",
+            symmetry=symmetry,
         )
         child_rotations, parent_map, child_ids = oversampled[:3]
         child_mstep_rotations = oversampled[3] if bool(generate_relion_mstep_rotations) else None
@@ -369,6 +402,15 @@ def _build_parent_expanded_local_entries(
         rotations_parts.append(np.asarray(child_rotations, dtype=np.float32))
         if child_mstep_rotations is not None:
             mstep_rotations_parts.append(np.asarray(child_mstep_rotations, dtype=np.float32))
+        if symmetry != "C1":
+            # Non-C1 child ids deliberately refer to the unreduced fine
+            # HEALPix lattice: an oversampled child can cross the parent ASU
+            # boundary and therefore need not have a row in the reduced fine
+            # grid.  Posterior bookkeeping must not use those ids.  Aggregate
+            # each child back to its exact reduced coarse parent, matching the
+            # adaptive-local pass-2 layout and avoiding an arbitrary nearest
+            # reduced-grid remap.
+            posterior_ids_parts.append(parent_ids[parent_map].astype(np.int32, copy=False))
 
     rotation_ids_flat = (
         np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
@@ -384,7 +426,20 @@ def _build_parent_expanded_local_entries(
         if mstep_rotations_parts
         else (np.zeros((0, 3, 3), dtype=np.float32) if generate_relion_mstep_rotations else None)
     )
-    return offsets, counts, rotation_ids_flat, rotation_log_priors_flat, rotations_flat, mstep_rotations_flat
+    posterior_ids_flat = (
+        np.concatenate(posterior_ids_parts, axis=0)
+        if posterior_ids_parts
+        else None
+    )
+    return (
+        offsets,
+        counts,
+        rotation_ids_flat,
+        rotation_log_priors_flat,
+        rotations_flat,
+        mstep_rotations_flat,
+        posterior_ids_flat,
+    )
 
 
 def _rotation_eulers_from_grid_metadata(
@@ -505,6 +560,7 @@ def build_local_hypothesis_layout(
     """Build exact per-image local neighborhoods and translation priors."""
 
     prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
+    symmetry = canonicalize_rotational_symmetry(str(grid_metadata.get("symmetry", "C1")))
     if rotation_grid_rotations is not None:
         rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
     if rotation_grid_mstep_rotations is not None:
@@ -528,6 +584,7 @@ def build_local_hypothesis_layout(
 
     rotations_flat_override = None
     mstep_rotations_flat_override = None
+    rotation_posterior_ids_flat_override = None
     if int(local_parent_oversampling_order) > 0:
         (
             offsets,
@@ -536,6 +593,7 @@ def build_local_hypothesis_layout(
             rotation_log_priors_flat,
             rotations_flat_override,
             mstep_rotations_flat_override,
+            rotation_posterior_ids_flat_override,
         ) = _build_parent_expanded_local_entries(
             prior_rotations,
             healpix_order,
@@ -545,6 +603,7 @@ def build_local_hypothesis_layout(
             rotation_log_prior=rotation_log_prior_np,
             random_perturbation=float(rotation_grid_random_perturbation),
             generate_relion_mstep_rotations=generate_relion_mstep_rotations,
+            symmetry=symmetry,
         )
     elif str(grid_metadata["mode"]) == "factorized":
         offsets, counts, rotation_ids_flat, rotation_log_priors_flat = _build_factorized_local_entries(
@@ -652,10 +711,25 @@ def build_local_hypothesis_layout(
             int(translation_grid.shape[0]),
         )
 
-    if rotation_grid_rotations is not None:
+    if rotation_posterior_ids_flat_override is not None:
+        parent_order = int(healpix_order) - int(local_parent_oversampling_order)
+        n_global_rotations = rotation_grid_size(parent_order, symmetry)
+    elif rotation_grid_rotations is not None:
         n_global_rotations = int(rotation_grid_rotations.shape[0])
     else:
         n_global_rotations = int(grid_metadata["n_pixels"]) * int(grid_metadata["n_psi"])
+
+    if rotation_posterior_ids_flat_override is not None:
+        posterior_ids = np.asarray(rotation_posterior_ids_flat_override, dtype=np.int64)
+        if posterior_ids.shape != np.asarray(rotation_ids_flat).shape:
+            raise RuntimeError(
+                "parent-expanded local posterior ids must match the scored rotation rows"
+            )
+        if np.any(posterior_ids < 0) or int(posterior_ids.max(initial=-1)) >= n_global_rotations:
+            raise RuntimeError(
+                f"parent-expanded {symmetry} posterior ids must index the reduced "
+                f"parent grid of size {n_global_rotations}"
+            )
 
     return LocalHypothesisLayout(
         n_global_rotations=n_global_rotations,
@@ -668,7 +742,9 @@ def build_local_hypothesis_layout(
         rotation_counts=counts,
         translation_grid=translation_grid,
         translation_log_priors=np.asarray(translation_log_priors, dtype=np.float32),
+        rotation_posterior_ids_flat=rotation_posterior_ids_flat_override,
         mstep_rotations_flat=mstep_rotations_flat,
+        symmetry=symmetry,
     )
 
 
@@ -680,6 +756,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
     oversampling_order: int,
     random_perturbation: float = 0.0,
     translation_step: float | None = None,
+    symmetry: str | None = None,
 ) -> LocalHypothesisLayout:
     """Expand local adaptive parent support while preserving significant pairs.
 
@@ -694,6 +771,9 @@ def build_local_adaptive_pass2_hypothesis_layout(
         raise ValueError("oversampling_order must be positive for adaptive local pass 2")
     parent_healpix_order = int(parent_healpix_order)
     fine_healpix_order = parent_healpix_order + oversampling_order
+    symmetry = canonicalize_rotational_symmetry(
+        parent_layout.symmetry if symmetry is None else symmetry
+    )
     n_images = int(parent_layout.n_images)
     if len(significant_sample_indices) != n_images:
         raise ValueError(
@@ -777,6 +857,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
                 return_rotation_indices=True,
                 return_mstep_rotations=True,
                 rotation_index_order="recovar",
+                symmetry=symmetry,
             )
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
@@ -808,7 +889,10 @@ def build_local_adaptive_pass2_hypothesis_layout(
         log_prior_parts.append(selected_parent_log_prior[parent_map].astype(np.float32, copy=False))
         sample_mask_parts.append(sample_mask)
 
-    fine_metadata = build_local_search_grid_metadata(fine_healpix_order)
+    fine_metadata = build_local_search_grid_metadata(
+        fine_healpix_order,
+        symmetry=symmetry,
+    )
     rotations_flat = (
         np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=np.float32)
     )
@@ -842,7 +926,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
             axis=0,
         )
     return LocalHypothesisLayout(
-        n_global_rotations=rotation_grid_size(parent_healpix_order),
+        n_global_rotations=rotation_grid_size(parent_healpix_order, symmetry),
         n_pixels=int(fine_metadata["n_pixels"]),
         n_psi=int(fine_metadata["n_psi"]),
         rotation_offsets=offsets,
@@ -857,6 +941,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
         rotation_posterior_ids_flat=posterior_ids_flat,
         sample_mask_flat=sample_mask_flat,
         mstep_rotations_flat=mstep_rotations_flat,
+        symmetry=symmetry,
     )
 
 
@@ -978,6 +1063,7 @@ def build_pass2_hypothesis_layout(
     random_perturbation: float = 0.0,
     rotation_index_order: str = "recovar",
     allow_empty: bool = False,
+    symmetry: str = "C1",
 ) -> LocalHypothesisLayout:
     """Build exact-local layout for RELION adaptive pass-2 hypotheses.
 
@@ -987,6 +1073,7 @@ def build_pass2_hypothesis_layout(
     carries its own oversampled rotations plus a sparse ``(R, T)`` mask.
     """
 
+    symmetry = canonicalize_rotational_symmetry(symmetry)
     translations_np = np.asarray(translations, dtype=np.float32)
     if translation_step is None:
         translation_step = _infer_translation_step(translations_np)
@@ -1039,6 +1126,7 @@ def build_pass2_hypothesis_layout(
             random_perturbation=random_perturbation,
             return_rotation_indices=True,
             rotation_index_order=rotation_index_order,
+            symmetry=symmetry,
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
         parent_map = np.asarray(parent_map, dtype=np.int32)
@@ -1098,7 +1186,12 @@ def build_pass2_hypothesis_layout(
         if sample_mask_parts
         else np.zeros((0, n_fine_translations), dtype=bool)
     )
-    n_pixels = 12 * (2 ** int(nside_level)) ** 2
+    n_pixels = int(
+        build_local_search_grid_metadata(
+            int(nside_level),
+            symmetry=symmetry,
+        )["n_pixels"]
+    )
 
     return LocalHypothesisLayout(
         n_global_rotations=int(n_coarse_rotations),
@@ -1119,6 +1212,7 @@ def build_pass2_hypothesis_layout(
         ),
         rotation_posterior_ids_flat=posterior_ids_flat,
         sample_mask_flat=sample_mask_flat,
+        symmetry=symmetry,
     )
 
 

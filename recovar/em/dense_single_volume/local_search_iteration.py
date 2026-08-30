@@ -38,11 +38,17 @@ EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
 EXACT_LOCAL_XHALF_BATCH_GUARD_ENV = "RECOVAR_LOCAL_XHALF_BATCH_GUARD"
 
 
-def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
+def _precompute_exact_local_fine_grid_enabled(
+    healpix_order: int,
+    symmetry: str = "C1",
+) -> bool:
     """Return whether exact local search should materialize the fine grid once."""
     from recovar.em.sampling import rotation_grid_size
 
-    return rotation_grid_size(int(healpix_order)) <= EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS
+    return (
+        rotation_grid_size(int(healpix_order), symmetry)
+        <= EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS
+    )
 
 
 @dataclass
@@ -224,6 +230,7 @@ def _run_local_search_iteration(
     relion_translation_angle_scale=1.0,
     rotation_grid_mstep_rotations=None,
     generate_relion_mstep_rotations=False,
+    symmetry: str = "C1",
 ):
     """Run exact local search over image-specific rotation neighborhoods."""
     # Indirection through the iteration_loop module so test monkeypatches that
@@ -257,7 +264,9 @@ def _run_local_search_iteration(
         metadata_t0 = time.time()
         # RELION local priors remain factorized in canonical direction/psi index
         # space even when the scored trial rotations have been perturbed.
-        local_grid_metadata = build_local_search_grid_metadata(healpix_order)
+        local_grid_metadata = build_local_search_grid_metadata(
+            healpix_order, symmetry=symmetry
+        )
         metadata_build_time = time.time() - metadata_t0
 
         layout_t0 = time.time()
@@ -422,6 +431,7 @@ def _run_local_search_iteration(
             debug_iteration=debug_iteration,
             translation_prior_centers=translation_prior_centers,
             relion_translation_angle_scale=relion_translation_angle_scale,
+            symmetry_label=symmetry,
         )
         use_noise_class_sums = bool(reconstruct_significant_only and accumulate_noise)
         class_mstep_posterior_sums = (
@@ -505,6 +515,7 @@ def _run_local_search_iteration(
             score_only=score_only,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             relion_translation_angle_scale=relion_translation_angle_scale,
+            symmetry_label=symmetry,
         )
 
     result = _unpack_local_search_engine_outputs(

@@ -548,6 +548,7 @@ def apply_iter_replay_overrides(
     global_direction_prior_order_per_half: list,
     preserve_existing_direction_prior: bool = False,
     sealed_sampling_state: dict | None = None,
+    symmetry: str = "C1",
 ) -> ReplayOverrideResult:
     """Apply per-iteration replay overrides to the in-flight iteration state.
 
@@ -573,6 +574,9 @@ def apply_iter_replay_overrides(
     # dispatcher and lives in iteration_loop, not in recovar.em.sampling.
     # Import it lazily: iteration_loop imports this module at load time.
     from recovar.em.dense_single_volume import iteration_loop as _il
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry = canonicalize_rotational_symmetry(symmetry)
 
     _replay_prior_translations = None
     _model_star = None
@@ -832,7 +836,9 @@ def apply_iter_replay_overrides(
                         if inferred_weights is not None:
                             _replay_class_weights = inferred_weights
                     _relion_direction_prior_order = infer_direction_prior_healpix_order(
-                        _relion_direction_prior[0] if k_class_enabled else _relion_direction_prior
+                        _relion_direction_prior[0] if k_class_enabled else _relion_direction_prior,
+                        symmetry,
+                        expected_order=state.healpix_order,
                     )
                     if _relion_direction_prior_order != state.healpix_order:
                         logger.info(
@@ -848,6 +854,7 @@ def apply_iter_replay_overrides(
                                         _relion_direction_prior[class_idx],
                                         _relion_direction_prior_order,
                                         state.healpix_order,
+                                        symmetry,
                                     )
                                     for class_idx in range(n_classes)
                                 ],
@@ -858,6 +865,7 @@ def apply_iter_replay_overrides(
                                 _relion_direction_prior,
                                 _relion_direction_prior_order,
                                 state.healpix_order,
+                                symmetry,
                             )
                         _relion_direction_prior_order = state.healpix_order
                     if k_class_enabled:
@@ -981,7 +989,11 @@ def apply_iter_replay_overrides(
                 if replay_priors[_half_idx] is None:
                     continue
                 prior_k = np.asarray(replay_priors[_half_idx], dtype=np.float32)
-                prior_order_k = infer_direction_prior_healpix_order(prior_k[0] if k_class_enabled else prior_k)
+                prior_order_k = infer_direction_prior_healpix_order(
+                    prior_k[0] if k_class_enabled else prior_k,
+                    symmetry,
+                    expected_order=state.healpix_order,
+                )
                 if prior_order_k != state.healpix_order:
                     logger.info(
                         "Replay override: remapping provided half-%d direction prior from healpix_order=%d to %d",
@@ -996,6 +1008,7 @@ def apply_iter_replay_overrides(
                                     prior_k[class_idx],
                                     prior_order_k,
                                     state.healpix_order,
+                                    symmetry,
                                 )
                                 for class_idx in range(n_classes)
                             ],
@@ -1006,6 +1019,7 @@ def apply_iter_replay_overrides(
                             prior_k,
                             prior_order_k,
                             state.healpix_order,
+                            symmetry,
                         )
                     prior_order_k = state.healpix_order
                 if k_class_enabled:

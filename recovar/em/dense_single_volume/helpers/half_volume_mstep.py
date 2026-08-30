@@ -6,15 +6,14 @@ import logging
 import os
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-
 from recovar.em.dense_single_volume.local_backprojection import (
     enforce_relion_half_volume_x0_hermitian,
     enforce_relion_half_volume_x0_hermitian_host,
 )
-
 
 _RELION_X_HALF_TO_NATIVE_HALF_MIN_VOXELS = 200_000_000
 _RELION_X_HALF_FULL_HOST_MIN_VOXELS = 100_000_000
@@ -151,6 +150,134 @@ def enforce_half_volume_x0(Ft_y, Ft_ctf, recon_volume_shape, *, logger: logging.
     return (
         enforce_relion_half_volume_x0_hermitian(Ft_y, recon_volume_shape),
         enforce_relion_half_volume_x0_hermitian(Ft_ctf, recon_volume_shape),
+    )
+
+
+def _validated_relion_right_operators(symmetry_label: str, symmetry_operators):
+    """Return identity-inclusive RELION right operators in source order."""
+
+    from recovar.em.symmetry import parse_rotational_symmetry, rotational_operators
+
+    parsed = parse_rotational_symmetry(symmetry_label)
+    if symmetry_operators is None:
+        operators = rotational_operators(parsed.label, dtype=np.float64)
+    else:
+        operators = np.asarray(symmetry_operators, dtype=np.float64)
+    expected_shape = (parsed.operator_count, 3, 3)
+    if operators.shape != expected_shape:
+        raise ValueError(
+            f"RELION {parsed.label} requires right operators with shape {expected_shape}, "
+            f"got {operators.shape}"
+        )
+    if not np.all(np.isfinite(operators)):
+        raise ValueError(f"RELION {parsed.label} right operators must be finite")
+    if not np.array_equal(operators[0], np.eye(3, dtype=np.float64)):
+        raise ValueError(f"RELION {parsed.label} right operators must contain exact identity first")
+    if not np.allclose(
+        operators @ np.swapaxes(operators, -1, -2),
+        np.eye(3, dtype=np.float64)[None, :, :],
+        rtol=0.0,
+        atol=2e-7,
+    ):
+        raise ValueError(f"RELION {parsed.label} right operators must be orthogonal")
+    if not np.allclose(np.linalg.det(operators), 1.0, rtol=0.0, atol=1e-9):
+        raise ValueError(f"RELION {parsed.label} right operators must be proper rotations")
+    return parsed.label, np.ascontiguousarray(operators)
+
+
+def finalize_half_volume_bpref(
+    Ft_y,
+    Ft_ctf,
+    recon_volume_shape,
+    *,
+    logger: logging.Logger,
+    label: str,
+    symmetry_label: str = "C1",
+    symmetry_operators=None,
+    relion_x_half: bool,
+):
+    """Finalize half-volume BPref accumulators before layout conversion.
+
+    C1 deliberately calls the historical x=0 helper verbatim.  This keeps
+    existing C1 output bitwise stable.  Non-C1 currently requires RELION's
+    odd ``(z, y, xhalf)`` BPref layout and uses a streamed CUDA finalizer that
+    fuses x=0 Hermitian enforcement with ordered point-group accumulation.
+    """
+
+    if not isinstance(symmetry_label, str) or not symmetry_label.strip():
+        raise ValueError("symmetry_label must be a nonempty RELION point-group label")
+    normalized_label = symmetry_label.strip().upper()
+    if normalized_label == "C1":
+        if symmetry_operators is not None:
+            identity = np.asarray(symmetry_operators)
+            if identity.shape != (1, 3, 3) or not np.array_equal(identity[0], np.eye(3)):
+                raise ValueError("C1 symmetry_operators must contain exact identity only")
+        return enforce_half_volume_x0(
+            Ft_y,
+            Ft_ctf,
+            recon_volume_shape,
+            logger=logger,
+            label=label,
+        )
+
+    canonical_label, right_operators = _validated_relion_right_operators(
+        normalized_label,
+        symmetry_operators,
+    )
+    if not relion_x_half:
+        raise NotImplementedError(
+            f"{label} requested {canonical_label} point-group symmetry for a native half-volume "
+            "accumulator; non-C1 reconstruction symmetry requires RELION x-half BPref storage"
+        )
+
+    recon_volume_shape = tuple(int(value) for value in recon_volume_shape)
+    if len(recon_volume_shape) != 3 or len(set(recon_volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic accumulator, "
+            f"got {recon_volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in recon_volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive accumulator grid, "
+            f"got {recon_volume_shape}"
+        )
+
+    data = jnp.asarray(Ft_y).reshape(-1)
+    weight = jnp.asarray(Ft_ctf).reshape(-1)
+    if data.dtype == jnp.dtype(jnp.complex64):
+        operator_dtype = np.float32
+        expected_weight_dtype = jnp.dtype(jnp.float32)
+    elif data.dtype == jnp.dtype(jnp.complex128):
+        operator_dtype = np.float64
+        expected_weight_dtype = jnp.dtype(jnp.float64)
+    else:
+        raise TypeError(
+            "RELION point-group BPref data must be complex64 or complex128, "
+            f"got {data.dtype}"
+        )
+    if weight.dtype != expected_weight_dtype:
+        raise TypeError(
+            "RELION point-group BPref weight precision must match the data component, "
+            f"got data={data.dtype}, weight={weight.dtype}"
+        )
+
+    support_radius = recon_volume_shape[0] // 2 - 1
+    logger.info(
+        "%s M-step: enforcing RELION x=0 and %s point-group symmetry on CUDA "
+        "(operators=%d, support_radius=%d)",
+        label,
+        canonical_label,
+        right_operators.shape[0],
+        support_radius,
+    )
+    from recovar import cuda_backproject
+
+    return cuda_backproject.relion_point_group_symmetrise_bpref(
+        data,
+        weight,
+        jnp.asarray(right_operators, dtype=operator_dtype),
+        recon_volume_shape,
+        support_radius,
     )
 
 

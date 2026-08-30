@@ -217,7 +217,12 @@ def _combined_noise_stats(noise_stats_per_half):
     )
 
 
-def _combined_class_direction_prior_from_halves(class_rotation_posterior_per_half, n_classes: int, healpix_order: int):
+def _combined_class_direction_prior_from_halves(
+    class_rotation_posterior_per_half,
+    n_classes: int,
+    healpix_order: int,
+    symmetry: str = "C1",
+):
     """Collapse Class3D rotation posterior sums after undoing RECOVAR's half split.
 
     RELION Class3D has a single ``mymodel.pdf_direction[class]`` updated from
@@ -237,7 +242,13 @@ def _combined_class_direction_prior_from_halves(class_rotation_posterior_per_hal
             combined = per_class if combined is None else combined + per_class
         if combined is None:
             return None
-        combined_priors.append(collapse_rotation_posterior_to_direction_prior(combined, healpix_order))
+        combined_priors.append(
+            collapse_rotation_posterior_to_direction_prior(
+                combined,
+                healpix_order,
+                symmetry,
+            )
+        )
     return np.stack(combined_priors, axis=0)
 
 

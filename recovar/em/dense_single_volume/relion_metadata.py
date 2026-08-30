@@ -49,15 +49,23 @@ def _relion_half_plane_shell_counts(image_shape):
     return counts
 
 
-def _relion_rotation_grid_float32(healpix_order: int):
+def _relion_rotation_grid_float32(healpix_order: int, symmetry: str = "C1"):
     """Return scorer matrices/eulers using RELION's accelerated-path policy."""
     # Indirection through iteration_loop module so test monkeypatches on
     # ``iteration_loop.get_relion_rotation_grid`` / ``get_relion_rotation_grid_eulers``
     # win at the call site.
     from recovar.em.dense_single_volume import iteration_loop as _il
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
 
     order = int(healpix_order)
-    source_eulers = _il._get_relion_rotation_grid_eulers_float64(order)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    if symmetry == "C1":
+        source_eulers = _il._get_relion_rotation_grid_eulers_float64(order)
+    else:
+        source_eulers = _il._get_relion_rotation_grid_eulers_float64(
+            order,
+            symmetry=symmetry,
+        )
     eulers = source_eulers.astype(np.float32)
     # RELION's accelerated expectation path constructs inverse projector
     # matrices on the host in RFLOAT precision, casts to XFLOAT, then copies
@@ -68,14 +76,21 @@ def _relion_rotation_grid_float32(healpix_order: int):
     return rotations, eulers
 
 
-def _rotation_eulers_for_canonical_or_custom_grid(rotations: np.ndarray, healpix_order: int) -> np.ndarray:
+def _rotation_eulers_for_canonical_or_custom_grid(
+    rotations: np.ndarray,
+    healpix_order: int,
+    symmetry: str = "C1",
+) -> np.ndarray:
     """Avoid expensive matrix->Euler conversion for canonical RELION grids."""
     from recovar.em.dense_single_volume import iteration_loop as _il
 
     rotations = np.asarray(rotations, dtype=np.float32)
     order = int(healpix_order)
-    if rotations.shape[0] == _il.rotation_grid_size(order):
-        canonical_rotations, canonical_eulers = _relion_rotation_grid_float32(order)
+    if rotations.shape[0] == _il.rotation_grid_size(order, symmetry):
+        canonical_rotations, canonical_eulers = _relion_rotation_grid_float32(
+            order,
+            symmetry,
+        )
         if np.allclose(rotations, canonical_rotations, rtol=0.0, atol=1e-6):
             return canonical_eulers
     return _il.utils.R_to_relion(np.asarray(rotations), degrees=True).astype(np.float32)

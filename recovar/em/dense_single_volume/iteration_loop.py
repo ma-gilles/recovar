@@ -15,7 +15,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 
@@ -33,11 +32,19 @@ from recovar.em.dense_single_volume.batch_planning import (
     _image_backend,
     _maybe_cache_raw_image_loaders,
 )
+from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
+    _maybe_dump_noise_update_debug,
+    _save_iteration_intermediates,
+    _save_iteration_particle_states,
+)
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.firstiter_cc import (
     _build_firstiter_cc_pass2_grids,
     _safe_dense_k_class_rotation_block_size,
     _safe_firstiter_cc_image_batch_size,
+)
+from recovar.em.dense_single_volume.frozen_boundary import (
+    _restore_diagnostic_frozen_boundary_state,
 )
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
 from recovar.em.dense_single_volume.helpers.convergence import (
@@ -59,6 +66,7 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     relion_backprojector_volume_shape,
     relion_x_half_accumulators_to_public_layout,
 )
+from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
     infer_direction_prior_healpix_order,
@@ -80,13 +88,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
 )
-
-
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
-from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
-from recovar.em.dense_single_volume.frozen_boundary import (
-    _restore_diagnostic_frozen_boundary_state,
-)
 from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
@@ -136,6 +138,11 @@ from recovar.em.dense_single_volume.mean_helpers import (
 )
 from recovar.em.dense_single_volume.mean_helpers import (
     _combined_noise_stats as _combined_noise_stats,
+)
+from recovar.em.dense_single_volume.ppca_bridge import (  # noqa: F401
+    PPCAKClassScheduleBridge,
+    run_dense_ppca_refinement_with_kclass_schedule,
+    run_local_ppca_refinement_with_kclass_schedule,
 )
 from recovar.em.dense_single_volume.refinement_options import (
     RefinementOptions,
@@ -1602,17 +1609,6 @@ def _k1_skip_significance_pruning_enabled() -> bool:
     return False
 
 
-from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
-    _maybe_dump_noise_update_debug,
-    _save_iteration_intermediates,
-    _save_iteration_particle_states,
-)
-from recovar.em.dense_single_volume.ppca_bridge import (  # noqa: F401
-    PPCAKClassScheduleBridge,
-    run_dense_ppca_refinement_with_kclass_schedule,
-    run_local_ppca_refinement_with_kclass_schedule,
-)
-
 # RELION stores windowFourierTransform(in, out, current_size) as a rectangular
 # FFTW half image, but the likelihood support is the nonzero Minvsigma2 mask:
 # rounded radial shells, no DC, no redundant negative-row kx=0 entries.
@@ -1631,8 +1627,6 @@ PROJECTION_PADDING_FACTOR = 2
 # Dense ``run_em`` kwargs that are identical for every E-step in RELION mode.
 # Per-iter and per-half values are layered on top at each call site via
 # ``{**_DENSE_EM_STATIC_KWARGS, ...}``.
-import os as _os_for_f64
-
 _DENSE_EM_STATIC_KWARGS: dict = {
     "score_with_masked_images": True,
     "half_spectrum_scoring": True,
@@ -1646,18 +1640,18 @@ _DENSE_EM_STATIC_KWARGS: dict = {
     # ``current_size``. Flipping these to True for the dense K-class path
     # should remove that precision floor at ~2× wall cost.
     "use_float64_scoring": bool(
-        _os_for_f64.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
+        os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     ),
     "use_float64_projections": bool(
-        _os_for_f64.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
+        os.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     ),
     # Default to RELION's float32 fine-search diff2/minimum ordering. This
     # diagnostic bypass retains the historical algebraic sparse scorer for
     # controlled full-trajectory A/B comparisons.
     "relion_exact_fine_gaussian": not bool(
-        _os_for_f64.environ.get(
+        os.environ.get(
             "RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN",
             "0",
         ).strip().lower()
@@ -1672,7 +1666,7 @@ _DENSE_EM_STATIC_KWARGS: dict = {
 def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
     """Select genuine-f64 pass 2 without perturbing an earlier f32 boundary."""
 
-    raw = _os_for_f64.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "")
+    raw = os.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "")
     if debug_iteration is None or not raw.strip():
         return False
     try:
@@ -2199,6 +2193,7 @@ def _score_kclass_firstiter_cc_pass2(
     bpref_device_signature_active: bool = False,
     debug_iteration: int | None = None,
     coarse_rotation_ids=None,
+    symmetry: str = "C1",
 ):
     """RELION iter-1 ``--firstiter_cc`` K-class adaptive 2-pass dispatch.
 
@@ -2247,6 +2242,7 @@ def _score_kclass_firstiter_cc_pass2(
             if coarse_rotation_ids is not None
             else {}
         ),
+        **({"symmetry": symmetry} if symmetry != "C1" else {}),
     )
     coarse_translation_phase_source = apply_relion_translation_perturbation(
         np.asarray(base_translations, dtype=np.float64),
@@ -2257,9 +2253,20 @@ def _score_kclass_firstiter_cc_pass2(
     firstiter_significance_image_batch_size = None
     firstiter_significance_rotation_block_size = None
     firstiter_sparse_pass2 = not bool(
-        _os_for_f64.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
+        os.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     )
+    if symmetry != "C1":
+        if not bool(em_kwargs.get("mstep_relion_x_half", False)):
+            raise RuntimeError(
+                f"{symmetry} reconstruction requires RELION x-half BPref accumulation; "
+                "a point-group refinement cannot disable the x-half M-step"
+            )
+        if not firstiter_sparse_pass2:
+            raise RuntimeError(
+                f"{symmetry} reconstruction requires sparse adaptive pass 2; "
+                "RECOVAR_K_CLASS_DENSE_PASS2 cannot be enabled for non-C1 symmetry"
+            )
     if safe_batch_sizes is not None:
         batch_plan = _plan_kclass_adaptive_grid_batch_sizes(
             coarse_rotations=coarse_rot,
@@ -2594,6 +2601,7 @@ def _score_half_dense(
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
     relion_translation_angle_scale: float = 1.0,
+    symmetry: str = "C1",
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -2643,6 +2651,7 @@ def _score_half_dense(
         "relion_firstiter_score_mode": firstiter_score_mode_this_iter,
         "relion_firstiter_winner_take_all": firstiter_winner_take_all_this_iter,
         "relion_translation_angle_scale": float(relion_translation_angle_scale),
+        "symmetry_label": symmetry,
     }
     if model_current_size_for_engine is not None:
         em_kwargs["reconstruction_current_size"] = model_current_size_for_engine
@@ -2683,6 +2692,12 @@ def _score_half_dense(
         # RECOVAR_K_CLASS_FULL_VOLUME_MSTEP / RECOVAR_K_CLASS_HALF_VOLUME_MSTEP
         # switches.
         k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()
+        if symmetry != "C1" and not k_class_relion_x_half_mstep:
+            raise RuntimeError(
+                f"{symmetry} reconstruction requires RELION x-half BPref accumulation; "
+                "RECOVAR_K_CLASS_RELION_X_HALF_MSTEP=0 and legacy full/native-half "
+                "M-step overrides are unsupported for non-C1 symmetry"
+            )
         em_kwargs["mstep_relion_x_half"] = bool(k_class_relion_x_half_mstep)
         em_kwargs["relion_half_volume_mstep"] = (
             False if k_class_relion_x_half_mstep else _k_class_relion_half_volume_mstep_enabled()
@@ -2728,6 +2743,7 @@ def _score_half_dense(
                 bpref_device_signature_active=bpref_device_signature_active,
                 debug_iteration=debug_iteration,
                 coarse_rotation_ids=coarse_rotation_ids,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
         elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:
@@ -2754,6 +2770,7 @@ def _score_half_dense(
                     if coarse_rotation_ids is not None
                     else {}
                 ),
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             coarse_translation_phase_source = apply_relion_translation_perturbation(
                 np.asarray(base_translations, dtype=np.float64),
@@ -2792,9 +2809,14 @@ def _score_half_dense(
             # Diagnostic: tests whether the sparse-bucket reduction order
             # carries a structural bias vs the dense in-place reduction.
             kclass_sparse_pass2 = not bool(
-                _os_for_f64.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
+                os.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
                 in {"1", "true", "yes", "on"}
             )
+            if symmetry != "C1" and not kclass_sparse_pass2:
+                raise RuntimeError(
+                    f"{symmetry} reconstruction requires sparse adaptive pass 2; "
+                    "RECOVAR_K_CLASS_DENSE_PASS2 cannot be enabled for non-C1 symmetry"
+                )
             adaptive_em_kwargs["sparse_pass2"] = kclass_sparse_pass2
             logger.info(
                 "RELION adaptive K-class routing through run_dense_k_class_em_adaptive "
@@ -2834,6 +2856,11 @@ def _score_half_dense(
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
         else:
+            if symmetry != "C1":
+                raise NotImplementedError(
+                    f"{symmetry} reconstruction requires an adaptive sparse or exact-local "
+                    "RELION x-half M-step; non-adaptive dense K-class reconstruction is unsupported"
+                )
             dense_em_kwargs = dict(em_kwargs)
             # The direct dense K-class wrapper delegates to run_em, which does
             # not implement RELION x-half accumulators. Keep that branch on its
@@ -2904,11 +2931,23 @@ def _score_half_dense(
             mstep_accumulator_shape=getattr(k_class_result, "mstep_accumulator_shape", None),
         )
 
+    if symmetry != "C1" and int(state.adaptive_oversampling) <= 0:
+        raise NotImplementedError(
+            f"{symmetry} reconstruction requires an adaptive sparse or exact-local "
+            "RELION x-half M-step; non-adaptive dense K=1 reconstruction is unsupported"
+        )
+
     if int(state.adaptive_oversampling) > 0:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K=1 adaptive oversampling does not support adjoint ablation flags")
         adaptive_os_local = int(state.adaptive_oversampling)
         k1_relion_x_half_mstep = _k1_relion_x_half_mstep_enabled()
+        if symmetry != "C1" and not k1_relion_x_half_mstep:
+            raise RuntimeError(
+                f"{symmetry} reconstruction requires RELION x-half BPref accumulation; "
+                "RECOVAR_K1_RELION_X_HALF_MSTEP=0, CPU-only execution, or disabled "
+                "custom CUDA is unsupported for non-C1 symmetry"
+            )
         means_single = jnp.asarray(means_k)[None, :]
         rot_pmap_for_collapse = None
         trans_pmap_for_collapse = None
@@ -2948,6 +2987,7 @@ def _score_half_dense(
                 update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
                 bpref_device_signature_active=bpref_device_signature_active,
                 debug_iteration=debug_iteration,
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
         else:
             (
@@ -2972,6 +3012,7 @@ def _score_half_dense(
                     if coarse_rotation_ids is not None
                     else {}
                 ),
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )
             coarse_translation_phase_source = apply_relion_translation_perturbation(
                 np.asarray(base_translations, dtype=np.float64),
@@ -2982,9 +3023,14 @@ def _score_half_dense(
             fine_rotations_for_pose = fine_rot
             adaptive_em_kwargs = dict(em_kwargs)
             k1_sparse_pass2 = not bool(
-                _os_for_f64.environ.get("RECOVAR_K1_DENSE_PASS2", "0").strip().lower()
+                os.environ.get("RECOVAR_K1_DENSE_PASS2", "0").strip().lower()
                 in {"1", "true", "yes", "on"}
             )
+            if symmetry != "C1" and not k1_sparse_pass2:
+                raise RuntimeError(
+                    f"{symmetry} reconstruction requires sparse adaptive pass 2; "
+                    "RECOVAR_K1_DENSE_PASS2 cannot be enabled for non-C1 symmetry"
+                )
             k1_skip_significance_pruning = _k1_skip_significance_pruning_enabled()
             adaptive_em_kwargs["sparse_pass2"] = k1_sparse_pass2
             if group_ids_k is not None:
@@ -3083,6 +3129,7 @@ def _score_half_dense(
                     if coarse_rotation_ids is not None
                     else {}
                 ),
+                **({"symmetry": symmetry} if symmetry != "C1" else {}),
             )[2]
         fine_rotation_eulers_for_pose = None
         if fine_rotations_for_pose is not None and _parity_dump.is_active():
@@ -3258,6 +3305,7 @@ def _score_half_local(
     relion_projector_r_max: int | None = None,
     source_faithful_spectrum_norm: bool = False,
     relion_translation_angle_scale: float = 1.0,
+    symmetry: str = "C1",
 ) -> HalfScoreResult:
     """Local-search E+M scoring for one half-set.
 
@@ -3299,9 +3347,11 @@ def _score_half_local(
     cone_radius = 3.0 * float(sigma_rot)  # sigma_cutoff=3.0
     cone_fraction = max(
         (cone_radius / float(np.pi)) ** 2,
-        1.0 / float(rotation_grid_size(local_search_order)),
+        1.0 / float(_symmetry_rotation_grid_size(local_search_order, symmetry)),
     )
-    est_cone_rots = int(np.ceil(rotation_grid_size(local_search_order) * cone_fraction))
+    est_cone_rots = int(
+        np.ceil(_symmetry_rotation_grid_size(local_search_order, symmetry) * cone_fraction)
+    )
     eff_n_rot = max(64, 2 * est_cone_rots)
     local_n_trans = int(current_translations.shape[0])
     if int(local_parent_oversampling_order) > 0:
@@ -3394,7 +3444,7 @@ def _score_half_local(
                 "local_search_order must be >= local_parent_oversampling_order; "
                 f"got {local_search_order} and {local_parent_oversampling_order}",
             )
-        parent_grid_metadata = build_local_search_grid_metadata(parent_order)
+        parent_grid_metadata = _symmetry_local_grid_metadata(parent_order, symmetry)
         parent_layout = build_local_hypothesis_layout(
             previous_best_rotation_eulers_k,
             None,
@@ -3487,6 +3537,7 @@ def _score_half_local(
             score_only=True,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             relion_translation_angle_scale=relion_translation_angle_scale,
+            symmetry=symmetry,
         )
         parent_profile = parent_outputs[-1]
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
@@ -3528,6 +3579,7 @@ def _score_half_local(
             parent_order,
             oversampling_order=int(local_parent_oversampling_order),
             random_perturbation=float(local_search_random_perturbation),
+            symmetry=symmetry,
         )
         if local_adaptive_pass2_denominator_mode is not None:
             if local_adaptive_pass2_denominator_mode == "full_parent":
@@ -3545,6 +3597,7 @@ def _score_half_local(
                 parent_order,
                 oversampling_order=int(local_parent_oversampling_order),
                 random_perturbation=float(local_search_random_perturbation),
+                symmetry=symmetry,
             )
             if local_adaptive_pass2_denominator_layout.sample_mask_flat is None:
                 denominator_valid_samples_per_image = (
@@ -3623,6 +3676,17 @@ def _score_half_local(
     )
     if diagnostic_score_only:
         local_relion_x_half_mstep = False
+    if symmetry != "C1" and not diagnostic_score_only and not local_relion_x_half_mstep:
+        env_name = (
+            _K_CLASS_RELION_X_HALF_MSTEP_ENV
+            if k_class_enabled
+            else _K1_RELION_X_HALF_MSTEP_ENV
+        )
+        raise RuntimeError(
+            f"{symmetry} exact-local reconstruction requires RELION x-half BPref "
+            f"accumulation; {env_name}=0, CPU-only execution, or disabled custom CUDA "
+            "is unsupported for non-C1 symmetry"
+        )
     if local_relion_x_half_mstep:
         logger.info(
             "RELION local %s M-step: using x-half BPref-layout backprojection",
@@ -3701,6 +3765,7 @@ def _score_half_local(
                 score_only=True,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 relion_translation_angle_scale=relion_translation_angle_scale,
+                symmetry=symmetry,
             )
         finally:
             os.environ.update(saved_local_debug_env)
@@ -3802,6 +3867,7 @@ def _score_half_local(
         relion_translation_angle_scale=relion_translation_angle_scale,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
+        symmetry=symmetry,
     )
     _local_cursor = 0
     Ft_y_k, Ft_ctf_k, ha_k = local_outputs[_local_cursor : _local_cursor + 3]
@@ -4609,6 +4675,63 @@ def _with_validated_relion_healpix_orders(options: RefinementOptions) -> Refinem
         options, adaptive=dataclasses.replace(adaptive, relion_healpix_orders=validated_orders)
     )
 
+
+def _symmetry_rotation_grid_size(order: int, symmetry: str) -> int:
+    """Call the historical one-argument C1 API for strict test compatibility."""
+
+    if symmetry == "C1":
+        return int(rotation_grid_size(order))
+    return int(rotation_grid_size(order, symmetry))
+
+
+def _symmetry_rotation_grid_float32(order: int, symmetry: str):
+    if symmetry == "C1":
+        return _relion_rotation_grid_float32(order)
+    return _relion_rotation_grid_float32(order, symmetry)
+
+
+def _symmetry_rotation_grid_eulers_float64(order: int, symmetry: str):
+    if symmetry == "C1":
+        return _get_relion_rotation_grid_eulers_float64(order)
+    return _get_relion_rotation_grid_eulers_float64(order, symmetry=symmetry)
+
+
+def _symmetry_local_grid_metadata(order: int, symmetry: str):
+    if symmetry == "C1":
+        return build_local_search_grid_metadata(order)
+    return build_local_search_grid_metadata(order, symmetry=symmetry)
+
+
+def _collapse_direction_posterior_for_symmetry(
+    rotation_posterior_sums,
+    healpix_order: int,
+    symmetry: str,
+):
+    if symmetry == "C1":
+        return collapse_rotation_posterior_to_direction_prior(
+            rotation_posterior_sums,
+            healpix_order,
+        )
+    return collapse_rotation_posterior_to_direction_prior(
+        rotation_posterior_sums,
+        healpix_order,
+        symmetry,
+    )
+
+
+def _direction_log_prior_for_symmetry(
+    direction_prior,
+    healpix_order: int,
+    symmetry: str,
+):
+    if symmetry == "C1":
+        return make_relion_direction_log_prior(direction_prior, healpix_order)
+    return make_relion_direction_log_prior(
+        direction_prior,
+        healpix_order,
+        symmetry=symmetry,
+    )
+
 def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number):
     target_order = int(target_order)
     if target_order < int(state.healpix_order):
@@ -4853,6 +4976,7 @@ def _run_relion_iteration_loop(
     parity = options.parity
     local_search = options.local_search
     k_class = options.k_class
+    symmetry = options.symmetry.point_group
     replay = options.replay
     debug = options.debug
     batching = options.batching
@@ -4872,6 +4996,13 @@ def _run_relion_iteration_loop(
     preserve_bpref_particle_order = parity.preserve_bpref_particle_order
     allow_replayed_bpref_particle_order = parity.allow_replayed_bpref_particle_order
     state_swap_probe = debug.state_swap_probe
+
+    logger.info("RELION rotational symmetry: %s", symmetry)
+    if sealed_sampling_state is not None and symmetry != "C1":
+        raise ValueError(
+            "sealed sampling replay is C1-specific and cannot be combined "
+            f"with symmetry={symmetry}"
+        )
 
     if options.parity.perturb_replay_restart_state_iterations:
         logger.info(
@@ -5052,7 +5183,10 @@ def _run_relion_iteration_loop(
             int(current_translations.shape[0]),
         )
     elif translations is None:
-        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
+        current_rotations, current_rotation_eulers = _symmetry_rotation_grid_float32(
+            current_healpix_order,
+            symmetry,
+        )
         base_translations = _translation_grid_for_class_count(
             schedule.init_translation_range,
             schedule.init_translation_step,
@@ -5063,7 +5197,10 @@ def _run_relion_iteration_loop(
             dtype=jnp.float32,
         )
     else:
-        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
+        current_rotations, current_rotation_eulers = _symmetry_rotation_grid_float32(
+            current_healpix_order,
+            symmetry,
+        )
         base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=jnp.float32)
     # Unperturbed base grid — `current_translations` may be replaced per-iter by
@@ -5295,7 +5432,11 @@ def _run_relion_iteration_loop(
                 continue
             prior_k = np.asarray(class_direction_prior_per_half[k], dtype=np.float32)
             class_direction_prior_per_half[k] = prior_k
-            class_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(prior_k[0])
+            class_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(
+                prior_k[0],
+                symmetry,
+                expected_order=state.healpix_order,
+            )
             logger.info(
                 "RELION mode: loaded init class direction priors half-%d: %d classes, %d directions",
                 k + 1,
@@ -5309,7 +5450,11 @@ def _run_relion_iteration_loop(
                 continue
             prior_k = np.asarray(global_direction_prior_per_half[k], dtype=np.float32)
             global_direction_prior_per_half[k] = prior_k
-            global_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(prior_k)
+            global_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(
+                prior_k,
+                symmetry,
+                expected_order=state.healpix_order,
+            )
             logger.info(
                 "RELION mode: loaded init direction prior half-%d: %d directions, range=[%.6f, %.6f], %d zero-probability",
                 k + 1,
@@ -5794,6 +5939,7 @@ def _run_relion_iteration_loop(
             global_direction_prior_order_per_half=global_direction_prior_order_per_half,
             preserve_existing_direction_prior=replay.preserve_initial_direction_prior,
             sealed_sampling_state=sealed_sampling_state,
+            **({"symmetry": symmetry} if symmetry != "C1" else {}),
         )
         cs = replay_result.cs
         _replay_prior_translations = replay_result.prior_translations
@@ -6046,7 +6192,10 @@ def _run_relion_iteration_loop(
                     current_healpix_order,
                     new_order,
                 )
-                current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(new_order)
+                current_rotations, current_rotation_eulers = _symmetry_rotation_grid_float32(
+                    new_order,
+                    symmetry,
+                )
                 current_healpix_order = new_order
             else:
                 logger.info(
@@ -6178,7 +6327,7 @@ def _run_relion_iteration_loop(
                 mstep_source_eulers = (
                     np.asarray(effective_rotation_eulers, dtype=np.float64)
                     if sealed_sampling_state is not None
-                    else _get_relion_rotation_grid_eulers_float64(_angsamp_order)
+                    else _symmetry_rotation_grid_eulers_float64(_angsamp_order, symmetry)
                 )
                 if int(mstep_source_eulers.shape[0]) != int(effective_rotation_eulers.shape[0]):
                     mstep_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
@@ -6284,26 +6433,40 @@ def _run_relion_iteration_loop(
             local_search_random_perturbation = 0.0
             local_search_angular_sampling_deg = None
             use_parent_expanded_local = state.adaptive_oversampling > 0
-            if effective_rotations.shape[0] != rotation_grid_size(local_search_order):
+            if effective_rotations.shape[0] != _symmetry_rotation_grid_size(
+                local_search_order,
+                symmetry,
+            ):
                 logger.info(
                     "Using lazy fine local-search grid: order=%d (%d rotations) from capped base order=%d",
                     local_search_order,
-                    rotation_grid_size(local_search_order),
+                    _symmetry_rotation_grid_size(local_search_order, symmetry),
                     current_healpix_order,
                 )
                 local_search_angular_sampling_deg = relion_angular_sampling_deg(
                     local_search_order,
                     adaptive_oversampling=0,
                 )
-                if (not use_parent_expanded_local) and _precompute_exact_local_fine_grid_enabled(local_search_order):
-                    _, local_search_rotation_eulers = _relion_rotation_grid_float32(local_search_order)
+                precompute_local_fine_grid = (
+                    _precompute_exact_local_fine_grid_enabled(local_search_order)
+                    if symmetry == "C1"
+                    else _precompute_exact_local_fine_grid_enabled(
+                        local_search_order,
+                        symmetry,
+                    )
+                )
+                if (not use_parent_expanded_local) and precompute_local_fine_grid:
+                    _, local_search_rotation_eulers = _symmetry_rotation_grid_float32(
+                        local_search_order,
+                        symmetry,
+                    )
                     local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
                         local_search_rotation_eulers,
                         float(random_perturbation),
                         local_search_angular_sampling_deg,
                     )
                     _, _, local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        _get_relion_rotation_grid_eulers_float64(local_search_order),
+                        _symmetry_rotation_grid_eulers_float64(local_search_order, symmetry),
                         float(random_perturbation),
                         local_search_angular_sampling_deg,
                         return_mstep_rotations=True,
@@ -6349,7 +6512,10 @@ def _run_relion_iteration_loop(
                 if effective_mstep_rotations is not None:
                     local_search_mstep_rotations = effective_mstep_rotations
                 else:
-                    mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(local_search_order)
+                    mstep_source_eulers = _symmetry_rotation_grid_eulers_float64(
+                        local_search_order,
+                        symmetry,
+                    )
                     if int(mstep_source_eulers.shape[0]) != int(effective_rotation_eulers.shape[0]):
                         mstep_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
                     _, _, local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
@@ -6398,7 +6564,11 @@ def _run_relion_iteration_loop(
                 if class_prior_k is not None and class_prior_order_k == direction_prior_healpix_order:
                     class_rotation_log_prior_per_half[_half_idx] = np.stack(
                         [
-                            make_relion_direction_log_prior(class_prior_k[class_idx], direction_prior_healpix_order)
+                            _direction_log_prior_for_symmetry(
+                                class_prior_k[class_idx],
+                                direction_prior_healpix_order,
+                                symmetry,
+                            )
                             for class_idx in range(n_classes)
                         ],
                         axis=0,
@@ -6418,9 +6588,10 @@ def _run_relion_iteration_loop(
             rotation_log_prior_per_half[_half_idx] = (
                 _sealed_direction_log_prior(prior_k, sealed_sampling_state)
                 if sealed_sampling_state is not None
-                else make_relion_direction_log_prior(
+                else _direction_log_prior_for_symmetry(
                     prior_k,
                     direction_prior_healpix_order,
+                    symmetry,
                 )
             )
             logger.info(
@@ -6741,7 +6912,9 @@ def _run_relion_iteration_loop(
                 logger.info("Skipping E-step/M-step accumulation for empty half-%d dataset", k + 1)
                 n_shells = int(cryo.image_shape[0] // 2 + 1)
                 n_rot_for_stats = int(
-                    rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0]
+                    _symmetry_rotation_grid_size(local_search_order, symmetry)
+                    if use_local
+                    else effective_rotations.shape[0]
                 )
                 empty_k1_x_half_mstep = (
                     (not k_class_enabled)
@@ -6889,6 +7062,7 @@ def _run_relion_iteration_loop(
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                     relion_translation_angle_scale=relion_translation_angle_scale,
+                    symmetry=symmetry,
                 )
                 ha_k = local_result.ha
                 Ft_y_k = local_result.Ft_y
@@ -6965,6 +7139,7 @@ def _run_relion_iteration_loop(
                     preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                     relion_translation_angle_scale=relion_translation_angle_scale,
+                    symmetry=symmetry,
                 )
                 ha_k = adaptive_result.ha
                 Ft_y_k = adaptive_result.Ft_y
@@ -7034,6 +7209,7 @@ def _run_relion_iteration_loop(
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
+                    symmetry=symmetry,
                 )
                 ha_k = single_pass_result.ha
                 Ft_y_k = single_pass_result.Ft_y
@@ -7890,18 +8066,26 @@ def _run_relion_iteration_loop(
                     if int(state.adaptive_oversampling) > 0
                     else int(local_search_order)
                 )
-            k1_direction_prior_size = rotation_grid_size(k1_direction_prior_order)
+            k1_direction_prior_size = _symmetry_rotation_grid_size(
+                k1_direction_prior_order,
+                symmetry,
+            )
             if (
                 not k_class_enabled
                 and all(np.asarray(rot_sum).shape[0] == k1_direction_prior_size for rot_sum in rotation_posterior_per_half)
             ):
                 for k in range(2):
-                    direction_prior_k = collapse_rotation_posterior_to_direction_prior(
+                    direction_prior_k = _collapse_direction_posterior_for_symmetry(
                         np.asarray(rotation_posterior_per_half[k], dtype=np.float64),
                         k1_direction_prior_order,
+                        symmetry,
                     )
                     try:
-                        make_relion_direction_log_prior(direction_prior_k, k1_direction_prior_order)
+                        _direction_log_prior_for_symmetry(
+                            direction_prior_k,
+                            k1_direction_prior_order,
+                            symmetry,
+                        )
                     except ValueError as exc:
                         logger.warning(
                             "Skipping K=1 direction prior update for half-%d at healpix_order=%d: "
@@ -7916,13 +8100,15 @@ def _run_relion_iteration_loop(
             elif (
                 not use_local
                 and k_class_enabled
-                and effective_rotations.shape[0] == rotation_grid_size(current_healpix_order)
+                and effective_rotations.shape[0]
+                == _symmetry_rotation_grid_size(current_healpix_order, symmetry)
                 and all(rot_sum is not None for rot_sum in class_rotation_posterior_per_half)
             ):
                 combined_class_direction_prior = _combined_class_direction_prior_from_halves(
                     class_rotation_posterior_per_half,
                     n_classes,
                     current_healpix_order,
+                    symmetry,
                 )
                 for k in range(2):
                     class_direction_prior_per_half[k] = combined_class_direction_prior.copy()
@@ -8015,6 +8201,7 @@ def _run_relion_iteration_loop(
                 k_class_enabled=k_class_enabled,
                 volume_shape=volume_shape,
                 voxel_size=cryo.voxel_size,
+                symmetry=symmetry,
             )
 
         # --- Compute ave_Pmax from the actual E-step maxima ---
@@ -8223,7 +8410,10 @@ def _run_relion_iteration_loop(
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
                 if local_search_rotations is None:
-                    local_grid_metadata = build_local_search_grid_metadata(local_search_order)
+                    local_grid_metadata = _symmetry_local_grid_metadata(
+                        local_search_order,
+                        symmetry,
+                    )
                     best_rots = _selected_rotation_matrices(
                         rot_idx,
                         None,
@@ -8478,7 +8668,11 @@ def _run_relion_iteration_loop(
         # --- Update convergence state ---
         # This checks assignment changes, resolution stalls, and may trigger
         # angular step refinement or convergence.
-        n_rot_current = rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0]
+        n_rot_current = (
+            _symmetry_rotation_grid_size(local_search_order, symmetry)
+            if use_local
+            else effective_rotations.shape[0]
+        )
         n_trans_current = current_translations.shape[0]
 
         # ``update_refinement_state`` expects ``new_resolution`` in
@@ -8575,6 +8769,7 @@ def _run_relion_iteration_loop(
             voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
             update_sampling=not native_sampling_boundary,
             check_convergence_now=not native_sampling_boundary,
+            symmetry_label=symmetry,
         )
         if _optimiser_meta is not None:
             _relion_res_stalls = _optimiser_meta.get("number_iter_without_resolution_gain")
@@ -9081,7 +9276,9 @@ def _run_relion_iteration_loop(
                         continue
                     _prior_k = np.asarray(_final_replay_priors[_half_idx], dtype=np.float32)
                     _prior_order_k = infer_direction_prior_healpix_order(
-                        _prior_k[0] if k_class_enabled else _prior_k
+                        _prior_k[0] if k_class_enabled else _prior_k,
+                        symmetry,
+                        expected_order=state.healpix_order,
                     )
                     if _prior_order_k != state.healpix_order:
                         if k_class_enabled:
@@ -9091,6 +9288,7 @@ def _run_relion_iteration_loop(
                                         _prior_k[class_idx],
                                         _prior_order_k,
                                         state.healpix_order,
+                                        symmetry,
                                     )
                                     for class_idx in range(n_classes)
                                 ],
@@ -9101,6 +9299,7 @@ def _run_relion_iteration_loop(
                                 _prior_k,
                                 _prior_order_k,
                                 state.healpix_order,
+                                symmetry,
                             )
                         _prior_order_k = state.healpix_order
                     if k_class_enabled:
@@ -9201,8 +9400,9 @@ def _run_relion_iteration_loop(
         final_current_rotations = current_rotations
         final_current_rotation_eulers = current_rotation_eulers
     else:
-        final_current_rotations, final_current_rotation_eulers = _relion_rotation_grid_float32(
-            final_current_healpix_order
+        final_current_rotations, final_current_rotation_eulers = _symmetry_rotation_grid_float32(
+            final_current_healpix_order,
+            symmetry,
         )
     final_effective_rotations = final_current_rotations
     final_effective_rotation_eulers = np.asarray(final_current_rotation_eulers, dtype=np.float32)
@@ -9420,8 +9620,9 @@ def _run_relion_iteration_loop(
             final_perturbation_healpix_order,
             adaptive_oversampling=0,
         )
-        final_mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(
-            final_perturbation_healpix_order
+        final_mstep_source_eulers = _symmetry_rotation_grid_eulers_float64(
+            final_perturbation_healpix_order,
+            symmetry,
         )
         if int(final_mstep_source_eulers.shape[0]) != int(final_effective_rotation_eulers.shape[0]):
             final_mstep_source_eulers = np.asarray(final_effective_rotation_eulers, dtype=np.float64)
@@ -9478,16 +9679,26 @@ def _run_relion_iteration_loop(
             ),
         )
         use_parent_expanded_final_local = int(state.adaptive_oversampling) > 0
-        if final_effective_rotations.shape[0] != rotation_grid_size(final_local_search_order):
+        if final_effective_rotations.shape[0] != _symmetry_rotation_grid_size(
+            final_local_search_order,
+            symmetry,
+        ):
             final_local_search_angular_sampling_deg = relion_angular_sampling_deg(
                 final_local_search_order,
                 adaptive_oversampling=0,
             )
-            if (not use_parent_expanded_final_local) and _precompute_exact_local_fine_grid_enabled(
-                final_local_search_order
-            ):
-                final_local_search_rotations, final_local_search_rotation_eulers = _relion_rotation_grid_float32(
-                    final_local_search_order
+            precompute_final_local_fine_grid = (
+                _precompute_exact_local_fine_grid_enabled(final_local_search_order)
+                if symmetry == "C1"
+                else _precompute_exact_local_fine_grid_enabled(
+                    final_local_search_order,
+                    symmetry,
+                )
+            )
+            if (not use_parent_expanded_final_local) and precompute_final_local_fine_grid:
+                final_local_search_rotations, final_local_search_rotation_eulers = _symmetry_rotation_grid_float32(
+                    final_local_search_order,
+                    symmetry,
                 )
                 if final_perturbation_applied:
                     final_local_search_rotations, final_local_search_rotation_eulers = (
@@ -9498,14 +9709,20 @@ def _run_relion_iteration_loop(
                         )
                     )
                     _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        _get_relion_rotation_grid_eulers_float64(final_local_search_order),
+                        _symmetry_rotation_grid_eulers_float64(
+                            final_local_search_order,
+                            symmetry,
+                        ),
                         final_random_perturbation,
                         final_local_search_angular_sampling_deg,
                         return_mstep_rotations=True,
                     )
                 else:
                     _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        _get_relion_rotation_grid_eulers_float64(final_local_search_order),
+                        _symmetry_rotation_grid_eulers_float64(
+                            final_local_search_order,
+                            symmetry,
+                        ),
                         0.0,
                         final_local_search_angular_sampling_deg,
                         return_mstep_rotations=True,
@@ -9536,7 +9753,10 @@ def _run_relion_iteration_loop(
             if final_effective_mstep_rotations is not None:
                 final_local_search_mstep_rotations = final_effective_mstep_rotations
             else:
-                final_mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(final_local_search_order)
+                final_mstep_source_eulers = _symmetry_rotation_grid_eulers_float64(
+                    final_local_search_order,
+                    symmetry,
+                )
                 if int(final_mstep_source_eulers.shape[0]) != int(final_effective_rotation_eulers.shape[0]):
                     final_mstep_source_eulers = np.asarray(final_effective_rotation_eulers, dtype=np.float64)
                 _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
@@ -9694,9 +9914,10 @@ def _run_relion_iteration_loop(
         ):
             final_class_rotation_log_prior_k = np.stack(
                 [
-                    make_relion_direction_log_prior(
+                    _direction_log_prior_for_symmetry(
                         class_direction_prior_per_half[k][class_idx],
                         final_direction_prior_healpix_order,
+                        symmetry,
                     )
                     for class_idx in range(n_classes)
                 ],
@@ -9709,9 +9930,10 @@ def _run_relion_iteration_loop(
             and global_direction_prior_per_half[k] is not None
             and global_direction_prior_order_per_half[k] == final_direction_prior_healpix_order
         ):
-            final_rotation_log_prior_k = make_relion_direction_log_prior(
+            final_rotation_log_prior_k = _direction_log_prior_for_symmetry(
                 global_direction_prior_per_half[k],
                 final_direction_prior_healpix_order,
+                symmetry,
             )
         if final_use_local:
             final_result = _score_half_local_in_bpref_scope(
@@ -9771,6 +9993,7 @@ def _run_relion_iteration_loop(
                 relion_projector_half=final_relion_projector_half_by_half[k],
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
                 relion_translation_angle_scale=relion_translation_angle_scale,
+                symmetry=symmetry,
             )
         else:
             final_result = _score_half_dense_in_bpref_scope(
@@ -9827,6 +10050,7 @@ def _run_relion_iteration_loop(
                 preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 relion_translation_angle_scale=relion_translation_angle_scale,
+                symmetry=symmetry,
             )
         if final_result.best_pose_translations is not None:
             final_result.best_pose_translations = _relion_metadata_translations(
@@ -9852,6 +10076,8 @@ def _run_relion_iteration_loop(
         )
         # --- Manifest dump for final all-data iteration (Phase 0.1) ---
         if debug.save_intermediates_dir is not None:
+            from recovar.em.symmetry import symmetry_operator_sha256
+
             _manifest_path = os.path.join(
                 debug.save_intermediates_dir,
                 f"manifest_final_half{k}.npz",
@@ -9896,6 +10122,10 @@ def _run_relion_iteration_loop(
                 "local_search": np.bool_(final_use_local),
                 "iteration": np.int32(-1),
                 "half_index": np.int32(k),
+                "symmetry_label": np.asarray(symmetry),
+                "symmetry_operator_sha256": np.asarray(
+                    symmetry_operator_sha256(symmetry)
+                ),
             }
             np.savez(_manifest_path, **_manifest)
             logger.info("Final manifest dumped: %s", _manifest_path)

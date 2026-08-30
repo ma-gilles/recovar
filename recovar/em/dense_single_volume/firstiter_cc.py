@@ -17,6 +17,7 @@ from recovar.em.sampling import (
     get_oversampled_rotation_grid_from_samples,
     get_oversampled_translation_grid,
 )
+from recovar.em.symmetry import canonicalize_rotational_symmetry
 
 # Mirrors iteration_loop's module-level constants so monkeypatches at either
 # module level still bind correctly.
@@ -86,6 +87,7 @@ def _build_firstiter_cc_pass2_grids(
     *,
     return_mstep_rotations: bool = False,
     coarse_rotation_ids=None,
+    symmetry: str = "C1",
 ):
     """Build (coarse, fine, parent_map) pose grids for K-class iter-1 firstiter_cc adaptive engine.
 
@@ -99,6 +101,7 @@ def _build_firstiter_cc_pass2_grids(
     the fine translation grid, returns parent_maps that index from fine to
     coarse.
     """
+    symmetry = canonicalize_rotational_symmetry(symmetry)
     coarse_rot_np = np.asarray(coarse_rotations, dtype=np.float32)
     coarse_trans_np = np.asarray(coarse_translations, dtype=np.float32)
     base_translations_f64 = np.asarray(base_translations, dtype=np.float64)
@@ -140,6 +143,7 @@ def _build_firstiter_cc_pass2_grids(
         oversampling_order=adaptive_os,
         random_perturbation=float(random_perturbation),
         return_mstep_rotations=return_mstep_rotations,
+        **({"symmetry": symmetry} if symmetry != "C1" else {}),
     )
     fine_rotations, rot_parent_map = fine_rotation_outputs[:2]
     fine_mstep_rotations = fine_rotation_outputs[2] if return_mstep_rotations else None

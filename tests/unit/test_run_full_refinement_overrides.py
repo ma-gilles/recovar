@@ -29,6 +29,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _updated_mean_variance_per_half,
 )
 from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
+from recovar.em.symmetry import symmetry_operator_sha256
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
@@ -158,60 +159,79 @@ def test_fresh_auto_refine_particle_order_excludes_kclass_and_replays():
     assert not _use_fresh_auto_refine_particle_order(args, object())
 
 
-def _write_final_manifest_replay_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _write_final_manifest_replay_fixture(
+    tmp_path: Path,
+    *,
+    symmetry: str = "C1",
+    include_symmetry_provenance: bool = True,
+) -> tuple[Path, Path]:
     manifest_dir = tmp_path / "intermediates"
     manifest_dir.mkdir()
     row_counts = (2, 3)
+    operator_sha256 = symmetry_operator_sha256(symmetry)
     for half, row_count in enumerate(row_counts):
+        manifest_payload = {
+            "effective_rotations": np.eye(3, dtype=np.float32)[None, ...],
+            "current_translations": np.zeros((1, 2), dtype=np.float32),
+            "rotation_log_prior": np.asarray([], dtype=np.float64),
+            "translation_log_prior": np.zeros((row_count, 1), dtype=np.float64),
+            "translation_prior_centers": np.zeros((row_count, 2), dtype=np.float64),
+            "image_corrections": np.arange(row_count, dtype=np.float64) + 1.0,
+            "scale_corrections": np.ones(row_count, dtype=np.float64),
+            "image_pre_shifts": np.zeros((row_count, 2), dtype=np.float32),
+            "absolute_previous_translations": np.zeros((row_count, 2), dtype=np.float32),
+            "mean_vol_ft": np.full(64, half + 1, dtype=np.complex128),
+            "mean_variance": np.arange(64, dtype=np.float32),
+            "noise_variance": np.ones(64, dtype=np.float32) * (half + 1),
+            "current_size": np.int32(8),
+            "half_spectrum_scoring": np.bool_(True),
+            "use_float64_scoring": np.bool_(False),
+            "use_float64_projections": np.bool_(False),
+            "projection_padding_factor": np.int32(2),
+            "reconstruction_padding_factor": np.int32(2),
+            "score_with_masked_images": np.bool_(True),
+            "perturbation_instance": np.float64(0.25),
+            "perturbation_factor": np.float64(0.5),
+            "perturbation_applied": np.bool_(True),
+            "perturbation_relion_iteration": np.int32(3),
+            "local_search": np.bool_(True),
+            "iteration": np.int32(-1),
+            "half_index": np.int32(half),
+        }
+        if include_symmetry_provenance:
+            manifest_payload.update(
+                symmetry_label=np.asarray(symmetry),
+                symmetry_operator_sha256=np.asarray(operator_sha256),
+            )
         np.savez(
             manifest_dir / f"manifest_final_half{half}.npz",
-            effective_rotations=np.eye(3, dtype=np.float32)[None, ...],
-            current_translations=np.zeros((1, 2), dtype=np.float32),
-            rotation_log_prior=np.asarray([], dtype=np.float64),
-            translation_log_prior=np.zeros((row_count, 1), dtype=np.float64),
-            translation_prior_centers=np.zeros((row_count, 2), dtype=np.float64),
-            image_corrections=np.arange(row_count, dtype=np.float64) + 1.0,
-            scale_corrections=np.ones(row_count, dtype=np.float64),
-            image_pre_shifts=np.zeros((row_count, 2), dtype=np.float32),
-            absolute_previous_translations=np.zeros((row_count, 2), dtype=np.float32),
-            mean_vol_ft=np.full(64, half + 1, dtype=np.complex128),
-            mean_variance=np.arange(64, dtype=np.float32),
-            noise_variance=np.ones(64, dtype=np.float32) * (half + 1),
-            current_size=np.int32(8),
-            half_spectrum_scoring=np.bool_(True),
-            use_float64_scoring=np.bool_(False),
-            use_float64_projections=np.bool_(False),
-            projection_padding_factor=np.int32(2),
-            reconstruction_padding_factor=np.int32(2),
-            score_with_masked_images=np.bool_(True),
-            perturbation_instance=np.float64(0.25),
-            perturbation_factor=np.float64(0.5),
-            perturbation_applied=np.bool_(True),
-            perturbation_relion_iteration=np.int32(3),
-            local_search=np.bool_(True),
-            iteration=np.int32(-1),
-            half_index=np.int32(half),
+            **manifest_payload,
         )
     results_path = tmp_path / "refinement_results.npz"
-    np.savez(
-        results_path,
-        git_commit=np.asarray("a" * 40),
-        git_dirty_count=np.int64(0),
-        current_sizes=np.asarray([6, 6], dtype=np.int64),
-        healpix_order_trajectory=np.asarray([4, 5], dtype=np.int32),
-        ave_Pmax_trajectory=np.asarray([0.2, 0.3], dtype=np.float64),
-        sigma_offset_per_half_trajectory=np.asarray(
+    results_payload = {
+        "git_commit": np.asarray("a" * 40),
+        "git_dirty_count": np.int64(0),
+        "current_sizes": np.asarray([6, 6], dtype=np.int64),
+        "healpix_order_trajectory": np.asarray([4, 5], dtype=np.int32),
+        "ave_Pmax_trajectory": np.asarray([0.2, 0.3], dtype=np.float64),
+        "sigma_offset_per_half_trajectory": np.asarray(
             [[2.0, 2.1], [3.0, 3.1]],
             dtype=object,
         ),
-        tau2_fudge=np.float64(1.0),
-        best_rotation_eulers_iter_001_half0=np.zeros((2, 3), dtype=np.float32),
-        best_rotation_eulers_iter_001_half1=np.zeros((3, 3), dtype=np.float32),
-        best_translations_iter_001_half0=np.zeros((2, 2), dtype=np.float32),
-        best_translations_iter_001_half1=np.zeros((3, 2), dtype=np.float32),
-        noise_radial_per_half_iter_001=np.ones((2, 5), dtype=np.float64),
-        fsc_iter_001=np.linspace(1.0, 0.1, 5, dtype=np.float32),
-    )
+        "tau2_fudge": np.float64(1.0),
+        "best_rotation_eulers_iter_001_half0": np.zeros((2, 3), dtype=np.float32),
+        "best_rotation_eulers_iter_001_half1": np.zeros((3, 3), dtype=np.float32),
+        "best_translations_iter_001_half0": np.zeros((2, 2), dtype=np.float32),
+        "best_translations_iter_001_half1": np.zeros((3, 2), dtype=np.float32),
+        "noise_radial_per_half_iter_001": np.ones((2, 5), dtype=np.float64),
+        "fsc_iter_001": np.linspace(1.0, 0.1, 5, dtype=np.float32),
+    }
+    if include_symmetry_provenance:
+        results_payload.update(
+            symmetry_label=np.asarray(symmetry),
+            symmetry_operator_sha256=np.asarray(operator_sha256),
+        )
+    np.savez(results_path, **results_payload)
     return manifest_dir, results_path
 
 
@@ -223,10 +243,63 @@ def test_final_manifest_replay_loads_exact_numbered_boundary(tmp_path: Path):
     assert replay.completed_relion_iteration == 2
     assert replay.current_size == 6
     assert replay.healpix_order == 5
+    assert replay.symmetry_label == "C1"
+    assert replay.symmetry_operator_sha256 == symmetry_operator_sha256("C1")
     assert replay.ave_pmax == pytest.approx(0.3)
     assert replay.translation_sigma_angstrom_per_half == pytest.approx((3.0, 3.1))
     assert replay.manifest_sha256[0] != replay.manifest_sha256[1]
     np.testing.assert_array_equal(replay.means[0], np.ones(64, dtype=np.complex128))
+
+
+def test_final_manifest_replay_binds_non_c1_symmetry_to_runtime(tmp_path: Path):
+    manifest_dir, results_path = _write_final_manifest_replay_fixture(
+        tmp_path,
+        symmetry="I1",
+    )
+
+    replay = _load_final_manifest_replay(
+        manifest_dir,
+        results_path,
+        expected_symmetry="i1",
+    )
+
+    assert replay.symmetry_label == "I1"
+    assert replay.symmetry_operator_sha256 == symmetry_operator_sha256("I1")
+    with pytest.raises(ValueError, match="does not match requested runtime symmetry"):
+        _load_final_manifest_replay(
+            manifest_dir,
+            results_path,
+            expected_symmetry="C1",
+        )
+
+
+def test_final_manifest_replay_accepts_legacy_c1_only(tmp_path: Path):
+    manifest_dir, results_path = _write_final_manifest_replay_fixture(
+        tmp_path,
+        include_symmetry_provenance=False,
+    )
+
+    replay = _load_final_manifest_replay(manifest_dir, results_path)
+
+    assert replay.symmetry_label == "C1"
+    with pytest.raises(ValueError, match="missing final-manifest fields"):
+        _load_final_manifest_replay(
+            manifest_dir,
+            results_path,
+            expected_symmetry="I1",
+        )
+
+
+def test_final_manifest_replay_rejects_wrong_operator_hash(tmp_path: Path):
+    manifest_dir, results_path = _write_final_manifest_replay_fixture(tmp_path)
+    half0_path = manifest_dir / "manifest_final_half0.npz"
+    with np.load(half0_path, allow_pickle=False) as archive:
+        payload = {key: np.asarray(archive[key]) for key in archive.files}
+    payload["symmetry_operator_sha256"] = np.asarray("0" * 64)
+    np.savez(half0_path, **payload)
+
+    with pytest.raises(ValueError, match="operator hash does not match"):
+        _load_final_manifest_replay(manifest_dir, results_path)
 
 
 def test_final_manifest_replay_rejects_disagreeing_shared_state(tmp_path: Path):
@@ -1140,9 +1213,9 @@ def test_parse_relion_cli_ini_high_is_none_when_absent_or_disabled():
 def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     """RELION ``--firstiter_cc`` and ``--ini_high`` are distinct knobs.
 
-    ``--firstiter_cc`` enables normalized-CC scoring in iter 1. RELION only
-    reapplies the post-iter1 low-pass when the optimiser command has a
-    positive ``--ini_high``. Do not substitute RECOVAR's ``--init_resolution``.
+    ``--firstiter_cc`` enables normalized-CC scoring in iter 1. A resumed
+    optimiser's positive ``--ini_high`` wins; a fresh run falls back to the
+    matched RECOVAR ``--init_resolution`` value.
     """
 
     tree = ast.parse(RUN_FULL_REFINEMENT.read_text())
@@ -1155,6 +1228,10 @@ def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     assert value.test.attr == "firstiter_cc"
     assert isinstance(value.body, ast.Name)
     assert value.body.id == "relion_firstiter_ini_high_angstrom"
+
+    source = RUN_FULL_REFINEMENT.read_text()
+    assert "args.firstiter_cc and relion_firstiter_ini_high_angstrom is None" in source
+    assert "relion_firstiter_ini_high_angstrom = float(args.init_resolution)" in source
 
 
 def test_refinement_results_persist_final_tau2_weight_combination():

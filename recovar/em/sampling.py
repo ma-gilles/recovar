@@ -6,33 +6,72 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import utils
+from recovar.em.symmetry import canonicalize_rotational_symmetry
 
 # Cached per-order geometry used by the exact RELION local-search selector.
 # For the RELION-parity grid, the flattened index is ``psi_idx * n_pixels +
 # pixel_idx`` with ``pixel_idx`` following RELION's NEST-ordered HEALPix
 # enumeration.
-_GRID_METADATA_CACHE: "dict[int, dict[str, np.ndarray]]" = {}
+_GRID_METADATA_CACHE: "dict[tuple[int, str], dict[str, np.ndarray]]" = {}
 
 
-def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
-    """Return cached ring-order HEALPix geometry for one rotation-grid order."""
+def _get_relion_grid_metadata(
+    healpix_order: int,
+    symmetry: str = "C1",
+) -> dict[str, np.ndarray]:
+    """Return cached RELION HEALPix geometry for one order and point group.
+
+    ``directions_ipix`` preserves the original NEST HEALPix pixel for every
+    retained asymmetric-unit direction.  The public flattened direction
+    component is the compact row index into this retained table.
+    """
     healpix_order = int(healpix_order)
-    cached = _GRID_METADATA_CACHE.get(healpix_order)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    cache_key = (healpix_order, symmetry)
+    cached = _GRID_METADATA_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    from recovar.relion_bind._relion_bind_core import get_healpix_directions
+    from recovar.relion_bind._relion_bind_core import (
+        get_healpix_directions,
+        get_healpix_sampling_metadata,
+    )
 
-    directions = np.asarray(get_healpix_directions(healpix_order), dtype=np.float64)
+    if symmetry == "C1":
+        # Preserve the historical C1 binding path exactly.  Besides protecting
+        # numerical parity, this avoids requiring symmetry-file lookup for the
+        # trivial group.
+        directions = np.asarray(
+            get_healpix_directions(healpix_order, symmetry),
+            dtype=np.float64,
+        )
+        directions_ipix = np.arange(directions.shape[0], dtype=np.int64)
+        n_psi = rotation_grid_n_in_planes(healpix_order)
+        psi_step = 360.0 / float(max(1, n_psi))
+        psi_deg = np.arange(n_psi, dtype=np.float64) * psi_step
+    else:
+        source = get_healpix_sampling_metadata(healpix_order, -1.0, symmetry)
+        directions = np.column_stack(
+            [
+                np.asarray(source["rot"], dtype=np.float64),
+                np.asarray(source["tilt"], dtype=np.float64),
+            ]
+        )
+        directions_ipix = np.asarray(source["directions_ipix"], dtype=np.int64)
+        psi_deg = np.asarray(source["psi"], dtype=np.float64)
+        n_psi = int(psi_deg.shape[0])
+
     n_pixels = int(directions.shape[0])
-    n_psi = rotation_grid_n_in_planes(healpix_order)
+    if n_pixels < 1:
+        raise ValueError(
+            f"RELION retained no {symmetry} asymmetric-unit directions at "
+            f"healpix_order={healpix_order}; increase the initial HEALPix order"
+        )
     # Use the actual matrix view directions of the RELION grid rather than a
     # closed-form HEALPix angle formula. This keeps the local-search selector
     # aligned with the trial rotations that are actually scored.
     rot_deg = np.asarray(directions[:, 0], dtype=np.float64)
     tilt_deg = np.asarray(directions[:, 1], dtype=np.float64)
-    psi_step = 360.0 / float(max(1, n_psi))
-    psi_deg = (np.arange(n_psi, dtype=np.float64) * float(psi_step)).astype(np.float64, copy=False)
     # RELION's viewing direction is the third ROW of the rotation matrix,
     # not the third column.
     dir_eulers = np.column_stack([rot_deg, tilt_deg, np.zeros(n_pixels, dtype=np.float64)])
@@ -47,10 +86,12 @@ def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
         "tilt_deg": tilt_deg,
         "dir_vecs": dir_vecs,
         "psi_deg": psi_deg,
+        "directions_ipix": directions_ipix,
         "n_pixels": np.asarray(n_pixels, dtype=np.int64),
         "n_psi": np.asarray(n_psi, dtype=np.int64),
+        "symmetry": symmetry,
     }
-    _GRID_METADATA_CACHE[healpix_order] = cached
+    _GRID_METADATA_CACHE[cache_key] = cached
     return cached
 
 
@@ -103,6 +144,7 @@ def build_local_search_grid_metadata(
     grid_eulers: np.ndarray | None = None,
     *,
     grid_rotations: np.ndarray | None = None,
+    symmetry: str = "C1",
 ) -> dict[str, np.ndarray]:
     """Prepare local-search metadata for either the canonical or a custom grid.
 
@@ -113,19 +155,22 @@ def build_local_search_grid_metadata(
     metadata.
     """
     healpix_order = int(healpix_order)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
     if grid_eulers is None:
-        meta = _get_relion_grid_metadata(healpix_order)
+        meta = _get_relion_grid_metadata(healpix_order, symmetry)
         return {
             "mode": "factorized",
             "rot_deg": np.asarray(meta["rot_deg"], dtype=np.float64),
             "tilt_deg": np.asarray(meta["tilt_deg"], dtype=np.float64),
             "dir_vecs": np.asarray(meta["dir_vecs"], dtype=np.float64),
             "psi_deg": np.asarray(meta["psi_deg"], dtype=np.float64),
+            "directions_ipix": np.asarray(meta["directions_ipix"], dtype=np.int64),
             "n_pixels": np.asarray(meta["n_pixels"], dtype=np.int64),
             "n_psi": np.asarray(meta["n_psi"], dtype=np.int64),
+            "symmetry": symmetry,
         }
 
-    n_pixels = hp.nside2npix(2**healpix_order)
+    n_pixels = int(_get_relion_grid_metadata(healpix_order, symmetry)["n_pixels"])
     n_psi = rotation_grid_n_in_planes(healpix_order)
     expected = n_pixels * n_psi
     if grid_rotations is not None:
@@ -151,6 +196,7 @@ def build_local_search_grid_metadata(
             "psi_deg_full": relion_psi_from_rotation_matrices(grid_rotations_full),
             "n_pixels": np.asarray(n_pixels, dtype=np.int64),
             "n_psi": np.asarray(n_psi, dtype=np.int64),
+            "symmetry": symmetry,
         }
 
     grid_eulers = np.asarray(grid_eulers, dtype=np.float32).reshape(-1, 3)
@@ -185,6 +231,7 @@ def build_local_search_grid_metadata(
             "n_pixels": np.asarray(n_pixels, dtype=np.int64),
             "n_psi": np.asarray(n_psi, dtype=np.int64),
             "eulers_full": np.asarray(grid_eulers, dtype=np.float32),
+            "symmetry": symmetry,
         }
 
     return {
@@ -194,6 +241,7 @@ def build_local_search_grid_metadata(
         "n_pixels": np.asarray(n_pixels, dtype=np.int64),
         "n_psi": np.asarray(n_psi, dtype=np.int64),
         "eulers_full": np.asarray(grid_eulers, dtype=np.float32),
+        "symmetry": symmetry,
     }
 
 
@@ -203,16 +251,26 @@ def rotation_grid_n_in_planes(order: int) -> int:
     return int(np.round(360.0 / angle_res))
 
 
-def rotation_grid_size(order: int) -> int:
-    """Total number of rotations in the full HEALPix x psi grid."""
-    nside = 2**order
-    return hp.nside2npix(nside) * rotation_grid_n_in_planes(order)
+def rotation_grid_size(order: int, symmetry: str = "C1") -> int:
+    """Total rotations in RELION's symmetry-reduced HEALPix x psi grid."""
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    if symmetry == "C1":
+        nside = 2**order
+        return hp.nside2npix(nside) * rotation_grid_n_in_planes(order)
+    metadata = _get_relion_grid_metadata(int(order), symmetry)
+    return int(metadata["n_pixels"]) * int(metadata["n_psi"])
 
 
-def _split_rotation_indices(indices, healpix_order, *, rotation_index_order: str = "recovar"):
+def _split_rotation_indices(
+    indices,
+    healpix_order,
+    *,
+    rotation_index_order: str = "recovar",
+    symmetry: str = "C1",
+):
     """Split full-grid rotation indices into HEALPix pixel and psi components."""
     indices = np.asarray(indices, dtype=np.int64).reshape(-1)
-    n_pixels = hp.nside2npix(2**healpix_order)
+    n_pixels = int(_get_relion_grid_metadata(int(healpix_order), symmetry)["n_pixels"])
     if rotation_index_order == "recovar":
         pixel_idx = indices % n_pixels
         psi_idx = indices // n_pixels
@@ -225,11 +283,18 @@ def _split_rotation_indices(indices, healpix_order, *, rotation_index_order: str
     return pixel_idx, psi_idx
 
 
-def _combine_rotation_indices(pixel_idx, psi_idx, healpix_order, *, rotation_index_order: str = "recovar"):
+def _combine_rotation_indices(
+    pixel_idx,
+    psi_idx,
+    healpix_order,
+    *,
+    rotation_index_order: str = "recovar",
+    symmetry: str = "C1",
+):
     """Combine HEALPix pixel and psi components into full-grid indices."""
     pixel_idx = np.asarray(pixel_idx, dtype=np.int64).reshape(-1)
     psi_idx = np.asarray(psi_idx, dtype=np.int64).reshape(-1)
-    n_pixels = hp.nside2npix(2**healpix_order)
+    n_pixels = int(_get_relion_grid_metadata(int(healpix_order), symmetry)["n_pixels"])
     if rotation_index_order == "recovar":
         return psi_idx * n_pixels + pixel_idx
     if rotation_index_order == "relion":
@@ -313,13 +378,20 @@ def get_relion_translation_grid(max_pixel, pixel_offset):
     return grid[squared_radius < max_pixel * max_pixel + 0.001]
 
 
-def rotation_indices_to_relion_eulers(indices, healpix_order, *, rotation_index_order: str = "recovar"):
+def rotation_indices_to_relion_eulers(
+    indices,
+    healpix_order,
+    *,
+    rotation_index_order: str = "recovar",
+    symmetry: str = "C1",
+):
     """Convert ring-order full-grid indices to RELION Euler angles."""
-    meta = _get_relion_grid_metadata(int(healpix_order))
+    meta = _get_relion_grid_metadata(int(healpix_order), symmetry)
     pixel_idx, psi_idx = _split_rotation_indices(
         indices,
         healpix_order,
         rotation_index_order=rotation_index_order,
+        symmetry=symmetry,
     )
     return np.stack(
         [
@@ -1020,6 +1092,7 @@ def get_oversampled_rotation_grid_from_samples(
     return_rotation_indices=False,
     return_mstep_rotations=False,
     rotation_index_order: str = "recovar",
+    symmetry: str = "C1",
 ):
     """Generate oversampled child orientations from coarse sample indices.
 
@@ -1053,6 +1126,9 @@ def get_oversampled_rotation_grid_from_samples(
         Nearest full-grid indices of the child orientations on the fine grid.
         RELION's oversampled psi children are midpoints inside the parent bin,
         so for 3D they are generally not exact rows of the global fine grid.
+        For non-C1 symmetry these identifiers use the unreduced fine NEST
+        direction grid because oversampled children can cross an asymmetric-
+        unit boundary and therefore need not be rows of the reduced grid.
         Only returned when ``return_rotation_indices=True``.
     mstep_rotations : np.ndarray, shape (n_children, 3, 3), optional
         RELION host-path rotations used by weighted-sum backprojection. These
@@ -1081,14 +1157,30 @@ def get_oversampled_rotation_grid_from_samples(
             f"'relion_hidden', got {rotation_index_order!r}"
         )
 
-    coarse_n_pixels = hp.nside2npix(2**parent_nside_level)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    coarse_metadata = _get_relion_grid_metadata(int(parent_nside_level), symmetry)
+    coarse_n_pixels = int(coarse_metadata["n_pixels"])
     coarse_n_in_planes = rotation_grid_n_in_planes(parent_nside_level)
     if rotation_index_order == "recovar":
-        parent_pixels = parent_rotation_indices % coarse_n_pixels
+        parent_directions = parent_rotation_indices % coarse_n_pixels
         parent_psi = parent_rotation_indices // coarse_n_pixels
     else:
-        parent_pixels = parent_rotation_indices // coarse_n_in_planes
+        parent_directions = parent_rotation_indices // coarse_n_in_planes
         parent_psi = parent_rotation_indices % coarse_n_in_planes
+
+    if np.any(parent_directions < 0) or np.any(parent_directions >= coarse_n_pixels):
+        raise ValueError(
+            "parent rotation index contains a direction outside the "
+            f"{symmetry} asymmetric-unit grid of size {coarse_n_pixels}"
+        )
+    if np.any(parent_psi < 0) or np.any(parent_psi >= coarse_n_in_planes):
+        raise ValueError(
+            "parent rotation index contains an in-plane sample outside the "
+            f"grid of size {coarse_n_in_planes}"
+        )
+    parent_pixels = np.asarray(coarse_metadata["directions_ipix"], dtype=np.int64)[
+        parent_directions
+    ]
 
     oversampling_order = int(oversampling_order)
     current_pixels = parent_pixels.copy()
@@ -1238,7 +1330,12 @@ def subdivide_healpix_pixels(pixels, nside_level):
 # ---------------------------------------------------------------------------
 
 
-def get_relion_rotation_grid(order, *, rotation_index_order: str = "recovar"):
+def get_relion_rotation_grid(
+    order,
+    *,
+    rotation_index_order: str = "recovar",
+    symmetry: str = "C1",
+):
     """Generate the exact RELION HEALPix rotation grid via the C++ binding.
 
     Returns rotation matrices in recovar's frame that correspond to exactly
@@ -1252,44 +1349,73 @@ def get_relion_rotation_grid(order, *, rotation_index_order: str = "recovar"):
     """
     from recovar.relion_bind._relion_bind_core import get_coarse_orientations
 
-    relion_euler = get_coarse_orientations(order)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    relion_euler = get_coarse_orientations(order, -1.0, symmetry)
     R = utils.R_from_relion(relion_euler, degrees=True)
     if rotation_index_order == "relion":
         return R
     if rotation_index_order != "recovar":
         raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
-    n_dir = hp.nside2npix(2**order)
+    n_dir = int(_get_relion_grid_metadata(int(order), symmetry)["n_pixels"])
     n_psi = R.shape[0] // n_dir
     return R.reshape(n_dir, n_psi, 3, 3).transpose(1, 0, 2, 3).reshape(-1, 3, 3)
 
 
-def get_relion_hidden_rotation_grid(order: int, *, matrices: bool = True) -> np.ndarray:
+def get_relion_hidden_rotation_grid(
+    order: int,
+    *,
+    matrices: bool = True,
+    symmetry: str = "C1",
+) -> np.ndarray:
     """Return RELION's native hidden-variable rotation order."""
 
     if matrices:
-        return get_relion_rotation_grid(order, rotation_index_order="relion")
-    return get_relion_rotation_grid_eulers(order, rotation_index_order="relion")
+        return get_relion_rotation_grid(
+            order,
+            rotation_index_order="relion",
+            symmetry=symmetry,
+        )
+    return get_relion_rotation_grid_eulers(
+        order,
+        rotation_index_order="relion",
+        symmetry=symmetry,
+    )
 
 
-def get_relion_rotation_grid_eulers(order, *, rotation_index_order: str = "recovar"):
+def get_relion_rotation_grid_eulers(
+    order,
+    *,
+    rotation_index_order: str = "recovar",
+    symmetry: str = "C1",
+):
     """Return RELION Euler angles in the same index order as get_relion_rotation_grid."""
     return _get_relion_rotation_grid_eulers_float64(
         order,
         rotation_index_order=rotation_index_order,
+        symmetry=symmetry,
     ).astype(np.float32)
 
 
-def _get_relion_rotation_grid_eulers_float64(order, *, rotation_index_order: str = "recovar"):
+def _get_relion_rotation_grid_eulers_float64(
+    order,
+    *,
+    rotation_index_order: str = "recovar",
+    symmetry: str = "C1",
+):
     """Return source-precision RELION Euler rows without public float32 truncation."""
 
     from recovar.relion_bind._relion_bind_core import get_coarse_orientations
 
-    relion_euler = np.asarray(get_coarse_orientations(order), dtype=np.float64)
+    symmetry = canonicalize_rotational_symmetry(symmetry)
+    relion_euler = np.asarray(
+        get_coarse_orientations(order, -1.0, symmetry),
+        dtype=np.float64,
+    )
     if rotation_index_order == "relion":
         return relion_euler
     if rotation_index_order != "recovar":
         raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
-    n_dir = hp.nside2npix(2**order)
+    n_dir = int(_get_relion_grid_metadata(int(order), symmetry)["n_pixels"])
     n_psi = relion_euler.shape[0] // n_dir
     return relion_euler.reshape(n_dir, n_psi, 3).transpose(1, 0, 2).reshape(-1, 3)
 
@@ -1301,6 +1427,7 @@ def get_oversampled_relion_hidden_rotation_grid_from_samples(
     *,
     random_perturbation=0.0,
     return_rotation_indices=False,
+    symmetry: str = "C1",
 ):
     """Generate RELION hidden-order oversampled children from coarse samples."""
 
@@ -1311,6 +1438,7 @@ def get_oversampled_relion_hidden_rotation_grid_from_samples(
         random_perturbation=random_perturbation,
         return_rotation_indices=return_rotation_indices,
         rotation_index_order="relion",
+        symmetry=symmetry,
     )
 
 
@@ -1354,13 +1482,12 @@ def get_local_rotation_grid_fast(
     per_image=False,
     grid_metadata=None,
 ):
-    """RELION-style local rotation selection for the C1 HEALPix x psi grid.
+    """RELION-style local rotation selection on a reduced HEALPix x psi grid.
 
     This mirrors the non-helical SPA path in
     ``HealpixSampling::selectOrientationsWithNonZeroPriorProbability`` for
     the common auto-refine case used on this branch:
 
-    - C1 symmetry only
     - factored direction and psi priors
     - ``sigma_tilt = sigma_rot``
     - no bimodal psi search
@@ -1411,6 +1538,13 @@ def get_local_rotation_grid_fast(
     healpix_order = int(healpix_order)
     grid_metadata = build_local_search_grid_metadata(healpix_order) if grid_metadata is None else grid_metadata
     mode = str(grid_metadata["mode"])
+    symmetry = canonicalize_rotational_symmetry(str(grid_metadata.get("symmetry", "C1")))
+    if symmetry == "C1":
+        symmetry_operators = None
+    else:
+        from recovar.em.symmetry import rotational_operators
+
+        symmetry_operators = rotational_operators(symmetry, dtype=np.float64)
     n_pixels = int(grid_metadata["n_pixels"])
     n_psi = int(grid_metadata["n_psi"])
     n_total = int(n_pixels * n_psi)
@@ -1424,7 +1558,11 @@ def get_local_rotation_grid_fast(
                 prior_rotation_indices.astype(np.int64)
             ]
         else:
-            prior_eulers = rotation_indices_to_relion_eulers(prior_rotation_indices.astype(np.int64), healpix_order)
+            prior_eulers = rotation_indices_to_relion_eulers(
+                prior_rotation_indices.astype(np.int64),
+                healpix_order,
+                symmetry=symmetry,
+            )
         prior_rot_deg = prior_eulers[:, 0]
         prior_tilt_deg = prior_eulers[:, 1]
         prior_psi_deg = prior_eulers[:, 2]
@@ -1461,7 +1599,22 @@ def get_local_rotation_grid_fast(
 
         for i in range(n_priors):
             if sigma_rot_deg > 0.0:
-                dots = np.clip(dir_vecs @ prior_dir_vecs[i], -1.0, 1.0)
+                if symmetry_operators is None:
+                    dots = dir_vecs @ prior_dir_vecs[i]
+                else:
+                    # RELION compares the prior direction against every
+                    # ``(d^T R)^T`` symmetry mate of the sampled direction.
+                    dots = np.max(
+                        np.einsum(
+                            "di,sij,j->sd",
+                            dir_vecs,
+                            symmetry_operators,
+                            prior_dir_vecs[i],
+                            optimize=True,
+                        ),
+                        axis=0,
+                    )
+                dots = np.clip(dots, -1.0, 1.0)
                 diffang = np.rad2deg(np.arccos(dots))
                 dir_mask = diffang < float(sigma_cutoff) * biggest_sigma_deg
                 dir_indices = np.flatnonzero(dir_mask).astype(np.int64)
@@ -1516,7 +1669,20 @@ def get_local_rotation_grid_fast(
             block = slice(start, stop)
 
             if sigma_rot_deg > 0.0:
-                dots = np.clip(np.asarray(prior_dir_vecs[block], dtype=np.float64) @ dir_vecs_full.T, -1.0, 1.0)
+                if symmetry_operators is None:
+                    dots = np.asarray(prior_dir_vecs[block], dtype=np.float64) @ dir_vecs_full.T
+                else:
+                    dots = np.max(
+                        np.einsum(
+                            "di,sij,bj->bsd",
+                            dir_vecs_full,
+                            symmetry_operators,
+                            np.asarray(prior_dir_vecs[block], dtype=np.float64),
+                            optimize=True,
+                        ),
+                        axis=1,
+                    )
+                dots = np.clip(dots, -1.0, 1.0)
                 diffang = np.rad2deg(np.arccos(dots))
                 joint_mask = diffang < cutoff_dir_deg
             else:

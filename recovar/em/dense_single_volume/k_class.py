@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import time
-import inspect
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -702,6 +702,8 @@ def _local_layout_for_class(
         translation_log_priors=local_layout.translation_log_priors,
         rotation_posterior_ids_flat=local_layout.rotation_posterior_ids_flat,
         sample_mask_flat=local_layout.sample_mask_flat,
+        mstep_rotations_flat=local_layout.mstep_rotations_flat,
+        symmetry=local_layout.symmetry,
     )
 
 
@@ -809,14 +811,23 @@ def _decode_dense_best_pose_details(hard_assignment, rotations: np.ndarray, tran
     )
 
 
-def _infer_healpix_order_from_rotation_count(n_rot: int) -> int:
+def _infer_healpix_order_from_rotation_count(
+    n_rot: int,
+    symmetry_label: str = "C1",
+) -> int:
     from recovar.em.sampling import rotation_grid_size
 
     n_rot = int(n_rot)
     for order in range(16):
-        if rotation_grid_size(order) == n_rot:
+        try:
+            grid_size = rotation_grid_size(order, symmetry_label)
+        except ValueError:
+            continue
+        if grid_size == n_rot:
             return order
-    raise ValueError(f"Cannot infer RELION HEALPix order from {n_rot} rotations")
+    raise ValueError(
+        f"Cannot infer RELION {symmetry_label} HEALPix order from {n_rot} rotations"
+    )
 
 
 def _rotation_prior_with_class_log_prior(rotation_log_prior, class_log_prior: float, n_rot: int):
@@ -863,10 +874,14 @@ def _run_sparse_k_class_adaptive_pass2(
     n_rot_coarse = int(coarse_rotations_np.shape[0])
     n_coarse_trans = int(coarse_translations_np.shape[0])
     n_fine_trans = int(fine_translations_np.shape[0])
+    symmetry_label = str(engine_kwargs.get("symmetry_label", "C1"))
     healpix_order = (
         int(coarse_healpix_order)
         if coarse_healpix_order is not None
-        else _infer_healpix_order_from_rotation_count(n_rot_coarse)
+        else _infer_healpix_order_from_rotation_count(
+            n_rot_coarse,
+            symmetry_label,
+        )
     )
     base_engine_kwargs = dict(engine_kwargs)
     relion_projector_half_by_class = base_engine_kwargs.get("relion_projector_half")
@@ -956,6 +971,7 @@ def _run_sparse_k_class_adaptive_pass2(
         relion_translation_angle_scale=float(
             base_engine_kwargs.get("relion_translation_angle_scale", 1.0)
         ),
+        symmetry_label=base_engine_kwargs.get("symmetry_label", "C1"),
     )
     preserve_bpref_particle_order = _apply_bpref_particle_order_policy(
         common,
@@ -1630,6 +1646,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         debug_iteration=engine_kwargs.get("debug_iteration"),
         coarse_healpix_order=engine_kwargs.get("coarse_healpix_order"),
         coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
+        symmetry_label=engine_kwargs.get("symmetry_label", "C1"),
         translation_phase_source=engine_kwargs.get("translation_phase_source"),
         relion_translation_angle_scale=engine_kwargs.get(
             "relion_translation_angle_scale",
@@ -2076,6 +2093,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         relion_translation_angle_scale=float(
             pass2_kwargs.get("relion_translation_angle_scale", 1.0)
         ),
+        symmetry_label=pass2_kwargs.get("symmetry_label", "C1"),
     )
     _apply_bpref_particle_order_policy(
         common,
@@ -2943,7 +2961,9 @@ def run_dense_k_class_em_adaptive(
     coarse_healpix_order, oversampling_order : int or None
         RELION sampling metadata for sparse pass-2 diagnostics.  When omitted,
         the values are inferred from exact HEALPix grid sizes for compatibility
-        with older callers.
+        with older C1 callers.  Non-C1 callers must provide
+        ``oversampling_order`` because ASU-boundary children do not form a
+        complete symmetry-reduced fine grid.
     coarse_*_log_prior : optional priors used only at pass-1.  ``engine_kwargs``
         carries the priors used at pass-2.
     skip_significance_pruning : bool
@@ -2956,7 +2976,34 @@ def run_dense_k_class_em_adaptive(
     """
     # Lazy import to avoid the formatter stripping a top-level name that is
     # only referenced inside this function.
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
     from .helpers.significance import _compute_k_class_significance_batched
+
+    symmetry_label = canonicalize_rotational_symmetry(
+        engine_kwargs.get("symmetry_label", "C1")
+    )
+    non_c1_symmetry = symmetry_label != "C1"
+    requested_sparse_pass2 = bool(engine_kwargs.get("sparse_pass2", False))
+    if non_c1_symmetry and not bool(
+        engine_kwargs.get("mstep_relion_x_half", False)
+    ):
+        raise RuntimeError(
+            f"{symmetry_label} adaptive reconstruction requires RELION x-half BPref "
+            "accumulation; full/native-half M-step routes are unsupported"
+        )
+    if non_c1_symmetry and not requested_sparse_pass2:
+        raise RuntimeError(
+            f"{symmetry_label} adaptive reconstruction requires sparse pass 2; "
+            "the dense pass-2 backend cannot apply point-group symmetry"
+        )
+    if non_c1_symmetry and oversampling_order is None:
+        raise ValueError(
+            f"{symmetry_label} adaptive K-class refinement requires explicit "
+            "oversampling_order; symmetry-boundary children do not form a "
+            "complete reduced fine grid, so the order cannot be inferred from "
+            "their count"
+        )
 
     overall_t0 = time.time()
     if relion_projector_half is not None:
@@ -3007,14 +3054,18 @@ def run_dense_k_class_em_adaptive(
     def _resolved_coarse_healpix_order() -> int:
         if coarse_healpix_order is not None:
             return int(coarse_healpix_order)
-        return _infer_healpix_order_from_rotation_count(n_rot_coarse)
+        return _infer_healpix_order_from_rotation_count(
+            n_rot_coarse,
+            symmetry_label,
+        )
 
     def _resolved_oversampling_order() -> int:
         if oversampling_order is not None:
             return max(0, int(oversampling_order))
         return max(
             0,
-            _infer_healpix_order_from_rotation_count(n_rot_fine) - _resolved_coarse_healpix_order(),
+            _infer_healpix_order_from_rotation_count(n_rot_fine, symmetry_label)
+            - _resolved_coarse_healpix_order(),
         )
 
     if rot_parent_map_np.shape != (n_rot_fine,):
@@ -3164,6 +3215,7 @@ def run_dense_k_class_em_adaptive(
             relion_coarse_gaussian_default=bool(
                 engine_kwargs.get("preserve_bpref_particle_order", False)
             ),
+            symmetry_label=engine_kwargs.get("symmetry_label", "C1"),
         )
 
         with nvtx.annotate("kclass.adaptive.significance", color="orange", domain=NVTX_DOMAIN_EM):
@@ -3324,6 +3376,7 @@ def run_dense_k_class_em_adaptive(
     dense_support_threshold = _dense_pass2_rotation_fraction_threshold(n_classes)
     if (
         sparse_pass2_requested
+        and not non_c1_symmetry
         and engine_kwargs.get("relion_projector_half") is None
         and fine_mstep_rotations_np is None
         and dense_support_threshold is not None
@@ -3531,6 +3584,12 @@ def run_dense_k_class_em_adaptive(
             "RELION native group-scale correction requires sparse K-class pass 2; "
             "the broad-support dense fallback does not accumulate group XA/AA statistics"
         )
+    if non_c1_symmetry:
+        raise RuntimeError(
+            f"{symmetry_label} adaptive reconstruction reached a configuration with no "
+            "sparse RELION x-half pass-2 route; refusing unsymmetrized dense fallback"
+        )
+
     pass2_kwargs.pop("group_ids", None)
     pass2_kwargs.pop("scale_correction_group_count", None)
     if pass2_kwargs.pop("mstep_relion_x_half", False):

@@ -497,19 +497,25 @@ def compute_translation_changes(
     return rms
 
 
-def relion_angular_distance_per_particle(M_current: np.ndarray, M_previous: np.ndarray) -> np.ndarray:
+def relion_angular_distance_per_particle(
+    M_current: np.ndarray,
+    M_previous: np.ndarray,
+    *,
+    symmetry_label: str = "C1",
+) -> np.ndarray:
     """Per-particle RELION-style angular distance between two rotation matrices.
 
     Implements ``HealpixSampling::calculateAngularDistance`` (see
-    ``relion/src/healpix_sampling.cpp:1969-2013``) for the no-symmetry case.
+    ``relion/src/healpix_sampling.cpp:1969-2013``), including RELION's
+    minimization over point-group symmetry mates.
     The distance for one matrix pair is::
 
         axes_dist = (1/3) * sum_{i=0..2} ACOSD(dot(E1[i,:], E2[i,:]))
 
     i.e., the mean of the angles between corresponding ROWS of the two
-    Euler matrices, in degrees. RELION minimizes over symmetry operators
-    when the symmetry group is non-trivial; here we assume C1 (no
-    symmetry), matching recovar's current behavior.
+    Euler matrices, in degrees. For a nontrivial group, the second Euler
+    matrix is transformed as ``L @ E2 @ R`` for every identity-inclusive
+    RELION ``SymList`` operator pair and the smallest axes distance is used.
 
     Parameters
     ----------
@@ -531,18 +537,38 @@ def relion_angular_distance_per_particle(M_current: np.ndarray, M_previous: np.n
     if M_current.ndim != 3 or M_current.shape[-2:] != (3, 3):
         raise ValueError(f"Expected (N, 3, 3) rotation matrices, got {M_current.shape}")
 
-    # Per-particle dot product of corresponding rows.
-    # einsum 'nij,nij->ni' gives shape (N, 3) where entry [n, i] is the
-    # dot product of M_current[n, i, :] and M_previous[n, i, :].
-    cos_per_row = np.einsum("nij,nij->ni", M_current, M_previous)
-    cos_per_row = np.clip(cos_per_row, -1.0, 1.0)
-    angles_deg = np.rad2deg(np.arccos(cos_per_row))  # (N, 3)
-    return angles_deg.mean(axis=-1)  # (N,)
+    from recovar.em.symmetry import canonicalize_rotational_symmetry
+
+    symmetry_label = canonicalize_rotational_symmetry(symmetry_label)
+
+    def _axes_distance(second: np.ndarray) -> np.ndarray:
+        # einsum 'nij,nij->ni' gives shape (N, 3), with the dot product
+        # between corresponding Euler-matrix rows in the final dimension.
+        cos_per_row = np.einsum("nij,nij->ni", M_current, second)
+        cos_per_row = np.clip(cos_per_row, -1.0, 1.0)
+        return np.rad2deg(np.arccos(cos_per_row)).mean(axis=-1)
+
+    # Preserve the historical C1 operation order exactly.
+    if symmetry_label == "C1":
+        return _axes_distance(M_previous)
+
+    from recovar.em.symmetry import relion_symmetry_operators
+
+    left_operators, right_operators = relion_symmetry_operators(symmetry_label)
+    minimum = np.full(M_current.shape[0], np.inf, dtype=np.float64)
+    # Stream over operators: materialising N x |G| transformed matrices is
+    # unnecessarily expensive for icosahedral real-data refinements.
+    for left, right in zip(left_operators, right_operators, strict=True):
+        transformed = np.matmul(np.matmul(left[None, :, :], M_previous), right[None, :, :])
+        minimum = np.minimum(minimum, _axes_distance(transformed))
+    return minimum
 
 
 def compute_relion_orientation_changes(
     current_rotations: Optional[np.ndarray],
     previous_rotations: Optional[np.ndarray],
+    *,
+    symmetry_label: str = "C1",
 ) -> float:
     """Mean RELION-style angular distance across all particles, in degrees.
 
@@ -567,7 +593,11 @@ def compute_relion_orientation_changes(
         return float("inf")
     if current_rotations.size == 0:
         return 0.0
-    per_particle = relion_angular_distance_per_particle(current_rotations, previous_rotations)
+    per_particle = relion_angular_distance_per_particle(
+        current_rotations,
+        previous_rotations,
+        symmetry_label=symmetry_label,
+    )
     return float(np.mean(per_particle))
 
 
@@ -1124,6 +1154,7 @@ def update_refinement_state(
     voxel_size_angstrom: float = 1.0,
     update_sampling: bool = True,
     check_convergence_now: bool = True,
+    symmetry_label: str = "C1",
 ) -> RefinementState:
     """Update RefinementState after one EM iteration.
 
@@ -1183,6 +1214,9 @@ def update_refinement_state(
         autonomous loop sets this false and evaluates at the top of the next
         iteration, matching RELION and avoiding a synthetic final pass when
         ``max_iter`` is exhausted before that next iteration exists.
+    symmetry_label : str, default "C1"
+        RELION proper rotational point group used to minimize per-particle
+        orientation changes over symmetry-equivalent poses.
 
     Returns
     -------
@@ -1209,6 +1243,7 @@ def update_refinement_state(
     current_changes_orientations = compute_relion_orientation_changes(
         current_rotation_matrices,
         previous_rotation_matrices,
+        symmetry_label=symmetry_label,
     )
     current_changes_offsets_angstrom = compute_relion_offset_changes_angstrom(
         current_translations_pixel,

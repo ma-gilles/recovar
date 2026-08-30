@@ -9312,6 +9312,361 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 /* ================================================================== */
+/*       RELION BPref x=0 + point-group symmetry finalisation          */
+/* ================================================================== */
+
+template <typename T>
+struct RelionSymmetryComplex {
+    T real;
+    T imag;
+};
+
+template <typename T>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_lerp(
+    T fraction,
+    RelionSymmetryComplex<T> low,
+    RelionSymmetryComplex<T> high)
+{
+    return {
+        low.real + (high.real - low.real) * fraction,
+        low.imag + (high.imag - low.imag) * fraction,
+    };
+}
+
+template <typename T>
+static __device__ __forceinline__ T relion_symmetry_lerp(
+    T fraction, T low, T high)
+{
+    return low + (high - low) * fraction;
+}
+
+template <typename T>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_read_data(
+    const T* __restrict__ data,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    const int64_t index =
+        (static_cast<int64_t>(z_index) * full_y + y_index) * x_half + x_index;
+    RelionSymmetryComplex<T> value = {data[2 * index], data[2 * index + 1]};
+    if (x_index != 0)
+        return value;
+
+    /* BackProjector::enforceHermitianSymmetry sums each x=0 pair and does
+     * not divide by two.  BPref grids are odd, so the partner of direct
+     * index i is N-1-i.  The (z=0,y=0) center is deliberately untouched. */
+    const int partner_z = full_z - 1 - z_index;
+    const int partner_y = full_y - 1 - y_index;
+    if (partner_z == z_index && partner_y == y_index)
+        return value;
+    const int64_t partner_index =
+        (static_cast<int64_t>(partner_z) * full_y + partner_y) * x_half;
+    value.real += data[2 * partner_index];
+    value.imag -= data[2 * partner_index + 1];
+    return value;
+}
+
+template <typename T>
+static __device__ __forceinline__ T relion_symmetry_read_weight(
+    const T* __restrict__ weight,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    const int64_t index =
+        (static_cast<int64_t>(z_index) * full_y + y_index) * x_half + x_index;
+    T value = weight[index];
+    if (x_index != 0)
+        return value;
+    const int partner_z = full_z - 1 - z_index;
+    const int partner_y = full_y - 1 - y_index;
+    if (partner_z == z_index && partner_y == y_index)
+        return value;
+    const int64_t partner_index =
+        (static_cast<int64_t>(partner_z) * full_y + partner_y) * x_half;
+    return value + weight[partner_index];
+}
+
+template <typename T>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+relion_point_group_symmetrise_bpref_kernel(
+    const T* __restrict__ data,
+    const T* __restrict__ weight,
+    const T* __restrict__ right_operators,
+    T* __restrict__ data_out,
+    T* __restrict__ weight_out,
+    int full_z,
+    int full_y,
+    int full_x,
+    int support_radius,
+    int operator_count,
+    int64_t voxel_count)
+{
+    const int64_t direct_index =
+        static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (direct_index >= voxel_count)
+        return;
+
+    const int x_half = full_x / 2 + 1;
+    const int x_index = static_cast<int>(direct_index % x_half);
+    const int64_t yz_index = direct_index / x_half;
+    const int y_index = static_cast<int>(yz_index % full_y);
+    const int z_index = static_cast<int>(yz_index / full_y);
+
+    const int x_logical = x_index;
+    const int y_logical = y_index - full_y / 2;
+    const int z_logical = z_index - full_z / 2;
+
+    /* RELION initialises sum_data/sum_weight by copying the x=0-enforced
+     * source.  Keep that identity contribution even outside rmax2. */
+    RelionSymmetryComplex<T> data_sum = relion_symmetry_read_data(
+        data, z_index, y_index, x_index, full_z, full_y, x_half);
+    T weight_sum = relion_symmetry_read_weight(
+        weight, z_index, y_index, x_index, full_z, full_y, x_half);
+
+    const int64_t radius_squared =
+        static_cast<int64_t>(x_logical) * x_logical +
+        static_cast<int64_t>(y_logical) * y_logical +
+        static_cast<int64_t>(z_logical) * z_logical;
+    const int64_t support_squared =
+        static_cast<int64_t>(support_radius) * support_radius;
+
+    if (radius_squared <= support_squared) {
+        const T x = static_cast<T>(x_logical);
+        const T y = static_cast<T>(y_logical);
+        const T z = static_cast<T>(z_logical);
+
+        /* Operator zero is identity and was copied above.  Stream through
+         * RELION's remaining SymList order without rotated-volume copies. */
+        for (int operator_index = 1; operator_index < operator_count; ++operator_index) {
+            const T* R = right_operators + static_cast<int64_t>(operator_index) * 9;
+            T xp = x * R[0] + y * R[1] + z * R[2];
+            T yp = x * R[3] + y * R[4] + z * R[5];
+            T zp = x * R[6] + y * R[7] + z * R[8];
+
+            bool conjugate_sample = false;
+            if (xp < static_cast<T>(0)) {
+                xp = -xp;
+                yp = -yp;
+                zp = -zp;
+                conjugate_sample = true;
+            }
+
+            const int x0 = floor_int(xp);
+            const int y0 = floor_int(yp) + full_y / 2;
+            const int z0 = floor_int(zp) + full_z / 2;
+            const int x1 = x0 + 1;
+            const int y1 = y0 + 1;
+            const int z1 = z0 + 1;
+            const T fx = xp - static_cast<T>(x0);
+            const T fy = yp - static_cast<T>(y0 - full_y / 2);
+            const T fz = zp - static_cast<T>(z0 - full_z / 2);
+
+            const RelionSymmetryComplex<T> d000 = relion_symmetry_read_data(
+                data, z0, y0, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d001 = relion_symmetry_read_data(
+                data, z0, y0, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d010 = relion_symmetry_read_data(
+                data, z0, y1, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d011 = relion_symmetry_read_data(
+                data, z0, y1, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d100 = relion_symmetry_read_data(
+                data, z1, y0, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d101 = relion_symmetry_read_data(
+                data, z1, y0, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d110 = relion_symmetry_read_data(
+                data, z1, y1, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d111 = relion_symmetry_read_data(
+                data, z1, y1, x1, full_z, full_y, x_half);
+
+            const RelionSymmetryComplex<T> dx00 = relion_symmetry_lerp(fx, d000, d001);
+            const RelionSymmetryComplex<T> dx01 = relion_symmetry_lerp(fx, d100, d101);
+            const RelionSymmetryComplex<T> dx10 = relion_symmetry_lerp(fx, d010, d011);
+            const RelionSymmetryComplex<T> dx11 = relion_symmetry_lerp(fx, d110, d111);
+            const RelionSymmetryComplex<T> dxy0 = relion_symmetry_lerp(fy, dx00, dx10);
+            const RelionSymmetryComplex<T> dxy1 = relion_symmetry_lerp(fy, dx01, dx11);
+            RelionSymmetryComplex<T> sample = relion_symmetry_lerp(fz, dxy0, dxy1);
+            if (conjugate_sample)
+                sample.imag = -sample.imag;
+            data_sum.real += sample.real;
+            data_sum.imag += sample.imag;
+
+            const T w000 = relion_symmetry_read_weight(
+                weight, z0, y0, x0, full_z, full_y, x_half);
+            const T w001 = relion_symmetry_read_weight(
+                weight, z0, y0, x1, full_z, full_y, x_half);
+            const T w010 = relion_symmetry_read_weight(
+                weight, z0, y1, x0, full_z, full_y, x_half);
+            const T w011 = relion_symmetry_read_weight(
+                weight, z0, y1, x1, full_z, full_y, x_half);
+            const T w100 = relion_symmetry_read_weight(
+                weight, z1, y0, x0, full_z, full_y, x_half);
+            const T w101 = relion_symmetry_read_weight(
+                weight, z1, y0, x1, full_z, full_y, x_half);
+            const T w110 = relion_symmetry_read_weight(
+                weight, z1, y1, x0, full_z, full_y, x_half);
+            const T w111 = relion_symmetry_read_weight(
+                weight, z1, y1, x1, full_z, full_y, x_half);
+            const T wx00 = relion_symmetry_lerp(fx, w000, w001);
+            const T wx01 = relion_symmetry_lerp(fx, w100, w101);
+            const T wx10 = relion_symmetry_lerp(fx, w010, w011);
+            const T wx11 = relion_symmetry_lerp(fx, w110, w111);
+            const T wxy0 = relion_symmetry_lerp(fy, wx00, wx10);
+            const T wxy1 = relion_symmetry_lerp(fy, wx01, wx11);
+            weight_sum += relion_symmetry_lerp(fz, wxy0, wxy1);
+        }
+    }
+
+    data_out[2 * direct_index] = data_sum.real;
+    data_out[2 * direct_index + 1] = data_sum.imag;
+    weight_out[direct_index] = weight_sum;
+}
+
+template <typename T>
+static cudaError_t launch_relion_point_group_symmetrise_bpref(
+    cudaStream_t stream,
+    const T* data,
+    const T* weight,
+    const T* right_operators,
+    T* data_out,
+    T* weight_out,
+    int full_z,
+    int full_y,
+    int full_x,
+    int support_radius,
+    int operator_count)
+{
+    const int64_t voxel_count =
+        static_cast<int64_t>(full_z) * full_y * (full_x / 2 + 1);
+    const int64_t block_count = (voxel_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    relion_point_group_symmetrise_bpref_kernel<T>
+        <<<static_cast<unsigned int>(block_count), BLOCK_SIZE, 0, stream>>>(
+            data,
+            weight,
+            right_operators,
+            data_out,
+            weight_out,
+            full_z,
+            full_y,
+            full_x,
+            support_radius,
+            operator_count,
+            voxel_count);
+    return cudaGetLastError();
+}
+
+ffi::Error RelionPointGroupSymmetriseBprefImpl(
+    cudaStream_t stream,
+    int64_t full_z,
+    int64_t full_y,
+    int64_t full_x,
+    int64_t support_radius,
+    ffi::AnyBuffer data,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer right_operators,
+    ffi::Result<ffi::AnyBuffer> data_out,
+    ffi::Result<ffi::AnyBuffer> weight_out)
+{
+    const auto data_dims = data.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto operator_dims = right_operators.dimensions();
+    const auto data_out_dims = data_out->dimensions();
+    const auto weight_out_dims = weight_out->dimensions();
+    if (data_dims.size() != 1 || weight_dims.size() != 1 ||
+        data_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_dims[0] != weight_dims[0] || data_dims[0] != data_out_dims[0] ||
+        data_dims[0] != weight_out_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: data and weight must be matching flat buffers");
+    if (operator_dims.size() != 3 || operator_dims[0] < 1 ||
+        operator_dims[1] != 3 || operator_dims[2] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: operators must have shape (n,3,3)");
+    if (full_z <= 0 || full_y <= 0 || full_x <= 0 ||
+        full_z != full_y || full_z != full_x || (full_x % 2) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: full BPref dimensions must be equal positive odd values");
+    if (full_z > std::numeric_limits<int>::max() ||
+        operator_dims[0] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: dimensions exceed CUDA integer bounds");
+    const int64_t expected_voxels = full_z * full_y * (full_x / 2 + 1);
+    if (data_dims[0] != expected_voxels)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: flat accumulator size does not match full dimensions");
+    const int64_t maximum_supported_radius = full_x / 2 - 1;
+    if (support_radius < 0 || support_radius > maximum_supported_radius)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: support radius must leave one interpolation voxel");
+
+    cudaError_t err;
+    if (data.element_type() == ffi::DataType::C64 &&
+        data_out->element_type() == ffi::DataType::C64 &&
+        weight.element_type() == ffi::DataType::F32 &&
+        weight_out->element_type() == ffi::DataType::F32 &&
+        right_operators.element_type() == ffi::DataType::F32) {
+        err = launch_relion_point_group_symmetrise_bpref<float>(
+            stream,
+            static_cast<const float*>(data.untyped_data()),
+            static_cast<const float*>(weight.untyped_data()),
+            static_cast<const float*>(right_operators.untyped_data()),
+            static_cast<float*>(data_out->untyped_data()),
+            static_cast<float*>(weight_out->untyped_data()),
+            static_cast<int>(full_z),
+            static_cast<int>(full_y),
+            static_cast<int>(full_x),
+            static_cast<int>(support_radius),
+            static_cast<int>(operator_dims[0]));
+    } else if (data.element_type() == ffi::DataType::C128 &&
+               data_out->element_type() == ffi::DataType::C128 &&
+               weight.element_type() == ffi::DataType::F64 &&
+               weight_out->element_type() == ffi::DataType::F64 &&
+               right_operators.element_type() == ffi::DataType::F64) {
+        err = launch_relion_point_group_symmetrise_bpref<double>(
+            stream,
+            static_cast<const double*>(data.untyped_data()),
+            static_cast<const double*>(weight.untyped_data()),
+            static_cast<const double*>(right_operators.untyped_data()),
+            static_cast<double*>(data_out->untyped_data()),
+            static_cast<double*>(weight_out->untyped_data()),
+            static_cast<int>(full_z),
+            static_cast<int>(full_y),
+            static_cast<int>(full_x),
+            static_cast<int>(support_radius),
+            static_cast<int>(operator_dims[0]));
+    } else {
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBpref: expected C64/F32/F32 or C128/F64/F64 buffers");
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPointGroupSymmetriseBpref, RelionPointGroupSymmetriseBprefImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("full_z")
+        .Attr<int64_t>("full_y")
+        .Attr<int64_t>("full_x")
+        .Attr<int64_t>("support_radius")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+/* ================================================================== */
 /*              C-linkage API  (ctypes / benchmarks)                   */
 /* ================================================================== */
 

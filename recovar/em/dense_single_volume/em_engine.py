@@ -65,7 +65,7 @@ from .helpers.half_spectrum import (
     mask_relion_noise_shell_indices_to_current_window,
 )
 from .helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
+    finalize_half_volume_bpref,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
 )
@@ -710,6 +710,7 @@ def run_em(
     relion_half_volume_mstep: bool = False,
     return_half_volume_accumulators: bool = False,
     relion_translation_angle_scale: float = 1.0,
+    symmetry_label: str = "C1",
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -2119,12 +2120,14 @@ def run_em(
     if score_only:
         new_mean = None
     elif relion_half_volume_mstep:
-        Ft_y, Ft_ctf = enforce_half_volume_x0(
+        Ft_y, Ft_ctf = finalize_half_volume_bpref(
             Ft_y,
             Ft_ctf,
             recon_volume_shape,
             logger=logger,
             label="Dense",
+            symmetry_label=symmetry_label,
+            relion_x_half=False,
         )
         if return_half_volume_accumulators:
             logger.info("Dense M-step: keeping native half-volume accumulators for downstream reconstruction")

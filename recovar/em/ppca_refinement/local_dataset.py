@@ -223,6 +223,7 @@ def _slice_local_hypothesis_layout(layout: LocalHypothesisLayout, rows) -> Local
             if sample_mask_parts
             else np.zeros((0, int(layout.translation_grid.shape[0])), dtype=bool)
         ),
+        symmetry=layout.symmetry,
     )
 
 

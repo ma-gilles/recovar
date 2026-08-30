@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from recovar.em.dense_single_volume.helpers.convergence import LOCAL_SEARCH_HEALPIX_ORDER
+from recovar.em.symmetry import canonicalize_rotational_symmetry
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,20 @@ class KClassOptions:
 
 
 @dataclass(frozen=True)
+class SymmetryOptions:
+    """RELION-compatible proper rotational point group."""
+
+    point_group: str = "C1"
+
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            "point_group",
+            canonicalize_rotational_symmetry(self.point_group),
+        )
+
+
+@dataclass(frozen=True)
 class ReplayState:
     """Per-iteration RELION-replay seed state.
 
@@ -226,6 +241,9 @@ class RefinementOptions:
     debug: EngineDebugOptions = field(default_factory=EngineDebugOptions)
     batching: RefinementBatching = field(default_factory=RefinementBatching)
     disc_type: str = "linear_interp"
+    # Keep new option groups after the historical positional fields so
+    # external positional construction retains its pre-symmetry meaning.
+    symmetry: SymmetryOptions = field(default_factory=SymmetryOptions)
 
 
 __all__ = [
@@ -236,6 +254,7 @@ __all__ = [
     "ExpectedAccuracyOptions",
     "EngineDebugOptions",
     "KClassOptions",
+    "SymmetryOptions",
     "ReplayState",
     "RefinementBatching",
     "RefinementOptions",

@@ -34,7 +34,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
+    finalize_half_volume_bpref,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
@@ -1370,7 +1370,20 @@ def _postprocess_local_bucket(
         if local_rotation_posterior_ids is None
         else np.asarray(local_rotation_posterior_ids, dtype=np.int32)
     )
-    np.add.at(buffers.rotation_posterior_sums, posterior_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
+    if posterior_ids_np.shape != local_rotation_ids_np.shape:
+        raise RuntimeError(
+            "exact local posterior ids must match the padded local rotation-id shape"
+        )
+    active_posterior_ids = posterior_ids_np[local_mask_np]
+    if (
+        np.any(active_posterior_ids < 0)
+        or int(active_posterior_ids.max(initial=-1)) >= buffers.rotation_posterior_sums.size
+    ):
+        raise RuntimeError(
+            "exact local posterior id is outside rotation_posterior_sums; "
+            "parent-expanded non-C1 layouts must provide symmetry-reduced parent ids"
+        )
+    np.add.at(buffers.rotation_posterior_sums, active_posterior_ids, probs_sum_t_np[local_mask_np])
 
     significant_sample_count = 0
     if collect_profile_stats:
@@ -2071,6 +2084,7 @@ def run_local_em_exact(
     return_reconstruction_sample_indices: bool = False,
     return_significant_counts: bool = False,
     score_only: bool = False,
+    symmetry_label: str = "C1",
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -5246,12 +5260,14 @@ def run_local_em_exact(
     _log_exact_local_progress(force=True, done=True)
     final_accumulator_t0 = time.time()
     if not score_only:
-        Ft_y, Ft_ctf = enforce_half_volume_x0(
+        Ft_y, Ft_ctf = finalize_half_volume_bpref(
             Ft_y,
             Ft_ctf,
             recon_volume_shape,
             logger=logger,
             label="Exact local",
+            symmetry_label=symmetry_label,
+            relion_x_half=bool(mstep_relion_x_half),
         )
         if return_half_volume_accumulators:
             logger.info("Exact local M-step: keeping native half-volume accumulators for downstream reconstruction")

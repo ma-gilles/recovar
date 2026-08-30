@@ -26,6 +26,10 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
 )
 from recovar.em.dense_single_volume.relion_metadata import _relion_half_plane_shell_counts
 from recovar.em.sampling import rotation_grid_size
+from recovar.em.symmetry import (
+    canonicalize_rotational_symmetry,
+    symmetry_operator_sha256,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +119,7 @@ def _save_iteration_intermediates(
     k_class_enabled: bool,
     volume_shape,
     voxel_size: float,
+    symmetry: str = "C1",
 ) -> None:
     """Write per-iteration intermediate volumes + diagnostics to ``save_dir``."""
     from recovar.output.output import save_volume
@@ -167,14 +172,25 @@ def _save_iteration_intermediates(
                 os.path.join(save_dir, f"it{iteration:03d}_ha_half{k_half + 1}.npy"),
                 hard_assignments[k_half],
             )
+    canonical_symmetry = canonicalize_rotational_symmetry(symmetry)
+    if use_local and canonical_symmetry == "C1":
+        # Preserve the historical C1 lookup exactly.  Nontrivial point groups
+        # use their asymmetric-unit grid size instead.
+        n_rotations = rotation_grid_size(local_search_order)
+    elif use_local:
+        n_rotations = rotation_grid_size(local_search_order, canonical_symmetry)
+    else:
+        n_rotations = effective_rotations.shape[0]
     iter_meta = {
         "iteration": iteration,
         "current_size": int(cs),
-        "n_rotations": int(rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0]),
+        "n_rotations": int(n_rotations),
         "n_translations": int(current_translations.shape[0]),
         "healpix_order": int(state.healpix_order),
         "local_search": bool(use_local),
         "sigma_rot": float(state.sigma_rot),
+        "symmetry_label": canonical_symmetry,
+        "symmetry_operator_sha256": symmetry_operator_sha256(canonical_symmetry),
     }
     np.save(os.path.join(save_dir, f"it{iteration:03d}_meta.npy"), iter_meta)
     np.save(
