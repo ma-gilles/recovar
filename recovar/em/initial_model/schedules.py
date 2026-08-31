@@ -52,6 +52,7 @@ class GuiInitialModelDefaults:
     pass2_engine: str = "auto"
     relion_wavg_sequential_cuda: bool = True
     exact_local_bucket_radix: int = 4
+    exact_local_physical_order_chunk_size: int = 0
     bootstrap_min_particles: int = 1000
     sigma2_min_particles: int = 1000
     padding_factor: int = 1

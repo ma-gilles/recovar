@@ -225,6 +225,15 @@ def make_parser() -> argparse.ArgumentParser:
         help="Static-shape radix for exact-local K=1 hypothesis buckets",
     )
     parser.add_argument(
+        "--exact-local-physical-order-chunk-size",
+        type=_nonnegative_int,
+        default=DEFAULTS.exact_local_physical_order_chunk_size,
+        help=(
+            "Bound consecutive physical-order K=1 buckets; 0 keeps the "
+            "qualified run-global shape"
+        ),
+    )
+    parser.add_argument(
         "--bootstrap-min-particles",
         "--bootstrap_min_particles",
         dest="bootstrap_min_particles",
@@ -414,6 +423,9 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
         "pass2_engine": args.pass2_engine,
         "relion_wavg_sequential_cuda": args.relion_wavg_sequential_cuda,
         "exact_local_bucket_radix": args.exact_local_bucket_radix,
+        "exact_local_physical_order_chunk_size": (
+            args.exact_local_physical_order_chunk_size
+        ),
         "bootstrap_min_particles": args.bootstrap_min_particles,
         "sigma2_min_particles": args.sigma2_min_particles,
         "padding_factor": args.padding_factor,

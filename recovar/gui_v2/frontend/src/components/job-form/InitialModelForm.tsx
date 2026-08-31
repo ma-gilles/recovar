@@ -130,6 +130,7 @@ function InitialModelFormLoaded({
   const [pass2Engine, setPass2Engine] = useState(String(pick("pass2_engine", defaults.pass2_engine)));
   const [relionWavgSequentialCuda, setRelionWavgSequentialCuda] = useState(Boolean(pick("relion_wavg_sequential_cuda", defaults.relion_wavg_sequential_cuda)));
   const [exactLocalBucketRadix, setExactLocalBucketRadix] = useState(String(pick("exact_local_bucket_radix", defaults.exact_local_bucket_radix)));
+  const [exactLocalPhysicalOrderChunkSize, setExactLocalPhysicalOrderChunkSize] = useState(String(pick("exact_local_physical_order_chunk_size", defaults.exact_local_physical_order_chunk_size)));
   const [bootstrapMin, setBootstrapMin] = useState(String(pick("bootstrap_min_particles", defaults.bootstrap_min_particles)));
   const [sigma2Min, setSigma2Min] = useState(String(pick("sigma2_min_particles", defaults.sigma2_min_particles)));
   const [translationSigma, setTranslationSigma] = useState(
@@ -182,6 +183,7 @@ function InitialModelFormLoaded({
       pass2_engine: pass2Engine,
       relion_wavg_sequential_cuda: relionWavgSequentialCuda,
       exact_local_bucket_radix: parseInt(exactLocalBucketRadix),
+      exact_local_physical_order_chunk_size: parseInt(exactLocalPhysicalOrderChunkSize),
       bootstrap_min_particles: parseInt(bootstrapMin),
       sigma2_min_particles: parseInt(sigma2Min),
       padding_factor: parseInt(paddingFactor),
@@ -206,7 +208,7 @@ function InitialModelFormLoaded({
     gradEmIters, stepsize, mu, symName, particleDiameter,
     runInC1, doSolvent, doZeroMask, doCtf, randomSeed, healpixOrder, oversampling,
     offsetRange, offsetStep, perturbationFactor, imageBatchSize, rotationBlockSize, pass2Engine,
-    relionWavgSequentialCuda, exactLocalBucketRadix,
+    relionWavgSequentialCuda, exactLocalBucketRadix, exactLocalPhysicalOrderChunkSize,
     bootstrapMin, sigma2Min, paddingFactor, imageBackend, gpuIds, lazy, writeArtifacts,
     requireCuda, deterministicCuda, useJaxCache, jaxCacheDir, randomPerturbation, translationSigma, datadir,
     stripPrefix, slurmOpts, localOpts, executorMode,
@@ -320,6 +322,12 @@ function InitialModelFormLoaded({
                 <option value="4">4 (qualified default)</option><option value="2">2 (legacy diagnostic)</option>
               </Select>
             </div>
+            <NumberField
+              label="Physical-order Chunk Size"
+              tooltip="initial_model.exact_local_physical_order_chunk_size"
+              value={exactLocalPhysicalOrderChunkSize}
+              onChange={setExactLocalPhysicalOrderChunkSize}
+            />
             <div className="space-y-1">
               <div className="flex items-center gap-1"><Label>GPU IDs</Label><TooltipIcon text={tooltips["initial_model.gpu_ids"]} /></div>
               <Input value={gpuIds} onChange={(event) => setGpuIds(event.target.value)} />

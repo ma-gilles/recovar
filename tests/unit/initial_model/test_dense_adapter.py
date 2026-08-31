@@ -995,6 +995,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_exact_local_bucket_radix"] = kwargs[
             "exact_local_bucket_radix"
         ]
+        calls["local_consecutive_mixed_bucket_size"] = kwargs[
+            "consecutive_mixed_bucket_size"
+        ]
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
@@ -1142,12 +1145,15 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_relion_exact_score_translation"] is True
     assert calls["local_relion_wavg_sequential_cuda"] is True
     assert calls["local_exact_local_bucket_radix"] == 4
+    assert calls["local_consecutive_mixed_bucket_size"] is None
     assert calls["diagnostic_context"] == [{"iteration": 7, "half": 1}, "clear"]
     assert result.meta["sparse_pass2"] is True
     assert result.meta["requested_relion_wavg_sequential_cuda"] is True
     assert result.meta["requested_exact_local_bucket_radix"] == 4
+    assert result.meta["requested_exact_local_physical_order_chunk_size"] == 0
     assert result.meta["effective_relion_wavg_sequential_cuda"] is True
     assert result.meta["effective_exact_local_bucket_radix"] == 4
+    assert result.meta["effective_exact_local_physical_order_chunk_size"] == 0
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
     np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
@@ -1866,6 +1872,7 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
                 "group_count": kwargs["reconstruction_group_count"],
                 "preserve_order": kwargs["preserve_bpref_particle_order"],
                 "unify_buckets": kwargs["unify_local_bucket_sizes"],
+                "chunk_size": kwargs["consecutive_mixed_bucket_size"],
             }
         )
         result = _fake_result(n_classes=1, n=8, n_images=int(dataset.n_images), n_groups=2)
@@ -1914,6 +1921,14 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
         "recovar.em.sampling._relion_adaptive_pass1_rotations_f32",
         lambda *args, **kwargs: None,
     )
+    monkeypatch.setattr(
+        "recovar.em.sampling.get_relion_hidden_rotation_grid",
+        lambda _order, matrices=True: np.zeros((72, 3, 3), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recovar.em.sampling.get_relion_rotation_grid_eulers",
+        lambda _order, **_kwargs: np.zeros((72, 3), dtype=np.float32),
+    )
 
     state = initialise_denovo_state(
         ori_size=8,
@@ -1931,6 +1946,7 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
         translations=np.zeros((1, 2), dtype=np.float32),
         relion_bpref_frame=True,
         pass2_engine="local",
+        exact_local_physical_order_chunk_size=220,
         engine_kwargs={
             "sparse_pass2": True,
             "healpix_order": 0,
@@ -1954,10 +1970,13 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
     np.testing.assert_array_equal(calls["local"][0]["group_ids"], halfset_ids)
     assert calls["local"][0]["group_count"] == 2
     assert calls["local"][0]["preserve_order"] is True
-    assert calls["local"][0]["unify_buckets"] is True
+    assert calls["local"][0]["unify_buckets"] is False
+    assert calls["local"][0]["chunk_size"] == 220
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], particle_ids)
     assert result.meta["halfset_ids"] == (0, 1)
     assert result.meta["joint_halfset_particle_stream"] is True
+    assert result.meta["requested_exact_local_physical_order_chunk_size"] == 220
+    assert result.meta["effective_exact_local_physical_order_chunk_size"] == 220
     assert [accum.halfset_idx for accum in result.accumulators] == [0, 1]
     assert not np.array_equal(result.accumulators[0].data, result.accumulators[1].data)
 

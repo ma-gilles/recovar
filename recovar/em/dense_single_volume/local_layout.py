@@ -8,6 +8,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from recovar import utils
+from recovar.em.dense_single_volume.batch_planning import (
+    _plan_consecutive_padded_batches,
+)
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.em.dense_single_volume.shape_buckets import coarse_bucket, power_bucket
@@ -1161,6 +1164,7 @@ def bucket_local_hypothesis_layout(
     large_bucket_quantum: int | None = None,
     preserve_image_order: bool = False,
     exact_local_bucket_radix: int | None = None,
+    consecutive_mixed_bucket_size: int | None = None,
 ) -> list[LocalBucketSpec]:
     """Bucket images by exact local-rotation count for static-shape execution."""
 
@@ -1197,6 +1201,14 @@ def bucket_local_hypothesis_layout(
     # images carry extra rotation padding.
     if unify_bucket_sizes is None:
         unify_bucket_sizes = os.environ.get("RECOVAR_LOCAL_BUCKET_UNIFY", "").lower() in {"1", "true", "yes", "on"}
+    if consecutive_mixed_bucket_size is not None:
+        consecutive_mixed_bucket_size = int(consecutive_mixed_bucket_size)
+        if consecutive_mixed_bucket_size <= 0:
+            raise ValueError("consecutive_mixed_bucket_size must be positive")
+        if not preserve_image_order:
+            raise ValueError("consecutive mixed buckets require preserved image order")
+        if bool(unify_bucket_sizes):
+            raise ValueError("consecutive mixed buckets cannot use run-global bucket unification")
     if bucket_sizes.size and bool(unify_bucket_sizes):
         bucket_sizes = np.full_like(bucket_sizes, int(bucket_sizes.max()))
     processing_order = (
@@ -1209,7 +1221,24 @@ def bucket_local_hypothesis_layout(
     if processing_order.size == 0:
         return bucket_specs
 
-    if preserve_image_order:
+    planned_groups: list[tuple[np.ndarray, int, int]] = []
+    if consecutive_mixed_bucket_size is not None:
+        for plan in _plan_consecutive_padded_batches(
+            bucket_sizes,
+            processing_order=processing_order,
+            target_items_per_batch=consecutive_mixed_bucket_size,
+            max_items_per_batch=image_batch_size,
+            max_padded_values_per_batch=max_hypotheses_per_microbatch,
+            item_alignment=3,
+        ):
+            planned_groups.append(
+                (
+                    np.asarray(plan.item_indices, dtype=np.int32),
+                    int(plan.padded_size),
+                    int(plan.padded_item_capacity),
+                )
+            )
+    elif preserve_image_order:
         boundaries = np.flatnonzero(
             np.r_[True, bucket_sizes[processing_order][1:] != bucket_sizes[processing_order][:-1], True]
         )
@@ -1222,69 +1251,78 @@ def bucket_local_hypothesis_layout(
             processing_order[bucket_sizes[processing_order] == bucket_size]
             for bucket_size in np.unique(bucket_sizes[processing_order])
         ]
-    for bucket_images in bucket_groups:
-        bucket_size = int(bucket_sizes[int(bucket_images[0])])
-        max_images = max(1, min(image_batch_size, max_hypotheses_per_microbatch // int(bucket_size)))
-        if preserve_image_order and max_images >= 3:
-            # RELION's InitialModel default processes pools of three particles.
-            # Keep static-shape FFI boundaries on pool boundaries so a new call
-            # never changes which physical particles may update BPref together.
-            max_images = max(3, (max_images // 3) * 3)
-        for start in range(0, bucket_images.shape[0], max_images):
-            image_indices = np.asarray(bucket_images[start : start + max_images], dtype=np.int32)
-            actual_counts = layout.rotation_counts[image_indices].astype(np.int32, copy=False)
-            batch_size = int(image_indices.shape[0])
-            padded_rotations = np.broadcast_to(
-                np.eye(3, dtype=np.float32),
-                (batch_size, int(bucket_size), 3, 3),
-            ).copy()
-            padded_mstep_rotations = padded_rotations.copy()
-            padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
-            padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.float32)
-            padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
-            padded_posterior_ids = (
-                None
-                if layout.rotation_posterior_ids_flat is None
-                else np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
-            )
-            padded_sample_mask = (
-                None
-                if layout.sample_mask_flat is None
-                else np.zeros(
-                    (batch_size, int(bucket_size), int(layout.translation_grid.shape[0])),
-                    dtype=bool,
+    if consecutive_mixed_bucket_size is None:
+        for bucket_images in bucket_groups:
+            bucket_size = int(bucket_sizes[int(bucket_images[0])])
+            max_images = max(1, min(image_batch_size, max_hypotheses_per_microbatch // int(bucket_size)))
+            if preserve_image_order and max_images >= 3:
+                # RELION's InitialModel default processes pools of three particles.
+                # Keep static-shape FFI boundaries on pool boundaries so a new call
+                # never changes which physical particles may update BPref together.
+                max_images = max(3, (max_images // 3) * 3)
+            for start in range(0, bucket_images.shape[0], max_images):
+                planned_groups.append(
+                    (
+                        np.asarray(bucket_images[start : start + max_images], dtype=np.int32),
+                        bucket_size,
+                        max_images,
+                    )
                 )
-            )
 
-            for row, image_idx in enumerate(image_indices.tolist()):
-                start_off = int(layout.rotation_offsets[image_idx])
-                end_off = int(layout.rotation_offsets[image_idx + 1])
-                count = end_off - start_off
-                padded_rotations[row, :count] = layout.rotations_flat[start_off:end_off]
-                padded_mstep_rotations[row, :count] = mstep_rotations_flat[start_off:end_off]
-                padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
-                padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
-                padded_mask[row, :count] = True
-                if padded_posterior_ids is not None:
-                    padded_posterior_ids[row, :count] = layout.rotation_posterior_ids_flat[start_off:end_off]
-                if padded_sample_mask is not None:
-                    padded_sample_mask[row, :count, :] = layout.sample_mask_flat[start_off:end_off]
-
-            bucket_specs.append(
-                LocalBucketSpec(
-                    image_indices=image_indices,
-                    bucket_image_count=int(max_images),
-                    bucket_rotation_count=int(bucket_size),
-                    actual_rotation_counts=actual_counts,
-                    local_rotation_ids=padded_rotation_ids,
-                    local_rotations=padded_rotations,
-                    local_rotation_log_prior=padded_log_prior,
-                    local_rotation_mask=padded_mask,
-                    translation_log_prior=np.asarray(layout.translation_log_priors[image_indices], dtype=np.float32),
-                    local_mstep_rotations=padded_mstep_rotations,
-                    local_rotation_posterior_ids=padded_posterior_ids,
-                    local_sample_mask=padded_sample_mask,
-                )
+    for image_indices, bucket_size, max_images in planned_groups:
+        actual_counts = layout.rotation_counts[image_indices].astype(np.int32, copy=False)
+        batch_size = int(image_indices.shape[0])
+        padded_rotations = np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (batch_size, int(bucket_size), 3, 3),
+        ).copy()
+        padded_mstep_rotations = padded_rotations.copy()
+        padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
+        padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.float32)
+        padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
+        padded_posterior_ids = (
+            None
+            if layout.rotation_posterior_ids_flat is None
+            else np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
+        )
+        padded_sample_mask = (
+            None
+            if layout.sample_mask_flat is None
+            else np.zeros(
+                (batch_size, int(bucket_size), int(layout.translation_grid.shape[0])),
+                dtype=bool,
             )
+        )
+
+        for row, image_idx in enumerate(image_indices.tolist()):
+            start_off = int(layout.rotation_offsets[image_idx])
+            end_off = int(layout.rotation_offsets[image_idx + 1])
+            count = end_off - start_off
+            padded_rotations[row, :count] = layout.rotations_flat[start_off:end_off]
+            padded_mstep_rotations[row, :count] = mstep_rotations_flat[start_off:end_off]
+            padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
+            padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
+            padded_mask[row, :count] = True
+            if padded_posterior_ids is not None:
+                padded_posterior_ids[row, :count] = layout.rotation_posterior_ids_flat[start_off:end_off]
+            if padded_sample_mask is not None:
+                padded_sample_mask[row, :count, :] = layout.sample_mask_flat[start_off:end_off]
+
+        bucket_specs.append(
+            LocalBucketSpec(
+                image_indices=image_indices,
+                bucket_image_count=int(max_images),
+                bucket_rotation_count=int(bucket_size),
+                actual_rotation_counts=actual_counts,
+                local_rotation_ids=padded_rotation_ids,
+                local_rotations=padded_rotations,
+                local_rotation_log_prior=padded_log_prior,
+                local_rotation_mask=padded_mask,
+                translation_log_prior=np.asarray(layout.translation_log_priors[image_indices], dtype=np.float32),
+                local_mstep_rotations=padded_mstep_rotations,
+                local_rotation_posterior_ids=padded_posterior_ids,
+                local_sample_mask=padded_sample_mask,
+            )
+        )
 
     return bucket_specs

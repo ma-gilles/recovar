@@ -155,3 +155,89 @@ def test_explicit_bucket_radix_is_consistent_across_exact_local_topology(monkeyp
     assert not pack_mask[0, 32:].any()
     assert pack_mask[1, :129].all()
     assert not pack_mask[1, 129:].any()
+
+
+@pytest.mark.unit
+def test_physical_order_chunks_reduce_padding_without_changing_candidates():
+    counts = np.asarray(
+        [17, 18, 31, 32, 17, 18, 129, 130, 200, 129, 130, 200, 17],
+        dtype=np.int32,
+    )
+    layout = _make_layout(counts)
+
+    global_buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=13,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=100_000,
+        unify_bucket_sizes=True,
+        preserve_image_order=True,
+        exact_local_bucket_radix=2,
+    )
+    chunked_buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=13,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=100_000,
+        unify_bucket_sizes=False,
+        preserve_image_order=True,
+        exact_local_bucket_radix=2,
+        consecutive_mixed_bucket_size=6,
+    )
+
+    assert [bucket.image_indices.tolist() for bucket in chunked_buckets] == [
+        list(range(6)),
+        list(range(6, 12)),
+        [12],
+    ]
+    assert [bucket.bucket_rotation_count for bucket in chunked_buckets] == [32, 256, 32]
+    assert [bucket.bucket_image_count for bucket in chunked_buckets] == [6, 6, 6]
+    global_padded_rows = sum(
+        bucket.bucket_image_count * bucket.bucket_rotation_count
+        for bucket in global_buckets
+    )
+    chunked_padded_rows = sum(
+        bucket.bucket_image_count * bucket.bucket_rotation_count
+        for bucket in chunked_buckets
+    )
+    assert chunked_padded_rows == 1920
+    assert chunked_padded_rows < global_padded_rows
+
+    observed_ids = []
+    for bucket in chunked_buckets:
+        assert bucket.bucket_image_count % 3 == 0
+        for row, image_index in enumerate(bucket.image_indices.tolist()):
+            start = int(layout.rotation_offsets[image_index])
+            stop = int(layout.rotation_offsets[image_index + 1])
+            count = stop - start
+            np.testing.assert_array_equal(
+                bucket.local_rotation_ids[row, :count],
+                layout.rotation_ids_flat[start:stop],
+            )
+            assert bucket.local_rotation_mask[row, :count].all()
+            assert not bucket.local_rotation_mask[row, count:].any()
+            observed_ids.extend(bucket.local_rotation_ids[row, :count].tolist())
+    assert observed_ids == layout.rotation_ids_flat.tolist()
+
+
+@pytest.mark.unit
+def test_physical_order_chunks_require_order_preservation_and_no_global_unify():
+    layout = _make_layout(np.asarray([17, 65, 33], dtype=np.int32))
+    with pytest.raises(ValueError, match="require preserved image order"):
+        bucket_local_hypothesis_layout(
+            layout,
+            image_batch_size=3,
+            rotation_block_size=5000,
+            max_hypotheses_per_microbatch=4096,
+            consecutive_mixed_bucket_size=3,
+        )
+    with pytest.raises(ValueError, match="cannot use run-global"):
+        bucket_local_hypothesis_layout(
+            layout,
+            image_batch_size=3,
+            rotation_block_size=5000,
+            max_hypotheses_per_microbatch=4096,
+            preserve_image_order=True,
+            unify_bucket_sizes=True,
+            consecutive_mixed_bucket_size=3,
+        )

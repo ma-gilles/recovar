@@ -1715,6 +1715,7 @@ def test_dense_estep_config_propagates_public_pass2_engine():
         pass2_engine="compact",
         relion_wavg_sequential_cuda=False,
         exact_local_bucket_radix=2,
+        exact_local_physical_order_chunk_size=220,
     )
     plan = driver.NativeSamplingPlan(
         rotations=np.zeros((1, 3, 3), dtype=np.float32),
@@ -1733,6 +1734,7 @@ def test_dense_estep_config_propagates_public_pass2_engine():
     assert config.pass2_engine == "compact"
     assert config.relion_wavg_sequential_cuda is False
     assert config.exact_local_bucket_radix == 2
+    assert config.exact_local_physical_order_chunk_size == 220
 
 
 def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():

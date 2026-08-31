@@ -200,6 +200,7 @@ class DenseInitialModelEstepConfig:
     pass2_engine: str = "auto"
     relion_wavg_sequential_cuda: bool = True
     exact_local_bucket_radix: int = 4
+    exact_local_physical_order_chunk_size: int = 0
     padding_factor: int = 1
     class_log_priors: Any | None = None
     relion_bpref_frame: bool = True
@@ -812,6 +813,10 @@ def _run_sparse_pass2_initial_model_estep(
     )
     if int(config.exact_local_bucket_radix) not in (2, 4):
         raise ValueError("InitialModel exact_local_bucket_radix must be 2 or 4")
+    if int(config.exact_local_physical_order_chunk_size) < 0:
+        raise ValueError(
+            "InitialModel exact_local_physical_order_chunk_size must be non-negative"
+        )
     pass1_time_s = 0.0
     pass2_time_s = 0.0
     exact_local_runtime_policy_active = False
@@ -1220,7 +1225,7 @@ def _run_sparse_pass2_initial_model_estep(
                     # sequence; changing bucket shapes would restart RELION's
                     # pool-of-three phase at an artificial FFI boundary.
                     unify_local_bucket_sizes=(
-                        True
+                        int(config.exact_local_physical_order_chunk_size) == 0
                         if reconstruction_group_ids is not None
                         else _unify_local_bucket_sizes_enabled()
                     ),
@@ -1252,6 +1257,12 @@ def _run_sparse_pass2_initial_model_estep(
                     exact_local_bucket_radix=(
                         int(config.exact_local_bucket_radix)
                         if use_exact_local_relion_operands
+                        else None
+                    ),
+                    consecutive_mixed_bucket_size=(
+                        int(config.exact_local_physical_order_chunk_size)
+                        if reconstruction_group_ids is not None
+                        and int(config.exact_local_physical_order_chunk_size) > 0
                         else None
                     ),
                 )
@@ -1308,11 +1319,19 @@ def _run_sparse_pass2_initial_model_estep(
     meta["requested_exact_local_bucket_radix"] = int(
         config.exact_local_bucket_radix
     )
+    meta["requested_exact_local_physical_order_chunk_size"] = int(
+        config.exact_local_physical_order_chunk_size
+    )
     meta["effective_relion_wavg_sequential_cuda"] = bool(
         exact_local_runtime_policy_active and config.relion_wavg_sequential_cuda
     )
     meta["effective_exact_local_bucket_radix"] = (
         int(config.exact_local_bucket_radix)
+        if exact_local_runtime_policy_active
+        else None
+    )
+    meta["effective_exact_local_physical_order_chunk_size"] = (
+        int(config.exact_local_physical_order_chunk_size)
         if exact_local_runtime_policy_active
         else None
     )

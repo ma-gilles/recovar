@@ -4,6 +4,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.batch_planning import (
+    _plan_consecutive_padded_batches,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
     _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
@@ -84,6 +87,40 @@ def test_sparse_pass2_execution_order_override_chunks_only_adjacent_particles():
             n_fine_trans=4,
             processing_order_override=order,
             processing_order_chunk_size=0,
+        )
+
+
+def test_shared_consecutive_padded_planner_preserves_order_and_pool_alignment():
+    padded_sizes = np.asarray([32, 64, 16, 128, 32, 16, 256], dtype=np.int64)
+    order = np.asarray([2, 0, 1, 4, 3, 5, 6], dtype=np.int64)
+
+    plans = _plan_consecutive_padded_batches(
+        padded_sizes,
+        processing_order=order,
+        target_items_per_batch=4,
+        max_items_per_batch=20,
+        max_padded_values_per_batch=10_000,
+        item_alignment=3,
+    )
+
+    assert [plan.item_indices.tolist() for plan in plans] == [
+        [2, 0, 1],
+        [4, 3, 5, 6],
+    ]
+    assert [plan.padded_size for plan in plans] == [64, 256]
+    assert [plan.padded_item_capacity for plan in plans] == [3, 4]
+    assert np.cumsum([0] + [plan.item_indices.size for plan in plans[:-1]]).tolist() == [0, 3]
+    assert np.concatenate([plan.item_indices for plan in plans]).tolist() == order.tolist()
+
+
+def test_shared_consecutive_padded_planner_validates_processing_order():
+    with pytest.raises(ValueError, match="must be a permutation"):
+        _plan_consecutive_padded_batches(
+            [16, 32, 64],
+            processing_order=[0, 0, 2],
+            target_items_per_batch=2,
+            max_items_per_batch=2,
+            max_padded_values_per_batch=1024,
         )
 
 

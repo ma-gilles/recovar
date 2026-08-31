@@ -3574,6 +3574,7 @@ def run_local_em_exact(
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
     exact_local_bucket_radix: int | None = None,
+    consecutive_mixed_bucket_size: int | None = None,
     preserve_bpref_particle_order: bool = False,
     stats_use_reconstruction_probs: bool = False,
     relion_f32_fine_posterior: bool = False,
@@ -4138,6 +4139,7 @@ def run_local_em_exact(
         unify_bucket_sizes=unify_local_bucket_sizes,
         preserve_image_order=source_faithful_bpref,
         exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+        consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
     )
     timing.bucket_build_s += time.time() - bucket_build_t0
     debug_target_only_targets: set[int] = set()

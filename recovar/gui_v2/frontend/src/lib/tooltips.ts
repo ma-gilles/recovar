@@ -36,6 +36,8 @@ export const tooltips: Record<string, string> = {
     "Use the bitwise-qualified shared CUDA implementation of RELION's ordered weighted-sum accumulation for exact K=1 runs.",
   "initial_model.exact_local_bucket_radix":
     "Static-shape palette for exact-local K=1 buckets. Radix 4 reduces JAX compilation churn; radix 2 is the legacy diagnostic setting.",
+  "initial_model.exact_local_physical_order_chunk_size":
+    "Bound consecutive physical-order K=1 buckets while keeping RELION's pool-of-three boundaries. Zero keeps the qualified run-global shape; nonzero values are performance candidates until trajectory-qualified.",
   "initial_model.bootstrap_min": "Minimum particle count used to form the initial bootstrap reference.",
   "initial_model.sigma2_min": "Minimum particle count used for initial noise-spectrum estimation.",
   "initial_model.translation_sigma": "Optional translation-prior standard deviation in Angstroms.",

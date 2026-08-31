@@ -95,6 +95,7 @@ class TestCommandBuilders:
         assert cmd[cmd.index("--pass2-engine") + 1] == "auto"
         assert "--relion-wavg-sequential-cuda" in cmd
         assert cmd[cmd.index("--exact-local-bucket-radix") + 1] == "4"
+        assert cmd[cmd.index("--exact-local-physical-order-chunk-size") + 1] == "0"
         assert cmd[cmd.index("--grad-ini-frac") + 1] == "0.4"
         assert cmd[cmd.index("--grad-fin-frac") + 1] == "0.1"
         assert cmd[cmd.index("--grad-em-iters") + 1] == "3"
@@ -110,6 +111,25 @@ class TestCommandBuilders:
                     "input_star": "/data/particles.star",
                     "outdir": "/out/InitialModel/job_0001",
                     "exact_local_bucket_radix": 3,
+                }
+            )
+
+    def test_initial_model_command_accepts_bounded_physical_order_chunks(self):
+        cmd = build_initial_model_command(
+            {
+                "input_star": "/data/particles.star",
+                "outdir": "/out/InitialModel/job_0001",
+                "exact_local_physical_order_chunk_size": 220,
+            }
+        )
+        assert cmd[cmd.index("--exact-local-physical-order-chunk-size") + 1] == "220"
+
+        with pytest.raises(ValueError, match="must be non-negative"):
+            build_initial_model_command(
+                {
+                    "input_star": "/data/particles.star",
+                    "outdir": "/out/InitialModel/job_0001",
+                    "exact_local_physical_order_chunk_size": -1,
                 }
             )
 
@@ -251,6 +271,7 @@ class TestJobsAPI:
         assert defaults_response.json()["jax_compilation_cache_dir"] == ""
         assert defaults_response.json()["relion_wavg_sequential_cuda"] is True
         assert defaults_response.json()["exact_local_bucket_radix"] == 4
+        assert defaults_response.json()["exact_local_physical_order_chunk_size"] == 0
 
         project_dir = str(tmp_path / "initial_model_project")
         response = await client.post("/api/projects", json={"path": project_dir, "name": "InitialModel"})

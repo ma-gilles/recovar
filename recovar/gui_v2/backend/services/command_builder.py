@@ -91,6 +91,13 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
     exact_local_bucket_radix = int(value("exact_local_bucket_radix"))
     if exact_local_bucket_radix not in (2, 4):
         raise ValueError("InitialModel exact_local_bucket_radix must be 2 or 4")
+    exact_local_physical_order_chunk_size = int(
+        value("exact_local_physical_order_chunk_size")
+    )
+    if exact_local_physical_order_chunk_size < 0:
+        raise ValueError(
+            "InitialModel exact_local_physical_order_chunk_size must be non-negative"
+        )
 
     cmd = [
         *_recovar_cmd(),
@@ -141,6 +148,8 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
         str(value("pass2_engine")),
         "--exact-local-bucket-radix",
         str(exact_local_bucket_radix),
+        "--exact-local-physical-order-chunk-size",
+        str(exact_local_physical_order_chunk_size),
         "--bootstrap-min-particles",
         str(value("bootstrap_min_particles")),
         "--sigma2-min-particles",

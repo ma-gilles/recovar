@@ -41,6 +41,9 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume.batch_planning import (
+    _plan_consecutive_padded_batches,
+)
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
@@ -2728,43 +2731,21 @@ def _bucket_pass2_inputs(
                         )
                     run_start = run_end
                 return buckets
-            ordered_chunk_size = int(processing_order_chunk_size)
-            if ordered_chunk_size <= 0:
-                raise ValueError("processing_order_chunk_size must be positive")
-            requested_max_images = max(
-                1,
-                min(ordered_chunk_size, int(max_images_per_microbatch)),
+            plans = _plan_consecutive_padded_batches(
+                bucket_sizes,
+                processing_order=processing_order,
+                target_items_per_batch=int(processing_order_chunk_size),
+                max_items_per_batch=int(max_images_per_microbatch),
+                max_padded_values_per_batch=int(max_hypotheses_per_microbatch),
+                values_per_padded_size=int(n_fine_trans),
             )
-            buckets = []
-            start = 0
-            while start < n_images:
-                stop = start
-                chunk_bucket_size = 0
-                while stop < n_images and stop - start < requested_max_images:
-                    next_bucket_size = max(
-                        chunk_bucket_size,
-                        int(bucket_sizes[processing_order[stop]]),
-                    )
-                    next_image_count = stop - start + 1
-                    next_hypothesis_count = (
-                        next_image_count * next_bucket_size * int(n_fine_trans)
-                    )
-                    if (
-                        stop > start
-                        and next_hypothesis_count > int(max_hypotheses_per_microbatch)
-                    ):
-                        break
-                    chunk_bucket_size = next_bucket_size
-                    stop += 1
-                chunk = processing_order[start:stop]
-                buckets.append(
-                    {
-                        "bucket_size": int(chunk_bucket_size),
-                        "image_indices": np.asarray(chunk, dtype=np.int64),
-                    }
-                )
-                start = stop
-            return buckets
+            return [
+                {
+                    "bucket_size": int(plan.padded_size),
+                    "image_indices": np.asarray(plan.item_indices, dtype=np.int64),
+                }
+                for plan in plans
+            ]
     else:
         # Group by bucket size, smaller buckets first. The secondary rotation
         # count key is historical RECOVAR behavior; an explicit order keeps

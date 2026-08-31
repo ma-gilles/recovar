@@ -46,6 +46,35 @@ projector/cache state, candidate buffers, posterior reductions, and BPref
 accumulators across a pool of particles with one or a few launches rather than
 per-signature/per-chunk dispatch.
 
+### 2026-08-31 late-GF46 controller-topology discriminator
+
+The matched late-state profile rules out the shared fine-score CUDA primitive
+as the cause of the remaining runtime gap.  At GF46 iteration 150 the exact
+fine-diff2 kernel launches twice and consumes `27.44 ms`, while
+`local.run_local_em_exact` consumes `9.796 s`.  Two changing
+`jit_run_local_bucket_big_jit` programs compile for `5.114 s`, or `52.2%` of
+that local wall.  InitialModel's run-global radix-4 bucket unification pads
+captured layouts by `3.55x`--`16.0x`; exact per-size execution avoids that work
+but creates `67`--`120` changing shape/launch groups and is therefore not a
+candidate default.  The same trace observes `1,840` raw stack reads for `920`
+active particles because pass 1 and pass 2 load independently; mature EM's
+persistent raw-loader cache is not invoked by InitialModel.
+
+The active bounded hypothesis is that the mature supplied-map controller's
+physical-order macro-batching policy can remove most VDAM-specific shape churn
+without changing candidate arithmetic or BPref particle order.  The first
+candidate will extract one shared consecutive padded-batch planner, replace
+InitialModel's run-global maximum with chunk-local radix-2 maxima aligned to
+the native pool-of-three order, and reuse EM's persistent raw-image loader
+cache.  Admission requires identical candidate support, physical order, and
+best state at a fixed late checkpoint.  Floating-point accumulator differences
+may be nonzero only when they are bounded, repeatable, within the native-repeat
+envelope, and do not alter the trajectory basin; bitwise equality is not a
+requirement for a material speedup.  The candidate must also materially reduce
+unique XLA programs, padded rows, raw reads, and same-H100 steady-state wall
+time.  The existing CUDA scorers/posterior/Wavg kernels remain authoritative.
+No broad RECOVAR suite or long trajectory is part of this discriminator.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
