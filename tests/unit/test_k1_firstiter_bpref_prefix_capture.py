@@ -230,7 +230,7 @@ def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
 
     monkeypatch.setattr(sparse.jax, "block_until_ready", record_replay_boundary)
 
-    def fake_accumulate(
+    def fake_accumulate_split(
         raw_images,
         raw_ctf,
         raw_minvsigma2,
@@ -239,7 +239,8 @@ def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
         actual_counts,
         particle_half_local_indices,
         particle_original_indices,
-        data_volume,
+        data_volume_real,
+        data_volume_imag,
         weight_volume,
         **kwargs,
     ):
@@ -261,16 +262,21 @@ def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
             }
         )
         ordinal = np.float32(np.asarray(particle_original_indices)[0])
-        return data_volume * np.float32(10.0) + ordinal, weight_volume * np.float32(10.0) + ordinal
+        return (
+            data_volume_real * np.float32(10.0) + ordinal,
+            data_volume_imag * np.float32(10.0) - ordinal,
+            weight_volume * np.float32(10.0) + ordinal,
+        )
 
     monkeypatch.setattr(
         sparse,
-        "_accumulate_relion_firstiter_bpref_fused",
-        fake_accumulate,
+        "_accumulate_relion_firstiter_bpref_fused_split",
+        fake_accumulate_split,
     )
     data, weight = sparse._replay_deferred_firstiter_bpref_batches(
         [first, second],
-        jnp.zeros(1, dtype=jnp.complex64),
+        jnp.zeros(1, dtype=jnp.float32),
+        jnp.zeros(1, dtype=jnp.float32),
         jnp.zeros(1, dtype=jnp.float32),
         centered_pixel_indices=np.arange(2, dtype=np.int32),
         fftw_pixel_indices=np.arange(2, dtype=np.int32),
@@ -281,17 +287,28 @@ def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
         adaptive_fraction=0.999,
     )
 
-    np.testing.assert_array_equal(np.asarray(data), np.asarray([120], dtype=np.complex64))
+    np.testing.assert_array_equal(
+        np.asarray(data),
+        np.asarray([120 - 120j], dtype=np.complex64),
+    )
     np.testing.assert_array_equal(np.asarray(weight), np.asarray([120], dtype=np.float32))
     assert [call["particle_original_indices"].item() for call in calls] == [10, 20]
     assert len(replay_boundaries) == 2
     np.testing.assert_array_equal(
         replay_boundaries[0][0],
-        np.asarray([10], dtype=np.complex64),
+        np.asarray([10], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        replay_boundaries[0][1],
+        np.asarray([-10], dtype=np.float32),
     )
     np.testing.assert_array_equal(
         replay_boundaries[1][0],
-        np.asarray([120], dtype=np.complex64),
+        np.asarray([120], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        replay_boundaries[1][1],
+        np.asarray([-120], dtype=np.float32),
     )
     for expected, actual in zip((first, second), calls, strict=True):
         for field in sparse.DeferredFirstiterBPrefBatch._fields:

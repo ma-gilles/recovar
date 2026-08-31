@@ -1074,7 +1074,13 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
         assert projection_cache is not None
         events.append("release")
 
-    def record_replay(batches, data_volume, weight_volume, **kwargs):
+    def record_replay(
+        batches,
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        **kwargs,
+    ):
         assert events == ["stage", "stage", "release"]
         assert len(batches) == 2
         assert [batch.particle_original_indices.item() for batch in batches] == [
@@ -1087,8 +1093,12 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
         ]
         assert all(batch.actual_counts.item() == 1 for batch in batches)
         np.testing.assert_array_equal(
-            np.asarray(data_volume),
-            np.zeros(data_volume.shape, dtype=np.complex64),
+            np.asarray(data_volume_real),
+            np.zeros(data_volume_real.shape, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(data_volume_imag),
+            np.zeros(data_volume_imag.shape, dtype=np.float32),
         )
         np.testing.assert_array_equal(
             np.asarray(weight_volume),
@@ -1099,7 +1109,11 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
         assert kwargs["max_r"] == expected_mstep_max_r
         events.append("replay")
         return (
-            jnp.full_like(data_volume, np.complex64(64.0 + 0.0j)),
+            jnp.full(
+                data_volume_real.shape,
+                np.complex64(64.0 + 0.0j),
+                dtype=jnp.complex64,
+            ),
             jnp.full_like(weight_volume, np.float32(4096.0)),
         )
 

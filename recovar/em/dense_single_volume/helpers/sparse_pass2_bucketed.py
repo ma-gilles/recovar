@@ -5837,7 +5837,102 @@ def _accumulate_relion_firstiter_bpref_fused(
 ):
     """Accumulate fresh firstiter BPref in RELION native units."""
 
+    return _accumulate_relion_firstiter_bpref_fused_impl(
+        raw_images,
+        raw_ctf,
+        raw_minvsigma2,
+        posterior,
+        rotations,
+        actual_counts,
+        particle_half_local_indices,
+        particle_original_indices,
+        (data_volume, weight_volume),
+        split_accumulators=False,
+        centered_pixel_indices=centered_pixel_indices,
+        fftw_pixel_indices=fftw_pixel_indices,
+        translation_angles=translation_angles,
+        physical_image_shape=physical_image_shape,
+        volume_shape=volume_shape,
+        max_r=max_r,
+        adaptive_fraction=adaptive_fraction,
+    )
+
+
+def _accumulate_relion_firstiter_bpref_fused_split(
+    raw_images,
+    raw_ctf,
+    raw_minvsigma2,
+    posterior,
+    rotations,
+    actual_counts,
+    particle_half_local_indices,
+    particle_original_indices,
+    data_volume_real,
+    data_volume_imag,
+    weight_volume,
+    *,
+    centered_pixel_indices,
+    fftw_pixel_indices,
+    translation_angles,
+    physical_image_shape,
+    volume_shape,
+    max_r: float,
+    adaptive_fraction: float,
+):
+    """Accumulate fresh firstiter BPref without interleaving complex data."""
+
+    return _accumulate_relion_firstiter_bpref_fused_impl(
+        raw_images,
+        raw_ctf,
+        raw_minvsigma2,
+        posterior,
+        rotations,
+        actual_counts,
+        particle_half_local_indices,
+        particle_original_indices,
+        (data_volume_real, data_volume_imag, weight_volume),
+        split_accumulators=True,
+        centered_pixel_indices=centered_pixel_indices,
+        fftw_pixel_indices=fftw_pixel_indices,
+        translation_angles=translation_angles,
+        physical_image_shape=physical_image_shape,
+        volume_shape=volume_shape,
+        max_r=max_r,
+        adaptive_fraction=adaptive_fraction,
+    )
+
+
+def _accumulate_relion_firstiter_bpref_fused_impl(
+    raw_images,
+    raw_ctf,
+    raw_minvsigma2,
+    posterior,
+    rotations,
+    actual_counts,
+    particle_half_local_indices,
+    particle_original_indices,
+    accumulators,
+    *,
+    split_accumulators: bool,
+    centered_pixel_indices,
+    fftw_pixel_indices,
+    translation_angles,
+    physical_image_shape,
+    volume_shape,
+    max_r: float,
+    adaptive_fraction: float,
+):
+    """Shared operand preparation and ordered firstiter particle launches."""
+
     from recovar import cuda_backproject
+
+    if split_accumulators:
+        data_volume_real, data_volume_imag, weight_volume = accumulators
+        data_volume = None
+    else:
+        data_volume, weight_volume = accumulators
+        data_volume_real = None
+        data_volume_imag = None
 
     actual_counts = np.asarray(actual_counts, dtype=np.int64)
     if actual_counts.shape != (int(posterior.shape[0]),):
@@ -5869,6 +5964,10 @@ def _accumulate_relion_firstiter_bpref_fused(
             or context_half != int(delta_config["half"])
         ):
             delta_config = None
+    if split_accumulators and delta_config is not None:
+        raise RuntimeError(
+            "split firstiter BPref accumulation is incompatible with accumulator-delta diagnostics"
+        )
 
     centered_pixel_indices = jnp.asarray(centered_pixel_indices, dtype=jnp.int32)
     fftw_pixel_indices = jnp.asarray(fftw_pixel_indices, dtype=jnp.int32)
@@ -5935,21 +6034,43 @@ def _accumulate_relion_firstiter_bpref_fused(
         native_eulers = jnp.asarray(
             rotations[particle_index, :count], dtype=jnp.float32
         ).transpose(0, 2, 1)
-        data_volume, weight_volume = cuda_backproject.relion_firstiter_bpref_fused_x_half(
-            data_volume,
-            weight_volume,
-            dense_images[particle_index],
-            dense_ctf[particle_index],
-            dense_minvsigma2[particle_index],
-            particle_posterior,
-            translation_angles,
-            native_eulers,
-            threshold,
-            weight_norm,
-            current_image_shape,
-            volume_shape,
-            max_r,
-        )
+        if split_accumulators:
+            data_volume_real, data_volume_imag, weight_volume = (
+                cuda_backproject.relion_firstiter_bpref_fused_x_half_split(
+                    data_volume_real,
+                    data_volume_imag,
+                    weight_volume,
+                    dense_images[particle_index],
+                    dense_ctf[particle_index],
+                    dense_minvsigma2[particle_index],
+                    particle_posterior,
+                    translation_angles,
+                    native_eulers,
+                    threshold,
+                    weight_norm,
+                    current_image_shape,
+                    volume_shape,
+                    max_r,
+                )
+            )
+        else:
+            data_volume, weight_volume = (
+                cuda_backproject.relion_firstiter_bpref_fused_x_half(
+                    data_volume,
+                    weight_volume,
+                    dense_images[particle_index],
+                    dense_ctf[particle_index],
+                    dense_minvsigma2[particle_index],
+                    particle_posterior,
+                    translation_angles,
+                    native_eulers,
+                    threshold,
+                    weight_norm,
+                    current_image_shape,
+                    volume_shape,
+                    max_r,
+                )
+            )
         if capture_particle:
             isolated_data, isolated_weight = (
                 cuda_backproject.relion_firstiter_bpref_fused_x_half(
@@ -6016,6 +6137,8 @@ def _accumulate_relion_firstiter_bpref_fused(
                     ).copy(),
                 },
             )
+    if split_accumulators:
+        return data_volume_real, data_volume_imag, weight_volume
     return data_volume, weight_volume
 
 
@@ -6068,7 +6191,8 @@ def _deferred_firstiter_bpref_batch_nbytes(
 
 def _replay_deferred_firstiter_bpref_batches(
     batches: list[DeferredFirstiterBPrefBatch],
-    data_volume,
+    data_volume_real,
+    data_volume_imag,
     weight_volume,
     *,
     centered_pixel_indices,
@@ -6079,35 +6203,40 @@ def _replay_deferred_firstiter_bpref_batches(
     max_r: float,
     adaptive_fraction: float,
 ):
-    """Replay staged BPref groups through the unchanged native accumulator."""
+    """Replay staged groups in split layout, then interleave complex once."""
 
     for batch in batches:
-        data_volume, weight_volume = _accumulate_relion_firstiter_bpref_fused(
-            batch.raw_images,
-            batch.raw_ctf,
-            batch.raw_minvsigma2,
-            batch.posterior,
-            batch.rotations,
-            batch.actual_counts,
-            batch.particle_half_local_indices,
-            batch.particle_original_indices,
-            data_volume,
-            weight_volume,
-            centered_pixel_indices=centered_pixel_indices,
-            fftw_pixel_indices=fftw_pixel_indices,
-            translation_angles=translation_angles,
-            physical_image_shape=physical_image_shape,
-            volume_shape=volume_shape,
-            max_r=max_r,
-            adaptive_fraction=adaptive_fraction,
+        data_volume_real, data_volume_imag, weight_volume = (
+            _accumulate_relion_firstiter_bpref_fused_split(
+                batch.raw_images,
+                batch.raw_ctf,
+                batch.raw_minvsigma2,
+                batch.posterior,
+                batch.rotations,
+                batch.actual_counts,
+                batch.particle_half_local_indices,
+                batch.particle_original_indices,
+                data_volume_real,
+                data_volume_imag,
+                weight_volume,
+                centered_pixel_indices=centered_pixel_indices,
+                fftw_pixel_indices=fftw_pixel_indices,
+                translation_angles=translation_angles,
+                physical_image_shape=physical_image_shape,
+                volume_shape=volume_shape,
+                max_r=max_r,
+                adaptive_fraction=adaptive_fraction,
+            )
         )
         # A box-800 launch group owns tens of MiB of uploaded image/CTF/noise
         # operands.  The accumulator dependency preserves launch order, but
         # without this boundary Python can enqueue many later groups before
         # those operands are retired and rebuild the live-set pressure this
         # path avoids.
-        jax.block_until_ready((data_volume, weight_volume))
-    return data_volume, weight_volume
+        jax.block_until_ready(
+            (data_volume_real, data_volume_imag, weight_volume),
+        )
+    return jax.lax.complex(data_volume_real, data_volume_imag), weight_volume
 
 
 def _release_deferred_firstiter_projection_buffers(
@@ -16360,15 +16489,19 @@ def compute_pass2_stats_sparse_bucketed(
         projector_device_buffer = None
         gc.collect()
 
-        Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype)
-        jax.block_until_ready(Ft_y_total)
-        Ft_ctf_total = jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype)
-        jax.block_until_ready(Ft_ctf_total)
+        if (
+            jnp.dtype(recon_y_accum_dtype) != jnp.dtype(jnp.complex64)
+            or jnp.dtype(recon_ctf_accum_dtype) != jnp.dtype(jnp.float32)
+        ):
+            raise TypeError(
+                "deferred firstiter BPref requires complex64 data and float32 weight accumulators"
+            )
         replay_t0 = time.time()
         Ft_y_total, Ft_ctf_total = _replay_deferred_firstiter_bpref_batches(
             deferred_firstiter_bpref_batches,
-            Ft_y_total,
-            Ft_ctf_total,
+            jnp.zeros(recon_volume_size, dtype=jnp.float32),
+            jnp.zeros(recon_volume_size, dtype=jnp.float32),
+            jnp.zeros(recon_volume_size, dtype=jnp.float32),
             centered_pixel_indices=centered_recon_indices,
             fftw_pixel_indices=relion_x_half_recon_indices,
             translation_angles=relion_score_translation_angles,

@@ -948,6 +948,83 @@ def test_relion_firstiter_bpref_wrapper_uses_split_native_operands_and_static_sc
     assert weight_out is weight_volume
 
 
+def test_relion_firstiter_bpref_split_wrapper_preserves_three_ffi_aliases(
+    monkeypatch,
+):
+    observed = {}
+
+    def fake_ffi_call(target, result_types, **options):
+        observed["target"] = target
+        observed["result_types"] = result_types
+        observed["options"] = options
+
+        def call(*args, **attrs):
+            observed["args"] = args
+            observed["attrs"] = attrs
+            return args[8], args[9], args[10]
+
+        return call
+
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+    monkeypatch.setattr(
+        cuda_backproject.jax.lax,
+        "complex",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("split wrapper interleaved its accumulators")
+        ),
+    )
+
+    image_shape = (4, 4)
+    volume_shape = (7, 7, 7)
+    volume_size = 7 * 7 * 4
+    data_real = jnp.arange(volume_size, dtype=jnp.float32)
+    data_imag = -data_real
+    weight = jnp.full(volume_size, 3.0, dtype=jnp.float32)
+    image = jnp.arange(12, dtype=jnp.float32).astype(jnp.complex64) * (1.0 + 2.0j)
+    ctf = jnp.ones(12, dtype=jnp.float32)
+    minvsigma2 = jnp.full(12, 2.0, dtype=jnp.float32)
+    posterior = jnp.arange(6, dtype=jnp.float32).reshape(2, 3)
+    translation_angles = jnp.arange(6, dtype=jnp.float32).reshape(3, 2)
+    native_eulers = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3))
+
+    outputs = (
+        cuda_backproject._relion_firstiter_bpref_fused_x_half_split_static.__wrapped__(
+            data_real,
+            data_imag,
+            weight,
+            image,
+            ctf,
+            minvsigma2,
+            posterior,
+            translation_angles,
+            native_eulers,
+            0.125,
+            1.0,
+            image_shape,
+            volume_shape,
+            2.0,
+        )
+    )
+
+    assert observed["target"] == cuda_backproject._TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF
+    assert observed["options"]["input_output_aliases"] == {8: 0, 9: 1, 10: 2}
+    assert observed["options"]["vmap_method"] == "sequential"
+    assert [item.dtype for item in observed["result_types"]] == [
+        jnp.float32,
+        jnp.float32,
+        jnp.float32,
+    ]
+    assert outputs[0] is data_real
+    assert outputs[1] is data_imag
+    assert outputs[2] is weight
+    assert observed["args"][8] is data_real
+    assert observed["args"][9] is data_imag
+    assert observed["args"][10] is weight
+    assert observed["attrs"]["significant_weight"] == np.float32(0.125)
+    assert observed["attrs"]["weight_norm"] == np.float32(1.0)
+
+
 @pytest.mark.gpu
 def test_relion_firstiter_bpref_exact_native_ffi_smoke(
     monkeypatch, custom_cuda_lib, gpu_device
@@ -1033,9 +1110,9 @@ def test_deferred_firstiter_bpref_replay_matches_eager_native_accumulators_bitwi
         )
 
     groups = [
-        launch_group(np.complex64(2**24 + 0j), 0),
-        launch_group(np.complex64(1 + 0j), 1),
-        launch_group(np.complex64(-(2**24) + 0j), 2),
+        launch_group(np.complex64(2**24 - (2**24) * 1j), 0),
+        launch_group(np.complex64(1 + 1j), 1),
+        launch_group(np.complex64(-(2**24) + (2**24) * 1j), 2),
     ]
     staged = [
         sparse_pass2_bucketed._stage_deferred_firstiter_bpref_batch(**group)
@@ -1066,7 +1143,8 @@ def test_deferred_firstiter_bpref_replay_matches_eager_native_accumulators_bitwi
         deferred_data, deferred_weight = (
             sparse_pass2_bucketed._replay_deferred_firstiter_bpref_batches(
                 staged,
-                jnp.zeros(volume_size, dtype=jnp.complex64),
+                jnp.zeros(volume_size, dtype=jnp.float32),
+                jnp.zeros(volume_size, dtype=jnp.float32),
                 jnp.zeros(volume_size, dtype=jnp.float32),
                 **common,
             )
@@ -1083,6 +1161,9 @@ def test_deferred_firstiter_bpref_replay_matches_eager_native_accumulators_bitwi
         np.asarray(deferred_weight),
         np.asarray(eager_weight),
     )
+    cancellation_offset = 3 * (7 * 4) + 3 * 4
+    assert np.asarray(eager_data)[cancellation_offset] == np.complex64(0.0 + 1.0j)
+    assert np.asarray(eager_weight)[cancellation_offset] == np.float32(6.0)
 
 
 def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():

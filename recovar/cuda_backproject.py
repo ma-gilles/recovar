@@ -3334,6 +3334,50 @@ def relion_firstiter_bpref_fused_x_half(
     )
 
 
+def relion_firstiter_bpref_fused_x_half_split(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: jax.Array,
+    weight_norm: jax.Array,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Dispatch firstiter BPref while retaining its native split accumulators.
+
+    The CUDA target natively aliases separate real, imaginary, and weight
+    ``float32`` arrays.  This entry point lets a memory-constrained replay keep
+    that representation across launches and defer the full-volume complex
+    interleave until all contributions have been accumulated.
+    """
+
+    significant_weight_scalar = float(np.asarray(significant_weight).reshape(()))
+    weight_norm_scalar = float(np.asarray(weight_norm).reshape(()))
+    return _relion_firstiter_bpref_fused_x_half_split_static(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        image,
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles,
+        native_euler_matrices,
+        significant_weight_scalar,
+        weight_norm_scalar,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+
+
 @functools.partial(jax.jit, static_argnums=(8, 9, 10, 11, 12))
 def _relion_firstiter_bpref_fused_x_half_static(
     data_volume: jax.Array,
@@ -3358,6 +3402,94 @@ def _relion_firstiter_bpref_fused_x_half_static(
     native Euler matrices.  The output remains in RELION accumulator units;
     callers must not fold RECOVAR's N²/N⁴ normalization into these operands.
     """
+
+    expected_volume_size = int(
+        volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    )
+    if data_volume.dtype != jnp.dtype(jnp.complex64) or data_volume.shape != (
+        expected_volume_size,
+    ):
+        raise TypeError(
+            "RELION firstiter fused BPref data accumulator must be flat complex64 shape "
+            f"{(expected_volume_size,)}, got {data_volume.shape}/{data_volume.dtype}"
+        )
+    data_volume_real = jnp.real(data_volume).astype(jnp.float32)
+    data_volume_imag = jnp.imag(data_volume).astype(jnp.float32)
+    data_real_out, data_imag_out, weight_out = (
+        _relion_firstiter_bpref_fused_x_half_split_impl(
+            data_volume_real,
+            data_volume_imag,
+            weight_volume,
+            image,
+            ctf,
+            minvsigma2,
+            posterior,
+            translation_angles,
+            native_euler_matrices,
+            significant_weight,
+            weight_norm,
+            image_shape,
+            volume_shape,
+            max_r,
+        )
+    )
+    return jax.lax.complex(data_real_out, data_imag_out), weight_out
+
+
+@functools.partial(jax.jit, static_argnums=(9, 10, 11, 12, 13))
+def _relion_firstiter_bpref_fused_x_half_split_static(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: float,
+    weight_norm: float,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Run the native split firstiter BPref FFI without complex repacking."""
+
+    return _relion_firstiter_bpref_fused_x_half_split_impl(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        image,
+        ctf,
+        minvsigma2,
+        posterior,
+        translation_angles,
+        native_euler_matrices,
+        significant_weight,
+        weight_norm,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+
+
+def _relion_firstiter_bpref_fused_x_half_split_impl(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    image: jax.Array,
+    ctf: jax.Array,
+    minvsigma2: jax.Array,
+    posterior: jax.Array,
+    translation_angles: jax.Array,
+    native_euler_matrices: jax.Array,
+    significant_weight: float,
+    weight_norm: float,
+    image_shape: Tuple[int, int],
+    volume_shape: Tuple[int, int, int],
+    max_r: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Validate and issue the shared three-accumulator firstiter FFI call."""
 
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
@@ -3407,26 +3539,22 @@ def _relion_firstiter_bpref_fused_x_half_static(
         raise ValueError("RELION firstiter fused BPref scalar attributes must be finite")
     if weight_norm <= 0.0:
         raise ValueError("RELION firstiter fused BPref weight norm must be positive")
-    if data_volume.dtype != jnp.dtype(jnp.complex64) or data_volume.shape != (
-        expected_volume_size,
+    for label, value in (
+        ("real data", data_volume_real),
+        ("imaginary data", data_volume_imag),
+        ("weight", weight_volume),
     ):
-        raise TypeError(
-            "RELION firstiter fused BPref data accumulator must be flat complex64 shape "
-            f"{(expected_volume_size,)}, got {data_volume.shape}/{data_volume.dtype}"
-        )
-    if weight_volume.dtype != jnp.dtype(jnp.float32) or weight_volume.shape != (
-        expected_volume_size,
-    ):
-        raise TypeError(
-            "RELION firstiter fused BPref weight accumulator must be flat float32 shape "
-            f"{(expected_volume_size,)}, got {weight_volume.shape}/{weight_volume.dtype}"
-        )
+        if value.dtype != jnp.dtype(jnp.float32) or value.shape != (
+            expected_volume_size,
+        ):
+            raise TypeError(
+                f"RELION firstiter fused BPref {label} accumulator must be flat "
+                f"float32 shape {(expected_volume_size,)}, got {value.shape}/{value.dtype}"
+            )
 
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
     kw["significant_weight"] = np.float32(significant_weight)
     kw["weight_norm"] = np.float32(weight_norm)
-    data_volume_real = jnp.real(data_volume).astype(jnp.float32)
-    data_volume_imag = jnp.imag(data_volume).astype(jnp.float32)
     out_types = (
         jax.ShapeDtypeStruct(data_volume_real.shape, data_volume_real.dtype),
         jax.ShapeDtypeStruct(data_volume_imag.shape, data_volume_imag.dtype),
@@ -3451,7 +3579,7 @@ def _relion_firstiter_bpref_fused_x_half_static(
         weight_volume,
         **kw,
     )
-    return jax.lax.complex(data_real_out, data_imag_out), weight_out
+    return data_real_out, data_imag_out, weight_out
 
 
 @functools.partial(jax.jit, static_argnums=(8, 9, 10))
