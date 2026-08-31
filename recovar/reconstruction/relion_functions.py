@@ -1179,6 +1179,41 @@ def _relion_pad_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_vo
     ].set(vol_half)
 
 
+def _relion_crop_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_volume_shape):
+    """Crop centered packed Fourier data directly into raw FFTW ordering.
+
+    This is the cropping branch of :func:`_relion_window_centered_half_fourier`
+    with the two non-packed axes emitted in the layout consumed by
+    ``irfftn``.  Selecting the final order directly avoids retaining a
+    box-scale centered crop while ``ifftshift`` materializes an equally large
+    raw-FFTW copy.
+    """
+
+    old_volume_shape = tuple(int(s) for s in old_volume_shape)
+    new_volume_shape = tuple(int(s) for s in new_volume_shape)
+    if len(set(old_volume_shape)) != 1 or len(set(new_volume_shape)) != 1:
+        raise ValueError(
+            "RELION Fourier cropping currently requires cubic shapes, got "
+            f"old={old_volume_shape}, new={new_volume_shape}"
+        )
+    old_dim = old_volume_shape[0]
+    new_dim = new_volume_shape[0]
+    if new_dim >= old_dim:
+        raise ValueError(f"direct FFTW cropping requires new_dim < old_dim, got {new_dim} >= {old_dim}")
+
+    old_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(old_volume_shape)
+    new_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(new_volume_shape)
+    vol_half = vol_half.reshape(old_half_shape)
+    centered_axis_idx = _relion_centered_axis_take_indices(old_dim, new_dim)
+    raw_axis_idx = jnp.asarray(np.fft.ifftshift(centered_axis_idx), dtype=jnp.int32)
+    col_idx = jnp.arange(new_half_shape[-1], dtype=jnp.int32)
+    return vol_half[
+        raw_axis_idx[:, None, None],
+        raw_axis_idx[None, :, None],
+        col_idx[None, None, :],
+    ]
+
+
 def _relion_idft3_real_from_fftw_half(vol_half, volume_shape):
     """Inverse-transform a packed half-volume already in raw FFTW order."""
 
@@ -1417,15 +1452,19 @@ def post_process_from_filter_v2(
     if input_half_volume:
         vol_half = vol.reshape(packed_shape)
         if reconstruction_volume_shape != upsampled_volume_shape:
-            if (
-                use_large_reconstruction_single_precision
-                and reconstruction_volume_shape[0] > upsampled_volume_shape[0]
-            ):
-                vol_half = _relion_pad_centered_half_fourier_to_fftw(
-                    vol_half,
-                    upsampled_volume_shape,
-                    reconstruction_volume_shape,
-                )
+            if use_large_reconstruction_single_precision:
+                if reconstruction_volume_shape[0] > upsampled_volume_shape[0]:
+                    vol_half = _relion_pad_centered_half_fourier_to_fftw(
+                        vol_half,
+                        upsampled_volume_shape,
+                        reconstruction_volume_shape,
+                    )
+                else:
+                    vol_half = _relion_crop_centered_half_fourier_to_fftw(
+                        vol_half,
+                        upsampled_volume_shape,
+                        reconstruction_volume_shape,
+                    )
                 vol = _relion_idft3_real_from_fftw_half(vol_half, reconstruction_volume_shape)
             else:
                 vol_half = _relion_window_centered_half_fourier(

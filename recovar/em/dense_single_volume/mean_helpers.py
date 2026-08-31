@@ -7,6 +7,7 @@ at ``iteration_loop.<name>``; all dependencies are imported directly.
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import time
@@ -313,6 +314,22 @@ def _reconstruct_volume_eager(
     )
 
 
+def _finish_host_staged_reconstruction(result, *accumulators):
+    """Finish a host-staged reconstruction before dispatching the next half.
+
+    Large RELION accumulators are moved to NumPy before reconstruction so the
+    device only needs one half's inputs and FFT workspace at a time.  JAX
+    dispatch is asynchronous, so wait here before the loop starts the other
+    half; otherwise both padded FFT workspaces can overlap despite the host
+    staging boundary.
+    """
+
+    if any(isinstance(accumulator, np.ndarray) for accumulator in accumulators):
+        result.block_until_ready()
+        gc.collect()
+    return result
+
+
 def _apply_relion_initial_lowpass_filter(
     volume_ft_flat, volume_shape, voxel_size, ini_high_angstrom, filter_edgewidth=5
 ):
@@ -468,7 +485,7 @@ def _reconstruct_and_postprocess_means(
                 reconstruction_tau_source,
                 dtype=jnp.float64,
             )
-            means[k] = _reconstruct_volume_eager(
+            reconstructed = _reconstruct_volume_eager(
                 Ft_ctf_k_local,
                 Ft_y_k_local,
                 volume_shape,
@@ -483,6 +500,11 @@ def _reconstruct_and_postprocess_means(
                 preserve_output_precision=True,
                 relion_filter_scale=float(volume_shape[0] ** 4),
             ).reshape(-1)
+            means[k] = _finish_host_staged_reconstruction(
+                reconstructed,
+                Ft_ctf_k_local,
+                Ft_y_k_local,
+            )
 
     for k in range(2):
         # Diagnostic: dump pre-mask Wiener output when env var set.

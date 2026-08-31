@@ -12913,6 +12913,36 @@ class TestRelionModeSmokeTest:
         assert means[0].shape == (VOLUME_SIZE,)
         assert means[1].shape == (VOLUME_SIZE,)
 
+    def test_host_staged_k1_reconstruction_blocks_before_next_half(self, monkeypatch):
+        """Host-staged box-scale reconstruction must serialize its FFT workspace."""
+        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+
+        events = []
+
+        class Result:
+            def block_until_ready(self):
+                events.append("block")
+
+        monkeypatch.setattr(mean_helpers_module.gc, "collect", lambda: events.append("collect"))
+        result = Result()
+
+        returned = mean_helpers_module._finish_host_staged_reconstruction(
+            result,
+            np.ones(1, dtype=np.float32),
+            jnp.ones(1, dtype=jnp.float32),
+        )
+        assert returned is result
+        assert events == ["block", "collect"]
+
+        events.clear()
+        returned = mean_helpers_module._finish_host_staged_reconstruction(
+            result,
+            jnp.ones(1, dtype=jnp.float32),
+            jnp.ones(1, dtype=jnp.float32),
+        )
+        assert returned is result
+        assert events == []
+
     def test_k1_save_intermediates_reconstructs_unregularized_half_maps(
         self,
         half_datasets,

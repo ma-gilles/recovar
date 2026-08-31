@@ -998,6 +998,84 @@ def test_relion_direct_fftw_half_padding_matches_centered_path_bitwise(old_dim, 
     np.testing.assert_array_equal(np.asarray(direct_real), np.asarray(centered_real))
 
 
+@pytest.mark.parametrize(("old_dim", "new_dim"), [(11, 8), (11, 9), (12, 8), (12, 9)])
+def test_relion_direct_fftw_half_crop_matches_centered_path_bitwise(old_dim, new_dim):
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(911 + old_dim + new_dim)
+    old_shape = (old_dim, old_dim, old_dim)
+    new_shape = (new_dim, new_dim, new_dim)
+    old_half_shape = ftu.volume_shape_to_half_volume_shape(old_shape)
+    vol_half = (
+        rng.standard_normal(old_half_shape) + 1j * rng.standard_normal(old_half_shape)
+    ).astype(np.complex64)
+
+    centered = rf._relion_window_centered_half_fourier(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    direct_fftw = rf._relion_crop_centered_half_fourier_to_fftw(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    shifted_reference = jnp.fft.ifftshift(centered, axes=(0, 1))
+
+    np.testing.assert_array_equal(np.asarray(direct_fftw), np.asarray(shifted_reference))
+    direct_real = rf._relion_idft3_real_from_fftw_half(direct_fftw, new_shape)
+    centered_real = ftu.get_idft3_real(centered, volume_shape=new_shape)
+    np.testing.assert_array_equal(np.asarray(direct_real), np.asarray(centered_real))
+
+
+def test_large_odd_accumulator_crop_routes_directly_to_fftw(monkeypatch):
+    import recovar.core.fourier_transform_utils as ftu
+
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+
+    direct_crop = rf._relion_crop_centered_half_fourier_to_fftw
+    calls = []
+
+    def record_direct_crop(vol_half, old_volume_shape, new_volume_shape):
+        calls.append((tuple(old_volume_shape), tuple(new_volume_shape)))
+        return direct_crop(vol_half, old_volume_shape, new_volume_shape)
+
+    def reject_centered_window(*_args, **_kwargs):
+        raise AssertionError("large half-volume crop must not materialize the centered window")
+
+    monkeypatch.setattr(rf, "_relion_crop_centered_half_fourier_to_fftw", record_direct_crop)
+    monkeypatch.setattr(rf, "_relion_window_centered_half_fourier", reject_centered_window)
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = jnp.ones(half_shape, dtype=jnp.float32)
+    f_ty = jnp.zeros(half_shape, dtype=jnp.complex64).at[5, 5, 0].set(1.0)
+    tau = jnp.ones(int(np.prod(volume_shape)), dtype=jnp.float32)
+
+    result = rf.post_process_from_filter_v2(
+        ft_ctf.reshape(-1),
+        f_ty.reshape(-1),
+        volume_shape,
+        2,
+        tau=tau,
+        kernel="triangular",
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        return_real_space=True,
+        accumulator_volume_shape=accumulator_shape,
+    )
+    np.asarray(result)
+
+    assert calls == [(accumulator_shape, (8, 8, 8))]
+    if callable(clear_cache):
+        clear_cache()
+
+
 def test_relion_odd_accumulator_postprocess_windows_to_even_padded_grid():
     import recovar.core.fourier_transform_utils as ftu
 
