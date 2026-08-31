@@ -4013,6 +4013,7 @@ def run_local_em_exact(
     seen_reconstruction_global_rotations = np.zeros_like(seen_global_rotations)
     total_padded_rotations = 0
     chunk_sizes = []
+    chunk_padded_image_counts = []
     chunk_local_rotations = []
     chunk_padded_rotations = []
     chunk_unique_rotations = []
@@ -4561,13 +4562,22 @@ def run_local_em_exact(
         n_chunks += 1
         if collect_profile_stats:
             chunk_sizes.append(int(bucket.image_indices.shape[0]))
+            padded_image_count = max(
+                int(bucket.image_indices.shape[0]),
+                int(getattr(bucket, "bucket_image_count", bucket.image_indices.shape[0])),
+            )
+            chunk_padded_image_counts.append(padded_image_count)
             chunk_local_rotations.append(int(np.sum(bucket.actual_rotation_counts)))
-            chunk_padded_rotations.append(int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count))
+            chunk_padded_rotations.append(
+                int(padded_image_count * bucket.bucket_rotation_count)
+            )
             bucket_valid_rotation_ids = np.asarray(bucket.local_rotation_ids, dtype=np.int64)[
                 np.asarray(bucket.local_rotation_mask, dtype=bool)
             ]
             chunk_unique_rotations.append(int(np.unique(bucket_valid_rotation_ids).shape[0]))
-            total_padded_rotations += int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count)
+            total_padded_rotations += int(
+                padded_image_count * bucket.bucket_rotation_count
+            )
             local_total_hypotheses += int(np.sum(bucket.actual_rotation_counts) * n_trans)
         fetch_t0 = time.time()
         if raw_batch_cache is None:
@@ -7873,6 +7883,10 @@ def run_local_em_exact(
         "projection_mode": np.asarray(projection_mode),
         "n_projection_windowed": np.int32(window_spec.n_projection),
         "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
+        "chunk_padded_image_counts": np.asarray(
+            chunk_padded_image_counts,
+            dtype=np.int32,
+        ),
         "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
         "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
         "chunk_unique_rotations": np.asarray(chunk_unique_rotations, dtype=np.int32),
