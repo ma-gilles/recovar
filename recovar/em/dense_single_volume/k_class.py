@@ -2233,6 +2233,12 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         # default is deliberately conservative for K>1.
         relion_exact_fine_normalized_cc=n_classes == 1,
         relion_firstiter_winner_take_all=True,
+        # K=1 production firstiter-CC must use the literal RELION fine
+        # numerator/denominator reduction.  Previously only the coarse probe
+        # enabled this path, leaving the actual pass-2 M-step on the folded
+        # algebraic shortcut.  Both are algebraically equivalent, but the
+        # literal route follows RELION's reduction contract directly.
+        relion_exact_fine_normalized_cc=n_classes == 1,
         bpref_device_signature_active=bool(
             pass2_kwargs.get("bpref_device_signature_active", False)
         ),
