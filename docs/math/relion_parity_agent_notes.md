@@ -14094,3 +14094,102 @@ Committed as `bada1a2e` on `double_parity`.
   round (not requested), remains a real gap for any future double-
   precision comparison run through that script specifically.
 - Everything listed as "Still open" in round 3's entry above is unchanged.
+
+## 2026-08-31 double-precision pass-1 translation-prior boundary
+
+The live K-class pass-1 entry point still narrowed `translation_log_prior`
+to `float32` before shape validation, even though the same function had
+already resolved `score_real_dtype` from `use_float64_scoring` and used it
+for rotation priors and downstream scoring.  The boundary now casts to
+`score_real_dtype`, preserving float64 in double-scoring mode and retaining
+float32 in the default mode.  The explicit conversion remains necessary so
+array-like inputs continue to support the existing `.ndim`/`.shape`
+validation.  A source-level merge guard covers both rotation and translation
+prior casts.  CPU validation:
+`pixi run python -m pytest tests/unit/test_em_kclass_merge_guards.py -q`
+(`51 passed`).
+
+## 2026-08-31 full `dense_single_volume` precision audit
+
+Three read-only subsystem sweeps covered every Python file under
+`recovar/em/dense_single_volume`: shared helpers; dense/local engines; and
+iteration/K-class/sparse-pass orchestration. Diagnostic/capture schemas,
+exact constants, and explicit CUDA `_f32` ABI calls were classified separately
+from live computation. The integrated fixes remove live narrowing at these
+boundaries:
+
+- shared `RelionStats`/`NoiseStats` constructors preserve producer dtype;
+- single- and K-class pass-1 priors/statistics follow scoring precision;
+- dense corrections and non-integral pre-shifts follow score precision, while
+  RELION CUDA preprocessing remains float32 only at its ABI;
+- dense/local big-JIT noise, norm, posterior-mass, and offset accumulators
+  derive dtype from live scores/posteriors;
+- sparse pass-2 translation grids, priors, corrections, pose/Pmax outputs, and
+  per-image prior packing follow the precision policy for K=1 and K-class;
+- K-class fallback grids/priors follow pass-2 scoring/projection flags;
+- global, sealed, and replay translations plus replay poses, corrections,
+  noise, and direction priors retain double precision in double mode;
+- local reconstruction probabilities used for global support thresholds retain
+  scoring precision; and legacy oversampling no longer narrow-then-widens.
+
+Deliberately unchanged: frozen/capture/parity-dump formats; hardware-bound
+CUDA `*_f32` kernels; metadata Euler serialization; exactly representable
+half-spectrum weights/constants; explicit float32 backprojector/capture modes;
+and diagnostic float32 reduction replays.
+
+Remaining policy/kernel work: exact RELION-GPU Gaussian diff2 and opt-in Wavg
+atomic families have no `_f64` CUDA counterparts; dormant public
+`build_pass2_hypothesis_layout` remains float32-only; batch memory estimates
+mix conservative complex128 tiles with complex64 assumptions; and some sparse
+XA/AA reductions retain RELION-f32 ordering pending a dedicated comparison.
+
+CPU validation: focused merge/K-class/budget tests `107 passed`; fast guard
+`16 passed`; focused sealed/replay and sparse dtype tests `4 passed`. A broader
+batch had `92 passed`, five known missing-FFTW binding failures, and one newly
+exposed bucket-vs-reference complex64 M-step accumulation-order difference
+(maximum `4.99e-6`) after both paths genuinely used float64 geometry; its
+tolerance was not widened. GPU job `60368517` failed before testing on the
+known bad node plus a missing harness variable. Corrected `gpu` job `60368743`
+ran successfully on an idle A100 and confirmed JAX GPU visibility, but all
+seven fast-parity cases skipped because their `/scratch/gpfs/GILLES/mg6942`
+fixtures are unavailable on this cluster. It is environment evidence only,
+not a GPU quality qualification for this patch batch.
+
+### Clean replay after the cast audit
+
+Slurm `gpu` job `60374001` ran the requested three-iteration replay
+sequentially with the double scoring, projection, and x-half M-step switches.
+The authoritative output is
+`/home/ry295/palmer_scratch/tmp/recovar_em_test_dtypefix_60374001`; logs are
+`/vast/palmer/scratch/lederman/ry295/slurmo/em-double-audit-60374001.{out,err}`.
+
+The dtype changes did not shrink the residual gap at displayed precision. At
+iteration 3, RELION/RECOVAR remained `ave_Pmax_optimizer=0.9322/0.9317` and
+`sigma_offsets_mean_A=1.4769/1.4772`; direction-prior relative L1 remained
+`3.733e-4` (half 1) and `4.138e-4` (half 2). This makes an env-gated routing or
+algorithmic difference the next hypothesis, rather than another ordinary
+host-side float32 cast.
+
+## 2026-08-31 implementation-gap localization after the dtype audit
+
+Controlled GPU ablations rejected the ACC-double `floorf` coordinate quirk
+(job `60374288`) and fine-rotation execution order (job `60374344`). Replaying
+only RELION's iteration-2 maps as iteration-3 references (job `60374396`)
+moved RECOVAR `ave_Pmax` from `0.93170411` to `0.93214603` versus RELION's
+displayed `0.9322`, establishing that the dominant parameter residual is
+inherited through the maps. Iteration-2 post-mask map relative L2 is
+`1.283e-3/2.701e-3`; replaying RELION iteration-1 references (job `60374590`)
+reduces it to `9.937e-4/1.244e-3`, localizing a substantial component to the
+first-iteration transition.
+
+The exact float32 fine-Gaussian route (job `60374528`) and newly wired literal
+K=1 first-iteration fine normalized-CC route (job `60374655`) were both null
+attributions. The latter remains a source-faithful production routing fix.
+
+One additional live dtype bug was found in sparse M-step statistics:
+support-weighted image power and per-image norm results narrowed to float32
+before shell/host-float64 accumulation. These reductions and their chunked
+noise/norm accumulator initializers now preserve input-derived precision.
+Focused CPU tests pass. GPU job `60374777` proves the change is live in the
+noise trajectory (`noise_radial_iter_001` relative L2 `4.14e-8`) but negligible
+for the open gap (`ave_Pmax` change `1.1e-16`; final-map relative L2 `<6e-15`).

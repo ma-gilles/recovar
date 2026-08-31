@@ -15975,3 +15975,117 @@ by building the extension explicitly once with CUDA still loaded (job
 
 Committed as `bada1a2e`. **`scripts/run_comparison.py` still has the same
 unfixed independent init_volume path** -- open for a future session.
+
+### 2026-08-31 dense single-volume double-precision audit
+
+A complete static/call-chain audit of `recovar/em/dense_single_volume/**`
+removed additional live narrowing at shared stats, pass-1 priors,
+correction/pre-shift, global/replay translation, dense/local noise, sparse
+pass-2 geometry/prior/output, and K-class fallback boundaries. CPU fast guard
+passes 16/16. GPU job `60368743` on the `gpu` partition confirmed an idle A100
+and JAX GPU visibility, but all seven fast-parity cases skipped because this
+cluster lacks their `/scratch/gpfs/GILLES/mg6942` fixtures. The integrated
+batch is therefore not yet GPU quality-qualified. Detailed classifications
+and intentionally retained boundaries are in `relion_parity_agent_notes.md`.
+
+Clean three-iteration GPU replay `60374001` subsequently exercised the exact
+seeded dataset and requested command. Its residual iteration-3 parameter gaps
+were unchanged at displayed precision after the dtype audit. The next phase is
+therefore an implementation/routing investigation, starting with a complete
+inventory and controlled ablation of RELION-parity environment gates.
+
+### Active hypothesis: ACC_DOUBLE coordinate flooring
+
+The first controlled implementation-gap experiment tests
+`RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK=1`. RELION's accelerated double path
+still narrows interpolation coordinates before `floorf`, whereas RECOVAR's
+complex128/manual projector otherwise retains double coordinates. The
+disproof criterion is simple: if the iteration-1 shell/sigma residuals and
+iteration-2 Pmax/direction-prior residuals are unchanged versus GPU baseline
+`60374001`, reject this gate and move to fine-score execution ordering.
+
+Result: rejected by GPU job `60374288`. All displayed per-iteration fields and
+direction-prior differences were unchanged; saved state was identical apart
+from negligible reconstruction/noise roundoff and timing/provenance.
+
+### Active hypothesis: fine-rotation execution order
+
+Test `RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1` independently. It keeps
+the candidate set fixed but orders fine rotations by RELION parent execution
+order, potentially changing near-tie/reduction behavior. Reject if Pmax,
+direction-prior, and pose/state arrays remain unchanged versus `60374001`.
+
+Result: rejected by GPU job `60374344`. Pmax moved only at `1e-16`; all
+displayed parameters and direction priors were unchanged.
+
+### Active hypothesis: iteration-3 reference map
+
+Substitute only RELION's reference maps at iteration 3 using the existing
+fail-closed replay diagnostic. If the iteration-3 Pmax residual closes, trace
+the iteration-2 BPref/reconstruction boundary. If it remains, localize inside
+iteration-3 significance and fine Gaussian scoring.
+
+Result: confirmed by GPU job `60374396`. Iteration-3 `ave_Pmax` improved from
+`0.931704` to `0.932146` (RELION displays `0.9322`), and direction-prior
+relative L1 improved from `3.73e-4/4.14e-4` to `2.12e-4/1.18e-4`.
+
+### Active hypothesis: iteration-2 reconstruction boundary
+
+Capture iteration-2 post-join BPref accumulators, full-precision pre-mask
+Wiener maps, and post-mask per-iteration maps in one baseline run. Compare the
+post-mask maps directly to RELION and decompose global/shell scaling; use the
+pre-mask/BPref boundary to decide whether the next oracle instrumentation must
+target accumulation or reconstruction/postprocessing.
+
+Result: GPU job `60374462` captured the boundary. Iteration-2 post-mask maps
+already differ from RELION by scale-fitted relative L2 `1.28e-3` (half 1) and
+`2.70e-3` (half 2), while optimal global scale is `1.000013/0.999996`.
+Therefore the causal reference mismatch is structured rather than a global
+normalization error. Raw iteration-2 BPref and full-precision pre-mask dumps
+are preserved under
+`/home/ry295/palmer_scratch/tmp/recovar_em_it2_recon_60374462`.
+
+### Active hypothesis: exact fine Gaussian scoring route
+
+As a causal diagnostic, keep float64 projections and double x-half M-step but
+disable float64 scoring so the existing RELION-exact direct diff2/minimum
+route is exercised in iterations 2-3. Improvement in the iteration-2 map and
+iteration-3 Pmax will justify implementing the same direct ordering in
+float64; no improvement rejects scorer ordering as the map cause.
+
+Result: rejected by GPU job `60374528`. The exact float32 direct-diff2 route
+left iteration-2 map relative L2 at `1.28e-3/2.70e-3` and the displayed
+iteration-3 Pmax/direction-prior residuals unchanged.
+
+### Active hypothesis: inherited iteration-1 reference error
+
+Replay RELION reference maps only at iteration 2, capture the resulting
+iteration-2 post-mask maps, and compare them with RELION. A large reduction
+means the iteration-2 map gap is inherited from iteration 1; persistence
+places it within iteration-2 E/M accumulation or reconstruction.
+
+Result: GPU job `60374590` reduced the iteration-2 scale-fitted map relative
+L2 from `1.28e-3/2.70e-3` to `9.94e-4/1.24e-3`. Thus the first-iteration map
+accounts for a substantial fraction of the later residual, especially in
+half 2, while an approximately `1e-3` iteration-2 transition residual remains.
+
+### Production exact first-iteration fine CC routing
+
+The production K=1 first-iteration sparse pass did not request the literal
+RELION fine normalized-CC scorer, even though its coarse probe did. The route
+is now wired for K=1 and guarded by a focused unit test. GPU job `60374655`
+showed this is a null attribution for the seeded fixture: iteration-2 maps and
+iteration-3 Pmax, sigma-offset, and direction-prior residuals were unchanged.
+The correction is retained as a source-faithful routing fix, but it does not
+explain the measured map gap.
+
+### Sparse image-power precision boundary
+
+The sparse M-step still narrowed the support-weighted image-power vector and
+per-image norm sum to float32 before shell/noise and host-float64 accumulation.
+Those reductions now preserve the producer dtype; a focused float64 dtype test
+passes. GPU job `60374777` confirms the change is live in the noise trajectory
+(`noise_radial_iter_001` changes by up to `3.67e-2`, relative L2 `4.14e-8`),
+but the reconstruction/Pmax effect is only roundoff (`ave_Pmax` `1.1e-16`,
+final-map relative L2 below `6e-15`). It is a valid precision fix, not the
+cause of the remaining parity gap.

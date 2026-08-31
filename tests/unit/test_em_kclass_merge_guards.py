@@ -1522,6 +1522,13 @@ def test_adaptive_significance_forwards_firstiter_score_mode():
     assert 'score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian")' in source
 
 
+def test_k1_firstiter_sparse_pass2_uses_exact_relion_cc_scorer():
+    """The exact scorer must be wired into the production fine pass, not only its probe."""
+
+    source = inspect.getsource(k_class_mod._run_sparse_firstiter_global_winner_subset_pass2)
+    assert 'relion_exact_fine_normalized_cc=n_classes == 1' in source
+
+
 # ----------------------------------------------------------------------
 # WIDTH_FMASK_EDGE plumbing through iteration_loop
 # (Constant-value assertion lives in test_em_parity_lowpass_and_tau2_fudge.py;

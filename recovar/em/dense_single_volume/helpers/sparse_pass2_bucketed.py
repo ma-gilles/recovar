@@ -4278,9 +4278,14 @@ def _compute_noise_block_chunked(
             n_chunks,
             int(max_block_bytes) / float(1024**3),
         )
-    noise_total = jnp.zeros(shell_count, dtype=jnp.float32)
-    a2_total = jnp.zeros(shell_count, dtype=jnp.float32)
-    xa_total = jnp.zeros(shell_count, dtype=jnp.float32)
+    accumulator_dtype = jnp.result_type(
+        proj_abs2_half.dtype,
+        ctf_probs.dtype,
+        noise_variance_half.dtype,
+    )
+    noise_total = jnp.zeros(shell_count, dtype=accumulator_dtype)
+    a2_total = jnp.zeros(shell_count, dtype=accumulator_dtype)
+    xa_total = jnp.zeros(shell_count, dtype=accumulator_dtype)
     for start in range(0, n_rows, max_rows):
         stop = min(start + max_rows, n_rows)
         noise_chunk, a2_chunk, xa_chunk = _compute_noise_block(
@@ -4457,8 +4462,13 @@ def _compute_noise_block_and_norm_residual_chunked(
             n_chunks,
             int(max_block_bytes) / float(1024**3),
         )
-    noise_total = jnp.zeros(int(shell_count), dtype=jnp.float32)
-    norm_total = jnp.zeros(int(batch_size), dtype=jnp.float32)
+    accumulator_dtype = jnp.result_type(
+        proj_abs2_half.dtype,
+        ctf_probs.dtype,
+        noise_variance_half.dtype,
+    )
+    noise_total = jnp.zeros(int(shell_count), dtype=accumulator_dtype)
+    norm_total = jnp.zeros(int(batch_size), dtype=accumulator_dtype)
     for start in range(0, n_rows, max_rows):
         stop = min(start + max_rows, n_rows)
         noise_chunk, norm_chunk = compute_block(
@@ -4514,7 +4524,11 @@ def _weighted_image_power_shells_and_per_image(
         shell_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], shell_mass)
         norm_mass = jnp.where(unweighted_shell[None, :], high_shell_mass[:, None], norm_mass)
     weighted_pixel_power = pixel_power * shell_mass
-    weighted_half = jnp.sum(weighted_pixel_power, axis=0).astype(jnp.float32)
+    # Keep the image-power reduction in the producer precision.  RELION's
+    # RFLOAT path is binary64 for the double-precision oracle, and narrowing
+    # here perturbs both the shell noise statistics and the per-image norm
+    # correction before either is accumulated into the host float64 totals.
+    weighted_half = jnp.sum(weighted_pixel_power, axis=0)
     weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
     source_faithful_spectrum_norm = _env_flag_enabled(
         _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
@@ -4549,8 +4563,7 @@ def _weighted_image_power_shells_and_per_image(
         # with RELION powerClass's divide-before-square float32 arithmetic.
         weighted_per_image = jax.lax.optimization_barrier(weighted_per_image)
         weighted_per_image = weighted_per_image + full_mass * (replacement_high - generic_high)
-    output_dtype = norm_reduction_dtype if source_faithful_spectrum_norm else jnp.float32
-    return weighted_shells, weighted_per_image.astype(output_dtype)
+    return weighted_shells, weighted_per_image.astype(norm_reduction_dtype)
 
 
 def _make_relion_wavg_rectangle(
@@ -7725,8 +7738,16 @@ def _compute_active_noise_rows_chunked(
     """Gather compact active noise rows in row chunks before accumulation."""
 
     n_rows = int(active_indices.size)
+    accumulator_dtype = jnp.result_type(
+        proj_abs2_for_noise.dtype,
+        ctf_probs_for_noise.dtype,
+        noise_variance_half.dtype,
+    )
     if n_rows <= 0:
-        return jnp.zeros(int(shell_count), dtype=jnp.float32), jnp.zeros(int(batch_size), dtype=jnp.float32)
+        return (
+            jnp.zeros(int(shell_count), dtype=accumulator_dtype),
+            jnp.zeros(int(batch_size), dtype=accumulator_dtype),
+        )
 
     use_residual_terms = _env_flag_enabled(_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV, default=True)
     if max_block_bytes is None:
@@ -7761,8 +7782,8 @@ def _compute_active_noise_rows_chunked(
                 int(max_block_bytes or 0) / float(1024**3),
             )
 
-    noise_total = jnp.zeros(int(shell_count), dtype=jnp.float32)
-    norm_total = jnp.zeros(int(batch_size), dtype=jnp.float32)
+    noise_total = jnp.zeros(int(shell_count), dtype=accumulator_dtype)
+    norm_total = jnp.zeros(int(batch_size), dtype=accumulator_dtype)
     for start in range(0, n_rows, max_rows):
         stop = min(start + max_rows, n_rows)
         noise_chunk, norm_chunk = _compute_active_noise_rows_block(

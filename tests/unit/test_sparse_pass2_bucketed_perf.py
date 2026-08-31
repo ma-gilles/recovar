@@ -4482,6 +4482,25 @@ def test_weighted_image_power_shells_uses_per_image_support_mass():
     np.testing.assert_allclose(np.asarray(shells), expected_shells, rtol=1e-6, atol=1e-6)
 
 
+def test_weighted_image_power_preserves_double_precision():
+    processed_half = jnp.asarray(
+        [[1.0 + 2.0j, 3.0 + 4.0j]],
+        dtype=jnp.complex128,
+    )
+    support_mass = jnp.asarray([0.75], dtype=jnp.float64)
+    shell_indices = jnp.asarray([0, 1], dtype=jnp.int32)
+
+    shells, per_image = _weighted_image_power_shells_and_per_image(
+        processed_half,
+        shell_indices,
+        support_mass,
+        shell_count=2,
+    )
+
+    assert shells.dtype == jnp.float64
+    assert per_image.dtype == jnp.float64
+
+
 def test_weighted_image_power_uses_unweighted_high_shells_for_noise_and_normcorr():
     processed_half = jnp.asarray(
         [

@@ -8108,7 +8108,7 @@ def _run_relion_iteration_loop(
                         relion_follower_scale_state,
                         group_ids=physical_groups,
                         follower_owners=relion_follower_owners_per_half[half_idx],
-                    ).astype(np.float32)
+                    ).astype(_dense_global_scoring_dtype(), copy=False)
                     normcorr = np.asarray(
                         norm_scale_update.norm_corrections_per_half[half_idx],
                         dtype=np.float64,
@@ -8119,7 +8119,7 @@ def _run_relion_iteration_loop(
                     relion_half_inputs.scale_corrections[half_idx] = selected_scales
                     relion_half_inputs.image_corrections[half_idx] = np.asarray(
                         norm_factor * selected_scales,
-                        dtype=np.float32,
+                        dtype=_dense_global_scoring_dtype(),
                     )
                 group_scale_corrections_for_dump = [
                     relion_rank1_serialized_scales(relion_follower_scale_state),
