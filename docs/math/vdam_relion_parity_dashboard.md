@@ -12,7 +12,7 @@
 | Same-GPU map envelope | **PASS 81/81** | Minimum best-native FSC AUC `0.9999885424`; no checkpoint outside. |
 | Active-particle envelope | **FAIL@37 — OPEN** | 35/80 checkpoints fail; 360/360 active particles are unmatched at iteration 80. |
 | Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is cross-GPU and trajectories differ. No speedup or regression claim. |
-| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling unset; test exact-local x-half bucket sizing and shared coarse-projection reuse with strict same-GPU state/map gates. |
+| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling and bounded raw reuse off; test x-half sizing, shared coarse-projection reuse, and pool-preserving local buckets. |
 
 ## At a glance
 
@@ -184,6 +184,16 @@ Palette evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_sig_bu
 
 All 20/20 pose/translation checkpoints match across arms. Keep profiling unset in production. The late-arm input/pass-1 slowdown confounds the exact magnitude, so the observed median ratio is diagnostic only. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_profile_toggle_pair_52c38c85b_20260831/pair_summary.json` (SHA-256 `2eab2b313f7484407ed639d97c149f7afc8cefba1cb19a490bf8103ea316f778`).
 
+### Bounded pass-to-pass raw cache: job `13260861`
+
+| Iteration sample | Control slice | Cached slice | Change |
+|---:|---:|---:|---:|
+| 1 | 0.1473 s | 0.0859 s | -41.7% |
+| 9 | 0.1462 s | 0.0856 s | -41.4% |
+| 20 | 0.1469 s | 0.0859 s | -41.5% |
+
+All 15/15 raw, metadata, and masked/unmasked CUDA-preprocess blocks are bitwise exact. The absolute ceiling is only about 4.9 s over 80 iterations, while the first clean full pair was +1.45% slower. **Default off; not promoted.** Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_between_pass_cache_microbench_gf46_90ce10d61_20260831_retry02/summary.json` (SHA-256 `a9423c50358c80b8aacb87d9ae61f9596785f80284c16e16be49c8ef6cc9619e`).
+
 ### Engineering decision ledger
 
 | Track | Decision | Evidence |
@@ -197,6 +207,7 @@ All 20/20 pose/translation checkpoints match across arms. Keep profiling unset i
 | coarse 128-tail palette | **REJECTED; DEFAULT OFF** | Job 13254010 failed closed after the sealed candidate cache changed; its completed warm arm was slower (+4.1% wall and +7.3% pass 1). |
 | dynamic coarse-tail mask | **REJECTED; DO NOT PROMOTE** | The 23.91x active-3 microgate was superseded by full paired job 13257087: only ~0.69% median wall gain on a forced nondefault native-texture path, 120/120 strict artifact mismatches, and no production-kernel benefit. |
 | runtime profiler toggle | **KEEP UNSET IN PRODUCTION** | Same-GPU crossed job 13258895 favored profiler-off in both pairs (+14.37% and +0.95% cost when on) with exact 20/20 pose/translation trajectories. Shared node contention invalidates a precise magnitude claim. |
+| bounded pass-1 to pass-2 raw cache | **EXACT BUT BOUNDED; DEFAULT OFF** | Job 13260861 is bitwise exact in 15/15 sampled blocks and saves ~0.061 s per 200-row two-pass slice, only ~4.9 s over 80 iterations; the first clean full pair was 1.45% slower. |
 
 ## Shared EM implementation
 
@@ -223,7 +234,7 @@ CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Curre
 ## Next gates
 
 1. Keep the profiler unset and finish the exact-local x-half bucket-size sweep. Require exact particle states/maps, the RELION envelope, repeatable warmed timing, and arm-resolved peak memory.
-2. Reject bounded pass-1 to pass-2 raw reuse unless a same-process fetch/preprocess microbenchmark is bitwise and materially reverses its first paired +1.45% slowdown; do not infer speed from the contended late pair.
+2. Keep bounded pass-1 to pass-2 raw reuse default-off. Audit whether consecutive RELION pools of three can use pool-local radix buckets without changing particle order or accumulation chronology; run GPU science only if the layout-only padded-row reduction is material.
 3. Qualify shared coarse-projection reuse only if its standalone output is strictly bitwise and its end-to-end production gain is measurable; the shared coarse primitive is not the bulk wall-time gap.
 4. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
 5. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection cache, or nondefault dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.

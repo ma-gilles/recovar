@@ -662,6 +662,34 @@
       "slurm_log_sha256": "9706a91df6e338f58cdd7c22525bbe642c34d1f10de00bcac57822e328fbf11a",
       "score_impact": "none"
     },
+    "between_pass_raw_cache": {
+      "microbench_job_id": "13260861",
+      "paired_job_id": "13258774",
+      "source_head": "90ce10d61f9737e3f1717a2ac05c6f85fdca47cb",
+      "case_id": "vdam-gf46",
+      "iterations_sampled": [1, 9, 20],
+      "selected_rows_per_sample": 200,
+      "exact_array_blocks": 15,
+      "exact_arrays": true,
+      "candidate_faster_blocks": 15,
+      "fetch_plus_preprocess_median_s": {
+        "control": [0.14733768350015453, 0.14618111200070416, 0.1468642274994636],
+        "candidate": [0.08592978349952318, 0.08561921450018417, 0.08586499149896554]
+      },
+      "slice_reduction_percent": [41.67833954072376, 41.42935887656147, 41.5344410542185],
+      "estimated_80_iteration_ceiling_seconds": 4.9,
+      "estimated_end_to_end_ceiling_percent": 2.0,
+      "first_clean_paired_change_percent": 1.45,
+      "result": "exact_but_bounded_not_promoted",
+      "default_enabled": false,
+      "reason": "The isolated two-pass slice is exact and faster, but its absolute saving is noise-scale end to end; pass 1 and cached pass-2 preprocessing become slower, and the first clean full pair regressed by 1.45%.",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_between_pass_cache_microbench_gf46_90ce10d61_20260831_retry02",
+      "summary_report": "summary.json",
+      "summary_sha256": "a9423c50358c80b8aacb87d9ae61f9596785f80284c16e16be49c8ef6cc9619e",
+      "slurm_log": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-micro-13260861.out",
+      "slurm_log_sha256": "551eb936ea6d44f51deffbafe0bb4223c5ba4eea8986cdfff33364d385c9a1a5",
+      "score_impact": "none"
+    },
     "decisions": [
       {
         "candidate": "shared EM arithmetic primitives",
@@ -707,6 +735,11 @@
         "candidate": "runtime profiler toggle",
         "status": "KEEP UNSET IN PRODUCTION",
         "evidence": "Same-GPU crossed job 13258895 favored profiler-off in both pairs (+14.37% and +0.95% cost when on) with exact 20/20 pose/translation trajectories. Shared node contention invalidates a precise magnitude claim."
+      },
+      {
+        "candidate": "bounded pass-1 to pass-2 raw cache",
+        "status": "EXACT BUT BOUNDED; DEFAULT OFF",
+        "evidence": "Job 13260861 is bitwise exact in 15/15 sampled blocks and saves ~0.061 s per 200-row two-pass slice, only ~4.9 s over 80 iterations; the first clean full pair was 1.45% slower."
       }
     ]
   },
@@ -762,7 +795,7 @@
     "typed_warm80_audit_job": "13256248",
     "current_blocker": "active_particle_envelope_fail_at_iteration_37",
     "runtime_status": "inconclusive",
-    "current_action": "Close the performance gap first: keep profiling unset, qualify exact-local x-half bucket sizing and shared coarse-projection reuse, and reject bounded pass-1 to pass-2 raw reuse unless its focused microbenchmark reverses the first paired slowdown. Then isolate the recorded iteration-37 active-particle escape.",
+    "current_action": "Close the performance gap first: keep profiling and bounded raw reuse off, qualify exact-local x-half bucket sizing and shared coarse-projection reuse, and audit pool-preserving local buckets before returning to the recorded iteration-37 active-particle escape.",
     "hypothesis": "Job 13211719 rejects same-cache reuse as sufficient for exact ordered-shell repeatability: the earliest captured difference is one float32 ULP in an E-step max-posterior scalar.",
     "evidence_pattern": "A populated the canonical cache 0->377; A-after, B-before, and B-after share manifest SHA-256 2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5 with no B additions or changes.",
     "narrowed_boundary": "Cache identity is proven. Pose, rotation, translation, and class selection remain exact while the one-ULP posterior difference feeds ordered noise and both-half BPref differences. The next discriminator remains compile/autotune variant versus runtime reduction at or before this E-step scalar.",

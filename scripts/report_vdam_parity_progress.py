@@ -428,7 +428,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
     "default_enabled": False,
     "promotion_authorized": False,
 }
-ENGINEERING_SNAPSHOT_SHA256 = "2ad43b2b4fec4141dde9cee2709e3bf8e8a74318d04a419ec93a5b399c8b7a1f"
+ENGINEERING_SNAPSHOT_SHA256 = "b2dba1441458c7ac9d7f3c4a6e9b67cc3afb5d251eff96d064aa786d81da7c8c"
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -798,8 +798,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "are unmatched at iteration 80. |",
         "| Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is "
         "cross-GPU and trajectories differ. No speedup or regression claim. |",
-        "| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling unset; test exact-local x-half bucket "
-        "sizing and shared coarse-projection reuse with strict same-GPU state/map gates. |",
+        "| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling and bounded raw reuse off; test "
+        "x-half sizing, shared coarse-projection reuse, and pool-preserving local buckets. |",
         "",
         "## At a glance",
         "",
@@ -1091,6 +1091,29 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"`{engineering['profile_toggle']['evidence_root']}/{engineering['profile_toggle']['summary_report']}` "
             f"(SHA-256 `{engineering['profile_toggle']['summary_sha256']}`).",
             "",
+            f"### Bounded pass-to-pass raw cache: job `{engineering['between_pass_raw_cache']['microbench_job_id']}`",
+            "",
+            "| Iteration sample | Control slice | Cached slice | Change |",
+            "|---:|---:|---:|---:|",
+        ]
+    )
+    raw_cache = engineering["between_pass_raw_cache"]
+    for index, iteration in enumerate(raw_cache["iterations_sampled"]):
+        lines.append(
+            f"| {iteration} | {raw_cache['fetch_plus_preprocess_median_s']['control'][index]:.4f} s | "
+            f"{raw_cache['fetch_plus_preprocess_median_s']['candidate'][index]:.4f} s | "
+            f"-{raw_cache['slice_reduction_percent'][index]:.1f}% |"
+        )
+    lines.extend(
+        [
+            "",
+            f"All {raw_cache['exact_array_blocks']}/{raw_cache['exact_array_blocks']} raw, metadata, and masked/"
+            "unmasked CUDA-preprocess blocks are bitwise exact. The absolute ceiling is only about "
+            f"{raw_cache['estimated_80_iteration_ceiling_seconds']:.1f} s over 80 iterations, while the first clean "
+            f"full pair was {raw_cache['first_clean_paired_change_percent']:+.2f}% slower. **Default off; not "
+            f"promoted.** Evidence: `{raw_cache['evidence_root']}/{raw_cache['summary_report']}` (SHA-256 "
+            f"`{raw_cache['summary_sha256']}`).",
+            "",
             "### Engineering decision ledger",
             "",
             "| Track | Decision | Evidence |",
@@ -1146,9 +1169,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "1. Keep the profiler unset and finish the exact-local x-half bucket-size sweep. Require exact particle "
             "states/maps, the RELION envelope, repeatable warmed timing, and arm-resolved peak memory.",
-            "2. Reject bounded pass-1 to pass-2 raw reuse unless a same-process fetch/preprocess microbenchmark is "
-            "bitwise and materially reverses its first paired +1.45% slowdown; do not infer speed from the contended "
-            "late pair.",
+            "2. Keep bounded pass-1 to pass-2 raw reuse default-off. Audit whether consecutive RELION pools of three "
+            "can use pool-local radix buckets without changing particle order or accumulation chronology; run GPU "
+            "science only if the layout-only padded-row reduction is material.",
             "3. Qualify shared coarse-projection reuse only if its standalone output is strictly bitwise and its "
             "end-to-end production gain is measurable; the shared coarse primitive is not the bulk wall-time gap.",
             "4. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
