@@ -160,12 +160,12 @@ touch "${JAX_COMPILATION_CACHE_DIR}/SAFE_TO_DELETE"
 import jax
 import recovar
 import recovar.cuda_backproject as cuda_backproject
-import recovar.relion_bind as relion_bind
+from recovar.relion_bind import _relion_bind_core as relion_bind_core
 
 assert recovar.__file__ is not None
 assert any(device.platform in {"gpu", "cuda"} for device in jax.devices())
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
-assert relion_bind.available(), relion_bind.unavailable_error()
+assert callable(getattr(relion_bind_core, "vdam_rnd_unif_sequence", None))
 print("VDAM late profiler GPU/runtime gate passed", jax.devices(), recovar.__file__)
 PY
 ) > "${PROVENANCE}/runtime_gate.stdout" 2> "${PROVENANCE}/runtime_gate.stderr"
