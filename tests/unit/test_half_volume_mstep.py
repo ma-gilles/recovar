@@ -951,6 +951,11 @@ def test_relion_firstiter_bpref_wrapper_uses_split_native_operands_and_static_sc
 def test_relion_firstiter_bpref_split_wrapper_preserves_three_ffi_aliases(
     monkeypatch,
 ):
+    split_jit_source = inspect.getsource(
+        cuda_backproject._relion_firstiter_bpref_fused_x_half_split_static,
+    )
+    assert "donate_argnums=(0, 1, 2)" in split_jit_source
+
     observed = {}
 
     def fake_ffi_call(target, result_types, **options):

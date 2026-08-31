@@ -3436,7 +3436,11 @@ def _relion_firstiter_bpref_fused_x_half_static(
     return jax.lax.complex(data_real_out, data_imag_out), weight_out
 
 
-@functools.partial(jax.jit, static_argnums=(9, 10, 11, 12, 13))
+@functools.partial(
+    jax.jit,
+    static_argnums=(9, 10, 11, 12, 13),
+    donate_argnums=(0, 1, 2),
+)
 def _relion_firstiter_bpref_fused_x_half_split_static(
     data_volume_real: jax.Array,
     data_volume_imag: jax.Array,
@@ -3453,7 +3457,13 @@ def _relion_firstiter_bpref_fused_x_half_split_static(
     volume_shape: Tuple[int, int, int],
     max_r: float,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Run the native split firstiter BPref FFI without complex repacking."""
+    """Run the native split firstiter BPref FFI without complex repacking.
+
+    The FFI aliases all three accumulator inputs to its outputs.  Donation is
+    required at this outer JIT boundary as well: without it, XLA preserves the
+    functional input values by copying each box-scale accumulator before the
+    aliased call, defeating the in-place CUDA contract.
+    """
 
     return _relion_firstiter_bpref_fused_x_half_split_impl(
         data_volume_real,
