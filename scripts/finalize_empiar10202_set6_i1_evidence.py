@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Finalize one matched EMPIAR-10202 set-6 run into PR158 evidence.
 
-This command does not submit or modify Slurm jobs.  It fails closed unless all
-four dependency-gated jobs completed with exit code 0, their saved allocation
-records have identical requested and allocated TRES, every declared output is
-present, and the command/output provenance still matches the launch manifest.
-It then invokes the pinned raw FSC collector and the in-repository proper-SO(3)
-diagnostic producer and writes the evidence envelope consumed by the PR158
-scorecard reporter.
+This command does not submit or modify Slurm jobs.  The original launch schema
+still requires all four dependency-gated jobs to complete.  The native harness
+adapter permits explicit retry records, but requires both full refinements to
+complete with sealed provenance; smoke jobs remain capability evidence and can
+never enter the science denominator.  Both paths require exact requested and
+allocated TRES, declared outputs, commands, and hashes before invoking the
+pinned FSC collectors and writing the PR158 scorecard envelope.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import argparse
 import dataclasses
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -34,27 +35,22 @@ SCIENCE_SCHEMA = "recovar.em_k1_science_diagnostics.v1"
 EXECUTION_BINDING_SCHEMA = "recovar.em_k1_execution_binding.v1"
 CASE_ID = "empiar-10202-set06-k1-I1"
 RUN_KEYS = ("recovar_smoke", "relion_smoke", "recovar_full", "relion_full")
+NATIVE_LAUNCH_SCHEMA = "recovar.em.matched_launch_harness.v1"
+NATIVE_ADAPTER = Path(__file__).resolve().with_name("audit_empiar10202_set6_i1_native_harness.py")
 ALLOWED_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex")
 LAUNCHER = Path(__file__).resolve().with_name("launch_empiar10202_set6_i1_matched.py")
-SUBJECT_REPO = Path(
-    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/"
-    "recovar_pr158_box800_subject_2249bf352_20260830"
-)
+SUBJECT_REPO = Path("/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_box800_subject_2249bf352_20260830")
 SUBJECT_COMMIT = "2249bf352377aae85ef9f3d378eda86dadef671f"
 SUBJECT_TREE = "4573e7561741eb4120e585730fd73663da7c382c"
 SUBJECT_DRIVER_SHA256 = "40affc02cb772fdee9d73777395d2321faa8d8677515a9fde6defc53b6795293"
 SUBJECT_CUDA_SOURCE_SHA256 = "4238bc4eb344c0e4bb12989a0b41fdcf62c455164ab207e3add44612f377ee9a"
 PREPARED_STAR_SHA256 = "d66afb3001e6e43463fb699804fe8b50f8cef1f2ccd9730f5275955b6be7b512"
 PREPARATION_MANIFEST = Path(
-    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
-    "empiar10202_set6_i1_20260830/preparation_manifest.json"
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_20260830/preparation_manifest.json"
 )
 PREPARATION_MANIFEST_SHA256 = "05865373813f50b83060ef4c93993522472b5ca3189c4acd27647c18262e501d"
 PREPARED_STAR = PREPARATION_MANIFEST.parent / "prepared/particles_set06_optics.star"
-PARTICLE_STACK = Path(
-    "/projects/CRYOEM/singerlab/mg6942/10202/06_Final_Stack/"
-    "2017-12-27_MagCorrect_Frames05-19.mrcs"
-)
+PARTICLE_STACK = Path("/projects/CRYOEM/singerlab/mg6942/10202/06_Final_Stack/2017-12-27_MagCorrect_Frames05-19.mrcs")
 PARTICLE_STACK_SHA256 = "8eecf0fbf8e645ac51feff278a86e43e7e4be117921333dc6d3e22e52a628453"
 PARTICLE_STACK_SIZE_BYTES = 78_118_401_024
 RECOVAR_REFERENCE = PREPARATION_MANIFEST.parent / "prepared/initial_reference_recovar_I1_30A_box800.mrc"
@@ -69,15 +65,9 @@ RELION_BIND_LIBRARY = Path(
 )
 RELION_BIND_LIBRARY_SHA256 = "82b0a8cf2c189463f9cf0181099f4e92ce4365cce3819463c27af44b3c1014a2"
 RELION_BIND_SOURCE_TREE = "1633d228e89d91ede8ad0996e727ec6ab1bc96ee"
-RELION_MPI = Path(
-    "/projects/MOLBIO/local/relion-5.0.1-gcc-11.5.0-cuda-12.6-rhel9-arch80/"
-    "bin/relion_refine_mpi"
-)
+RELION_MPI = Path("/projects/MOLBIO/local/relion-5.0.1-gcc-11.5.0-cuda-12.6-rhel9-arch80/bin/relion_refine_mpi")
 RELION_MPI_SHA256 = "92cf3ba54038d5e162e238b952fe88f1414f440d4e6cba23bc4b097428087b4a"
-RELION_SOURCE = Path(
-    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/"
-    "relion_d476e6f_clean_binding_20260713"
-)
+RELION_SOURCE = Path("/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_d476e6f_clean_binding_20260713")
 RELION_SOURCE_COMMIT = "d476e6f6a4f1f37627c06ace5227fc374c0c2b05"
 CUDA_LIBRARY = Path(
     "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
@@ -102,10 +92,7 @@ SMOKE_STAR_SHA256 = "500dc2b76fdd5554d1dba759168184109f16d91deed0fce1fc2d9f5daf1
 SMOKE_HALF_ASSIGNMENT_SHA256 = "3a8f3eb11efce69ae772bed68639f05ac73b3e7162cc2316be987a28806227fc"
 SMOKE_SOURCE_IMAGE_NAMES_SHA256 = "44d98ac85bc83243cd7cd38180fa480ab979a49aefc25c6f4e928ce11d5f1240"
 SMOKE_SOURCE_ROWS = tuple(range(62)) + (63, 66)
-FINAL_ENVIRONMENT_TEXT = (
-    "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=unset\n"
-    "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=unset\n"
-)
+FINAL_ENVIRONMENT_TEXT = "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=unset\nRECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=unset\n"
 SLURM_TEMPLATE_SHA256 = {
     "recovar_smoke": "72dad390b3714eca443ee433629cacae5fd1dbe3c28055d02b910ffbd91f534f",
     "relion_smoke": "5934121c2bcddc29b3c776edd9138d862aa72c19fdb69bb1a73086f8ee1fe22e",
@@ -127,9 +114,7 @@ EXPECTED_SCIENTIFIC_CONTRACT = {
     "final_all_data_after_max_iter_environment": "unset",
     "quality_metric": "signed canonical-frame shellwise FSC/FSC-AUC",
 }
-RAW_COLLECTOR = Path(
-    "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/scripts/collect_metrics.py"
-)
+RAW_COLLECTOR = Path("/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/scripts/collect_metrics.py")
 RAW_COLLECTOR_SHA256 = "63d1a8f9f0a772ef0db45d7417902f36cbde884b309fa6e94d69bdfe2edf2d88"
 DIAGNOSTIC_PRODUCER = Path(__file__).resolve().with_name("collect_em_k1_science_diagnostics.py")
 DIAGNOSTIC_PRODUCER_SHA256 = "01b432c5c735a060f69d55569c897ac42aca8c2af6c3fa3a23b334fb2378ac9c"
@@ -175,6 +160,18 @@ def _git_output(repo: Path, *arguments: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def _load_native_adapter() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "_recovar_empiar10202_native_evidence_adapter",
+        NATIVE_ADAPTER,
+    )
+    _require(spec is not None and spec.loader is not None, "cannot load native evidence adapter")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _file_record(path: Path, *, nonempty: bool = True) -> dict[str, Any]:
@@ -573,9 +570,14 @@ def _validate_subject(payload: Mapping[str, Any]) -> None:
     _require(subject.get("driver_sha256") == SUBJECT_DRIVER_SHA256, "wrong subject driver digest")
     _require(subject.get("cuda_source_sha256") == SUBJECT_CUDA_SOURCE_SHA256, "wrong CUDA source digest")
     _require_real_directory(SUBJECT_REPO, "subject repository")
-    _require(driver.is_file() and not driver.is_symlink() and sha256_file(driver) == SUBJECT_DRIVER_SHA256, "subject driver changed")
     _require(
-        cuda_source.is_file() and not cuda_source.is_symlink() and sha256_file(cuda_source) == SUBJECT_CUDA_SOURCE_SHA256,
+        driver.is_file() and not driver.is_symlink() and sha256_file(driver) == SUBJECT_DRIVER_SHA256,
+        "subject driver changed",
+    )
+    _require(
+        cuda_source.is_file()
+        and not cuda_source.is_symlink()
+        and sha256_file(cuda_source) == SUBJECT_CUDA_SOURCE_SHA256,
         "CUDA source changed",
     )
     _require(python.is_file(), "subject Python is missing")
@@ -794,7 +796,9 @@ def _validate_run_specs(
             _require(row.get(field) == expected, f"RunSpec {field} mismatch for {spec.key}")
         _require(not script.is_symlink() and script.is_file(), f"Slurm script is not regular for {spec.key}")
         script_text = script.read_text()
-        _require("{RUN_ROOT}" not in script_text and "{RUNTIME_ROOT}" not in script_text, "reserved Slurm token present")
+        _require(
+            "{RUN_ROOT}" not in script_text and "{RUNTIME_ROOT}" not in script_text, "reserved Slurm token present"
+        )
         _require(
             _normalized_slurm_sha256(script_text, root, runtime_root) == SLURM_TEMPLATE_SHA256[spec.key],
             f"Slurm script semantic template mismatch for {spec.key}",
@@ -898,7 +902,10 @@ def audit_launch(
         _require(re.fullmatch(r"[0-9]+", job_id) is not None and job_id not in seen, "invalid job ID")
         seen.add(job_id)
         submitted = submission["jobs"][key]
-        _require(set(submitted) == {"job_id", "sbatch_command", "artifacts", "scontrol_submit_sha256"}, f"job ledger fields changed for {key}")
+        _require(
+            set(submitted) == {"job_id", "sbatch_command", "artifacts", "scontrol_submit_sha256"},
+            f"job ledger fields changed for {key}",
+        )
         _require(str(submitted.get("job_id")) == job_id, f"job ledger mismatch for {key}")
         script = root / "scripts" / f"{key}.sbatch"
         expected_sbatch = ["sbatch", "--parsable"]
@@ -1134,8 +1141,16 @@ def _run_analysis(
             "proper_so3": {"argv": diagnostic_command, "sha256": sha256_json(diagnostic_command)},
         },
         "analysis_artifacts": {
-            "science_diagnostics": {"path": str(diagnostics.resolve()), "sha256": sha256_file(diagnostics), "schema": SCIENCE_SCHEMA},
-            "curve_archive": {"path": str(diagnostic_curves.resolve()), "sha256": sha256_file(diagnostic_curves), "fields": sorted(fields)},
+            "science_diagnostics": {
+                "path": str(diagnostics.resolve()),
+                "sha256": sha256_file(diagnostics),
+                "schema": SCIENCE_SCHEMA,
+            },
+            "curve_archive": {
+                "path": str(diagnostic_curves.resolve()),
+                "sha256": sha256_file(diagnostic_curves),
+                "fields": sorted(fields),
+            },
             "common_mask": {"path": str(mask.resolve()), "sha256": sha256_file(mask)},
         },
     }
@@ -1143,7 +1158,9 @@ def _run_analysis(
 
 def _input_contract(payload: dict[str, Any]) -> dict[str, Any]:
     prep_path = Path(payload["preparation"]["preparation_manifest"])
-    _require(sha256_file(prep_path) == payload["preparation"]["preparation_manifest_sha256"], "preparation manifest changed")
+    _require(
+        sha256_file(prep_path) == payload["preparation"]["preparation_manifest_sha256"], "preparation manifest changed"
+    )
     prep = json.loads(prep_path.read_text())
     source = prep["input_contract"]
     prepared = source["prepared_star"]
@@ -1183,9 +1200,25 @@ def _input_contract(payload: dict[str, Any]) -> dict[str, Any]:
 def finalize(
     manifest_path: Path,
     *,
+    replacement_records: Sequence[Path] = (),
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> Path:
-    payload, audit = audit_launch(manifest_path, runner=runner)
+    manifest_schema = json.loads(manifest_path.read_text()).get("schema")
+    native = manifest_schema == NATIVE_LAUNCH_SCHEMA
+    if native:
+        adapter = _load_native_adapter()
+        payload, audit = adapter.audit_native_launch(
+            manifest_path,
+            replacement_records=replacement_records,
+            runner=runner,
+            require_science_ready=True,
+        )
+        evidence_root = Path(payload["run_root"]) / "evidence"
+        _require(not evidence_root.exists(), f"refusing to reuse native evidence path: {evidence_root}")
+        evidence_root.mkdir()
+    else:
+        _require(not replacement_records, "replacement records require the native launch schema")
+        payload, audit = audit_launch(manifest_path, runner=runner)
     collector, analysis = _run_analysis(payload, audit, runner=runner)
     output = Path(payload["run_root"]) / "evidence" / "case_evidence.json"
     _require(not output.exists(), f"refusing to overwrite evidence: {output}")
@@ -1205,6 +1238,22 @@ def finalize(
         "--launch-manifest",
         str(manifest_path.resolve()),
     ]
+    for replacement in replacement_records:
+        finalizer_argv.extend(["--replacement-record", str(replacement.resolve())])
+    execution_binding = {
+        "schema": EXECUTION_BINDING_SCHEMA,
+        "launch_manifest_path": audit["launch_manifest"]["path"],
+        "launch_manifest_sha256": audit["launch_manifest"]["sha256"],
+        "finalizer_command_path": str(Path(__file__).resolve()),
+        "finalizer_command_sha256": sha256_file(Path(__file__).resolve()),
+        "finalizer_argv": finalizer_argv,
+        "finalizer_argv_sha256": sha256_json(finalizer_argv),
+        "evidence_envelope_path": str(execution_envelope.resolve()),
+        "evidence_envelope_sha256": sha256_file(execution_envelope),
+    }
+    if native:
+        execution_binding["launch_manifest_schema"] = NATIVE_LAUNCH_SCHEMA
+        execution_binding["replacement_records"] = [_file_record(path.resolve()) for path in replacement_records]
     evidence = {
         "schema": EVIDENCE_SCHEMA,
         "case_id": CASE_ID,
@@ -1215,17 +1264,7 @@ def finalize(
         "collector": collector,
         "analysis_commands": analysis["commands"],
         "analysis_artifacts": analysis["analysis_artifacts"],
-        "execution_binding": {
-            "schema": EXECUTION_BINDING_SCHEMA,
-            "launch_manifest_path": audit["launch_manifest"]["path"],
-            "launch_manifest_sha256": audit["launch_manifest"]["sha256"],
-            "finalizer_command_path": str(Path(__file__).resolve()),
-            "finalizer_command_sha256": sha256_file(Path(__file__).resolve()),
-            "finalizer_argv": finalizer_argv,
-            "finalizer_argv_sha256": sha256_json(finalizer_argv),
-            "evidence_envelope_path": str(execution_envelope.resolve()),
-            "evidence_envelope_sha256": sha256_file(execution_envelope),
-        },
+        "execution_binding": execution_binding,
     }
     partial = output.with_suffix(".json.partial")
     partial.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
@@ -1236,11 +1275,16 @@ def finalize(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--launch-manifest", type=Path, required=True)
+    parser.add_argument("--replacement-record", type=Path, action="append", default=[])
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    output = finalize(parse_args(argv).launch_manifest)
+    args = parse_args(argv)
+    output = finalize(
+        args.launch_manifest.resolve(),
+        replacement_records=tuple(path.resolve() for path in args.replacement_record),
+    )
     print(json.dumps({"evidence": str(output), "sha256": sha256_file(output)}, indent=2))
     return 0
 

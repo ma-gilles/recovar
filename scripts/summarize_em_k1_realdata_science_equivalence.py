@@ -36,6 +36,8 @@ EVIDENCE_SCHEMA = "recovar.em_k1_realdata_science_equivalence_case_evidence.v1"
 COLLECTOR_SCHEMA = "recovar-relion-realdata-metrics-v2"
 EXECUTION_BINDING_SCHEMA = "recovar.em_k1_execution_binding.v1"
 LAUNCH_MANIFEST_SCHEMA = "recovar.empiar10202_set6_i1_matched_launch.v1"
+NATIVE_LAUNCH_MANIFEST_SCHEMA = "recovar.em.matched_launch_harness.v1"
+NATIVE_EXECUTION_AUDIT_SCHEMA = "recovar.em.native_matched_execution_audit.v1"
 SUITE_ID = "pr158-k1-realdata-science-equivalence-v1"
 TARGET_CASE_ID = "empiar-10202-set06-k1-I1"
 CALIBRATION_CASE_IDS = (
@@ -708,18 +710,41 @@ def _validate_execution_binding(
     if paths["finalizer_command"].is_absolute():
         check(paths["finalizer_command"].resolve() == expected_finalizer, "finalizer_command_path")
 
+    native_binding = binding.get("launch_manifest_schema") == NATIVE_LAUNCH_MANIFEST_SCHEMA
+    replacement_records = binding.get("replacement_records", []) if native_binding else []
+    if native_binding:
+        check(isinstance(replacement_records, list), "replacement_records")
+        if not isinstance(replacement_records, list):
+            replacement_records = []
+    else:
+        check("replacement_records" not in binding, "unexpected_replacement_records")
     argv = binding.get("finalizer_argv")
+    expected_argv_length = 4 + 2 * len(replacement_records)
     check(
-        isinstance(argv, list) and len(argv) == 4 and all(isinstance(value, str) for value in argv),
+        isinstance(argv, list) and len(argv) == expected_argv_length and all(isinstance(value, str) for value in argv),
         "finalizer_argv",
     )
     check(_is_sha256(binding.get("finalizer_argv_sha256")), "finalizer_argv_sha256_format")
     if isinstance(argv, list) and all(isinstance(value, str) for value in argv):
         check(sha256_json(argv) == binding.get("finalizer_argv_sha256"), "finalizer_argv_sha256")
-        if len(argv) == 4:
+        if len(argv) == expected_argv_length:
             check(Path(argv[1]).resolve() == expected_finalizer, "finalizer_argv_command")
             check(argv[2] == "--launch-manifest", "finalizer_argv_flag")
             check(Path(argv[3]).resolve() == paths["launch_manifest"].resolve(), "finalizer_argv_manifest")
+            for index, record in enumerate(replacement_records):
+                offset = 4 + 2 * index
+                check(argv[offset] == "--replacement-record", f"replacement_{index}_argv_flag")
+                if not isinstance(record, Mapping):
+                    check(False, f"replacement_{index}_record")
+                    continue
+                replacement_path = Path(record.get("path", ""))
+                replacement_digest = record.get("sha256")
+                check(replacement_path.is_absolute(), f"replacement_{index}_path")
+                check(_is_sha256(replacement_digest), f"replacement_{index}_sha256_format")
+                check(replacement_path.is_file(), f"replacement_{index}_missing")
+                check(Path(argv[offset + 1]).resolve() == replacement_path.resolve(), f"replacement_{index}_argv")
+                if replacement_path.is_file() and _is_sha256(replacement_digest):
+                    check(sha256_file(replacement_path) == replacement_digest, f"replacement_{index}_sha256")
 
     launch_path = paths["launch_manifest"]
     if launch_path.is_file():
@@ -728,8 +753,10 @@ def _validate_execution_binding(
         except (json.JSONDecodeError, OSError):
             check(False, "launch_manifest_json")
         else:
-            check(launch.get("schema") == LAUNCH_MANIFEST_SCHEMA, "launch_manifest_schema")
-            check(launch.get("subject") == evidence.get("subject"), "launch_manifest_subject")
+            allowed_schema = NATIVE_LAUNCH_MANIFEST_SCHEMA if native_binding else LAUNCH_MANIFEST_SCHEMA
+            check(launch.get("schema") == allowed_schema, "launch_manifest_schema")
+            if not native_binding:
+                check(launch.get("subject") == evidence.get("subject"), "launch_manifest_subject")
             check(Path(launch.get("run_root", "")).resolve() == launch_path.parent.resolve(), "launch_manifest_root")
 
     envelope_path = paths["evidence_envelope"]
@@ -771,6 +798,37 @@ def _validate_execution_binding(
             )
             if envelope is not None:
                 check(embedded_launch == envelope.get("launch"), "evidence_envelope_launch")
+            if native_binding:
+                check(embedded_launch.get("schema") == NATIVE_EXECUTION_AUDIT_SCHEMA, "native_audit_schema")
+                science = embedded_launch.get("science_scoring", {})
+                check(science.get("eligible") is True, "native_science_eligible")
+                check(
+                    science.get("smoke_only_promotion_forbidden") is True,
+                    "native_smoke_promotion_forbidden",
+                )
+                check(
+                    embedded_launch.get("science_subject") == evidence.get("subject"),
+                    "native_science_subject",
+                )
+                embedded_replacements = embedded_launch.get("replacement_records", [])
+                check(
+                    isinstance(embedded_replacements, list)
+                    and [row.get("artifact") for row in embedded_replacements if isinstance(row, Mapping)]
+                    == replacement_records,
+                    "native_replacement_binding",
+                )
+                jobs = embedded_launch.get("jobs", {})
+                for key in ("recovar_smoke", "relion_smoke"):
+                    job = jobs.get(key, {}) if isinstance(jobs, Mapping) else {}
+                    check(job.get("science_role") == "capability_only", f"native_{key}_capability_only")
+                    check(job.get("smoke_can_promote") is False, f"native_{key}_cannot_promote")
+                for key in ("recovar_full", "relion_full"):
+                    job = jobs.get(key, {}) if isinstance(jobs, Mapping) else {}
+                    check(job.get("phase") == "full", f"native_{key}_phase")
+                    check(job.get("science_role") == "science_candidate", f"native_{key}_science_role")
+                    check(job.get("classification") == "completed", f"native_{key}_completed")
+                    check(job.get("provenance_complete") is True, f"native_{key}_provenance")
+                    check(bool(job.get("expected_outputs")), f"native_{key}_outputs")
     return failures
 
 
@@ -800,7 +858,14 @@ def validate_case_evidence_provenance(
         failures.append("scorecard_contract_not_frozen")
 
     subject = evidence.get("subject", {})
-    check(subject.get("commit") == case.get("expected_subject_commit"), "subject_commit")
+    subject_matches_contract = subject.get("commit") == case.get("expected_subject_commit")
+    check(subject_matches_contract, "subject_commit")
+    launch_schema = evidence.get("execution_binding", {}).get("launch_manifest_schema")
+    if launch_schema == NATIVE_LAUNCH_MANIFEST_SCHEMA and not subject_matches_contract:
+        # A native retry may intentionally exercise a newer fix, but that does
+        # not silently redefine the frozen science subject.  Promotion requires
+        # a reviewed scorecard contract change that names the exact new commit.
+        failures.append("native_subject_requires_deliberate_scorecard_contract_update")
     check(subject.get("commit") == scorecard["suite"]["subject_commit"], "suite_subject_commit")
     check(subject.get("tree_clean") is True, "subject_tree_clean")
     check(subject.get("diff_sha256") == EMPTY_SHA256, "subject_diff_sha256")
