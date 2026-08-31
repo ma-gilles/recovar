@@ -317,6 +317,42 @@ def test_k_class_assemble_result_can_keep_full_accumulators_on_host():
     np.testing.assert_allclose(result.Ft_ctf, np.asarray([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32))
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.complex64])
+def test_k_class_singleton_host_accumulator_adds_class_axis_without_copy(dtype):
+    source = np.arange(12, dtype=np.float32).reshape(3, 4).astype(dtype)
+
+    stacked = k_class_module._stack_accumulators([source], host=True)
+
+    assert stacked.shape == (1, 3, 4)
+    assert stacked.dtype == np.dtype(dtype)
+    assert np.shares_memory(stacked, source)
+    np.testing.assert_array_equal(stacked[0], source)
+
+
+def test_k_class_multiple_host_accumulators_remain_independent_stack():
+    first = np.asarray([1.0, 2.0], dtype=np.float32)
+    second = np.asarray([3.0, 4.0], dtype=np.float32)
+
+    stacked = k_class_module._stack_accumulators([first, second], host=True)
+
+    assert stacked.shape == (2, 2)
+    assert stacked.dtype == np.dtype(np.float32)
+    assert not np.shares_memory(stacked, first)
+    assert not np.shares_memory(stacked, second)
+    np.testing.assert_array_equal(stacked, np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+
+
+def test_k_class_singleton_noncontiguous_host_accumulator_keeps_stack_contract():
+    source = np.arange(12, dtype=np.float32).reshape(3, 4).T
+
+    stacked = k_class_module._stack_accumulators([source], host=True)
+
+    assert stacked.shape == (1, 4, 3)
+    assert stacked.flags.owndata
+    assert not np.shares_memory(stacked, source)
+    np.testing.assert_array_equal(stacked[0], source)
+
+
 def test_k_class_combined_accumulator_skips_empty_half_allocation():
     half = jnp.asarray([1.0, 2.0], dtype=jnp.float32)
 

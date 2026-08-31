@@ -108,9 +108,13 @@ def _delete_if_jax_array(value):
             pass
 
 
-def _join_half_pair_at_indices_host(values_0, values_1, flat_indices):
-    values_0_np = np.array(jax.device_get(values_0), copy=True)
-    values_1_np = np.array(jax.device_get(values_1), copy=True)
+def _join_half_pair_at_indices_host(values_0, values_1, flat_indices, *, preserve_inputs=True):
+    values_0_np = np.asarray(jax.device_get(values_0))
+    values_1_np = np.asarray(jax.device_get(values_1))
+    if preserve_inputs or not values_0_np.flags.writeable:
+        values_0_np = np.array(values_0_np, copy=True)
+    if preserve_inputs or not values_1_np.flags.writeable:
+        values_1_np = np.array(values_1_np, copy=True)
     flat_indices_np = np.asarray(jax.device_get(flat_indices), dtype=np.intp)
 
     values_0_flat = values_0_np.reshape(-1)
@@ -1709,6 +1713,7 @@ def join_halves_at_low_resolution(
     low_resol_join_halves_angstrom,
     current_resolution_angstrom=None,
     padding_factor=None,
+    preserve_inputs=True,
 ):
     """RELION's ``--low_resol_join_halves`` operation on Fourier accumulators.
 
@@ -1769,12 +1774,20 @@ def join_halves_at_low_resolution(
         join radii to accumulator-space coordinates. If omitted, falls back
         to the legacy shape-based inference, which is only reliable for full
         padded accumulators and not current-size BPref grids.
+    preserve_inputs : bool
+        Keep the four input accumulators unchanged. Numbered EM iterations
+        may set this to ``False`` after saving pre-join diagnostics; writable
+        host arrays then update only the joined entries in existing storage,
+        as RELION does. Final all-data reconstruction leaves this enabled
+        because its unfiltered half maps retain the pre-join accumulators.
 
     Returns
     -------
     (Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined)
-        New accumulators with the low-resolution shells averaged. Outside
-        the joining sphere they are identical to the inputs.
+        Accumulators with the low-resolution shells averaged. Outside the
+        joining sphere they are identical to the inputs. With
+        ``preserve_inputs=False``, writable host inputs may be returned and
+        updated in place.
     """
     if low_resol_join_halves_angstrom is None or low_resol_join_halves_angstrom <= 0:
         return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
@@ -1831,12 +1844,23 @@ def join_halves_at_low_resolution(
     )
     if _low_resolution_join_host_fallback_enabled_for_size(max_input_size, join_indices_np.size):
         logger.info(
-            "Low-resolution half join using host fallback: size=%d join_voxels=%d",
+            "Low-resolution half join using host fallback: size=%d join_voxels=%d preserve_inputs=%s",
             max_input_size,
             int(join_indices_np.size),
+            bool(preserve_inputs),
         )
-        Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices_host(Ft_y_0, Ft_y_1, join_indices_np)
-        Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices_host(Ft_ctf_0, Ft_ctf_1, join_indices_np)
+        Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices_host(
+            Ft_y_0,
+            Ft_y_1,
+            join_indices_np,
+            preserve_inputs=preserve_inputs,
+        )
+        Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices_host(
+            Ft_ctf_0,
+            Ft_ctf_1,
+            join_indices_np,
+            preserve_inputs=preserve_inputs,
+        )
         return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
 
     Ft_y_0_arr = jnp.asarray(Ft_y_0)

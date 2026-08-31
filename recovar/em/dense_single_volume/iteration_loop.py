@@ -7598,6 +7598,7 @@ def _run_relion_iteration_loop(
                 parity.low_resol_join_halves_angstrom,
                 current_resolution_angstrom=prev_res_angstrom,
                 padding_factor=PADDING_FACTOR,
+                preserve_inputs=False,
             )
 
         # --- RELION-exact M-step ordering ---

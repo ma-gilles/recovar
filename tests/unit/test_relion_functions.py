@@ -1197,6 +1197,45 @@ def test_join_halves_at_low_resolution_host_fallback_matches_join(monkeypatch):
     np.testing.assert_allclose(joined1[idx_outside], 4.0, atol=1e-6)
 
 
+def test_join_halves_at_low_resolution_host_fallback_can_reuse_numpy_storage(monkeypatch):
+    volume_shape = (8, 8, 8)
+    idx_inside = (6, 4, 4)
+    idx_outside = (7, 7, 7)
+
+    ft_y_0 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_y_1 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_ctf_0 = np.ones(volume_shape, dtype=np.float32)
+    ft_ctf_1 = np.full(volume_shape, 3.0, dtype=np.float32)
+    ft_y_0[idx_inside] = 12.0 + 4.0j
+    ft_y_1[idx_inside] = 2.0 + 10.0j
+    ft_y_0[idx_outside] = 20.0
+    ft_y_1[idx_outside] = 4.0
+
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+    joined = regularization.join_halves_at_low_resolution(
+        ft_y_0,
+        ft_y_1,
+        ft_ctf_0,
+        ft_ctf_1,
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+        preserve_inputs=False,
+    )
+
+    assert joined[0] is ft_y_0
+    assert joined[1] is ft_y_1
+    assert joined[2] is ft_ctf_0
+    assert joined[3] is ft_ctf_1
+    np.testing.assert_array_equal(ft_y_0[idx_inside], np.complex64(7.0 + 7.0j))
+    np.testing.assert_array_equal(ft_y_1[idx_inside], np.complex64(7.0 + 7.0j))
+    np.testing.assert_array_equal(ft_ctf_0[idx_inside], np.float32(2.0))
+    np.testing.assert_array_equal(ft_ctf_1[idx_inside], np.float32(2.0))
+    np.testing.assert_array_equal(ft_y_0[idx_outside], np.complex64(20.0))
+    np.testing.assert_array_equal(ft_y_1[idx_outside], np.complex64(4.0))
+
+
 def test_low_resolution_join_host_fallback_auto_catches_padded_384(monkeypatch):
     monkeypatch.delenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", raising=False)
     monkeypatch.delenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK_MIN_ELEMENTS", raising=False)
