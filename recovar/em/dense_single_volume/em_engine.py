@@ -1144,11 +1144,11 @@ def run_em(
                 source_image_count=source_image_count,
                 selected_position=selected_position,
                 name="scale_corrections",
-            ).astype(np.float32, copy=False)
+            ).astype(precision_policy.score_real_dtype, copy=False)
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_scale_np = pad_axis(batch_scale_np, 0, batch_size, value=1)
         else:
-            batch_scale_np = np.ones(batch_size, dtype=np.float32)
+            batch_scale_np = np.ones(batch_size, dtype=precision_policy.score_real_dtype)
         if image_corrections is not None:
             batch_corr_np = _batch_parameter_rows(
                 image_corrections,
@@ -1159,7 +1159,7 @@ def run_em(
                 source_image_count=source_image_count,
                 selected_position=selected_position,
                 name="image_corrections",
-            ).astype(np.float32, copy=False)
+            ).astype(precision_policy.score_real_dtype, copy=False)
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_corr_np = pad_axis(batch_corr_np, 0, batch_size, value=1)
         else:
@@ -1311,7 +1311,7 @@ def run_em(
         # image with zero fill before FFT. Keep the Fourier-phase path for
         # non-integral pre-shifts.
         if batch_image_pre_shifts_np is not None and not real_space_pre_shift_applied:
-            batch_shifts_np = np.asarray(batch_image_pre_shifts_np, dtype=np.float32)
+            batch_shifts_np = np.asarray(batch_image_pre_shifts_np, dtype=precision_policy.score_real_dtype)
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_shifts_np = pad_axis(batch_shifts_np, 0, batch_size, value=0)
             phase_expanded = tiled_half_image_phase_factors(image_shape, batch_shifts_np, n_trans)

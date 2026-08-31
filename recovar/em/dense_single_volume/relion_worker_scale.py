@@ -1389,7 +1389,7 @@ def setup_relion_follower_scale_state(
                 follower_scale_state,
                 group_ids=physical_groups,
                 follower_owners=owners,
-            ).astype(np.float32)
+            )
             relion_half_inputs.scale_corrections[half_idx] = selected_scales
         scale_stats_group_count_per_half = [
             follower_count * physical_group_count,

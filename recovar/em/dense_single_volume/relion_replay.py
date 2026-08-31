@@ -219,13 +219,18 @@ def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: 
     return int(init_relion_iteration) + int(loop_iteration) + 1
 
 
-def _optional_float32_half_pair(values):
-    """Return optional per-half arrays normalized to float32."""
+def _optional_float32_half_pair(values, *, dtype=None):
+    """Return optional per-half arrays, preserving precision by default.
+
+    The historical name is retained for import compatibility. Sealed float32
+    sources remain float32, while higher-precision replay state is not
+    silently narrowed.
+    """
     if values is None:
         return [None, None]
     return [
-        np.asarray(values[0], dtype=np.float32) if values[0] is not None else None,
-        np.asarray(values[1], dtype=np.float32) if values[1] is not None else None,
+        np.asarray(values[0], dtype=dtype) if values[0] is not None else None,
+        np.asarray(values[1], dtype=dtype) if values[1] is not None else None,
     ]
 
 
@@ -378,9 +383,16 @@ def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -
             # those exact arrays instead of rescaling against resident state.
             serialized_scale_value = legacy_scale_value
 
-    replay_images = _optional_float32_half_pair(replay_image_value)
-    serialized_scales = _optional_float32_half_pair(serialized_scale_value)
-    scoring_scales = _optional_float32_half_pair(scoring_scale_value)
+    resident_dtypes = [
+        np.asarray(value).dtype
+        for values in (relion_half_inputs.image_corrections, relion_half_inputs.scale_corrections)
+        for value in values
+        if value is not None
+    ]
+    correction_dtype = np.result_type(*resident_dtypes) if resident_dtypes else None
+    replay_images = _optional_float32_half_pair(replay_image_value, dtype=correction_dtype)
+    serialized_scales = _optional_float32_half_pair(serialized_scale_value, dtype=correction_dtype)
+    scoring_scales = _optional_float32_half_pair(scoring_scale_value, dtype=correction_dtype)
 
     for half_idx in range(2):
         resident_image = relion_half_inputs.image_corrections[half_idx]
@@ -408,15 +420,15 @@ def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -
         )
 
         if target_scale is not None:
-            target_scale = np.asarray(target_scale, dtype=np.float32)
+            target_scale = np.asarray(target_scale, dtype=correction_dtype)
             if not np.all(np.isfinite(target_scale)) or np.any(target_scale <= 0.0):
                 raise ValueError("scoring scale corrections must be finite and positive")
         if base_scale is not None:
-            base_scale = np.asarray(base_scale, dtype=np.float32)
+            base_scale = np.asarray(base_scale, dtype=correction_dtype)
             if not np.all(np.isfinite(base_scale)) or np.any(base_scale <= 0.0):
                 raise ValueError("source scale corrections must be finite and positive")
         if base_image is not None:
-            base_image = np.asarray(base_image, dtype=np.float32)
+            base_image = np.asarray(base_image, dtype=correction_dtype)
             if target_scale is not None and base_scale is None:
                 raise ValueError("Cannot preserve image_corrections/scale without a source scale")
             if target_scale is not None and base_scale is not None:
@@ -573,6 +585,7 @@ def apply_iter_replay_overrides(
     # dispatcher and lives in iteration_loop, not in recovar.em.sampling.
     # Import it lazily: iteration_loop imports this module at load time.
     from recovar.em.dense_single_volume import iteration_loop as _il
+    runtime_dtype = _il._dense_global_scoring_dtype()
 
     _replay_prior_translations = None
     _model_star = None
@@ -605,8 +618,8 @@ def apply_iter_replay_overrides(
         sealed_x = np.asarray(sealed_sampling_state["translations_x_angstrom"], dtype=np.float64)
         sealed_y = np.asarray(sealed_sampling_state["translations_y_angstrom"], dtype=np.float64)
         _replay_prior_translations = jnp.asarray(
-            np.stack([sealed_x / _px, sealed_y / _px], axis=1).astype(np.float32),
-            dtype=jnp.float32,
+            np.stack([sealed_x / _px, sealed_y / _px], axis=1),
+            dtype=runtime_dtype,
         )
         cs = int(sealed_sampling_state["current_size"])
         _replay_meta = {
@@ -929,7 +942,9 @@ def apply_iter_replay_overrides(
             )
         _replay_prev_trans = iter_replay_override.get("previous_best_translations")
         if _replay_prev_trans is not None:
-            relion_half_inputs.previous_best_translations = _optional_float32_half_pair(_replay_prev_trans)
+            relion_half_inputs.previous_best_translations = _optional_float32_half_pair(
+                _replay_prev_trans, dtype=runtime_dtype
+            )
             logger.info(
                 "Replay override: previous_best_translations <- half1=%s half2=%s",
                 "set" if relion_half_inputs.previous_best_translations[0] is not None else "none",
@@ -937,7 +952,7 @@ def apply_iter_replay_overrides(
             )
         _replay_prev_rots = iter_replay_override.get("previous_best_rotations")
         if _replay_prev_rots is not None:
-            previous_best_rotations = _optional_float32_half_pair(_replay_prev_rots)
+            previous_best_rotations = _optional_float32_half_pair(_replay_prev_rots, dtype=runtime_dtype)
             logger.info(
                 "Replay override: previous_best_rotations <- half1=%s half2=%s",
                 "set" if previous_best_rotations[0] is not None else "none",
@@ -964,7 +979,7 @@ def apply_iter_replay_overrides(
             ]
             previous_noise_radial = jnp.asarray(
                 np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
-                dtype=jnp.float32,
+                dtype=runtime_dtype,
             )
             logger.info("Replay override: sigma2_noise <- per-half model.star arrays")
         _replay_dir_prior = iter_replay_override.get("direction_prior")
@@ -974,13 +989,15 @@ def apply_iter_replay_overrides(
                 if inferred_weights is not None:
                     _replay_class_weights = inferred_weights
             if k_class_enabled:
-                replay_priors = normalize_class_direction_prior_per_half(_replay_dir_prior, n_classes)
+                replay_priors = normalize_class_direction_prior_per_half(
+                    _replay_dir_prior, n_classes, dtype=runtime_dtype
+                )
             else:
-                replay_priors = normalize_direction_prior_per_half(_replay_dir_prior)
+                replay_priors = normalize_direction_prior_per_half(_replay_dir_prior, dtype=runtime_dtype)
             for _half_idx in range(2):
                 if replay_priors[_half_idx] is None:
                     continue
-                prior_k = np.asarray(replay_priors[_half_idx], dtype=np.float32)
+                prior_k = np.asarray(replay_priors[_half_idx], dtype=runtime_dtype)
                 prior_order_k = infer_direction_prior_healpix_order(prior_k[0] if k_class_enabled else prior_k)
                 if prior_order_k != state.healpix_order:
                     logger.info(
@@ -996,6 +1013,7 @@ def apply_iter_replay_overrides(
                                     prior_k[class_idx],
                                     prior_order_k,
                                     state.healpix_order,
+                                    dtype=runtime_dtype,
                                 )
                                 for class_idx in range(n_classes)
                             ],
@@ -1006,10 +1024,13 @@ def apply_iter_replay_overrides(
                             prior_k,
                             prior_order_k,
                             state.healpix_order,
+                            dtype=runtime_dtype,
                         )
                     prior_order_k = state.healpix_order
                 if k_class_enabled:
-                    class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(prior_k, n_classes)
+                    class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(
+                        prior_k, n_classes, dtype=runtime_dtype
+                    )
                     class_direction_prior_order_per_half[_half_idx] = prior_order_k
                     logger.info(
                         "Replay override: class direction prior half-%d <- provided override (%d classes, %d directions)",

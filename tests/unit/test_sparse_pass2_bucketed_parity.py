@@ -528,7 +528,7 @@ def test_sparse_pass2_prepare_per_image_inputs_honors_explicit_float64_dtype():
         oversampling_order=0,
         n_fine_trans=1,
         fine_translation_parent=np.asarray([0], dtype=np.int32),
-        rotation_log_prior=np.zeros(12, dtype=np.float32),
+        rotation_log_prior=np.full(12, 1.0 + 2.0**-40, dtype=np.float64),
         random_perturbation=0.0,
         fine_rotations_override=score_rotations,
         fine_mstep_rotations_override=mstep_rotations,
@@ -542,6 +542,8 @@ def test_sparse_pass2_prepare_per_image_inputs_honors_explicit_float64_dtype():
     f64_out = _prepare_per_image_pass2_inputs(**kwargs, dtype=np.float64)
     assert f64_out["oversampled_rots"][0].dtype == np.float64
     assert f64_out["oversampled_mstep_rots"][0].dtype == np.float64
+    assert f64_out["log_prior"][0].dtype == np.float64
+    assert f64_out["log_prior"][0][0] == 1.0 + 2.0**-40
     np.testing.assert_allclose(f64_out["oversampled_rots"][0], score_rotations, atol=1e-12)
     np.testing.assert_allclose(f64_out["oversampled_mstep_rots"][0], mstep_rotations, atol=1e-12)
     np.testing.assert_allclose(

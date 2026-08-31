@@ -98,7 +98,7 @@ def make_relion_stats(
     max_posterior_per_image,
     rotation_posterior_sums,
     image_dtype=None,
-    rotation_dtype=jnp.float32,
+    rotation_dtype=None,
 ) -> RelionStats:
     """Build a ``RelionStats`` object with consistent array conversion."""
 
@@ -121,9 +121,13 @@ def make_noise_stats(
     wsum_norm_correction=None,
     wsum_scale_correction_xa=None,
     wsum_scale_correction_aa=None,
-    array_dtype=jnp.float32,
+    array_dtype=None,
 ) -> NoiseStats:
-    """Build a ``NoiseStats`` object with consistent array and scalar coercion."""
+    """Build a ``NoiseStats`` object without narrowing source precision.
+
+    Pass ``array_dtype`` only for an explicit external precision boundary.
+    Otherwise each accumulator retains the dtype chosen by its producer.
+    """
 
     return NoiseStats(
         wsum_sigma2_noise=jnp.asarray(wsum_sigma2_noise, dtype=array_dtype),
