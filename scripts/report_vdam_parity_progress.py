@@ -428,7 +428,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
     "default_enabled": False,
     "promotion_authorized": False,
 }
-ENGINEERING_SNAPSHOT_SHA256 = "918c2d7fc613ea64a66e7a7b704c01a66ae50a8ee660b3647875c61402149504"
+ENGINEERING_SNAPSHOT_SHA256 = "2ad43b2b4fec4141dde9cee2709e3bf8e8a74318d04a419ec93a5b399c8b7a1f"
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -798,8 +798,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "are unmatched at iteration 80. |",
         "| Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is "
         "cross-GPU and trajectories differ. No speedup or regression claim. |",
-        "| Immediate work | **ISOLATE ITERATION 37** | Keep the typed defaults, find the first upstream "
-        "active-particle escape, then obtain a same-GPU trajectory-matched runtime pair. |",
+        "| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling unset; test exact-local x-half bucket "
+        "sizing and shared coarse-projection reuse with strict same-GPU state/map gates. |",
         "",
         "## At a glance",
         "",
@@ -809,7 +809,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "Frozen; no recent diagnostic changes this score. |",
         f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** cases meet 1.10x; "
         f"observed {min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x | "
-        "Warm80 timing is INCONCLUSIVE; the shared production coarse pass remains the dominant GPU target. |",
+        "Warm80 timing is INCONCLUSIVE; exact-local topology, pass-1 orchestration, and repeated input work "
+        "dominate the remaining wall gap. |",
         "| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |",
         "| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |",
         "",
@@ -1058,8 +1059,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"{engineering['warm_profile']['gpu_kernel_seconds']:.2f} s kernels | GPU kernels explain only "
             f"part of wall time. Artifact: `{engineering['warm_profile']['evidence_root']}`. |",
             f"| shared coarse projector | {engineering['warm_profile']['coarse_projector_seconds']:.3f} s | "
-            f"{engineering['warm_profile']['coarse_projector_gpu_percent']:.2f}% of GPU kernel time; primary "
-            "GPU target. |",
+            f"{engineering['warm_profile']['coarse_projector_gpu_percent']:.2f}% of GPU kernel time, but only a "
+            "bounded fraction of end-to-end wall; not the bulk gap. |",
             f"| exact-local / pass 1 wall | {engineering['warm_profile']['local_exact_wall_seconds']:.2f} / "
             f"{engineering['warm_profile']['pass1_seconds']:.2f} s | Globally padded rectangular scheduling is "
             "the main topology target. |",
@@ -1071,6 +1072,24 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"| fine fused / Wavg | {engineering['warm_profile']['fine_fused_seconds']:.3f} / "
             f"{engineering['warm_profile']['weighted_average_seconds']:.3f} s | Already small; optimize only without "
             "repeating projections. |",
+            "",
+            f"### Production profiler toggle: job `{engineering['profile_toggle']['job_id']}`",
+            "",
+            "| Crossed pair | Profiler off | Profiler on | Readout |",
+            "|---|---:|---:|---|",
+            f"| pair 1 | {engineering['profile_toggle']['external_wall_seconds']['off'][0]:.3f} s | "
+            f"{engineering['profile_toggle']['external_wall_seconds']['on'][0]:.3f} s | on +"
+            f"{engineering['profile_toggle']['profile_on_penalty_percent_by_pair'][0]:.2f}% |",
+            f"| pair 2 | {engineering['profile_toggle']['external_wall_seconds']['off'][1]:.3f} s | "
+            f"{engineering['profile_toggle']['external_wall_seconds']['on'][1]:.3f} s | on +"
+            f"{engineering['profile_toggle']['profile_on_penalty_percent_by_pair'][1]:.2f}% |",
+            "",
+            f"All {engineering['profile_toggle']['particle_pose_translation_exact_iterations']}/"
+            f"{engineering['profile_toggle']['particle_pose_translation_exact_iterations']} pose/translation "
+            "checkpoints match across arms. Keep profiling unset in production. The late-arm input/pass-1 slowdown "
+            "confounds the exact magnitude, so the observed median ratio is diagnostic only. Evidence: "
+            f"`{engineering['profile_toggle']['evidence_root']}/{engineering['profile_toggle']['summary_report']}` "
+            f"(SHA-256 `{engineering['profile_toggle']['summary_sha256']}`).",
             "",
             "### Engineering decision ledger",
             "",
@@ -1125,17 +1144,19 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            f"1. Isolate the first active-particle envelope escape at iteration "
-            f"{particle_gate['first_failure_iteration']} on the same GPU and hard-state trajectory; identify the "
-            "first upstream nonexact field before changing arithmetic.",
-            "2. Keep the audited typed Wavg/radix defaults while the policy and map gates remain green; the open "
-            "particle gate prevents a correctness claim.",
-            "3. Obtain a same-GPU, trajectory-matched runtime A/B. Until then runtime remains INCONCLUSIVE and no "
-            "speedup or regression may be reported.",
-            "4. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, or nondefault dynamic "
-            "tail mask without new evidence on the dominant production kernel.",
-            "5. After the particle and runtime gates close, qualify additional frozen K=1 stresses and re-run the "
-            "frozen matrix before K>1 or real-data promotion.",
+            "1. Keep the profiler unset and finish the exact-local x-half bucket-size sweep. Require exact particle "
+            "states/maps, the RELION envelope, repeatable warmed timing, and arm-resolved peak memory.",
+            "2. Reject bounded pass-1 to pass-2 raw reuse unless a same-process fetch/preprocess microbenchmark is "
+            "bitwise and materially reverses its first paired +1.45% slowdown; do not infer speed from the contended "
+            "late pair.",
+            "3. Qualify shared coarse-projection reuse only if its standalone output is strictly bitwise and its "
+            "end-to-end production gain is measurable; the shared coarse primitive is not the bulk wall-time gap.",
+            "4. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
+            f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
+            "the explicitly requested performance-first phase is active.",
+            "5. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection "
+            "cache, or nondefault dynamic tail mask without new evidence. After speed closes, isolate correctness "
+            "and then expand the frozen K=1 matrix before K>1 or real-data promotion.",
             "",
             "## Evidence and reproducibility",
             "",

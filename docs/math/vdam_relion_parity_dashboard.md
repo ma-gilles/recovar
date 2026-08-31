@@ -12,14 +12,14 @@
 | Same-GPU map envelope | **PASS 81/81** | Minimum best-native FSC AUC `0.9999885424`; no checkpoint outside. |
 | Active-particle envelope | **FAIL@37 — OPEN** | 35/80 checkpoints fail; 360/360 active particles are unmatched at iteration 80. |
 | Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is cross-GPU and trajectories differ. No speedup or regression claim. |
-| Immediate work | **ISOLATE ITERATION 37** | Keep the typed defaults, find the first upstream active-particle escape, then obtain a same-GPU trajectory-matched runtime pair. |
+| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling unset; test exact-local x-half bucket sizing and shared coarse-projection reuse with strict same-GPU state/map gates. |
 
 ## At a glance
 
 | Axis | Authoritative state | Current engineering read |
 |---|---|---|
 | K=1 correctness | **2/20** strict cases pass | Frozen; no recent diagnostic changes this score. |
-| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | Warm80 timing is INCONCLUSIVE; the shared production coarse pass remains the dominant GPU target. |
+| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | Warm80 timing is INCONCLUSIVE; exact-local topology, pass-1 orchestration, and repeated input work dominate the remaining wall gap. |
 | EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |
 | Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |
 
@@ -169,11 +169,20 @@ Palette evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_sig_bu
 | Profile slice | Time | Readout |
 |---|---:|---|
 | iterations 47--80 | 240.36 s wall / 44.58 s kernels | GPU kernels explain only part of wall time. Artifact: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_warm_nsys_v3_6b5e6568a_20260831`. |
-| shared coarse projector | 35.899 s | 80.53% of GPU kernel time; primary GPU target. |
+| shared coarse projector | 35.899 s | 80.53% of GPU kernel time, but only a bounded fraction of end-to-end wall; not the bulk gap. |
 | exact-local / pass 1 wall | 130.09 / 71.39 s | Globally padded rectangular scheduling is the main topology target. |
 | XLA compile ranges | 57.83 s | Shape-policy stability matters before arithmetic changes. |
 | dataset getitem / disk read | 31.90 / 25.36 s | Input latency is material, but the exact eager cache experiment regressed. |
 | fine fused / Wavg | 1.897 / 0.556 s | Already small; optimize only without repeating projections. |
+
+### Production profiler toggle: job `13258895`
+
+| Crossed pair | Profiler off | Profiler on | Readout |
+|---|---:|---:|---|
+| pair 1 | 80.067 s | 91.570 s | on +14.37% |
+| pair 2 | 121.944 s | 123.108 s | on +0.95% |
+
+All 20/20 pose/translation checkpoints match across arms. Keep profiling unset in production. The late-arm input/pass-1 slowdown confounds the exact magnitude, so the observed median ratio is diagnostic only. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_profile_toggle_pair_52c38c85b_20260831/pair_summary.json` (SHA-256 `2eab2b313f7484407ed639d97c149f7afc8cefba1cb19a490bf8103ea316f778`).
 
 ### Engineering decision ledger
 
@@ -187,6 +196,7 @@ Palette evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_sig_bu
 | typed Wavg/radix defaults | **KEEP; POLICY + MAP PASS; PARTICLE OPEN** | Audit job 13256248 confirms typed policy PASS 80/80 in both arms and the same-GPU map envelope PASS 81/81; the active-particle envelope first fails at iteration 37, so correctness remains open. |
 | coarse 128-tail palette | **REJECTED; DEFAULT OFF** | Job 13254010 failed closed after the sealed candidate cache changed; its completed warm arm was slower (+4.1% wall and +7.3% pass 1). |
 | dynamic coarse-tail mask | **REJECTED; DO NOT PROMOTE** | The 23.91x active-3 microgate was superseded by full paired job 13257087: only ~0.69% median wall gain on a forced nondefault native-texture path, 120/120 strict artifact mismatches, and no production-kernel benefit. |
+| runtime profiler toggle | **KEEP UNSET IN PRODUCTION** | Same-GPU crossed job 13258895 favored profiler-off in both pairs (+14.37% and +0.95% cost when on) with exact 20/20 pose/translation trajectories. Shared node contention invalidates a precise magnitude claim. |
 
 ## Shared EM implementation
 
@@ -212,11 +222,11 @@ CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Curre
 
 ## Next gates
 
-1. Isolate the first active-particle envelope escape at iteration 37 on the same GPU and hard-state trajectory; identify the first upstream nonexact field before changing arithmetic.
-2. Keep the audited typed Wavg/radix defaults while the policy and map gates remain green; the open particle gate prevents a correctness claim.
-3. Obtain a same-GPU, trajectory-matched runtime A/B. Until then runtime remains INCONCLUSIVE and no speedup or regression may be reported.
-4. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, or nondefault dynamic tail mask without new evidence on the dominant production kernel.
-5. After the particle and runtime gates close, qualify additional frozen K=1 stresses and re-run the frozen matrix before K>1 or real-data promotion.
+1. Keep the profiler unset and finish the exact-local x-half bucket-size sweep. Require exact particle states/maps, the RELION envelope, repeatable warmed timing, and arm-resolved peak memory.
+2. Reject bounded pass-1 to pass-2 raw reuse unless a same-process fetch/preprocess microbenchmark is bitwise and materially reverses its first paired +1.45% slowdown; do not infer speed from the contended late pair.
+3. Qualify shared coarse-projection reuse only if its standalone output is strictly bitwise and its end-to-end production gain is measurable; the shared coarse primitive is not the bulk wall-time gap.
+4. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
+5. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection cache, or nondefault dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.
 
 ## Evidence and reproducibility
 

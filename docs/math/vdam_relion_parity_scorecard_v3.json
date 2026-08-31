@@ -633,6 +633,35 @@
       "weighted_average_seconds": 0.556,
       "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_warm_nsys_v3_6b5e6568a_20260831"
     },
+    "profile_toggle": {
+      "job_id": "13258895",
+      "source_head": "52c38c85bcaf54a258e6efa8b73b1b9d12ed6d46",
+      "case_id": "vdam-gf46",
+      "iterations": 20,
+      "hardware": "H100",
+      "same_physical_gpu": true,
+      "execution_order": ["off-1", "on-1", "on-2", "off-2"],
+      "external_wall_seconds": {
+        "off": [80.067321671, 121.944470925],
+        "on": [91.570161946, 123.108310603]
+      },
+      "profile_on_penalty_percent_by_pair": [14.37, 0.95],
+      "median_profile_off_speedup": 1.0627026758696798,
+      "particle_pose_translation_exact_iterations": 20,
+      "cross_map_fsc_auc_floor": 0.99999999995796,
+      "repeat_map_fsc_auc_floor": 0.99999999995846,
+      "profile_metadata_absent_off_iterations": 20,
+      "profile_metadata_present_on_iterations": 20,
+      "result": "keep_profile_unset_for_production",
+      "magnitude_claim_authorized": false,
+      "reason": "Both crossed pairs favor profiler-off, but late arms slowed together because pass-1 and raw-cache work contended with an overlapping workload on the node. Direction is accepted; the 1.0627x median magnitude is not a production speed claim.",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_profile_toggle_pair_52c38c85b_20260831",
+      "summary_report": "pair_summary.json",
+      "summary_sha256": "2eab2b313f7484407ed639d97c149f7afc8cefba1cb19a490bf8103ea316f778",
+      "slurm_log": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-profile-pair-13258895.out",
+      "slurm_log_sha256": "9706a91df6e338f58cdd7c22525bbe642c34d1f10de00bcac57822e328fbf11a",
+      "score_impact": "none"
+    },
     "decisions": [
       {
         "candidate": "shared EM arithmetic primitives",
@@ -673,6 +702,11 @@
         "candidate": "dynamic coarse-tail mask",
         "status": "REJECTED; DO NOT PROMOTE",
         "evidence": "The 23.91x active-3 microgate was superseded by full paired job 13257087: only ~0.69% median wall gain on a forced nondefault native-texture path, 120/120 strict artifact mismatches, and no production-kernel benefit."
+      },
+      {
+        "candidate": "runtime profiler toggle",
+        "status": "KEEP UNSET IN PRODUCTION",
+        "evidence": "Same-GPU crossed job 13258895 favored profiler-off in both pairs (+14.37% and +0.95% cost when on) with exact 20/20 pose/translation trajectories. Shared node contention invalidates a precise magnitude claim."
       }
     ]
   },
@@ -728,7 +762,7 @@
     "typed_warm80_audit_job": "13256248",
     "current_blocker": "active_particle_envelope_fail_at_iteration_37",
     "runtime_status": "inconclusive",
-    "current_action": "Isolate the first active-particle envelope escape at iteration 37, then obtain a same-GPU trajectory-matched runtime pair. Do not revisit the rejected 128-tail palette or nondefault dynamic tail mask without new production-profile evidence.",
+    "current_action": "Close the performance gap first: keep profiling unset, qualify exact-local x-half bucket sizing and shared coarse-projection reuse, and reject bounded pass-1 to pass-2 raw reuse unless its focused microbenchmark reverses the first paired slowdown. Then isolate the recorded iteration-37 active-particle escape.",
     "hypothesis": "Job 13211719 rejects same-cache reuse as sufficient for exact ordered-shell repeatability: the earliest captured difference is one float32 ULP in an E-step max-posterior scalar.",
     "evidence_pattern": "A populated the canonical cache 0->377; A-after, B-before, and B-after share manifest SHA-256 2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5 with no B additions or changes.",
     "narrowed_boundary": "Cache identity is proven. Pose, rotation, translation, and class selection remain exact while the one-ULP posterior difference feeds ordered noise and both-half BPref differences. The next discriminator remains compile/autotune variant versus runtime reduction at or before this E-step scalar.",
