@@ -866,6 +866,7 @@ def adjust_regularization_relion_style(
     native_volume_shape=None,
     tau_is_1d=False,
     relion_filter_scale=None,
+    large_grid_single_precision=False,
 ):
     """Adjust the RELION-style regularization filter.
 
@@ -906,7 +907,12 @@ def adjust_regularization_relion_style(
         has_weight = native_weight > 1e-20
         safe_native_weight = jnp.where(has_weight, native_weight, 1.0)
         native_inverse = 1.0 / (0.001 * safe_native_weight)
-        return jnp.where(has_weight, native_inverse / scale, 0.0)
+        # Evaluate RELION's native-unit fallback in double precision, but do
+        # not let that scalar normalization promote a large float32 BPref
+        # denominator (and its subsequent complex division) box-wide.  The
+        # caller still promotes this result when its tau operand is float64.
+        fallback = jnp.where(has_weight, native_inverse / scale, 0.0)
+        return fallback.astype(current_filter.dtype) if large_grid_single_precision else fallback
 
     # Exact half-volume behavior: reuse full-volume implementation and repack.
     if half_volume:
@@ -1374,6 +1380,7 @@ def post_process_from_filter_v2(
         native_volume_shape=og_volume_shape,
         tau_is_1d=tau_is_1d,
         relion_filter_scale=relion_filter_scale,
+        large_grid_single_precision=use_large_accumulator_single_precision,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 

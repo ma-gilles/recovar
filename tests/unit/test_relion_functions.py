@@ -532,7 +532,49 @@ def test_zero_tau_fallback_respects_relion_filter_normalization():
     )
 
     expected_fallback = 1.0 / (0.001 * scale * scale)
+    assert regularized.dtype == np.float64
     np.testing.assert_allclose(regularized, 1.0 + expected_fallback, rtol=0, atol=1e-12)
+
+
+def test_large_accumulator_guard_keeps_scaled_wiener_boundary_single_precision(
+    tmp_path,
+    monkeypatch,
+):
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "100")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR", str(tmp_path))
+    monkeypatch.setattr(rf, "_RELION_WIENER_BOUNDARY_DUMP_CALL", 0)
+
+    volume_shape = (6, 6, 6)
+    n_voxels = int(np.prod(volume_shape))
+    ft_ctf = np.ones(n_voxels, dtype=np.float32)
+    f_ty = np.zeros(n_voxels, dtype=np.complex64)
+    f_ty[n_voxels // 2] = 1.0 + 0.25j
+    tau = np.zeros(n_voxels, dtype=np.float64)
+
+    out = rf.post_process_from_filter_v2(
+        jnp.asarray(ft_ctf),
+        jnp.asarray(f_ty),
+        volume_shape,
+        1,
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=False,
+        current_size=4,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    assert np.asarray(out).dtype == np.complex64
+    with np.load(tmp_path / "recovar_wiener_boundary_0000.npz") as boundary:
+        assert boundary["regularized_filter"].dtype == np.float32
+        assert boundary["divided_volume"].dtype == np.complex64
+    if callable(clear_cache):
+        clear_cache()
 
 
 def test_post_process_can_preserve_double_reconstruction_output():
