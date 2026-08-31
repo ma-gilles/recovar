@@ -16338,7 +16338,10 @@ def compute_pass2_stats_sparse_bucketed(
             translation_angles=relion_score_translation_angles,
             physical_image_shape=image_shape,
             volume_shape=recon_volume_shape,
-            max_r=float(mstep_current_size // 2),
+            max_r=float(
+                (image_shape[0] if mstep_current_size is None else mstep_current_size)
+                // 2
+            ),
             adaptive_fraction=float(adaptive_fraction),
         )
         jax.block_until_ready((Ft_y_total, Ft_ctf_total))

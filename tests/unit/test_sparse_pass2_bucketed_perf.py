@@ -934,8 +934,17 @@ class MockDataset:
         self.translations = np.asarray(translations)
 
 
+@pytest.mark.parametrize(
+    ("current_size", "expected_mstep_max_r"),
+    [
+        pytest.param(None, 4.0, id="full-box-sentinel"),
+        pytest.param(6, 3.0, id="reduced-current-size"),
+    ],
+)
 def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
     monkeypatch,
+    current_size,
+    expected_mstep_max_r,
 ):
     """The K=1 driver must stage every score group before releasing and replaying."""
 
@@ -1022,10 +1031,22 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
     )
 
     def fake_projector(_projector, rotations, image_shape, **kwargs):
-        row = jnp.linspace(0.25, 1.25, n_half, dtype=jnp.float32).astype(
+        pixel_indices = kwargs.get("pixel_indices")
+        n_projection_pixels = (
+            n_half if pixel_indices is None else int(np.asarray(pixel_indices).size)
+        )
+        row = jnp.linspace(
+            0.25,
+            1.25,
+            n_projection_pixels,
+            dtype=jnp.float32,
+        ).astype(
             jnp.complex64,
         )
-        projections = jnp.broadcast_to(row, (int(rotations.shape[0]), n_half))
+        projections = jnp.broadcast_to(
+            row,
+            (int(rotations.shape[0]), n_projection_pixels),
+        )
         projection_abs2 = (
             jnp.abs(projections) ** 2 if kwargs.get("return_abs2", True) else None
         )
@@ -1075,6 +1096,7 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
         )
         assert tuple(kwargs["physical_image_shape"]) == IMAGE_SHAPE
         assert np.asarray(kwargs["translation_angles"]).shape == (1, 2)
+        assert kwargs["max_r"] == expected_mstep_max_r
         events.append("replay")
         return (
             jnp.full_like(data_volume, np.complex64(64.0 + 0.0j)),
@@ -1137,7 +1159,7 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
             nside_level=0,
             disc_type="linear_interp",
             oversampling_order=0,
-            current_size=IMAGE_SHAPE[0],
+            current_size=current_size,
             half_spectrum_scoring=True,
             fine_rotations_override=fine_rotations,
             fine_rotation_parent_override=np.asarray([0], dtype=np.int64),
