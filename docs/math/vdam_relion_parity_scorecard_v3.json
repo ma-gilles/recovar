@@ -721,6 +721,83 @@
       "slurm_log": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-proj-cache-break-even-13261339.out",
       "score_impact": "none"
     },
+    "xhalf_projection_batch_gate": {
+      "job_id": "13260950",
+      "source_head": "693bf4c0d3b4822bdc85e8d49ab09bd7106f8f4b",
+      "case_id": "vdam-gf46",
+      "hardware": "H100",
+      "same_physical_gpu": true,
+      "exclusive_node": true,
+      "iterations": 80,
+      "control_target_row_pixels": 40000000,
+      "candidate_target_row_pixels": 80000000,
+      "scored_external_wall_seconds": {
+        "control": [331.408101928, 290.490799828],
+        "candidate": [291.330201409, 283.557308942]
+      },
+      "scored_external_median_wall_seconds": {
+        "control": 310.949450878,
+        "candidate": 287.4437551755
+      },
+      "paired_speedups": [1.137568643158745, 1.0244518150911714],
+      "median_speedup": 1.081774939546516,
+      "median_wall_reduction_percent": 7.56,
+      "scored_peak_used_mib": {
+        "control": [17645, 17645],
+        "candidate": [17641, 17645]
+      },
+      "terminal_map_repeat_envelope": {
+        "cross_relative_l2_max": 0.06905659544793974,
+        "repeat_relative_l2_max": 0.07033904280482867,
+        "cross_within_2x_repeat_relative_l2": true,
+        "cross_fsc_auc_min": 0.9871221846485219,
+        "repeat_fsc_auc_min": 0.9872370320250046,
+        "fsc_floor_shortfall": 0.0001148473764827,
+        "cross_at_least_repeat_fsc_floor": false
+      },
+      "terminal_vs_relion": {
+        "control_relative_l2": [0.07385672909411614, 0.07165742996726458],
+        "candidate_relative_l2": [0.07604256072301403, 0.07604433724325933],
+        "control_fsc_auc": [0.9840837512929396, 0.9797248480097303],
+        "candidate_fsc_auc": [0.9821128733072066, 0.982112118838797]
+      },
+      "control_repeat_first_particle_divergence_iteration": 4,
+      "candidate_repeat_first_particle_divergence_iteration": 46,
+      "result": "runtime_pass_science_fail_not_promoted",
+      "promotion_authorized": false,
+      "escalation_authorized": false,
+      "next_design": "Use the 80M outer projection/scoring batch but split physical BPref accumulation at the original dynamic 40M boundaries so the numerically sensitive accumulation topology remains unchanged.",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_xhalf_2x_exclusive_693bf4c0d_20260831",
+      "summary_report": "pair_summary.json",
+      "summary_sha256": "71dbdae2c30d45346b9ee68f96a3b74032e705b63773dd1ba55aff1c26bce362",
+      "slurm_log": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-xhalf-pair-13260950.out",
+      "slurm_log_sha256": "42b3d69292f49c1233969b0defbc716d89f6088e7ba63d7861ec342dc19b0263",
+      "score_impact": "none"
+    },
+    "pool_preserving_layout_gate": {
+      "job_id": "13262146",
+      "source_head": "104dac4ef0d36b1436ec047f46a56c4bee93f025",
+      "case_id": "vdam-gf46",
+      "hardware": "H100",
+      "iterations": [20, 40, 60, 80],
+      "chronological_physical_order_exact": true,
+      "literal_pool_rows_reduction_percent": [49.5, 56.4375, 82.21875, 65.625],
+      "current_outer_calls": [7, 3, 4, 5],
+      "literal_pool_calls": [67, 67, 67, 120],
+      "contiguous_equal_run_calls": [27, 25, 35, 29],
+      "macro_packed_static_rows_reduction_percent": [37.5, 49.76, 79.17, 57.0],
+      "prior_exact_pair_bucket_regression_percent": 31.0,
+      "prior_exact_scoring_bucket_regression_percent": 36.0,
+      "result": "literal_pool_and_run_rejected_macro_pack_proposed",
+      "gpu_pair_authorized": false,
+      "reason": "Literal pool calls remove padding but multiply launch/compile boundaries. Earlier exact variants with fewer boundaries were already 31--36% slower. The only viable design packs pool-local rows inside the existing outer calls using the shared compact-pair machinery.",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_pool_layout_capture_it80_104dac4ef_20260831",
+      "layout_report": "analysis/pool_layout.json",
+      "layout_report_sha256": "aaa931b08e0decbbda8c91004fb7a6dde5e3e65d9d647466bb43247fb4a2946e",
+      "slurm_log": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-first-boundary-13262146.out",
+      "slurm_log_sha256": "581611b74eed9f3798492794b9a0c3028103e0e577555cffb859e6401cd72814",
+      "score_impact": "none"
+    },
     "decisions": [
       {
         "candidate": "shared EM arithmetic primitives",
@@ -776,6 +853,16 @@
         "candidate": "shared coarse-projection cache",
         "status": "EXACT BUT IMMATERIAL; NOT INTEGRATED",
         "evidence": "Jobs 13261042/13261159 are bitwise exact; job 13261339 crosses over near batch 45 and reaches only 1.01115x at batch 200. GF46 has one batch per pass, so its end-to-end ceiling is below 0.52%."
+      },
+      {
+        "candidate": "x-half 80M outer projection batch",
+        "status": "RUNTIME PASS; SCIENCE FAIL; NOT PROMOTED",
+        "evidence": "Exclusive same-H100 job 13260950 reduced median wall by 7.56% and did not increase peak memory, but cross-run FSC missed the declared repeat floor by 1.15e-4 and candidate RELION relative-L2 exceeded both controls. Preserve 40M BPref accumulation boundaries before retesting."
+      },
+      {
+        "candidate": "literal pool-preserving local buckets",
+        "status": "REJECTED BEFORE GPU PAIR",
+        "evidence": "Job 13262146 proves exact source chronology and 49.5--82.2% fewer logical padded rows, but raises calls from 3--7 to 67--120; earlier exact, less fragmented variants regressed 31--36%. Pursue macro-packed rows inside unchanged outer calls instead."
       }
     ]
   },

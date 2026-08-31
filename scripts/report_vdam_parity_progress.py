@@ -428,7 +428,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
     "default_enabled": False,
     "promotion_authorized": False,
 }
-ENGINEERING_SNAPSHOT_SHA256 = "e597a8eb9446942948ab3ef5f63d9d931d85d434fe0591e8e830fed8ff5473f0"
+ENGINEERING_SNAPSHOT_SHA256 = "b4695d4f29cde09f5c44e9c2559267f059ac596f1905c1c53ae4c770fcd20f9c"
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -796,11 +796,11 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{particle_gate['failures']}/{particle_gate['checkpoints']} checkpoints fail; "
         f"{particle_gate['final_active_unmatched']}/{particle_gate['final_active_particles']} active particles "
         "are unmatched at iteration 80. |",
-        "| Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is "
-        "cross-GPU and trajectories differ. No speedup or regression claim. |",
-        "| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling, bounded raw reuse, and shared "
-        "coarse-projection caching off; finish x-half sizing, pool-preserving local buckets, and low-cardinality "
-        "Fourier-window shape audits. |",
+        "| Runtime | **INCONCLUSIVE** | The exclusive 80M x-half arm is 7.56% faster, but it missed the "
+        "predeclared science envelope and is not promoted. Frozen runtime remains 0/20. |",
+        "| Immediate work | **PRESERVE NUMERICAL TOPOLOGY** | Retain the faster 80M projection/scoring batch while "
+        "restoring 40M BPref accumulation boundaries; prototype call-neutral macro packing and stable physical "
+        "Fourier shapes from shared EM machinery. |",
         "",
         "## At a glance",
         "",
@@ -810,8 +810,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "Frozen; no recent diagnostic changes this score. |",
         f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** cases meet 1.10x; "
         f"observed {min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x | "
-        "Warm80 timing is INCONCLUSIVE; exact-local topology, pass-1 orchestration, and repeated input work "
-        "dominate the remaining wall gap. |",
+        "Warm80 remains unqualified. The 80M x-half pair proves a 7.56% opportunity, but its map gate failed; "
+        "exact-local padding and repeated compilation remain the next call-neutral targets. |",
         "| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |",
         "| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |",
         "",
@@ -1001,6 +1001,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     tail_full = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257087")
     tail_active200 = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257182")
     projection_cache = engineering["shared_coarse_projection_cache"]
+    xhalf_batch = engineering["xhalf_projection_batch_gate"]
+    pool_layout = engineering["pool_preserving_layout_gate"]
     source_cuda = invalid_speed["source_cuda_library"]
     source_lock = invalid_speed["source_build_lock"]
     lines.extend(
@@ -1045,15 +1047,28 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"about `{projection_cache['observed_iteration_contribution_percent']:.2f}%`; retains "
             f"`{projection_cache['projection_cache_gib']:.2f}--{projection_cache['retained_memory_upper_gib']:.1f} "
             "GiB`. | **EXACT BUT IMMATERIAL; NOT INTEGRATED** |",
+            f"| x-half projection batch `{xhalf_batch['job_id']}` | median "
+            f"{xhalf_batch['scored_external_median_wall_seconds']['control']:.3f} -> "
+            f"{xhalf_batch['scored_external_median_wall_seconds']['candidate']:.3f} s "
+            f"({xhalf_batch['median_wall_reduction_percent']:.2f}% lower); both pairs faster | Peak memory "
+            "unchanged, but terminal cross FSC missed the repeat floor by "
+            f"`{xhalf_batch['terminal_map_repeat_envelope']['fsc_floor_shortfall']:.3g}`. | "
+            "**RUNTIME PASS; SCIENCE FAIL; NOT PROMOTED** |",
+            f"| literal pool-local buckets `{pool_layout['job_id']}` | logical padded rows -"
+            f"{min(pool_layout['literal_pool_rows_reduction_percent']):.1f}% to -"
+            f"{max(pool_layout['literal_pool_rows_reduction_percent']):.1f}% | Exact source chronology, but calls "
+            f"{pool_layout['current_outer_calls']} -> {pool_layout['literal_pool_calls']}; earlier less-fragmented "
+            "exact variants were 31--36% slower. | **REJECTED BEFORE GPU PAIR** |",
             f"| ordered-scatter CUDA Graph `{speed['paired_job']}` | {speed['candidate_seconds']} vs "
             f"{speed['control_seconds']} s ({speed['wall_time_change_percent']:.2f}%) | particles "
             f"{speed['candidate_control_particle_passed']}/{speed['candidate_control_particle_denominator']}; "
             f"maps {speed['candidate_control_map_passed']}/{speed['candidate_control_map_denominator']}. | "
             "**QUALIFIED CANDIDATE** |",
             "",
-            "The current warm80 comparison cannot establish a speedup or regression. The tail-mask microbenchmark "
-            "does not target the dominant accepted production coarse kernel and is superseded by the full paired gate. "
-            "None of these diagnostics can change the frozen correctness or runtime panels.",
+            "The x-half experiment establishes a runtime opportunity, not a promotable default: its science gate "
+            "failed. The tail-mask microbenchmark does not target the dominant accepted production coarse kernel "
+            "and is superseded by the full paired gate. None of these diagnostics can change the frozen correctness "
+            "or runtime panels.",
             "",
             f"Palette evidence: `{palette['evidence_root']}/{palette['failure_report']}` "
             f"(SHA-256 `{palette['failure_report_sha256']}`); Slurm log `{palette['evidence_sha256']}`. "
@@ -1146,6 +1161,59 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"`{projection_cache['microbench_report_sha256']}`; binary report SHA-256: "
             f"`{projection_cache['binary_report_sha256']}`.",
             "",
+            f"### X-half projection-batch gate: job `{xhalf_batch['job_id']}`",
+            "",
+            "| Arm | Scored walls | Median | Peak GPU memory |",
+            "|---|---:|---:|---:|",
+            f"| 40M control | {', '.join(f'{value:.3f}' for value in xhalf_batch['scored_external_wall_seconds']['control'])} s | "
+            f"{xhalf_batch['scored_external_median_wall_seconds']['control']:.3f} s | "
+            f"{max(xhalf_batch['scored_peak_used_mib']['control'])} MiB |",
+            f"| 80M candidate | {', '.join(f'{value:.3f}' for value in xhalf_batch['scored_external_wall_seconds']['candidate'])} s | "
+            f"{xhalf_batch['scored_external_median_wall_seconds']['candidate']:.3f} s | "
+            f"{max(xhalf_batch['scored_peak_used_mib']['candidate'])} MiB |",
+            "",
+            f"Both crossed pairs favor 80M (`{xhalf_batch['paired_speedups'][0]:.5f}x`, "
+            f"`{xhalf_batch['paired_speedups'][1]:.5f}x`), for a median `{xhalf_batch['median_speedup']:.5f}x` "
+            "speedup. It nevertheless fails closed: terminal cross-map relative L2 is inside the declared 2x "
+            "repeat envelope, but cross FSC AUC is "
+            f"`{xhalf_batch['terminal_map_repeat_envelope']['cross_fsc_auc_min']:.10f}` versus repeat floor "
+            f"`{xhalf_batch['terminal_map_repeat_envelope']['repeat_fsc_auc_min']:.10f}`. Candidate-vs-RELION "
+            "FSC lies inside the two-control range, while candidate relative L2 is slightly above both controls. "
+            "The candidate is not promoted and no wider cap is authorized.",
+            "",
+            "The next design separates independent work from sensitive accumulation: keep the 80M outer "
+            "projection/scoring buckets, then split the physical BPref accumulation operands at the original "
+            "dynamic 40M boundaries. This preserves the old accumulation call sequence while retaining most of "
+            "the larger-batch opportunity.",
+            "",
+            f"Evidence: `{xhalf_batch['evidence_root']}/{xhalf_batch['summary_report']}` (SHA-256 "
+            f"`{xhalf_batch['summary_sha256']}`); Slurm log SHA-256 `{xhalf_batch['slurm_log_sha256']}`.",
+            "",
+            f"### Pool-preserving layout gate: job `{pool_layout['job_id']}`",
+            "",
+            "| Iteration | Current calls | Pool calls | Equal-run calls | Logical row reduction | Call-neutral macro-pack estimate |",
+            "|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for index, iteration in enumerate(pool_layout["iterations"]):
+        lines.append(
+            f"| {iteration} | {pool_layout['current_outer_calls'][index]} | "
+            f"{pool_layout['literal_pool_calls'][index]} | {pool_layout['contiguous_equal_run_calls'][index]} | "
+            f"-{pool_layout['literal_pool_rows_reduction_percent'][index]:.2f}% | "
+            f"-{pool_layout['macro_packed_static_rows_reduction_percent'][index]:.2f}% |"
+        )
+    lines.extend(
+        [
+            "",
+            "The literal and equal-run planners preserve exact `(particle, local rotation, reconstruction group)` "
+            "chronology, but multiply outer launch/compile boundaries. They are rejected without a GPU pair because "
+            "earlier exact variants with fewer extra boundaries regressed 31% and 36%. The viable follow-up is a "
+            "single macro-packed flat-row buffer per existing outer call, using shared compact-pair planning and a "
+            "segmented posterior while restoring dense layout only for unchanged BPref accumulation.",
+            "",
+            f"Evidence: `{pool_layout['evidence_root']}/{pool_layout['layout_report']}` (SHA-256 "
+            f"`{pool_layout['layout_report_sha256']}`); Slurm log SHA-256 `{pool_layout['slurm_log_sha256']}`.",
+            "",
             "### Engineering decision ledger",
             "",
             "| Track | Decision | Evidence |",
@@ -1199,16 +1267,17 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            "1. Keep the profiler unset and finish the exact-local x-half bucket-size sweep. Require exact particle "
-            "states/maps, the RELION envelope, repeatable warmed timing, and arm-resolved peak memory.",
-            "2. Keep bounded pass-1 to pass-2 raw reuse default-off. Audit whether consecutive RELION pools of three "
-            "can use pool-local radix buckets without changing particle order or accumulation chronology; run GPU "
-            "science only if the layout-only padded-row reduction is material.",
+            "1. Keep the profiler unset. Prove that 80M outer projection/scoring operands are bitwise invariant, then "
+            "restore the original dynamic 40M physical-BPref accumulation boundaries and rerun the exclusive "
+            "same-H100 80-iteration science gate.",
+            "2. Do not run literal pool-per-call or equal-run trajectories. Build only a focused call-neutral "
+            "macro-packed flat scorer from the shared compact-pair machinery; require exact active outputs and a "
+            ">2% call-level gain before production wiring.",
             "3. Do not integrate the exact shared coarse-projection cache: its batch-200 call-level gain is only "
             "1.1%, GF46 cannot reuse it across batches, and its end-to-end ceiling is below 0.52%.",
-            "4. Audit a low-cardinality physical Fourier-window shape policy against the 57.83 s late-window XLA "
-            "compile cost. Require an exact active-cutoff/order proof and a predicted end-to-end gain above 2% "
-            "before any GPU trajectory.",
+            "4. Finish the default-off stable physical Fourier-window implementation. Preserve the true logical "
+            "cutoff as the runtime loop bound, poison-test padded tails, and require exact active outputs plus a "
+            ">2% call-level gain before any trajectory.",
             "5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
             f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
             "the explicitly requested performance-first phase is active.",

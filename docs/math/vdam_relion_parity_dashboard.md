@@ -11,15 +11,15 @@
 | Typed Wavg/radix policy | **PASS 80/80 in both arms** | Requested/effective sequential Wavg=`true`; radix=`4`. |
 | Same-GPU map envelope | **PASS 81/81** | Minimum best-native FSC AUC `0.9999885424`; no checkpoint outside. |
 | Active-particle envelope | **FAIL@37 — OPEN** | 35/80 checkpoints fail; 360/360 active particles are unmatched at iteration 80. |
-| Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is cross-GPU and trajectories differ. No speedup or regression claim. |
-| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling, bounded raw reuse, and shared coarse-projection caching off; finish x-half sizing, pool-preserving local buckets, and low-cardinality Fourier-window shape audits. |
+| Runtime | **INCONCLUSIVE** | The exclusive 80M x-half arm is 7.56% faster, but it missed the predeclared science envelope and is not promoted. Frozen runtime remains 0/20. |
+| Immediate work | **PRESERVE NUMERICAL TOPOLOGY** | Retain the faster 80M projection/scoring batch while restoring 40M BPref accumulation boundaries; prototype call-neutral macro packing and stable physical Fourier shapes from shared EM machinery. |
 
 ## At a glance
 
 | Axis | Authoritative state | Current engineering read |
 |---|---|---|
 | K=1 correctness | **2/20** strict cases pass | Frozen; no recent diagnostic changes this score. |
-| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | Warm80 timing is INCONCLUSIVE; exact-local topology, pass-1 orchestration, and repeated input work dominate the remaining wall gap. |
+| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | Warm80 remains unqualified. The 80M x-half pair proves a 7.56% opportunity, but its map gate failed; exact-local padding and repeated compilation remain the next call-neutral targets. |
 | EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |
 | Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |
 
@@ -159,9 +159,11 @@ Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_sig_bucket_ab_
 | 128-tail palette `13254010` | warm wall +4.1%; pass 1 +7.3% | 20/20 particle states, then sealed cache changed 1277->1280 files. | **REJECTED / DEFAULT OFF** |
 | dynamic tail mask `13257087` | 65.1455 vs 65.5981 s = 1.00695x | Forced nondefault native-texture path; 120/120 strict artifacts differ. Microgates: active-3 23.91x bitwise; active-200 2.317x not bitwise. | **VALID SCIENCE FAIL / DO NOT PROMOTE** |
 | shared coarse-projection cache `13261042 / 13261159 / 13261300 / 13261339` | exact at every tested batch; `1.01115x` at batch 200 | GF46 has 1 image batch per pass; loose overall ceiling `0.52%`, observed iteration contribution about `0.10%`; retains `0.99--1.5 GiB`. | **EXACT BUT IMMATERIAL; NOT INTEGRATED** |
+| x-half projection batch `13260950` | median 310.949 -> 287.444 s (7.56% lower); both pairs faster | Peak memory unchanged, but terminal cross FSC missed the repeat floor by `0.000115`. | **RUNTIME PASS; SCIENCE FAIL; NOT PROMOTED** |
+| literal pool-local buckets `13262146` | logical padded rows -49.5% to -82.2% | Exact source chronology, but calls [7, 3, 4, 5] -> [67, 67, 67, 120]; earlier less-fragmented exact variants were 31--36% slower. | **REJECTED BEFORE GPU PAIR** |
 | ordered-scatter CUDA Graph `13203664` | 291 vs 293 s (-0.68%) | particles 80/80; maps 81/81. | **QUALIFIED CANDIDATE** |
 
-The current warm80 comparison cannot establish a speedup or regression. The tail-mask microbenchmark does not target the dominant accepted production coarse kernel and is superseded by the full paired gate. None of these diagnostics can change the frozen correctness or runtime panels.
+The x-half experiment establishes a runtime opportunity, not a promotable default: its science gate failed. The tail-mask microbenchmark does not target the dominant accepted production coarse kernel and is superseded by the full paired gate. None of these diagnostics can change the frozen correctness or runtime panels.
 
 Palette evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_sig_bucket_ab_4846bd5c5_20260831/FAILED.json` (SHA-256 `91754058b814633ea39fd3f8f958a3765d48bd21575cc69be489765657da92af`); Slurm log `324bb62a9e257fb8b9871462d99bcb2cbda9750a021db6809b63f85ea088fc7a`. Tail-pair evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_coarse_tail_pair_51357fbec_20260831/pair_summary.json` (SHA-256 `fe00d3936fefa751a676ee8b3b52b262770e50e865d2716a1512a26076d4b1ba`); Slurm log `8e27a0f48d42c072604b326d4ee96e6052b1a794715795f5a9662e5f17f38699`.
 
@@ -201,6 +203,32 @@ The standalone shared CUDA primitive is bitwise exact against the current produc
 
 Commit `1ee37ed5a0` therefore retains only the standalone shared primitive, binary comparator, focused tests, and benchmark harness on its isolated branch. It is unreachable from production and was not integrated. Main report SHA-256: `6e06f7d715653ebaf253062b9c965787cf78fded79a05586b055470ebf248541`; binary report SHA-256: `f15c1f6cac734913e2be80430d678b90b73588b40f27fa3cdc36863644228861`.
 
+### X-half projection-batch gate: job `13260950`
+
+| Arm | Scored walls | Median | Peak GPU memory |
+|---|---:|---:|---:|
+| 40M control | 331.408, 290.491 s | 310.949 s | 17645 MiB |
+| 80M candidate | 291.330, 283.557 s | 287.444 s | 17645 MiB |
+
+Both crossed pairs favor 80M (`1.13757x`, `1.02445x`), for a median `1.08177x` speedup. It nevertheless fails closed: terminal cross-map relative L2 is inside the declared 2x repeat envelope, but cross FSC AUC is `0.9871221846` versus repeat floor `0.9872370320`. Candidate-vs-RELION FSC lies inside the two-control range, while candidate relative L2 is slightly above both controls. The candidate is not promoted and no wider cap is authorized.
+
+The next design separates independent work from sensitive accumulation: keep the 80M outer projection/scoring buckets, then split the physical BPref accumulation operands at the original dynamic 40M boundaries. This preserves the old accumulation call sequence while retaining most of the larger-batch opportunity.
+
+Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_xhalf_2x_exclusive_693bf4c0d_20260831/pair_summary.json` (SHA-256 `71dbdae2c30d45346b9ee68f96a3b74032e705b63773dd1ba55aff1c26bce362`); Slurm log SHA-256 `42b3d69292f49c1233969b0defbc716d89f6088e7ba63d7861ec342dc19b0263`.
+
+### Pool-preserving layout gate: job `13262146`
+
+| Iteration | Current calls | Pool calls | Equal-run calls | Logical row reduction | Call-neutral macro-pack estimate |
+|---:|---:|---:|---:|---:|---:|
+| 20 | 7 | 67 | 27 | -49.50% | -37.50% |
+| 40 | 3 | 67 | 25 | -56.44% | -49.76% |
+| 60 | 4 | 67 | 35 | -82.22% | -79.17% |
+| 80 | 5 | 120 | 29 | -65.62% | -57.00% |
+
+The literal and equal-run planners preserve exact `(particle, local rotation, reconstruction group)` chronology, but multiply outer launch/compile boundaries. They are rejected without a GPU pair because earlier exact variants with fewer extra boundaries regressed 31% and 36%. The viable follow-up is a single macro-packed flat-row buffer per existing outer call, using shared compact-pair planning and a segmented posterior while restoring dense layout only for unchanged BPref accumulation.
+
+Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_pool_layout_capture_it80_104dac4ef_20260831/analysis/pool_layout.json` (SHA-256 `aaa931b08e0decbbda8c91004fb7a6dde5e3e65d9d647466bb43247fb4a2946e`); Slurm log SHA-256 `581611b74eed9f3798492794b9a0c3028103e0e577555cffb859e6401cd72814`.
+
 ### Engineering decision ledger
 
 | Track | Decision | Evidence |
@@ -216,6 +244,8 @@ Commit `1ee37ed5a0` therefore retains only the standalone shared primitive, bina
 | runtime profiler toggle | **KEEP UNSET IN PRODUCTION** | Same-GPU crossed job 13258895 favored profiler-off in both pairs (+14.37% and +0.95% cost when on) with exact 20/20 pose/translation trajectories. Shared node contention invalidates a precise magnitude claim. |
 | bounded pass-1 to pass-2 raw cache | **EXACT BUT BOUNDED; DEFAULT OFF** | Job 13260861 is bitwise exact in 15/15 sampled blocks and saves ~0.061 s per 200-row two-pass slice, only ~4.9 s over 80 iterations; the first clean full pair was 1.45% slower. |
 | shared coarse-projection cache | **EXACT BUT IMMATERIAL; NOT INTEGRATED** | Jobs 13261042/13261159 are bitwise exact; job 13261339 crosses over near batch 45 and reaches only 1.01115x at batch 200. GF46 has one batch per pass, so its end-to-end ceiling is below 0.52%. |
+| x-half 80M outer projection batch | **RUNTIME PASS; SCIENCE FAIL; NOT PROMOTED** | Exclusive same-H100 job 13260950 reduced median wall by 7.56% and did not increase peak memory, but cross-run FSC missed the declared repeat floor by 1.15e-4 and candidate RELION relative-L2 exceeded both controls. Preserve 40M BPref accumulation boundaries before retesting. |
+| literal pool-preserving local buckets | **REJECTED BEFORE GPU PAIR** | Job 13262146 proves exact source chronology and 49.5--82.2% fewer logical padded rows, but raises calls from 3--7 to 67--120; earlier exact, less fragmented variants regressed 31--36%. Pursue macro-packed rows inside unchanged outer calls instead. |
 
 ## Shared EM implementation
 
@@ -241,10 +271,10 @@ CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Curre
 
 ## Next gates
 
-1. Keep the profiler unset and finish the exact-local x-half bucket-size sweep. Require exact particle states/maps, the RELION envelope, repeatable warmed timing, and arm-resolved peak memory.
-2. Keep bounded pass-1 to pass-2 raw reuse default-off. Audit whether consecutive RELION pools of three can use pool-local radix buckets without changing particle order or accumulation chronology; run GPU science only if the layout-only padded-row reduction is material.
+1. Keep the profiler unset. Prove that 80M outer projection/scoring operands are bitwise invariant, then restore the original dynamic 40M physical-BPref accumulation boundaries and rerun the exclusive same-H100 80-iteration science gate.
+2. Do not run literal pool-per-call or equal-run trajectories. Build only a focused call-neutral macro-packed flat scorer from the shared compact-pair machinery; require exact active outputs and a >2% call-level gain before production wiring.
 3. Do not integrate the exact shared coarse-projection cache: its batch-200 call-level gain is only 1.1%, GF46 cannot reuse it across batches, and its end-to-end ceiling is below 0.52%.
-4. Audit a low-cardinality physical Fourier-window shape policy against the 57.83 s late-window XLA compile cost. Require an exact active-cutoff/order proof and a predicted end-to-end gain above 2% before any GPU trajectory.
+4. Finish the default-off stable physical Fourier-window implementation. Preserve the true logical cutoff as the runtime loop bound, poison-test padded tails, and require exact active outputs plus a >2% call-level gain before any trajectory.
 5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
 6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection cache, shared coarse-projection cache, or nondefault dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.
 
