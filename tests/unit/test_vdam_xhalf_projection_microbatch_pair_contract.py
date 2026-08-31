@@ -17,6 +17,7 @@ def test_vdam_xhalf_projection_pair_is_same_gpu_warm_balanced_and_pinned():
         "#SBATCH --exclusive",
         'vdam_select_target_gpu "${TARGET_GPU_UUID}" 0',
         "exclusive_gpu_local_index=",
+        "mapfile -t exclusive_gpu_rows",
         "--query-gpu=index,uuid",
         "export CUDA_VISIBLE_DEVICES=${exclusive_gpu_local_index}",
         "selected_gpu_local_index.txt",

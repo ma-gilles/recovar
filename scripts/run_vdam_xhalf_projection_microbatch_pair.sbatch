@@ -77,7 +77,12 @@ done
 source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
 exclusive_gpu_local_index=
 if [[ -z "${TARGET_GPU_UUID}" ]]; then
-  first_gpu=$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits | head -n 1)
+  exclusive_gpu_rows=()
+  mapfile -t exclusive_gpu_rows < <(
+    nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits
+  )
+  test "${#exclusive_gpu_rows[@]}" -ge 1
+  first_gpu=${exclusive_gpu_rows[0]}
   exclusive_gpu_local_index=${first_gpu%%,*}
   exclusive_gpu_local_index=${exclusive_gpu_local_index//[[:space:]]/}
   TARGET_GPU_UUID=${first_gpu#*,}
