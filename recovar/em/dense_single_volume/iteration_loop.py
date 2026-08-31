@@ -30,7 +30,7 @@ from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
     _image_backend,
-    _maybe_cache_raw_image_loaders,
+    maybe_cache_raw_image_loaders,
 )
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.firstiter_cc import (
@@ -5070,7 +5070,7 @@ def _run_relion_iteration_loop(
             RELION_WIDTH_MASK_EDGE,
         )
 
-    _maybe_cache_raw_image_loaders(experiment_datasets)
+    maybe_cache_raw_image_loaders(experiment_datasets)
     _mark_setup_phase("mask_and_image_cache")
 
     # --- Initialize RefinementState ---

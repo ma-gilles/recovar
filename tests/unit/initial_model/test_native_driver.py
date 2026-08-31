@@ -13,6 +13,7 @@ import pytest
 
 import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
+from recovar.em.dense_single_volume.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.iteration_loop import select_subset_for_iter
 
@@ -671,6 +672,122 @@ def test_native_driver_rejects_unimplemented_direct_symmetry_before_io():
 
     with pytest.raises(NotImplementedError, match="direct refinement currently supports C1 only"):
         driver.run_native_initial_model(opts)
+
+
+def test_native_driver_caches_dataset_immediately_after_loading(monkeypatch):
+    events = []
+    dataset = SimpleNamespace(tilt_series_flag=False)
+
+    class CacheBoundaryReached(RuntimeError):
+        pass
+
+    def fake_load_dataset(*args, **kwargs):
+        events.append(("load", args, kwargs))
+        return dataset
+
+    def fake_cache(datasets):
+        events.append(("cache", tuple(datasets)))
+        raise CacheBoundaryReached
+
+    monkeypatch.setattr(driver, "read_star", lambda path: (pd.DataFrame(index=[0]), None))
+    monkeypatch.setattr(driver, "load_dataset", fake_load_dataset)
+    monkeypatch.setattr(driver, "maybe_cache_raw_image_loaders", fake_cache)
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        lazy=True,
+        datadir="particles",
+        strip_prefix="old/",
+    )
+
+    with pytest.raises(CacheBoundaryReached):
+        driver.run_native_initial_model(opts)
+
+    assert events == [
+        (
+            "load",
+            ("particles.star",),
+            {"lazy": True, "datadir": "particles", "strip_prefix": "old/"},
+        ),
+        ("cache", (dataset,)),
+    ]
+
+
+def test_native_driver_rejects_tilt_series_before_eager_cache(monkeypatch):
+    dataset = SimpleNamespace(tilt_series_flag=True)
+    monkeypatch.setattr(driver, "read_star", lambda path: (pd.DataFrame(index=[0]), None))
+    monkeypatch.setattr(driver, "load_dataset", lambda *args, **kwargs: dataset)
+
+    def fail_if_cached(_datasets):
+        raise AssertionError("unsupported tilt-series data must not be eagerly cached")
+
+    monkeypatch.setattr(driver, "maybe_cache_raw_image_loaders", fail_if_cached)
+
+    with pytest.raises(NotImplementedError, match="not tilt-series"):
+        driver.run_native_initial_model(driver.NativeInitialModelOptions(fn_img="particles.star"))
+
+
+class _PersistentRawLoader:
+    def __init__(self, *, n=8, D=16):
+        self.num_images = n
+        self.image_size = D
+        self._dtype = np.dtype(np.float32)
+        self._cached = None
+        self.load_all_count = 0
+        self.disk_read_count = 0
+
+    def _read_disk(self, indices):
+        self.disk_read_count += 1
+        return np.broadcast_to(
+            np.asarray(indices, dtype=np.float32)[:, None, None],
+            (len(indices), self.image_size, self.image_size),
+        ).copy()
+
+    def load_all(self):
+        self.load_all_count += 1
+        if self._cached is None:
+            self._cached = self._read_disk(np.arange(self.num_images))
+
+    def read(self, indices):
+        indices = np.asarray(indices, dtype=np.int32)
+        if self._cached is not None:
+            return self._cached[indices]
+        return self._read_disk(indices)
+
+
+def _raw_cache_dataset(loader):
+    return SimpleNamespace(
+        image_source=SimpleNamespace(
+            backend=SimpleNamespace(source=loader),
+        ),
+    )
+
+
+def test_initial_model_raw_cache_persists_across_passes_and_iterations(monkeypatch):
+    loader = _PersistentRawLoader()
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "1")
+
+    maybe_cache_raw_image_loaders((_raw_cache_dataset(loader),))
+    for _iteration in range(3):
+        loader.read([0, 1])  # pass 1
+        loader.read([1, 2])  # pass 2
+
+    assert loader.load_all_count == 1
+    assert loader.disk_read_count == 1
+
+
+def test_initial_model_raw_cache_guard_preserves_lazy_loading(monkeypatch):
+    loader = _PersistentRawLoader(n=1024, D=1024)
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
+    monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "0.001")
+
+    maybe_cache_raw_image_loaders((_raw_cache_dataset(loader),))
+
+    assert loader.load_all_count == 0
+    assert loader.disk_read_count == 0
+    assert loader._cached is None
+    loader.read([0])
+    assert loader.disk_read_count == 1
 
 
 def test_configure_relion_image_mask_forwards_image_backend():

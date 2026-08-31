@@ -75,6 +75,7 @@ def test_parser_resolves_gui_defaults_and_auto_gpu_backend():
     assert args.gpu_ids == "0"
     assert args.jax_compilation_cache is True
     assert args.jax_compilation_cache_dir == ""
+    assert options["lazy"] is True
     assert options["relion_wavg_sequential_cuda"] is True
     assert options["exact_local_bucket_radix"] == 4
     assert options["exact_local_physical_order_chunk_size"] == 0

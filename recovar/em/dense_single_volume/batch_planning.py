@@ -3,7 +3,7 @@
 ``_estimate_relion_em_batch_sizes`` chooses microbatch sizes from pose-grid,
 image, class, and GPU size so the dense RELION loop's transient memory
 drivers (score tensor + projection tile + translation-expanded half-images)
-stay within available memory. ``_maybe_cache_raw_image_loaders`` keeps
+stay within available memory. ``maybe_cache_raw_image_loaders`` keeps
 file-backed raw particles in host memory across passes.
 
 Extracted from ``iteration_loop.py`` so the master loop stays focused on
@@ -441,7 +441,7 @@ def _em_raw_image_cache_mode() -> str:
     return os.environ.get(_EM_RAW_IMAGE_CACHE_ENV, "auto").strip().lower()
 
 
-def _maybe_cache_raw_image_loaders(experiment_datasets) -> None:
+def maybe_cache_raw_image_loaders(experiment_datasets) -> None:
     """Keep file-backed raw particles in host memory across RELION EM passes."""
     mode = _em_raw_image_cache_mode()
     if mode in {"0", "false", "no", "off", "disable", "disabled"}:

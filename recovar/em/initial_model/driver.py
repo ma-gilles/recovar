@@ -20,6 +20,7 @@ from recovar.core import mask as core_mask
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
+from recovar.em.dense_single_volume.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.dense_single_volume.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy_from_prepared_inputs,
     estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
@@ -2341,6 +2342,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     )
     if getattr(dataset, "tilt_series_flag", False):
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
+    maybe_cache_raw_image_loaders((dataset,))
 
     _configure_relion_image_mask(dataset, opts)
     optics_state = _native_optics_state(main_star, optics_star, dataset)

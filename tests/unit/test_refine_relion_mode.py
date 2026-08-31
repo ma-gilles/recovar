@@ -1307,7 +1307,7 @@ def test_relion_raw_image_cache_loads_unique_loaders(monkeypatch):
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "1")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader), _RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader), _RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 1
     assert loader._cached is not None
@@ -1318,7 +1318,7 @@ def test_relion_raw_image_cache_respects_memory_guard(monkeypatch):
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "0.001")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 0
     assert loader._cached is None
@@ -1328,7 +1328,7 @@ def test_relion_raw_image_cache_can_be_disabled(monkeypatch):
     loader = _RawCacheFakeLoader()
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "off")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 0
     assert loader._cached is None
