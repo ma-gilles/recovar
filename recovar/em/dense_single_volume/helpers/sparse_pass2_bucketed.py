@@ -5555,6 +5555,137 @@ def _scoped_bpref_diagnostics_active(flags: dict[str, bool]) -> bool:
     )
 
 
+def _relion_firstiter_bpref_diagnostics_active(
+    *,
+    bpref_device_signature_active: bool,
+) -> bool:
+    """Resolve the diagnostics that make deferred firstiter BPref unsafe."""
+
+    device_signature_configured = bool(
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
+    )
+    return bool(
+        (device_signature_configured and bpref_device_signature_active)
+        or (
+            os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip()
+            and (bpref_device_signature_active or not device_signature_configured)
+        )
+        or _bpref_membership_dump_requested()
+        or _scoped_bpref_diagnostics_active(
+            _scoped_bpref_diagnostic_flags(active=bpref_device_signature_active)
+        )
+        or os.environ.get(_BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV, "").strip()
+        or os.environ.get("RECOVAR_PASS2_DUMP_DIR", "").strip()
+    )
+
+
+def _relion_firstiter_compact_batch_planning_safe(
+    *,
+    relion_firstiter_fused_bpref: bool,
+    projector_host_owned: bool,
+    diagnostics_active: bool,
+    deferred_firstiter_bpref: bool,
+    direct_peak_bytes: int,
+    fixed_base_bytes: int,
+    projector_dtype,
+    score_complex_dtype,
+) -> bool:
+    """Return whether the c64/f32 K=1 lifetime admits phase-max planning."""
+
+    compact_dtypes = bool(
+        np.dtype(projector_dtype) == np.dtype(np.complex64)
+        and np.dtype(score_complex_dtype) == np.dtype(np.complex64)
+    )
+    return bool(
+        relion_firstiter_fused_bpref
+        and projector_host_owned
+        and not diagnostics_active
+        and compact_dtypes
+        and (
+            deferred_firstiter_bpref
+            or int(direct_peak_bytes) <= int(fixed_base_bytes)
+        )
+    )
+
+
+class _RelionFirstiterCompactBatchPlanningDecision(NamedTuple):
+    enabled: bool
+    deferred_firstiter_bpref: bool
+    direct_peak_bytes: int
+
+
+def _relion_firstiter_compact_batch_planning_decision(
+    *,
+    source_faithful_spectrum_norm: bool,
+    winner_take_all: bool,
+    preserve_bpref_particle_order: bool,
+    use_relion_x_half_mstep: bool,
+    projector_half,
+    score_complex_dtype,
+    recon_volume_size: int,
+    bpref_device_signature_active: bool,
+    fixed_base_bytes: int,
+) -> _RelionFirstiterCompactBatchPlanningDecision:
+    """Preflight compact planning through the authoritative BPref gates."""
+
+    if projector_half is None:
+        return _RelionFirstiterCompactBatchPlanningDecision(False, False, 0)
+    projector_shape = tuple(projector_half.shape)
+    projector_dtype = np.dtype(projector_half.dtype)
+    projector_host_owned = not isinstance(projector_half, jax.Array)
+    diagnostics_active = _relion_firstiter_bpref_diagnostics_active(
+        bpref_device_signature_active=bpref_device_signature_active,
+    )
+    fresh_k1_guard = bool(source_faithful_spectrum_norm)
+    relion_exact_bpref_operands = _relion_exact_bpref_operands_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+    )
+    relion_firstiter_fused_bpref = _relion_firstiter_fused_bpref_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        winner_take_all=winner_take_all,
+        preserve_bpref_particle_order=preserve_bpref_particle_order,
+        relion_exact_bpref_operands=relion_exact_bpref_operands,
+        use_relion_x_half_mstep=use_relion_x_half_mstep,
+        score_only=False,
+    )
+    _, _, direct_peak_bytes = _relion_firstiter_bpref_overlap_bytes(
+        projector_shape=projector_shape,
+        projector_dtype=projector_dtype,
+        recon_volume_size=recon_volume_size,
+        recon_y_dtype=np.complex64,
+        recon_ctf_dtype=np.float32,
+    )
+    deferred_firstiter_bpref = _relion_firstiter_deferred_bpref_enabled(
+        relion_firstiter_fused_bpref=relion_firstiter_fused_bpref,
+        use_relion_projector=True,
+        projector_device_owned=projector_host_owned,
+        projector_shape=projector_shape,
+        projector_dtype=projector_dtype,
+        recon_volume_size=recon_volume_size,
+        recon_y_dtype=np.complex64,
+        recon_ctf_dtype=np.float32,
+        device_memory_bytes=_device_memory_limit_bytes(),
+        allocator_free_memory_bytes=_jax_allocator_free_memory_bytes(),
+        diagnostics_active=diagnostics_active,
+    )
+    enabled = _relion_firstiter_compact_batch_planning_safe(
+        relion_firstiter_fused_bpref=relion_firstiter_fused_bpref,
+        projector_host_owned=projector_host_owned,
+        diagnostics_active=diagnostics_active,
+        deferred_firstiter_bpref=deferred_firstiter_bpref,
+        direct_peak_bytes=direct_peak_bytes,
+        fixed_base_bytes=fixed_base_bytes,
+        projector_dtype=projector_dtype,
+        score_complex_dtype=score_complex_dtype,
+    )
+    return _RelionFirstiterCompactBatchPlanningDecision(
+        enabled,
+        deferred_firstiter_bpref,
+        direct_peak_bytes,
+    )
+
+
 def _resolve_bpref_execution_modes(
     scoped_diagnostic_flags: dict[str, bool],
     *,
@@ -12955,16 +13086,8 @@ def compute_pass2_stats_sparse_bucketed(
             recon_ctf_dtype=recon_ctf_accum_dtype,
             device_memory_bytes=device_memory_bytes,
             allocator_free_memory_bytes=_jax_allocator_free_memory_bytes(),
-            diagnostics_active=bool(
-                device_signature_requested
-                or contribution_diagnostics_active
-                or membership_diagnostics_active
-                or _scoped_bpref_diagnostics_active(scoped_diagnostic_flags)
-                or os.environ.get(
-                    _BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV,
-                    "",
-                ).strip()
-                or os.environ.get("RECOVAR_PASS2_DUMP_DIR", "").strip()
+            diagnostics_active=_relion_firstiter_bpref_diagnostics_active(
+                bpref_device_signature_active=bpref_device_signature_active,
             ),
         )
     deferred_firstiter_bpref_batches: list[DeferredFirstiterBPrefBatch] = []

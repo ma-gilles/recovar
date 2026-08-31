@@ -44,6 +44,12 @@ _RELION_EM_BATCH_MAX_TRANSLATION_TILE_GB = 14.0
 _RELION_EM_BATCH_MIN_TRANSLATION_TILE_GB = 0.5
 _RELION_EM_BATCH_RUNTIME_FREE_FRACTION = 0.80
 _RELION_EM_BATCH_PROJECTION_FRACTION_ENV = "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION"
+# A compact K=1 plan is used only by the RELION x-half route after its
+# lifetimes have been made explicit.  Keep 4 decimal GB of native-volume-scale
+# headroom (roughly one complex64 800^3 volume) in addition to
+# the phase-specific Projector/BPref objects.  Already-live allocations are
+# handled by the runtime-free probe and must not be added to this allowance.
+_RELION_EM_COMPACT_K1_FIXED_BASE_GB = 4.0
 
 _EM_RAW_IMAGE_CACHE_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE"
 _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
@@ -58,6 +64,8 @@ class _RelionEMBatchPlan:
     projection_budget_gb: float
     translation_tile_budget_gb: float
     persistent_estimate_gb: float
+    persistent_estimate_mode: str
+    pending_score_persistent_gb: float
     usable_estimate_gb: float
     gpu_used_estimate_gb: float
     runtime_free_estimate_gb: float
@@ -114,8 +122,28 @@ def _estimate_relion_em_batch_sizes(
     n_classes: int = 1,
     gpu_memory_gb: float | None = None,
     current_size: int | None = None,
+    use_float64_scoring: bool = True,
+    compact_k1_relion_layout: bool = False,
+    model_current_size: int | None = None,
+    runtime_free_memory_gb: float | None = None,
 ) -> _RelionEMBatchPlan:
-    """Choose EM microbatch sizes from pose-grid, image, class, and GPU size."""
+    """Choose EM microbatch sizes from pose-grid, image, class, and GPU size.
+
+    ``use_float64_scoring=True`` retains the historical conservative
+    complex128 tile estimate for callers that do not state their score
+    precision.  Production call sites pass the resolved
+    :class:`DensePrecisionPolicy` flag explicitly.
+
+    ``compact_k1_relion_layout`` is an explicit opt-in for the K=1 RELION
+    x-half lifetime.  Its static fallback models the larger of two disjoint
+    phases: one complex64 Projector texture during scoring, or one
+    complex64/float32 BPref pair during deferred replay.  When the caller
+    supplies a live ``runtime_free_memory_gb`` sample, the core allocations
+    are already reflected in that free-memory value, so only the not-yet-live
+    score texture is subtracted.  This mirrors RELION's order of allocating
+    fixed objects before sizing its tunable allocator and avoids counting
+    already-live references twice.
+    """
     # Indirection through iteration_loop module so test monkeypatches on
     # ``iteration_loop.utils.get_gpu_memory_total`` / ``get_gpu_memory_used``
     # win at this call site too.
@@ -146,17 +174,105 @@ def _estimate_relion_em_batch_sizes(
         gpu_used_gb = 0.0
     gpu_used_gb = min(gpu_used_gb, max(0.0, gpu_memory_gb - 1.0))
 
+    supplied_runtime_free_memory = runtime_free_memory_gb is not None
+    if supplied_runtime_free_memory:
+        runtime_free_memory_gb = float(runtime_free_memory_gb)
+        if not np.isfinite(runtime_free_memory_gb) or runtime_free_memory_gb <= 0:
+            raise ValueError(
+                "runtime_free_memory_gb must be a positive finite live-memory "
+                f"sample, got {runtime_free_memory_gb!r}"
+            )
+        runtime_free_memory_gb = min(float(gpu_memory_gb), runtime_free_memory_gb)
+        gpu_used_gb = max(0.0, float(gpu_memory_gb) - runtime_free_memory_gb)
+
     padded_volume_voxels = float(np.prod([d * padding_factor for d in volume_shape]))
     native_volume_voxels = float(np.prod(volume_shape))
-    persistent_bytes = (
-        2.0 * padded_volume_voxels * np.dtype(np.complex64).itemsize * n_classes
-        + 4.0 * native_volume_voxels * np.dtype(np.complex64).itemsize * n_classes
-    )
-    persistent_gb = persistent_bytes / 1e9
+    pending_score_persistent_gb = 0.0
+    if compact_k1_relion_layout:
+        if n_classes != 1:
+            raise ValueError(
+                "compact_k1_relion_layout is K=1-only; "
+                f"got n_classes={n_classes}"
+            )
+        if use_float64_scoring:
+            raise ValueError(
+                "compact_k1_relion_layout requires the production float32/complex64 "
+                "precision policy"
+            )
+        if model_current_size is None:
+            raise ValueError(
+                "compact_k1_relion_layout requires explicit model_current_size; "
+                "score current_size is not a reconstruction-size substitute"
+            )
+        model_current_size = int(model_current_size)
+        if model_current_size <= 0:
+            raise ValueError(
+                f"model_current_size must be positive, got {model_current_size}"
+            )
+
+        from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+            half_volume_accumulator_shape,
+            relion_backprojector_volume_shape,
+        )
+
+        compact_full_shape = relion_backprojector_volume_shape(
+            volume_shape,
+            padding_factor,
+            current_size=model_current_size,
+        )
+        compact_half_shape = half_volume_accumulator_shape(compact_full_shape)
+        compact_voxels = int(np.prod(compact_half_shape))
+        texture_bytes = compact_voxels * np.dtype(np.complex64).itemsize
+        bpref_bytes = compact_voxels * (
+            np.dtype(np.complex64).itemsize + np.dtype(np.float32).itemsize
+        )
+        # The fresh K=1 path defers BPref until the Projector texture closes;
+        # these allocations are phase alternatives, not an additive overlap.
+        persistent_gb = _RELION_EM_COMPACT_K1_FIXED_BASE_GB + max(
+            texture_bytes,
+            bpref_bytes,
+        ) / 1e9
+        pending_score_persistent_gb = texture_bytes / 1e9
+        persistent_estimate_mode = "compact_k1_relion_phase_max"
+    else:
+        persistent_bytes = (
+            2.0 * padded_volume_voxels * np.dtype(np.complex64).itemsize * n_classes
+            + 4.0 * native_volume_voxels * np.dtype(np.complex64).itemsize * n_classes
+        )
+        persistent_gb = persistent_bytes / 1e9
+        persistent_estimate_mode = "historical_full_cube"
+
     runtime_free_gb = max(1.0, gpu_memory_gb - gpu_used_gb)
-    usable_from_total_gb = max(1.0, gpu_memory_gb * _RELION_EM_BATCH_USABLE_FRACTION - persistent_gb)
-    usable_from_runtime_gb = max(1.0, runtime_free_gb * _RELION_EM_BATCH_RUNTIME_FREE_FRACTION)
-    usable_gb = min(usable_from_total_gb, usable_from_runtime_gb)
+    if compact_k1_relion_layout:
+        # The live free-memory sample already excludes all fixed objects that
+        # have reached the device.  Reserve only the score texture that is
+        # uploaded after this planning point.  Applying ``persistent_gb`` here
+        # as well would double-count those live objects and recreate the box-
+        # 800 batch collapse this mode is intended to remove.
+        usable_from_runtime_gb = max(
+            1.0,
+            (runtime_free_gb - pending_score_persistent_gb)
+            * _RELION_EM_BATCH_RUNTIME_FREE_FRACTION,
+        )
+        if supplied_runtime_free_memory:
+            usable_from_total_gb = usable_from_runtime_gb
+            usable_gb = usable_from_runtime_gb
+        else:
+            usable_from_total_gb = max(
+                1.0,
+                gpu_memory_gb * _RELION_EM_BATCH_USABLE_FRACTION - persistent_gb,
+            )
+            usable_gb = min(usable_from_total_gb, usable_from_runtime_gb)
+    else:
+        usable_from_total_gb = max(
+            1.0,
+            gpu_memory_gb * _RELION_EM_BATCH_USABLE_FRACTION - persistent_gb,
+        )
+        usable_from_runtime_gb = max(
+            1.0,
+            runtime_free_gb * _RELION_EM_BATCH_RUNTIME_FREE_FRACTION,
+        )
+        usable_gb = min(usable_from_total_gb, usable_from_runtime_gb)
 
     score_float_budget = int(
         max(
@@ -187,6 +303,7 @@ def _estimate_relion_em_batch_sizes(
     score_image_cap = max(1, score_float_budget // max(n_rot * n_trans * n_classes, 1))
     full_half_pixels = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
     score_half_pixels = _active_half_spectrum_pixels(image_shape, current_size)
+    score_complex_dtype = np.complex128 if bool(use_float64_scoring) else np.complex64
     active_score_tile_budget_gb = max(
         _RELION_EM_BATCH_MIN_PROJECTION_GB,
         min(
@@ -201,7 +318,7 @@ def _estimate_relion_em_batch_sizes(
             np.ceil(
                 n_trans
                 * score_half_pixels
-                * np.dtype(np.complex128).itemsize
+                * np.dtype(score_complex_dtype).itemsize
                 * n_classes
                 * _RELION_EM_BATCH_ACTIVE_SCORE_TILE_LIVE_FACTOR,
             )
@@ -254,17 +371,16 @@ def _estimate_relion_em_batch_sizes(
     else:
         pose_pixel_budget_gb = projection_budget_gb
     # Dense scoring can materialize a rotation x translation x active-pixel
-    # complex tile. JAX runs with x64 enabled, so budget this as complex128.
-    # This is load-bearing for 100k/256 K=1 global searches: otherwise the
-    # planner allows the full 36,864-rotation block and XLA tries to allocate
-    # a 22 GiB pose-pixel tile in one shot.
+    # complex tile.  Global x64 enablement does not promote explicitly cast
+    # score operands: DensePrecisionPolicy keeps the production path at
+    # complex64 and uses complex128 only for genuine float64 scoring.
     pose_pixel_bytes_per_rotation = max(
         1,
         int(
             np.ceil(
                 n_trans
                 * score_half_pixels
-                * np.dtype(np.complex128).itemsize
+                * np.dtype(score_complex_dtype).itemsize
                 * n_classes
                 * _RELION_EM_BATCH_POSE_PIXEL_LIVE_FACTOR,
             )
@@ -297,6 +413,8 @@ def _estimate_relion_em_batch_sizes(
         projection_budget_gb=float(projection_budget_gb),
         translation_tile_budget_gb=float(translation_tile_budget_gb),
         persistent_estimate_gb=float(persistent_gb),
+        persistent_estimate_mode=str(persistent_estimate_mode),
+        pending_score_persistent_gb=float(pending_score_persistent_gb),
         usable_estimate_gb=float(usable_gb),
         gpu_used_estimate_gb=float(gpu_used_gb),
         runtime_free_estimate_gb=float(runtime_free_gb),

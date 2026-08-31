@@ -343,6 +343,7 @@ def _run_local_search_iteration(
         padding_factor=max(int(projection_padding_factor), int(reconstruction_padding_factor), 1),
         n_classes=local_kernel_classes,
         current_size=local_batch_planning_current_size,
+        use_float64_scoring=use_float64_scoring,
     )
     if (
         local_batch_plan.image_batch_size != image_batch_size

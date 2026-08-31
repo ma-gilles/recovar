@@ -17,6 +17,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -28,6 +29,7 @@ from recovar.core import fourier_transform_utils
 from recovar.data_io import cryoem_dataset
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.batch_planning import (
+    _RELION_EM_COMPACT_K1_FIXED_BASE_GB,
     _estimate_relion_em_batch_sizes,
     _image_backend,
     _maybe_cache_raw_image_loaders,
@@ -5224,7 +5226,16 @@ def _run_relion_iteration_loop(
 
     padded_volume_shape = tuple(d * PADDING_FACTOR for d in volume_shape)
 
-    def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
+    def _safe_batch_sizes(
+        n_rot,
+        n_trans,
+        *,
+        classes=None,
+        image_shape_for_batch=None,
+        current_size_for_batch=None,
+        compact_k1_relion_layout=False,
+        model_current_size_for_batch=None,
+    ):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
         force_full_coarse_grid = os.environ.get(
             "RECOVAR_K1_COARSE_GAUSSIAN_FORCE_FULL_ROTATION_GRID_DIAGNOSTIC",
@@ -5244,6 +5255,22 @@ def _run_relion_iteration_loop(
                 "The K=1 full coarse rotation-grid diagnostic requires either "
                 "serial per-particle CUDA launches or native texture scoring",
             )
+        use_float64_scoring_for_batch = bool(
+            _DENSE_EM_STATIC_KWARGS["use_float64_scoring"]
+            or os.environ.get(
+                "RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS",
+                "",
+            ).strip()
+        )
+        runtime_free_memory_gb = None
+        if compact_k1_relion_layout:
+            # The native texture allocation is outside XLA's reusable pool.
+            # JAX allocator "free" bytes may still be physically reserved, so
+            # physical cudaMemGetInfo/nvidia-smi free is the conservative
+            # capacity shared by the texture and subsequent score workspaces.
+            physical_free_bytes = _sparse_pass2_diagnostics._device_free_memory_bytes()
+            if physical_free_bytes is not None and int(physical_free_bytes) > 0:
+                runtime_free_memory_gb = int(physical_free_bytes) / 1e9
         plan = _estimate_relion_em_batch_sizes(
             requested_image_batch_size=batching.image_batch_size,
             requested_rotation_block_size=batching.rotation_block_size,
@@ -5254,6 +5281,13 @@ def _run_relion_iteration_loop(
             padding_factor=PADDING_FACTOR,
             n_classes=n_classes if classes is None else classes,
             current_size=current_size_for_batch,
+            # The targeted pass-2 diagnostic upgrades only selected
+            # iterations. Keep every plan in such a run conservative rather
+            # than sizing an eventual complex128 pass from complex64 bytes.
+            use_float64_scoring=use_float64_scoring_for_batch,
+            compact_k1_relion_layout=bool(compact_k1_relion_layout),
+            model_current_size=model_current_size_for_batch,
+            runtime_free_memory_gb=runtime_free_memory_gb,
         )
         if plan.image_batch_size != batching.image_batch_size or plan.rotation_block_size != batching.rotation_block_size:
             logger.info(
@@ -5262,7 +5296,8 @@ def _run_relion_iteration_loop(
                 "(n_rot=%d n_trans=%d K=%d, score_budget=%.1fM floats, score_pixels=%d, "
                 "projection_tile=%.2f/%.2f GB, active_score_tile=%.2f/%.2f GB, "
                 "pose_pixel_tile=%.2f GB, translation_tile=%.2f/%.2f GB, "
-                "persistent_est=%.2f GB, usable_est=%.2f GB, gpu_used_est=%.2f GB)",
+                "persistent_est=%.2f GB mode=%s pending_score=%.2f GB, "
+                "usable_est=%.2f GB, gpu_used_est=%.2f GB, runtime_free_est=%.2f GB)",
                 batching.image_batch_size,
                 batching.rotation_block_size,
                 plan.image_batch_size,
@@ -5280,8 +5315,11 @@ def _run_relion_iteration_loop(
                 plan.translation_tile_gb,
                 plan.translation_tile_budget_gb,
                 plan.persistent_estimate_gb,
+                plan.persistent_estimate_mode,
+                plan.pending_score_persistent_gb,
                 plan.usable_estimate_gb,
                 plan.gpu_used_estimate_gb,
+                plan.runtime_free_estimate_gb,
             )
         if force_full_coarse_grid:
             effective_classes = int(n_classes if classes is None else classes)
@@ -6793,6 +6831,61 @@ def _run_relion_iteration_loop(
             dense_k_class_rotation_block_size = batching.rotation_block_size
             significance_image_batch_size = None
             significance_rotation_block_size = None
+            safe_batch_sizes_for_half = _safe_batch_sizes
+            if (
+                use_adaptive
+                and not k_class_enabled
+                and relion_firstiter_cc_this_iter
+                and relion_projector_half_by_half[k] is not None
+            ):
+                explicit_model_current_size = (
+                    int(volume_shape[0])
+                    if model_current_size_for_engine is None
+                    else int(model_current_size_for_engine)
+                )
+                compact_recon_shape = relion_backprojector_volume_shape(
+                    volume_shape,
+                    PADDING_FACTOR,
+                    current_size=explicit_model_current_size,
+                )
+                compact_half_shape = half_volume_accumulator_shape(
+                    compact_recon_shape,
+                )
+                compact_recon_size = int(np.prod(compact_half_shape))
+                projector_half = relion_projector_half_by_half[k]
+                compact_decision = _sparse_pass2_diagnostics._relion_firstiter_compact_batch_planning_decision(
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    winner_take_all=firstiter_winner_take_all_this_iter,
+                    preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
+                    use_relion_x_half_mstep=_k1_relion_x_half_mstep_enabled(),
+                    projector_half=projector_half,
+                    score_complex_dtype=(
+                        np.complex128
+                        if _DENSE_EM_STATIC_KWARGS["use_float64_scoring"]
+                        or os.environ.get(
+                            "RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS",
+                            "",
+                        ).strip()
+                        else np.complex64
+                    ),
+                    recon_volume_size=compact_recon_size,
+                    bpref_device_signature_active=bpref_device_signature_active,
+                    fixed_base_bytes=int(_RELION_EM_COMPACT_K1_FIXED_BASE_GB * 1e9),
+                )
+                if compact_decision.enabled:
+                    safe_batch_sizes_for_half = partial(
+                        _safe_batch_sizes,
+                        compact_k1_relion_layout=True,
+                        model_current_size_for_batch=explicit_model_current_size,
+                    )
+                    logger.info(
+                        "RELION K=1 compact batch planning enabled: "
+                        "model_current_size=%d deferred_bpref=%s "
+                        "direct_peak=%.2f GB",
+                        explicit_model_current_size,
+                        compact_decision.deferred_firstiter_bpref,
+                        compact_decision.direct_peak_bytes / 1e9,
+                    )
             if use_adaptive:
                 adaptive_batch_plan = _plan_adaptive_dense_batch_sizes(
                     n_rot=effective_rotations.shape[0],
@@ -6802,14 +6895,14 @@ def _run_relion_iteration_loop(
                     cs_for_engine=cs_for_engine,
                     coarse_cs=coarse_cs,
                     k_class_enabled=k_class_enabled,
-                    safe_batch_sizes=_safe_batch_sizes,
+                    safe_batch_sizes=safe_batch_sizes_for_half,
                 )
                 k_class_image_batch_size = adaptive_batch_plan.pass2_image_batch_size
                 dense_k_class_rotation_block_size = adaptive_batch_plan.pass2_rotation_block_size
                 significance_image_batch_size = adaptive_batch_plan.significance_image_batch_size
                 significance_rotation_block_size = adaptive_batch_plan.significance_rotation_block_size
             elif k_class_enabled:
-                k_class_image_batch_size, dense_k_class_rotation_block_size = _safe_batch_sizes(
+                k_class_image_batch_size, dense_k_class_rotation_block_size = safe_batch_sizes_for_half(
                     effective_rotations.shape[0],
                     current_translations.shape[0],
                     classes=n_classes,
@@ -7116,7 +7209,7 @@ def _run_relion_iteration_loop(
                     relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
                     disable_adjoint_y=debug.disable_adjoint_y,
                     disable_adjoint_ctf=debug.disable_adjoint_ctf,
-                    safe_batch_sizes=_safe_batch_sizes,
+                    safe_batch_sizes=safe_batch_sizes_for_half,
                     max_significants=adaptive.max_significants,
                     noise_stats_per_half_per_class=noise_stats_per_half_per_class,
                     class_assignments=class_assignments,
