@@ -4417,6 +4417,7 @@ def _compute_sparse_pass2_projections_block(
     output_complex_dtype=None,
     output_abs2_dtype=None,
     relion_projector_half=None,
+    relion_projector_texture=None,
     relion_projector_r_max: int | None = None,
     projection_padding_factor: int = 1,
     projector_output_size: int | None = None,
@@ -4427,7 +4428,9 @@ def _compute_sparse_pass2_projections_block(
     projection_max_r = projection_kwargs.pop("max_r", None)
     if projector_output_size is None and projection_max_r is not None:
         projector_output_size = int(2 * float(projection_max_r))
-    use_relion_projector = relion_projector_half is not None
+    use_relion_projector = (
+        relion_projector_half is not None or relion_projector_texture is not None
+    )
     if use_relion_projector and relion_projector_r_max is None:
         raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
 
@@ -4443,6 +4446,7 @@ def _compute_sparse_pass2_projections_block(
                 centered_rows=True,
                 dense_scale=True,
                 projector_output_size=projector_output_size,
+                persistent_texture=relion_projector_texture,
             )
         return _compute_projections_block(
             mean_for_proj,
@@ -4532,6 +4536,7 @@ def _compute_sparse_pass2_windowed_projections_block(
     output_complex_dtype=None,
     output_abs2_dtype=None,
     relion_projector_half=None,
+    relion_projector_texture=None,
     relion_projector_r_max: int | None = None,
     projection_padding_factor: int = 1,
     **projection_kwargs,
@@ -4567,6 +4572,7 @@ def _compute_sparse_pass2_windowed_projections_block(
             disc_type,
             max_projected_rotations=None,
             relion_projector_half=relion_projector_half,
+            relion_projector_texture=relion_projector_texture,
             relion_projector_r_max=relion_projector_r_max,
             projection_padding_factor=projection_padding_factor,
             **projection_kwargs,
@@ -12159,6 +12165,7 @@ def compute_pass2_stats_sparse_bucketed(
     relion_f32_fine_posterior=False,
     relion_exact_fine_normalized_cc=False,
     relion_projector_half=None,
+    relion_projector_texture=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
@@ -12291,20 +12298,38 @@ def compute_pass2_stats_sparse_bucketed(
         raise ValueError("normalization_other_score_log_z requires return_score_log_z=True")
     if score_only and accumulate_noise:
         raise ValueError("Sparse pass-2 score-only mode is incompatible with accumulate_noise=True")
-    use_relion_projector = relion_projector_half is not None
+    if relion_projector_half is not None and relion_projector_texture is not None:
+        raise ValueError(
+            "pass exactly one of relion_projector_half and relion_projector_texture"
+        )
+    use_relion_projector = (
+        relion_projector_half is not None or relion_projector_texture is not None
+    )
     projector_device_owned = False
+    projector_shape = None
+    projector_dtype = None
     if use_relion_projector:
         if relion_projector_r_max is None:
-            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        # A host slab is copied into a function-owned JAX buffer below.  Only
-        # that case can be released before deferred BPref without invalidating
-        # a device array retained by the caller for the other half-set.
-        projector_device_owned = not isinstance(relion_projector_half, jax.Array)
-        relion_projector_half = jnp.asarray(relion_projector_half)
-        if relion_projector_half.ndim != 3:
+            raise ValueError("relion_projector_r_max is required with a RELION projector")
+        if relion_projector_texture is not None:
+            if getattr(relion_projector_texture, "closed", True):
+                raise ValueError("relion_projector_texture must be live")
+            projector_shape = tuple(relion_projector_texture.shape)
+            projector_dtype = np.dtype(relion_projector_texture.dtype)
+            projector_device_owned = True
+        else:
+            # A host slab is copied into a function-owned JAX buffer below.
+            # Only that case can be released before deferred BPref without
+            # invalidating a device array retained by the caller for the other
+            # half-set.
+            projector_device_owned = not isinstance(relion_projector_half, jax.Array)
+            relion_projector_half = jnp.asarray(relion_projector_half)
+            projector_shape = tuple(relion_projector_half.shape)
+            projector_dtype = relion_projector_half.dtype
+        if len(projector_shape) != 3:
             raise ValueError(
                 "relion_projector_half must be a single-class Projector::data slab "
-                f"with shape (z, y, x_half), got {relion_projector_half.shape}",
+                f"with shape (z, y, x_half), got {projector_shape}",
             )
 
     n_images = experiment_dataset.n_units
@@ -12732,8 +12757,8 @@ def compute_pass2_stats_sparse_bucketed(
             relion_firstiter_fused_bpref=relion_firstiter_fused_bpref,
             use_relion_projector=use_relion_projector,
             projector_device_owned=projector_device_owned,
-            projector_shape=relion_projector_half.shape,
-            projector_dtype=relion_projector_half.dtype,
+            projector_shape=projector_shape,
+            projector_dtype=projector_dtype,
             recon_volume_size=recon_volume_size,
             recon_y_dtype=recon_y_accum_dtype,
             recon_ctf_dtype=recon_ctf_accum_dtype,
@@ -12773,8 +12798,8 @@ def compute_pass2_stats_sparse_bucketed(
             )
         projector_bytes, accumulator_bytes, direct_peak_bytes = (
             _relion_firstiter_bpref_overlap_bytes(
-                projector_shape=relion_projector_half.shape,
-                projector_dtype=relion_projector_half.dtype,
+                projector_shape=projector_shape,
+                projector_dtype=projector_dtype,
                 recon_volume_size=recon_volume_size,
                 recon_y_dtype=recon_y_accum_dtype,
                 recon_ctf_dtype=recon_ctf_accum_dtype,
@@ -13034,6 +13059,7 @@ def compute_pass2_stats_sparse_bucketed(
                     output_complex_dtype=precision_policy.score_complex_dtype,
                     output_abs2_dtype=precision_policy.score_real_dtype,
                     relion_projector_half=relion_projector_half,
+                    relion_projector_texture=relion_projector_texture,
                     relion_projector_r_max=relion_projector_r_max,
                     projection_padding_factor=projection_padding_factor,
                     **projection_kwargs,
@@ -13055,6 +13081,7 @@ def compute_pass2_stats_sparse_bucketed(
                     output_complex_dtype=precision_policy.score_complex_dtype,
                     output_abs2_dtype=precision_policy.score_real_dtype,
                     relion_projector_half=relion_projector_half,
+                    relion_projector_texture=relion_projector_texture,
                     relion_projector_r_max=relion_projector_r_max,
                     projection_padding_factor=projection_padding_factor,
                     **projection_kwargs,
@@ -13716,6 +13743,7 @@ def compute_pass2_stats_sparse_bucketed(
                         output_complex_dtype=precision_policy.score_complex_dtype,
                         output_abs2_dtype=precision_policy.score_real_dtype,
                         relion_projector_half=relion_projector_half,
+                        relion_projector_texture=relion_projector_texture,
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                         **projection_kwargs,
@@ -15127,6 +15155,7 @@ def compute_pass2_stats_sparse_bucketed(
                         output_complex_dtype=precision_policy.score_complex_dtype,
                         output_abs2_dtype=precision_policy.score_real_dtype,
                         relion_projector_half=relion_projector_half,
+                        relion_projector_texture=relion_projector_texture,
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                         **projection_kwargs,
@@ -15150,6 +15179,7 @@ def compute_pass2_stats_sparse_bucketed(
                     output_complex_dtype=precision_policy.score_complex_dtype,
                     output_abs2_dtype=precision_policy.score_real_dtype,
                     relion_projector_half=relion_projector_half,
+                    relion_projector_texture=relion_projector_texture,
                     relion_projector_r_max=relion_projector_r_max,
                     projection_padding_factor=projection_padding_factor,
                     **projection_kwargs,
@@ -16316,6 +16346,12 @@ def compute_pass2_stats_sparse_bucketed(
         # touching the caller's host slab or changing the replay operands.
         projector_device_buffer = relion_projector_half
         relion_projector_half = None
+        if relion_projector_texture is not None:
+            # The score outputs above have crossed explicit NumPy/JAX readiness
+            # boundaries.  Release the persistent CUDA texture before deferred
+            # BPref replay allocates its full-box accumulators.
+            relion_projector_texture.close()
+            relion_projector_texture = None
         _release_deferred_firstiter_projection_buffers(
             projector_device_buffer,
             projection_cache,

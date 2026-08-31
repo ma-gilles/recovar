@@ -34,6 +34,61 @@ logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
 
 
+def _open_persistent_relion_projector_texture(
+    relion_projector_half,
+    *,
+    relion_projector_r_max,
+    projection_padding_factor,
+):
+    """Upload an eligible host ``PPref`` slab without staging it through JAX.
+
+    This is deliberately a narrow fast path for fine sparse pass-2.  Other
+    inputs retain the established transient texture/JAX behavior.
+    """
+
+    if (
+        not isinstance(relion_projector_half, np.ndarray)
+        or relion_projector_half.dtype != np.dtype(np.complex64)
+        or relion_projector_half.ndim != 3
+        or not relion_projector_half.flags.c_contiguous
+        or relion_projector_r_max is None
+    ):
+        return None
+
+    from .projection import _relion_projector_texture_enabled
+
+    if not _relion_projector_texture_enabled(
+        relion_projector_half,
+        r_max=int(relion_projector_r_max),
+        padding_factor=int(projection_padding_factor),
+    ):
+        return None
+
+    from recovar.cuda_backproject import RelionPersistentHalfTextureF32
+
+    logger.info(
+        "Sparse pass-2 persistent RELION projector texture: shape=%s host=%.2f GiB",
+        tuple(relion_projector_half.shape),
+        relion_projector_half.nbytes / float(1024**3),
+    )
+    return RelionPersistentHalfTextureF32(
+        relion_projector_half,
+        padding_factor=int(projection_padding_factor),
+        projector_max_r=int(relion_projector_r_max),
+        projector_scale=1.0,
+    )
+
+
+def _call_with_persistent_texture_cleanup(texture, callback, *args, **kwargs):
+    """Run ``callback`` and close an optional texture on every exit path."""
+
+    try:
+        return callback(*args, **kwargs)
+    finally:
+        if texture is not None:
+            texture.close()
+
+
 def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
     """Match RELION's parsed adaptive-fraction arithmetic at the CUDA cutoff.
 
@@ -918,7 +973,19 @@ def compute_pass2_stats_sparse(
     if not use_perimage_reference and not full_grid_reference:
         from .sparse_pass2_bucketed import compute_pass2_stats_sparse_bucketed
 
-        return compute_pass2_stats_sparse_bucketed(
+        relion_projector_texture = _open_persistent_relion_projector_texture(
+            relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
+            projection_padding_factor=projection_padding_factor,
+        )
+        bucketed_relion_projector_half = (
+            relion_projector_half
+            if relion_projector_texture is None
+            else None
+        )
+        return _call_with_persistent_texture_cleanup(
+            relion_projector_texture,
+            compute_pass2_stats_sparse_bucketed,
             experiment_dataset,
             volume,
             mean_variance,
@@ -971,7 +1038,8 @@ def compute_pass2_stats_sparse(
             relion_fine_diff2_fused_ffi=relion_fine_diff2_fused_ffi,
             relion_f32_fine_posterior=relion_f32_fine_posterior,
             relion_exact_fine_normalized_cc=relion_exact_fine_normalized_cc,
-            relion_projector_half=relion_projector_half,
+            relion_projector_half=bucketed_relion_projector_half,
+            relion_projector_texture=relion_projector_texture,
             relion_projector_r_max=relion_projector_r_max,
             adaptive_fraction=adaptive_fraction,
             bpref_device_signature_active=bpref_device_signature_active,

@@ -38,11 +38,18 @@
 
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <new>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
@@ -2222,6 +2229,270 @@ cudaError_t create_relion_half_texture_f32(
     return cudaSuccess;
 }
 
+/* A supplied host Projector::data slab should not need an equally large JAX
+ * device allocation merely to populate the CUDA array required for hardware
+ * interpolation.  The persistent owner below uploads that host slab once and
+ * reuses its texture across sparse pass-2 buckets.  Handles are monotonic and
+ * resolved through a guarded registry: a compiled FFI executable can retain a
+ * stale handle after explicit destruction, but it can never dereference freed
+ * storage or alias a later owner. */
+struct PersistentRelionHalfTextureF32 {
+    RelionHalfTextureF32 texture;
+    int tex_x = 0;
+    int tex_y = 0;
+    int tex_z = 0;
+    int device = -1;
+
+    std::mutex state_mutex;
+    std::condition_variable state_changed;
+    bool closing = false;
+    int active_calls = 0;
+
+    bool acquire_call()
+    {
+        std::lock_guard<std::mutex> lock(state_mutex);
+        if (closing) return false;
+        ++active_calls;
+        return true;
+    }
+
+    void release_call() noexcept
+    {
+        try {
+            std::lock_guard<std::mutex> lock(state_mutex);
+            --active_calls;
+            if (active_calls == 0) state_changed.notify_all();
+        } catch (...) {
+            /* A mutex failure during process teardown must not cross an FFI
+             * or destructor boundary. */
+        }
+    }
+
+    void wait_until_idle()
+    {
+        std::unique_lock<std::mutex> lock(state_mutex);
+        closing = true;
+        state_changed.wait(lock, [this] { return active_calls == 0; });
+    }
+
+    cudaError_t destroy_owned_texture() noexcept
+    {
+        int original_device = -1;
+        cudaError_t err = cudaGetDevice(&original_device);
+        if (err == cudaSuccess && original_device != device)
+            err = cudaSetDevice(device);
+        if (err == cudaSuccess &&
+            (texture.texture || texture.surface || texture.array))
+            err = cudaDeviceSynchronize();
+        const cudaError_t cleanup_err =
+            destroy_relion_half_texture_f32(&texture);
+        if (err == cudaSuccess) err = cleanup_err;
+        if (original_device >= 0 && original_device != device) {
+            const cudaError_t restore_err = cudaSetDevice(original_device);
+            if (err == cudaSuccess) err = restore_err;
+        }
+        return err;
+    }
+
+    ~PersistentRelionHalfTextureF32()
+    {
+        (void)destroy_owned_texture();
+    }
+};
+
+struct PersistentRelionHalfTextureF32CallGuard {
+    std::shared_ptr<PersistentRelionHalfTextureF32> owner;
+    bool active = false;
+
+    explicit PersistentRelionHalfTextureF32CallGuard(
+        std::shared_ptr<PersistentRelionHalfTextureF32> value)
+        noexcept
+        : owner(std::move(value))
+    {
+        try {
+            active = owner && owner->acquire_call();
+        } catch (...) {
+            active = false;
+        }
+    }
+
+    ~PersistentRelionHalfTextureF32CallGuard()
+    {
+        if (active) owner->release_call();
+    }
+};
+
+static std::mutex persistent_relion_half_texture_f32_mutex;
+static std::unordered_map<
+    uint64_t,
+    std::shared_ptr<PersistentRelionHalfTextureF32>>
+    persistent_relion_half_texture_f32_registry;
+static std::atomic<uint64_t> persistent_relion_half_texture_f32_next_handle{1};
+
+cudaError_t create_relion_half_texture_f32_from_host(
+    const float2* projector_half_host,
+    int tex_x,
+    int tex_y,
+    int tex_z,
+    RelionHalfTextureF32* texture)
+{
+    if (!projector_half_host || !texture ||
+        tex_x <= 0 || tex_y <= 0 || tex_z <= 0)
+        return cudaErrorInvalidValue;
+
+    const cudaChannelFormatDesc desc = cudaCreateChannelDesc<float2>();
+    const cudaExtent extent = make_cudaExtent(
+        static_cast<size_t>(tex_x),
+        static_cast<size_t>(tex_y),
+        static_cast<size_t>(tex_z));
+    cudaError_t err = cudaMalloc3DArray(
+        &texture->array,
+        &desc,
+        extent,
+        cudaArrayDefault);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    cudaMemcpy3DParms copy_params;
+    memset(&copy_params, 0, sizeof(copy_params));
+    copy_params.srcPtr = make_cudaPitchedPtr(
+        const_cast<float2*>(projector_half_host),
+        static_cast<size_t>(tex_x) * sizeof(float2),
+        static_cast<size_t>(tex_x),
+        static_cast<size_t>(tex_y));
+    copy_params.dstArray = texture->array;
+    copy_params.extent = extent;
+    copy_params.kind = cudaMemcpyHostToDevice;
+    /* The blocking copy is the ownership boundary.  Python may release its
+     * host view immediately after the create call returns successfully. */
+    err = cudaMemcpy3D(&copy_params);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+
+    cudaResourceDesc resource;
+    cudaTextureDesc texture_desc;
+    memset(&resource, 0, sizeof(resource));
+    memset(&texture_desc, 0, sizeof(texture_desc));
+    resource.resType = cudaResourceTypeArray;
+    resource.res.array.array = texture->array;
+    texture_desc.filterMode = cudaFilterModeLinear;
+    texture_desc.readMode = cudaReadModeElementType;
+    texture_desc.normalizedCoords = false;
+    texture_desc.addressMode[0] = cudaAddressModeClamp;
+    texture_desc.addressMode[1] = cudaAddressModeClamp;
+    texture_desc.addressMode[2] = cudaAddressModeClamp;
+    err = cudaCreateTextureObject(
+        &texture->texture,
+        &resource,
+        &texture_desc,
+        nullptr);
+    if (err != cudaSuccess) {
+        (void)destroy_relion_half_texture_f32(texture);
+        return err;
+    }
+    return cudaSuccess;
+}
+
+extern "C" int recovar_relion_persistent_half_texture_f32_create(
+    const void* projector_half_host,
+    int tex_x,
+    int tex_y,
+    int tex_z,
+    int device,
+    float projector_scale,
+    uint64_t* owner_handle)
+{
+    if (!projector_half_host || !owner_handle || projector_scale != 1.0f ||
+        !std::isfinite(projector_scale) ||
+        tex_x <= 0 || tex_y <= 0 || tex_z <= 0 || device < 0)
+        return static_cast<int>(cudaErrorInvalidValue);
+    *owner_handle = 0;
+
+    try {
+        auto owner = std::make_shared<PersistentRelionHalfTextureF32>();
+        owner->tex_x = tex_x;
+        owner->tex_y = tex_y;
+        owner->tex_z = tex_z;
+        owner->device = device;
+
+        int device_count = 0;
+        cudaError_t err = cudaGetDeviceCount(&device_count);
+        if (err != cudaSuccess) return static_cast<int>(err);
+        if (device >= device_count)
+            return static_cast<int>(cudaErrorInvalidDevice);
+        int original_device = -1;
+        err = cudaGetDevice(&original_device);
+        if (err != cudaSuccess) return static_cast<int>(err);
+        if (original_device != device) err = cudaSetDevice(device);
+        if (err == cudaSuccess) {
+            err = create_relion_half_texture_f32_from_host(
+                static_cast<const float2*>(projector_half_host),
+                tex_x,
+                tex_y,
+                tex_z,
+                &owner->texture);
+        }
+        if (original_device != device) {
+            const cudaError_t restore_err = cudaSetDevice(original_device);
+            if (err == cudaSuccess) err = restore_err;
+        }
+        if (err != cudaSuccess) return static_cast<int>(err);
+
+        const uint64_t handle =
+            persistent_relion_half_texture_f32_next_handle.fetch_add(
+                1, std::memory_order_relaxed);
+        if (handle == 0 ||
+            handle > static_cast<uint64_t>(
+                std::numeric_limits<int64_t>::max()))
+            return static_cast<int>(cudaErrorInvalidValue);
+        {
+            std::lock_guard<std::mutex> lock(
+                persistent_relion_half_texture_f32_mutex);
+            const auto inserted =
+                persistent_relion_half_texture_f32_registry.emplace(
+                    handle, owner);
+            if (!inserted.second)
+                return static_cast<int>(cudaErrorInvalidResourceHandle);
+        }
+        *owner_handle = handle;
+        return static_cast<int>(cudaSuccess);
+    } catch (const std::bad_alloc&) {
+        return static_cast<int>(cudaErrorMemoryAllocation);
+    } catch (...) {
+        return static_cast<int>(cudaErrorUnknown);
+    }
+}
+
+extern "C" int recovar_relion_persistent_half_texture_f32_destroy(
+    uint64_t owner_handle)
+{
+    if (owner_handle == 0)
+        return static_cast<int>(cudaErrorInvalidResourceHandle);
+    try {
+        std::shared_ptr<PersistentRelionHalfTextureF32> owner;
+        {
+            std::lock_guard<std::mutex> lock(
+                persistent_relion_half_texture_f32_mutex);
+            const auto found =
+                persistent_relion_half_texture_f32_registry.find(owner_handle);
+            if (found == persistent_relion_half_texture_f32_registry.end())
+                return static_cast<int>(cudaErrorInvalidResourceHandle);
+            owner = found->second;
+            persistent_relion_half_texture_f32_registry.erase(found);
+        }
+        owner->wait_until_idle();
+        return static_cast<int>(owner->destroy_owned_texture());
+    } catch (const std::bad_alloc&) {
+        return static_cast<int>(cudaErrorMemoryAllocation);
+    } catch (...) {
+        return static_cast<int>(cudaErrorUnknown);
+    }
+}
+
 template <bool HALF_IMG>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_texture_kernel(
@@ -2416,6 +2687,44 @@ cleanup:
         stream,
         &projector_texture,
         err);
+}
+
+cudaError_t launch_relion_projector_persistent_half_texture_f32(
+    cudaStream_t stream,
+    const PersistentRelionHalfTextureF32& owner,
+    float2* image,
+    const float* rotations,
+    int64_t n_images,
+    int64_t image_h,
+    int64_t image_w,
+    int padding_factor,
+    int projector_max_r)
+{
+    if (n_images == 0 || image_h == 0 || image_w == 0) return cudaSuccess;
+    if (!owner.texture.texture) return cudaErrorInvalidResourceHandle;
+
+    const int padded_max_r = projector_max_r * padding_factor;
+    const int tex_y_init = -(padded_max_r + 1);
+    const int tex_z_init = -(padded_max_r + 1);
+    const int64_t n_pixels = image_h * image_w;
+    dim3 grid(
+        static_cast<unsigned int>(n_images),
+        static_cast<unsigned int>((n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE));
+    dim3 block(BLOCK_SIZE);
+    project_relion_half_texture_f32_kernel<true><<<grid, block, 0, stream>>>(
+        owner.texture.texture,
+        image,
+        rotations,
+        static_cast<int>(n_pixels),
+        static_cast<int>(image_h),
+        static_cast<int>(image_w),
+        tex_y_init,
+        tex_z_init,
+        padding_factor,
+        padded_max_r * padded_max_r);
+    cudaError_t err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+    return err;
 }
 
 /* Match RELION's Wavg A2 topology: one block per orientation, one thread per
@@ -7319,6 +7628,111 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("padding_factor")
         .Attr<int64_t>("projector_max_r")
         .Attr<float>("projector_scale")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionProjectorPersistentHalfTextureF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    int64_t padding_factor,
+    int64_t projector_max_r,
+    ffi::AnyBuffer owner_handle_buffer,
+    ffi::AnyBuffer rotations,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (owner_handle_buffer.element_type() != ffi::DataType::U64)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: owner handle must be U64");
+    if (rotations.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: rotations must be F32");
+    if (output->element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: output must be C64");
+
+    const auto handle_dims = owner_handle_buffer.dimensions();
+    const auto rotation_dims = rotations.dimensions();
+    const auto output_dims = output->dimensions();
+    RelionHalfTextureGeometry geometry;
+    const int64_t int_max = static_cast<int64_t>(std::numeric_limits<int>::max());
+    if (handle_dims.size() != 0 ||
+        !validate_relion_half_texture_geometry(
+            current_size, padding_factor, projector_max_r, &geometry) ||
+        rotation_dims.size() != 2 || rotation_dims[0] <= 0 ||
+        rotation_dims[0] > int_max || rotation_dims[1] != 6 ||
+        output_dims.size() != 2 || output_dims[0] != rotation_dims[0] ||
+        output_dims[1] != geometry.image_pixels)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: inconsistent operands");
+
+    uint64_t owner_handle = 0;
+    cudaError_t err = cudaMemcpyAsync(
+        &owner_handle,
+        owner_handle_buffer.untyped_data(),
+        sizeof(owner_handle),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+
+    std::shared_ptr<PersistentRelionHalfTextureF32> owner;
+    try {
+        std::lock_guard<std::mutex> lock(
+            persistent_relion_half_texture_f32_mutex);
+        const auto found =
+            persistent_relion_half_texture_f32_registry.find(owner_handle);
+        if (found == persistent_relion_half_texture_f32_registry.end())
+            return ffi::Error::InvalidArgument(
+                "RelionProjectorPersistentHalfTextureF32: owner handle is not live");
+        owner = found->second;
+    } catch (...) {
+        return ffi::Error::Internal(
+            "RelionProjectorPersistentHalfTextureF32: registry lookup failed");
+    }
+    PersistentRelionHalfTextureF32CallGuard call_guard(owner);
+    if (!call_guard.active)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: owner is closing");
+    int current_device = -1;
+    err = cudaGetDevice(&current_device);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    if (owner->tex_x != geometry.projector_half_x ||
+        owner->tex_y != geometry.projector_size ||
+        owner->tex_z != geometry.projector_size ||
+        owner->device != current_device)
+        return ffi::Error::InvalidArgument(
+            "RelionProjectorPersistentHalfTextureF32: texture geometry/device mismatch");
+
+    err = launch_relion_projector_persistent_half_texture_f32(
+        stream,
+        *owner,
+        reinterpret_cast<float2*>(output->untyped_data()),
+        static_cast<const float*>(rotations.untyped_data()),
+        rotation_dims[0],
+        current_size,
+        current_size / 2 + 1,
+        static_cast<int>(padding_factor),
+        static_cast<int>(projector_max_r));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionProjectorPersistentHalfTextureF32,
+    RelionProjectorPersistentHalfTextureF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Attr<int64_t>("padding_factor")
+        .Attr<int64_t>("projector_max_r")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()

@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import weakref
 from contextlib import contextmanager
 from types import ModuleType
 from typing import Tuple
@@ -236,6 +237,9 @@ def _lib_missing_required_symbols(lib_path: pathlib.Path) -> str | None:
         # Can't even dlopen — treat as binary-incompatible.
         return "<dlopen failed>"
     for _target, symbol in _FFI_REGISTRATIONS:
+        if not hasattr(lib, symbol):
+            return symbol
+    for symbol in _REQUIRED_C_API_SYMBOLS:
         if not hasattr(lib, symbol):
             return symbol
     return None
@@ -534,6 +538,9 @@ _TARGET_RELION_COARSE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
 _TARGET_RELION_PROJECTOR_HALF_TEXTURE_F32 = (
     "cuda_relion_projector_half_texture_f32"
 )
+_TARGET_RELION_PROJECTOR_PERSISTENT_HALF_TEXTURE_F32 = (
+    "cuda_relion_projector_persistent_half_texture_f32"
+)
 _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_native_texture_rectangular_f32"
 )
@@ -620,6 +627,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionProjectorHalfTextureF32",
     ),
     (
+        _TARGET_RELION_PROJECTOR_PERSISTENT_HALF_TEXTURE_F32,
+        "RelionProjectorPersistentHalfTextureF32",
+    ),
+    (
         _TARGET_RELION_COARSE_DIFF2_NATIVE_TEXTURE_RECTANGULAR_F32,
         "RelionCoarseDiff2NativeTextureRectangularF32",
     ),
@@ -659,6 +670,11 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32,
         "RelionWavgRotationAtomicTripletAddF32",
     ),
+)
+
+_REQUIRED_C_API_SYMBOLS: tuple[str, ...] = (
+    "recovar_relion_persistent_half_texture_f32_create",
+    "recovar_relion_persistent_half_texture_f32_destroy",
 )
 
 
@@ -1904,6 +1920,315 @@ def relion_coarse_normalized_cc_pairs_f32(
         half_weights,
         packed_to_compact,
     )
+
+
+def _persistent_relion_half_texture_c_api():
+    lib = _get_lib()
+    create = lib.recovar_relion_persistent_half_texture_f32_create
+    create.argtypes = (
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_float,
+        ctypes.POINTER(ctypes.c_uint64),
+    )
+    create.restype = ctypes.c_int
+    destroy = lib.recovar_relion_persistent_half_texture_f32_destroy
+    destroy.argtypes = (ctypes.c_uint64,)
+    destroy.restype = ctypes.c_int
+    return create, destroy
+
+
+def _destroy_persistent_relion_half_texture_handle(
+    owner_handle: int,
+    *,
+    raise_on_error: bool,
+) -> None:
+    if not owner_handle:
+        return
+    try:
+        _, destroy = _persistent_relion_half_texture_c_api()
+        status = int(destroy(ctypes.c_uint64(int(owner_handle))))
+    except Exception:
+        if raise_on_error:
+            raise
+        return
+    if status != 0 and raise_on_error:
+        raise RuntimeError(
+            "failed to destroy persistent RELION half texture: "
+            f"CUDA error code {status}"
+        )
+
+
+class RelionPersistentHalfTextureF32:
+    """One host-uploaded RELION ``Projector::data`` texture.
+
+    The input must already be a C-contiguous ``complex64`` host slab.  It is
+    copied synchronously into a CUDA array exactly once; projection calls pass
+    only a dynamic opaque handle plus their rotation rows to XLA FFI.  Handles
+    are never reused by the CUDA registry, so an executable retained in JAX's
+    compilation cache cannot alias a later texture after :meth:`close`.
+    """
+
+    def __init__(
+        self,
+        projector_half: np.ndarray,
+        *,
+        padding_factor: int,
+        projector_max_r: int,
+        projector_scale: float = 1.0,
+        device=None,
+    ) -> None:
+        if not isinstance(projector_half, np.ndarray):
+            raise TypeError(
+                "persistent RELION half texture requires a NumPy host array"
+            )
+        if projector_half.dtype != np.dtype(np.complex64):
+            raise TypeError(
+                "persistent RELION half texture requires complex64 host data, "
+                f"got {projector_half.dtype}"
+            )
+        if projector_half.ndim != 3 or not projector_half.flags.c_contiguous:
+            raise ValueError(
+                "persistent RELION half texture requires a C-contiguous "
+                f"(z, y, x-half) slab, got shape={projector_half.shape} "
+                f"c_contiguous={projector_half.flags.c_contiguous}"
+            )
+        padding_factor = int(padding_factor)
+        projector_max_r = int(projector_max_r)
+        projector_scale = float(projector_scale)
+        if padding_factor <= 0 or projector_max_r <= 0:
+            raise ValueError("padding_factor and projector_max_r must be positive")
+        if projector_scale != 1.0:
+            raise ValueError(
+                "persistent host-uploaded RELION texture is exact only for "
+                f"projector_scale=1.0, got {projector_scale}"
+            )
+        padded_max_r = projector_max_r * padding_factor
+        expected_shape = (
+            2 * padded_max_r + 3,
+            2 * padded_max_r + 3,
+            padded_max_r + 2,
+        )
+        if projector_half.shape != expected_shape:
+            raise ValueError(
+                "persistent RELION half texture geometry mismatch: "
+                f"got {projector_half.shape}, expected {expected_shape}"
+            )
+        if jax.default_backend() != "gpu":
+            raise RuntimeError("persistent RELION half texture requires a JAX GPU backend")
+        if not custom_cuda_requested():
+            raise RuntimeError(
+                "persistent RELION half texture requires the custom CUDA extension"
+            )
+
+        gpu_devices = jax.devices("gpu")
+        if not gpu_devices:
+            raise RuntimeError("persistent RELION half texture requires a JAX GPU device")
+        if device is None:
+            device = gpu_devices[0]
+        if device not in gpu_devices:
+            raise ValueError("persistent RELION half texture device is not a local JAX GPU")
+        device_ordinal = int(
+            getattr(device, "local_hardware_id", getattr(device, "id", -1))
+        )
+        if device_ordinal < 0:
+            raise ValueError("could not resolve the CUDA ordinal for the JAX GPU device")
+
+        _ensure_ffi()
+        create, _ = _persistent_relion_half_texture_c_api()
+        owner_handle = ctypes.c_uint64()
+        status = int(
+            create(
+                projector_half.ctypes.data_as(ctypes.c_void_p),
+                ctypes.c_int(expected_shape[2]),
+                ctypes.c_int(expected_shape[1]),
+                ctypes.c_int(expected_shape[0]),
+                ctypes.c_int(device_ordinal),
+                ctypes.c_float(projector_scale),
+                ctypes.byref(owner_handle),
+            )
+        )
+        if status != 0 or int(owner_handle.value) == 0:
+            raise RuntimeError(
+                "failed to create persistent RELION half texture: "
+                f"CUDA error code {status}"
+            )
+
+        self.shape = tuple(int(value) for value in expected_shape)
+        self.dtype = np.dtype(np.complex64)
+        self.padding_factor = padding_factor
+        self.projector_max_r = projector_max_r
+        self.projector_scale = projector_scale
+        self.device = device
+        self.device_ordinal = device_ordinal
+        self._owner_handle = int(owner_handle.value)
+        self._handle_array = None
+        self._last_output = None
+        self._lock = threading.RLock()
+        try:
+            handle_array = jax.device_put(
+                np.asarray(self._owner_handle, dtype=np.uint64),
+                device,
+            )
+            if handle_array.dtype != jnp.uint64 or handle_array.shape != ():
+                raise RuntimeError(
+                    "persistent RELION texture handles require scalar JAX uint64"
+                )
+            self._handle_array = jax.block_until_ready(handle_array)
+        except Exception:
+            _destroy_persistent_relion_half_texture_handle(
+                self._owner_handle,
+                raise_on_error=False,
+            )
+            self._owner_handle = 0
+            raise
+        self._finalizer = weakref.finalize(
+            self,
+            _destroy_persistent_relion_half_texture_handle,
+            self._owner_handle,
+            raise_on_error=False,
+        )
+
+    @property
+    def closed(self) -> bool:
+        return self._owner_handle == 0
+
+    @property
+    def owner_handle(self) -> int:
+        if self.closed:
+            raise RuntimeError("persistent RELION half texture is closed")
+        return self._owner_handle
+
+    def _require_live_geometry(
+        self,
+        *,
+        padding_factor: int,
+        projector_max_r: int,
+    ) -> jax.Array:
+        if self.closed or self._handle_array is None:
+            raise RuntimeError("persistent RELION half texture is closed")
+        if (
+            int(padding_factor) != self.padding_factor
+            or int(projector_max_r) != self.projector_max_r
+        ):
+            raise ValueError(
+                "persistent RELION half texture geometry does not match the "
+                "projection request"
+            )
+        return self._handle_array
+
+    def close(self) -> None:
+        with self._lock:
+            if self.closed:
+                return
+            readiness_error = None
+            if self._last_output is not None:
+                try:
+                    jax.block_until_ready(self._last_output)
+                except Exception as exc:  # still destroy after a failed launch
+                    readiness_error = exc
+            owner_handle = self._owner_handle
+            self._owner_handle = 0
+            self._handle_array = None
+            self._last_output = None
+            self._finalizer.detach()
+            _destroy_persistent_relion_half_texture_handle(
+                owner_handle,
+                raise_on_error=True,
+            )
+            if readiness_error is not None:
+                raise readiness_error
+
+    def __enter__(self):
+        if self.closed:
+            raise RuntimeError("persistent RELION half texture is closed")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=("current_size", "padding_factor", "projector_max_r"),
+)
+def _relion_projector_persistent_half_texture_f32(
+    owner_handle: jax.Array,
+    rotation_matrices: jax.Array,
+    *,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+) -> jax.Array:
+    compact_rotations = _rot_to_compact(rotation_matrices, jnp.float32)
+    output_type = jax.ShapeDtypeStruct(
+        (
+            rotation_matrices.shape[0],
+            current_size * (current_size // 2 + 1),
+        ),
+        jnp.complex64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_PROJECTOR_PERSISTENT_HALF_TEXTURE_F32,
+        output_type,
+        vmap_method="sequential",
+    )(
+        owner_handle,
+        compact_rotations,
+        current_size=np.int64(current_size),
+        padding_factor=np.int64(padding_factor),
+        projector_max_r=np.int64(projector_max_r),
+    )
+
+
+def relion_projector_persistent_half_texture_f32(
+    texture: RelionPersistentHalfTextureF32,
+    rotation_matrices: jax.Array,
+    *,
+    current_size: int,
+    padding_factor: int,
+    projector_max_r: int,
+) -> jax.Array:
+    """Project through one explicitly owned host-uploaded RELION texture."""
+
+    if not isinstance(texture, RelionPersistentHalfTextureF32):
+        raise TypeError("texture must be a RelionPersistentHalfTextureF32")
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    if rotation_matrices.dtype != jnp.float32:
+        raise TypeError(
+            "RELION half-texture rotations must be float32, got "
+            f"{rotation_matrices.dtype}"
+        )
+    if (
+        int(current_size) <= 0
+        or rotation_matrices.ndim != 3
+        or rotation_matrices.shape[0] <= 0
+        or rotation_matrices.shape[1:] != (3, 3)
+    ):
+        raise ValueError(
+            "persistent RELION half-texture projection operands have "
+            f"inconsistent shapes: rotations={rotation_matrices.shape}, "
+            f"current_size={current_size}"
+        )
+    with texture._lock:
+        owner_handle = texture._require_live_geometry(
+            padding_factor=padding_factor,
+            projector_max_r=projector_max_r,
+        )
+        output = _relion_projector_persistent_half_texture_f32(
+            owner_handle,
+            rotation_matrices,
+            current_size=int(current_size),
+            padding_factor=int(padding_factor),
+            projector_max_r=int(projector_max_r),
+        )
+        texture._last_output = output
+        output = jax.block_until_ready(output)
+        texture._last_output = None
+        return output
 
 
 @functools.partial(
