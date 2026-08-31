@@ -106,6 +106,74 @@ def _stub_estep_factory(ori_size: int):
     return estep
 
 
+def test_vdam_iteration_loop_can_execute_exactly_one_absolute_restart_iteration(monkeypatch):
+    import recovar.em.initial_model.iteration_loop as loop
+
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=200,
+        n_directions=3,
+        pseudo_halfsets=True,
+    )
+    state.iter = 180
+    seen = []
+
+    def estep(current, particle_ids, halfset_ids):
+        seen.append(int(current.iter))
+        return [], {"max_posterior_per_image": np.ones(len(particle_ids), dtype=np.float32)}
+
+    monkeypatch.setattr(loop, "vdam_m_step", lambda current, accumulators, **kwargs: current)
+    final = run_vdam_iterations(
+        state,
+        nr_particles=20,
+        optics_group_by_particle=[0] * 20,
+        grad_ini_subset_size=10,
+        grad_fin_subset_size=10,
+        tau2_fudge_arg=4.0,
+        grad_em_iters=0,
+        random_seed=29,
+        rnd_unif_factory=numpy_rnd_unif_factory,
+        expectation_step=estep,
+        refresh_tau2_from_projector=False,
+        start_iteration=180,
+        diagnostic_stop_after_iteration=181,
+    )
+
+    assert seen == [181]
+    assert final.iter == 181
+
+
+def test_vdam_iteration_loop_restart_rejects_state_iteration_mismatch():
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=200,
+        n_directions=3,
+        pseudo_halfsets=True,
+    )
+    state.iter = 180
+
+    with pytest.raises(ValueError, match="state.iter must equal start_iteration"):
+        run_vdam_iterations(
+            state,
+            nr_particles=20,
+            optics_group_by_particle=[0] * 20,
+            grad_ini_subset_size=10,
+            grad_fin_subset_size=10,
+            tau2_fudge_arg=4.0,
+            grad_em_iters=0,
+            random_seed=29,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            expectation_step=lambda *_args: ([], {}),
+            refresh_tau2_from_projector=False,
+            start_iteration=179,
+            diagnostic_stop_after_iteration=180,
+        )
+
+
 def test_refresh_tau2_from_projector_power_updates_all_classes(bind):
     ori = 8
     state = initialise_denovo_state(

@@ -682,21 +682,30 @@ def run_vdam_iterations(
     refresh_tau2_from_projector: bool = True,
     projector_padding_factor: int = 1,
     projector_interpolator: int = 1,
+    start_iteration: int = 0,
     diagnostic_stop_after_iteration: int | None = None,
 ) -> InitialModelState:
     """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
     phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
+    start_iteration = int(start_iteration)
+    if start_iteration < 0 or start_iteration >= int(state.nr_iter):
+        raise ValueError("start_iteration must be between 0 and state.nr_iter - 1")
+    if int(state.iter) != start_iteration:
+        raise ValueError(
+            f"state.iter must equal start_iteration ({int(state.iter)} != {start_iteration})"
+        )
     final_iteration = int(state.nr_iter)
     if diagnostic_stop_after_iteration is not None:
         final_iteration = int(diagnostic_stop_after_iteration)
-        if final_iteration < 1 or final_iteration > int(state.nr_iter):
+        if final_iteration <= start_iteration or final_iteration > int(state.nr_iter):
             raise ValueError(
-                "diagnostic_stop_after_iteration must be between 1 and state.nr_iter"
+                "diagnostic_stop_after_iteration must be greater than start_iteration "
+                "and no greater than state.nr_iter"
             )
     current = state
     profile_iterations = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
 
-    for it in range(1, final_iteration + 1):
+    for it in range(start_iteration + 1, final_iteration + 1):
         iteration_started = time.perf_counter()
         stage_started = iteration_started
         iteration_profile: dict[str, float] = {}

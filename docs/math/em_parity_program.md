@@ -14,6 +14,38 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
+### 2026-08-31 late-trajectory one-iteration performance gate
+
+Validation scope is diagnostic/performance-only: it cannot promote science,
+change the frozen VDAM quality denominator, or change a production default.
+The frozen `vdam-gf46` run at RECOVAR commit `984637b7d` took `4388.59 s`
+versus native RELION's `480.65 s` (`9.13x`).  The gap becomes largest after
+the search changes from HEALPix order 2 (`36,864` fine rotations) to order 3
+(`294,912` fine rotations) while the gradient subset grows from 360 to 1000
+particles.  At iteration 180, RECOVAR's checkpoint-mtime interval is about
+`38.8 s`, while RELION reports `4.138 s` for expectation; at iteration 200
+the corresponding values are `25.9 s` and `3.468 s`.
+
+The candidate performance hypothesis is excessive host orchestration around
+the order-3 search: signature/bucket/chunk JAX and FFI calls, materializations,
+and synchronization boundaries may keep RECOVAR from matching RELION's
+persistent CUDA execution context.  This remains a hypothesis until the
+kernel/API trace measures invocation counts and GPU idle time.  In particular,
+the iteration-180 model's prior mode is 1 but its rot/tilt/psi widths are all
+zero; both engines therefore enumerate the full direction/psi grid.  The gap
+must not be attributed to RELION using a local angular cone.  The bounded discriminator starts native
+RELION and RECOVAR from the same hash-pinned `run_it180` optimiser/model/data/
+sampling state, executes exactly iteration 181 on the same H100, and records
+wall time, RECOVAR stage timers, and Nsight CUDA-kernel/API/NVTX summaries.
+The runner must fail closed on a missing gradient moment, mismatched schedule,
+dirty source, binary/hash drift, GPU UUID drift, or any output other than the
+single requested next iteration.  No 200-iteration trajectory or broad test
+suite is part of this gate.  The implementation target, if the trace supports
+the hypothesis, is a persistent macro-batched CUDA path that retains images,
+projector/cache state, candidate buffers, posterior reductions, and BPref
+accumulators across a pool of particles with one or a few launches rather than
+per-signature/per-chunk dispatch.
+
 Current continuation (2026-08-24): K=1 GUI-default qualification is running
 from immutable production head `1e499798c`.  Completed 200-iteration cases
 `vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC

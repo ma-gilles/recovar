@@ -326,6 +326,14 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
     p.add_argument(
+        "--diagnostic_continue_optimiser",
+        default=None,
+        help=(
+            "Diagnostic/performance-only native RELION VDAM checkpoint. Requires "
+            "--diagnostic_stop_after_iteration=checkpoint+1 and executes exactly one iteration."
+        ),
+    )
+    p.add_argument(
         "--diagnostic_stop_after_iteration",
         type=int,
         default=None,
@@ -450,6 +458,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         ),
         deterministic_cuda=bool(args.deterministic_cuda),
+        diagnostic_continue_optimiser=args.diagnostic_continue_optimiser,
         diagnostic_stop_after_iteration=args.diagnostic_stop_after_iteration,
     )
     result = run_native_initial_model(native_opts)

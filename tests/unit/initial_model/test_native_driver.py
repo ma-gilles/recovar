@@ -90,6 +90,215 @@ def test_iteration_artifact_cadence_rejects_nonpositive_interval():
         driver._should_write_iteration_artifacts(1, 10, 0)
 
 
+def _write_test_mrc(path: Path, values: np.ndarray) -> None:
+    import mrcfile
+
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(np.asarray(values, dtype=np.float32))
+
+
+def _write_native_vdam_checkpoint(tmp_path: Path) -> tuple[Path, Path, dict[str, np.ndarray]]:
+    ori_size = 4
+    n_shells = 3
+    reference = np.arange(ori_size**3, dtype=np.float32).reshape((ori_size,) * 3)
+    moment_values = {}
+    for index, scale in ((1, 1.0), (2, 2.0)):
+        complex_values = (
+            np.arange(ori_size * ori_size * n_shells, dtype=np.float32).reshape(
+                ori_size,
+                ori_size,
+                n_shells,
+            )
+            * scale
+            + 1j * scale
+        ).astype(np.complex64)
+        moment_values[f"moment{index}"] = complex_values
+        _write_test_mrc(
+            tmp_path / f"run_it180_1moment{index:03d}.mrc",
+            complex_values.view(np.float32).reshape(ori_size, ori_size, 2 * n_shells),
+        )
+    second_moment = (moment_values["moment1"] * 3.0 + 2.0j).astype(np.complex64)
+    moment_values["second_moment"] = second_moment
+    _write_test_mrc(
+        tmp_path / "run_it180_2moment001.mrc",
+        second_moment.view(np.float32).reshape(ori_size, ori_size, 2 * n_shells),
+    )
+    _write_test_mrc(tmp_path / "run_it180_class001.mrc", reference)
+
+    model = tmp_path / "run_it180_model.star"
+    model.write_text(
+        """data_model_general
+_rlnOriginalImageSize 4
+_rlnCurrentResolution 8
+_rlnCurrentImageSize 4
+_rlnPaddingFactor 1
+_rlnPixelSize 2
+_rlnNrClasses 1
+_rlnTau2FudgeFactor 4
+_rlnSigmaOffsetsAngst 5
+_rlnAveragePmax 0.75
+_rlnOrientationalPriorMode 1
+_rlnSigmaPriorRotAngle 0
+_rlnSigmaPriorTiltAngle 0
+_rlnSigmaPriorPsiAngle 0
+
+data_model_classes
+
+loop_
+_rlnReferenceImage #1
+_rlnGradMoment1 #2
+_rlnGradMoment2 #3
+_rlnClassDistribution #4
+_rlnAccuracyRotations #5
+_rlnAccuracyTranslationsAngst #6
+_rlnEstimatedResolution #7
+_rlnOverallFourierCompleteness #8
+run_it180_class001.mrc run_it180_1moment001.mrc run_it180_2moment001.mrc 1 0.1 0.4 8 1
+
+data_model_class_1
+
+loop_
+_rlnSpectralIndex #1
+_rlnResolution #2
+_rlnAngstromResolution #3
+_rlnSsnrMap #4
+_rlnGoldStandardFsc #5
+_rlnFourierCompleteness #6
+_rlnReferenceSigma2 #7
+_rlnReferenceTau2 #8
+_rlnSpectralOrientabilityContribution #9
+0 0 999 10 0.1 0.9 1 4 0
+1 0.125 8 9 0.2 0.8 2 5 0
+2 0.25 4 8 0.3 0.7 3 6 0
+
+data_model_optics_group_1
+
+loop_
+_rlnSpectralIndex #1
+_rlnResolution #2
+_rlnSigma2Noise #3
+0 0 0.01
+1 0.125 0.02
+2 0.25 0.03
+
+data_model_pdf_orient_class_1
+
+loop_
+_rlnOrientationDistribution #1
+0.25
+0.75
+"""
+    )
+    data = tmp_path / "run_it180_data.star"
+    data.write_text("data_particles\n\nloop_\n_rlnImageName #1\n1@stack.mrcs\n")
+    sampling = tmp_path / "run_it180_sampling.star"
+    sampling.write_text(
+        """data_sampling_general
+_rlnHealpixOrder 3
+_rlnOffsetRange 1.9
+_rlnOffsetStep 0.64
+_rlnOffsetRangeOriginal 12
+_rlnOffsetStepOriginal 4
+"""
+    )
+    optimiser = tmp_path / "run_it180_optimiser.star"
+    optimiser.write_text(
+        f"""data_optimiser_general
+_rlnModelStarFile {model}
+_rlnExperimentalDataStarFile {data}
+_rlnOrientSamplingStarFile {sampling}
+_rlnCurrentIteration 180
+_rlnNumberOfIterations 200
+_rlnDoGradientRefine 1
+_rlnDoStochasticGradientDescent 1
+_rlnDoSplitRandomHalves 0
+_rlnRandomSeed 29
+_rlnAdaptiveOversampleOrder 1
+_rlnGradEmIters 0
+_rlnParticleDiameter 200
+_rlnIncrementImageSize 10
+_rlnHasHighFscAtResolLimit 0
+_rlnGradCurrentStepsize 0.5
+_rlnSgdSubsetSize 1000
+_rlnHasConverged 0
+_rlnGradHasConverged 0
+_rlnAutoLocalSearchesHealpixOrder 4
+_rlnOverallAccuracyRotations 0.1
+_rlnOverallAccuracyTranslationsAngst 0.4
+_rlnChangesOptimalOffsets 1.5
+_rlnChangesOptimalOrientations 80
+_rlnChangesOptimalClasses 0
+_rlnSmallestChangesOffsets 1.5
+_rlnSmallestChangesOrientations 80
+_rlnSmallestChangesClasses 0
+_rlnNumberOfIterWithoutResolutionGain 1
+_rlnNumberOfIterWithoutChangingAssignments 0
+_rlnBestResolutionThusFar 0.125
+"""
+    )
+    return optimiser, data, {"reference": reference, **moment_values}
+
+
+def test_native_vdam_diagnostic_continuation_loads_complete_gradient_state(tmp_path):
+    optimiser, data, expected = _write_native_vdam_checkpoint(tmp_path)
+    opts = driver.NativeInitialModelOptions(
+        fn_img=str(data),
+        nr_iter=200,
+        random_seed=29,
+        particle_diameter=200.0,
+        diagnostic_continue_optimiser=str(optimiser),
+        diagnostic_stop_after_iteration=181,
+    )
+
+    checkpoint = driver._load_native_vdam_continuation(
+        optimiser,
+        expected_data_star=data,
+        opts=opts,
+        dataset=SimpleNamespace(grid_size=4, voxel_size=2.0),
+    )
+
+    from recovar.utils.helpers import relion_volume_to_recovar
+
+    assert checkpoint.iteration == 180
+    assert checkpoint.state.iter == 180
+    assert checkpoint.state.nr_iter == 200
+    assert checkpoint.state.current_resolution_shell == 1
+    assert checkpoint.state.subset_size == 1000
+    assert checkpoint.state.Igrad1.dtype == np.complex128
+    np.testing.assert_array_equal(
+        checkpoint.state.Iref[0],
+        relion_volume_to_recovar(expected["reference"]),
+    )
+    np.testing.assert_array_equal(checkpoint.state.Igrad1[0], expected["moment1"])
+    np.testing.assert_array_equal(checkpoint.state.Igrad1[1], expected["moment2"])
+    np.testing.assert_array_equal(checkpoint.state.Igrad2[0], expected["second_moment"])
+    np.testing.assert_array_equal(checkpoint.state.sigma2_noise[0], [0.01, 0.02, 0.03])
+    np.testing.assert_array_equal(checkpoint.state.tau2_class[0], [4.0, 5.0, 6.0])
+    assert checkpoint.sampling_state.healpix_order == 3
+    assert checkpoint.sampling_state.uniform_local_orientation_prior is True
+
+
+def test_native_vdam_diagnostic_continuation_fails_without_second_pseudo_half(tmp_path):
+    optimiser, data, _expected = _write_native_vdam_checkpoint(tmp_path)
+    (tmp_path / "run_it180_1moment002.mrc").unlink()
+    opts = driver.NativeInitialModelOptions(
+        fn_img=str(data),
+        nr_iter=200,
+        random_seed=29,
+        particle_diameter=200.0,
+        diagnostic_continue_optimiser=str(optimiser),
+        diagnostic_stop_after_iteration=181,
+    )
+
+    with pytest.raises(FileNotFoundError):
+        driver._load_native_vdam_continuation(
+            optimiser,
+            expected_data_star=data,
+            opts=opts,
+            dataset=SimpleNamespace(grid_size=4, voxel_size=2.0),
+        )
+
+
 def test_iteration_reference_replay_expands_iteration_and_class(monkeypatch, tmp_path):
     state = initialise_denovo_state(
         ori_size=8,
