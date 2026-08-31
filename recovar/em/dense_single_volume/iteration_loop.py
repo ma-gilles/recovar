@@ -7942,6 +7942,9 @@ def _run_relion_iteration_loop(
                 )
                 mean_signal_variance_per_half.append(mean_signal_variance_k)
                 tau2_update_details_per_half.append(tau2_update_details_k)
+            mean_signal_variance_shells_per_half = [
+                details["prior_shells"] for details in tau2_update_details_per_half
+            ]
             mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
             # Keep the single tau2 diagnostic fields aligned with RELION's half1
             # model.star, which is what the parity diff script reports.
@@ -7997,6 +8000,9 @@ def _run_relion_iteration_loop(
             relion_width_mask_edge=RELION_WIDTH_MASK_EDGE,
             relion_fmask_edge=RELION_WIDTH_FMASK_EDGE,
             accumulator_volume_shape=mstep_accumulator_shape,
+            mean_signal_variance_shells_per_half=(
+                mean_signal_variance_shells_per_half if not k_class_enabled else None
+            ),
         )
 
         # RELION reconstructs the first-iteration CC maps with the untapered

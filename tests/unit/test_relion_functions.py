@@ -120,6 +120,59 @@ def test_adjust_regularization_accepts_tau_shells_without_volume_roundtrip():
     assert not np.isclose(direct[idx], roundtripped[idx])
 
 
+def test_relion_reconstruction_tau_shells_match_full_prior_bitwise():
+    """Authoritative tau2 shells reproduce the legacy full-prior result exactly."""
+    volume_shape = (8, 8, 8)
+    accumulator_shape = (16, 16, 16)
+    half_shape = (16, 16, 9)
+    rng = np.random.default_rng(20260831)
+    weight = (0.5 + rng.random(half_shape)).astype(np.float32)
+    numerator = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    fsc = np.linspace(0.9, 0.1, volume_shape[0] // 2 + 1, dtype=np.float64)
+    tau_full, _, details = regularization.compute_relion_tau2_from_weights(
+        weight,
+        weight,
+        fsc,
+        volume_shape,
+        padding_factor=2,
+        r_max=volume_shape[0] // 2,
+        return_details=True,
+        accumulator_volume_shape=accumulator_shape,
+    )
+    common = {
+        "kernel": "triangular",
+        "use_spherical_mask": False,
+        "grid_correct": False,
+        "current_size": volume_shape[0],
+        "accumulator_volume_shape": accumulator_shape,
+        "input_half_volume": True,
+        "preserve_output_precision": True,
+    }
+
+    from_full = rf.post_process_from_filter_v2(
+        jnp.asarray(weight),
+        jnp.asarray(numerator),
+        volume_shape,
+        2,
+        tau=jnp.asarray(tau_full, dtype=jnp.float64),
+        tau_is_1d=False,
+        **common,
+    )
+    from_shells = rf.post_process_from_filter_v2(
+        jnp.asarray(weight),
+        jnp.asarray(numerator),
+        volume_shape,
+        2,
+        tau=jnp.asarray(details["prior_shells"], dtype=jnp.float64),
+        tau_is_1d=True,
+        **common,
+    )
+
+    np.testing.assert_array_equal(np.asarray(from_shells), np.asarray(from_full))
+
+
 @pytest.mark.parametrize("layout", ["full", "half"])
 @pytest.mark.parametrize("force_host", [False, True])
 def test_relion_weight_shell_stats_uses_relion_half_up_rounding(monkeypatch, layout, force_host):

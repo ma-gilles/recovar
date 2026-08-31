@@ -386,6 +386,7 @@ def _reconstruct_and_postprocess_means(
     relion_width_mask_edge: int,
     relion_fmask_edge: int,
     accumulator_volume_shape=None,
+    mean_signal_variance_shells_per_half=None,
 ) -> None:
     """Run one iteration's regularized reconstruction + post-processing.
 
@@ -446,6 +447,11 @@ def _reconstruct_and_postprocess_means(
         means[0] = shared_classes
         means[1] = shared_classes
     else:
+        if (
+            mean_signal_variance_shells_per_half is not None
+            and len(mean_signal_variance_shells_per_half) != 2
+        ):
+            raise ValueError("K=1 reconstruction tau2 shells require exactly two halves")
         for k in range(2):
             Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
             Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
@@ -453,8 +459,13 @@ def _reconstruct_and_postprocess_means(
             # Keep the stored/controller tau2 state compact, but promote the
             # reconstruction operand so 1 / (padding_factor**3 * tau2) is not
             # rounded in float32 before it enters the Wiener denominator.
+            reconstruction_tau_source = (
+                mean_signal_variance_shells_per_half[k]
+                if mean_signal_variance_shells_per_half is not None
+                else mean_signal_variance_per_half[k]
+            )
             reconstruction_tau = jnp.asarray(
-                mean_signal_variance_per_half[k],
+                reconstruction_tau_source,
                 dtype=jnp.float64,
             )
             means[k] = _reconstruct_volume_eager(
@@ -468,6 +479,7 @@ def _reconstruct_and_postprocess_means(
                 minres_map=relion_minres_map,
                 current_size=cs_int,
                 accumulator_volume_shape=accumulator_volume_shape,
+                tau_is_1d=mean_signal_variance_shells_per_half is not None,
                 preserve_output_precision=True,
                 relion_filter_scale=float(volume_shape[0] ** 4),
             ).reshape(-1)

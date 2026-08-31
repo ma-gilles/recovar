@@ -8918,6 +8918,7 @@ class TestRelionModeSmokeTest:
         taper = np.asarray([1.0, 0.5, 0.0, 0.0, 0.0], dtype=np.float64)
         tau2_call = 0
         reconstruction_tau = []
+        reconstruction_tau_is_1d = []
 
         def fake_tau2_from_weights(*_args, **_kwargs):
             nonlocal tau2_call
@@ -8937,6 +8938,7 @@ class TestRelionModeSmokeTest:
 
         def fake_reconstruct(*_args, **kwargs):
             reconstruction_tau.append(np.asarray(kwargs["tau"]))
+            reconstruction_tau_is_1d.append(kwargs["tau_is_1d"])
             return jnp.ones(VOLUME_SIZE, dtype=jnp.complex64)
 
         monkeypatch.setattr(
@@ -8977,11 +8979,15 @@ class TestRelionModeSmokeTest:
                     low_resol_join_halves_angstrom=0.0,
                     emulate_relion_firstiter_cc=True,
                     relion_firstiter_ini_high_angstrom=8.0,
+                    use_per_half_mean_variance=False,
                 ),
             ),
         )
 
         assert len(reconstruction_tau) == 2
+        assert reconstruction_tau_is_1d == [True, True]
+        assert reconstruction_tau[0].shape == taper.shape
+        assert reconstruction_tau[1].shape == taper.shape
         np.testing.assert_array_equal(reconstruction_tau[0], untapered_tau[0])
         np.testing.assert_array_equal(reconstruction_tau[1], untapered_tau[1])
         assert reconstruction_tau[0].dtype == np.float64
@@ -12838,6 +12844,68 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(np.asarray(calls[1]["tau"]), np.asarray(tau_shells[1]))
         assert means[0].shape == (n_classes, VOLUME_SIZE)
         np.testing.assert_array_equal(np.asarray(means[0]), np.asarray(means[1]))
+
+    def test_k1_reconstruction_uses_per_half_1d_tau_shell_prior(self, monkeypatch):
+        """K=1 reconstruction should not round-trip tau2 through full volumes."""
+        from types import SimpleNamespace
+
+        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+
+        calls = []
+
+        def fake_reconstruct(*_args, **kwargs):
+            calls.append(kwargs)
+            return jnp.ones(VOLUME_SIZE, dtype=jnp.complex128)
+
+        monkeypatch.setattr(mean_helpers_module, "_reconstruct_volume_eager", fake_reconstruct)
+
+        n_shells = VOLUME_SHAPE[0] // 2 + 1
+        tau_full = [
+            jnp.full(VOLUME_SIZE, 11.0, dtype=jnp.float32),
+            jnp.full(VOLUME_SIZE, 12.0, dtype=jnp.float32),
+        ]
+        tau_shells = [
+            jnp.arange(n_shells, dtype=jnp.float32) + 101.0,
+            jnp.arange(n_shells, dtype=jnp.float32) + 201.0,
+        ]
+        means = [None, None]
+        mean_helpers_module._reconstruct_and_postprocess_means(
+            means,
+            Ft_y_0=jnp.ones(VOLUME_SIZE, dtype=jnp.complex64),
+            Ft_y_1=jnp.ones(VOLUME_SIZE, dtype=jnp.complex64),
+            Ft_ctf_0=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            Ft_ctf_1=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            Ft_y_combined=None,
+            Ft_ctf_combined=None,
+            mean_signal_variance=None,
+            mean_signal_variance_shells=None,
+            mean_signal_variance_per_half=tau_full,
+            n_classes=1,
+            k_class_enabled=False,
+            cs=8,
+            iteration=0,
+            grid_size=8,
+            cryo=SimpleNamespace(voxel_size=1.0),
+            volume_shape=VOLUME_SHAPE,
+            tau2_fudge=1.0,
+            padding_factor=1,
+            projection_padding_factor=1,
+            relion_minres_map=0,
+            particle_diameter_ang=None,
+            relion_firstiter_cc_this_iter=False,
+            relion_firstiter_ini_high_angstrom=None,
+            relion_width_mask_edge=5,
+            relion_fmask_edge=2,
+            mean_signal_variance_shells_per_half=tau_shells,
+        )
+
+        assert len(calls) == 2
+        assert all(call["tau_is_1d"] is True for call in calls)
+        assert all(call["tau"].dtype == jnp.float64 for call in calls)
+        np.testing.assert_array_equal(np.asarray(calls[0]["tau"]), np.asarray(tau_shells[0]))
+        np.testing.assert_array_equal(np.asarray(calls[1]["tau"]), np.asarray(tau_shells[1]))
+        assert means[0].shape == (VOLUME_SIZE,)
+        assert means[1].shape == (VOLUME_SIZE,)
 
     def test_k1_save_intermediates_reconstructs_unregularized_half_maps(
         self,
