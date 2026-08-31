@@ -38,6 +38,7 @@ PROFILED_ITERATION=$((CHECKPOINT_ITERATION + 1))
 NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
 CUDA_TOOLKIT=${CUDA_TOOLKIT:-/usr/local/cuda-13.1}
 RELION_CUDA_TOOLKIT=${RELION_CUDA_TOOLKIT:-/usr/local/cuda-12.6}
+CUSPARSE_LIBRARY=${CUSPARSE_LIBRARY:-${RELION_CUDA_TOOLKIT}/lib64/libcusparse.so.12}
 RELION_RUNTIME=${RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 MPI_ROOT=${MPI_ROOT:-/usr/local/openmpi/cuda-12.6/4.1.6/gcc}
 PROVENANCE=${ROOT}/provenance
@@ -54,6 +55,7 @@ test -x "${PIXI_PY}"
 test -x "${RELION_BINARY}"
 test -x "${NSYS}"
 test -x "${CUDA_TOOLKIT}/bin/nvcc"
+test -s "${CUSPARSE_LIBRARY}"
 test -s "${CHECKPOINT}"
 test -s "${DATA_STAR}"
 test -d "${DATA_DIR}"
@@ -97,6 +99,7 @@ CHECKPOINT_FILES=(
   "${PARTICLE_STACK}"
   "${RELION_BINARY}"
   "${RELION_BIND_BINARY_OVERRIDE}"
+  "${CUSPARSE_LIBRARY}"
   "${REPO_ROOT}/scripts/run_vdam_late_iteration_profile.sbatch"
   "${REPO_ROOT}/scripts/run_vdam_late_iteration_profile.py"
   "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb"
@@ -153,7 +156,7 @@ touch "${JAX_COMPILATION_CACHE_DIR}/SAFE_TO_DELETE"
 
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" - <<'PY'
+  env LD_PRELOAD="${CUSPARSE_LIBRARY}" "${PIXI_PY}" - <<'PY'
 import jax
 import recovar
 import recovar.cuda_backproject as cuda_backproject
@@ -231,6 +234,7 @@ vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
 RECOVAR_NSYS_BASE=${NSIGHT}/recovar_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
 RECOVAR_COMMAND=(
+  env "LD_PRELOAD=${CUSPARSE_LIBRARY}"
   "${PIXI_PY}" -m scripts.run_vdam_late_iteration_profile
   --checkpoint-optimiser "${CHECKPOINT}"
   --input-star "${DATA_STAR}"
