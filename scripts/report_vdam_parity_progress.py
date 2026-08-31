@@ -428,7 +428,14 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
     "default_enabled": False,
     "promotion_authorized": False,
 }
-ENGINEERING_SNAPSHOT_SHA256 = "b4695d4f29cde09f5c44e9c2559267f059ac596f1905c1c53ae4c770fcd20f9c"
+ENGINEERING_SNAPSHOT_SHA256 = "2a6893af6498715a5beeb7ac639b4048a0e8e750ca11b295b2637a0f179e47ed"
+RUNTIME_LANE_WORKBOARD_SHA256 = "442d01f47376731d8e6a985906f69180f6dd7a85d7324a46e88c596163a445dc"
+RUNTIME_LANE_IDS = [
+    "call_neutral_flat_row",
+    "stable_fine_window",
+    "batched_cub_sort_scan",
+    "xhalf_projection_cap",
+]
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -671,6 +678,17 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         _sha256_json(scorecard.get("engineering_snapshot")) == ENGINEERING_SNAPSHOT_SHA256,
         "current engineering snapshot changed without an evidence update",
     )
+    workboard = scorecard.get("runtime_lane_workboard")
+    _require(
+        isinstance(workboard, dict)
+        and workboard.get("role") == "diagnostic_performance"
+        and workboard.get("score_impact") == "none"
+        and workboard.get("frozen_scores_changed") is False
+        and workboard.get("production_default_changed") is False
+        and [row.get("id") for row in workboard.get("lanes", [])] == RUNTIME_LANE_IDS
+        and _sha256_json(workboard) == RUNTIME_LANE_WORKBOARD_SHA256,
+        "runtime lane workboard changed without an evidence update",
+    )
     accepted = [case["id"] for case in scorecard["cases"] if case["strict_result"] == "pass"]
     _require(accepted == ["vdam-gf44", "vdam-gf45"], "accepted v3 case set changed")
     secondary = scorecard.get("secondary_tracks")
@@ -771,6 +789,12 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     map_gate = active_gate["same_gpu_map_envelope"]
     particle_gate = active_gate["active_particle_envelope"]
     current_runtime = active_gate["runtime"]
+    workboard = scorecard["runtime_lane_workboard"]
+    runtime_lanes = {row["id"]: row for row in workboard["lanes"]}
+    flat_lane = runtime_lanes["call_neutral_flat_row"]
+    stable_lane = runtime_lanes["stable_fine_window"]
+    cub_lane = runtime_lanes["batched_cub_sort_scan"]
+    xhalf_lane = runtime_lanes["xhalf_projection_cap"]
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
@@ -796,11 +820,12 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{particle_gate['failures']}/{particle_gate['checkpoints']} checkpoints fail; "
         f"{particle_gate['final_active_unmatched']}/{particle_gate['final_active_particles']} active particles "
         "are unmatched at iteration 80. |",
-        "| Runtime | **INCONCLUSIVE** | The exclusive 80M x-half arm is 7.56% faster, but it missed the "
-        "predeclared science envelope and is not promoted. Frozen runtime remains 0/20. |",
-        "| Immediate work | **PRESERVE NUMERICAL TOPOLOGY** | Retain the faster 80M projection/scoring batch while "
-        "restoring 40M BPref accumulation boundaries; prototype call-neutral macro packing and stable physical "
-        "Fourier shapes from shared EM machinery. |",
+        "| Runtime | **INCONCLUSIVE** — 0/20 | No candidate has a qualified trajectory/runtime pair. Flat-row and "
+        "batched-CUB calls are exact at their downstream gates and materially faster only at call level; stable "
+        "windows remain forecast-only. |",
+        "| Immediate work | **WIRE FLAT ROW DEFAULT-OFF** | Include shared packing/projection cost in one live call, "
+        "then gate the same active outputs. Replay captured batched-CUB operands, integrate stable score/Wavg/BPref "
+        "shapes together, then run focused trajectory A/B gates. |",
         "",
         "## At a glance",
         "",
@@ -810,10 +835,43 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "Frozen; no recent diagnostic changes this score. |",
         f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** cases meet 1.10x; "
         f"observed {min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x | "
-        "Warm80 remains unqualified. The 80M x-half pair proves a 7.56% opportunity, but its map gate failed; "
-        "exact-local padding and repeated compilation remain the next call-neutral targets. |",
+        "Flat-row score-plus-posterior calls are 32.68--54.53% lower and batched CUB is 20.4--26.8% lower, but "
+        "full-stage, memory, and trajectory runtime remain unmeasured. |",
         "| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |",
         "| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |",
+        "",
+        "## Runtime workboard",
+        "",
+        "| Lane | State | Exactness | Performance readout | Next gate |",
+        "|---|---|---|---|---|",
+        f"| Flat-row scorer (`{'/'.join(flat_lane['jobs'])}`) | **QUALIFIED MICROBENCH; DEFAULT OFF** | Active raw, "
+        f"dense scores, posterior {flat_lane['exactness']['posterior_outputs_bitwise']}, poison tail, and calls "
+        f"bitwise | Combined call reduction at it20/40/60/80: "
+        f"{', '.join(f'{value:.2f}%' for value in flat_lane['combined_call_reduction_percent'])}; packing/projection "
+        "not timed | Default-off live call with packing/projection, then exact boundary; no trajectory yet. |",
+        f"| Stable fine window (`{'/'.join(stable_lane['jobs'])}`) | **EXACT PRIMITIVE; FORECAST ONLY** | Logical "
+        f"{stable_lane['logical_sizes']} under physical {stable_lane['physical_size']} bitwise; compile identities "
+        f"{stable_lane['compile_identities_control']}->{stable_lane['compile_identities_candidate']} | GF46 "
+        f"signatures {stable_lane['gf46_signature_forecast']['control']}->"
+        f"{stable_lane['gf46_signature_forecast']['candidate']}; forecast "
+        f"{stable_lane['gf46_net_wall_gain_forecast_percent'][0]:.1f}--"
+        f"{stable_lane['gf46_net_wall_gain_forecast_percent'][1]:.1f}% only | Integrate score/Wavg/BPref shapes "
+        "together; no trajectory yet. |",
+        f"| Batched CUB (`{cub_lane['diagnosis_job']}/{cub_lane['scratch_job']}/"
+        f"{cub_lane['scalar_repeat_job']}/{cub_lane['posterior_boundary_job']}`) | "
+        "**DOWNSTREAM EXACT; TRAJECTORY NEXT; DEFAULT OFF** | Sort, threshold index/value, support mask, and "
+        f"n-significant bitwise at all four shapes; raw scan is natively variable | "
+        f"{min(cub_lane['posterior_boundary']['time_lower_percent']):.1f}--"
+        f"{max(cub_lane['posterior_boundary']['time_lower_percent']):.1f}% lower; minimum "
+        f"{cub_lane['posterior_boundary']['minimum_speedup']:.4f}x | Captured operands, then "
+        "control/control/candidate trajectory A/B; no promotion yet. |",
+        f"| 80M x-half (`{xhalf_lane['performance_job']}/{xhalf_lane['operand_job']}`) | "
+        "**REJECTED / UNQUALIFIED** | iteration-1 topology is identical but 3/3 artifacts already differ; causal "
+        f"projection effect not proved | Prior same-H100 wall was {xhalf_lane['same_h100_wall_reduction_percent']:.2f}% "
+        "lower, but unusable for promotion | Revisit only with one-process replay from a byte-identical frozen state. |",
+        "",
+        "All four lanes are diagnostic, default-off/unwired, and have **no impact** on frozen correctness "
+        f"{strict['passed']}/{strict['denominator']} or runtime {runtime['passed']}/{runtime['denominator']}.",
         "",
         "### Gate progression",
         "",
@@ -831,28 +889,17 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"iteration {active_gate['original_profile_repeat']['stopped_after_iteration']} (invalid harness); corrected "
         f"job `{active_gate['corrected_profile_job']}` completed, with direct map/particle FAIL@4, but is cross-GPU "
         "diagnostic only. Frozen scores stay "
-        "2/20 correctness and 0/20 runtime. |",
-        "",
-        "### Typed warm80 audit evidence",
-        "",
-        "| Artifact | Path | SHA-256 |",
-        "|---|---|---|",
-    ]
-    for report_id, report in active_gate["reports"].items():
-        lines.append(
-            f"| `{report_id}` | `{active_gate['evidence_root']}/{report['path']}` | `{report['sha256']}` |"
-        )
-    analysis_job = active_gate["analysis_job"]
-    lines.extend(
-        [
-            f"| `slurm_log` | `{analysis_job['slurm_log']}` | `{analysis_job['slurm_log_sha256']}` |",
+        "2/20 correctness and 0/20 runtime. Evidence SHA-256: policy "
+        f"`{active_gate['reports']['typed_policy']['sha256']}`, runtime "
+        f"`{active_gate['reports']['runtime']['sha256']}`, map "
+        f"`{active_gate['reports']['same_gpu_map']['sha256']}`, particle "
+        f"`{active_gate['reports']['same_gpu_particle']['sha256']}`. |",
         "",
         "## Primary panels",
         "",
         "| Gate | Passed | Evaluated | Denominator | Role |",
         "|---|---:|---:|---:|---|",
-        ]
-    )
+    ]
     for panel in scorecard["panels"]:
         lines.append(
             f"| {panel['label']} | **{panel['passed']}** | {panel['evaluated']} | "
@@ -1051,9 +1098,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"{xhalf_batch['scored_external_median_wall_seconds']['control']:.3f} -> "
             f"{xhalf_batch['scored_external_median_wall_seconds']['candidate']:.3f} s "
             f"({xhalf_batch['median_wall_reduction_percent']:.2f}% lower); both pairs faster | Peak memory "
-            "unchanged, but terminal cross FSC missed the repeat floor by "
-            f"`{xhalf_batch['terminal_map_repeat_envelope']['fsc_floor_shortfall']:.3g}`. | "
-            "**RUNTIME PASS; SCIENCE FAIL; NOT PROMOTED** |",
+            "unchanged, but operand job 13265965 found iteration-1 trajectory differences before cap topology "
+            "differs; no causal x-half invariant. | **REJECTED / CAUSAL PROOF UNQUALIFIED** |",
             f"| literal pool-local buckets `{pool_layout['job_id']}` | logical padded rows -"
             f"{min(pool_layout['literal_pool_rows_reduction_percent']):.1f}% to -"
             f"{max(pool_layout['literal_pool_rows_reduction_percent']):.1f}% | Exact source chronology, but calls "
@@ -1065,10 +1111,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"maps {speed['candidate_control_map_passed']}/{speed['candidate_control_map_denominator']}. | "
             "**QUALIFIED CANDIDATE** |",
             "",
-            "The x-half experiment establishes a runtime opportunity, not a promotable default: its science gate "
-            "failed. The tail-mask microbenchmark does not target the dominant accepted production coarse kernel "
-            "and is superseded by the full paired gate. None of these diagnostics can change the frozen correctness "
-            "or runtime panels.",
+            "The x-half pair measured a runtime opportunity but failed the required causal invariant: all three "
+            "iteration-1 artifacts differ even though both caps predict identical iteration-1 topology. Commit "
+            "`732868abb` rejects the lane as unqualified; it does not attribute later projector differences to the "
+            "cap. None of these diagnostics can change the frozen correctness or runtime panels.",
             "",
             f"Palette evidence: `{palette['evidence_root']}/{palette['failure_report']}` "
             f"(SHA-256 `{palette['failure_report_sha256']}`); Slurm log `{palette['evidence_sha256']}`. "
@@ -1077,142 +1123,35 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             f"### Warm H100 profile: job `{engineering['warm_profile']['job_id']}`",
             "",
-            "| Profile slice | Time | Readout |",
-            "|---|---:|---|",
-            f"| iterations {engineering['warm_profile']['iteration_window']} | "
-            f"{engineering['warm_profile']['wall_span_seconds']:.2f} s wall / "
-            f"{engineering['warm_profile']['gpu_kernel_seconds']:.2f} s kernels | GPU kernels explain only "
-            f"part of wall time. Artifact: `{engineering['warm_profile']['evidence_root']}`. |",
-            f"| shared coarse projector | {engineering['warm_profile']['coarse_projector_seconds']:.3f} s | "
-            f"{engineering['warm_profile']['coarse_projector_gpu_percent']:.2f}% of GPU kernel time, but only a "
-            "bounded fraction of end-to-end wall; not the bulk gap. |",
-            f"| exact-local / pass 1 wall | {engineering['warm_profile']['local_exact_wall_seconds']:.2f} / "
-            f"{engineering['warm_profile']['pass1_seconds']:.2f} s | Globally padded rectangular scheduling is "
-            "the main topology target. |",
-            f"| XLA compile ranges | {engineering['warm_profile']['xla_compile_seconds']:.2f} s | Shape-policy "
-            "stability matters before arithmetic changes. |",
-            f"| dataset getitem / disk read | {engineering['warm_profile']['dataset_getitem_seconds']:.2f} / "
-            f"{engineering['warm_profile']['disk_read_seconds']:.2f} s | Input latency is material, but the exact "
-            "eager cache experiment regressed. |",
-            f"| fine fused / Wavg | {engineering['warm_profile']['fine_fused_seconds']:.3f} / "
-            f"{engineering['warm_profile']['weighted_average_seconds']:.3f} s | Already small; optimize only without "
-            "repeating projections. |",
+            f"Iterations {engineering['warm_profile']['iteration_window']}: "
+            f"{engineering['warm_profile']['wall_span_seconds']:.2f} s wall, "
+            f"{engineering['warm_profile']['gpu_kernel_seconds']:.2f} s kernels, "
+            f"{engineering['warm_profile']['coarse_projector_seconds']:.3f} s coarse projector, "
+            f"{engineering['warm_profile']['xla_compile_seconds']:.2f} s XLA compile, and "
+            f"{engineering['warm_profile']['dataset_getitem_seconds']:.2f} s dataset getitem. The profile points to "
+            "execution topology and shape churn; full artifact paths and hashes remain bound in the JSON ledger.",
             "",
-            f"### Production profiler toggle: job `{engineering['profile_toggle']['job_id']}`",
+            "### Archived speed gates",
             "",
-            "| Crossed pair | Profiler off | Profiler on | Readout |",
-            "|---|---:|---:|---|",
-            f"| pair 1 | {engineering['profile_toggle']['external_wall_seconds']['off'][0]:.3f} s | "
-            f"{engineering['profile_toggle']['external_wall_seconds']['on'][0]:.3f} s | on +"
-            f"{engineering['profile_toggle']['profile_on_penalty_percent_by_pair'][0]:.2f}% |",
-            f"| pair 2 | {engineering['profile_toggle']['external_wall_seconds']['off'][1]:.3f} s | "
-            f"{engineering['profile_toggle']['external_wall_seconds']['on'][1]:.3f} s | on +"
-            f"{engineering['profile_toggle']['profile_on_penalty_percent_by_pair'][1]:.2f}% |",
-            "",
-            f"All {engineering['profile_toggle']['particle_pose_translation_exact_iterations']}/"
-            f"{engineering['profile_toggle']['particle_pose_translation_exact_iterations']} pose/translation "
-            "checkpoints match across arms. Keep profiling unset in production. The late-arm input/pass-1 slowdown "
-            "confounds the exact magnitude, so the observed median ratio is diagnostic only. Evidence: "
-            f"`{engineering['profile_toggle']['evidence_root']}/{engineering['profile_toggle']['summary_report']}` "
-            f"(SHA-256 `{engineering['profile_toggle']['summary_sha256']}`).",
-            "",
-            f"### Bounded pass-to-pass raw cache: job `{engineering['between_pass_raw_cache']['microbench_job_id']}`",
-            "",
-            "| Iteration sample | Control slice | Cached slice | Change |",
-            "|---:|---:|---:|---:|",
-        ]
-    )
-    raw_cache = engineering["between_pass_raw_cache"]
-    for index, iteration in enumerate(raw_cache["iterations_sampled"]):
-        lines.append(
-            f"| {iteration} | {raw_cache['fetch_plus_preprocess_median_s']['control'][index]:.4f} s | "
-            f"{raw_cache['fetch_plus_preprocess_median_s']['candidate'][index]:.4f} s | "
-            f"-{raw_cache['slice_reduction_percent'][index]:.1f}% |"
-        )
-    lines.extend(
-        [
-            "",
-            f"All {raw_cache['exact_array_blocks']}/{raw_cache['exact_array_blocks']} raw, metadata, and masked/"
-            "unmasked CUDA-preprocess blocks are bitwise exact. The absolute ceiling is only about "
-            f"{raw_cache['estimated_80_iteration_ceiling_seconds']:.1f} s over 80 iterations, while the first clean "
-            f"full pair was {raw_cache['first_clean_paired_change_percent']:+.2f}% slower. **Default off; not "
-            f"promoted.** Evidence: `{raw_cache['evidence_root']}/{raw_cache['summary_report']}` (SHA-256 "
-            f"`{raw_cache['summary_sha256']}`).",
-            "",
-            "### Shared coarse-projection cache: jobs `13261042 / 13261159 / 13261300 / 13261339`",
-            "",
-            "The standalone shared CUDA primitive is bitwise exact against the current production scorer, "
-            "including main-plus-tail execution and five old-binary versus refactored-binary cases. The H100 "
-            f"batch sweep remains exact for `B={{{','.join(str(value) for value in projection_cache['tested_batch_sizes'])}}}`, "
-            f"but the fitted crossover is only about `B={projection_cache['fitted_crossover_batch']:.1f}`: caching "
-            "is slower below that point and reaches just "
-            f"`{projection_cache['batch_200_speedup']:.5f}x` at `B=200` "
-            f"(`{projection_cache['batch_200_control_seconds']:.6f} -> "
-            f"{projection_cache['batch_200_cached_seconds']:.6f} s`). GF46 uses one image batch per pass, so "
-            "there is no cross-batch rebuild to remove. Even crediting the full 1.13% pass-1 improvement gives "
-            f"a loose `{projection_cache['estimated_end_to_end_ceiling_percent']:.2f}%` end-to-end ceiling; the "
-            f"observed coarse-call saving is about `{projection_cache['observed_iteration_contribution_percent']:.2f}%` "
-            "of an iteration. The cache also retains about "
-            f"`{projection_cache['projection_cache_gib']:.2f}--{projection_cache['retained_memory_upper_gib']:.1f} GiB`.",
-            "",
-            f"Commit `{projection_cache['source_head'][:10]}` therefore retains only the standalone shared primitive, "
-            "binary comparator, focused tests, and benchmark harness on its isolated branch. It is unreachable "
-            "from production and was not integrated. Main report SHA-256: "
-            f"`{projection_cache['microbench_report_sha256']}`; binary report SHA-256: "
-            f"`{projection_cache['binary_report_sha256']}`.",
-            "",
-            f"### X-half projection-batch gate: job `{xhalf_batch['job_id']}`",
-            "",
-            "| Arm | Scored walls | Median | Peak GPU memory |",
-            "|---|---:|---:|---:|",
-            f"| 40M control | {', '.join(f'{value:.3f}' for value in xhalf_batch['scored_external_wall_seconds']['control'])} s | "
-            f"{xhalf_batch['scored_external_median_wall_seconds']['control']:.3f} s | "
-            f"{max(xhalf_batch['scored_peak_used_mib']['control'])} MiB |",
-            f"| 80M candidate | {', '.join(f'{value:.3f}' for value in xhalf_batch['scored_external_wall_seconds']['candidate'])} s | "
-            f"{xhalf_batch['scored_external_median_wall_seconds']['candidate']:.3f} s | "
-            f"{max(xhalf_batch['scored_peak_used_mib']['candidate'])} MiB |",
-            "",
-            f"Both crossed pairs favor 80M (`{xhalf_batch['paired_speedups'][0]:.5f}x`, "
-            f"`{xhalf_batch['paired_speedups'][1]:.5f}x`), for a median `{xhalf_batch['median_speedup']:.5f}x` "
-            "speedup. It nevertheless fails closed: terminal cross-map relative L2 is inside the declared 2x "
-            "repeat envelope, but cross FSC AUC is "
-            f"`{xhalf_batch['terminal_map_repeat_envelope']['cross_fsc_auc_min']:.10f}` versus repeat floor "
-            f"`{xhalf_batch['terminal_map_repeat_envelope']['repeat_fsc_auc_min']:.10f}`. Candidate-vs-RELION "
-            "FSC lies inside the two-control range, while candidate relative L2 is slightly above both controls. "
-            "The candidate is not promoted and no wider cap is authorized.",
-            "",
-            "The next design separates independent work from sensitive accumulation: keep the 80M outer "
-            "projection/scoring buckets, then split the physical BPref accumulation operands at the original "
-            "dynamic 40M boundaries. This preserves the old accumulation call sequence while retaining most of "
-            "the larger-batch opportunity.",
-            "",
-            f"Evidence: `{xhalf_batch['evidence_root']}/{xhalf_batch['summary_report']}` (SHA-256 "
-            f"`{xhalf_batch['summary_sha256']}`); Slurm log SHA-256 `{xhalf_batch['slurm_log_sha256']}`.",
-            "",
-            f"### Pool-preserving layout gate: job `{pool_layout['job_id']}`",
-            "",
-            "| Iteration | Current calls | Pool calls | Equal-run calls | Logical row reduction | Call-neutral macro-pack estimate |",
-            "|---:|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for index, iteration in enumerate(pool_layout["iterations"]):
-        lines.append(
-            f"| {iteration} | {pool_layout['current_outer_calls'][index]} | "
-            f"{pool_layout['literal_pool_calls'][index]} | {pool_layout['contiguous_equal_run_calls'][index]} | "
-            f"-{pool_layout['literal_pool_rows_reduction_percent'][index]:.2f}% | "
-            f"-{pool_layout['macro_packed_static_rows_reduction_percent'][index]:.2f}% |"
-        )
-    lines.extend(
-        [
-            "",
-            "The literal and equal-run planners preserve exact `(particle, local rotation, reconstruction group)` "
-            "chronology, but multiply outer launch/compile boundaries. They are rejected without a GPU pair because "
-            "earlier exact variants with fewer extra boundaries regressed 31% and 36%. The viable follow-up is a "
-            "single macro-packed flat-row buffer per existing outer call, using shared compact-pair planning and a "
-            "segmented posterior while restoring dense layout only for unchanged BPref accumulation.",
-            "",
-            f"Evidence: `{pool_layout['evidence_root']}/{pool_layout['layout_report']}` (SHA-256 "
-            f"`{pool_layout['layout_report_sha256']}`); Slurm log SHA-256 `{pool_layout['slurm_log_sha256']}`.",
+            "| Gate | Compact decision |",
+            "|---|---|",
+            f"| profiler `{engineering['profile_toggle']['job_id']}` | Keep unset; both crossed pairs favored off, "
+            f"but contention forbids a magnitude claim; {engineering['profile_toggle']['particle_pose_translation_exact_iterations']}/"
+            f"{engineering['profile_toggle']['particle_pose_translation_exact_iterations']} particle checkpoints exact. |",
+            f"| pass-to-pass raw cache `{engineering['between_pass_raw_cache']['microbench_job_id']}` | "
+            f"{engineering['between_pass_raw_cache']['exact_array_blocks']}/"
+            f"{engineering['between_pass_raw_cache']['exact_array_blocks']} blocks exact, but only "
+            f"~{engineering['between_pass_raw_cache']['estimated_80_iteration_ceiling_seconds']:.1f} s ceiling and "
+            f"the full pair was {engineering['between_pass_raw_cache']['first_clean_paired_change_percent']:+.2f}% slower; default off. |",
+            f"| shared coarse cache `{'/'.join(projection_cache['exact_jobs'])}/{projection_cache['batch_sweep_job_id']}` | "
+            f"Exact but only {projection_cache['batch_200_speedup']:.5f}x at batch 200 and <"
+            f"{projection_cache['estimated_end_to_end_ceiling_percent']:.2f}% end-to-end ceiling; not integrated. |",
+            f"| x-half `{xhalf_batch['job_id']}/13265965` | {xhalf_batch['median_wall_reduction_percent']:.2f}% lower "
+            "wall, but preboundary state was noninvariant; rejected/unqualified at `732868abb`. |",
+            f"| literal pool `{pool_layout['job_id']}` | Rows fell "
+            f"{min(pool_layout['literal_pool_rows_reduction_percent']):.1f}--"
+            f"{max(pool_layout['literal_pool_rows_reduction_percent']):.1f}%, but calls rose to "
+            f"{pool_layout['literal_pool_calls']}; rejected before GPU pair. |",
             "",
             "### Engineering decision ledger",
             "",
@@ -1267,24 +1206,23 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            "1. Keep the profiler unset. Prove that 80M outer projection/scoring operands are bitwise invariant, then "
-            "restore the original dynamic 40M physical-BPref accumulation boundaries and rerun the exclusive "
-            "same-H100 80-iteration science gate.",
-            "2. Do not run literal pool-per-call or equal-run trajectories. Build only a focused call-neutral "
-            "macro-packed flat scorer from the shared compact-pair machinery; require exact active outputs and a "
-            ">2% call-level gain before production wiring.",
-            "3. Do not integrate the exact shared coarse-projection cache: its batch-200 call-level gain is only "
-            "1.1%, GF46 cannot reuse it across batches, and its end-to-end ceiling is below 0.52%.",
-            "4. Finish the default-off stable physical Fourier-window implementation. Preserve the true logical "
-            "cutoff as the runtime loop bound, poison-test padded tails, and require exact active outputs plus a "
-            ">2% call-level gain before any trajectory.",
+            "1. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
+            "control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, "
+            "dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.",
+            "2. Advance batched CUB to actual captured posterior operands, then a control/control/candidate trajectory "
+            "A/B. Job 13267397 already preserves sort, threshold, support, and significant-count outputs bitwise and "
+            "reduces call time 20.4--26.8%; keep it default-off until both higher gates pass.",
+            "3. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
+            "as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact "
+            "boundary measurement before any trajectory.",
+            "4. Keep the 80M x-half cap rejected. Job 13265965 did not provide a causal invariant, so do not "
+            "implement the accumulation split without a one-process replay from byte-identical frozen incoming state.",
             "5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
             f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
             "the explicitly requested performance-first phase is active.",
-            "6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection "
-            "cache, shared coarse-projection cache, or nondefault dynamic tail mask without new evidence. After "
-            "speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data "
-            "promotion.",
+            "6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, shared coarse-projection "
+            "cache, literal pool-per-call layout, or dynamic tail mask without new evidence. After speed closes, "
+            "isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.",
             "",
             "## Evidence and reproducibility",
             "",

@@ -308,6 +308,61 @@ def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:
     assert next(row for row in loaded["panels"] if row["id"] == "k1_strict_correctness")["passed"] == 2
 
 
+def test_runtime_workboard_is_evidence_bound_and_non_scoring() -> None:
+    loaded = progress_mod.load_and_validate()
+    workboard = loaded["runtime_lane_workboard"]
+    lanes = {row["id"]: row for row in workboard["lanes"]}
+
+    assert workboard["frozen_scores_changed"] is False
+    assert workboard["production_default_changed"] is False
+    assert workboard["score_impact"] == "none"
+    assert list(lanes) == progress_mod.RUNTIME_LANE_IDS
+    assert lanes["call_neutral_flat_row"]["status"] == "qualified_microbenchmark_default_off"
+    assert lanes["call_neutral_flat_row"]["combined_call_reduction_percent"] == pytest.approx(
+        [32.87868950661776, 35.76924670326675, 54.525674298292294, 32.682870365453375]
+    )
+    assert lanes["call_neutral_flat_row"]["outer_calls_control"] == [7, 3, 4, 5]
+    assert lanes["call_neutral_flat_row"]["outer_calls_candidate"] == [7, 3, 4, 5]
+    assert lanes["stable_fine_window"]["forecast_only"] is True
+    assert lanes["stable_fine_window"]["trajectory_run"] is False
+    assert lanes["batched_cub_sort_scan"]["sort_bitwise"] is True
+    assert lanes["batched_cub_sort_scan"]["scalar_control_repeat_scan_mismatch_entries"] == 442353
+    assert lanes["batched_cub_sort_scan"]["posterior_boundary"]["support_mask_bitwise"] is True
+    assert lanes["batched_cub_sort_scan"]["posterior_boundary"]["minimum_speedup"] == pytest.approx(
+        1.2565006073036646
+    )
+    assert lanes["batched_cub_sort_scan"]["promotion_authorized"] is False
+    assert lanes["xhalf_projection_cap"]["preboundary_invariant_passed"] is False
+    assert lanes["xhalf_projection_cap"]["causal_projection_effect_established"] is False
+    assert lanes["xhalf_projection_cap"]["promotion_authorized"] is False
+    assert next(row for row in loaded["panels"] if row["id"] == "k1_strict_correctness")["passed"] == 2
+    assert next(row for row in loaded["panels"] if row["id"] == "runtime_comparable")["passed"] == 0
+
+
+def test_runtime_workboard_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    scorecard["runtime_lane_workboard"]["lanes"][0]["promotion_authorized"] = True
+    with pytest.raises(ValueError, match="runtime lane workboard changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_runtime_workboard_is_easy_to_scan() -> None:
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+
+    assert "## Runtime workboard" in rendered
+    assert "Flat-row scorer (`13266322/13266460`) | **QUALIFIED MICROBENCH; DEFAULT OFF**" in rendered
+    assert "32.88%, 35.77%, 54.53%, 32.68%" in rendered
+    assert "Stable fine window (`13264981/13265301`) | **EXACT PRIMITIVE; FORECAST ONLY**" in rendered
+    assert (
+        "Batched CUB (`13266477/13266811/13267179/13267397`) | "
+        "**DOWNSTREAM EXACT; TRAJECTORY NEXT; DEFAULT OFF**" in rendered
+    )
+    assert "20.4--26.8% lower; minimum 1.2565x" in rendered
+    assert "80M x-half (`13260950/13265965`) | **REJECTED / UNQUALIFIED**" in rendered
+    assert "iteration-1 topology is identical but 3/3 artifacts already differ" in rendered
+    assert "default-off/unwired" in rendered
+    assert "no impact" in rendered
+
+
 def test_dashboard_is_compact_and_exposes_shared_em_reuse() -> None:
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
     assert len(rendered.splitlines()) < 250
