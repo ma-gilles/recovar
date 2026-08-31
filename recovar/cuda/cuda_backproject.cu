@@ -9922,6 +9922,54 @@ relion_symmetry_read_data(
 }
 
 template <typename T>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_read_data_split(
+    const T* __restrict__ data_real,
+    const T* __restrict__ data_imag,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    const int64_t index =
+        (static_cast<int64_t>(z_index) * full_y + y_index) * x_half + x_index;
+    RelionSymmetryComplex<T> value = {data_real[index], data_imag[index]};
+    if (x_index != 0)
+        return value;
+
+    const int partner_z = full_z - 1 - z_index;
+    const int partner_y = full_y - 1 - y_index;
+    if (partner_z == z_index && partner_y == y_index)
+        return value;
+    const int64_t partner_index =
+        (static_cast<int64_t>(partner_z) * full_y + partner_y) * x_half;
+    value.real += data_real[partner_index];
+    value.imag -= data_imag[partner_index];
+    return value;
+}
+
+template <typename T, bool SPLIT_INPUT>
+static __device__ __forceinline__ RelionSymmetryComplex<T>
+relion_symmetry_read_data_layout(
+    const T* __restrict__ data,
+    const T* __restrict__ data_imag,
+    int z_index,
+    int y_index,
+    int x_index,
+    int full_z,
+    int full_y,
+    int x_half)
+{
+    if constexpr (SPLIT_INPUT)
+        return relion_symmetry_read_data_split(
+            data, data_imag, z_index, y_index, x_index, full_z, full_y, x_half);
+    return relion_symmetry_read_data(
+        data, z_index, y_index, x_index, full_z, full_y, x_half);
+}
+
+template <typename T>
 static __device__ __forceinline__ T relion_symmetry_read_weight(
     const T* __restrict__ weight,
     int z_index,
@@ -9945,12 +9993,14 @@ static __device__ __forceinline__ T relion_symmetry_read_weight(
     return value + weight[partner_index];
 }
 
-template <typename T>
+template <typename T, bool SPLIT_INPUT, bool RANGED_OUTPUT>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 relion_point_group_symmetrise_bpref_kernel(
     const T* __restrict__ data,
+    const T* __restrict__ data_imag,
     const T* __restrict__ weight,
     const T* __restrict__ right_operators,
+    const int64_t* __restrict__ range_start,
     T* __restrict__ data_out,
     T* __restrict__ weight_out,
     int full_z,
@@ -9958,12 +10008,22 @@ relion_point_group_symmetrise_bpref_kernel(
     int full_x,
     int support_radius,
     int operator_count,
+    int64_t output_count,
     int64_t voxel_count)
 {
-    const int64_t direct_index =
+    const int64_t output_index =
         static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (direct_index >= voxel_count)
+    if (output_index >= output_count)
         return;
+    int64_t direct_index = output_index;
+    if constexpr (RANGED_OUTPUT)
+        direct_index = range_start[0] + output_index;
+    if (direct_index < 0 || direct_index >= voxel_count) {
+        data_out[2 * output_index] = static_cast<T>(0);
+        data_out[2 * output_index + 1] = static_cast<T>(0);
+        weight_out[output_index] = static_cast<T>(0);
+        return;
+    }
 
     const int x_half = full_x / 2 + 1;
     const int x_index = static_cast<int>(direct_index % x_half);
@@ -9977,8 +10037,8 @@ relion_point_group_symmetrise_bpref_kernel(
 
     /* RELION initialises sum_data/sum_weight by copying the x=0-enforced
      * source.  Keep that identity contribution even outside rmax2. */
-    RelionSymmetryComplex<T> data_sum = relion_symmetry_read_data(
-        data, z_index, y_index, x_index, full_z, full_y, x_half);
+    RelionSymmetryComplex<T> data_sum = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+        data, data_imag, z_index, y_index, x_index, full_z, full_y, x_half);
     T weight_sum = relion_symmetry_read_weight(
         weight, z_index, y_index, x_index, full_z, full_y, x_half);
 
@@ -10020,22 +10080,22 @@ relion_point_group_symmetrise_bpref_kernel(
             const T fy = yp - static_cast<T>(y0 - full_y / 2);
             const T fz = zp - static_cast<T>(z0 - full_z / 2);
 
-            const RelionSymmetryComplex<T> d000 = relion_symmetry_read_data(
-                data, z0, y0, x0, full_z, full_y, x_half);
-            const RelionSymmetryComplex<T> d001 = relion_symmetry_read_data(
-                data, z0, y0, x1, full_z, full_y, x_half);
-            const RelionSymmetryComplex<T> d010 = relion_symmetry_read_data(
-                data, z0, y1, x0, full_z, full_y, x_half);
-            const RelionSymmetryComplex<T> d011 = relion_symmetry_read_data(
-                data, z0, y1, x1, full_z, full_y, x_half);
-            const RelionSymmetryComplex<T> d100 = relion_symmetry_read_data(
-                data, z1, y0, x0, full_z, full_y, x_half);
-            const RelionSymmetryComplex<T> d101 = relion_symmetry_read_data(
-                data, z1, y0, x1, full_z, full_y, x_half);
-            const RelionSymmetryComplex<T> d110 = relion_symmetry_read_data(
-                data, z1, y1, x0, full_z, full_y, x_half);
-            const RelionSymmetryComplex<T> d111 = relion_symmetry_read_data(
-                data, z1, y1, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d000 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y0, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d001 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y0, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d010 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y1, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d011 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z0, y1, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d100 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y0, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d101 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y0, x1, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d110 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y1, x0, full_z, full_y, x_half);
+            const RelionSymmetryComplex<T> d111 = relion_symmetry_read_data_layout<T, SPLIT_INPUT>(
+                data, data_imag, z1, y1, x1, full_z, full_y, x_half);
 
             const RelionSymmetryComplex<T> dx00 = relion_symmetry_lerp(fx, d000, d001);
             const RelionSymmetryComplex<T> dx01 = relion_symmetry_lerp(fx, d100, d101);
@@ -10075,9 +10135,9 @@ relion_point_group_symmetrise_bpref_kernel(
         }
     }
 
-    data_out[2 * direct_index] = data_sum.real;
-    data_out[2 * direct_index + 1] = data_sum.imag;
-    weight_out[direct_index] = weight_sum;
+    data_out[2 * output_index] = data_sum.real;
+    data_out[2 * output_index + 1] = data_sum.imag;
+    weight_out[output_index] = weight_sum;
 }
 
 template <typename T>
@@ -10097,11 +10157,13 @@ static cudaError_t launch_relion_point_group_symmetrise_bpref(
     const int64_t voxel_count =
         static_cast<int64_t>(full_z) * full_y * (full_x / 2 + 1);
     const int64_t block_count = (voxel_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    relion_point_group_symmetrise_bpref_kernel<T>
+    relion_point_group_symmetrise_bpref_kernel<T, false, false>
         <<<static_cast<unsigned int>(block_count), BLOCK_SIZE, 0, stream>>>(
             data,
+            nullptr,
             weight,
             right_operators,
+            nullptr,
             data_out,
             weight_out,
             full_z,
@@ -10109,6 +10171,46 @@ static cudaError_t launch_relion_point_group_symmetrise_bpref(
             full_x,
             support_radius,
             operator_count,
+            voxel_count,
+            voxel_count);
+    return cudaGetLastError();
+}
+
+template <typename T>
+static cudaError_t launch_relion_point_group_symmetrise_bpref_split_range(
+    cudaStream_t stream,
+    const T* data_real,
+    const T* data_imag,
+    const T* weight,
+    const T* right_operators,
+    const int64_t* range_start,
+    T* data_out,
+    T* weight_out,
+    int full_z,
+    int full_y,
+    int full_x,
+    int support_radius,
+    int operator_count,
+    int64_t output_count)
+{
+    const int64_t voxel_count =
+        static_cast<int64_t>(full_z) * full_y * (full_x / 2 + 1);
+    const int64_t block_count = (output_count + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    relion_point_group_symmetrise_bpref_kernel<T, true, true>
+        <<<static_cast<unsigned int>(block_count), BLOCK_SIZE, 0, stream>>>(
+            data_real,
+            data_imag,
+            weight,
+            right_operators,
+            range_start,
+            data_out,
+            weight_out,
+            full_z,
+            full_y,
+            full_x,
+            support_radius,
+            operator_count,
+            output_count,
             voxel_count);
     return cudaGetLastError();
 }
@@ -10209,6 +10311,107 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("full_y")
         .Attr<int64_t>("full_x")
         .Attr<int64_t>("support_radius")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionPointGroupSymmetriseBprefSplitRangeImpl(
+    cudaStream_t stream,
+    int64_t full_z,
+    int64_t full_y,
+    int64_t full_x,
+    int64_t support_radius,
+    ffi::AnyBuffer data_real,
+    ffi::AnyBuffer data_imag,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer right_operators,
+    ffi::AnyBuffer range_start,
+    ffi::Result<ffi::AnyBuffer> data_out,
+    ffi::Result<ffi::AnyBuffer> weight_out)
+{
+    const auto data_real_dims = data_real.dimensions();
+    const auto data_imag_dims = data_imag.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto operator_dims = right_operators.dimensions();
+    const auto range_start_dims = range_start.dimensions();
+    const auto data_out_dims = data_out->dimensions();
+    const auto weight_out_dims = weight_out->dimensions();
+    if (data_real_dims.size() != 1 || data_imag_dims.size() != 1 ||
+        weight_dims.size() != 1 ||
+        data_real_dims[0] != data_imag_dims[0] ||
+        data_real_dims[0] != weight_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: split inputs must be matching flat buffers");
+    if (data_out_dims.size() != 1 || weight_out_dims.size() != 1 ||
+        data_out_dims[0] <= 0 || data_out_dims[0] != weight_out_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: outputs must be matching nonempty flat ranges");
+    if (range_start_dims.size() != 1 || range_start_dims[0] != 1 ||
+        range_start.element_type() != ffi::DataType::S64)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: range_start must be one int64 value");
+    if (operator_dims.size() != 3 || operator_dims[0] < 1 ||
+        operator_dims[1] != 3 || operator_dims[2] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: operators must have shape (n,3,3)");
+    if (full_z <= 0 || full_y <= 0 || full_x <= 0 ||
+        full_z != full_y || full_z != full_x || (full_x % 2) == 0)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: full BPref dimensions must be equal positive odd values");
+    if (full_z > std::numeric_limits<int>::max() ||
+        operator_dims[0] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: dimensions exceed CUDA integer bounds");
+    const int64_t expected_voxels = full_z * full_y * (full_x / 2 + 1);
+    if (data_real_dims[0] != expected_voxels || data_out_dims[0] > expected_voxels)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: input or range size does not match full dimensions");
+    const int64_t maximum_supported_radius = full_x / 2 - 1;
+    if (support_radius < 0 || support_radius > maximum_supported_radius)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: support radius must leave one interpolation voxel");
+    if (data_real.element_type() != ffi::DataType::F32 ||
+        data_imag.element_type() != ffi::DataType::F32 ||
+        weight.element_type() != ffi::DataType::F32 ||
+        right_operators.element_type() != ffi::DataType::F32 ||
+        data_out->element_type() != ffi::DataType::C64 ||
+        weight_out->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionPointGroupSymmetriseBprefSplitRange: expected F32/F32/F32/F32/S64 inputs and C64/F32 outputs");
+
+    cudaError_t err = launch_relion_point_group_symmetrise_bpref_split_range<float>(
+        stream,
+        static_cast<const float*>(data_real.untyped_data()),
+        static_cast<const float*>(data_imag.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(right_operators.untyped_data()),
+        static_cast<const int64_t*>(range_start.untyped_data()),
+        static_cast<float*>(data_out->untyped_data()),
+        static_cast<float*>(weight_out->untyped_data()),
+        static_cast<int>(full_z),
+        static_cast<int>(full_y),
+        static_cast<int>(full_x),
+        static_cast<int>(support_radius),
+        static_cast<int>(operator_dims[0]),
+        static_cast<int64_t>(data_out_dims[0]));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPointGroupSymmetriseBprefSplitRange,
+    RelionPointGroupSymmetriseBprefSplitRangeImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("full_z")
+        .Attr<int64_t>("full_y")
+        .Attr<int64_t>("full_x")
+        .Attr<int64_t>("support_radius")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

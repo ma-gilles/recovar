@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -273,7 +274,7 @@ def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
         "_accumulate_relion_firstiter_bpref_fused_split",
         fake_accumulate_split,
     )
-    data, weight = sparse._replay_deferred_firstiter_bpref_batches(
+    data_real, data_imag, weight = sparse._replay_deferred_firstiter_bpref_batches(
         [first, second],
         jnp.zeros(1, dtype=jnp.float32),
         jnp.zeros(1, dtype=jnp.float32),
@@ -287,10 +288,8 @@ def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
         adaptive_fraction=0.999,
     )
 
-    np.testing.assert_array_equal(
-        np.asarray(data),
-        np.asarray([120 - 120j], dtype=np.complex64),
-    )
+    np.testing.assert_array_equal(np.asarray(data_real), np.asarray([120], dtype=np.float32))
+    np.testing.assert_array_equal(np.asarray(data_imag), np.asarray([-120], dtype=np.float32))
     np.testing.assert_array_equal(np.asarray(weight), np.asarray([120], dtype=np.float32))
     assert [call["particle_original_indices"].item() for call in calls] == [10, 20]
     assert len(replay_boundaries) == 2
@@ -313,6 +312,115 @@ def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
     for expected, actual in zip((first, second), calls, strict=True):
         for field in sparse.DeferredFirstiterBPrefBatch._fields:
             np.testing.assert_array_equal(actual[field], getattr(expected, field))
+
+
+def test_split_firstiter_bpref_normalization_is_donated_and_bitwise_exact():
+    assert (
+        sparse._normalize_split_relion_firstiter_bpref_accumulators._jit_info.donate_argnums
+        == (0, 1, 2)
+    )
+    component_pairs = np.asarray(
+        [
+            (0.0, 0.0),
+            (0.0, -0.0),
+            (-0.0, 0.0),
+            (-0.0, -0.0),
+            (0.0, 2.0),
+            (0.0, -2.0),
+            (-0.0, 2.0),
+            (-0.0, -2.0),
+            (2.0, 0.0),
+            (2.0, -0.0),
+            (-2.0, 0.0),
+            (-2.0, -0.0),
+            (1.25, -2.5),
+            (-(2**24), 3.0),
+        ],
+        dtype=np.float32,
+    )
+    data = np.empty(component_pairs.shape[0], dtype=np.complex64)
+    data.real = component_pairs[:, 0]
+    data.imag = component_pairs[:, 1]
+    weight = np.asarray([0.0, -0.0, 3.5, 2**24], dtype=np.float32)
+    weight = np.resize(weight, data.shape).astype(np.float32, copy=False)
+    fft_size = np.float32(640000.0)
+    expected_data = np.asarray(-jnp.asarray(data) / fft_size)
+    expected_weight = np.asarray(
+        jnp.asarray(weight) / np.float32(fft_size * fft_size),
+    )
+
+    real_out, imag_out, weight_out = (
+        sparse._normalize_split_relion_firstiter_bpref_accumulators(
+            jnp.asarray(data.real.copy()),
+            jnp.asarray(data.imag.copy()),
+            jnp.asarray(weight.copy()),
+            fft_size,
+            np.float32(fft_size * fft_size),
+        )
+    )
+    data_out = np.empty(data.shape, dtype=np.complex64)
+    data_out.real = np.asarray(real_out)
+    data_out.imag = np.asarray(imag_out)
+    np.testing.assert_array_equal(data_out.view(np.uint32), expected_data.view(np.uint32))
+    np.testing.assert_array_equal(
+        np.asarray(weight_out).view(np.uint32),
+        expected_weight.view(np.uint32),
+    )
+
+
+@pytest.mark.gpu
+def test_split_firstiter_bpref_normalization_aliases_all_gpu_inputs(gpu_device):
+    data = np.empty(8, dtype=np.complex64)
+    data.real = np.asarray([0.0, 0.0, -0.0, -0.0, 2.0, 2.0, -2.0, -2.0])
+    data.imag = np.asarray([0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0])
+    weight = np.asarray([0.0, -0.0, 1.0, -1.0, 3.5, 2**24, 0.25, 17.0], dtype=np.float32)
+    fft_size = np.float32(640000.0)
+    expected_data = np.asarray(
+        jax.device_get(-jax.device_put(data, gpu_device) / fft_size),
+    )
+    expected_weight = np.asarray(
+        jax.device_get(
+            jax.device_put(weight, gpu_device) / np.float32(fft_size * fft_size),
+        ),
+    )
+
+    real_input = jax.device_put(data.real.copy(), gpu_device)
+    imag_input = jax.device_put(data.imag.copy(), gpu_device)
+    weight_input = jax.device_put(weight.copy(), gpu_device)
+    input_pointers = {
+        real_input.unsafe_buffer_pointer(),
+        imag_input.unsafe_buffer_pointer(),
+        weight_input.unsafe_buffer_pointer(),
+    }
+    real_out, imag_out, weight_out = (
+        sparse._normalize_split_relion_firstiter_bpref_accumulators(
+            real_input,
+            imag_input,
+            weight_input,
+            fft_size,
+            np.float32(fft_size * fft_size),
+        )
+    )
+    jax.block_until_ready((real_out, imag_out, weight_out))
+    output_pointers = {
+        real_out.unsafe_buffer_pointer(),
+        imag_out.unsafe_buffer_pointer(),
+        weight_out.unsafe_buffer_pointer(),
+    }
+
+    assert len(input_pointers) == 3
+    assert output_pointers == input_pointers
+    data_out = np.empty(data.shape, dtype=np.complex64)
+    data_out.real = np.asarray(real_out)
+    data_out.imag = np.asarray(imag_out)
+    np.testing.assert_array_equal(
+        data_out.view(np.uint32),
+        expected_data.view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(weight_out).view(np.uint32),
+        expected_weight.view(np.uint32),
+    )
 
 
 def test_firstiter_fused_bpref_prefix_capture_uses_immutable_identity_and_global_ordinal(

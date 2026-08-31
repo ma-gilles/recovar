@@ -518,6 +518,9 @@ _TARGET_RELION_FIRSTITER_BPREF_FUSED_X_HALF = (
 _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF = (
     "cuda_relion_point_group_symmetrise_bpref"
 )
+_TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE = (
+    "cuda_relion_point_group_symmetrise_bpref_split_range"
+)
 _TARGET_RELION_PREPROCESS_REAL_F32 = "cuda_relion_preprocess_real_f32"
 _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_LANE = (
     "cuda_relion_preprocess_real_f32_native_lane"
@@ -597,6 +600,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF,
         "RelionPointGroupSymmetriseBpref",
+    ),
+    (
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE,
+        "RelionPointGroupSymmetriseBprefSplitRange",
     ),
     (_TARGET_RELION_PREPROCESS_REAL_F32, "RelionPreprocessRealF32"),
     (
@@ -1298,6 +1305,164 @@ def relion_point_group_symmetrise_bpref(
         data_volume,
         weight_volume,
         right_operators,
+        full_z=np.int64(volume_shape[0]),
+        full_y=np.int64(volume_shape[1]),
+        full_x=np.int64(volume_shape[2]),
+        support_radius=np.int64(support_radius),
+    )
+
+
+def relion_point_group_symmetrise_bpref_split_host(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+    *,
+    chunk_voxels: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Symmetrise split float32 BPref accumulators into bounded host chunks.
+
+    The first-iteration replay intentionally retains RELION's separate real,
+    imaginary, and weight accumulators so its atomic prefix stays byte-exact.
+    A full device-side complex interleave would add another complex64 volume
+    at box scale.  This routine instead reuses one bounded CUDA output range,
+    copies each completed range into host complex64/float32 arrays, and never
+    materialises a second full-volume device pair.
+    """
+
+    volume_shape = tuple(int(value) for value in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic 3-D grid, "
+            f"got {volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive grid, "
+            f"got {volume_shape}"
+        )
+    support_radius = int(support_radius)
+    maximum_supported_radius = volume_shape[0] // 2 - 1
+    if support_radius < 0 or support_radius > maximum_supported_radius:
+        raise ValueError(
+            "RELION point-group BPref support radius must leave its one-voxel "
+            f"interpolation margin: got {support_radius} for {volume_shape} "
+            f"(maximum {maximum_supported_radius})"
+        )
+
+    expected_size = int(volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1))
+    for label, value in (
+        ("real data", data_volume_real),
+        ("imaginary data", data_volume_imag),
+        ("weight", weight_volume),
+    ):
+        if value.ndim != 1 or value.shape != (expected_size,):
+            raise ValueError(
+                f"RELION split point-group {label} accumulator must be flat with shape "
+                f"{(expected_size,)}, got {value.shape}"
+            )
+        if value.dtype != jnp.dtype(jnp.float32):
+            raise TypeError(
+                f"RELION split point-group {label} accumulator must be float32, "
+                f"got {value.dtype}"
+            )
+    if right_operators.ndim != 3 or right_operators.shape[1:] != (3, 3):
+        raise ValueError(
+            "RELION point-group operators must have shape (n, 3, 3), "
+            f"got {right_operators.shape}"
+        )
+    if right_operators.shape[0] < 1:
+        raise ValueError("RELION point-group operators must include identity first")
+    if right_operators.dtype != jnp.dtype(jnp.float32):
+        raise TypeError(
+            "RELION split point-group operators must be float32, "
+            f"got {right_operators.dtype}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION point-group BPref symmetry requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION point-group BPref symmetry was requested but custom CUDA is disabled"
+        )
+
+    if chunk_voxels is None:
+        raw_chunk_voxels = os.environ.get(
+            "RECOVAR_RELION_BPREF_SYMMETRY_CHUNK_VOXELS",
+        )
+        chunk_voxels = 16 * 1024 * 1024 if raw_chunk_voxels is None else int(raw_chunk_voxels)
+    chunk_voxels = int(chunk_voxels)
+    if chunk_voxels <= 0:
+        raise ValueError(f"RELION BPref symmetry chunk_voxels must be positive, got {chunk_voxels}")
+    chunk_voxels = min(chunk_voxels, expected_size)
+
+    data_host = np.empty(expected_size, dtype=np.complex64)
+    weight_host = np.empty(expected_size, dtype=np.float32)
+    chunk_count = (expected_size + chunk_voxels - 1) // chunk_voxels
+    logger.info(
+        "RELION split BPref symmetry: voxels=%d chunk_voxels=%d chunks=%d host=%.2f GiB",
+        expected_size,
+        chunk_voxels,
+        chunk_count,
+        (data_host.nbytes + weight_host.nbytes) / float(1024**3),
+    )
+    for chunk_index, start in enumerate(range(0, expected_size, chunk_voxels)):
+        data_chunk, weight_chunk = _relion_point_group_symmetrise_bpref_split_range_static(
+            data_volume_real,
+            data_volume_imag,
+            weight_volume,
+            right_operators,
+            jnp.asarray([start], dtype=jnp.int64),
+            volume_shape,
+            support_radius,
+            chunk_voxels,
+        )
+        data_chunk_host, weight_chunk_host = jax.device_get((data_chunk, weight_chunk))
+        stop = min(start + chunk_voxels, expected_size)
+        valid_count = stop - start
+        np.copyto(data_host[start:stop], np.asarray(data_chunk_host)[:valid_count])
+        np.copyto(weight_host[start:stop], np.asarray(weight_chunk_host)[:valid_count])
+        del data_chunk, weight_chunk, data_chunk_host, weight_chunk_host
+        if chunk_index + 1 == chunk_count or (chunk_index + 1) % 16 == 0:
+            logger.info(
+                "RELION split BPref symmetry progress: chunk=%d/%d voxels=%d/%d",
+                chunk_index + 1,
+                chunk_count,
+                stop,
+                expected_size,
+            )
+    return data_host, weight_host
+
+
+@functools.partial(jax.jit, static_argnums=(5, 6, 7))
+def _relion_point_group_symmetrise_bpref_split_range_static(
+    data_volume_real: jax.Array,
+    data_volume_imag: jax.Array,
+    weight_volume: jax.Array,
+    right_operators: jax.Array,
+    range_start: jax.Array,
+    volume_shape: Tuple[int, int, int],
+    support_radius: int,
+    range_voxels: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Emit one bounded complex/weight range from full split inputs."""
+
+    _ensure_ffi()
+    output_types = (
+        jax.ShapeDtypeStruct((range_voxels,), jnp.complex64),
+        jax.ShapeDtypeStruct((range_voxels,), jnp.float32),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE,
+        output_types,
+        vmap_method="sequential",
+    )(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        right_operators,
+        range_start,
         full_z=np.int64(volume_shape[0]),
         full_y=np.int64(volume_shape[1]),
         full_x=np.int64(volume_shape[2]),

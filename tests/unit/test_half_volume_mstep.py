@@ -1030,6 +1030,66 @@ def test_relion_firstiter_bpref_split_wrapper_preserves_three_ffi_aliases(
     assert observed["attrs"]["weight_norm"] == np.float32(1.0)
 
 
+def test_relion_split_symmetry_range_has_bounded_outputs_and_no_aliases(monkeypatch):
+    observed = {}
+
+    def fake_ffi_call(target, result_types, **options):
+        observed["target"] = target
+        observed["result_types"] = result_types
+        observed["options"] = options
+
+        def call(*args, **attrs):
+            observed["args"] = args
+            observed["attrs"] = attrs
+            return (
+                jnp.zeros(result_types[0].shape, dtype=result_types[0].dtype),
+                jnp.zeros(result_types[1].shape, dtype=result_types[1].dtype),
+            )
+
+        return call
+
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+    volume_shape = (7, 7, 7)
+    volume_size = 7 * 7 * 4
+    range_voxels = 17
+    outputs = (
+        cuda_backproject._relion_point_group_symmetrise_bpref_split_range_static.__wrapped__(
+            jnp.zeros(volume_size, dtype=jnp.float32),
+            jnp.zeros(volume_size, dtype=jnp.float32),
+            jnp.zeros(volume_size, dtype=jnp.float32),
+            jnp.eye(3, dtype=jnp.float32)[None],
+            jnp.asarray([volume_size - 5], dtype=jnp.int64),
+            volume_shape,
+            2,
+            range_voxels,
+        )
+    )
+
+    assert (
+        observed["target"]
+        == cuda_backproject._TARGET_RELION_POINT_GROUP_SYMMETRISE_BPREF_SPLIT_RANGE
+    )
+    assert "input_output_aliases" not in observed["options"]
+    assert [result.shape for result in observed["result_types"]] == [
+        (range_voxels,),
+        (range_voxels,),
+    ]
+    assert [result.dtype for result in observed["result_types"]] == [
+        jnp.complex64,
+        jnp.float32,
+    ]
+    assert [value.shape for value in observed["args"][:3]] == [
+        (volume_size,),
+        (volume_size,),
+        (volume_size,),
+    ]
+    assert observed["args"][4].shape == (1,)
+    assert observed["attrs"]["support_radius"] == np.int64(2)
+    assert outputs[0].shape == (range_voxels,)
+    assert outputs[1].shape == (range_voxels,)
+
+
 @pytest.mark.gpu
 def test_relion_firstiter_bpref_exact_native_ffi_smoke(
     monkeypatch, custom_cuda_lib, gpu_device
@@ -1145,7 +1205,7 @@ def test_deferred_firstiter_bpref_replay_matches_eager_native_accumulators_bitwi
                     **common,
                 )
             )
-        deferred_data, deferred_weight = (
+        deferred_real, deferred_imag, deferred_weight = (
             sparse_pass2_bucketed._replay_deferred_firstiter_bpref_batches(
                 staged,
                 jnp.zeros(volume_size, dtype=jnp.float32),
@@ -1155,12 +1215,16 @@ def test_deferred_firstiter_bpref_replay_matches_eager_native_accumulators_bitwi
             )
         )
         cuda_backproject.jax.block_until_ready(
-            (eager_data, eager_weight, deferred_data, deferred_weight),
+            (eager_data, eager_weight, deferred_real, deferred_imag, deferred_weight),
         )
 
     np.testing.assert_array_equal(
-        np.asarray(deferred_data),
-        np.asarray(eager_data),
+        np.asarray(deferred_real),
+        np.asarray(eager_data).real,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(deferred_imag),
+        np.asarray(eager_data).imag,
     )
     np.testing.assert_array_equal(
         np.asarray(deferred_weight),

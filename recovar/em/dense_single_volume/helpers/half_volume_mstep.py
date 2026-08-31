@@ -281,6 +281,76 @@ def finalize_half_volume_bpref(
     )
 
 
+def finalize_split_relion_x_half_bpref(
+    Ft_y_real,
+    Ft_y_imag,
+    Ft_ctf,
+    recon_volume_shape,
+    *,
+    logger: logging.Logger,
+    label: str,
+    symmetry_label: str,
+    symmetry_operators=None,
+):
+    """Finalize a deferred RELION BPref while preserving split inputs.
+
+    This is the large-grid continuation of the exact split first-iteration
+    replay.  C1 supplies identity alone and therefore performs only RELION's
+    x=0 enforcement.  Every point group is emitted to bounded host ranges, so
+    no full complex data buffer or full finalized output pair is allocated on
+    the device.
+    """
+
+    canonical_label, right_operators = _validated_relion_right_operators(
+        symmetry_label,
+        symmetry_operators,
+    )
+    recon_volume_shape = tuple(int(value) for value in recon_volume_shape)
+    if len(recon_volume_shape) != 3 or len(set(recon_volume_shape)) != 1:
+        raise ValueError(
+            "RELION point-group BPref symmetry requires a cubic accumulator, "
+            f"got {recon_volume_shape}"
+        )
+    if any(value <= 0 or value % 2 == 0 for value in recon_volume_shape):
+        raise ValueError(
+            "RELION point-group BPref symmetry requires an odd positive accumulator grid, "
+            f"got {recon_volume_shape}"
+        )
+
+    data_real = jnp.asarray(Ft_y_real).reshape(-1)
+    data_imag = jnp.asarray(Ft_y_imag).reshape(-1)
+    weight = jnp.asarray(Ft_ctf).reshape(-1)
+    for field, value in (
+        ("real data", data_real),
+        ("imaginary data", data_imag),
+        ("weight", weight),
+    ):
+        if value.dtype != jnp.dtype(jnp.float32):
+            raise TypeError(
+                f"RELION split point-group {field} accumulator must be float32, got {value.dtype}"
+            )
+
+    support_radius = recon_volume_shape[0] // 2 - 1
+    logger.info(
+        "%s M-step: enforcing RELION x=0 and %s point-group symmetry from split "
+        "accumulators (operators=%d, support_radius=%d)",
+        label,
+        canonical_label,
+        right_operators.shape[0],
+        support_radius,
+    )
+    from recovar import cuda_backproject
+
+    return cuda_backproject.relion_point_group_symmetrise_bpref_split_host(
+        data_real,
+        data_imag,
+        weight,
+        jnp.asarray(right_operators, dtype=np.float32),
+        recon_volume_shape,
+        support_radius,
+    )
+
+
 def half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
     """Convert half-volume M-step accumulators back to the public full-volume contract."""
 

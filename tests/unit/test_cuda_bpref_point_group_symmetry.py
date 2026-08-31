@@ -103,6 +103,158 @@ def test_streamed_cuda_matches_relion_cpu_oracle(
     )
 
 
+@pytest.mark.parametrize("symmetry", ["C1", "C2", "I1"])
+def test_split_ranged_cuda_is_bitwise_equal_to_complex_input(symmetry):
+    _skip_if_unavailable()
+    from recovar.cuda_backproject import (
+        relion_point_group_symmetrise_bpref,
+        relion_point_group_symmetrise_bpref_split_host,
+    )
+    from recovar.em.symmetry import rotational_operators
+
+    rng = np.random.default_rng(20260831)
+    raw_data = (
+        rng.standard_normal(_HALF_SHAPE) + 1j * rng.standard_normal(_HALF_SHAPE)
+    ).astype(np.complex64)
+    raw_weight = rng.uniform(0.1, 2.0, size=_HALF_SHAPE).astype(np.float32)
+    operators = jnp.asarray(rotational_operators(symmetry, dtype=np.float32))
+
+    complex_data, complex_weight = relion_point_group_symmetrise_bpref(
+        jnp.asarray(raw_data.reshape(-1)),
+        jnp.asarray(raw_weight.reshape(-1)),
+        operators,
+        _VOLUME_SHAPE,
+        _R_MAX,
+    )
+    split_data, split_weight = relion_point_group_symmetrise_bpref_split_host(
+        jnp.asarray(raw_data.real.reshape(-1)),
+        jnp.asarray(raw_data.imag.reshape(-1)),
+        jnp.asarray(raw_weight.reshape(-1)),
+        operators,
+        _VOLUME_SHAPE,
+        _R_MAX,
+        chunk_voxels=37,
+    )
+
+    np.testing.assert_array_equal(
+        split_data.view(np.uint32),
+        np.asarray(complex_data).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        split_weight.view(np.uint32),
+        np.asarray(complex_weight).view(np.uint32),
+    )
+
+
+def test_split_ranged_c1_is_bitwise_equal_to_historical_host_x0_path():
+    _skip_if_unavailable()
+    from recovar.cuda_backproject import (
+        relion_point_group_symmetrise_bpref_split_host,
+    )
+    from recovar.em.dense_single_volume.local_backprojection import (
+        enforce_relion_half_volume_x0_hermitian_host,
+    )
+    from recovar.em.symmetry import rotational_operators
+
+    rng = np.random.default_rng(20260831)
+    raw_data = (
+        rng.standard_normal(_HALF_SHAPE) + 1j * rng.standard_normal(_HALF_SHAPE)
+    ).astype(np.complex64)
+    raw_weight = rng.uniform(0.1, 2.0, size=_HALF_SHAPE).astype(np.float32)
+    flat_data = raw_data.reshape(-1)
+    flat_weight = raw_weight.reshape(-1)
+    partner_x0 = np.ravel_multi_index((_PAD_SIZE - 1, _PAD_SIZE - 1, 0), _HALF_SHAPE)
+    self_x0 = np.ravel_multi_index((_PAD_SIZE // 2, _PAD_SIZE // 2, 0), _HALF_SHAPE)
+    flat_data.real[[0, partner_x0, self_x0, -1]] = np.asarray(
+        [-0.0, 0.0, -0.0, -0.0],
+        dtype=np.float32,
+    )
+    flat_data.imag[[0, partner_x0, self_x0, -1]] = np.asarray(
+        [0.0, -0.0, -0.0, 0.0],
+        dtype=np.float32,
+    )
+    flat_weight[[0, partner_x0, self_x0, -1]] = np.asarray(
+        [-0.0, 0.0, -0.0, -0.0],
+        dtype=np.float32,
+    )
+
+    expected_data = enforce_relion_half_volume_x0_hermitian_host(
+        flat_data,
+        _VOLUME_SHAPE,
+    )
+    expected_weight = enforce_relion_half_volume_x0_hermitian_host(
+        flat_weight,
+        _VOLUME_SHAPE,
+    )
+    chunk_voxels = 37
+    assert raw_data.size % chunk_voxels != 0
+    split_data, split_weight = relion_point_group_symmetrise_bpref_split_host(
+        jnp.asarray(flat_data.real),
+        jnp.asarray(flat_data.imag),
+        jnp.asarray(flat_weight),
+        jnp.asarray(rotational_operators("C1", dtype=np.float32)),
+        _VOLUME_SHAPE,
+        _R_MAX,
+        chunk_voxels=chunk_voxels,
+    )
+
+    np.testing.assert_array_equal(
+        split_data.view(np.uint32),
+        np.asarray(expected_data).view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        split_weight.view(np.uint32),
+        np.asarray(expected_weight).view(np.uint32),
+    )
+
+
+def test_split_range_zero_pads_only_past_the_final_voxel():
+    _skip_if_unavailable()
+    from recovar import cuda_backproject
+    from recovar.em.symmetry import rotational_operators
+
+    rng = np.random.default_rng(20260831)
+    raw_data = (
+        rng.standard_normal(_HALF_SHAPE) + 1j * rng.standard_normal(_HALF_SHAPE)
+    ).astype(np.complex64)
+    raw_weight = rng.uniform(0.1, 2.0, size=_HALF_SHAPE).astype(np.float32)
+    operators = jnp.asarray(rotational_operators("C1", dtype=np.float32))
+    expected_data, expected_weight = cuda_backproject.relion_point_group_symmetrise_bpref(
+        jnp.asarray(raw_data.reshape(-1)),
+        jnp.asarray(raw_weight.reshape(-1)),
+        operators,
+        _VOLUME_SHAPE,
+        _R_MAX,
+    )
+    range_size = 17
+    valid_count = 5
+    range_start = raw_data.size - valid_count
+    range_data, range_weight = (
+        cuda_backproject._relion_point_group_symmetrise_bpref_split_range_static(
+            jnp.asarray(raw_data.real.reshape(-1)),
+            jnp.asarray(raw_data.imag.reshape(-1)),
+            jnp.asarray(raw_weight.reshape(-1)),
+            operators,
+            jnp.asarray([range_start], dtype=jnp.int64),
+            _VOLUME_SHAPE,
+            _R_MAX,
+            range_size,
+        )
+    )
+    range_data = np.asarray(range_data)
+    range_weight = np.asarray(range_weight)
+    np.testing.assert_array_equal(
+        range_data[:valid_count].view(np.uint32),
+        np.asarray(expected_data)[range_start:].view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        range_weight[:valid_count].view(np.uint32),
+        np.asarray(expected_weight)[range_start:].view(np.uint32),
+    )
+    np.testing.assert_array_equal(range_data[valid_count:], np.zeros(12, dtype=np.complex64))
+    np.testing.assert_array_equal(range_weight[valid_count:], np.zeros(12, dtype=np.float32))
+
+
 def test_cuda_negative_x_weight_sum_and_radius_boundary():
     _skip_if_unavailable()
     from recovar.cuda_backproject import relion_point_group_symmetrise_bpref

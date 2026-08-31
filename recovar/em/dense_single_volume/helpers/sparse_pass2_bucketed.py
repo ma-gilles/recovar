@@ -74,6 +74,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     finalize_half_volume_bpref,
+    finalize_split_relion_x_half_bpref,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
@@ -1053,6 +1054,23 @@ def _maybe_dump_native_half_mstep(
         recon_volume_shape=np.asarray(recon_volume_shape, dtype=np.int32),
         stage=np.asarray(stage),
     )
+
+
+def _maybe_dump_split_native_half_mstep(
+    Ft_y_real,
+    Ft_y_imag,
+    Ft_ctf,
+    **dump_kwargs,
+):
+    """Materialise split data on host only when an explicit dump is active."""
+
+    if not os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR"):
+        return
+    data_host = np.empty(Ft_y_real.shape, dtype=np.complex64)
+    np.copyto(data_host.real, np.asarray(jax.device_get(Ft_y_real)))
+    np.copyto(data_host.imag, np.asarray(jax.device_get(Ft_y_imag)))
+    weight_host = np.asarray(jax.device_get(Ft_ctf))
+    _maybe_dump_native_half_mstep(data_host, weight_host, **dump_kwargs)
 
 
 def _maybe_dump_bpref_contribution_rows(
@@ -6203,7 +6221,7 @@ def _replay_deferred_firstiter_bpref_batches(
     max_r: float,
     adaptive_fraction: float,
 ):
-    """Replay staged groups in split layout, then interleave complex once."""
+    """Replay staged groups while retaining RELION's exact split layout."""
 
     for batch in batches:
         data_volume_real, data_volume_imag, weight_volume = (
@@ -6236,7 +6254,51 @@ def _replay_deferred_firstiter_bpref_batches(
         jax.block_until_ready(
             (data_volume_real, data_volume_imag, weight_volume),
         )
-    return jax.lax.complex(data_volume_real, data_volume_imag), weight_volume
+    return data_volume_real, data_volume_imag, weight_volume
+
+
+@partial(jax.jit, donate_argnums=(0, 1, 2))
+def _normalize_split_relion_firstiter_bpref_accumulators(
+    data_volume_real,
+    data_volume_imag,
+    weight_volume,
+    fft_size,
+    fft_size_squared,
+):
+    """Normalize and consume the three full-volume split accumulators."""
+
+    # Scalar division preserves the historical complex result for every
+    # nonzero component without the extra multiplies in an expanded complex
+    # quotient (which change float32 rounding).  Complex division has special
+    # signed-zero results because its zero imaginary divisor still enters the
+    # component products; repair exactly those raw-zero components below.
+    normalized_real = -data_volume_real / fft_size
+    normalized_imag = -data_volume_imag / fft_size
+    positive_zero = jnp.asarray(0.0, dtype=data_volume_real.dtype)
+    negative_zero = jnp.asarray(-0.0, dtype=data_volume_real.dtype)
+    real_zero_is_negative = jnp.logical_and(
+        jnp.logical_not(jnp.signbit(data_volume_real)),
+        jnp.logical_not(jnp.signbit(data_volume_imag)),
+    )
+    imag_zero_is_negative = jnp.logical_and(
+        jnp.logical_not(jnp.signbit(data_volume_imag)),
+        jnp.signbit(data_volume_real),
+    )
+    normalized_real = jnp.where(
+        data_volume_real == 0,
+        jnp.where(real_zero_is_negative, negative_zero, positive_zero),
+        normalized_real,
+    )
+    normalized_imag = jnp.where(
+        data_volume_imag == 0,
+        jnp.where(imag_zero_is_negative, negative_zero, positive_zero),
+        normalized_imag,
+    )
+    return (
+        normalized_real,
+        normalized_imag,
+        weight_volume / fft_size_squared,
+    )
 
 
 def _release_deferred_firstiter_projection_buffers(
@@ -12947,6 +13009,9 @@ def compute_pass2_stats_sparse_bucketed(
             deferred_firstiter_bpref_max_host_bytes / float(1024**3),
         )
 
+    deferred_bpref_data_real = None
+    deferred_bpref_data_imag = None
+
     # Output accumulators (volume_size matches what original returned: full N**3)
     if return_score_log_z_only:
         Ft_y_total = None
@@ -16497,23 +16562,27 @@ def compute_pass2_stats_sparse_bucketed(
                 "deferred firstiter BPref requires complex64 data and float32 weight accumulators"
             )
         replay_t0 = time.time()
-        Ft_y_total, Ft_ctf_total = _replay_deferred_firstiter_bpref_batches(
-            deferred_firstiter_bpref_batches,
-            jnp.zeros(recon_volume_size, dtype=jnp.float32),
-            jnp.zeros(recon_volume_size, dtype=jnp.float32),
-            jnp.zeros(recon_volume_size, dtype=jnp.float32),
-            centered_pixel_indices=centered_recon_indices,
-            fftw_pixel_indices=relion_x_half_recon_indices,
-            translation_angles=relion_score_translation_angles,
-            physical_image_shape=image_shape,
-            volume_shape=recon_volume_shape,
-            max_r=float(
-                (image_shape[0] if mstep_current_size is None else mstep_current_size)
-                // 2
-            ),
-            adaptive_fraction=float(adaptive_fraction),
+        deferred_bpref_data_real, deferred_bpref_data_imag, Ft_ctf_total = (
+            _replay_deferred_firstiter_bpref_batches(
+                deferred_firstiter_bpref_batches,
+                jnp.zeros(recon_volume_size, dtype=jnp.float32),
+                jnp.zeros(recon_volume_size, dtype=jnp.float32),
+                jnp.zeros(recon_volume_size, dtype=jnp.float32),
+                centered_pixel_indices=centered_recon_indices,
+                fftw_pixel_indices=relion_x_half_recon_indices,
+                translation_angles=relion_score_translation_angles,
+                physical_image_shape=image_shape,
+                volume_shape=recon_volume_shape,
+                max_r=float(
+                    (image_shape[0] if mstep_current_size is None else mstep_current_size)
+                    // 2
+                ),
+                adaptive_fraction=float(adaptive_fraction),
+            )
         )
-        jax.block_until_ready((Ft_y_total, Ft_ctf_total))
+        jax.block_until_ready(
+            (deferred_bpref_data_real, deferred_bpref_data_imag, Ft_ctf_total)
+        )
         logger.info(
             "Sparse pass-2 deferred firstiter BPref replay complete: "
             "groups=%d particles=%d wall=%.1fs",
@@ -16544,29 +16613,66 @@ def compute_pass2_stats_sparse_bucketed(
         Ft_y_total = jnp.zeros(full_volume_size, dtype=recon_y_accum_dtype)
         Ft_ctf_total = jnp.zeros(full_volume_size, dtype=recon_ctf_accum_dtype)
     elif use_half_volume_mstep:
+        deferred_split_bpref = bool(deferred_firstiter_bpref)
         if relion_firstiter_fused_bpref:
             # Preserve the native atomic prefix across the entire half, then
             # convert once to RECOVAR's public FFT normalization and CTF sign.
             fft_size = np.float32(np.prod(image_shape))
-            Ft_y_total = -Ft_y_total / fft_size
-            Ft_ctf_total = Ft_ctf_total / np.float32(fft_size * fft_size)
-        _maybe_dump_native_half_mstep(
-            Ft_y_total,
-            Ft_ctf_total,
+            if deferred_split_bpref:
+                (
+                    deferred_bpref_data_real,
+                    deferred_bpref_data_imag,
+                    Ft_ctf_total,
+                ) = _normalize_split_relion_firstiter_bpref_accumulators(
+                    deferred_bpref_data_real,
+                    deferred_bpref_data_imag,
+                    Ft_ctf_total,
+                    fft_size,
+                    np.float32(fft_size * fft_size),
+                )
+            else:
+                Ft_y_total = -Ft_y_total / fft_size
+                Ft_ctf_total = Ft_ctf_total / np.float32(fft_size * fft_size)
+        dump_kwargs = dict(
             current_size=current_size,
             n_images=n_images,
             recon_volume_shape=recon_volume_shape,
             stage="pre_x0",
         )
-        Ft_y_total, Ft_ctf_total = finalize_half_volume_bpref(
-            Ft_y_total,
-            Ft_ctf_total,
-            recon_volume_shape,
-            logger=logger,
-            label="Sparse pass-2",
-            symmetry_label=symmetry_label,
-            relion_x_half=use_relion_x_half_mstep,
-        )
+        if deferred_split_bpref:
+            _maybe_dump_split_native_half_mstep(
+                deferred_bpref_data_real,
+                deferred_bpref_data_imag,
+                Ft_ctf_total,
+                **dump_kwargs,
+            )
+            Ft_y_total, Ft_ctf_total = finalize_split_relion_x_half_bpref(
+                deferred_bpref_data_real,
+                deferred_bpref_data_imag,
+                Ft_ctf_total,
+                recon_volume_shape,
+                logger=logger,
+                label="Sparse pass-2",
+                symmetry_label=symmetry_label,
+            )
+            deferred_bpref_data_real = None
+            deferred_bpref_data_imag = None
+            gc.collect()
+        else:
+            _maybe_dump_native_half_mstep(
+                Ft_y_total,
+                Ft_ctf_total,
+                **dump_kwargs,
+            )
+            Ft_y_total, Ft_ctf_total = finalize_half_volume_bpref(
+                Ft_y_total,
+                Ft_ctf_total,
+                recon_volume_shape,
+                logger=logger,
+                label="Sparse pass-2",
+                symmetry_label=symmetry_label,
+                relion_x_half=use_relion_x_half_mstep,
+            )
         _maybe_dump_native_half_mstep(
             Ft_y_total,
             Ft_ctf_total,

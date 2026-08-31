@@ -1109,18 +1109,29 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
         assert kwargs["max_r"] == expected_mstep_max_r
         events.append("replay")
         return (
-            jnp.full(
-                data_volume_real.shape,
-                np.complex64(64.0 + 0.0j),
-                dtype=jnp.complex64,
-            ),
+            jnp.full_like(data_volume_real, np.float32(64.0)),
+            jnp.zeros_like(data_volume_imag),
             jnp.full_like(weight_volume, np.float32(4096.0)),
         )
 
-    def record_finalize(data_volume, weight_volume, _volume_shape, **kwargs):
-        assert kwargs["relion_x_half"] is True
+    def record_finalize(
+        data_volume_real,
+        data_volume_imag,
+        weight_volume,
+        _volume_shape,
+        **kwargs,
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(data_volume_real),
+            np.full(data_volume_real.shape, -1.0, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            np.asarray(data_volume_imag),
+            np.zeros(data_volume_imag.shape, dtype=np.float32),
+        )
+        assert kwargs["symmetry_label"] == "C1"
         events.append("finalize")
-        return data_volume, weight_volume
+        return jax.lax.complex(data_volume_real, data_volume_imag), weight_volume
 
     def record_public_layout(data_volume, weight_volume, _volume_shape):
         events.append("layout")
@@ -1148,7 +1159,7 @@ def test_sparse_pass2_deferred_firstiter_bpref_runs_full_driver_lifecycle(
     )
     monkeypatch.setattr(
         bucketed_mod,
-        "finalize_half_volume_bpref",
+        "finalize_split_relion_x_half_bpref",
         record_finalize,
     )
     monkeypatch.setattr(
