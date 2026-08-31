@@ -147,7 +147,7 @@ export TMPDIR=${RUNTIME}/tmp
 export PIXI_HOME=${RUNTIME}/pixi_home
 export RATTLER_CACHE_DIR=${RUNTIME}/rattler_cache
 export PATH=${CUDA_TOOLKIT}/bin:${PATH}
-export LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${RELION_CUDA_TOOLKIT}/lib64:${CUDA_TOOLKIT}/lib64
+export LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${RELION_CUDA_TOOLKIT}/lib64:${RELION_CUDA_TOOLKIT}/targets/x86_64-linux/lib:${CUDA_TOOLKIT}/lib64:${CUDA_TOOLKIT}/targets/x86_64-linux/lib
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 touch "${JAX_COMPILATION_CACHE_DIR}/SAFE_TO_DELETE"
 
