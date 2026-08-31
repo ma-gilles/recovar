@@ -1,12 +1,14 @@
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts.run_vdam_late_iteration_profile import (
     _process_resource_delta,
     _profile_metadata,
+    _recovar_argv,
 )
 from scripts.summarize_vdam_nsys_sqlite import summarize
 
@@ -130,6 +132,34 @@ def test_late_profile_resource_delta_reports_io_and_cpu_counters():
     assert delta["user_cpu_s"] == pytest.approx(0.5)
     assert delta["input_blocks"] == 10
     assert delta["proc_io"] == {"read_bytes": 100, "syscr": 20}
+
+
+def test_late_profile_only_passes_nondefault_candidate_options(tmp_path):
+    args = SimpleNamespace(
+        checkpoint_iteration=180,
+        input_star=tmp_path / "particles.star",
+        nr_iter=200,
+        random_seed=29,
+        image_batch_size=500,
+        data_dir=tmp_path,
+        checkpoint_optimiser=tmp_path / "run_it180_optimiser.star",
+        exact_local_bucket_radix=4,
+        exact_local_physical_order_chunk_size=0,
+    )
+
+    control = _recovar_argv(args=args, output_prefix=tmp_path / "control" / "run")
+    assert "--exact-local-bucket-radix" not in control
+    assert "--exact-local-physical-order-chunk-size" not in control
+
+    args.exact_local_bucket_radix = 2
+    args.exact_local_physical_order_chunk_size = 220
+    candidate = _recovar_argv(args=args, output_prefix=tmp_path / "candidate" / "run")
+    assert candidate[-4:] == [
+        "--exact-local-bucket-radix",
+        "2",
+        "--exact-local-physical-order-chunk-size",
+        "220",
+    ]
 
 
 def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():

@@ -118,7 +118,13 @@ def _recovar_argv(
         "--diagnostic_stop_after_iteration",
         str(stop_iteration),
     ]
-    command.extend(("--exact_local_bucket_radix", str(args.exact_local_bucket_radix)))
+    # The frozen pre-candidate control does not expose these knobs.  Omit its
+    # qualified defaults, and pass only non-default candidate values once the
+    # integrated source provides the corresponding CLI options.
+    if int(args.exact_local_bucket_radix) != 4:
+        command.extend(
+            ("--exact-local-bucket-radix", str(args.exact_local_bucket_radix))
+        )
     if int(args.exact_local_physical_order_chunk_size) > 0:
         command.extend(
             (
