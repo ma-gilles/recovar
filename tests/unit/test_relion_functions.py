@@ -365,6 +365,103 @@ def test_post_process_large_grid_guard_avoids_complex128_padded_volume(monkeypat
         clear_cache()
 
 
+def test_post_process_large_grid_guard_uses_reconstruction_grid_for_compact_accumulator(
+    tmp_path,
+    monkeypatch,
+):
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "1000")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_WIENER_BOUNDARY_DUMP_DIR", str(tmp_path))
+    monkeypatch.setattr(rf, "_RELION_WIENER_BOUNDARY_DUMP_CALL", 0)
+
+    volume_shape = (8, 8, 8)
+    accumulator_shape = (5, 5, 5)
+    half_shape = (5, 5, 3)
+    ft_ctf = np.ones(half_shape, dtype=np.float32)
+    f_ty = np.zeros(half_shape, dtype=np.complex64)
+    f_ty[2, 2, 0] = 1.0 + 0.25j
+    tau = np.ones(int(np.prod(volume_shape)), dtype=np.float64)
+
+    out = rf.post_process_from_filter_v2(
+        jnp.asarray(ft_ctf),
+        jnp.asarray(f_ty),
+        volume_shape,
+        2,
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        current_size=2,
+        accumulator_volume_shape=accumulator_shape,
+        preserve_output_precision=True,
+    )
+
+    # The compact accumulator has only 125 voxels, but the actual inverse FFT
+    # is 16^3=4096 voxels and must activate the large-grid precision guard.
+    assert np.asarray(out).dtype == np.complex64
+    assert np.all(np.isfinite(np.asarray(out)))
+    with np.load(tmp_path / "recovar_wiener_boundary_0000.npz") as boundary:
+        # Compact Wiener arithmetic remains unchanged; only the operand handed
+        # to the large padded FFT is narrowed.
+        assert boundary["regularized_filter"].dtype == np.float64
+        assert boundary["divided_volume"].dtype == np.complex128
+    if callable(clear_cache):
+        clear_cache()
+
+
+def test_post_process_small_grid_auto_guard_matches_disabled_bitwise(monkeypatch):
+    clear_cache = getattr(rf.post_process_from_filter_v2, "clear_cache", None)
+    volume_shape = (6, 6, 6)
+    n_voxels = int(np.prod(volume_shape))
+    rng = np.random.default_rng(9382)
+    ft_ctf = rng.uniform(0.5, 1.5, n_voxels).astype(np.float32)
+    f_ty = (rng.standard_normal(n_voxels) + 1j * rng.standard_normal(n_voxels)).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, n_voxels).astype(np.float64)
+    common = dict(
+        tau=jnp.asarray(tau),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=False,
+        current_size=4,
+        preserve_output_precision=True,
+    )
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "never")
+    if callable(clear_cache):
+        clear_cache()
+    disabled = np.asarray(
+        rf.post_process_from_filter_v2(
+            jnp.asarray(ft_ctf),
+            jnp.asarray(f_ty),
+            volume_shape,
+            1,
+            **common,
+        )
+    )
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "1000")
+    if callable(clear_cache):
+        clear_cache()
+    automatic = np.asarray(
+        rf.post_process_from_filter_v2(
+            jnp.asarray(ft_ctf),
+            jnp.asarray(f_ty),
+            volume_shape,
+            1,
+            **common,
+        )
+    )
+
+    assert disabled.dtype == np.complex128
+    np.testing.assert_array_equal(automatic, disabled)
+    if callable(clear_cache):
+        clear_cache()
+
+
 def test_zero_tau_fallback_respects_relion_filter_normalization():
     shape = (4, 4, 4)
     filt = jnp.ones(np.prod(shape), dtype=jnp.float32)

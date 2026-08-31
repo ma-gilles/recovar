@@ -187,8 +187,8 @@ def _get_idft3_np(img, norm=fourier_transform_utils.DEFAULT_FFT_NORM, axes=(-3, 
     return img
 
 
-def _large_grid_postprocess_single_precision_enabled(padded_voxels):
-    """Return whether large RELION postprocess grids should avoid complex128.
+def _large_grid_postprocess_single_precision_enabled(grid_voxels):
+    """Return whether a large RELION postprocess grid should avoid complex128.
 
     RELION's GPU reconstruction path is single precision.  RECOVAR globally
     enables JAX x64, which can otherwise promote a large padded reconstruction
@@ -213,7 +213,7 @@ def _large_grid_postprocess_single_precision_enabled(padded_voxels):
             _RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS,
         )
     )
-    return int(padded_voxels) >= threshold
+    return int(grid_voxels) >= threshold
 
 
 def _pad_volume_for_projection_host(
@@ -1241,8 +1241,18 @@ def post_process_from_filter_v2(
         if accumulator_volume_shape is None
         else tuple(int(s) for s in accumulator_volume_shape)
     )
-    use_large_grid_single_precision = _large_grid_postprocess_single_precision_enabled(
+    reconstruction_volume_shape = _relion_reconstruction_padded_shape(
+        og_volume_shape,
+        volume_upsampling_factor,
+    )
+    use_large_accumulator_single_precision = _large_grid_postprocess_single_precision_enabled(
         int(np.prod(upsampled_volume_shape))
+    )
+    use_large_reconstruction_single_precision = _large_grid_postprocess_single_precision_enabled(
+        int(np.prod(reconstruction_volume_shape))
+    )
+    use_large_postprocess_single_precision = (
+        use_large_accumulator_single_precision or use_large_reconstruction_single_precision
     )
     if input_half_volume is None:
         input_half_volume = _infer_half_volume_layout(Ft_ctf, upsampled_volume_shape)
@@ -1260,7 +1270,7 @@ def post_process_from_filter_v2(
         packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
-        if use_large_grid_single_precision:
+        if use_large_accumulator_single_precision:
             Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
             F_ty_flat = F_ty_flat.astype(jnp.complex64)
         if current_size_limited:
@@ -1278,7 +1288,7 @@ def post_process_from_filter_v2(
     else:
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, upsampled_volume_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, upsampled_volume_shape)
-        if use_large_grid_single_precision:
+        if use_large_accumulator_single_precision:
             Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
             F_ty_flat = F_ty_flat.astype(jnp.complex64)
         if current_size_limited:
@@ -1292,7 +1302,7 @@ def post_process_from_filter_v2(
         valid_indices = valid_mask.reshape(-1).astype(Ft_ctf_flat.real.dtype)
 
     tau_for_filter = tau
-    if use_large_grid_single_precision and tau is not None:
+    if use_large_accumulator_single_precision and tau is not None:
         tau_for_filter = jnp.asarray(tau, dtype=jnp.float32)
 
     Ft_ctf2 = adjust_regularization_relion_style(
@@ -1316,7 +1326,6 @@ def post_process_from_filter_v2(
     # first windows that Fourier grid to the even padoridim grid before
     # inverse FFT.  Preserve that convention here; directly inverse-FFTing
     # the odd accumulator introduces a common map-origin shift.
-    reconstruction_volume_shape = _relion_reconstruction_padded_shape(og_volume_shape, volume_upsampling_factor)
     _maybe_dump_relion_wiener_boundary(
         Ft_ctf_input=Ft_ctf_flat,
         F_ty_input=F_ty_flat,
@@ -1333,6 +1342,13 @@ def post_process_from_filter_v2(
         minres_map=minres_map,
         tau_is_1d=tau_is_1d,
     )
+    if use_large_postprocess_single_precision:
+        # Preserve the compact accumulator's Wiener arithmetic, then cast at
+        # the boundary where it is scattered onto the much larger inverse-FFT
+        # grid.  A float64 tau must not promote a box-scale padded FFT to a
+        # complex128 allocation merely because the current-size accumulator
+        # itself is small.
+        vol = vol.astype(jnp.complex64)
 
     # iDFT → crop to original size
     if input_half_volume:
@@ -1376,7 +1392,7 @@ def post_process_from_filter_v2(
     if volume_mask is not None:
         vol = vol * volume_mask
 
-    if use_large_grid_single_precision:
+    if use_large_postprocess_single_precision:
         vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
 
     if grid_correct:
@@ -1384,7 +1400,7 @@ def post_process_from_filter_v2(
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
         vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], gc_pf / kernel_width, order=order)
-        if use_large_grid_single_precision:
+        if use_large_postprocess_single_precision:
             vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
 
     if return_real_space:
