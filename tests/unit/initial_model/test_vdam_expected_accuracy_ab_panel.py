@@ -90,6 +90,7 @@ def test_warm_nsys_pair_reuses_one_cache_and_profiles_only_repeat_two() -> None:
     text = WARM_NSYS_SCRIPT.read_text()
 
     assert 'for repeat in 1 2' in text
+    assert "VDAM_NSYS_DURATION_S=${VDAM_NSYS_DURATION_S:-600}" in text
     assert 'shared_cache=${OUTPUT_ROOT}_jax_cache' in text
     assert 'touch "${OUTPUT_ROOT}/SAFE_TO_DELETE" "${shared_cache}/SAFE_TO_DELETE"' in text
     assert 'if [[ "${repeat}" == 2 ]]' in text

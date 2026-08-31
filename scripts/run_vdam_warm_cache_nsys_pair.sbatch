@@ -33,7 +33,10 @@ TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}
 TARGET_RELION_PERTURBATION_SOURCE=${TARGET_RELION_PERTURBATION_SOURCE:-}
 VDAM_NSYS_BIN=${VDAM_NSYS_BIN:-/opt/nvidia/nsight-systems/2025.3.2/target-linux-x64/nsys}
 VDAM_NSYS_DELAY_S=${VDAM_NSYS_DELAY_S:-120}
-VDAM_NSYS_DURATION_S=${VDAM_NSYS_DURATION_S:-120}
+# The target exits before this ceiling in normal runs.  A 120-second trace can
+# terminate an 80-iteration target before its required final checkpoint, so the
+# warm-trajectory wrapper uses the already-qualified full-run window.
+VDAM_NSYS_DURATION_S=${VDAM_NSYS_DURATION_S:-600}
 
 test ! -e "${OUTPUT_ROOT}"
 test -x "${PIXI_PY}"
