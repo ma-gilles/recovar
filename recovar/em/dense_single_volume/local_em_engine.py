@@ -141,6 +141,7 @@ from recovar.em.dense_single_volume.local_layout import (
     LocalHypothesisLayout,
     _exact_bucket_rotation_size,
     _exact_local_large_bucket_quantum,
+    _resolve_exact_local_bucket_radix,
     bucket_local_hypothesis_layout,
 )
 from recovar.em.dense_single_volume.local_score_pass import (
@@ -2949,6 +2950,7 @@ def _exact_local_planned_hypotheses_floor(
     *,
     image_batch_size: int,
     rotation_block_size: int,
+    exact_local_bucket_radix: int | None = None,
 ) -> int:
     """Minimum row cap needed to honor the memory planner's image batch."""
 
@@ -2962,6 +2964,7 @@ def _exact_local_planned_hypotheses_floor(
         max_rotation_count,
         rotation_block_size,
         large_bucket_quantum=large_bucket_quantum,
+        exact_local_bucket_radix=exact_local_bucket_radix,
     )
     return int(image_batch_size * max(1, bucket_rotation_count))
 
@@ -2975,6 +2978,7 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     local_layout: LocalHypothesisLayout,
     image_batch_size: int,
     rotation_block_size: int,
+    exact_local_bucket_radix: int | None = None,
     allow_auto_boost: bool = True,
     auto_boost_factor: float | None = None,
     allow_high_memory_default: bool = True,
@@ -2996,6 +3000,7 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
         local_layout,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
     )
     boost_factor = _exact_local_auto_microbatch_boost() if auto_boost_factor is None else float(auto_boost_factor)
     if boost_factor <= 0.0 or not np.isfinite(boost_factor):
@@ -3077,6 +3082,7 @@ def _exact_local_xhalf_projection_microbatch_cap(
     *,
     n_projection_pixels: int,
     rotation_block_size: int,
+    exact_local_bucket_radix: int | None = None,
 ) -> int:
     """Bound fused x-half projection rows without truncating neighborhoods."""
 
@@ -3094,6 +3100,7 @@ def _exact_local_xhalf_projection_microbatch_cap(
             int(count),
             rotation_block_size,
             large_bucket_quantum=large_bucket_quantum,
+            exact_local_bucket_radix=exact_local_bucket_radix,
         )
         for count in rotation_counts
     )
@@ -3423,6 +3430,8 @@ def _build_reconstruction_pack_indices(
     significant_rotation_mask: np.ndarray,
     local_rotation_mask: np.ndarray,
     rotation_block_size: int,
+    *,
+    exact_local_bucket_radix: int | None = None,
 ):
     """Pack RELION-style reconstruction rows into a smaller padded bucket."""
 
@@ -3437,6 +3446,7 @@ def _build_reconstruction_pack_indices(
         max_count,
         rotation_block_size,
         large_bucket_quantum=_reconstruction_pack_large_bucket_quantum(),
+        exact_local_bucket_radix=exact_local_bucket_radix,
     )
     batch_size = int(pack_mask.shape[0])
     take_indices = np.zeros((batch_size, packed_rotation_count), dtype=np.int32)
@@ -3455,6 +3465,8 @@ def _build_nonzero_reconstruction_pack_indices(
     local_rotation_mask: np.ndarray,
     probs_sum_t_np: np.ndarray,
     rotation_block_size: int,
+    *,
+    exact_local_bucket_radix: int | None = None,
 ):
     """Pack rows that can make a nonzero M-step contribution.
 
@@ -3469,6 +3481,7 @@ def _build_nonzero_reconstruction_pack_indices(
         np.asarray(significant_rotation_mask, dtype=bool) & nonzero_rotation_mask,
         local_rotation_mask,
         rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
     )
 
 
@@ -3560,6 +3573,7 @@ def run_local_em_exact(
     normalization_max_posterior: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
+    exact_local_bucket_radix: int | None = None,
     preserve_bpref_particle_order: bool = False,
     stats_use_reconstruction_probs: bool = False,
     relion_f32_fine_posterior: bool = False,
@@ -3572,6 +3586,7 @@ def run_local_em_exact(
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
+    resolved_exact_local_bucket_radix = _resolve_exact_local_bucket_radix(exact_local_bucket_radix)
     score_only = bool(score_only)
     use_relion_f32_fine_posterior = bool(
         relion_f32_fine_posterior
@@ -4073,6 +4088,7 @@ def run_local_em_exact(
         local_layout=local_layout,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         allow_auto_boost=allow_microbatch_auto_boost,
         auto_boost_factor=xhalf_auto_microbatch_boost,
         allow_high_memory_default=not xhalf_bpref_mstep,
@@ -4102,6 +4118,7 @@ def run_local_em_exact(
             local_layout,
             n_projection_pixels=int(window_spec.n_projection),
             rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         )
         if max_hypotheses_per_microbatch < tail_capped_hypotheses_per_microbatch:
             logger.info(
@@ -4120,6 +4137,7 @@ def run_local_em_exact(
         max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
         unify_bucket_sizes=unify_local_bucket_sizes,
         preserve_image_order=source_faithful_bpref,
+        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
     )
     timing.bucket_build_s += time.time() - bucket_build_t0
     debug_target_only_targets: set[int] = set()
@@ -5536,6 +5554,7 @@ def run_local_em_exact(
                     local_mask_np,
                     probs_sum_t_np,
                     rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                 )
                 reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
                 reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
@@ -5591,6 +5610,7 @@ def run_local_em_exact(
                         local_mask_np,
                         local_mask_np,
                         rotation_block_size,
+                        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                     )
                 else:
                     (
@@ -5603,6 +5623,7 @@ def run_local_em_exact(
                         local_mask_np,
                         probs_sum_t_np,
                         rotation_block_size,
+                        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                     )
                 reconstruction_take_indices_jnp = jnp.asarray(
                     reconstruction_take_indices,
@@ -5657,6 +5678,7 @@ def run_local_em_exact(
                     local_mask_np,
                     probs_sum_t_np,
                     rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                 )
                 reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
                 reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
@@ -7160,6 +7182,7 @@ def run_local_em_exact(
             np.asarray(bucket.local_rotation_mask, dtype=bool),
             probs_sum_t_np,
             rotation_block_size,
+            exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         )
         reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
         reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)

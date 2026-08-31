@@ -29,11 +29,29 @@ EXACT_LOCAL_BUCKET_RADIX_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_RADIX"
 EXACT_LOCAL_BUCKET_MIN_QUANTUM = 256
 
 
+def _resolve_exact_local_bucket_radix(explicit: int | None = None) -> int:
+    """Resolve and validate the exact-local small-bucket radix."""
+
+    source = "exact_local_bucket_radix"
+    raw_value = explicit
+    if raw_value is None:
+        source = EXACT_LOCAL_BUCKET_RADIX_ENV
+        raw_value = os.environ.get(EXACT_LOCAL_BUCKET_RADIX_ENV, "2")
+    try:
+        bucket_radix = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be an integer at least 2") from exc
+    if bucket_radix < 2:
+        raise ValueError(f"{source} must be at least 2")
+    return bucket_radix
+
+
 def _exact_bucket_rotation_size(
     local_rotation_count: int,
     rotation_block_size: int,
     *,
     large_bucket_quantum: int | None = None,
+    exact_local_bucket_radix: int | None = None,
 ) -> int:
     """Return a compile-friendly padded size for one exact local neighborhood.
 
@@ -49,9 +67,7 @@ def _exact_bucket_rotation_size(
         return 1
     engine_cap = int(_local_search_engine_rotation_block_size(rotation_block_size))
     if local_rotation_count <= engine_cap:
-        bucket_radix = int(os.environ.get(EXACT_LOCAL_BUCKET_RADIX_ENV, "2"))
-        if bucket_radix < 2:
-            raise ValueError(f"{EXACT_LOCAL_BUCKET_RADIX_ENV} must be at least 2")
+        bucket_radix = _resolve_exact_local_bucket_radix(exact_local_bucket_radix)
         if bucket_radix != 2:
             return int(
                 power_bucket(
@@ -1144,6 +1160,7 @@ def bucket_local_hypothesis_layout(
     unify_bucket_sizes: bool | None = None,
     large_bucket_quantum: int | None = None,
     preserve_image_order: bool = False,
+    exact_local_bucket_radix: int | None = None,
 ) -> list[LocalBucketSpec]:
     """Bucket images by exact local-rotation count for static-shape execution."""
 
@@ -1166,6 +1183,7 @@ def bucket_local_hypothesis_layout(
                 int(count),
                 rotation_block_size,
                 large_bucket_quantum=resolved_large_bucket_quantum,
+                exact_local_bucket_radix=exact_local_bucket_radix,
             )
             for count in layout.rotation_counts
         ],
