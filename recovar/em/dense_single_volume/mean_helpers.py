@@ -128,7 +128,11 @@ def _normalize_initial_means(init_volume, n_classes: int):
     if n_classes > 1 and arr.ndim == 3 and int(arr.shape[0]) == 2 and int(arr.shape[1]) == n_classes:
         return [arr[0], arr[1]]
     shared = _as_class_array(arr)
-    return [jnp.array(shared), jnp.array(shared)]
+    # JAX arrays are immutable, and the refinement loop replaces each half-map
+    # list entry after reconstruction.  Reuse the common cold-start buffer
+    # rather than materializing two identical full-volume copies.  At box 800,
+    # the copies consumed another 7.63 GiB before the RELION texture upload.
+    return [shared, shared]
 
 
 def _class_weights_from_posterior(class_posterior_per_half, n_classes: int, previous_weights: np.ndarray) -> np.ndarray:

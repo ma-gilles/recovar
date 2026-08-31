@@ -4791,6 +4791,10 @@ def main():
         init_prior = utils.make_radial_image(init_PS, ds.volume_shape, extend_last_frequency=True)
         # Scale by a factor to provide regularization without being too strong
         mean_variance = jnp.asarray(init_prior * 0.5 + jnp.max(init_prior) * 1e-4)
+        # Only the derived variance is consumed by refinement.  Drop the
+        # box-scale initialization operands before constructing Projector::data
+        # so the CUDA texture upload does not overlap dead JAX buffers.
+        del init_PS_source, init_prior
 
     # ---- STRICT-PARITY: --relion_init_dir override of bootstrapped iter-0 state ----
     # When set, replace the image-bootstrap sigma2_noise + power-spectrum-bootstrap

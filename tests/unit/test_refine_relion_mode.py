@@ -9232,6 +9232,19 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(np.asarray(got[0]), np.asarray(shared))
         np.testing.assert_allclose(np.asarray(got[1]), np.asarray(shared))
 
+    def test_normalize_initial_means_reuses_immutable_shared_reference(self):
+        shared = jnp.arange(VOLUME_SIZE, dtype=jnp.complex64)
+
+        got = iteration_loop_module._normalize_initial_means(shared, n_classes=1)
+
+        assert got[0] is got[1]
+        np.testing.assert_array_equal(np.asarray(got[0]), np.asarray(shared))
+        # Per-half refinement replaces list entries; JAX's functional update
+        # leaves the aliased cold-start buffer unchanged for the other half.
+        got[0] = got[0].at[0].set(jnp.complex64(-1.0))
+        assert got[0] is not got[1]
+        np.testing.assert_array_equal(np.asarray(got[1]), np.asarray(shared))
+
     def test_normalize_noise_variance_per_half_preserves_relion_half_models(self):
         half1 = np.arange(IMAGE_SIZE, dtype=np.float32) + 1.0
         half2 = half1 * 2.0

@@ -5353,7 +5353,10 @@ def _run_relion_iteration_loop(
         n_halves=2,
     )
     noise_variance = _mean_noise_variance(noise_variance_per_half)
-    initial_mean_variance = jnp.array(init_mean_variance)
+    # The variance is immutable until the first reconstruction replaces it.
+    # Preserve an existing JAX buffer instead of copying a full box-scale
+    # volume during initialization.
+    initial_mean_variance = jnp.asarray(init_mean_variance)
     if parity.use_per_half_mean_variance:
         if k_class_enabled:
             raise ValueError("per-half scoring tau2 is supported only for K=1")
