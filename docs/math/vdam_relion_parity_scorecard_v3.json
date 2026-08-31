@@ -319,6 +319,99 @@
       "note": "Cancelled before science after the loader treated the qualified CUDA library as stale and launched make/nvcc against that source artifact. The library bytes stayed unchanged, but a source-side .build.lock was created. INVALID HARNESS: no A/B result, runtime result, or promotion."
     }
   ],
+  "engineering_snapshot": {
+    "as_of": "2026-08-31",
+    "frozen_scores_changed": false,
+    "score_impact": "none",
+    "active_gate": {
+      "job_id": "13253088",
+      "status": "active_result_pending",
+      "source_head": "6f39ad52e",
+      "case_id": "vdam-gf46",
+      "iterations": 80,
+      "hardware": "H100",
+      "purpose": "Run the two-repeat warm trajectory and Nsight gate for the audited typed GUI defaults.",
+      "score_impact": "none_until_audited"
+    },
+    "short_gate": {
+      "job_id": "13252518",
+      "status": "completed_audited",
+      "source_head": "6f39ad52e",
+      "case_id": "vdam-gf46",
+      "iterations": 20,
+      "hardware": "H100",
+      "recovar_wall_seconds": 177,
+      "cumulative_pre_artifact_seconds": 158.846,
+      "particle_count": 3000,
+      "exact_particle_state_iterations": 20,
+      "first_divergent_iteration": null,
+      "requested_effective_wavg_sequential_cuda": true,
+      "requested_effective_exact_local_bucket_radix": 4,
+      "comparison_note": "177 s is below the 182 s accepted short baseline but above the 169.40 s prior exact-control result; these are cross-run H100 observations, not a paired speed result.",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime20_6f39ad52e_20260831",
+      "particle_audit": "provenance/particle_state_audit_it001_020.json",
+      "score_impact": "none"
+    },
+    "typed_runtime_controls": {
+      "integration_head": "6f39ad52e",
+      "integration_commits": ["59c0abde9", "4672232a3", "6f39ad52e"],
+      "focused_checks": "18/18",
+      "defaults": {
+        "relion_wavg_sequential_cuda": true,
+        "exact_local_bucket_radix": 4
+      }
+    },
+    "warm_profile": {
+      "job_id": "13248509",
+      "source_head": "6b5e6568a",
+      "case_id": "vdam-gf46",
+      "iteration_window": "47--80",
+      "wall_span_seconds": 240.36,
+      "gpu_kernel_seconds": 44.58,
+      "coarse_projector_seconds": 35.899,
+      "coarse_projector_gpu_percent": 80.53,
+      "local_exact_wall_seconds": 130.09,
+      "pass1_seconds": 71.39,
+      "xla_compile_seconds": 57.83,
+      "dataset_getitem_seconds": 31.90,
+      "disk_read_seconds": 25.36,
+      "fine_fused_seconds": 1.897,
+      "weighted_average_seconds": 0.556,
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_warm_nsys_v3_6b5e6568a_20260831"
+    },
+    "decisions": [
+      {
+        "candidate": "shared EM arithmetic primitives",
+        "status": "KEEP",
+        "evidence": "Coarse scoring, compact planning/fine posterior, Wavg, radix buckets, and ordered accumulation already use the mature EM implementations."
+      },
+      {
+        "candidate": "ordered-scatter CUDA Graph",
+        "status": "QUALIFIED CANDIDATE",
+        "evidence": "Job 13203664 was quality-neutral (80/80 particles; 81/81 maps) and reduced wall 293->291 s."
+      },
+      {
+        "candidate": "eager shared raw-image cache",
+        "status": "REJECTED",
+        "evidence": "Exact-control wall regressed 169.40->172.20 s (+1.7%); 9cb34ddf2 was reverted by 274e4062d."
+      },
+      {
+        "candidate": "inline indexed fine projection",
+        "status": "REJECTED",
+        "evidence": "Job 13249200 was bitwise exact but 2--4x slower because it repeated projections."
+      },
+      {
+        "candidate": "float32 coarse scorer",
+        "status": "REJECTED",
+        "evidence": "788,541/802,681 coarse scans changed; commit 31953d remains a regression-only prototype."
+      },
+      {
+        "candidate": "typed Wavg/radix defaults",
+        "status": "SHORT GATE EXACT; WARM80 ACTIVE",
+        "evidence": "Job 13252518 retained all 3,000 particle states through iteration 20; two-repeat warm job 13253088 is pending."
+      }
+    ]
+  },
   "speed_snapshot": {
     "role": "diagnostic_performance",
     "score_impact": "none",

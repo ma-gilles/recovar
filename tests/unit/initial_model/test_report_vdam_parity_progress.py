@@ -217,6 +217,36 @@ def test_invalid_speed_harness_is_visible_and_non_scoring() -> None:
     assert "authorizes no 80-iteration promotion" in rendered
 
 
+def test_current_engineering_snapshot_is_visible_and_non_scoring() -> None:
+    loaded = progress_mod.load_and_validate()
+    snapshot = loaded["engineering_snapshot"]
+    rendered = progress_mod.render_markdown(loaded)
+
+    assert snapshot["frozen_scores_changed"] is False
+    assert snapshot["score_impact"] == "none"
+    assert snapshot["active_gate"]["status"] == "active_result_pending"
+    assert snapshot["short_gate"]["first_divergent_iteration"] is None
+    assert snapshot["short_gate"]["exact_particle_state_iterations"] == 20
+    assert snapshot["typed_runtime_controls"]["defaults"] == {
+        "relion_wavg_sequential_cuda": True,
+        "exact_local_bucket_radix": 4,
+    }
+    assert "`13252518`: 20-iteration `vdam-gf46` | **PARTICLE TRAJECTORY EXACT**" in rendered
+    assert "`13253088`: 80-iteration warm two-repeat | **RESULT PENDING**" in rendered
+    assert "cross-run H100 observations, not a paired speed result" in rendered
+    assert "Warm H100 profile: job `13248509`" in rendered
+    assert "inline indexed fine projection | **REJECTED**" in rendered
+    assert "float32 coarse scorer | **REJECTED**" in rendered
+    assert next(row for row in loaded["panels"] if row["id"] == "k1_strict_correctness")["passed"] == 2
+    assert next(row for row in loaded["panels"] if row["id"] == "runtime_comparable")["passed"] == 0
+
+
+def test_current_engineering_snapshot_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    scorecard["engineering_snapshot"]["active_gate"]["status"] = "completed"
+    with pytest.raises(ValueError, match="current engineering snapshot changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
 def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:
     loaded = progress_mod.load_and_validate()
     v2 = next(row for row in loaded["secondary_tracks"] if row["id"] == "legacy_parameter_expansion_v2")

@@ -302,6 +302,122 @@ INVALID_SPEED_HARNESS_EVIDENCE = {
     "runtime_result_recorded": False,
     "promotion_authorized": False,
 }
+ENGINEERING_SNAPSHOT_POLICY = {
+    "as_of": "2026-08-31",
+    "frozen_scores_changed": False,
+    "score_impact": "none",
+    "active_gate": {
+        "job_id": "13253088",
+        "status": "active_result_pending",
+        "source_head": "6f39ad52e",
+        "case_id": "vdam-gf46",
+        "iterations": 80,
+        "hardware": "H100",
+        "purpose": "Run the two-repeat warm trajectory and Nsight gate for the audited typed GUI defaults.",
+        "score_impact": "none_until_audited",
+    },
+    "short_gate": {
+        "job_id": "13252518",
+        "status": "completed_audited",
+        "source_head": "6f39ad52e",
+        "case_id": "vdam-gf46",
+        "iterations": 20,
+        "hardware": "H100",
+        "recovar_wall_seconds": 177,
+        "cumulative_pre_artifact_seconds": 158.846,
+        "particle_count": 3000,
+        "exact_particle_state_iterations": 20,
+        "first_divergent_iteration": None,
+        "requested_effective_wavg_sequential_cuda": True,
+        "requested_effective_exact_local_bucket_radix": 4,
+        "comparison_note": (
+            "177 s is below the 182 s accepted short baseline but above the 169.40 s prior exact-control result; "
+            "these are cross-run H100 observations, not a paired speed result."
+        ),
+        "evidence_root": (
+            "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+            "vdam_gf46_typed_runtime20_6f39ad52e_20260831"
+        ),
+        "particle_audit": "provenance/particle_state_audit_it001_020.json",
+        "score_impact": "none",
+    },
+    "typed_runtime_controls": {
+        "integration_head": "6f39ad52e",
+        "integration_commits": ["59c0abde9", "4672232a3", "6f39ad52e"],
+        "focused_checks": "18/18",
+        "defaults": {
+            "relion_wavg_sequential_cuda": True,
+            "exact_local_bucket_radix": 4,
+        },
+    },
+    "warm_profile": {
+        "job_id": "13248509",
+        "source_head": "6b5e6568a",
+        "case_id": "vdam-gf46",
+        "iteration_window": "47--80",
+        "wall_span_seconds": 240.36,
+        "gpu_kernel_seconds": 44.58,
+        "coarse_projector_seconds": 35.899,
+        "coarse_projector_gpu_percent": 80.53,
+        "local_exact_wall_seconds": 130.09,
+        "pass1_seconds": 71.39,
+        "xla_compile_seconds": 57.83,
+        "dataset_getitem_seconds": 31.90,
+        "disk_read_seconds": 25.36,
+        "fine_fused_seconds": 1.897,
+        "weighted_average_seconds": 0.556,
+        "evidence_root": (
+            "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+            "vdam_gf46_warm_nsys_v3_6b5e6568a_20260831"
+        ),
+    },
+    "decisions": [
+        {
+            "candidate": "shared EM arithmetic primitives",
+            "status": "KEEP",
+            "evidence": (
+                "Coarse scoring, compact planning/fine posterior, Wavg, radix buckets, and ordered "
+                "accumulation already use the mature EM implementations."
+            ),
+        },
+        {
+            "candidate": "ordered-scatter CUDA Graph",
+            "status": "QUALIFIED CANDIDATE",
+            "evidence": (
+                "Job 13203664 was quality-neutral (80/80 particles; 81/81 maps) and reduced wall "
+                "293->291 s."
+            ),
+        },
+        {
+            "candidate": "eager shared raw-image cache",
+            "status": "REJECTED",
+            "evidence": (
+                "Exact-control wall regressed 169.40->172.20 s (+1.7%); 9cb34ddf2 was reverted by "
+                "274e4062d."
+            ),
+        },
+        {
+            "candidate": "inline indexed fine projection",
+            "status": "REJECTED",
+            "evidence": "Job 13249200 was bitwise exact but 2--4x slower because it repeated projections.",
+        },
+        {
+            "candidate": "float32 coarse scorer",
+            "status": "REJECTED",
+            "evidence": (
+                "788,541/802,681 coarse scans changed; commit 31953d remains a regression-only prototype."
+            ),
+        },
+        {
+            "candidate": "typed Wavg/radix defaults",
+            "status": "SHORT GATE EXACT; WARM80 ACTIVE",
+            "evidence": (
+                "Job 13252518 retained all 3,000 particle states through iteration 20; two-repeat warm job "
+                "13253088 is pending."
+            ),
+        },
+    ],
+}
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -511,6 +627,10 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
     derived_counts = _validate_cases(scorecard, suite)
     _validate_panels(scorecard, derived_counts)
     _validate_active_diagnostics(scorecard)
+    _require(
+        scorecard.get("engineering_snapshot") == ENGINEERING_SNAPSHOT_POLICY,
+        "current engineering snapshot changed without an evidence update",
+    )
     accepted = [case["id"] for case in scorecard["cases"] if case["strict_result"] == "pass"]
     _require(accepted == ["vdam-gf44", "vdam-gf45"], "accepted v3 case set changed")
     secondary = scorecard.get("secondary_tracks")
@@ -598,6 +718,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     progress = build_progress(scorecard)
     strict = next(panel for panel in scorecard["panels"] if panel["id"] == "k1_strict_correctness")
     runtime = next(panel for panel in scorecard["panels"] if panel["id"] == "runtime_comparable")
+    engineering = scorecard["engineering_snapshot"]
+    active_gate = engineering["active_gate"]
+    short_gate = engineering["short_gate"]
+    runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
         "",
@@ -608,6 +732,31 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         ">",
         "> This page is generated from the frozen 20-case, iteration 0--200 scorecard. "
         "Scheduler diagnostics, the legacy v1/v2 tracks, K>1, and real data cannot change this score.",
+        "",
+        "## At a glance",
+        "",
+        "| Axis | Authoritative state | Current engineering read |",
+        "|---|---|---|",
+        f"| K=1 correctness | **{strict['passed']}/{strict['denominator']}** strict cases pass | "
+        "Frozen; no recent diagnostic changes this score. |",
+        f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** cases meet 1.10x; "
+        f"observed {min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x | "
+        "The shared coarse pass dominates GPU time; compile, rectangular scheduling, and input latency dominate wall. |",
+        "| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |",
+        "| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |",
+        "",
+        "### Gate progression",
+        "",
+        "| Gate | Status | Evidence |",
+        "|---|---|---|",
+        f"| `{short_gate['job_id']}`: {short_gate['iterations']}-iteration `{short_gate['case_id']}` | "
+        "**PARTICLE TRAJECTORY EXACT** | All "
+        f"{short_gate['particle_count']:,}/{short_gate['particle_count']:,} pose/translation states match at every "
+        f"iteration; first divergence is `null`; requested/effective Wavg=`true`, radix=`4`. Wall "
+        f"{short_gate['recovar_wall_seconds']} s; pre-artifact {short_gate['cumulative_pre_artifact_seconds']:.3f} s. "
+        f"{short_gate['comparison_note']} Evidence: `{short_gate['evidence_root']}/{short_gate['particle_audit']}`. |",
+        f"| `{active_gate['job_id']}`: {active_gate['iterations']}-iteration warm two-repeat | "
+        f"**RESULT PENDING** | {active_gate['purpose']} No partial result or frozen-score impact is claimed. |",
         "",
         "## Primary panels",
         "",
@@ -789,6 +938,40 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"{speed['native_particle_envelope_passed']}/{speed['native_particle_envelope_denominator']}. "
             "This performance snapshot cannot change the frozen correctness or runtime panels.",
             "",
+            f"### Warm H100 profile: job `{engineering['warm_profile']['job_id']}`",
+            "",
+            "| Profile slice | Time | Readout |",
+            "|---|---:|---|",
+            f"| iterations {engineering['warm_profile']['iteration_window']} | "
+            f"{engineering['warm_profile']['wall_span_seconds']:.2f} s wall / "
+            f"{engineering['warm_profile']['gpu_kernel_seconds']:.2f} s kernels | GPU kernels explain only "
+            f"part of wall time. Artifact: `{engineering['warm_profile']['evidence_root']}`. |",
+            f"| shared coarse projector | {engineering['warm_profile']['coarse_projector_seconds']:.3f} s | "
+            f"{engineering['warm_profile']['coarse_projector_gpu_percent']:.2f}% of GPU kernel time; primary "
+            "GPU target. |",
+            f"| exact-local / pass 1 wall | {engineering['warm_profile']['local_exact_wall_seconds']:.2f} / "
+            f"{engineering['warm_profile']['pass1_seconds']:.2f} s | Globally padded rectangular scheduling is "
+            "the main topology target. |",
+            f"| XLA compile ranges | {engineering['warm_profile']['xla_compile_seconds']:.2f} s | Shape-policy "
+            "stability matters before arithmetic changes. |",
+            f"| dataset getitem / disk read | {engineering['warm_profile']['dataset_getitem_seconds']:.2f} / "
+            f"{engineering['warm_profile']['disk_read_seconds']:.2f} s | Input latency is material, but the exact "
+            "eager cache experiment regressed. |",
+            f"| fine fused / Wavg | {engineering['warm_profile']['fine_fused_seconds']:.3f} / "
+            f"{engineering['warm_profile']['weighted_average_seconds']:.3f} s | Already small; optimize only without "
+            "repeating projections. |",
+            "",
+            "### Engineering decision ledger",
+            "",
+            "| Track | Decision | Evidence |",
+            "|---|---|---|",
+        ]
+    )
+    for row in engineering["decisions"]:
+        lines.append(f"| {row['candidate']} | **{row['status']}** | {row['evidence']} |")
+    lines.extend(
+        [
+            "",
             "## Shared EM implementation",
             "",
             "| Component | Shared with EM | Qualification |",
@@ -800,6 +983,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"| {row['component']} | {'yes' if row['shared_with_em'] else 'no'} | {row['qualification']} |"
         )
     interface = scorecard["interface_policy"]
+    typed = engineering["typed_runtime_controls"]
     lines.extend(
         [
             "",
@@ -808,10 +992,11 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Interface and secondary gates",
             "",
-            f"CLI and GUI both default to `{interface['cli_default']}`. The `reference` mode is "
-            f"{interface['reference_mode']}. "
-            f"The typed policy is `{interface['policy_commit']}` with {interface['focused_tests']} focused checks; "
-            f"K>1 remains {interface['k_greater_than_one']}.",
+            f"CLI and GUI both default to `{interface['cli_default']}`; `reference` remains "
+            f"{interface['reference_mode']}. Current typed runtime-control integration `{typed['integration_head']}` "
+            f"passed {typed['focused_checks']} focused checks and defaults sequential CUDA Wavg to "
+            f"`{str(typed['defaults']['relion_wavg_sequential_cuda']).lower()}` and exact-local radix to "
+            f"`{typed['defaults']['exact_local_bucket_radix']}`. K>1 remains {interface['k_greater_than_one']}.",
             "",
             "| Track | Result | Role | v3 score impact |",
             "|---|---:|---|---:|",
@@ -824,20 +1009,20 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             else str(row["status"]).replace("_", " ")
         )
         lines.append(f"| `{row['id']}` | {result} | `{row['role']}` | {row['score_impact']} |")
-    gate = scorecard["next_gate"]
     lines.extend(
         [
             "",
-            "## Current hypothesis and next gate",
+            "## Next gates",
             "",
-            gate["hypothesis"],
-            "",
-            f"Ordered-shell head `{gate['ordered_shell_head']}` follows pre-diagnostic head "
-            f"`{gate['pre_diagnostic_head']}`; pair-stable head `{gate['pair_stable_head']}` follows prior "
-            f"profile-matched head `{gate['prior_profile_matched_head']}` (harness fix "
-            f"`{gate['harness_fix_commit']}`). Evidence: "
-            f"**{gate['evidence_pattern']}** {gate['narrowed_boundary']} No cache-disable or production "
-            "arithmetic change is authorized by this snapshot.",
+            f"1. Audit both repeats from active job `{active_gate['job_id']}` through iteration "
+            f"{active_gate['iterations']}; require trajectory stability and a same-artifact wall comparison.",
+            "2. If green, qualify the same typed defaults on additional frozen K=1 stress cases.",
+            "3. Prototype a preprojected indexed-job fine scorer that preserves the exact CUDA reduction tree; the "
+            "rejected inline version repeated projections.",
+            "4. Attack coarse-pass topology with exact arithmetic and stable shapes; do not revive the rejected "
+            "float32 scorer or eager raw cache.",
+            "5. Re-run the frozen K=1 matrix before allowing K>1, real-data, or runtime results to affect their own "
+            "separate gates.",
             "",
             "## Evidence and reproducibility",
             "",

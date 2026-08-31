@@ -4,6 +4,22 @@
 >
 > This page is generated from the frozen 20-case, iteration 0--200 scorecard. Scheduler diagnostics, the legacy v1/v2 tracks, K>1, and real data cannot change this score.
 
+## At a glance
+
+| Axis | Authoritative state | Current engineering read |
+|---|---|---|
+| K=1 correctness | **2/20** strict cases pass | Frozen; no recent diagnostic changes this score. |
+| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | The shared coarse pass dominates GPU time; compile, rectangular scheduling, and input latency dominate wall. |
+| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |
+| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |
+
+### Gate progression
+
+| Gate | Status | Evidence |
+|---|---|---|
+| `13252518`: 20-iteration `vdam-gf46` | **PARTICLE TRAJECTORY EXACT** | All 3,000/3,000 pose/translation states match at every iteration; first divergence is `null`; requested/effective Wavg=`true`, radix=`4`. Wall 177 s; pre-artifact 158.846 s. 177 s is below the 182 s accepted short baseline but above the 169.40 s prior exact-control result; these are cross-run H100 observations, not a paired speed result. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime20_6f39ad52e_20260831/provenance/particle_state_audit_it001_020.json`. |
+| `13253088`: 80-iteration warm two-repeat | **RESULT PENDING** | Run the two-repeat warm trajectory and Nsight gate for the audited typed GUI defaults. No partial result or frozen-score impact is claimed. |
+
 ## Primary panels
 
 | Gate | Passed | Evaluated | Denominator | Role |
@@ -114,6 +130,28 @@ Ordered-scatter CUDA Graph candidate `6b5e6568a` (paired job `13203664`) ran in 
 
 Quality-neutral candidate/control checks: particles 80/80; maps 81/81. The separate native-particle envelope remains 23/80. This performance snapshot cannot change the frozen correctness or runtime panels.
 
+### Warm H100 profile: job `13248509`
+
+| Profile slice | Time | Readout |
+|---|---:|---|
+| iterations 47--80 | 240.36 s wall / 44.58 s kernels | GPU kernels explain only part of wall time. Artifact: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_warm_nsys_v3_6b5e6568a_20260831`. |
+| shared coarse projector | 35.899 s | 80.53% of GPU kernel time; primary GPU target. |
+| exact-local / pass 1 wall | 130.09 / 71.39 s | Globally padded rectangular scheduling is the main topology target. |
+| XLA compile ranges | 57.83 s | Shape-policy stability matters before arithmetic changes. |
+| dataset getitem / disk read | 31.90 / 25.36 s | Input latency is material, but the exact eager cache experiment regressed. |
+| fine fused / Wavg | 1.897 / 0.556 s | Already small; optimize only without repeating projections. |
+
+### Engineering decision ledger
+
+| Track | Decision | Evidence |
+|---|---|---|
+| shared EM arithmetic primitives | **KEEP** | Coarse scoring, compact planning/fine posterior, Wavg, radix buckets, and ordered accumulation already use the mature EM implementations. |
+| ordered-scatter CUDA Graph | **QUALIFIED CANDIDATE** | Job 13203664 was quality-neutral (80/80 particles; 81/81 maps) and reduced wall 293->291 s. |
+| eager shared raw-image cache | **REJECTED** | Exact-control wall regressed 169.40->172.20 s (+1.7%); 9cb34ddf2 was reverted by 274e4062d. |
+| inline indexed fine projection | **REJECTED** | Job 13249200 was bitwise exact but 2--4x slower because it repeated projections. |
+| float32 coarse scorer | **REJECTED** | 788,541/802,681 coarse scans changed; commit 31953d remains a regression-only prototype. |
+| typed Wavg/radix defaults | **SHORT GATE EXACT; WARM80 ACTIVE** | Job 13252518 retained all 3,000 particle states through iteration 20; two-repeat warm job 13253088 is pending. |
+
 ## Shared EM implementation
 
 | Component | Shared with EM | Qualification |
@@ -128,7 +166,7 @@ VDAM calls the shared EM primitives above; it does not carry duplicate projector
 
 ## Interface and secondary gates
 
-CLI and GUI both default to `relion_fast`. The `reference` mode is diagnostic. The typed policy is `36103aaa2` with 28/28 focused checks; K>1 remains unqualified.
+CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Current typed runtime-control integration `6f39ad52e` passed 18/18 focused checks and defaults sequential CUDA Wavg to `true` and exact-local radix to `4`. K>1 remains unqualified.
 
 | Track | Result | Role | v3 score impact |
 |---|---:|---|---:|
@@ -136,11 +174,13 @@ CLI and GUI both default to `relion_fast`. The `reference` mode is diagnostic. T
 | `k_greater_than_one` | unqualified | `separate_gate` | none |
 | `real_data` | not scored | `separate_gate` | none |
 
-## Current hypothesis and next gate
+## Next gates
 
-Job 13211719 rejects same-cache reuse as sufficient for exact ordered-shell repeatability: the earliest captured difference is one float32 ULP in an E-step max-posterior scalar.
-
-Ordered-shell head `3b5afd98e` follows pre-diagnostic head `94bc7d890`; pair-stable head `ee673be1f` follows prior profile-matched head `39a38f9d6` (harness fix `381bf7949`). Evidence: **A populated the canonical cache 0->377; A-after, B-before, and B-after share manifest SHA-256 2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5 with no B additions or changes.** Cache identity is proven. Pose, rotation, translation, and class selection remain exact while the one-ULP posterior difference feeds ordered noise and both-half BPref differences. The next discriminator remains compile/autotune variant versus runtime reduction at or before this E-step scalar. No cache-disable or production arithmetic change is authorized by this snapshot.
+1. Audit both repeats from active job `13253088` through iteration 80; require trajectory stability and a same-artifact wall comparison.
+2. If green, qualify the same typed defaults on additional frozen K=1 stress cases.
+3. Prototype a preprojected indexed-job fine scorer that preserves the exact CUDA reduction tree; the rejected inline version repeated projections.
+4. Attack coarse-pass topology with exact arithmetic and stable shapes; do not revive the rejected float32 scorer or eager raw cache.
+5. Re-run the frozen K=1 matrix before allowing K>1, real-data, or runtime results to affect their own separate gates.
 
 ## Evidence and reproducibility
 
