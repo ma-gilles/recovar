@@ -428,12 +428,14 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
     "default_enabled": False,
     "promotion_authorized": False,
 }
-ENGINEERING_SNAPSHOT_SHA256 = "2a6893af6498715a5beeb7ac639b4048a0e8e750ca11b295b2637a0f179e47ed"
-RUNTIME_LANE_WORKBOARD_SHA256 = "442d01f47376731d8e6a985906f69180f6dd7a85d7324a46e88c596163a445dc"
+ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
+RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
     "batched_cub_sort_scan",
+    "batched_posterior_elementwise",
+    "elementwise_same_binary_causal",
     "xhalf_projection_cap",
 ]
 EVIDENCE_SOURCE_POLICY = {
@@ -746,10 +748,12 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and next_gate.get("ordered_shell_head") == "3b5afd98e"
         and next_gate.get("pre_diagnostic_head") == "94bc7d890"
         and next_gate.get("typed_warm80_audit_job") == "13256248"
-        and next_gate.get("current_blocker") == "active_particle_envelope_fail_at_iteration_37"
-        and next_gate.get("runtime_status") == "inconclusive"
+        and next_gate.get("same_binary_causal_job") == "13271166"
+        and next_gate.get("current_blocker")
+        == "elementwise_large_end_to_end_gain_not_demonstrated_and_stability_panel_open"
+        and next_gate.get("runtime_status") == "elementwise_same_binary_gain_immaterial"
         and next_gate.get("production_change_authorized") is False,
-        "cache discriminator gate changed",
+        "current causal gate changed",
     )
     history = scorecard.get("history")
     _require(isinstance(history, list) and history[-1].get("strict_passed") == 2, "current history score changed")
@@ -794,6 +798,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     flat_lane = runtime_lanes["call_neutral_flat_row"]
     stable_lane = runtime_lanes["stable_fine_window"]
     cub_lane = runtime_lanes["batched_cub_sort_scan"]
+    elementwise_lane = runtime_lanes["batched_posterior_elementwise"]
+    same_binary_lane = runtime_lanes["elementwise_same_binary_causal"]
     xhalf_lane = runtime_lanes["xhalf_projection_cap"]
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
@@ -807,70 +813,79 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "> This page is generated from the frozen 20-case, iteration 0--200 scorecard. "
         "Scheduler diagnostics, the legacy v1/v2 tracks, K>1, and real data cannot change this score.",
         "",
-        "## Current action",
-        "",
-        "| Gate | Result | What it means now |",
-        "|---|---|---|",
-        f"| Typed Wavg/radix policy | **PASS {typed_policy['iterations_per_arm']}/"
-        f"{typed_policy['iterations_per_arm']} in both arms** | Requested/effective sequential Wavg=`true`; "
-        f"radix=`{typed_policy['exact_local_bucket_radix']}`. |",
-        f"| Same-GPU map envelope | **PASS {map_gate['checkpoints_passed']}/{map_gate['checkpoints']}** | "
-        f"Minimum best-native FSC AUC `{map_gate['minimum_best_native_fsc_auc']:.10f}`; no checkpoint outside. |",
-        f"| Active-particle envelope | **FAIL@{particle_gate['first_failure_iteration']} — OPEN** | "
-        f"{particle_gate['failures']}/{particle_gate['checkpoints']} checkpoints fail; "
-        f"{particle_gate['final_active_unmatched']}/{particle_gate['final_active_particles']} active particles "
-        "are unmatched at iteration 80. |",
-        "| Runtime | **INCONCLUSIVE** — 0/20 | No candidate has a qualified trajectory/runtime pair. Flat-row and "
-        "batched-CUB calls are exact at their downstream gates and materially faster only at call level; stable "
-        "windows remain forecast-only. |",
-        "| Immediate work | **WIRE FLAT ROW DEFAULT-OFF** | Include shared packing/projection cost in one live call, "
-        "then gate the same active outputs. Replay captured batched-CUB operands, integrate stable score/Wavg/BPref "
-        "shapes together, then run focused trajectory A/B gates. |",
-        "",
         "## At a glance",
         "",
-        "| Axis | Authoritative state | Current engineering read |",
+        "| Axis | Frozen score | Current read |",
         "|---|---|---|",
-        f"| K=1 correctness | **{strict['passed']}/{strict['denominator']}** strict cases pass | "
-        "Frozen; no recent diagnostic changes this score. |",
-        f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** cases meet 1.10x; "
-        f"observed {min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x | "
-        "Flat-row score-plus-posterior calls are 32.68--54.53% lower and batched CUB is 20.4--26.8% lower, but "
-        "full-stage, memory, and trajectory runtime remain unmeasured. |",
-        "| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |",
-        "| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |",
+        f"| K=1 correctness | **{strict['passed']}/{strict['denominator']}** | Unchanged; accepted cases are "
+        f"`{', '.join(progress['accepted_cases'])}`. |",
+        f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** | Unchanged; observed suite range "
+        f"{min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x. Promotion requires a large reproducible gain "
+        "without instability or quality loss. |",
+        "| Performance lanes | non-scoring | 4 accepted/qualified evidence lanes; 2 rejected; **0 pending**; all "
+        "default-off. |",
+        "| Numerical policy | non-scoring | Roundoff-scale map differences are acceptable when stable, unbiased, "
+        "basin-preserving, quality-neutral, and paired with a large reproducible end-to-end gain. |",
+        "| EM reuse | shared production primitives | The remaining boundary is execution topology/variability, "
+        "not duplicate projector or scorer math. |",
+        "| Later gates | separate | K>1 remains unqualified; real data remains unscored. |",
         "",
-        "## Runtime workboard",
+        "## Current focus",
         "",
-        "| Lane | State | Exactness | Performance readout | Next gate |",
-        "|---|---|---|---|---|",
-        f"| Flat-row scorer (`{'/'.join(flat_lane['jobs'])}`) | **QUALIFIED MICROBENCH; DEFAULT OFF** | Active raw, "
-        f"dense scores, posterior {flat_lane['exactness']['posterior_outputs_bitwise']}, poison tail, and calls "
-        f"bitwise | Combined call reduction at it20/40/60/80: "
-        f"{', '.join(f'{value:.2f}%' for value in flat_lane['combined_call_reduction_percent'])}; packing/projection "
-        "not timed | Default-off live call with packing/projection, then exact boundary; no trajectory yet. |",
-        f"| Stable fine window (`{'/'.join(stable_lane['jobs'])}`) | **EXACT PRIMITIVE; FORECAST ONLY** | Logical "
-        f"{stable_lane['logical_sizes']} under physical {stable_lane['physical_size']} bitwise; compile identities "
-        f"{stable_lane['compile_identities_control']}->{stable_lane['compile_identities_candidate']} | GF46 "
-        f"signatures {stable_lane['gf46_signature_forecast']['control']}->"
-        f"{stable_lane['gf46_signature_forecast']['candidate']}; forecast "
+        "| Evidence | Result | What it rules out | Explicit next gate |",
+        "|---|---|---|---|",
+        f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
+        f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
+        f"speedup is `{same_binary_lane['runtime_result']['warm_speedup']:.4f}x` | All four arms loaded CUDA SHA "
+        f"`{same_binary_lane['shared_cuda_library_sha256']}`; different CUDA libraries are not the cause, and the "
+        "strict two-control map-diameter flag alone is not a scientific rejection. | "
+        f"{same_binary_lane['next_gate']} |",
+        "",
+        "## Performance lanes",
+        "",
+        "| Bucket | Lane | Evidence | Explicit next gate |",
+        "|---|---|---|---|",
+        f"| **ACCEPTED PRIMITIVE ONLY** | Flat-row scorer `{'/'.join(flat_lane['jobs'])}` | Active raw/dense "
+        f"scores, posterior {flat_lane['exactness']['posterior_outputs_bitwise']}, poisoned tail, and call count are "
+        f"bitwise; isolated combined-call reduction "
+        f"{', '.join(f'{value:.2f}%' for value in flat_lane['combined_call_reduction_percent'])}. Default-off. | "
+        f"{flat_lane['next_gate']} |",
+        f"| **ACCEPTED PRIMITIVE ONLY** | Stable fine window `{'/'.join(stable_lane['jobs'])}` | Logical "
+        f"{stable_lane['logical_sizes']} under physical {stable_lane['physical_size']} is bitwise; compile identities "
+        f"{stable_lane['compile_identities_control']}->{stable_lane['compile_identities_candidate']}; "
         f"{stable_lane['gf46_net_wall_gain_forecast_percent'][0]:.1f}--"
-        f"{stable_lane['gf46_net_wall_gain_forecast_percent'][1]:.1f}% only | Integrate score/Wavg/BPref shapes "
-        "together; no trajectory yet. |",
-        f"| Batched CUB (`{cub_lane['diagnosis_job']}/{cub_lane['scratch_job']}/"
-        f"{cub_lane['scalar_repeat_job']}/{cub_lane['posterior_boundary_job']}`) | "
-        "**DOWNSTREAM EXACT; TRAJECTORY NEXT; DEFAULT OFF** | Sort, threshold index/value, support mask, and "
-        f"n-significant bitwise at all four shapes; raw scan is natively variable | "
-        f"{min(cub_lane['posterior_boundary']['time_lower_percent']):.1f}--"
-        f"{max(cub_lane['posterior_boundary']['time_lower_percent']):.1f}% lower; minimum "
-        f"{cub_lane['posterior_boundary']['minimum_speedup']:.4f}x | Captured operands, then "
-        "control/control/candidate trajectory A/B; no promotion yet. |",
-        f"| 80M x-half (`{xhalf_lane['performance_job']}/{xhalf_lane['operand_job']}`) | "
-        "**REJECTED / UNQUALIFIED** | iteration-1 topology is identical but 3/3 artifacts already differ; causal "
-        f"projection effect not proved | Prior same-H100 wall was {xhalf_lane['same_h100_wall_reduction_percent']:.2f}% "
-        "lower, but unusable for promotion | Revisit only with one-process replay from a byte-identical frozen state. |",
+        f"{stable_lane['gf46_net_wall_gain_forecast_percent'][1]:.1f}% is forecast-only. Default-off. | "
+        f"{stable_lane['next_gate']} |",
+        f"| **REJECTED** | Batched CUB trajectory `{cub_lane['trajectory_ab']['job_id']}` | State escapes "
+        "it4/p285, it16/p2902, it18/p902; schedule escape it18; 21 candidate map checkpoints outside, worst "
+        f"ratio `{cub_lane['trajectory_ab']['worst_map_escape']['nearest_over_control_diameter']:.10f}`. Cold/warm "
+        f"speedups `{cub_lane['trajectory_ab']['runtime']['cold_speedup']:.4f}x`/"
+        f"`{cub_lane['trajectory_ab']['runtime']['warm_speedup']:.4f}x` are non-scoring. Raw report SHA-256 "
+        f"`{cub_lane['trajectory_ab']['report_sha256']}`. | {cub_lane['next_gate']} |",
+        f"| **NUMERICALLY EQUIVALENT / E2E INCONCLUSIVE** | Elementwise primitive "
+        f"`{elementwise_lane['primitive_gate']['job_id']}` + trajectory `{elementwise_lane['trajectory_ab']['job_id']}` "
+        f"| Primitive is bitwise at it20/40/60/80 and "
+        f"{elementwise_lane['primitive_gate']['minimum_speedup']:.4f}--"
+        f"{max(elementwise_lane['primitive_gate']['speedups']):.4f}x faster; trajectory has zero state/schedule "
+        f"escapes and only roundoff-scale terminal relative-L2 "
+        f"`{elementwise_lane['trajectory_ab']['map_escape']['nearest_control_relative_l2']:.3e}`. "
+        f"Raw report SHA-256 `{elementwise_lane['trajectory_ab']['report_sha256']}`. | "
+        f"{elementwise_lane['next_gate']} |",
+        f"| **NUMERICALLY EQUIVALENT / E2E IMMATERIAL** | Same-binary causal `{same_binary_lane['job_id']}` | "
+        "Zero state/schedule escapes; roundoff-scale relative-L2 differences at it2/3 with identical CUDA SHA. "
+        "Cold/warm speedups "
+        f"`{same_binary_lane['runtime_result']['cold_speedup']:.4f}x`/"
+        f"`{same_binary_lane['runtime_result']['warm_speedup']:.4f}x`; the warm gain is immaterial. Raw report SHA-256 "
+        f"`{same_binary_lane['report_sha256']}`. | {same_binary_lane['next_gate']} |",
+        f"| **REJECTED** | 80M x-half `{xhalf_lane['performance_job']}/{xhalf_lane['operand_job']}` | "
+        "Iteration-1 topology is identical but 3/3 artifacts differ; causal projection effect was not proved. "
+        f"Prior {xhalf_lane['same_h100_wall_reduction_percent']:.2f}% wall reduction is unusable. | "
+        f"{xhalf_lane['next_gate']} |",
+        "| **PENDING** | None | No performance candidate currently awaits an audit. | Submit the multi-repeat "
+        "elementwise stability/equivalence panel; add a pending row after its provenance-sealed job exists. |",
         "",
-        "All four lanes are diagnostic, default-off/unwired, and have **no impact** on frozen correctness "
+        "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All six "
+        "lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness "
         f"{strict['passed']}/{strict['denominator']} or runtime {runtime['passed']}/{runtime['denominator']}.",
         "",
         "### Gate progression",
@@ -885,7 +900,11 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{short_gate['comparison_note']} Evidence: `{short_gate['evidence_root']}/{short_gate['particle_audit']}`. |",
         f"| `{active_gate['science_job']}` + audit `{active_gate['job_id']}`: "
         f"{active_gate['iterations']}-iteration typed gate | **MIXED: POLICY/MAP PASS; PARTICLE FAIL@"
-        f"{particle_gate['first_failure_iteration']}; RUNTIME INCONCLUSIVE** | Original profiled repeat stopped at "
+        f"{particle_gate['first_failure_iteration']}; RUNTIME INCONCLUSIVE** | Typed policy **PASS "
+        f"{typed_policy['iterations_per_arm']}/{typed_policy['iterations_per_arm']} in both arms**. "
+        f"Same-GPU map **PASS {map_gate['checkpoints_passed']}/{map_gate['checkpoints']}**; active-particle "
+        f"**FAIL@{particle_gate['first_failure_iteration']} — OPEN**; runtime **INCONCLUSIVE**. Original profiled "
+        "repeat stopped at "
         f"iteration {active_gate['original_profile_repeat']['stopped_after_iteration']} (invalid harness); corrected "
         f"job `{active_gate['corrected_profile_job']}` completed, with direct map/particle FAIL@4, but is cross-GPU "
         "diagnostic only. Frozen scores stay "
@@ -1206,17 +1225,18 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            "1. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
+            "1. Run a multi-repeat elementwise stability/equivalence panel across the full trajectory. Measure drift "
+            "growth, bias, variance, discrete state-escape rate, basin changes, final quality, and end-to-end runtime "
+            "distributions; do not require a brittle zero two-control map diameter.",
+            "2. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
             "control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, "
             "dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.",
-            "2. Advance batched CUB to actual captured posterior operands, then a control/control/candidate trajectory "
-            "A/B. Job 13267397 already preserves sort, threshold, support, and significant-count outputs bitwise and "
-            "reduces call time 20.4--26.8%; keep it default-off until both higher gates pass.",
             "3. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
             "as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact "
             "boundary measurement before any trajectory.",
-            "4. Keep the 80M x-half cap rejected. Job 13265965 did not provide a causal invariant, so do not "
-            "implement the accumulation split without a one-process replay from byte-identical frozen incoming state.",
+            "4. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is "
+            "numerically equivalent, but the same-binary 1.0091x warm result is immaterial and the isolated primitive "
+            "speedup cannot authorize promotion.",
             "5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
             f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
             "the explicitly requested performance-first phase is active.",

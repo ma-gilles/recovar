@@ -876,8 +876,13 @@
       },
       {
         "candidate": "batched CUB sort/scan scratch reuse",
-        "status": "DOWNSTREAM-EXACT MICROGATE; TRAJECTORY NEXT; DEFAULT OFF",
-        "evidence": "Job 13267397 preserves all sorts, threshold indices/values, support masks, and significant counts bitwise at the four GF46 shapes while reducing call time 20.4--26.8% (minimum 1.2565x). Iteration-20 normalized drift stays inside scalar self-repeat variability; iterations 40/60/80 are exact through normalized/reconstruction weights. Captured operands and a control/control/candidate trajectory A/B remain required before promotion."
+        "status": "REJECTED; TRAJECTORY SCIENCE FAIL; DEFAULT OFF",
+        "evidence": "The primitive gate in job 13267397 was downstream-exact and 20.4--26.8% faster, but fail-closed ABBA trajectory job 13268653 rejects promotion: candidate repeat 1 escapes the particle-state envelope at iterations 4/16/18 (particles 285/2902/902), changes current_changes_optimal_offsets_angstrom at iteration 18, and reaches a worst map/control-diameter ratio of 87.94603038052571. The 1.0247x cold and 1.0517x warm observations are non-scoring because correctness failed."
+      },
+      {
+        "candidate": "batched posterior elementwise exponentiate/divide",
+        "status": "NUMERICALLY EQUIVALENT; END-TO-END GAIN IMMATERIAL/INCONCLUSIVE; DEFAULT OFF",
+        "evidence": "Primitive job 13269547 is bitwise exact at GF46 iterations 20/40/60/80 and 7.1839--31.6257x faster at the isolated warmed exponentiate-plus-divide boundary. Jobs 13269681/13271166 have zero particle-state and schedule escapes. The strict two-control map-diameter diagnostic flags roundoff-scale relative-L2 differences, but the same-binary rerun moves them to candidate repeat 2 at iterations 2/3 while all four arms use identical CUDA bytes, supporting control-scale numerical variability rather than a basin change. Same-binary warm gain is only 1.0091x, so there is no large reproducible end-to-end advantage and no promotion."
       }
     ]
   },
@@ -887,11 +892,27 @@
     "score_impact": "none",
     "frozen_scores_changed": false,
     "production_default_changed": false,
+    "numerical_equivalence_policy": {
+      "zero_two_control_map_diameter_required": false,
+      "roundoff_scale_difference_allowed": true,
+      "required_properties": [
+        "mathematical_equivalence",
+        "no_drift_growth",
+        "no_bias",
+        "no_increased_variance",
+        "no_discrete_state_or_schedule_escape",
+        "no_basin_change",
+        "no_final_quality_regression"
+      ],
+      "performance_requirement": "large reproducible end-to-end runtime gain",
+      "isolated_primitive_speedup_is_insufficient": true
+    },
     "lanes": [
       {
         "id": "call_neutral_flat_row",
         "label": "Call-neutral flat-row scorer",
         "status": "qualified_microbenchmark_default_off",
+        "lane_state": "accepted_primitive",
         "jobs": ["13266322", "13266460"],
         "source_head": "2b873a0966ecabc1d0174e5f6069e822b7d03002",
         "documentation_head": "5bd40c10c4ed726e7758237fd103158628ffd282",
@@ -928,6 +949,7 @@
         "id": "stable_fine_window",
         "label": "Stable physical fine-window shapes",
         "status": "exact_primitive_forecast_only_default_off",
+        "lane_state": "accepted_primitive",
         "jobs": ["13264981", "13265301"],
         "source_head": "a0f878ec569c54b89bd827db996c445102c05286",
         "hardware": "H100",
@@ -958,7 +980,8 @@
       {
         "id": "batched_cub_sort_scan",
         "label": "Batched CUB sort/scan",
-        "status": "downstream_exact_microbenchmark_trajectory_next_default_off",
+        "status": "rejected_trajectory_science_fail_default_off",
+        "lane_state": "rejected",
         "diagnosis_job": "13266477",
         "scratch_job": "13266811",
         "scalar_repeat_job": "13267179",
@@ -1002,11 +1025,66 @@
         },
         "performance_claim_authorized": true,
         "performance_claim_scope": "seeded_call_level_only",
+        "trajectory_ab": {
+          "job_id": "13268653",
+          "result": "fail",
+          "case_id": "vdam-gf46",
+          "iterations": 20,
+          "execution_order": "control-1,candidate-1,candidate-2,control-2",
+          "same_gpu": true,
+          "control_repo_head": "f90c453f5f52995b4b790e4a0be533bdc5afee3d",
+          "candidate_repo_head": "ca7867872cf7b68dfbb04aacad82c0c76e72f0de",
+          "control_cuda_sha256": "a548e44d81adcad7d0356ad369d8cfd23aae7404c1383b1ca2cf85967e77241b",
+          "candidate_cuda_sha256": "000650ce5e7bb7b7274b1f386c8f402b1f37e08634f782d3e895beed9dfd7a27",
+          "particle_state_escapes": [
+            {"candidate_repeat": 1, "iteration": 4, "particle_id": 285},
+            {"candidate_repeat": 1, "iteration": 16, "particle_id": 2902},
+            {"candidate_repeat": 1, "iteration": 18, "particle_id": 902}
+          ],
+          "schedule_escapes": [
+            {
+              "candidate_repeat": 1,
+              "iteration": 18,
+              "field": "current_changes_optimal_offsets_angstrom"
+            }
+          ],
+          "map_failed_iteration_count": 20,
+          "map_outside_candidate_checkpoint_count": 21,
+          "worst_map_escape": {
+            "candidate_repeat": 1,
+            "iteration": 4,
+            "control_diameter_relative_l2": 3.535450590389303e-07,
+            "nearest_control_relative_l2": 3.109288450312252e-05,
+            "nearest_over_control_diameter": 87.94603038052571
+          },
+          "max_posterior_nearest_control_diagnostic": {
+            "candidate_repeat_1_worst": 0.51508629322052,
+            "candidate_repeat_1_iteration": 18,
+            "candidate_repeat_2_worst": 4.9054622650146484e-05,
+            "candidate_repeat_2_iteration": 10,
+            "scoring": false
+          },
+          "runtime": {
+            "cold_control_seconds": 166,
+            "cold_candidate_seconds": 162,
+            "cold_speedup": 1.0246913580246915,
+            "warm_control_seconds": 61,
+            "warm_candidate_seconds": 58,
+            "warm_speedup": 1.0517241379310345,
+            "scoring": false,
+            "promotion_authorized": false
+          },
+          "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_batched_posterior_ab_ca7867872_r3_20260831/analysis/audit_vdam_two_repo_trajectory_ab.json",
+          "report_sha256": "a67f6c969e84da096c70d88219ddb4e6962ecd13266814743d992099be7b172d",
+          "slurm_log_sha256": "0474fd2f6be931f313eb9299f7d52c4b024d8233cba4f6cca98447ce6ce60f16"
+        },
         "production_wired": false,
         "default_enabled": false,
-        "trajectory_run": false,
+        "trajectory_run": true,
+        "science_gate_passed": false,
+        "trajectory_runtime_claim_authorized": false,
         "promotion_authorized": false,
-        "next_gate": "Replay actual captured posterior operands, then run a control/control/candidate trajectory A/B; keep default-off until both gates pass.",
+        "next_gate": "Rejected. Revisit only after a causal fix preserves the scalar scan/reduction chronology and passes the same fail-closed ABBA trajectory gate.",
         "evidence": {
           "diagnosis_log_sha256": "39a0cfd990cf607aa997a8a162d998f12b8b3cc0fa86de4a190fa7692dc7c424",
           "scratch_log_sha256": "f61a9edf94662984ed624340546c9fe782e4e711f89243094576f71da8c73d71",
@@ -1018,9 +1096,200 @@
         }
       },
       {
+        "id": "batched_posterior_elementwise",
+        "label": "Batched posterior elementwise ops",
+        "status": "numerically_equivalent_end_to_end_gain_inconclusive_default_off",
+        "lane_state": "accepted_numerical_equivalence",
+        "primitive_gate": {
+          "job_id": "13269547",
+          "result": "pass",
+          "hardware": "NVIDIA H100 80GB HBM3",
+          "source_head": "bbd49083beb0bcaa2872d53ed87c7a9ff354fe51",
+          "cuda_library_sha256": "6210cdb1cc97aa72fbdf80b36b501ad48c8d1d1e4866f4a2c11889076e1bff53",
+          "captured_iterations": [20, 40, 60, 80],
+          "exponentiate_bitwise": true,
+          "divide_bitwise": true,
+          "combined_bitwise": true,
+          "speedups": [7.18388202434731, 18.66334512444239, 15.005022375757674, 31.62574537247615],
+          "minimum_speedup": 7.18388202434731,
+          "timing_scope": "warmed combined exponentiate+divide; compilation excluded",
+          "focused_gpu_test": "1 passed",
+          "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_posterior_elementwise_only_gate_bbd49083_r1_20260831/batched_elementwise_gate.json",
+          "report_sha256": "139a7b8b75b5daec52f22de4f3633733c94a8d9752db7390b89701fa30733524",
+          "slurm_log_sha256": "941ccd3da0c88a5fb1a72b085e4367862716f5831be17ff7075a093254718804"
+        },
+        "trajectory_ab": {
+          "job_id": "13269681",
+          "result": "fail",
+          "result_role": "raw_strict_two_control_map_diameter_diagnostic",
+          "acceptance_result": "numerically_equivalent",
+          "case_id": "vdam-gf46",
+          "iterations": 20,
+          "execution_order": "control-1,candidate-1,candidate-2,control-2",
+          "same_gpu": true,
+          "control_repo_head": "f90c453f5f52995b4b790e4a0be533bdc5afee3d",
+          "candidate_repo_head": "bbd49083beb0bcaa2872d53ed87c7a9ff354fe51",
+          "control_cuda_sha256": "a548e44d81adcad7d0356ad369d8cfd23aae7404c1383b1ca2cf85967e77241b",
+          "candidate_cuda_sha256": "6210cdb1cc97aa72fbdf80b36b501ad48c8d1d1e4866f4a2c11889076e1bff53",
+          "particle_state_failed_iteration_count": 0,
+          "particle_state_outside_candidate_checkpoint_count": 0,
+          "schedule_failed_iteration_count": 0,
+          "schedule_outside_candidate_checkpoint_count": 0,
+          "map_failed_iteration_count": 1,
+          "map_outside_candidate_checkpoint_count": 1,
+          "map_escape": {
+            "candidate_repeat": 1,
+            "iteration": 20,
+            "control_diameter_relative_l2": 5.076089288308145e-07,
+            "nearest_control_relative_l2": 5.451515532757519e-07,
+            "nearest_over_control_diameter": 1.0739597400924568
+          },
+          "candidate_repeat_2_terminal_map_ratio": 0.6969188422862708,
+          "max_posterior_nearest_control_diagnostic": {
+            "candidate_repeat_1_worst": 4.89354133605957e-05,
+            "candidate_repeat_1_iteration": 10,
+            "candidate_repeat_2_worst": 3.8564205169677734e-05,
+            "candidate_repeat_2_iteration": 15,
+            "scoring": false
+          },
+          "runtime": {
+            "cold_control_seconds": 163,
+            "cold_candidate_seconds": 163,
+            "cold_speedup": 1.0,
+            "warm_control_seconds": 77,
+            "warm_candidate_seconds": 66,
+            "warm_speedup": 1.1666666666666667,
+            "scoring": false,
+            "promotion_authorized": false
+          },
+          "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_elementwise_only_ab_bbd49083_r1_20260831/analysis/audit_vdam_two_repo_trajectory_ab.json",
+          "report_sha256": "42544acfe0ae193022808abdbdf56639f418f6102d4e66b9a44ddc1a0aa1ff56",
+          "slurm_log_sha256": "0474fd2f6be931f313eb9299f7d52c4b024d8233cba4f6cca98447ce6ce60f16"
+        },
+        "numerical_equivalence": {
+          "result": "pass",
+          "fixed_operand_elementwise_bitwise": true,
+          "particle_state_escapes": 0,
+          "schedule_escapes": 0,
+          "map_difference_scale": "relative_l2_5.45e-7",
+          "two_control_diameter_ratio": 1.0739597400924568,
+          "same_binary_control_variability_confirmed": true,
+          "basin_change_observed": false,
+          "qualification": "roundoff-scale trajectory variation with no discrete state or schedule change",
+          "remaining_stability_gate": [
+            "drift_growth",
+            "bias",
+            "variance",
+            "state_escape_rate",
+            "final_quality"
+          ]
+        },
+        "performance_claim_authorized": true,
+        "performance_claim_scope": "isolated_warmed_primitive_only",
+        "end_to_end_runtime_status": "inconclusive",
+        "production_wired": false,
+        "default_enabled": false,
+        "trajectory_run": true,
+        "numerical_equivalence_gate_passed": true,
+        "trajectory_runtime_claim_authorized": false,
+        "promotion_authorized": false,
+        "next_gate": "Run a multi-repeat equivalence panel measuring drift growth, bias, variance, discrete state-escape rate, basin changes, and final quality. Promote only with a large reproducible end-to-end gain."
+      },
+      {
+        "id": "elementwise_same_binary_causal",
+        "label": "Elementwise same-binary causal rerun",
+        "status": "numerical_equivalence_evidence_end_to_end_gain_immaterial_default_off",
+        "lane_state": "accepted_numerical_equivalence",
+        "job_id": "13271166",
+        "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_elementwise_same_binary_ab_4ee4383e_bbd49083_r3_20260831",
+        "execution_order": "control-1,candidate-1,candidate-2,control-2",
+        "control_repo_head": "4ee4383ed57ccddc4e56575a965f318c3fb737d4",
+        "candidate_repo_head": "bbd49083beb0bcaa2872d53ed87c7a9ff354fe51",
+        "shared_cuda_library_sha256": "6210cdb1cc97aa72fbdf80b36b501ad48c8d1d1e4866f4a2c11889076e1bff53",
+        "control_scope": "same CUDA wrapper/source and scalar helper call sites, with external RELION binding harness fix",
+        "gpu_cuda_preflight": "passed_all_four_arms",
+        "invalid_preflight_attempts": [
+          {
+            "job_id": "13270868",
+            "reason": "mistyped control HEAD pin",
+            "science_started": false,
+            "evidence_role": "invalid_preflight_only",
+            "slurm_log_sha256": "7d40e9fdc81101e4f98ffad045858532ac1d9705db6fc3434551546c88e83245"
+          },
+          {
+            "job_id": "13270984",
+            "reason": "missing RELION binding in control worktree",
+            "science_started": false,
+            "evidence_role": "invalid_preflight_only",
+            "slurm_log_sha256": "bc2267616534133f2b33850d2afd46aeb035e17af456d212469a60e9e1c7d10a"
+          }
+        ],
+        "science_result": {
+          "result": "fail",
+          "result_role": "raw_strict_two_control_map_diameter_diagnostic",
+          "acceptance_result": "numerically_equivalent",
+          "particle_state_failed_iteration_count": 0,
+          "particle_state_outside_candidate_checkpoint_count": 0,
+          "schedule_failed_iteration_count": 0,
+          "schedule_outside_candidate_checkpoint_count": 0,
+          "map_failed_iteration_count": 2,
+          "map_outside_candidate_checkpoint_count": 2,
+          "map_escapes": [
+            {
+              "candidate_repeat": 2,
+              "iteration": 2,
+              "control_diameter_relative_l2": 1.1102519767328753e-07,
+              "nearest_control_relative_l2": 1.3540378017785787e-07,
+              "nearest_over_control_diameter": 1.219577024094196
+            },
+            {
+              "candidate_repeat": 2,
+              "iteration": 3,
+              "control_diameter_relative_l2": 1.6416293253915265e-07,
+              "nearest_control_relative_l2": 1.8785676095449206e-07,
+              "nearest_over_control_diameter": 1.1443311717746543
+            }
+          ]
+        },
+        "numerical_equivalence": {
+          "result": "pass",
+          "all_four_arms_same_cuda_library": true,
+          "particle_state_escapes": 0,
+          "schedule_escapes": 0,
+          "map_difference_scale": "relative_l2_1.35e-7_to_1.88e-7",
+          "map_escape_repeats_and_iterations": "candidate_repeat_2_iterations_2_3",
+          "different_cuda_binary_ruled_out": true,
+          "basin_change_observed": false,
+          "interpretation": "control-scale numerical variability, not a discrete scientific trajectory change"
+        },
+        "runtime_result": {
+          "cold_control_seconds": 226,
+          "cold_candidate_seconds": 210,
+          "cold_speedup": 1.0761904761904761,
+          "warm_control_seconds": 111,
+          "warm_candidate_seconds": 110,
+          "warm_speedup": 1.009090909090909,
+          "qualification": "immaterial",
+          "scoring": false,
+          "promotion_authorized": false
+        },
+        "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_elementwise_same_binary_ab_4ee4383e_bbd49083_r3_20260831/analysis/audit_vdam_two_repo_trajectory_ab.json",
+        "report_sha256": "ccb9d9cc4f4ee949aabbfa2c6045aea5b6c2007bcdbcd871e0e1df246d0c3db0",
+        "slurm_log_sha256": "0474fd2f6be931f313eb9299f7d52c4b024d8233cba4f6cca98447ce6ce60f16",
+        "score_impact": "none",
+        "production_wired": false,
+        "default_enabled": false,
+        "trajectory_run": true,
+        "numerical_equivalence_gate_passed": true,
+        "trajectory_runtime_claim_authorized": false,
+        "promotion_authorized": false,
+        "next_gate": "Run multi-repeat stability/equivalence checks for drift growth, bias, variance, state-escape rate, basin changes, and final quality; seek a different optimization if end-to-end gain remains near 1.009x."
+      },
+      {
         "id": "xhalf_projection_cap",
         "label": "80M x-half projection cap",
         "status": "rejected_unqualified",
+        "lane_state": "rejected",
         "performance_job": "13260950",
         "operand_job": "13265965",
         "decision_head": "732868abb01befa3b60686e783e195608734faa9",
@@ -1097,12 +1366,13 @@
     "ordered_shell_head": "3b5afd98e",
     "pre_diagnostic_head": "94bc7d890",
     "typed_warm80_audit_job": "13256248",
-    "current_blocker": "active_particle_envelope_fail_at_iteration_37",
-    "runtime_status": "inconclusive",
-    "current_action": "Close the performance gap first: integrate the exact call-neutral flat-row scorer behind an explicit default-off control and time packing/projection in a live call; in parallel, replay captured posterior operands for the downstream-exact batched CUB call, complete the stable physical-shape integration, and then run focused trajectory A/B gates.",
-    "hypothesis": "Job 13211719 rejects same-cache reuse as sufficient for exact ordered-shell repeatability: the earliest captured difference is one float32 ULP in an E-step max-posterior scalar.",
-    "evidence_pattern": "A populated the canonical cache 0->377; A-after, B-before, and B-after share manifest SHA-256 2703b7d6fdbc0d329407e20574a90791a15af59c6dc882bc2e617069e28ef3d5 with no B additions or changes.",
-    "narrowed_boundary": "Cache identity is proven. The performance frontier is execution topology: flat-row scoring is exact and materially faster at call level, stable physical windows are exact but forecast-only, and batched CUB preserves support decisions while reducing call time 20.4--26.8%. Captured operands and focused trajectories are the next discriminators.",
+    "same_binary_causal_job": "13271166",
+    "current_blocker": "elementwise_large_end_to_end_gain_not_demonstrated_and_stability_panel_open",
+    "runtime_status": "elementwise_same_binary_gain_immaterial",
+    "current_action": "Run a multi-repeat elementwise stability/equivalence panel measuring drift growth, bias, variance, discrete state-escape rate, basin changes, and final quality. Treat the roundoff-scale map differences as numerically equivalent unless this panel shows instability; seek a different optimization if the same-binary end-to-end gain remains near 1.009x.",
+    "hypothesis": "The small map differences in jobs 13269681/13271166 are control-scale numerical variability, not scientific basin changes: fixed operands are bitwise, state/schedule stay exact, and the same-binary rerun moves the flagged checkpoints between repeats while using identical CUDA bytes. Multi-repeat statistics must test stability rather than requiring a brittle zero two-control map diameter.",
+    "evidence_pattern": "Batched CUB remains rejected because it causes discrete state escapes at iterations 4/16/18, a schedule escape at iteration 18, and a worst 87.946x map/control-diameter excursion. Elementwise has zero state/schedule escapes in both ABBA panels and only relative-L2 map differences of roughly 1e-7; same-binary warm speedup is 1.0091x and therefore immaterial.",
+    "narrowed_boundary": "Flat-row and stable-window primitives are accepted as default-off primitive evidence. Elementwise is numerically equivalent but not promoted because no large reproducible end-to-end gain is established. Batched CUB and x-half remain rejected. No lane is pending; the next gate is multi-repeat stability/equivalence plus final-quality and runtime distributions.",
     "production_change_authorized": false
   },
   "history": [

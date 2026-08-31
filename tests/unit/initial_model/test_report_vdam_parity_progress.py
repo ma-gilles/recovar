@@ -316,6 +316,13 @@ def test_runtime_workboard_is_evidence_bound_and_non_scoring() -> None:
     assert workboard["frozen_scores_changed"] is False
     assert workboard["production_default_changed"] is False
     assert workboard["score_impact"] == "none"
+    numerical_policy = workboard["numerical_equivalence_policy"]
+    assert numerical_policy["zero_two_control_map_diameter_required"] is False
+    assert numerical_policy["roundoff_scale_difference_allowed"] is True
+    assert numerical_policy["isolated_primitive_speedup_is_insufficient"] is True
+    assert numerical_policy["performance_requirement"] == "large reproducible end-to-end runtime gain"
+    assert "no_discrete_state_or_schedule_escape" in numerical_policy["required_properties"]
+    assert "no_final_quality_regression" in numerical_policy["required_properties"]
     assert list(lanes) == progress_mod.RUNTIME_LANE_IDS
     assert lanes["call_neutral_flat_row"]["status"] == "qualified_microbenchmark_default_off"
     assert lanes["call_neutral_flat_row"]["combined_call_reduction_percent"] == pytest.approx(
@@ -331,10 +338,94 @@ def test_runtime_workboard_is_evidence_bound_and_non_scoring() -> None:
     assert lanes["batched_cub_sort_scan"]["posterior_boundary"]["minimum_speedup"] == pytest.approx(
         1.2565006073036646
     )
+    cub_trajectory = lanes["batched_cub_sort_scan"]["trajectory_ab"]
+    assert lanes["batched_cub_sort_scan"]["status"] == "rejected_trajectory_science_fail_default_off"
+    assert cub_trajectory["job_id"] == "13268653"
+    assert cub_trajectory["result"] == "fail"
+    assert cub_trajectory["particle_state_escapes"] == [
+        {"candidate_repeat": 1, "iteration": 4, "particle_id": 285},
+        {"candidate_repeat": 1, "iteration": 16, "particle_id": 2902},
+        {"candidate_repeat": 1, "iteration": 18, "particle_id": 902},
+    ]
+    assert cub_trajectory["schedule_escapes"] == [
+        {
+            "candidate_repeat": 1,
+            "iteration": 18,
+            "field": "current_changes_optimal_offsets_angstrom",
+        }
+    ]
+    assert cub_trajectory["map_outside_candidate_checkpoint_count"] == 21
+    assert cub_trajectory["worst_map_escape"]["nearest_over_control_diameter"] == pytest.approx(
+        87.94603038052571
+    )
+    assert cub_trajectory["report_sha256"] == (
+        "a67f6c969e84da096c70d88219ddb4e6962ecd13266814743d992099be7b172d"
+    )
+    assert cub_trajectory["runtime"]["scoring"] is False
     assert lanes["batched_cub_sort_scan"]["promotion_authorized"] is False
+
+    elementwise = lanes["batched_posterior_elementwise"]
+    assert elementwise["status"] == "numerically_equivalent_end_to_end_gain_inconclusive_default_off"
+    assert elementwise["primitive_gate"]["job_id"] == "13269547"
+    assert elementwise["primitive_gate"]["combined_bitwise"] is True
+    assert elementwise["primitive_gate"]["minimum_speedup"] == pytest.approx(7.18388202434731)
+    assert elementwise["trajectory_ab"]["job_id"] == "13269681"
+    assert elementwise["trajectory_ab"]["result_role"] == "raw_strict_two_control_map_diameter_diagnostic"
+    assert elementwise["trajectory_ab"]["acceptance_result"] == "numerically_equivalent"
+    assert elementwise["trajectory_ab"]["particle_state_failed_iteration_count"] == 0
+    assert elementwise["trajectory_ab"]["schedule_failed_iteration_count"] == 0
+    assert elementwise["trajectory_ab"]["map_escape"]["iteration"] == 20
+    assert elementwise["trajectory_ab"]["map_escape"]["nearest_over_control_diameter"] == pytest.approx(
+        1.0739597400924568
+    )
+    assert elementwise["trajectory_ab"]["report_sha256"] == (
+        "42544acfe0ae193022808abdbdf56639f418f6102d4e66b9a44ddc1a0aa1ff56"
+    )
+    assert elementwise["trajectory_ab"]["runtime"]["scoring"] is False
+    assert elementwise["numerical_equivalence"]["result"] == "pass"
+    assert elementwise["numerical_equivalence"]["fixed_operand_elementwise_bitwise"] is True
+    assert elementwise["numerical_equivalence"]["basin_change_observed"] is False
+    assert elementwise["numerical_equivalence_gate_passed"] is True
+    assert elementwise["end_to_end_runtime_status"] == "inconclusive"
+    assert elementwise["promotion_authorized"] is False
+
+    same_binary = lanes["elementwise_same_binary_causal"]
+    assert same_binary["status"] == "numerical_equivalence_evidence_end_to_end_gain_immaterial_default_off"
+    assert same_binary["job_id"] == "13271166"
+    assert same_binary["control_repo_head"] == "4ee4383ed57ccddc4e56575a965f318c3fb737d4"
+    assert same_binary["shared_cuda_library_sha256"] == (
+        "6210cdb1cc97aa72fbdf80b36b501ad48c8d1d1e4866f4a2c11889076e1bff53"
+    )
+    assert same_binary["science_result"]["particle_state_failed_iteration_count"] == 0
+    assert same_binary["science_result"]["schedule_failed_iteration_count"] == 0
+    assert same_binary["science_result"]["acceptance_result"] == "numerically_equivalent"
+    assert [row["iteration"] for row in same_binary["science_result"]["map_escapes"]] == [2, 3]
+    assert [row["nearest_over_control_diameter"] for row in same_binary["science_result"]["map_escapes"]] == pytest.approx(
+        [1.219577024094196, 1.1443311717746543]
+    )
+    assert same_binary["report_sha256"] == (
+        "ccb9d9cc4f4ee949aabbfa2c6045aea5b6c2007bcdbcd871e0e1df246d0c3db0"
+    )
+    assert [row["job_id"] for row in same_binary["invalid_preflight_attempts"]] == ["13270868", "13270984"]
+    assert all(row["science_started"] is False for row in same_binary["invalid_preflight_attempts"])
+    assert same_binary["runtime_result"]["scoring"] is False
+    assert same_binary["runtime_result"]["qualification"] == "immaterial"
+    assert same_binary["numerical_equivalence"]["result"] == "pass"
+    assert same_binary["numerical_equivalence"]["different_cuda_binary_ruled_out"] is True
+    assert same_binary["numerical_equivalence_gate_passed"] is True
+    assert same_binary["promotion_authorized"] is False
+
     assert lanes["xhalf_projection_cap"]["preboundary_invariant_passed"] is False
     assert lanes["xhalf_projection_cap"]["causal_projection_effect_established"] is False
     assert lanes["xhalf_projection_cap"]["promotion_authorized"] is False
+    assert [row["lane_state"] for row in workboard["lanes"]] == [
+        "accepted_primitive",
+        "accepted_primitive",
+        "rejected",
+        "accepted_numerical_equivalence",
+        "accepted_numerical_equivalence",
+        "rejected",
+    ]
     assert next(row for row in loaded["panels"] if row["id"] == "k1_strict_correctness")["passed"] == 2
     assert next(row for row in loaded["panels"] if row["id"] == "runtime_comparable")["passed"] == 0
 
@@ -348,24 +439,32 @@ def test_runtime_workboard_is_fail_closed(tmp_path: Path, scorecard: dict) -> No
 def test_runtime_workboard_is_easy_to_scan() -> None:
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
 
-    assert "## Runtime workboard" in rendered
-    assert "Flat-row scorer (`13266322/13266460`) | **QUALIFIED MICROBENCH; DEFAULT OFF**" in rendered
+    assert "## Performance lanes" in rendered
+    assert "**ACCEPTED PRIMITIVE ONLY** | Flat-row scorer `13266322/13266460`" in rendered
     assert "32.88%, 35.77%, 54.53%, 32.68%" in rendered
-    assert "Stable fine window (`13264981/13265301`) | **EXACT PRIMITIVE; FORECAST ONLY**" in rendered
-    assert (
-        "Batched CUB (`13266477/13266811/13267179/13267397`) | "
-        "**DOWNSTREAM EXACT; TRAJECTORY NEXT; DEFAULT OFF**" in rendered
-    )
-    assert "20.4--26.8% lower; minimum 1.2565x" in rendered
-    assert "80M x-half (`13260950/13265965`) | **REJECTED / UNQUALIFIED**" in rendered
-    assert "iteration-1 topology is identical but 3/3 artifacts already differ" in rendered
+    assert "**ACCEPTED PRIMITIVE ONLY** | Stable fine window `13264981/13265301`" in rendered
+    assert "**REJECTED** | Batched CUB trajectory `13268653`" in rendered
+    assert "it4/p285, it16/p2902, it18/p902" in rendered
+    assert "87.9460303805" in rendered
+    assert "a67f6c969e84da096c70d88219ddb4e6962ecd13266814743d992099be7b172d" in rendered
+    assert "**NUMERICALLY EQUIVALENT / E2E INCONCLUSIVE** | Elementwise primitive `13269547`" in rendered
+    assert "only roundoff-scale terminal relative-L2 `5.452e-07`" in rendered
+    assert "42544acfe0ae193022808abdbdf56639f418f6102d4e66b9a44ddc1a0aa1ff56" in rendered
+    assert "Same-binary ABBA `13271166` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN IMMATERIAL**" in rendered
+    assert "warm speedup is `1.0091x`" in rendered
+    assert "strict two-control map-diameter flag alone is not a scientific rejection" in rendered
+    assert "**NUMERICALLY EQUIVALENT / E2E IMMATERIAL** | Same-binary causal `13271166`" in rendered
+    assert "ccb9d9cc4f4ee949aabbfa2c6045aea5b6c2007bcdbcd871e0e1df246d0c3db0" in rendered
+    assert "Invalid jobs `13270868` and `13270984` stopped in preflight before science" in rendered
+    assert "**PENDING** | None" in rendered
+    assert "trajectory next" not in rendered.lower()
     assert "default-off/unwired" in rendered
     assert "no impact" in rendered
 
 
 def test_dashboard_is_compact_and_exposes_shared_em_reuse() -> None:
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
-    assert len(rendered.splitlines()) < 250
+    assert len(rendered.splitlines()) < 255
     assert "Authoritative v3 status — NOT READY" in rendered
     assert "Strict K=1 correctness is **2 / 20**" in rendered
     assert "runtime parity is **0 / 20**" in rendered

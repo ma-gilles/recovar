@@ -4,42 +4,43 @@
 >
 > This page is generated from the frozen 20-case, iteration 0--200 scorecard. Scheduler diagnostics, the legacy v1/v2 tracks, K>1, and real data cannot change this score.
 
-## Current action
-
-| Gate | Result | What it means now |
-|---|---|---|
-| Typed Wavg/radix policy | **PASS 80/80 in both arms** | Requested/effective sequential Wavg=`true`; radix=`4`. |
-| Same-GPU map envelope | **PASS 81/81** | Minimum best-native FSC AUC `0.9999885424`; no checkpoint outside. |
-| Active-particle envelope | **FAIL@37 — OPEN** | 35/80 checkpoints fail; 360/360 active particles are unmatched at iteration 80. |
-| Runtime | **INCONCLUSIVE** — 0/20 | No candidate has a qualified trajectory/runtime pair. Flat-row and batched-CUB calls are exact at their downstream gates and materially faster only at call level; stable windows remain forecast-only. |
-| Immediate work | **WIRE FLAT ROW DEFAULT-OFF** | Include shared packing/projection cost in one live call, then gate the same active outputs. Replay captured batched-CUB operands, integrate stable score/Wavg/BPref shapes together, then run focused trajectory A/B gates. |
-
 ## At a glance
 
-| Axis | Authoritative state | Current engineering read |
+| Axis | Frozen score | Current read |
 |---|---|---|
-| K=1 correctness | **2/20** strict cases pass | Frozen; no recent diagnostic changes this score. |
-| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | Flat-row score-plus-posterior calls are 32.68--54.53% lower and batched CUB is 20.4--26.8% lower, but full-stage, memory, and trajectory runtime remain unmeasured. |
-| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |
-| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |
+| K=1 correctness | **2/20** | Unchanged; accepted cases are `vdam-gf44, vdam-gf45`. |
+| Runtime | **0/20** | Unchanged; observed suite range 4.91--11.58x. Promotion requires a large reproducible gain without instability or quality loss. |
+| Performance lanes | non-scoring | 4 accepted/qualified evidence lanes; 2 rejected; **0 pending**; all default-off. |
+| Numerical policy | non-scoring | Roundoff-scale map differences are acceptable when stable, unbiased, basin-preserving, quality-neutral, and paired with a large reproducible end-to-end gain. |
+| EM reuse | shared production primitives | The remaining boundary is execution topology/variability, not duplicate projector or scorer math. |
+| Later gates | separate | K>1 remains unqualified; real data remains unscored. |
 
-## Runtime workboard
+## Current focus
 
-| Lane | State | Exactness | Performance readout | Next gate |
-|---|---|---|---|---|
-| Flat-row scorer (`13266322/13266460`) | **QUALIFIED MICROBENCH; DEFAULT OFF** | Active raw, dense scores, posterior 6/6, poison tail, and calls bitwise | Combined call reduction at it20/40/60/80: 32.88%, 35.77%, 54.53%, 32.68%; packing/projection not timed | Default-off live call with packing/projection, then exact boundary; no trajectory yet. |
-| Stable fine window (`13264981/13265301`) | **EXACT PRIMITIVE; FORECAST ONLY** | Logical [68, 70, 72] under physical 72 bitwise; compile identities 3->1 | GF46 signatures 29->14; forecast 5.2--5.4% only | Integrate score/Wavg/BPref shapes together; no trajectory yet. |
-| Batched CUB (`13266477/13266811/13267179/13267397`) | **DOWNSTREAM EXACT; TRAJECTORY NEXT; DEFAULT OFF** | Sort, threshold index/value, support mask, and n-significant bitwise at all four shapes; raw scan is natively variable | 20.4--26.8% lower; minimum 1.2565x | Captured operands, then control/control/candidate trajectory A/B; no promotion yet. |
-| 80M x-half (`13260950/13265965`) | **REJECTED / UNQUALIFIED** | iteration-1 topology is identical but 3/3 artifacts already differ; causal projection effect not proved | Prior same-H100 wall was 7.56% lower, but unusable for promotion | Revisit only with one-process replay from a byte-identical frozen state. |
+| Evidence | Result | What it rules out | Explicit next gate |
+|---|---|---|---|
+| Same-binary ABBA `13271166` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm speedup is `1.0091x` | All four arms loaded CUDA SHA `6210cdb1cc97aa72fbdf80b36b501ad48c8d1d1e4866f4a2c11889076e1bff53`; different CUDA libraries are not the cause, and the strict two-control map-diameter flag alone is not a scientific rejection. | Run multi-repeat stability/equivalence checks for drift growth, bias, variance, state-escape rate, basin changes, and final quality; seek a different optimization if end-to-end gain remains near 1.009x. |
 
-All four lanes are diagnostic, default-off/unwired, and have **no impact** on frozen correctness 2/20 or runtime 0/20.
+## Performance lanes
+
+| Bucket | Lane | Evidence | Explicit next gate |
+|---|---|---|---|
+| **ACCEPTED PRIMITIVE ONLY** | Flat-row scorer `13266322/13266460` | Active raw/dense scores, posterior 6/6, poisoned tail, and call count are bitwise; isolated combined-call reduction 32.88%, 35.77%, 54.53%, 32.68%. Default-off. | Wire behind an explicit default-off control, include shared compact-pair packing/projection cost, and repeat the bitwise live-call boundary before any short trajectory. |
+| **ACCEPTED PRIMITIVE ONLY** | Stable fine window `13264981/13265301` | Logical [68, 70, 72] under physical 72 is bitwise; compile identities 3->1; 5.2--5.4% is forecast-only. Default-off. | Integrate score, Wavg, and BPref physical shapes together, poison-test inactive tails, and measure a live exact boundary before a trajectory. |
+| **REJECTED** | Batched CUB trajectory `13268653` | State escapes it4/p285, it16/p2902, it18/p902; schedule escape it18; 21 candidate map checkpoints outside, worst ratio `87.9460303805`. Cold/warm speedups `1.0247x`/`1.0517x` are non-scoring. Raw report SHA-256 `a67f6c969e84da096c70d88219ddb4e6962ecd13266814743d992099be7b172d`. | Rejected. Revisit only after a causal fix preserves the scalar scan/reduction chronology and passes the same fail-closed ABBA trajectory gate. |
+| **NUMERICALLY EQUIVALENT / E2E INCONCLUSIVE** | Elementwise primitive `13269547` + trajectory `13269681` | Primitive is bitwise at it20/40/60/80 and 7.1839--31.6257x faster; trajectory has zero state/schedule escapes and only roundoff-scale terminal relative-L2 `5.452e-07`. Raw report SHA-256 `42544acfe0ae193022808abdbdf56639f418f6102d4e66b9a44ddc1a0aa1ff56`. | Run a multi-repeat equivalence panel measuring drift growth, bias, variance, discrete state-escape rate, basin changes, and final quality. Promote only with a large reproducible end-to-end gain. |
+| **NUMERICALLY EQUIVALENT / E2E IMMATERIAL** | Same-binary causal `13271166` | Zero state/schedule escapes; roundoff-scale relative-L2 differences at it2/3 with identical CUDA SHA. Cold/warm speedups `1.0762x`/`1.0091x`; the warm gain is immaterial. Raw report SHA-256 `ccb9d9cc4f4ee949aabbfa2c6045aea5b6c2007bcdbcd871e0e1df246d0c3db0`. | Run multi-repeat stability/equivalence checks for drift growth, bias, variance, state-escape rate, basin changes, and final quality; seek a different optimization if end-to-end gain remains near 1.009x. |
+| **REJECTED** | 80M x-half `13260950/13265965` | Iteration-1 topology is identical but 3/3 artifacts differ; causal projection effect was not proved. Prior 7.56% wall reduction is unusable. | Do not revisit without one-process replay from a byte-identical frozen incoming state, resetting accumulators between 40M and 80M arms. |
+| **PENDING** | None | No performance candidate currently awaits an audit. | Submit the multi-repeat elementwise stability/equivalence panel; add a pending row after its provenance-sealed job exists. |
+
+Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All six lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness 2/20 or runtime 0/20.
 
 ### Gate progression
 
 | Gate | Status | Evidence |
 |---|---|---|
 | `13252518`: 20-iteration `vdam-gf46` | **PARTICLE TRAJECTORY EXACT** | All 3,000/3,000 pose/translation states match at every iteration; first divergence is `null`; requested/effective Wavg=`true`, radix=`4`. Wall 177 s; pre-artifact 158.846 s. 177 s is below the 182 s accepted short baseline but above the 169.40 s prior exact-control result; these are cross-run H100 observations, not a paired speed result. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime20_6f39ad52e_20260831/provenance/particle_state_audit_it001_020.json`. |
-| `13253088` + audit `13256248`: 80-iteration typed gate | **MIXED: POLICY/MAP PASS; PARTICLE FAIL@37; RUNTIME INCONCLUSIVE** | Original profiled repeat stopped at iteration 64 (invalid harness); corrected job `13254470` completed, with direct map/particle FAIL@4, but is cross-GPU diagnostic only. Frozen scores stay 2/20 correctness and 0/20 runtime. Evidence SHA-256: policy `0c6c60df5c841ebbdbd54d67df681d6a5c2c1229d0657315d4add08d663f28f5`, runtime `5ffa9ae565466aa924eccd1a836a3a5af1613df40cf4c584b344ec3dd4494165`, map `4a2fa726dd2ee7e491983cd67e6212211dc8022aa89a9510e89495035ea1010a`, particle `a7772c546379ac414a511fbcd15907144de264da18677ad6de41c8bec03c47ba`. |
+| `13253088` + audit `13256248`: 80-iteration typed gate | **MIXED: POLICY/MAP PASS; PARTICLE FAIL@37; RUNTIME INCONCLUSIVE** | Typed policy **PASS 80/80 in both arms**. Same-GPU map **PASS 81/81**; active-particle **FAIL@37 — OPEN**; runtime **INCONCLUSIVE**. Original profiled repeat stopped at iteration 64 (invalid harness); corrected job `13254470` completed, with direct map/particle FAIL@4, but is cross-GPU diagnostic only. Frozen scores stay 2/20 correctness and 0/20 runtime. Evidence SHA-256: policy `0c6c60df5c841ebbdbd54d67df681d6a5c2c1229d0657315d4add08d663f28f5`, runtime `5ffa9ae565466aa924eccd1a836a3a5af1613df40cf4c584b344ec3dd4494165`, map `4a2fa726dd2ee7e491983cd67e6212211dc8022aa89a9510e89495035ea1010a`, particle `a7772c546379ac414a511fbcd15907144de264da18677ad6de41c8bec03c47ba`. |
 
 ## Primary panels
 
@@ -198,7 +199,8 @@ Iterations 47--80: 240.36 s wall, 44.58 s kernels, 35.899 s coarse projector, 57
 | literal pool-preserving local buckets | **REJECTED BEFORE GPU PAIR** | Job 13262146 proves exact source chronology and 49.5--82.2% fewer logical padded rows, but raises calls from 3--7 to 67--120; earlier exact, less fragmented variants regressed 31--36%. Pursue macro-packed rows inside unchanged outer calls instead. |
 | call-neutral flat-row fine scorer | **QUALIFIED MICROBENCHMARK; DEFAULT OFF** | Jobs 13266322/13266460 preserve active raw scores, dense scores, all six shared-posterior outputs, poisoned-tail no-op behavior, and outer-call cardinality bitwise. GF46 iteration-20/40/60/80 score-plus-posterior calls are 32.88%, 35.77%, 54.53%, and 32.68% lower, but projection/packing and trajectory costs are not measured. |
 | stable physical fine-window shapes | **EXACT PRIMITIVE; FORECAST ONLY; DEFAULT OFF** | Jobs 13264981/13265301 prove logical sizes 68/70/72 bitwise under one physical size 72 and reduce compile identities from three to one. The GF46 29-to-14 signature and 5.2--5.4% net-wall figures are forecasts; score, Wavg, and BPref shapes are not yet integrated together and no trajectory ran. |
-| batched CUB sort/scan scratch reuse | **DOWNSTREAM-EXACT MICROGATE; TRAJECTORY NEXT; DEFAULT OFF** | Job 13267397 preserves all sorts, threshold indices/values, support masks, and significant counts bitwise at the four GF46 shapes while reducing call time 20.4--26.8% (minimum 1.2565x). Iteration-20 normalized drift stays inside scalar self-repeat variability; iterations 40/60/80 are exact through normalized/reconstruction weights. Captured operands and a control/control/candidate trajectory A/B remain required before promotion. |
+| batched CUB sort/scan scratch reuse | **REJECTED; TRAJECTORY SCIENCE FAIL; DEFAULT OFF** | The primitive gate in job 13267397 was downstream-exact and 20.4--26.8% faster, but fail-closed ABBA trajectory job 13268653 rejects promotion: candidate repeat 1 escapes the particle-state envelope at iterations 4/16/18 (particles 285/2902/902), changes current_changes_optimal_offsets_angstrom at iteration 18, and reaches a worst map/control-diameter ratio of 87.94603038052571. The 1.0247x cold and 1.0517x warm observations are non-scoring because correctness failed. |
+| batched posterior elementwise exponentiate/divide | **NUMERICALLY EQUIVALENT; END-TO-END GAIN IMMATERIAL/INCONCLUSIVE; DEFAULT OFF** | Primitive job 13269547 is bitwise exact at GF46 iterations 20/40/60/80 and 7.1839--31.6257x faster at the isolated warmed exponentiate-plus-divide boundary. Jobs 13269681/13271166 have zero particle-state and schedule escapes. The strict two-control map-diameter diagnostic flags roundoff-scale relative-L2 differences, but the same-binary rerun moves them to candidate repeat 2 at iterations 2/3 while all four arms use identical CUDA bytes, supporting control-scale numerical variability rather than a basin change. Same-binary warm gain is only 1.0091x, so there is no large reproducible end-to-end advantage and no promotion. |
 
 ## Shared EM implementation
 
@@ -224,10 +226,10 @@ CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Curre
 
 ## Next gates
 
-1. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.
-2. Advance batched CUB to actual captured posterior operands, then a control/control/candidate trajectory A/B. Job 13267397 already preserves sort, threshold, support, and significant-count outputs bitwise and reduces call time 20.4--26.8%; keep it default-off until both higher gates pass.
+1. Run a multi-repeat elementwise stability/equivalence panel across the full trajectory. Measure drift growth, bias, variance, discrete state-escape rate, basin changes, final quality, and end-to-end runtime distributions; do not require a brittle zero two-control map diameter.
+2. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.
 3. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact boundary measurement before any trajectory.
-4. Keep the 80M x-half cap rejected. Job 13265965 did not provide a causal invariant, so do not implement the accumulation split without a one-process replay from byte-identical frozen incoming state.
+4. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is numerically equivalent, but the same-binary 1.0091x warm result is immaterial and the isolated primitive speedup cannot authorize promotion.
 5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
 6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, shared coarse-projection cache, literal pool-per-call layout, or dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.
 
