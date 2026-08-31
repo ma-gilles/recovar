@@ -52,6 +52,15 @@ ACTIVE_DIAGNOSTIC_POLICY = {
         "EXPECTED HYPOTHESIS REJECTION",
     ),
     "13212500": ("invalid_harness", "invalid", "cancelled", "INVALID HARNESS"),
+    "13254010": ("expected_fail_closed", "hypothesis_rejected", "failed", "EXPECTED FAIL-CLOSED"),
+    "13256612": ("microgate_only", "bitwise_pass_microcase", "completed", "MICROGATE ONLY"),
+    "13257087": (
+        "valid_science_fail",
+        "hypothesis_rejected",
+        "failed",
+        "VALID SCIENCE FAIL / DO NOT PROMOTE",
+    ),
+    "13257182": ("valid_exactness_fail", "hypothesis_rejected", "failed", "VALID EXACTNESS FAIL"),
 }
 CRITICAL_CACHE_MISS_JOBS = frozenset({"13208734", "13208735", "13209422"})
 PROFILE_MATCHED_EVIDENCE = {
@@ -302,122 +311,124 @@ INVALID_SPEED_HARNESS_EVIDENCE = {
     "runtime_result_recorded": False,
     "promotion_authorized": False,
 }
-ENGINEERING_SNAPSHOT_POLICY = {
-    "as_of": "2026-08-31",
-    "frozen_scores_changed": False,
-    "score_impact": "none",
-    "active_gate": {
-        "job_id": "13253088",
-        "status": "active_result_pending",
-        "source_head": "6f39ad52e",
-        "case_id": "vdam-gf46",
-        "iterations": 80,
-        "hardware": "H100",
-        "purpose": "Run the two-repeat warm trajectory and Nsight gate for the audited typed GUI defaults.",
-        "score_impact": "none_until_audited",
+COARSE_TAIL_PALETTE_EVIDENCE = {
+    "wrapper_outcome": "failed_expected_cache_contract",
+    "wrapper_failure_expected": True,
+    "scorecard_failure": False,
+    "hypothesis": "coarse_128_tail_palette_is_promotable",
+    "hypothesis_result": "rejected",
+    "source_head": "4846bd5c5bdc35a0f6d232450023082d007a44ff",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-sig-bucket-ab-13254010.out",
+    "evidence_sha256": "324bb62a9e257fb8b9871462d99bcb2cbda9750a021db6809b63f85ea088fc7a",
+    "evidence_root": (
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+        "vdam_gf46_sig_bucket_ab_4846bd5c5_20260831"
+    ),
+    "failure_report": "FAILED.json",
+    "failure_report_sha256": "91754058b814633ea39fd3f8f958a3765d48bd21575cc69be489765657da92af",
+    "particle_report": "analysis/manual/warm1_candidate_vs_control_particle.json",
+    "particle_report_sha256": "f5b71f0d9aa32dcf59e97cf6806a5205907e17d267a66f69c9ba80f663c95a82",
+    "warm_particle_result": "pass_20_of_20",
+    "warm_control_wall_seconds": 84.2343172990004,
+    "warm_candidate_wall_seconds": 87.68975677600065,
+    "warm_wall_change_percent": 4.1,
+    "warm_control_pass1_seconds": 8.130380868911743,
+    "warm_candidate_pass1_seconds": 8.72612977027893,
+    "warm_pass1_change_percent": 7.3,
+    "cache_contract": {
+        "result": "fail",
+        "candidate_files_before": 1277,
+        "candidate_files_after": 1280,
+        "candidate_bytes_before": 9670745,
+        "candidate_bytes_after": 9706866,
     },
-    "short_gate": {
-        "job_id": "13252518",
-        "status": "completed_audited",
-        "source_head": "6f39ad52e",
-        "case_id": "vdam-gf46",
-        "iterations": 20,
-        "hardware": "H100",
-        "recovar_wall_seconds": 177,
-        "cumulative_pre_artifact_seconds": 158.846,
-        "particle_count": 3000,
-        "exact_particle_state_iterations": 20,
-        "first_divergent_iteration": None,
-        "requested_effective_wavg_sequential_cuda": True,
-        "requested_effective_exact_local_bucket_radix": 4,
-        "comparison_note": (
-            "177 s is below the 182 s accepted short baseline but above the 169.40 s prior exact-control result; "
-            "these are cross-run H100 observations, not a paired speed result."
-        ),
-        "evidence_root": (
-            "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
-            "vdam_gf46_typed_runtime20_6f39ad52e_20260831"
-        ),
-        "particle_audit": "provenance/particle_state_audit_it001_020.json",
-        "score_impact": "none",
-    },
-    "typed_runtime_controls": {
-        "integration_head": "6f39ad52e",
-        "integration_commits": ["59c0abde9", "4672232a3", "6f39ad52e"],
-        "focused_checks": "18/18",
-        "defaults": {
-            "relion_wavg_sequential_cuda": True,
-            "exact_local_bucket_radix": 4,
-        },
-    },
-    "warm_profile": {
-        "job_id": "13248509",
-        "source_head": "6b5e6568a",
-        "case_id": "vdam-gf46",
-        "iteration_window": "47--80",
-        "wall_span_seconds": 240.36,
-        "gpu_kernel_seconds": 44.58,
-        "coarse_projector_seconds": 35.899,
-        "coarse_projector_gpu_percent": 80.53,
-        "local_exact_wall_seconds": 130.09,
-        "pass1_seconds": 71.39,
-        "xla_compile_seconds": 57.83,
-        "dataset_getitem_seconds": 31.90,
-        "disk_read_seconds": 25.36,
-        "fine_fused_seconds": 1.897,
-        "weighted_average_seconds": 0.556,
-        "evidence_root": (
-            "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
-            "vdam_gf46_warm_nsys_v3_6b5e6568a_20260831"
-        ),
-    },
-    "decisions": [
-        {
-            "candidate": "shared EM arithmetic primitives",
-            "status": "KEEP",
-            "evidence": (
-                "Coarse scoring, compact planning/fine posterior, Wavg, radix buckets, and ordered "
-                "accumulation already use the mature EM implementations."
-            ),
-        },
-        {
-            "candidate": "ordered-scatter CUDA Graph",
-            "status": "QUALIFIED CANDIDATE",
-            "evidence": (
-                "Job 13203664 was quality-neutral (80/80 particles; 81/81 maps) and reduced wall "
-                "293->291 s."
-            ),
-        },
-        {
-            "candidate": "eager shared raw-image cache",
-            "status": "REJECTED",
-            "evidence": (
-                "Exact-control wall regressed 169.40->172.20 s (+1.7%); 9cb34ddf2 was reverted by "
-                "274e4062d."
-            ),
-        },
-        {
-            "candidate": "inline indexed fine projection",
-            "status": "REJECTED",
-            "evidence": "Job 13249200 was bitwise exact but 2--4x slower because it repeated projections.",
-        },
-        {
-            "candidate": "float32 coarse scorer",
-            "status": "REJECTED",
-            "evidence": (
-                "788,541/802,681 coarse scans changed; commit 31953d remains a regression-only prototype."
-            ),
-        },
-        {
-            "candidate": "typed Wavg/radix defaults",
-            "status": "SHORT GATE EXACT; WARM80 ACTIVE",
-            "evidence": (
-                "Job 13252518 retained all 3,000 particle states through iteration 20; two-repeat warm job "
-                "13253088 is pending."
-            ),
-        },
-    ],
+    "default_enabled": False,
+    "promotion_authorized": False,
 }
+DYNAMIC_TAIL_MICRO_EVIDENCE = {
+    "superseded_by": "13257087",
+    "source_head": "e5b90c0c6e642b5a98d0b546f6c07e864546719a",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-coarse-tail-mask-13256612.out",
+    "evidence_sha256": "56ab0d0871c72e8c09d6e2768cefccc6db5ad549dedb878b04b5c52a0c921d84",
+    "evidence_root": (
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+        "vdam_coarse_dynamic_tail_mask_e5b90c0c6_20260831"
+    ),
+    "benchmark_report": "benchmark.log",
+    "benchmark_report_sha256": "2a1e5eadccc4c79f08ead171412b4fc7b25ea52293d99fa810afeb6aba8f01cf",
+    "microgate": {
+        "active_batch_size": 3,
+        "batch_size": 500,
+        "rotation_count": 510,
+        "translation_count": 29,
+        "active_rows_bitwise_equal": True,
+        "inactive_rows_equal_initial_diff2": True,
+        "all_active_median_seconds": 0.03901593100090395,
+        "tail_masked_median_seconds": 0.001631766001082724,
+        "speedup": 23.91024875810364,
+    },
+    "default_enabled": False,
+    "whole_trajectory_qualified": False,
+    "promotion_authorized": False,
+}
+DYNAMIC_TAIL_FULL_EVIDENCE = {
+    "wrapper_outcome": "failed_expected_strict_artifact_contract",
+    "execution_valid": True,
+    "all_arm_success_markers": True,
+    "scorecard_failure": False,
+    "hypothesis": "dynamic_coarse_tail_mask_is_production_promotable",
+    "hypothesis_result": "rejected",
+    "source_head": "51357fbecd1a6e977bb8875e7be9a0609ed547c9",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-tail-mask-pair-13257087.out",
+    "evidence_sha256": "8e27a0f48d42c072604b326d4ee96e6052b1a794715795f5a9662e5f17f38699",
+    "evidence_root": (
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+        "vdam_gf46_coarse_tail_pair_51357fbec_20260831"
+    ),
+    "summary_report": "pair_summary.json",
+    "summary_report_sha256": "fe00d3936fefa751a676ee8b3b52b262770e50e865d2716a1512a26076d4b1ba",
+    "same_physical_gpu": True,
+    "iterations": 20,
+    "active_rows_per_iteration": 200,
+    "static_batch_size": 500,
+    "padding_row_fraction": 0.6,
+    "candidate_median_wall_seconds": 65.1455342735,
+    "control_median_wall_seconds": 65.5981299435,
+    "candidate_speedup": 1.0069474550335233,
+    "material_speedup": False,
+    "particle_pose_translation_exact_iterations": 20,
+    "artifact_byte_mismatches": 120,
+    "artifact_count": 120,
+    "execution_scope": {
+        "relion_coarse_gaussian_native_texture": True,
+        "relion_coarse_fused_projector": False,
+        "path_role": "nondefault_path_diagnostic_only",
+        "accepted_warm80_dominant_production_kernel": "relion_coarse_diff2_projector_f32_kernel",
+        "accepted_warm80_kernel_seconds": 36.15,
+        "accepted_warm80_kernel_calls": 65,
+    },
+    "default_enabled": False,
+    "promotion_authorized": False,
+}
+DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
+    "source_head": "51357fbecd1a6e977bb8875e7be9a0609ed547c9",
+    "evidence": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-tail-micro200-13257182.out",
+    "evidence_sha256": "8f157a19adeedc7dc51cd0785fcd9a3fdff69fd6c209ad8d1466478aca29ed84",
+    "evidence_root": (
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+        "vdam_coarse_tail_micro_active200_51357fbec_20260831"
+    ),
+    "benchmark_report": "benchmark.log",
+    "benchmark_report_sha256": "b17c74081b77dd0142f5be0e9d97577277bd2ebc874065ddab802ef61b5c1493",
+    "active_batch_size": 200,
+    "batch_size": 500,
+    "speedup": 2.3173440825230447,
+    "active_rows_bitwise_equal": False,
+    "inactive_rows_equal_initial_diff2": True,
+    "default_enabled": False,
+    "promotion_authorized": False,
+}
+ENGINEERING_SNAPSHOT_SHA256 = "918c2d7fc613ea64a66e7a7b704c01a66ae50a8ee660b3647875c61402149504"
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -456,6 +467,11 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _sha256_json(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _load_suite_definition(scorecard: dict[str, Any]) -> dict[str, Any]:
@@ -588,6 +604,30 @@ def _validate_active_diagnostics(scorecard: dict[str, Any]) -> None:
         == INVALID_SPEED_HARNESS_EVIDENCE,
         "13212500: invalid speed-harness evidence changed",
     )
+    palette = next(row for row in diagnostics if row["job_id"] == "13254010")
+    _require(
+        {key: palette.get(key) for key in COARSE_TAIL_PALETTE_EVIDENCE}
+        == COARSE_TAIL_PALETTE_EVIDENCE,
+        "13254010: coarse-tail palette evidence changed",
+    )
+    tail_micro = next(row for row in diagnostics if row["job_id"] == "13256612")
+    _require(
+        {key: tail_micro.get(key) for key in DYNAMIC_TAIL_MICRO_EVIDENCE}
+        == DYNAMIC_TAIL_MICRO_EVIDENCE,
+        "13256612: dynamic-tail microgate evidence changed",
+    )
+    tail_full = next(row for row in diagnostics if row["job_id"] == "13257087")
+    _require(
+        {key: tail_full.get(key) for key in DYNAMIC_TAIL_FULL_EVIDENCE}
+        == DYNAMIC_TAIL_FULL_EVIDENCE,
+        "13257087: dynamic-tail paired evidence changed",
+    )
+    tail_active200 = next(row for row in diagnostics if row["job_id"] == "13257182")
+    _require(
+        {key: tail_active200.get(key) for key in DYNAMIC_TAIL_ACTIVE200_EVIDENCE}
+        == DYNAMIC_TAIL_ACTIVE200_EVIDENCE,
+        "13257182: dynamic-tail active-200 evidence changed",
+    )
 
 
 def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
@@ -628,7 +668,7 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
     _validate_panels(scorecard, derived_counts)
     _validate_active_diagnostics(scorecard)
     _require(
-        scorecard.get("engineering_snapshot") == ENGINEERING_SNAPSHOT_POLICY,
+        _sha256_json(scorecard.get("engineering_snapshot")) == ENGINEERING_SNAPSHOT_SHA256,
         "current engineering snapshot changed without an evidence update",
     )
     accepted = [case["id"] for case in scorecard["cases"] if case["strict_result"] == "pass"]
@@ -672,7 +712,10 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
     _require(
         isinstance(speed, dict)
         and speed.get("role") == "diagnostic_performance"
-        and speed.get("score_impact") == "none",
+        and speed.get("score_impact") == "none"
+        and speed.get("current_audit_job") == "13256248"
+        and speed.get("current_result") == "inconclusive"
+        and speed.get("current_claim_authorized") is False,
         "speed diagnostic changed role or score impact",
     )
     next_gate = scorecard.get("next_gate")
@@ -684,6 +727,9 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and next_gate.get("ordered_shell_job") == "13211719"
         and next_gate.get("ordered_shell_head") == "3b5afd98e"
         and next_gate.get("pre_diagnostic_head") == "94bc7d890"
+        and next_gate.get("typed_warm80_audit_job") == "13256248"
+        and next_gate.get("current_blocker") == "active_particle_envelope_fail_at_iteration_37"
+        and next_gate.get("runtime_status") == "inconclusive"
         and next_gate.get("production_change_authorized") is False,
         "cache discriminator gate changed",
     )
@@ -721,6 +767,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     engineering = scorecard["engineering_snapshot"]
     active_gate = engineering["active_gate"]
     short_gate = engineering["short_gate"]
+    typed_policy = active_gate["typed_policy"]
+    map_gate = active_gate["same_gpu_map_envelope"]
+    particle_gate = active_gate["active_particle_envelope"]
+    current_runtime = active_gate["runtime"]
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
@@ -733,6 +783,24 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "> This page is generated from the frozen 20-case, iteration 0--200 scorecard. "
         "Scheduler diagnostics, the legacy v1/v2 tracks, K>1, and real data cannot change this score.",
         "",
+        "## Current action",
+        "",
+        "| Gate | Result | What it means now |",
+        "|---|---|---|",
+        f"| Typed Wavg/radix policy | **PASS {typed_policy['iterations_per_arm']}/"
+        f"{typed_policy['iterations_per_arm']} in both arms** | Requested/effective sequential Wavg=`true`; "
+        f"radix=`{typed_policy['exact_local_bucket_radix']}`. |",
+        f"| Same-GPU map envelope | **PASS {map_gate['checkpoints_passed']}/{map_gate['checkpoints']}** | "
+        f"Minimum best-native FSC AUC `{map_gate['minimum_best_native_fsc_auc']:.10f}`; no checkpoint outside. |",
+        f"| Active-particle envelope | **FAIL@{particle_gate['first_failure_iteration']} — OPEN** | "
+        f"{particle_gate['failures']}/{particle_gate['checkpoints']} checkpoints fail; "
+        f"{particle_gate['final_active_unmatched']}/{particle_gate['final_active_particles']} active particles "
+        "are unmatched at iteration 80. |",
+        "| Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is "
+        "cross-GPU and trajectories differ. No speedup or regression claim. |",
+        "| Immediate work | **ISOLATE ITERATION 37** | Keep the typed defaults, find the first upstream "
+        "active-particle escape, then obtain a same-GPU trajectory-matched runtime pair. |",
+        "",
         "## At a glance",
         "",
         "| Axis | Authoritative state | Current engineering read |",
@@ -741,7 +809,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "Frozen; no recent diagnostic changes this score. |",
         f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** cases meet 1.10x; "
         f"observed {min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x | "
-        "The shared coarse pass dominates GPU time; compile, rectangular scheduling, and input latency dominate wall. |",
+        "Warm80 timing is INCONCLUSIVE; the shared production coarse pass remains the dominant GPU target. |",
         "| EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |",
         "| Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |",
         "",
@@ -755,14 +823,34 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"iteration; first divergence is `null`; requested/effective Wavg=`true`, radix=`4`. Wall "
         f"{short_gate['recovar_wall_seconds']} s; pre-artifact {short_gate['cumulative_pre_artifact_seconds']:.3f} s. "
         f"{short_gate['comparison_note']} Evidence: `{short_gate['evidence_root']}/{short_gate['particle_audit']}`. |",
-        f"| `{active_gate['job_id']}`: {active_gate['iterations']}-iteration warm two-repeat | "
-        f"**RESULT PENDING** | {active_gate['purpose']} No partial result or frozen-score impact is claimed. |",
+        f"| `{active_gate['science_job']}` + audit `{active_gate['job_id']}`: "
+        f"{active_gate['iterations']}-iteration typed gate | **MIXED: POLICY/MAP PASS; PARTICLE FAIL@"
+        f"{particle_gate['first_failure_iteration']}; RUNTIME INCONCLUSIVE** | Original profiled repeat stopped at "
+        f"iteration {active_gate['original_profile_repeat']['stopped_after_iteration']} (invalid harness); corrected "
+        f"job `{active_gate['corrected_profile_job']}` completed, with direct map/particle FAIL@4, but is cross-GPU "
+        "diagnostic only. Frozen scores stay "
+        "2/20 correctness and 0/20 runtime. |",
+        "",
+        "### Typed warm80 audit evidence",
+        "",
+        "| Artifact | Path | SHA-256 |",
+        "|---|---|---|",
+    ]
+    for report_id, report in active_gate["reports"].items():
+        lines.append(
+            f"| `{report_id}` | `{active_gate['evidence_root']}/{report['path']}` | `{report['sha256']}` |"
+        )
+    analysis_job = active_gate["analysis_job"]
+    lines.extend(
+        [
+            f"| `slurm_log` | `{analysis_job['slurm_log']}` | `{analysis_job['slurm_log_sha256']}` |",
         "",
         "## Primary panels",
         "",
         "| Gate | Passed | Evaluated | Denominator | Role |",
         "|---|---:|---:|---:|---|",
-    ]
+        ]
+    )
     for panel in scorecard["panels"]:
         lines.append(
             f"| {panel['label']} | **{panel['passed']}** | {panel['evaluated']} | "
@@ -906,6 +994,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     )
     speed = scorecard["speed_snapshot"]
     invalid_speed = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13212500")
+    palette = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13254010")
+    tail_micro = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13256612")
+    tail_full = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257087")
+    tail_active200 = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257182")
     source_cuda = invalid_speed["source_cuda_library"]
     source_lock = invalid_speed["source_build_lock"]
     lines.extend(
@@ -925,18 +1017,37 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Speed snapshot",
             "",
-            f"Ordered-scatter CUDA Graph candidate `{speed['candidate_commit']}` (paired job `{speed['paired_job']}`) "
-            f"ran in {speed['candidate_seconds']} s versus {speed['control_seconds']} s "
-            f"({speed['wall_time_change_percent']:.2f}%). Ordered backprojection fell from "
-            f"{speed['ordered_backprojection_control_seconds']:.3f} s to "
-            f"{speed['ordered_backprojection_candidate_seconds']:.3f} s "
-            f"({speed['ordered_backprojection_change_percent']:.2f}%).",
+            "| Experiment | Timing readout | Exactness / scope | Decision |",
+            "|---|---|---|---|",
+            f"| typed warm80 audit `{active_gate['job_id']}` | cold {current_runtime['cold']['typed_seconds']} vs "
+            f"{current_runtime['cold']['old_seconds']} s ({current_runtime['cold']['change_percent']:+.1f}%); "
+            f"warm {current_runtime['warm']['typed_seconds']} vs {current_runtime['warm']['old_seconds']} s "
+            f"({current_runtime['warm']['change_percent']:+.1f}%) | Same hard state only through iterations "
+            f"1--{current_runtime['cold']['hard_state_exact_through_iteration']}; warm is cross-GPU. | "
+            "**INCONCLUSIVE — no speed claim** |",
+            f"| 128-tail palette `{palette['job_id']}` | warm wall +{palette['warm_wall_change_percent']:.1f}%; "
+            f"pass 1 +{palette['warm_pass1_change_percent']:.1f}% | 20/20 particle states, then sealed cache "
+            f"changed {palette['cache_contract']['candidate_files_before']}->"
+            f"{palette['cache_contract']['candidate_files_after']} files. | **REJECTED / DEFAULT OFF** |",
+            f"| dynamic tail mask `{tail_full['job_id']}` | {tail_full['candidate_median_wall_seconds']:.4f} vs "
+            f"{tail_full['control_median_wall_seconds']:.4f} s = {tail_full['candidate_speedup']:.5f}x | "
+            f"Forced nondefault native-texture path; 120/120 strict artifacts differ. Microgates: active-3 "
+            f"{tail_micro['microgate']['speedup']:.2f}x bitwise; active-200 {tail_active200['speedup']:.3f}x "
+            "not bitwise. | **VALID SCIENCE FAIL / DO NOT PROMOTE** |",
+            f"| ordered-scatter CUDA Graph `{speed['paired_job']}` | {speed['candidate_seconds']} vs "
+            f"{speed['control_seconds']} s ({speed['wall_time_change_percent']:.2f}%) | particles "
+            f"{speed['candidate_control_particle_passed']}/{speed['candidate_control_particle_denominator']}; "
+            f"maps {speed['candidate_control_map_passed']}/{speed['candidate_control_map_denominator']}. | "
+            "**QUALIFIED CANDIDATE** |",
             "",
-            f"Quality-neutral candidate/control checks: particles {speed['candidate_control_particle_passed']}/"
-            f"{speed['candidate_control_particle_denominator']}; maps {speed['candidate_control_map_passed']}/"
-            f"{speed['candidate_control_map_denominator']}. The separate native-particle envelope remains "
-            f"{speed['native_particle_envelope_passed']}/{speed['native_particle_envelope_denominator']}. "
-            "This performance snapshot cannot change the frozen correctness or runtime panels.",
+            "The current warm80 comparison cannot establish a speedup or regression. The tail-mask microbenchmark "
+            "does not target the dominant accepted production coarse kernel and is superseded by the full paired gate. "
+            "None of these diagnostics can change the frozen correctness or runtime panels.",
+            "",
+            f"Palette evidence: `{palette['evidence_root']}/{palette['failure_report']}` "
+            f"(SHA-256 `{palette['failure_report_sha256']}`); Slurm log `{palette['evidence_sha256']}`. "
+            f"Tail-pair evidence: `{tail_full['evidence_root']}/{tail_full['summary_report']}` "
+            f"(SHA-256 `{tail_full['summary_report_sha256']}`); Slurm log `{tail_full['evidence_sha256']}`.",
             "",
             f"### Warm H100 profile: job `{engineering['warm_profile']['job_id']}`",
             "",
@@ -1014,15 +1125,17 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            f"1. Audit both repeats from active job `{active_gate['job_id']}` through iteration "
-            f"{active_gate['iterations']}; require trajectory stability and a same-artifact wall comparison.",
-            "2. If green, qualify the same typed defaults on additional frozen K=1 stress cases.",
-            "3. Prototype a preprojected indexed-job fine scorer that preserves the exact CUDA reduction tree; the "
-            "rejected inline version repeated projections.",
-            "4. Attack coarse-pass topology with exact arithmetic and stable shapes; do not revive the rejected "
-            "float32 scorer or eager raw cache.",
-            "5. Re-run the frozen K=1 matrix before allowing K>1, real-data, or runtime results to affect their own "
-            "separate gates.",
+            f"1. Isolate the first active-particle envelope escape at iteration "
+            f"{particle_gate['first_failure_iteration']} on the same GPU and hard-state trajectory; identify the "
+            "first upstream nonexact field before changing arithmetic.",
+            "2. Keep the audited typed Wavg/radix defaults while the policy and map gates remain green; the open "
+            "particle gate prevents a correctness claim.",
+            "3. Obtain a same-GPU, trajectory-matched runtime A/B. Until then runtime remains INCONCLUSIVE and no "
+            "speedup or regression may be reported.",
+            "4. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, or nondefault dynamic "
+            "tail mask without new evidence on the dominant production kernel.",
+            "5. After the particle and runtime gates close, qualify additional frozen K=1 stresses and re-run the "
+            "frozen matrix before K>1 or real-data promotion.",
             "",
             "## Evidence and reproducibility",
             "",

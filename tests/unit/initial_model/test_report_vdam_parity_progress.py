@@ -224,7 +224,19 @@ def test_current_engineering_snapshot_is_visible_and_non_scoring() -> None:
 
     assert snapshot["frozen_scores_changed"] is False
     assert snapshot["score_impact"] == "none"
-    assert snapshot["active_gate"]["status"] == "active_result_pending"
+    gate = snapshot["active_gate"]
+    assert gate["status"] == "completed_mixed_gate"
+    assert gate["typed_policy"]["result"] == "pass"
+    assert gate["typed_policy"]["iterations_per_arm"] == 80
+    assert gate["same_gpu_map_envelope"]["result"] == "pass"
+    assert gate["same_gpu_map_envelope"]["checkpoints_passed"] == 81
+    assert gate["active_particle_envelope"]["result"] == "fail"
+    assert gate["active_particle_envelope"]["first_failure_iteration"] == 37
+    assert gate["runtime"]["result"] == "inconclusive"
+    assert gate["runtime"]["claim_authorized"] is False
+    assert gate["original_profile_repeat"]["status"] == "invalid_harness"
+    assert gate["original_profile_repeat"]["stopped_after_iteration"] == 64
+    assert gate["corrected_profile_repeat"]["comparison_role"] == "cross_gpu_diagnostic_only"
     assert snapshot["short_gate"]["first_divergent_iteration"] is None
     assert snapshot["short_gate"]["exact_particle_state_iterations"] == 20
     assert snapshot["typed_runtime_controls"]["defaults"] == {
@@ -232,7 +244,17 @@ def test_current_engineering_snapshot_is_visible_and_non_scoring() -> None:
         "exact_local_bucket_radix": 4,
     }
     assert "`13252518`: 20-iteration `vdam-gf46` | **PARTICLE TRAJECTORY EXACT**" in rendered
-    assert "`13253088`: 80-iteration warm two-repeat | **RESULT PENDING**" in rendered
+    assert "**PASS 80/80 in both arms**" in rendered
+    assert "**PASS 81/81**" in rendered
+    assert "**FAIL@37 — OPEN**" in rendered
+    assert "**INCONCLUSIVE**" in rendered
+    assert "Original profiled repeat stopped at iteration 64 (invalid harness)" in rendered
+    assert "corrected job `13254470` completed, with direct map/particle FAIL@4" in rendered
+    assert "cross-GPU diagnostic only" in rendered
+    assert gate["reports"]["typed_policy"]["sha256"] in rendered
+    assert gate["reports"]["same_gpu_map"]["sha256"] in rendered
+    assert gate["reports"]["same_gpu_particle"]["sha256"] in rendered
+    assert gate["reports"]["runtime"]["sha256"] in rendered
     assert "cross-run H100 observations, not a paired speed result" in rendered
     assert "Warm H100 profile: job `13248509`" in rendered
     assert "inline indexed fine projection | **REJECTED**" in rendered
@@ -242,9 +264,41 @@ def test_current_engineering_snapshot_is_visible_and_non_scoring() -> None:
 
 
 def test_current_engineering_snapshot_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
-    scorecard["engineering_snapshot"]["active_gate"]["status"] = "completed"
+    scorecard["engineering_snapshot"]["active_gate"]["reports"]["runtime"]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="current engineering snapshot changed"):
         progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_new_performance_diagnostics_are_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    palette = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13254010")
+    palette["warm_wall_change_percent"] = -4.1
+    with pytest.raises(ValueError, match="13254010: coarse-tail palette evidence changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+    scorecard = json.loads(progress_mod.DEFAULT_SCORECARD.read_text())
+    tail = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257087")
+    tail["promotion_authorized"] = True
+    with pytest.raises(ValueError, match="13257087: dynamic-tail paired evidence changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
+def test_tail_mask_microgate_is_superseded_by_full_pair() -> None:
+    loaded = progress_mod.load_and_validate()
+    rendered = progress_mod.render_markdown(loaded)
+
+    micro = next(row for row in loaded["active_diagnostics"] if row["job_id"] == "13256612")
+    full = next(row for row in loaded["active_diagnostics"] if row["job_id"] == "13257087")
+    active200 = next(row for row in loaded["active_diagnostics"] if row["job_id"] == "13257182")
+    assert micro["superseded_by"] == "13257087"
+    assert full["promotion_authorized"] is False
+    assert full["execution_scope"]["path_role"] == "nondefault_path_diagnostic_only"
+    assert active200["active_rows_bitwise_equal"] is False
+    assert "`13256612` | `diagnostic` | **MICROGATE ONLY**" in rendered
+    assert "`13257087` | `diagnostic` | **VALID SCIENCE FAIL / DO NOT PROMOTE**" in rendered
+    assert "`13257182` | `diagnostic` | **VALID EXACTNESS FAIL**" in rendered
+    assert "Forced nondefault native-texture path" in rendered
+    assert "120/120 strict artifacts differ" in rendered
+    assert "**VALID SCIENCE FAIL / DO NOT PROMOTE**" in rendered
 
 
 def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:
@@ -256,7 +310,7 @@ def test_legacy_v2_track_is_non_scoring(scorecard: dict) -> None:
 
 def test_dashboard_is_compact_and_exposes_shared_em_reuse() -> None:
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
-    assert len(rendered.splitlines()) < 200
+    assert len(rendered.splitlines()) < 250
     assert "Authoritative v3 status — NOT READY" in rendered
     assert "Strict K=1 correctness is **2 / 20**" in rendered
     assert "runtime parity is **0 / 20**" in rendered

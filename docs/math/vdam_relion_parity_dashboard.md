@@ -4,12 +4,22 @@
 >
 > This page is generated from the frozen 20-case, iteration 0--200 scorecard. Scheduler diagnostics, the legacy v1/v2 tracks, K>1, and real data cannot change this score.
 
+## Current action
+
+| Gate | Result | What it means now |
+|---|---|---|
+| Typed Wavg/radix policy | **PASS 80/80 in both arms** | Requested/effective sequential Wavg=`true`; radix=`4`. |
+| Same-GPU map envelope | **PASS 81/81** | Minimum best-native FSC AUC `0.9999885424`; no checkpoint outside. |
+| Active-particle envelope | **FAIL@37 — OPEN** | 35/80 checkpoints fail; 360/360 active particles are unmatched at iteration 80. |
+| Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is cross-GPU and trajectories differ. No speedup or regression claim. |
+| Immediate work | **ISOLATE ITERATION 37** | Keep the typed defaults, find the first upstream active-particle escape, then obtain a same-GPU trajectory-matched runtime pair. |
+
 ## At a glance
 
 | Axis | Authoritative state | Current engineering read |
 |---|---|---|
 | K=1 correctness | **2/20** strict cases pass | Frozen; no recent diagnostic changes this score. |
-| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | The shared coarse pass dominates GPU time; compile, rectangular scheduling, and input latency dominate wall. |
+| Runtime | **0/20** cases meet 1.10x; observed 4.91--11.58x | Warm80 timing is INCONCLUSIVE; the shared production coarse pass remains the dominant GPU target. |
 | EM reuse | Shared production arithmetic | The remaining gap is execution topology, not duplicate scoring math. |
 | Later gates | K>1 unqualified; real data not scored | Kept separate until K=1 correctness and runtime close. |
 
@@ -18,7 +28,20 @@
 | Gate | Status | Evidence |
 |---|---|---|
 | `13252518`: 20-iteration `vdam-gf46` | **PARTICLE TRAJECTORY EXACT** | All 3,000/3,000 pose/translation states match at every iteration; first divergence is `null`; requested/effective Wavg=`true`, radix=`4`. Wall 177 s; pre-artifact 158.846 s. 177 s is below the 182 s accepted short baseline but above the 169.40 s prior exact-control result; these are cross-run H100 observations, not a paired speed result. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime20_6f39ad52e_20260831/provenance/particle_state_audit_it001_020.json`. |
-| `13253088`: 80-iteration warm two-repeat | **RESULT PENDING** | Run the two-repeat warm trajectory and Nsight gate for the audited typed GUI defaults. No partial result or frozen-score impact is claimed. |
+| `13253088` + audit `13256248`: 80-iteration typed gate | **MIXED: POLICY/MAP PASS; PARTICLE FAIL@37; RUNTIME INCONCLUSIVE** | Original profiled repeat stopped at iteration 64 (invalid harness); corrected job `13254470` completed, with direct map/particle FAIL@4, but is cross-GPU diagnostic only. Frozen scores stay 2/20 correctness and 0/20 runtime. |
+
+### Typed warm80 audit evidence
+
+| Artifact | Path | SHA-256 |
+|---|---|---|
+| `typed_policy` | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/typed_runtime_policy_it001_080.json` | `0c6c60df5c841ebbdbd54d67df681d6a5c2c1229d0657315d4add08d663f28f5` |
+| `runtime` | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/runtime_profile_comparison.json` | `5ffa9ae565466aa924eccd1a836a3a5af1613df40cf4c584b344ec3dd4494165` |
+| `same_gpu_map` | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/map_typed_r01_native4_envelope_it000_080.json` | `4a2fa726dd2ee7e491983cd67e6212211dc8022aa89a9510e89495035ea1010a` |
+| `same_gpu_particle` | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/particle_typed_r01_native4_envelope_it001_080.json` | `a7772c546379ac414a511fbcd15907144de264da18677ad6de41c8bec03c47ba` |
+| `retry_map` | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/map_typed_r02_native4_envelope_it000_080.json` | `473b650ddf4f9a261514529f14d54fd6306ddb1580a600fbce203254e09f977c` |
+| `retry_particle` | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/particle_typed_r02_native4_envelope_it001_080.json` | `36b0da26550a6e98d2eb0917cb0b12cdc62bca5b8843abe72f4458d9bb77d0f7` |
+| `exit_statuses` | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/cpu_audit_exit_statuses.txt` | `a29bc69e9e1fa0ec5de5211e8b1cbe1cdb673816c8d1a58deb15fe36ba2b05e0` |
+| `slurm_log` | `/scratch/gpfs/GILLES/mg6942/slurmo/vdam-typed80-audit-13256248.out` | `0004a1cf9d67b1638883ba3a1f55edffa6cb265d10971db637c8a89ed3ca44f3` |
 
 ## Primary panels
 
@@ -77,6 +100,10 @@ These are scheduler/causal diagnostics, not v3 score entries. INVALID attempts a
 | `13211317` | `diagnostic` | **INVALID/SUPERSEDED** | INVALID | failed | none | Prior ordered-shell attempt is INVALID/SUPERSEDED by valid same-cache job 13211719; it carries no parity inference or score impact. |
 | `13211719` | `diagnostic` | **EXPECTED HYPOTHESIS REJECTION** | HYPOTHESIS REJECTED | failed | none | Valid A/B execution used one canonical cache: A populated 0->377 and A-after/B-before/B-after were byte-identical. Repeatability failed scientifically: one float32 ULP first appears in an E-step posterior scalar, followed by ordered-noise and both-half BPref differences; the target stack stayed exact. |
 | `13212500` | `diagnostic` | **INVALID HARNESS** | INVALID | cancelled | none | Cancelled before science after the loader treated the qualified CUDA library as stale and launched make/nvcc against that source artifact. The library bytes stayed unchanged, but a source-side .build.lock was created. INVALID HARNESS: no A/B result, runtime result, or promotion. |
+| `13254010` | `diagnostic` | **EXPECTED FAIL-CLOSED** | HYPOTHESIS REJECTED | failed | none | EXPECTED FAIL-CLOSED: the warm candidate preserved 20/20 particle states but was slower (+4.1% wall; +7.3% pass 1), then changed its sealed cache (1277->1280 files). The 128-tail palette is rejected, default-off, and cannot be promoted. |
+| `13256612` | `diagnostic` | **MICROGATE ONLY** | BITWISE PASS MICROCASE | completed | none | SUBORDINATE MICROGATE: bitwise in the active-3 / batch-500 CUDA microcase and 23.91x faster there only. Full paired job 13257087 supersedes it; there is no default change, promotion, or frozen-score impact. |
+| `13257087` | `diagnostic` | **VALID SCIENCE FAIL / DO NOT PROMOTE** | HYPOTHESIS REJECTED | failed | none | VALID SCIENCE FAIL / DO NOT PROMOTE: this forced the nondefault native-texture path, while the accepted warm80 run is dominated by the production relion_coarse_diff2_projector_f32_kernel. All 20 particle pose/translation schedules match in both pairs, but 120/120 strict artifacts differ amid comparable within-arm repeat drift; the 1.00695x (~0.69%) median wall gain is noise-scale. |
+| `13257182` | `diagnostic` | **VALID EXACTNESS FAIL** | HYPOTHESIS REJECTED | failed | none | VALID EXACTNESS FAIL: the representative active-200 / batch-500 microgate was 2.317x faster but active rows were not bitwise equal. This reinforces the full paired DO NOT PROMOTE decision. |
 
 Job `13209422` warm-cache additions included: `run_local_bucket_big_jit`, `relion_coarse_diff2_projector_f32`, `coarse posterior`, `relion_vdam_mstep_fused_projector_x_half`. Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_jax_cache_history_profilematched_39a38f9d6_20260830/analysis/arms.tsv`.
 
@@ -126,9 +153,16 @@ Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_sig_bucket_ab_
 
 ## Speed snapshot
 
-Ordered-scatter CUDA Graph candidate `6b5e6568a` (paired job `13203664`) ran in 291 s versus 293 s (-0.68%). Ordered backprojection fell from 39.447 s to 36.660 s (-7.07%).
+| Experiment | Timing readout | Exactness / scope | Decision |
+|---|---|---|---|
+| typed warm80 audit `13256248` | cold 704 vs 644 s (+9.3%); warm 415 vs 423 s (-1.9%) | Same hard state only through iterations 1--36; warm is cross-GPU. | **INCONCLUSIVE — no speed claim** |
+| 128-tail palette `13254010` | warm wall +4.1%; pass 1 +7.3% | 20/20 particle states, then sealed cache changed 1277->1280 files. | **REJECTED / DEFAULT OFF** |
+| dynamic tail mask `13257087` | 65.1455 vs 65.5981 s = 1.00695x | Forced nondefault native-texture path; 120/120 strict artifacts differ. Microgates: active-3 23.91x bitwise; active-200 2.317x not bitwise. | **VALID SCIENCE FAIL / DO NOT PROMOTE** |
+| ordered-scatter CUDA Graph `13203664` | 291 vs 293 s (-0.68%) | particles 80/80; maps 81/81. | **QUALIFIED CANDIDATE** |
 
-Quality-neutral candidate/control checks: particles 80/80; maps 81/81. The separate native-particle envelope remains 23/80. This performance snapshot cannot change the frozen correctness or runtime panels.
+The current warm80 comparison cannot establish a speedup or regression. The tail-mask microbenchmark does not target the dominant accepted production coarse kernel and is superseded by the full paired gate. None of these diagnostics can change the frozen correctness or runtime panels.
+
+Palette evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_sig_bucket_ab_4846bd5c5_20260831/FAILED.json` (SHA-256 `91754058b814633ea39fd3f8f958a3765d48bd21575cc69be489765657da92af`); Slurm log `324bb62a9e257fb8b9871462d99bcb2cbda9750a021db6809b63f85ea088fc7a`. Tail-pair evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_coarse_tail_pair_51357fbec_20260831/pair_summary.json` (SHA-256 `fe00d3936fefa751a676ee8b3b52b262770e50e865d2716a1512a26076d4b1ba`); Slurm log `8e27a0f48d42c072604b326d4ee96e6052b1a794715795f5a9662e5f17f38699`.
 
 ### Warm H100 profile: job `13248509`
 
@@ -150,7 +184,9 @@ Quality-neutral candidate/control checks: particles 80/80; maps 81/81. The separ
 | eager shared raw-image cache | **REJECTED** | Exact-control wall regressed 169.40->172.20 s (+1.7%); 9cb34ddf2 was reverted by 274e4062d. |
 | inline indexed fine projection | **REJECTED** | Job 13249200 was bitwise exact but 2--4x slower because it repeated projections. |
 | float32 coarse scorer | **REJECTED** | 788,541/802,681 coarse scans changed; commit 31953d remains a regression-only prototype. |
-| typed Wavg/radix defaults | **SHORT GATE EXACT; WARM80 ACTIVE** | Job 13252518 retained all 3,000 particle states through iteration 20; two-repeat warm job 13253088 is pending. |
+| typed Wavg/radix defaults | **KEEP; POLICY + MAP PASS; PARTICLE OPEN** | Audit job 13256248 confirms typed policy PASS 80/80 in both arms and the same-GPU map envelope PASS 81/81; the active-particle envelope first fails at iteration 37, so correctness remains open. |
+| coarse 128-tail palette | **REJECTED; DEFAULT OFF** | Job 13254010 failed closed after the sealed candidate cache changed; its completed warm arm was slower (+4.1% wall and +7.3% pass 1). |
+| dynamic coarse-tail mask | **REJECTED; DO NOT PROMOTE** | The 23.91x active-3 microgate was superseded by full paired job 13257087: only ~0.69% median wall gain on a forced nondefault native-texture path, 120/120 strict artifact mismatches, and no production-kernel benefit. |
 
 ## Shared EM implementation
 
@@ -176,11 +212,11 @@ CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Curre
 
 ## Next gates
 
-1. Audit both repeats from active job `13253088` through iteration 80; require trajectory stability and a same-artifact wall comparison.
-2. If green, qualify the same typed defaults on additional frozen K=1 stress cases.
-3. Prototype a preprojected indexed-job fine scorer that preserves the exact CUDA reduction tree; the rejected inline version repeated projections.
-4. Attack coarse-pass topology with exact arithmetic and stable shapes; do not revive the rejected float32 scorer or eager raw cache.
-5. Re-run the frozen K=1 matrix before allowing K>1, real-data, or runtime results to affect their own separate gates.
+1. Isolate the first active-particle envelope escape at iteration 37 on the same GPU and hard-state trajectory; identify the first upstream nonexact field before changing arithmetic.
+2. Keep the audited typed Wavg/radix defaults while the policy and map gates remain green; the open particle gate prevents a correctness claim.
+3. Obtain a same-GPU, trajectory-matched runtime A/B. Until then runtime remains INCONCLUSIVE and no speedup or regression may be reported.
+4. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, or nondefault dynamic tail mask without new evidence on the dominant production kernel.
+5. After the particle and runtime gates close, qualify additional frozen K=1 stresses and re-run the frozen matrix before K>1 or real-data promotion.
 
 ## Evidence and reproducibility
 
