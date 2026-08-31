@@ -28,12 +28,13 @@ def _use_custom_cuda_lib(monkeypatch, custom_cuda_lib):
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
 
-def _skip_if_unavailable():
+def _skip_if_unavailable(*, require_relion_bind: bool = True):
     from recovar.cuda_backproject import cuda_available
 
     if not cuda_available():
         pytest.skip("custom CUDA BPref symmetry finalizer is unavailable")
-    pytest.importorskip("recovar.relion_bind._relion_bind_core")
+    if require_relion_bind:
+        pytest.importorskip("recovar.relion_bind._relion_bind_core")
 
 
 @pytest.mark.parametrize(
@@ -105,7 +106,7 @@ def test_streamed_cuda_matches_relion_cpu_oracle(
 
 @pytest.mark.parametrize("symmetry", ["C1", "C2", "I1"])
 def test_split_ranged_cuda_is_bitwise_equal_to_complex_input(symmetry):
-    _skip_if_unavailable()
+    _skip_if_unavailable(require_relion_bind=False)
     from recovar.cuda_backproject import (
         relion_point_group_symmetrise_bpref,
         relion_point_group_symmetrise_bpref_split_host,
@@ -147,7 +148,7 @@ def test_split_ranged_cuda_is_bitwise_equal_to_complex_input(symmetry):
 
 
 def test_split_ranged_c1_is_bitwise_equal_to_historical_host_x0_path():
-    _skip_if_unavailable()
+    _skip_if_unavailable(require_relion_bind=False)
     from recovar.cuda_backproject import (
         relion_point_group_symmetrise_bpref_split_host,
     )
@@ -209,7 +210,7 @@ def test_split_ranged_c1_is_bitwise_equal_to_historical_host_x0_path():
 
 
 def test_split_range_zero_pads_only_past_the_final_voxel():
-    _skip_if_unavailable()
+    _skip_if_unavailable(require_relion_bind=False)
     from recovar import cuda_backproject
     from recovar.em.symmetry import rotational_operators
 
