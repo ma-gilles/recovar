@@ -15,7 +15,7 @@ Update this file every time a binding validates or disproves parity.
 | Partial | Implementation exists but known incomplete |
 | Broken | Implementation exists but produces wrong results |
 | No | No recovar implementation |
-| N/A | Not applicable (e.g., C1 symmetry) |
+| N/A | Not applicable to the audited configuration |
 | ✓ | Binding confirmed numerical parity |
 | **DIVERGENT** | Binding showed measurable difference (see Notes) |
 | — | Not yet tested with binding |
@@ -27,7 +27,7 @@ Update this file every time a binding validates or disproves parity.
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
 | 1 | Read image + apply gain/defect | ml_optimiser.cpp:5840 | Partial | `data_io/` handles gain | — | recovar skips defect correction |
-| 2 | Soft circular mask (particle_diameter) | ml_optimiser.cpp:5893 | Yes | `core/mask.py:relion_soft_image_mask`, `refine.py` | �� | Binding P2: 93 tests, RELION C++ softMaskOutsideMap vs recovar smooth_circular_mask at atol=1e-12. Wired into `_run_relion_iteration_loop` via image_mask override. |
+| 2 | Soft circular mask (particle_diameter) | ml_optimiser.cpp:5893 | Yes | `core/mask.py:relion_soft_image_mask`, `refine.py` | ✓ | Binding P2: 93 tests, RELION C++ softMaskOutsideMap vs recovar smooth_circular_mask at atol=1e-12. Wired into `_run_relion_iteration_loop` via image_mask override. |
 | 3 | FFT of masked image (for E-step) | ml_optimiser.cpp:5920 | Yes | `em_engine.py` FFT in preprocess | — | |
 | 4 | FFT of unmasked image (for M-step) | ml_optimiser.cpp:5927 | No | — | — | recovar uses same image for both |
 | 5 | selfTranslate (beam-tilt phase ramp) | ml_optimiser.cpp:5935 | No | — | — | Zero effect for SPA w/o beam tilt |
@@ -70,7 +70,7 @@ Update this file every time a binding validates or disproves parity.
 
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
-| 25 | Symmetrise Fourier accumulators | backprojector.cpp:1200 | N/A | C1 symmetry only | — | |
+| 25 | Symmetrise Fourier accumulators | backprojector.cpp:1200 | Yes | `recovar/em/symmetry.py`, `recovar/em/dense_single_volume/helpers/half_volume_mstep.py:finalize_half_volume_bpref` | ✓ | Proper RELION rotations `C1`--`C99`, `D1`--`D99`, `T`, `O`, and `I`/`I1`--`I4` (`I` is the `I2` alias). `tests/unit/test_cuda_bpref_point_group_symmetry.py:test_streamed_cuda_matches_relion_cpu_oracle` checks the streamed CUDA BPref finalizer in both precisions for C2, D2, T, O, I/I2, I1, I3, and I4 against `recovar/relion_bind/backprojector_bind.cpp:apply_point_group_symmetry_to_bpref`, which directly calls RELION `BackProjector::enforceHermitianSymmetry` and `applyPointGroupSymmetry`; 16/16 parity cases passed in H100 job 13201774. |
 | 26 | Enforce Hermitian symmetry | backprojector.cpp:2207 | Yes | `half_volume_to_full_volume` | ✓ | Phase 4: round-trip corr>0.8 (192 proj), FSC half-sets >0.5 |
 | 27 | Blob deconvolution (iterative) | backprojector.cpp:1400 | No | direct Wiener instead | — | Different strategy — binding M2 |
 | 28 | IFFT → crop to ori_size | backprojector.cpp:2589 | Yes | iDFT + unpad | ✓ | Binding M7: 21 pass, 6 xfail (layout conversion). Output shape, determinism, self-consistency verified. Covered by BackProjector round-trip + M4/M5 bindings. |
@@ -114,11 +114,11 @@ Update this file every time a binding validates or disproves parity.
 
 | Status | Count | IDs |
 |--------|-------|-----|
-| Ported (full) | 34 | 1,2,3,4,9,10,11,13,14,15,17,18,19,20,21,26,28,29,30,31,32,33,34,36,37,38,39,40,41,42,43,44,45,46 |
-| Ported (partial/broken) | 2 | 22,35 |
-| Not ported | 8 | 5,6,7,8,16,23,24,27 |
-| Not applicable | 1 | 25 |
-| **Binding-validated** | **22** | **2 (image mask P2), 9 (noise weighting), 10 (windowing), 11 (volume padding E1b), 12 (projector storage), 13 (trilinear projection), 14 (phase shift), 15 (diff2 scoring), 17 (posteriors E5), 22 (noise accumulation E7), 26 (backproject+reconstruct), 28 (IFFT+crop M7), 29 (gridding correction), 33 (SSNR M4), 34 (resolution M5), 35 (noise update M9), 38 (HEALPix grid), 39 (oversampled sub-grid), 40 (translation grid), 41 (perturbation), 42 (cone filter S4), M6 (downsampled average)** |
+| Ported (full) | 33 | 2,3,9,10,11,13,14,15,17,18,19,20,21,25,26,28,29,30,31,32,33,34,36,37,38,39,40,41,42,43,44,45,46 |
+| Ported (partial/broken) | 3 | 1,22,35 |
+| Not ported | 10 | 4,5,6,7,8,12,16,23,24,27 |
+| Not applicable | 0 | — |
+| **Binding-validated** | **24** | **2 (image mask P2), 9 (noise weighting), 10 (windowing), 11 (volume padding E1b), 12 (projector storage), 13 (trilinear projection), 14 (phase shift), 15 (diff2 scoring), 17 (posteriors E5), 22 (noise accumulation E7), 25 (point-group symmetry), 26 (backproject+reconstruct), 28 (IFFT+crop M7), 29 (gridding correction), 32 (gold-standard FSC), 33 (SSNR M4), 34 (resolution M5), 35 (noise update M9), 38 (HEALPix grid), 39 (oversampled sub-grid), 40 (translation grid), 41 (perturbation), 42 (cone filter S4), M6 (downsampled average)** |
 
 ---
 
@@ -126,6 +126,7 @@ Update this file every time a binding validates or disproves parity.
 
 | Date | Change |
 |------|--------|
+| 2026-08-30 | **Proper rotational point groups implemented and validated**: promoted #25 from N/A to Yes/✓ for `C1`--`C99`, `D1`--`D99`, `T`, `O`, and `I`/`I1`--`I4`. RELION `SymList` supplies the ordered operators; the non-C1 streamed CUDA BPref finalizer was validated in float32 and float64 against a CPU oracle that delegates to RELION's own `BackProjector` symmetry methods (16/16 representative parity cases; H100 job 13201774, 25/25 focused symmetry tests overall). Recomputed the summary directly from the 46 numbered rows: 33 full, 3 partial/broken, 10 not ported, and 0 N/A; the binding-validation ledger now has 24 entries including the unnumbered M6 check. |
 | 2026-04-16 | **Phase 7 complete**: Added 4 new binding test files (P2 image mask, E1b padding parity, M7 IFFT+crop, S4 cone filter). 182 new tests (93+14+21+54). Ported features #2 (soft circular mask), #30 (flatten solvent), #31 (zero mask). P2 binding validates RELION C++ softMaskOutsideMap vs recovar smooth_circular_mask at atol=1e-12. E1b validates volume padding at pf=1/2 vs RELION projector at rel_err<1e-12. S4 documents RELION factored cone vs recovar SO(3) ball geometry. Validated count: 22 (was 18). Ported count: 34 (was 31). |
 | 2026-04-16 | **E-step composite parity**: end-to-end scoring+posterior test confirms EXACT parity (max_diff=1e-17) when using all-1 half-spectrum weights (half_spectrum_scoring=True) and RELION's Minvsigma2=1/(2σ²) convention. Windowing divergence reduced from 20% to 0.4% (6 Nyquist-boundary pixels). Hermitian weights (w=2 for interior) make posteriors ~2x too peaked vs RELION — half_spectrum_scoring=True is correct. DC exclusion verified exact. Items #9, #10 promoted to ✓. Validated count: 18. |
 | 2026-04-16 | Phase 5b+6 complete: Added 6 new bindings (M4 updateSSNRarrays, M6 getDownsampledAverage, E5 posteriors, E7 noise accumulation, M5 resolution, M9 noise update). 49 new tests, all at exact parity (1e-12 to 1e-15). Total: 209 binding tests passing. Rewrote backproject tests with determinism checks (bit-exact) replacing loose corr>0.8 threshold. |
