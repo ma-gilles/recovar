@@ -26,6 +26,7 @@ do not perturb the M-step accumulators.
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import logging
 import os
@@ -171,6 +172,19 @@ _AUTO_PROJECTED_ROTATIONS_DEVICE_FRACTION = 0.040
 _AUTO_PROJECTION_GATHER_DEVICE_FRACTION = 0.020
 _AUTO_NOISE_BLOCK_DEVICE_FRACTION = 0.0125
 _AUTO_ADJOINT_BLOCK_DEVICE_FRACTION = 0.006
+# The fresh first-iteration CUDA scorer temporarily materializes a texture
+# copy of Projector::data while the native BPref accumulators remain live.
+# Above half of physical memory, leave the other half for the reference,
+# score workspaces, allocator fragmentation, and CUDA runtime allocations by
+# deferring BPref until Projector::data can be released.
+_AUTO_DEFERRED_FIRSTITER_BPREF_DEVICE_FRACTION = 0.500
+_RELION_FIRSTITER_DEFERRED_BPREF_ENV = (
+    "RECOVAR_RELION_FIRSTITER_DEFERRED_BPREF"
+)
+_RELION_FIRSTITER_DEFERRED_BPREF_MAX_HOST_BYTES_ENV = (
+    "RECOVAR_RELION_FIRSTITER_DEFERRED_BPREF_MAX_HOST_BYTES"
+)
+_DEFAULT_DEFERRED_FIRSTITER_BPREF_MAX_HOST_BYTES = 128 * 1024**3
 _DEFAULT_SMALL_BUCKET_COALESCE_SIZE = 128
 _DEFAULT_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES = 5_000
 _DEFAULT_TAIL_BUCKET_COALESCE_MAX_IMAGES_FUSED_KCLASS = 0
@@ -809,6 +823,19 @@ class SparseKClassPass2FusedResult(NamedTuple):
     per_class_best_pose_rotation_ids: tuple[np.ndarray, ...] | None
     profile_summary: dict
     class_posterior_sums: np.ndarray | None = None
+
+
+class DeferredFirstiterBPrefBatch(NamedTuple):
+    """Host snapshot of one scored fresh-firstiter BPref launch group."""
+
+    raw_images: np.ndarray
+    raw_ctf: np.ndarray
+    raw_minvsigma2: np.ndarray
+    posterior: np.ndarray
+    rotations: np.ndarray
+    actual_counts: np.ndarray
+    particle_half_local_indices: np.ndarray
+    particle_original_indices: np.ndarray
 
 
 class SparseKClassCompactPairPlanStats(NamedTuple):
@@ -3092,6 +3119,133 @@ def _relion_firstiter_fused_bpref_enabled(
     return bool(requested and supported)
 
 
+def _relion_firstiter_bpref_overlap_bytes(
+    *,
+    projector_shape,
+    projector_dtype,
+    recon_volume_size: int,
+    recon_y_dtype,
+    recon_ctf_dtype,
+) -> tuple[int, int, int]:
+    """Estimate direct-path persistent bytes and its texture-time peak.
+
+    The projection FFI creates one CUDA texture-array copy of the supplied
+    Projector::data slab.  The direct route therefore owns two projector
+    slabs while both native x-half accumulators are live.
+    """
+
+    projector_bytes = int(np.prod(projector_shape)) * int(
+        np.dtype(projector_dtype).itemsize
+    )
+    accumulator_bytes = int(recon_volume_size) * (
+        int(np.dtype(recon_y_dtype).itemsize)
+        + int(np.dtype(recon_ctf_dtype).itemsize)
+    )
+    direct_peak_bytes = 2 * projector_bytes + accumulator_bytes
+    return projector_bytes, accumulator_bytes, direct_peak_bytes
+
+
+def _relion_firstiter_deferred_bpref_enabled(
+    *,
+    relion_firstiter_fused_bpref: bool,
+    use_relion_projector: bool,
+    projector_device_owned: bool,
+    projector_shape,
+    projector_dtype,
+    recon_volume_size: int,
+    recon_y_dtype,
+    recon_ctf_dtype,
+    device_memory_bytes: int | None,
+    allocator_free_memory_bytes: int | None = None,
+    diagnostics_active: bool = False,
+) -> bool:
+    """Select exact host-staged BPref when the direct GPU overlap is unsafe."""
+
+    supported = bool(
+        relion_firstiter_fused_bpref
+        and use_relion_projector
+        and projector_device_owned
+        and not diagnostics_active
+    )
+    raw = os.environ.get(_RELION_FIRSTITER_DEFERRED_BPREF_ENV)
+    if raw is not None and raw.strip():
+        requested = _env_flag_enabled(_RELION_FIRSTITER_DEFERRED_BPREF_ENV)
+        if requested and not supported:
+            raise ValueError(
+                f"{_RELION_FIRSTITER_DEFERRED_BPREF_ENV}=1 requires a fresh "
+                "firstiter fused-BPref call with a host-owned RELION projector"
+            )
+        return bool(requested and supported)
+    if not supported or device_memory_bytes is None or int(device_memory_bytes) <= 0:
+        return False
+    _, accumulator_bytes, direct_peak_bytes = _relion_firstiter_bpref_overlap_bytes(
+        projector_shape=projector_shape,
+        projector_dtype=projector_dtype,
+        recon_volume_size=recon_volume_size,
+        recon_y_dtype=recon_y_dtype,
+        recon_ctf_dtype=recon_ctf_dtype,
+    )
+    exceeds_physical_peak_budget = direct_peak_bytes > int(
+        float(device_memory_bytes)
+        * _AUTO_DEFERRED_FIRSTITER_BPREF_DEVICE_FRACTION
+    )
+    exceeds_allocator_budget = bool(
+        allocator_free_memory_bytes is not None
+        and int(allocator_free_memory_bytes) > 0
+        and accumulator_bytes > int(0.8 * float(allocator_free_memory_bytes))
+    )
+    return bool(exceeds_physical_peak_budget or exceeds_allocator_budget)
+
+
+def _deferred_firstiter_bpref_estimated_host_bytes(
+    buckets,
+    *,
+    n_half: int,
+    n_fine_trans: int,
+) -> int:
+    """Estimate the exact retained snapshot bytes for fresh firstiter BPref.
+
+    Each particle's complex64 image and float32 CTF is retained once.  The
+    inverse-noise row is retained once per launch group, while posterior and
+    rotation arrays use the group's padded support.  The three identity/count
+    vectors are staged as int64 by :func:`_stage_deferred_firstiter_bpref_batch`.
+    """
+
+    n_half = int(n_half)
+    n_fine_trans = int(n_fine_trans)
+    if n_half <= 0 or n_fine_trans <= 0:
+        raise ValueError("deferred firstiter BPref dimensions must be positive")
+    total_bytes = 0
+    for bucket in buckets:
+        batch = int(np.asarray(bucket["image_indices"]).size)
+        bucket_size = int(bucket["bucket_size"])
+        if batch <= 0 or bucket_size <= 0:
+            raise ValueError("deferred firstiter BPref buckets must be nonempty")
+        total_bytes += batch * n_half * (
+            np.dtype(np.complex64).itemsize + np.dtype(np.float32).itemsize
+        )
+        total_bytes += n_half * np.dtype(np.float32).itemsize
+        total_bytes += batch * bucket_size * (
+            n_fine_trans * np.dtype(np.float32).itemsize
+            + 9 * np.dtype(np.float32).itemsize
+        )
+        total_bytes += batch * 3 * np.dtype(np.int64).itemsize
+    return int(total_bytes)
+
+
+def _deferred_firstiter_bpref_max_host_bytes() -> int:
+    """Return the fail-closed cap for retained fresh-firstiter host operands."""
+
+    configured = _optional_positive_int_env(
+        _RELION_FIRSTITER_DEFERRED_BPREF_MAX_HOST_BYTES_ENV,
+    )
+    return int(
+        _DEFAULT_DEFERRED_FIRSTITER_BPREF_MAX_HOST_BYTES
+        if configured is None
+        else configured
+    )
+
+
 def _relion_wavg_direct_modes(
     *,
     accumulate_noise: bool,
@@ -5363,6 +5517,20 @@ def _scoped_bpref_diagnostic_flags(*, active: bool) -> dict[str, bool]:
     }
 
 
+def _scoped_bpref_diagnostics_active(flags: dict[str, bool]) -> bool:
+    """Return whether a scoped execution diagnostic, not just its target, is active."""
+
+    return any(
+        bool(flags[name])
+        for name in (
+            "sequential_translation_reduction",
+            "per_particle_launches",
+            "fused_atomics",
+            "high_precision_operand_bundle",
+        )
+    )
+
+
 def _resolve_bpref_execution_modes(
     scoped_diagnostic_flags: dict[str, bool],
     *,
@@ -5843,6 +6011,123 @@ def _accumulate_relion_firstiter_bpref_fused(
                 },
             )
     return data_volume, weight_volume
+
+
+def _host_snapshot(value) -> np.ndarray:
+    """Make an independent, bit-preserving host copy of a scored operand."""
+
+    return np.array(jax.device_get(value), copy=True)
+
+
+def _stage_deferred_firstiter_bpref_batch(
+    *,
+    raw_images,
+    raw_ctf,
+    raw_minvsigma2,
+    posterior,
+    rotations,
+    actual_counts,
+    particle_half_local_indices,
+    particle_original_indices,
+) -> DeferredFirstiterBPrefBatch:
+    """Snapshot one launch group without changing any source dtype or order."""
+
+    return DeferredFirstiterBPrefBatch(
+        raw_images=_host_snapshot(raw_images),
+        raw_ctf=_host_snapshot(raw_ctf),
+        raw_minvsigma2=_host_snapshot(raw_minvsigma2),
+        posterior=_host_snapshot(posterior),
+        rotations=_host_snapshot(rotations),
+        actual_counts=np.array(actual_counts, dtype=np.int64, copy=True),
+        particle_half_local_indices=np.array(
+            particle_half_local_indices,
+            dtype=np.int64,
+            copy=True,
+        ),
+        particle_original_indices=np.array(
+            particle_original_indices,
+            dtype=np.int64,
+            copy=True,
+        ),
+    )
+
+
+def _deferred_firstiter_bpref_batch_nbytes(
+    batch: DeferredFirstiterBPrefBatch,
+) -> int:
+    """Return retained host bytes for one deferred launch group."""
+
+    return int(sum(value.nbytes for value in batch))
+
+
+def _replay_deferred_firstiter_bpref_batches(
+    batches: list[DeferredFirstiterBPrefBatch],
+    data_volume,
+    weight_volume,
+    *,
+    centered_pixel_indices,
+    fftw_pixel_indices,
+    translation_angles,
+    physical_image_shape,
+    volume_shape,
+    max_r: float,
+    adaptive_fraction: float,
+):
+    """Replay staged BPref groups through the unchanged native accumulator."""
+
+    for batch in batches:
+        data_volume, weight_volume = _accumulate_relion_firstiter_bpref_fused(
+            batch.raw_images,
+            batch.raw_ctf,
+            batch.raw_minvsigma2,
+            batch.posterior,
+            batch.rotations,
+            batch.actual_counts,
+            batch.particle_half_local_indices,
+            batch.particle_original_indices,
+            data_volume,
+            weight_volume,
+            centered_pixel_indices=centered_pixel_indices,
+            fftw_pixel_indices=fftw_pixel_indices,
+            translation_angles=translation_angles,
+            physical_image_shape=physical_image_shape,
+            volume_shape=volume_shape,
+            max_r=max_r,
+            adaptive_fraction=adaptive_fraction,
+        )
+        # A box-800 launch group owns tens of MiB of uploaded image/CTF/noise
+        # operands.  The accumulator dependency preserves launch order, but
+        # without this boundary Python can enqueue many later groups before
+        # those operands are retired and rebuild the live-set pressure this
+        # path avoids.
+        jax.block_until_ready((data_volume, weight_volume))
+    return data_volume, weight_volume
+
+
+def _release_deferred_firstiter_projection_buffers(
+    projector_device_buffer,
+    projection_cache,
+) -> None:
+    """Delete only function-owned scoring buffers, once per device object."""
+
+    values = [projector_device_buffer]
+    if projection_cache is not None:
+        values.extend(projection_cache.values())
+    deleted_ids: set[int] = set()
+    for value in values:
+        if value is None or id(value) in deleted_ids:
+            continue
+        deleted_ids.add(id(value))
+        delete = getattr(value, "delete", None)
+        if callable(delete):
+            try:
+                delete()
+            except RuntimeError as exc:
+                logger.warning(
+                    "Deferred firstiter BPref could not explicitly release %s: %s",
+                    type(value).__name__,
+                    exc,
+                )
 
 
 def _accumulate_relion_x_half_per_particle_launches(
@@ -12007,9 +12292,14 @@ def compute_pass2_stats_sparse_bucketed(
     if score_only and accumulate_noise:
         raise ValueError("Sparse pass-2 score-only mode is incompatible with accumulate_noise=True")
     use_relion_projector = relion_projector_half is not None
+    projector_device_owned = False
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        # A host slab is copied into a function-owned JAX buffer below.  Only
+        # that case can be released before deferred BPref without invalidating
+        # a device array retained by the caller for the other half-set.
+        projector_device_owned = not isinstance(relion_projector_half, jax.Array)
         relion_projector_half = jnp.asarray(relion_projector_half)
         if relion_projector_half.ndim != 3:
             raise ValueError(
@@ -12420,6 +12710,89 @@ def compute_pass2_stats_sparse_bucketed(
     if use_relion_fine_mstep_prune and not use_relion_x_half_mstep:
         logger.info("Sparse pass-2 M-step: applying RELION fine-pass significant-weight pruning")
 
+    fresh_k1_guard = bool(source_faithful_spectrum_norm)
+    source_faithful_spectrum_norm = _relion_powerclass_spectrum_norm_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+    )
+    relion_exact_bpref_operands = _relion_exact_bpref_operands_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+    )
+    relion_firstiter_fused_bpref = _relion_firstiter_fused_bpref_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        winner_take_all=bool(relion_firstiter_winner_take_all),
+        preserve_bpref_particle_order=bool(preserve_bpref_particle_order),
+        relion_exact_bpref_operands=bool(relion_exact_bpref_operands),
+        use_relion_x_half_mstep=bool(use_relion_x_half_mstep),
+        score_only=bool(score_only),
+    )
+    deferred_firstiter_bpref = False
+    if use_relion_projector:
+        deferred_firstiter_bpref = _relion_firstiter_deferred_bpref_enabled(
+            relion_firstiter_fused_bpref=relion_firstiter_fused_bpref,
+            use_relion_projector=use_relion_projector,
+            projector_device_owned=projector_device_owned,
+            projector_shape=relion_projector_half.shape,
+            projector_dtype=relion_projector_half.dtype,
+            recon_volume_size=recon_volume_size,
+            recon_y_dtype=recon_y_accum_dtype,
+            recon_ctf_dtype=recon_ctf_accum_dtype,
+            device_memory_bytes=device_memory_bytes,
+            allocator_free_memory_bytes=_jax_allocator_free_memory_bytes(),
+            diagnostics_active=bool(
+                device_signature_requested
+                or contribution_diagnostics_active
+                or membership_diagnostics_active
+                or _scoped_bpref_diagnostics_active(scoped_diagnostic_flags)
+                or os.environ.get(
+                    _BPREF_ACCUMULATOR_DELTA_DUMP_DIR_ENV,
+                    "",
+                ).strip()
+                or os.environ.get("RECOVAR_PASS2_DUMP_DIR", "").strip()
+            ),
+        )
+    deferred_firstiter_bpref_batches: list[DeferredFirstiterBPrefBatch] = []
+    deferred_firstiter_bpref_host_bytes = 0
+    deferred_firstiter_bpref_max_host_bytes = 0
+    if deferred_firstiter_bpref:
+        deferred_firstiter_bpref_max_host_bytes = (
+            _deferred_firstiter_bpref_max_host_bytes()
+        )
+        estimated_host_bytes = _deferred_firstiter_bpref_estimated_host_bytes(
+            buckets,
+            n_half=n_half,
+            n_fine_trans=n_fine_trans,
+        )
+        if estimated_host_bytes > deferred_firstiter_bpref_max_host_bytes:
+            raise MemoryError(
+                "Deferred fresh firstiter BPref host staging exceeds its explicit "
+                f"cap: estimated={estimated_host_bytes} bytes "
+                f"cap={deferred_firstiter_bpref_max_host_bytes} bytes. Increase "
+                f"{_RELION_FIRSTITER_DEFERRED_BPREF_MAX_HOST_BYTES_ENV} or use "
+                "a smaller particle subset."
+            )
+        projector_bytes, accumulator_bytes, direct_peak_bytes = (
+            _relion_firstiter_bpref_overlap_bytes(
+                projector_shape=relion_projector_half.shape,
+                projector_dtype=relion_projector_half.dtype,
+                recon_volume_size=recon_volume_size,
+                recon_y_dtype=recon_y_accum_dtype,
+                recon_ctf_dtype=recon_ctf_accum_dtype,
+            )
+        )
+        logger.info(
+            "Sparse pass-2 deferring fresh firstiter BPref until scoring releases "
+            "Projector::data: projector=%.2f GiB accumulators=%.2f GiB "
+            "direct_texture_peak=%.2f GiB device=%.2f GiB "
+            "host_estimate=%.2f GiB host_cap=%.2f GiB",
+            projector_bytes / float(1024**3),
+            accumulator_bytes / float(1024**3),
+            direct_peak_bytes / float(1024**3),
+            device_memory_bytes / float(1024**3),
+            estimated_host_bytes / float(1024**3),
+            deferred_firstiter_bpref_max_host_bytes / float(1024**3),
+        )
+
     # Output accumulators (volume_size matches what original returned: full N**3)
     if return_score_log_z_only:
         Ft_y_total = None
@@ -12428,8 +12801,16 @@ def compute_pass2_stats_sparse_bucketed(
         best_rotations = None
         best_rotation_indices = None
     else:
-        Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype)
-        Ft_ctf_total = jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype)
+        Ft_y_total = (
+            None
+            if deferred_firstiter_bpref
+            else jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype)
+        )
+        Ft_ctf_total = (
+            None
+            if deferred_firstiter_bpref
+            else jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype)
+        )
         hard_assignment = np.empty(n_images, dtype=np.int32)
         best_rotations = np.empty((n_images, 3, 3), dtype=np.float32)
         best_rotation_indices = np.empty(n_images, dtype=np.int64)
@@ -12548,22 +12929,6 @@ def compute_pass2_stats_sparse_bucketed(
     )
 
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
-    fresh_k1_guard = bool(source_faithful_spectrum_norm)
-    source_faithful_spectrum_norm = _relion_powerclass_spectrum_norm_enabled(
-        fresh_k1_guard=fresh_k1_guard,
-    )
-    relion_exact_bpref_operands = _relion_exact_bpref_operands_enabled(
-        fresh_k1_guard=fresh_k1_guard,
-        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
-    )
-    relion_firstiter_fused_bpref = _relion_firstiter_fused_bpref_enabled(
-        fresh_k1_guard=fresh_k1_guard,
-        winner_take_all=bool(relion_firstiter_winner_take_all),
-        preserve_bpref_particle_order=bool(preserve_bpref_particle_order),
-        relion_exact_bpref_operands=bool(relion_exact_bpref_operands),
-        use_relion_x_half_mstep=bool(use_relion_x_half_mstep),
-        score_only=bool(score_only),
-    )
     if relion_exact_bpref_operands:
         if use_float64_scoring:
             raise ValueError("exact RELION BPref operands require the native float32 path")
@@ -15410,25 +15775,73 @@ def compute_pass2_stats_sparse_bucketed(
                     raise RuntimeError(
                         "fresh firstiter fused BPref is missing native source operands"
                     )
-                Ft_y_total, Ft_ctf_total = _accumulate_relion_firstiter_bpref_fused(
-                    direct_bpref_image_half,
-                    direct_bpref_ctf_half,
-                    direct_bpref_minvsigma2_half,
-                    mstep_probs,
-                    jnp.asarray(mstep_rotations),
-                    actual_counts,
-                    np.asarray(image_indices, dtype=np.int64),
-                    _original_indices_for_local(experiment_dataset, image_indices),
-                    Ft_y_total,
-                    Ft_ctf_total,
-                    centered_pixel_indices=centered_recon_indices,
-                    fftw_pixel_indices=relion_x_half_recon_indices,
-                    translation_angles=relion_score_translation_angles,
-                    physical_image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    max_r=float(mstep_current_size // 2),
-                    adaptive_fraction=float(adaptive_fraction),
-                )
+                if deferred_firstiter_bpref:
+                    staged_bpref_batch = _stage_deferred_firstiter_bpref_batch(
+                        raw_images=direct_bpref_image_half,
+                        raw_ctf=direct_bpref_ctf_half,
+                        raw_minvsigma2=direct_bpref_minvsigma2_half,
+                        posterior=mstep_probs,
+                        rotations=jnp.asarray(mstep_rotations),
+                        actual_counts=actual_counts,
+                        particle_half_local_indices=np.asarray(
+                            image_indices,
+                            dtype=np.int64,
+                        ),
+                        particle_original_indices=_original_indices_for_local(
+                            experiment_dataset,
+                            image_indices,
+                        ),
+                    )
+                    staged_bpref_batch_bytes = (
+                        _deferred_firstiter_bpref_batch_nbytes(
+                            staged_bpref_batch,
+                        )
+                    )
+                    if (
+                        deferred_firstiter_bpref_host_bytes
+                        + staged_bpref_batch_bytes
+                        > deferred_firstiter_bpref_max_host_bytes
+                    ):
+                        raise MemoryError(
+                            "Deferred fresh firstiter BPref host staging exceeded "
+                            "its admitted cap at runtime: "
+                            f"retained={deferred_firstiter_bpref_host_bytes} bytes "
+                            f"next={staged_bpref_batch_bytes} bytes "
+                            f"cap={deferred_firstiter_bpref_max_host_bytes} bytes"
+                        )
+                    deferred_firstiter_bpref_batches.append(staged_bpref_batch)
+                    deferred_firstiter_bpref_host_bytes += staged_bpref_batch_bytes
+                    if len(deferred_firstiter_bpref_batches) % 256 == 0:
+                        logger.info(
+                            "Sparse pass-2 deferred firstiter BPref staging: "
+                            "groups=%d particles=%d host=%.2f GiB",
+                            len(deferred_firstiter_bpref_batches),
+                            sum(
+                                int(batch.actual_counts.size)
+                                for batch in deferred_firstiter_bpref_batches
+                            ),
+                            deferred_firstiter_bpref_host_bytes / float(1024**3),
+                        )
+                else:
+                    Ft_y_total, Ft_ctf_total = _accumulate_relion_firstiter_bpref_fused(
+                        direct_bpref_image_half,
+                        direct_bpref_ctf_half,
+                        direct_bpref_minvsigma2_half,
+                        mstep_probs,
+                        jnp.asarray(mstep_rotations),
+                        actual_counts,
+                        np.asarray(image_indices, dtype=np.int64),
+                        _original_indices_for_local(experiment_dataset, image_indices),
+                        Ft_y_total,
+                        Ft_ctf_total,
+                        centered_pixel_indices=centered_recon_indices,
+                        fftw_pixel_indices=relion_x_half_recon_indices,
+                        translation_angles=relion_score_translation_angles,
+                        physical_image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        max_r=float(mstep_current_size // 2),
+                        adaptive_fraction=float(adaptive_fraction),
+                    )
             elif live_per_particle_launches:
                 mstep_window_indices = (
                     relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
@@ -15878,6 +16291,66 @@ def compute_pass2_stats_sparse_bucketed(
             group_wall,
             group_images / max(group_wall, 1e-9),
         )
+
+    if deferred_firstiter_bpref:
+        staged_particle_count = sum(
+            int(batch.actual_counts.size)
+            for batch in deferred_firstiter_bpref_batches
+        )
+        if staged_particle_count != n_images:
+            raise RuntimeError(
+                "deferred fresh firstiter BPref did not stage every particle: "
+                f"staged={staged_particle_count} expected={n_images}"
+            )
+        logger.info(
+            "Sparse pass-2 deferred firstiter BPref score phase complete: "
+            "groups=%d particles=%d host=%.2f GiB; releasing Projector::data",
+            len(deferred_firstiter_bpref_batches),
+            staged_particle_count,
+            deferred_firstiter_bpref_host_bytes / float(1024**3),
+        )
+
+        # Every staged np.array conversion above is a synchronization boundary
+        # for its score/posterior dependencies.  The function-owned projector
+        # and any locally built projection cache can now be invalidated without
+        # touching the caller's host slab or changing the replay operands.
+        projector_device_buffer = relion_projector_half
+        relion_projector_half = None
+        _release_deferred_firstiter_projection_buffers(
+            projector_device_buffer,
+            projection_cache,
+        )
+        projection_cache = None
+        projector_device_buffer = None
+        gc.collect()
+
+        Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype)
+        jax.block_until_ready(Ft_y_total)
+        Ft_ctf_total = jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype)
+        jax.block_until_ready(Ft_ctf_total)
+        replay_t0 = time.time()
+        Ft_y_total, Ft_ctf_total = _replay_deferred_firstiter_bpref_batches(
+            deferred_firstiter_bpref_batches,
+            Ft_y_total,
+            Ft_ctf_total,
+            centered_pixel_indices=centered_recon_indices,
+            fftw_pixel_indices=relion_x_half_recon_indices,
+            translation_angles=relion_score_translation_angles,
+            physical_image_shape=image_shape,
+            volume_shape=recon_volume_shape,
+            max_r=float(mstep_current_size // 2),
+            adaptive_fraction=float(adaptive_fraction),
+        )
+        jax.block_until_ready((Ft_y_total, Ft_ctf_total))
+        logger.info(
+            "Sparse pass-2 deferred firstiter BPref replay complete: "
+            "groups=%d particles=%d wall=%.1fs",
+            len(deferred_firstiter_bpref_batches),
+            staged_particle_count,
+            time.time() - replay_t0,
+        )
+        deferred_firstiter_bpref_batches.clear()
+        gc.collect()
 
     em_wall = time.time() - overall_t0
     logger.info(

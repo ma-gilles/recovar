@@ -2,8 +2,300 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
+
+
+def test_deferred_firstiter_bpref_gate_uses_texture_peak_and_force_override(
+    monkeypatch,
+):
+    box800_projector_bytes, box800_accumulator_bytes, box800_peak_bytes = (
+        sparse._relion_firstiter_bpref_overlap_bytes(
+            projector_shape=(1603, 1603, 802),
+            projector_dtype=np.complex64,
+            recon_volume_size=2_060_826_418,
+            recon_y_dtype=np.complex64,
+            recon_ctf_dtype=np.float32,
+        )
+    )
+    assert box800_projector_bytes == 16_486_611_344
+    assert box800_accumulator_bytes == 24_729_917_016
+    assert box800_peak_bytes == 57_703_139_704
+
+    common = dict(
+        relion_firstiter_fused_bpref=True,
+        use_relion_projector=True,
+        projector_device_owned=True,
+        projector_shape=(10, 10, 6),
+        projector_dtype=np.complex64,
+        recon_volume_size=100,
+        recon_y_dtype=np.complex64,
+        recon_ctf_dtype=np.float32,
+    )
+    projector_bytes, accumulator_bytes, peak_bytes = (
+        sparse._relion_firstiter_bpref_overlap_bytes(
+            projector_shape=common["projector_shape"],
+            projector_dtype=common["projector_dtype"],
+            recon_volume_size=common["recon_volume_size"],
+            recon_y_dtype=common["recon_y_dtype"],
+            recon_ctf_dtype=common["recon_ctf_dtype"],
+        )
+    )
+    assert projector_bytes == 4_800
+    assert accumulator_bytes == 1_200
+    assert peak_bytes == 10_800
+
+    monkeypatch.delenv(sparse._RELION_FIRSTITER_DEFERRED_BPREF_ENV, raising=False)
+    assert sparse._relion_firstiter_deferred_bpref_enabled(
+        **common,
+        device_memory_bytes=20_000,
+    )
+    assert not sparse._relion_firstiter_deferred_bpref_enabled(
+        **common,
+        device_memory_bytes=22_000,
+    )
+    assert sparse._relion_firstiter_deferred_bpref_enabled(
+        **common,
+        device_memory_bytes=22_000,
+        allocator_free_memory_bytes=1_000,
+    )
+
+    monkeypatch.setenv(sparse._RELION_FIRSTITER_DEFERRED_BPREF_ENV, "1")
+    assert sparse._relion_firstiter_deferred_bpref_enabled(
+        **common,
+        device_memory_bytes=1_000_000,
+    )
+    with pytest.raises(ValueError, match="host-owned RELION projector"):
+        sparse._relion_firstiter_deferred_bpref_enabled(
+            **(common | {"projector_device_owned": False}),
+            device_memory_bytes=20_000,
+        )
+    with pytest.raises(ValueError, match="host-owned RELION projector"):
+        sparse._relion_firstiter_deferred_bpref_enabled(
+            **common,
+            device_memory_bytes=20_000,
+            diagnostics_active=True,
+        )
+
+    monkeypatch.setenv(sparse._RELION_FIRSTITER_DEFERRED_BPREF_ENV, "0")
+    assert not sparse._relion_firstiter_deferred_bpref_enabled(
+        **common,
+        device_memory_bytes=20_000,
+    )
+
+
+def test_deferred_firstiter_bpref_host_estimate_and_cap(monkeypatch):
+    buckets = [
+        {"bucket_size": 5, "image_indices": np.asarray([0, 1, 2])},
+        {"bucket_size": 7, "image_indices": np.asarray([3])},
+    ]
+    expected = (
+        4 * 11 * (np.dtype(np.complex64).itemsize + np.dtype(np.float32).itemsize)
+        + 2 * 11 * np.dtype(np.float32).itemsize
+        + (3 * 5 + 1 * 7)
+        * (2 * np.dtype(np.float32).itemsize + 9 * np.dtype(np.float32).itemsize)
+        + 4 * 3 * np.dtype(np.int64).itemsize
+    )
+    assert sparse._deferred_firstiter_bpref_estimated_host_bytes(
+        buckets,
+        n_half=11,
+        n_fine_trans=2,
+    ) == int(expected)
+
+    # EMPIAR-10202 set 6 half 1: 15,258 particles, box 800, 16 padded
+    # rotations, 84 fine translations, and 2,180 seven-particle-or-smaller
+    # launch groups.  The halves run serially, so this is the peak retained
+    # payload admitted by the production smoke rather than both halves added.
+    set6_half1_buckets = [
+        {
+            "bucket_size": 16,
+            "image_indices": np.arange(start, min(start + 7, 15_258)),
+        }
+        for start in range(0, 15_258, 7)
+    ]
+    assert sparse._deferred_firstiter_bpref_estimated_host_bytes(
+        set6_half1_buckets,
+        n_half=320_800,
+        n_fine_trans=84,
+    ) == 61_625_754_608
+
+    monkeypatch.delenv(
+        sparse._RELION_FIRSTITER_DEFERRED_BPREF_MAX_HOST_BYTES_ENV,
+        raising=False,
+    )
+    assert (
+        sparse._deferred_firstiter_bpref_max_host_bytes()
+        == sparse._DEFAULT_DEFERRED_FIRSTITER_BPREF_MAX_HOST_BYTES
+    )
+    monkeypatch.setenv(
+        sparse._RELION_FIRSTITER_DEFERRED_BPREF_MAX_HOST_BYTES_ENV,
+        "12345",
+    )
+    assert sparse._deferred_firstiter_bpref_max_host_bytes() == 12345
+
+
+def test_scoped_bpref_configured_target_is_not_an_active_diagnostic():
+    flags = {
+        "device_signature_configured": True,
+        "sequential_translation_reduction": False,
+        "per_particle_launches": False,
+        "fused_atomics": False,
+        "high_precision_operand_bundle": False,
+    }
+    assert not sparse._scoped_bpref_diagnostics_active(flags)
+    flags["fused_atomics"] = True
+    assert sparse._scoped_bpref_diagnostics_active(flags)
+
+
+def test_release_deferred_firstiter_projection_buffers_deletes_unique_values_once(
+    caplog,
+):
+    events = []
+
+    class Buffer:
+        def __init__(self, name, *, fail=False):
+            self.name = name
+            self.fail = fail
+
+        def delete(self):
+            events.append(self.name)
+            if self.fail:
+                raise RuntimeError("already released")
+
+    projector = Buffer("projector")
+    cached = Buffer("cache")
+    already_released = Buffer("stale", fail=True)
+    sparse._release_deferred_firstiter_projection_buffers(
+        projector,
+        {
+            "score": cached,
+            "recon": cached,
+            "recon_abs2": already_released,
+        },
+    )
+    assert events == ["projector", "cache", "stale"]
+    assert "could not explicitly release Buffer: already released" in caplog.text
+
+
+def test_deferred_firstiter_bpref_snapshot_and_replay_preserve_bits_and_order(
+    monkeypatch,
+):
+    first_images = jnp.asarray([[1 + 2j, 3 + 4j]], dtype=jnp.complex64)
+    first_ctf = jnp.asarray([[5.0, 6.0]], dtype=jnp.float32)
+    first_noise = jnp.asarray([7.0, 8.0], dtype=jnp.float32)
+    first_posterior = jnp.asarray([[[0.0, 1.0]]], dtype=jnp.float32)
+    first_rotations = jnp.asarray(np.eye(3, dtype=np.float32)[None, None])
+    second_images = jnp.asarray([[9 + 10j, 11 + 12j]], dtype=jnp.complex64)
+    second_ctf = jnp.asarray([[13.0, 14.0]], dtype=jnp.float32)
+    second_noise = jnp.asarray([15.0, 16.0], dtype=jnp.float32)
+    second_posterior = jnp.asarray([[[1.0, 0.0]]], dtype=jnp.float32)
+    second_rotations = jnp.asarray((-np.eye(3, dtype=np.float32))[None, None])
+
+    first = sparse._stage_deferred_firstiter_bpref_batch(
+        raw_images=first_images,
+        raw_ctf=first_ctf,
+        raw_minvsigma2=first_noise,
+        posterior=first_posterior,
+        rotations=first_rotations,
+        actual_counts=np.asarray([1]),
+        particle_half_local_indices=np.asarray([0]),
+        particle_original_indices=np.asarray([10]),
+    )
+    second = sparse._stage_deferred_firstiter_bpref_batch(
+        raw_images=second_images,
+        raw_ctf=second_ctf,
+        raw_minvsigma2=second_noise,
+        posterior=second_posterior,
+        rotations=second_rotations,
+        actual_counts=np.asarray([1]),
+        particle_half_local_indices=np.asarray([1]),
+        particle_original_indices=np.asarray([20]),
+    )
+    np.testing.assert_array_equal(first.raw_images, np.asarray(first_images))
+    np.testing.assert_array_equal(first.raw_ctf, np.asarray(first_ctf))
+    np.testing.assert_array_equal(first.raw_minvsigma2, np.asarray(first_noise))
+    np.testing.assert_array_equal(first.posterior, np.asarray(first_posterior))
+    np.testing.assert_array_equal(first.rotations, np.asarray(first_rotations))
+    assert sparse._deferred_firstiter_bpref_batch_nbytes(first) == sum(
+        value.nbytes for value in first
+    )
+
+    calls = []
+    replay_boundaries = []
+
+    def record_replay_boundary(values):
+        replay_boundaries.append(tuple(np.asarray(value).copy() for value in values))
+        return values
+
+    monkeypatch.setattr(sparse.jax, "block_until_ready", record_replay_boundary)
+
+    def fake_accumulate(
+        raw_images,
+        raw_ctf,
+        raw_minvsigma2,
+        posterior,
+        rotations,
+        actual_counts,
+        particle_half_local_indices,
+        particle_original_indices,
+        data_volume,
+        weight_volume,
+        **kwargs,
+    ):
+        calls.append(
+            {
+                "raw_images": np.asarray(raw_images).copy(),
+                "raw_ctf": np.asarray(raw_ctf).copy(),
+                "raw_minvsigma2": np.asarray(raw_minvsigma2).copy(),
+                "posterior": np.asarray(posterior).copy(),
+                "rotations": np.asarray(rotations).copy(),
+                "actual_counts": np.asarray(actual_counts).copy(),
+                "particle_half_local_indices": np.asarray(
+                    particle_half_local_indices,
+                ).copy(),
+                "particle_original_indices": np.asarray(
+                    particle_original_indices,
+                ).copy(),
+                "kwargs": kwargs,
+            }
+        )
+        ordinal = np.float32(np.asarray(particle_original_indices)[0])
+        return data_volume * np.float32(10.0) + ordinal, weight_volume * np.float32(10.0) + ordinal
+
+    monkeypatch.setattr(
+        sparse,
+        "_accumulate_relion_firstiter_bpref_fused",
+        fake_accumulate,
+    )
+    data, weight = sparse._replay_deferred_firstiter_bpref_batches(
+        [first, second],
+        jnp.zeros(1, dtype=jnp.complex64),
+        jnp.zeros(1, dtype=jnp.float32),
+        centered_pixel_indices=np.arange(2, dtype=np.int32),
+        fftw_pixel_indices=np.arange(2, dtype=np.int32),
+        translation_angles=np.zeros((2, 2), dtype=np.float32),
+        physical_image_shape=(2, 2),
+        volume_shape=(1,),
+        max_r=1.0,
+        adaptive_fraction=0.999,
+    )
+
+    np.testing.assert_array_equal(np.asarray(data), np.asarray([120], dtype=np.complex64))
+    np.testing.assert_array_equal(np.asarray(weight), np.asarray([120], dtype=np.float32))
+    assert [call["particle_original_indices"].item() for call in calls] == [10, 20]
+    assert len(replay_boundaries) == 2
+    np.testing.assert_array_equal(
+        replay_boundaries[0][0],
+        np.asarray([10], dtype=np.complex64),
+    )
+    np.testing.assert_array_equal(
+        replay_boundaries[1][0],
+        np.asarray([120], dtype=np.complex64),
+    )
+    for expected, actual in zip((first, second), calls, strict=True):
+        for field in sparse.DeferredFirstiterBPrefBatch._fields:
+            np.testing.assert_array_equal(actual[field], getattr(expected, field))
 
 
 def test_firstiter_fused_bpref_prefix_capture_uses_immutable_identity_and_global_ordinal(

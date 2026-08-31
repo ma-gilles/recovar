@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import logging
-from pathlib import Path
 import inspect
+import logging
 import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,7 +14,10 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 import recovar.core.slicing as slicing
 import recovar.cuda_backproject as cuda_backproject
-from recovar.em.dense_single_volume.helpers import half_volume_mstep
+from recovar.em.dense_single_volume.helpers import (
+    half_volume_mstep,
+    sparse_pass2_bucketed,
+)
 from recovar.reconstruction import regularization
 
 pytestmark = pytest.mark.unit
@@ -321,8 +324,7 @@ def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
 
 
 def test_relion_x_half_production_allocators_use_current_size_backprojector_shape():
-    from recovar.em.dense_single_volume import k_class
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import k_class, local_em_engine
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 
     def assert_uses_current_size_shape(fn):
@@ -988,6 +990,99 @@ def test_relion_firstiter_bpref_exact_native_ffi_smoke(
     expected_weight[expected_offset] = np.float32(2.0)
     np.testing.assert_array_equal(data_out, expected_data)
     np.testing.assert_array_equal(weight_out, expected_weight)
+
+
+@pytest.mark.gpu
+def test_deferred_firstiter_bpref_replay_matches_eager_native_accumulators_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    cuda_backproject._cuda_ok = None
+
+    image_shape = (4, 4)
+    volume_shape = (7, 7, 7)
+    volume_size = 7 * 7 * 4
+    centered_pixel_indices = np.arange(12, dtype=np.int32)
+    fftw_pixel_indices = np.arange(12, dtype=np.int32)
+    translation_angles = np.zeros((1, 2), dtype=np.float32)
+    rotations = np.eye(3, dtype=np.float32)[None, None]
+
+    def launch_group(tag, original_index):
+        image = np.zeros((1, 12), dtype=np.complex64)
+        image[0, 0] = np.complex64(tag)
+        ctf = np.zeros((1, 12), dtype=np.float32)
+        ctf[0, 0] = np.float32(2.0)
+        return dict(
+            raw_images=image,
+            raw_ctf=ctf,
+            raw_minvsigma2=np.full(12, np.float32(0.5), dtype=np.float32),
+            posterior=np.ones((1, 1, 1), dtype=np.float32),
+            rotations=rotations,
+            actual_counts=np.asarray([1], dtype=np.int64),
+            particle_half_local_indices=np.asarray(
+                [original_index],
+                dtype=np.int64,
+            ),
+            particle_original_indices=np.asarray(
+                [original_index],
+                dtype=np.int64,
+            ),
+        )
+
+    groups = [
+        launch_group(np.complex64(2**24 + 0j), 0),
+        launch_group(np.complex64(1 + 0j), 1),
+        launch_group(np.complex64(-(2**24) + 0j), 2),
+    ]
+    staged = [
+        sparse_pass2_bucketed._stage_deferred_firstiter_bpref_batch(**group)
+        for group in groups
+    ]
+    common = dict(
+        centered_pixel_indices=centered_pixel_indices,
+        fftw_pixel_indices=fftw_pixel_indices,
+        translation_angles=translation_angles,
+        physical_image_shape=image_shape,
+        volume_shape=volume_shape,
+        max_r=2.0,
+        adaptive_fraction=0.999,
+    )
+
+    with cuda_backproject.jax.default_device(gpu_device):
+        eager_data = jnp.zeros(volume_size, dtype=jnp.complex64)
+        eager_weight = jnp.zeros(volume_size, dtype=jnp.float32)
+        for group in groups:
+            eager_data, eager_weight = (
+                sparse_pass2_bucketed._accumulate_relion_firstiter_bpref_fused(
+                    data_volume=eager_data,
+                    weight_volume=eager_weight,
+                    **group,
+                    **common,
+                )
+            )
+        deferred_data, deferred_weight = (
+            sparse_pass2_bucketed._replay_deferred_firstiter_bpref_batches(
+                staged,
+                jnp.zeros(volume_size, dtype=jnp.complex64),
+                jnp.zeros(volume_size, dtype=jnp.float32),
+                **common,
+            )
+        )
+        cuda_backproject.jax.block_until_ready(
+            (eager_data, eager_weight, deferred_data, deferred_weight),
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(deferred_data),
+        np.asarray(eager_data),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(deferred_weight),
+        np.asarray(eager_weight),
+    )
 
 
 def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():
