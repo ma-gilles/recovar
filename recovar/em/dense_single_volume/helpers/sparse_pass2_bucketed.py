@@ -5126,6 +5126,8 @@ def _relion_wavg_sequential_triplet_terms(
     scale,
     raw_shifted_images,
     posterior,
+    *,
+    relion_wavg_sequential_cuda: bool | None = None,
 ):
     """Dispatch the shared Wavg translation-order reduction.
 
@@ -5133,10 +5135,16 @@ def _relion_wavg_sequential_triplet_terms(
     same image/rotation/pixel ownership and sequential translation arithmetic
     as the JAX reference while avoiding one XLA loop-body launch per
     translation.  Both local EM and VDAM reach this helper through the shared
-    exact-local pass-2 implementation.
+    exact-local pass-2 implementation.  A typed policy overrides the legacy
+    environment gate; ``None`` preserves its existing behavior.
     """
 
-    if _env_flag_enabled(_RELION_WAVG_SEQUENTIAL_CUDA_ENV, default=False):
+    use_cuda = (
+        _env_flag_enabled(_RELION_WAVG_SEQUENTIAL_CUDA_ENV, default=False)
+        if relion_wavg_sequential_cuda is None
+        else bool(relion_wavg_sequential_cuda)
+    )
+    if use_cuda:
         from recovar import cuda_backproject
 
         return cuda_backproject.relion_wavg_sequential_triplet_f32(

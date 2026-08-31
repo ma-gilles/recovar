@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -335,6 +336,87 @@ def test_wavg_sequential_triplet_cuda_dispatch_is_explicit(monkeypatch):
         (1, 4, 3),
         (1, 2, 4),
     )
+
+
+@pytest.mark.parametrize(
+    ("environment_value", "typed_value", "expected_backend"),
+    [
+        ("1", None, "cuda"),
+        ("0", None, "jax"),
+        ("1", False, "jax"),
+        ("0", True, "cuda"),
+    ],
+)
+def test_wavg_sequential_triplet_typed_policy_overrides_environment(
+    monkeypatch,
+    environment_value,
+    typed_value,
+    expected_backend,
+):
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+
+    projections = jnp.ones((1, 1, 1), dtype=jnp.complex64)
+    raw_ctf = jnp.ones((1, 1), dtype=jnp.float32)
+    scale = jnp.ones((1,), dtype=jnp.float32)
+    shifted = jnp.ones((1, 1, 1), dtype=jnp.complex64)
+    posterior = jnp.ones((1, 1, 1), dtype=jnp.float32)
+    cuda_sentinel = jnp.full((1, 1, 1, 3), 1.0, dtype=jnp.float32)
+    jax_sentinel = jnp.full((1, 1, 1, 3), 2.0, dtype=jnp.float32)
+
+    monkeypatch.setenv(
+        "RECOVAR_K1_RELION_WAVG_SEQUENTIAL_CUDA",
+        environment_value,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_wavg_sequential_triplet_f32",
+        lambda *_: cuda_sentinel,
+    )
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_relion_wavg_sequential_triplet_terms_jax",
+        lambda *_: jax_sentinel,
+    )
+
+    actual = sparse_pass2_bucketed._relion_wavg_sequential_triplet_terms(
+        projections,
+        raw_ctf,
+        scale,
+        shifted,
+        posterior,
+        relion_wavg_sequential_cuda=typed_value,
+    )
+
+    expected = cuda_sentinel if expected_backend == "cuda" else jax_sentinel
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
+def test_exact_local_engine_threads_typed_wavg_policy_through_static_jit():
+    from recovar.em.dense_single_volume import local_big_jit, local_em_engine
+
+    engine_parameter = inspect.signature(local_em_engine.run_local_em_exact).parameters["relion_wavg_sequential_cuda"]
+    bucket_parameter = inspect.signature(local_big_jit.run_local_bucket_big_jit).parameters[
+        "relion_wavg_sequential_cuda"
+    ]
+    direct_shell_parameter = inspect.signature(local_big_jit._relion_wavg_direct_triplet_shells).parameters[
+        "relion_wavg_sequential_cuda"
+    ]
+    assert engine_parameter.default is None
+    assert bucket_parameter.default is None
+    assert direct_shell_parameter.default is None
+
+    engine_source = inspect.getsource(local_em_engine.run_local_em_exact)
+    bucket_source = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    direct_shell_source = inspect.getsource(local_big_jit._relion_wavg_direct_triplet_shells)
+    module_source = Path(local_big_jit.__file__).read_text()
+    assert "relion_wavg_sequential_cuda=relion_wavg_sequential_cuda" in engine_source
+    assert "relion_wavg_sequential_cuda=relion_wavg_sequential_cuda" in bucket_source
+    assert "relion_wavg_sequential_cuda=relion_wavg_sequential_cuda" in direct_shell_source
+    bucket_definition = module_source.index("def run_local_bucket_big_jit(")
+    bucket_decorator = module_source.rfind("@partial(", 0, bucket_definition)
+    assert bucket_decorator >= 0
+    assert '"relion_wavg_sequential_cuda"' in module_source[bucket_decorator:bucket_definition]
 
 
 def test_direct_wavg_residual_replaces_only_complete_low_shells():

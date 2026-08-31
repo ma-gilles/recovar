@@ -3527,6 +3527,7 @@ def run_local_em_exact(
     projection_mask_current_image_disk: bool = True,
     relion_exact_bpref_operands: bool = False,
     relion_exact_fine_diff2: bool = False,
+    relion_wavg_sequential_cuda: bool | None = None,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     do_gridding_correction: bool = False,
@@ -3587,6 +3588,8 @@ def run_local_em_exact(
     relion_exact_score_translation = bool(relion_exact_score_translation)
     relion_exact_bpref_operands = bool(relion_exact_bpref_operands)
     relion_exact_fine_diff2 = bool(relion_exact_fine_diff2)
+    if relion_wavg_sequential_cuda is not None:
+        relion_wavg_sequential_cuda = bool(relion_wavg_sequential_cuda)
     preserve_bpref_particle_order = bool(preserve_bpref_particle_order)
     source_faithful_bpref = bool(
         preserve_bpref_particle_order and relion_exact_bpref_operands
@@ -5007,6 +5010,7 @@ def run_local_em_exact(
                 projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
                 relion_exact_bpref_operands=relion_exact_bpref_operands,
                 relion_exact_fine_diff2=relion_exact_fine_diff2,
+                relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
                 relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
                 relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
                 mstep_subtract_ctf_projection=bool(mstep_subtract_ctf_projection),

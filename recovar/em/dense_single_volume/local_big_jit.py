@@ -288,6 +288,7 @@ def _relion_wavg_direct_triplet_shells(
     image_shape,
     shell_count,
     cutoff_shell,
+    relion_wavg_sequential_cuda: bool | None = None,
     return_per_image_cutoff=False,
 ):
     """Return RELION Wavg shells and optional per-image cutoff triplets."""
@@ -308,6 +309,7 @@ def _relion_wavg_direct_triplet_shells(
         batch_scale,
         raw_exact,
         reconstruction_probs,
+        relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
     )
     rectangle_terms = _relion_wavg_rectangle_triplet_terms(
         exact_terms,
@@ -850,6 +852,7 @@ def _project_local_half_spectrum(
         "projection_mask_current_image_disk",
         "relion_exact_bpref_operands",
         "relion_exact_fine_diff2",
+        "relion_wavg_sequential_cuda",
         "relion_cuda_preprocess_radius",
         "relion_cuda_preprocess_cosine_width",
         "mstep_subtract_ctf_projection",
@@ -968,6 +971,7 @@ def run_local_bucket_big_jit(
     projection_mask_current_image_disk: bool = True,
     relion_exact_bpref_operands: bool = False,
     relion_exact_fine_diff2: bool = False,
+    relion_wavg_sequential_cuda: bool | None = None,
     relion_cuda_preprocess_radius: float = 0.0,
     relion_cuda_preprocess_cosine_width: float = 0.0,
     mstep_subtract_ctf_projection: bool,
@@ -1864,6 +1868,7 @@ def run_local_bucket_big_jit(
                 image_shape=image_shape,
                 shell_count=n_shells,
                 cutoff_shell=int(norm_current_size) // 2,
+                relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
                 return_per_image_cutoff=return_debug_operands,
             )
             cutoff_mask = jnp.arange(n_shells, dtype=jnp.int32) == int(norm_current_size) // 2
