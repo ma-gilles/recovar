@@ -12,7 +12,7 @@
 | Same-GPU map envelope | **PASS 81/81** | Minimum best-native FSC AUC `0.9999885424`; no checkpoint outside. |
 | Active-particle envelope | **FAIL@37 — OPEN** | 35/80 checkpoints fail; 360/360 active particles are unmatched at iteration 80. |
 | Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is cross-GPU and trajectories differ. No speedup or regression claim. |
-| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling and bounded raw reuse off; test x-half sizing, shared coarse-projection reuse, and pool-preserving local buckets. |
+| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling, bounded raw reuse, and shared coarse-projection caching off; finish x-half sizing, pool-preserving local buckets, and low-cardinality Fourier-window shape audits. |
 
 ## At a glance
 
@@ -158,6 +158,7 @@ Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_sig_bucket_ab_
 | typed warm80 audit `13256248` | cold 704 vs 644 s (+9.3%); warm 415 vs 423 s (-1.9%) | Same hard state only through iterations 1--36; warm is cross-GPU. | **INCONCLUSIVE — no speed claim** |
 | 128-tail palette `13254010` | warm wall +4.1%; pass 1 +7.3% | 20/20 particle states, then sealed cache changed 1277->1280 files. | **REJECTED / DEFAULT OFF** |
 | dynamic tail mask `13257087` | 65.1455 vs 65.5981 s = 1.00695x | Forced nondefault native-texture path; 120/120 strict artifacts differ. Microgates: active-3 23.91x bitwise; active-200 2.317x not bitwise. | **VALID SCIENCE FAIL / DO NOT PROMOTE** |
+| shared coarse-projection cache `13261042 / 13261159 / 13261300 / 13261339` | exact at every tested batch; `1.01115x` at batch 200 | GF46 has 1 image batch per pass; loose overall ceiling `0.52%`, observed iteration contribution about `0.10%`; retains `0.99--1.5 GiB`. | **EXACT BUT IMMATERIAL; NOT INTEGRATED** |
 | ordered-scatter CUDA Graph `13203664` | 291 vs 293 s (-0.68%) | particles 80/80; maps 81/81. | **QUALIFIED CANDIDATE** |
 
 The current warm80 comparison cannot establish a speedup or regression. The tail-mask microbenchmark does not target the dominant accepted production coarse kernel and is superseded by the full paired gate. None of these diagnostics can change the frozen correctness or runtime panels.
@@ -194,6 +195,12 @@ All 20/20 pose/translation checkpoints match across arms. Keep profiling unset i
 
 All 15/15 raw, metadata, and masked/unmasked CUDA-preprocess blocks are bitwise exact. The absolute ceiling is only about 4.9 s over 80 iterations, while the first clean full pair was +1.45% slower. **Default off; not promoted.** Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_between_pass_cache_microbench_gf46_90ce10d61_20260831_retry02/summary.json` (SHA-256 `a9423c50358c80b8aacb87d9ae61f9596785f80284c16e16be49c8ef6cc9619e`).
 
+### Shared coarse-projection cache: jobs `13261042 / 13261159 / 13261300 / 13261339`
+
+The standalone shared CUDA primitive is bitwise exact against the current production scorer, including main-plus-tail execution and five old-binary versus refactored-binary cases. The H100 batch sweep remains exact for `B={1,2,4,8,16,32,54,64,128,200}`, but the fitted crossover is only about `B=45.1`: caching is slower below that point and reaches just `1.01115x` at `B=200` (`0.454683 -> 0.449668 s`). GF46 uses one image batch per pass, so there is no cross-batch rebuild to remove. Even crediting the full 1.13% pass-1 improvement gives a loose `0.52%` end-to-end ceiling; the observed coarse-call saving is about `0.10%` of an iteration. The cache also retains about `0.99--1.5 GiB`.
+
+Commit `1ee37ed5a0` therefore retains only the standalone shared primitive, binary comparator, focused tests, and benchmark harness on its isolated branch. It is unreachable from production and was not integrated. Main report SHA-256: `6e06f7d715653ebaf253062b9c965787cf78fded79a05586b055470ebf248541`; binary report SHA-256: `f15c1f6cac734913e2be80430d678b90b73588b40f27fa3cdc36863644228861`.
+
 ### Engineering decision ledger
 
 | Track | Decision | Evidence |
@@ -208,6 +215,7 @@ All 15/15 raw, metadata, and masked/unmasked CUDA-preprocess blocks are bitwise 
 | dynamic coarse-tail mask | **REJECTED; DO NOT PROMOTE** | The 23.91x active-3 microgate was superseded by full paired job 13257087: only ~0.69% median wall gain on a forced nondefault native-texture path, 120/120 strict artifact mismatches, and no production-kernel benefit. |
 | runtime profiler toggle | **KEEP UNSET IN PRODUCTION** | Same-GPU crossed job 13258895 favored profiler-off in both pairs (+14.37% and +0.95% cost when on) with exact 20/20 pose/translation trajectories. Shared node contention invalidates a precise magnitude claim. |
 | bounded pass-1 to pass-2 raw cache | **EXACT BUT BOUNDED; DEFAULT OFF** | Job 13260861 is bitwise exact in 15/15 sampled blocks and saves ~0.061 s per 200-row two-pass slice, only ~4.9 s over 80 iterations; the first clean full pair was 1.45% slower. |
+| shared coarse-projection cache | **EXACT BUT IMMATERIAL; NOT INTEGRATED** | Jobs 13261042/13261159 are bitwise exact; job 13261339 crosses over near batch 45 and reaches only 1.01115x at batch 200. GF46 has one batch per pass, so its end-to-end ceiling is below 0.52%. |
 
 ## Shared EM implementation
 
@@ -235,9 +243,10 @@ CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Curre
 
 1. Keep the profiler unset and finish the exact-local x-half bucket-size sweep. Require exact particle states/maps, the RELION envelope, repeatable warmed timing, and arm-resolved peak memory.
 2. Keep bounded pass-1 to pass-2 raw reuse default-off. Audit whether consecutive RELION pools of three can use pool-local radix buckets without changing particle order or accumulation chronology; run GPU science only if the layout-only padded-row reduction is material.
-3. Qualify shared coarse-projection reuse only if its standalone output is strictly bitwise and its end-to-end production gain is measurable; the shared coarse primitive is not the bulk wall-time gap.
-4. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
-5. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection cache, or nondefault dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.
+3. Do not integrate the exact shared coarse-projection cache: its batch-200 call-level gain is only 1.1%, GF46 cannot reuse it across batches, and its end-to-end ceiling is below 0.52%.
+4. Audit a low-cardinality physical Fourier-window shape policy against the 57.83 s late-window XLA compile cost. Require an exact active-cutoff/order proof and a predicted end-to-end gain above 2% before any GPU trajectory.
+5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
+6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection cache, shared coarse-projection cache, or nondefault dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.
 
 ## Evidence and reproducibility
 

@@ -690,6 +690,37 @@
       "slurm_log_sha256": "551eb936ea6d44f51deffbafe0bb4223c5ba4eea8986cdfff33364d385c9a1a5",
       "score_impact": "none"
     },
+    "shared_coarse_projection_cache": {
+      "exact_jobs": ["13261042", "13261159"],
+      "microbench_job_id": "13261300",
+      "batch_sweep_job_id": "13261339",
+      "source_head": "1ee37ed5a087ad2c6e7c56f491cde6a77e874bfb",
+      "case_id": "vdam-gf46",
+      "hardware": "H100",
+      "tested_batch_sizes": [1, 2, 4, 8, 16, 32, 54, 64, 128, 200],
+      "exact_mismatch_count": 0,
+      "fitted_crossover_batch": 45.1,
+      "batch_200_control_seconds": 0.4546827980011585,
+      "batch_200_cached_seconds": 0.4496675500013225,
+      "batch_200_speedup": 1.0111532353175612,
+      "gf46_image_batches_per_pass": 1,
+      "estimated_end_to_end_ceiling_percent": 0.52,
+      "observed_iteration_contribution_percent": 0.10,
+      "projection_cache_gib": 0.9920654296875,
+      "retained_memory_upper_gib": 1.5,
+      "result": "exact_but_immaterial_not_integrated",
+      "production_reachable": false,
+      "default_enabled": false,
+      "reason": "The shared primitive is exact, but it is slower below about 45 images and only 1.1% faster at batch 200. GF46 has one image batch per pass, so it cannot amortize cache construction across batches and the loose end-to-end ceiling is below 0.52%.",
+      "evidence_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shared_coarse_cache_exact_20260831",
+      "microbench_report": "gf46-micro-13261300/report.json",
+      "microbench_report_sha256": "6e06f7d715653ebaf253062b9c965787cf78fded79a05586b055470ebf248541",
+      "binary_report": "binary-ab-13261159/report.json",
+      "binary_report_sha256": "f15c1f6cac734913e2be80430d678b90b73588b40f27fa3cdc36863644228861",
+      "batch_sweep_root": "break-even-13261339",
+      "slurm_log": "/scratch/gpfs/GILLES/mg6942/slurmo/vdam-proj-cache-break-even-13261339.out",
+      "score_impact": "none"
+    },
     "decisions": [
       {
         "candidate": "shared EM arithmetic primitives",
@@ -740,6 +771,11 @@
         "candidate": "bounded pass-1 to pass-2 raw cache",
         "status": "EXACT BUT BOUNDED; DEFAULT OFF",
         "evidence": "Job 13260861 is bitwise exact in 15/15 sampled blocks and saves ~0.061 s per 200-row two-pass slice, only ~4.9 s over 80 iterations; the first clean full pair was 1.45% slower."
+      },
+      {
+        "candidate": "shared coarse-projection cache",
+        "status": "EXACT BUT IMMATERIAL; NOT INTEGRATED",
+        "evidence": "Jobs 13261042/13261159 are bitwise exact; job 13261339 crosses over near batch 45 and reaches only 1.01115x at batch 200. GF46 has one batch per pass, so its end-to-end ceiling is below 0.52%."
       }
     ]
   },

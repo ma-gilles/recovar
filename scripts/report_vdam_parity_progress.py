@@ -428,7 +428,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
     "default_enabled": False,
     "promotion_authorized": False,
 }
-ENGINEERING_SNAPSHOT_SHA256 = "b2dba1441458c7ac9d7f3c4a6e9b67cc3afb5d251eff96d064aa786d81da7c8c"
+ENGINEERING_SNAPSHOT_SHA256 = "e597a8eb9446942948ab3ef5f63d9d931d85d434fe0591e8e830fed8ff5473f0"
 EVIDENCE_SOURCE_POLICY = {
     "v3_original": {
         "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826",
@@ -798,8 +798,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "are unmatched at iteration 80. |",
         "| Runtime | **INCONCLUSIVE** | Cold and warm observations conflict; the corrected warm retry is "
         "cross-GPU and trajectories differ. No speedup or regression claim. |",
-        "| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling and bounded raw reuse off; test "
-        "x-half sizing, shared coarse-projection reuse, and pool-preserving local buckets. |",
+        "| Immediate work | **QUALIFY TOPOLOGY CANDIDATES** | Keep profiling, bounded raw reuse, and shared "
+        "coarse-projection caching off; finish x-half sizing, pool-preserving local buckets, and low-cardinality "
+        "Fourier-window shape audits. |",
         "",
         "## At a glance",
         "",
@@ -999,6 +1000,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     tail_micro = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13256612")
     tail_full = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257087")
     tail_active200 = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257182")
+    projection_cache = engineering["shared_coarse_projection_cache"]
     source_cuda = invalid_speed["source_cuda_library"]
     source_lock = invalid_speed["source_build_lock"]
     lines.extend(
@@ -1035,6 +1037,14 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"Forced nondefault native-texture path; 120/120 strict artifacts differ. Microgates: active-3 "
             f"{tail_micro['microgate']['speedup']:.2f}x bitwise; active-200 {tail_active200['speedup']:.3f}x "
             "not bitwise. | **VALID SCIENCE FAIL / DO NOT PROMOTE** |",
+            f"| shared coarse-projection cache `{' / '.join(projection_cache['exact_jobs'])} / "
+            f"{projection_cache['microbench_job_id']} / {projection_cache['batch_sweep_job_id']}` | exact at "
+            f"every tested batch; `{projection_cache['batch_200_speedup']:.5f}x` at batch 200 | GF46 has "
+            f"{projection_cache['gf46_image_batches_per_pass']} image batch per pass; loose overall ceiling "
+            f"`{projection_cache['estimated_end_to_end_ceiling_percent']:.2f}%`, observed iteration contribution "
+            f"about `{projection_cache['observed_iteration_contribution_percent']:.2f}%`; retains "
+            f"`{projection_cache['projection_cache_gib']:.2f}--{projection_cache['retained_memory_upper_gib']:.1f} "
+            "GiB`. | **EXACT BUT IMMATERIAL; NOT INTEGRATED** |",
             f"| ordered-scatter CUDA Graph `{speed['paired_job']}` | {speed['candidate_seconds']} vs "
             f"{speed['control_seconds']} s ({speed['wall_time_change_percent']:.2f}%) | particles "
             f"{speed['candidate_control_particle_passed']}/{speed['candidate_control_particle_denominator']}; "
@@ -1114,6 +1124,28 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"promoted.** Evidence: `{raw_cache['evidence_root']}/{raw_cache['summary_report']}` (SHA-256 "
             f"`{raw_cache['summary_sha256']}`).",
             "",
+            "### Shared coarse-projection cache: jobs `13261042 / 13261159 / 13261300 / 13261339`",
+            "",
+            "The standalone shared CUDA primitive is bitwise exact against the current production scorer, "
+            "including main-plus-tail execution and five old-binary versus refactored-binary cases. The H100 "
+            f"batch sweep remains exact for `B={{{','.join(str(value) for value in projection_cache['tested_batch_sizes'])}}}`, "
+            f"but the fitted crossover is only about `B={projection_cache['fitted_crossover_batch']:.1f}`: caching "
+            "is slower below that point and reaches just "
+            f"`{projection_cache['batch_200_speedup']:.5f}x` at `B=200` "
+            f"(`{projection_cache['batch_200_control_seconds']:.6f} -> "
+            f"{projection_cache['batch_200_cached_seconds']:.6f} s`). GF46 uses one image batch per pass, so "
+            "there is no cross-batch rebuild to remove. Even crediting the full 1.13% pass-1 improvement gives "
+            f"a loose `{projection_cache['estimated_end_to_end_ceiling_percent']:.2f}%` end-to-end ceiling; the "
+            f"observed coarse-call saving is about `{projection_cache['observed_iteration_contribution_percent']:.2f}%` "
+            "of an iteration. The cache also retains about "
+            f"`{projection_cache['projection_cache_gib']:.2f}--{projection_cache['retained_memory_upper_gib']:.1f} GiB`.",
+            "",
+            f"Commit `{projection_cache['source_head'][:10]}` therefore retains only the standalone shared primitive, "
+            "binary comparator, focused tests, and benchmark harness on its isolated branch. It is unreachable "
+            "from production and was not integrated. Main report SHA-256: "
+            f"`{projection_cache['microbench_report_sha256']}`; binary report SHA-256: "
+            f"`{projection_cache['binary_report_sha256']}`.",
+            "",
             "### Engineering decision ledger",
             "",
             "| Track | Decision | Evidence |",
@@ -1172,14 +1204,18 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "2. Keep bounded pass-1 to pass-2 raw reuse default-off. Audit whether consecutive RELION pools of three "
             "can use pool-local radix buckets without changing particle order or accumulation chronology; run GPU "
             "science only if the layout-only padded-row reduction is material.",
-            "3. Qualify shared coarse-projection reuse only if its standalone output is strictly bitwise and its "
-            "end-to-end production gain is measurable; the shared coarse primitive is not the bulk wall-time gap.",
-            "4. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
+            "3. Do not integrate the exact shared coarse-projection cache: its batch-200 call-level gain is only "
+            "1.1%, GF46 cannot reuse it across batches, and its end-to-end ceiling is below 0.52%.",
+            "4. Audit a low-cardinality physical Fourier-window shape policy against the 57.83 s late-window XLA "
+            "compile cost. Require an exact active-cutoff/order proof and a predicted end-to-end gain above 2% "
+            "before any GPU trajectory.",
+            "5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
             f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
             "the explicitly requested performance-first phase is active.",
-            "5. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection "
-            "cache, or nondefault dynamic tail mask without new evidence. After speed closes, isolate correctness "
-            "and then expand the frozen K=1 matrix before K>1 or real-data promotion.",
+            "6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, exact-local projection "
+            "cache, shared coarse-projection cache, or nondefault dynamic tail mask without new evidence. After "
+            "speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data "
+            "promotion.",
             "",
             "## Evidence and reproducibility",
             "",
