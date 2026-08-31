@@ -1180,6 +1180,7 @@ def _compute_significance_batched(
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
     n_images = experiment_dataset.n_units
+    score_real_dtype = np.float64 if use_float64_scoring else np.float32
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
 
@@ -1275,12 +1276,12 @@ def _compute_significance_batched(
     hard_assignment = np.empty(n_images, dtype=np.int32)
     significant_sample_indices = [None] * n_images if return_significant_sample_indices else None
     normalization_log_z = np.empty(n_images, dtype=np.float64) if return_full_stats else None
-    log_evidence = np.empty(n_images, dtype=np.float32) if return_full_stats else None
-    best_log_score = np.empty(n_images, dtype=np.float32) if return_full_stats else None
-    max_posterior = np.empty(n_images, dtype=np.float32) if return_full_stats else None
+    log_evidence = np.empty(n_images, dtype=score_real_dtype) if return_full_stats else None
+    best_log_score = np.empty(n_images, dtype=score_real_dtype) if return_full_stats else None
+    max_posterior = np.empty(n_images, dtype=score_real_dtype) if return_full_stats else None
 
     if translation_log_prior is not None:
-        translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
+        translation_log_prior = np.asarray(translation_log_prior, dtype=score_real_dtype)
         if translation_log_prior.ndim == 1:
             if translation_log_prior.shape != (n_trans,):
                 raise ValueError(
@@ -1299,7 +1300,7 @@ def _compute_significance_batched(
             )
 
     if rotation_log_prior is not None:
-        rotation_log_prior = np.asarray(rotation_log_prior, dtype=np.float32)
+        rotation_log_prior = np.asarray(rotation_log_prior, dtype=score_real_dtype)
         if rotation_log_prior.shape != (n_rot,):
             raise ValueError(
                 f"rotation_log_prior must have shape ({n_rot},), got {rotation_log_prior.shape}",
@@ -1308,7 +1309,7 @@ def _compute_significance_batched(
             rotation_log_prior_padded = np.concatenate(
                 [
                     rotation_log_prior,
-                    np.zeros(n_rot_padded - n_rot, dtype=np.float32),
+                    np.zeros(n_rot_padded - n_rot, dtype=score_real_dtype),
                 ]
             )
         else:
@@ -2141,7 +2142,7 @@ def _compute_k_class_significance_batched(
             rotation_log_prior_padded = prior
 
     if translation_log_prior is not None:
-        translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
+        translation_log_prior = np.asarray(translation_log_prior, dtype=score_real_dtype)
         if translation_log_prior.ndim == 1:
             if translation_log_prior.shape != (n_trans,):
                 raise ValueError(

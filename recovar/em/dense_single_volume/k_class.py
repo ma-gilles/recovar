@@ -1765,14 +1765,15 @@ def _run_dense_k_class_joint_firstiter_score_probe(
 
     class_log_evidence = np.asarray(full_stats["class_log_evidence_per_image"], dtype=np.float64)
     per_class_hard = np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
-    class_best_log_score = np.asarray(full_stats["class_best_log_score_per_image"], dtype=np.float32)
+    score_dtype = np.float64 if engine_kwargs.get("use_float64_scoring", False) else np.float32
+    class_best_log_score = np.asarray(full_stats["class_best_log_score_per_image"], dtype=score_dtype)
     class_assignments = np.asarray(full_stats["class_assignments"], dtype=np.int32)
     per_class_stats = tuple(
         make_relion_stats(
-            log_evidence_per_image=np.asarray(class_log_evidence[class_index], dtype=np.float32),
-            best_log_score_per_image=np.asarray(class_best_log_score[class_index], dtype=np.float32),
-            max_posterior_per_image=np.ones(n_images, dtype=np.float32),
-            rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
+            log_evidence_per_image=np.asarray(class_log_evidence[class_index], dtype=score_dtype),
+            best_log_score_per_image=np.asarray(class_best_log_score[class_index], dtype=score_dtype),
+            max_posterior_per_image=np.ones(n_images, dtype=score_dtype),
+            rotation_posterior_sums=np.zeros(n_rot, dtype=score_dtype),
         )
         for class_index in range(n_classes)
     )
@@ -1896,18 +1897,19 @@ def _zero_subset_noise_stats(
     n_images: int,
     full_group_count: int | None,
 ) -> NoiseStats:
-    class_noise = np.asarray(noise_variance, dtype=np.float32)
+    class_noise = np.asarray(noise_variance)
+    stats_dtype = class_noise.dtype
     return make_noise_stats(
-        wsum_sigma2_noise=np.zeros_like(class_noise, dtype=np.float32),
-        wsum_img_power=np.zeros_like(class_noise, dtype=np.float32),
+        wsum_sigma2_noise=np.zeros_like(class_noise),
+        wsum_img_power=np.zeros_like(class_noise),
         wsum_sigma2_offset=0.0,
         sumw=0.0,
-        wsum_norm_correction=np.zeros(int(n_images), dtype=np.float32),
+        wsum_norm_correction=np.zeros(int(n_images), dtype=stats_dtype),
         wsum_scale_correction_xa=(
-            None if full_group_count is None else np.zeros(int(full_group_count), dtype=np.float32)
+            None if full_group_count is None else np.zeros(int(full_group_count), dtype=stats_dtype)
         ),
         wsum_scale_correction_aa=(
-            None if full_group_count is None else np.zeros(int(full_group_count), dtype=np.float32)
+            None if full_group_count is None else np.zeros(int(full_group_count), dtype=stats_dtype)
         ),
     )
 
@@ -1920,12 +1922,13 @@ def _full_stats_from_subset(
     class_log_evidence: np.ndarray,
 ) -> RelionStats:
     image_indices = np.asarray(image_indices, dtype=np.int64)
-    best = np.full(int(n_images), -np.inf, dtype=np.float32)
-    pmax = np.zeros(int(n_images), dtype=np.float32)
-    best[image_indices] = np.asarray(subset_stats.best_log_score_per_image, dtype=np.float32)
-    pmax[image_indices] = np.asarray(subset_stats.max_posterior_per_image, dtype=np.float32)
+    stats_dtype = np.asarray(subset_stats.best_log_score_per_image).dtype
+    best = np.full(int(n_images), -np.inf, dtype=stats_dtype)
+    pmax = np.zeros(int(n_images), dtype=stats_dtype)
+    best[image_indices] = np.asarray(subset_stats.best_log_score_per_image, dtype=stats_dtype)
+    pmax[image_indices] = np.asarray(subset_stats.max_posterior_per_image, dtype=stats_dtype)
     return make_relion_stats(
-        log_evidence_per_image=np.asarray(class_log_evidence, dtype=np.float32),
+        log_evidence_per_image=np.asarray(class_log_evidence, dtype=stats_dtype),
         best_log_score_per_image=best,
         max_posterior_per_image=pmax,
         rotation_posterior_sums=subset_stats.rotation_posterior_sums,
@@ -1969,8 +1972,15 @@ def _run_firstiter_global_winner_subset_pass2(
     log_priors = _class_log_priors(n_classes, class_log_priors)
     relion_projector_half_by_class = pass2_kwargs.get("relion_projector_half")
     relion_projector_r_max = pass2_kwargs.get("relion_projector_r_max")
-    rotations_np = np.asarray(fine_rotations_np, dtype=np.float32)
-    translations_np = np.asarray(fine_translations_np, dtype=np.float32)
+    pose_dtype = (
+        np.float64
+        if pass2_kwargs.get("use_float64_scoring", False)
+        or pass2_kwargs.get("use_float64_projections", False)
+        else np.float32
+    )
+    score_dtype = np.float64 if pass2_kwargs.get("use_float64_scoring", False) else np.float32
+    rotations_np = np.asarray(fine_rotations_np, dtype=pose_dtype)
+    translations_np = np.asarray(fine_translations_np, dtype=pose_dtype)
 
     Ft_y = []
     Ft_ctf = []
@@ -1994,10 +2004,10 @@ def _run_firstiter_global_winner_subset_pass2(
             hard_assignments.append(np.zeros(n_images, dtype=np.int32))
             per_class_stats.append(
                 make_relion_stats(
-                    log_evidence_per_image=np.asarray(coarse_result.class_log_evidence[class_index], dtype=np.float32),
-                    best_log_score_per_image=np.full(n_images, -np.inf, dtype=np.float32),
-                    max_posterior_per_image=np.zeros(n_images, dtype=np.float32),
-                    rotation_posterior_sums=np.zeros(n_rot_fine, dtype=np.float32),
+                    log_evidence_per_image=np.asarray(coarse_result.class_log_evidence[class_index], dtype=score_dtype),
+                    best_log_score_per_image=np.full(n_images, -np.inf, dtype=score_dtype),
+                    max_posterior_per_image=np.zeros(n_images, dtype=score_dtype),
+                    rotation_posterior_sums=np.zeros(n_rot_fine, dtype=score_dtype),
                 ),
             )
             if per_class_noise is not None:
@@ -2009,8 +2019,8 @@ def _run_firstiter_global_winner_subset_pass2(
                     ),
                 )
             if return_best_pose_details:
-                per_class_best_pose_rotations.append(np.zeros((n_images, 3, 3), dtype=np.float32))
-                per_class_best_pose_translations.append(np.zeros((n_images, 2), dtype=np.float32))
+                per_class_best_pose_rotations.append(np.zeros((n_images, 3, 3), dtype=pose_dtype))
+                per_class_best_pose_translations.append(np.zeros((n_images, 2), dtype=pose_dtype))
                 per_class_best_pose_rotation_ids.append(np.zeros(n_images, dtype=np.int32))
             continue
 
@@ -2143,10 +2153,17 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
     n_images = int(coarse_class_assignments.shape[0])
     relion_projector_half_by_class = pass2_kwargs.get("relion_projector_half")
     relion_projector_r_max = pass2_kwargs.get("relion_projector_r_max")
+    score_dtype = np.float64 if pass2_kwargs.get("use_float64_scoring", False) else np.float32
+    pose_dtype = (
+        np.float64
+        if pass2_kwargs.get("use_float64_scoring", False)
+        or pass2_kwargs.get("use_float64_projections", False)
+        else np.float32
+    )
 
     def _class_rotation_prior(class_index: int):
         del class_index
-        return np.zeros(int(n_rot_coarse), dtype=np.float32)
+        return np.zeros(int(n_rot_coarse), dtype=score_dtype)
 
     common = dict(
         nside_level=int(healpix_order),
@@ -2213,10 +2230,10 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             hard_assignments.append(np.zeros(n_images, dtype=np.int32))
             per_class_stats.append(
                 make_relion_stats(
-                    log_evidence_per_image=np.asarray(coarse_result.class_log_evidence[class_index], dtype=np.float32),
-                    best_log_score_per_image=np.full(n_images, -np.inf, dtype=np.float32),
-                    max_posterior_per_image=np.zeros(n_images, dtype=np.float32),
-                    rotation_posterior_sums=np.zeros(n_rot_coarse, dtype=np.float32),
+                    log_evidence_per_image=np.asarray(coarse_result.class_log_evidence[class_index], dtype=score_dtype),
+                    best_log_score_per_image=np.full(n_images, -np.inf, dtype=score_dtype),
+                    max_posterior_per_image=np.zeros(n_images, dtype=score_dtype),
+                    rotation_posterior_sums=np.zeros(n_rot_coarse, dtype=score_dtype),
                 ),
             )
             if per_class_noise is not None:
@@ -2228,8 +2245,8 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
                     ),
                 )
             if return_best_pose_details:
-                per_class_best_pose_rotations.append(np.zeros((n_images, 3, 3), dtype=np.float32))
-                per_class_best_pose_translations.append(np.zeros((n_images, 2), dtype=np.float32))
+                per_class_best_pose_rotations.append(np.zeros((n_images, 3, 3), dtype=pose_dtype))
+                per_class_best_pose_translations.append(np.zeros((n_images, 2), dtype=pose_dtype))
                 per_class_best_pose_rotation_ids.append(np.zeros(n_images, dtype=np.int32))
             continue
 
@@ -2361,8 +2378,14 @@ def run_dense_k_class_em(
     log_priors = _class_log_priors(n_classes, class_log_priors)
     base_engine_kwargs = dict(engine_kwargs)
     keep_half_accumulators = n_classes > 1 and bool(base_engine_kwargs.get("relion_half_volume_mstep", False))
-    rotations_np = np.asarray(rotations, dtype=np.float32)
-    translations_np = np.asarray(translations, dtype=np.float32)
+    pose_dtype = (
+        np.float64
+        if base_engine_kwargs.get("use_float64_scoring", False)
+        or base_engine_kwargs.get("use_float64_projections", False)
+        else np.float32
+    )
+    rotations_np = np.asarray(rotations, dtype=pose_dtype)
+    translations_np = np.asarray(translations, dtype=pose_dtype)
 
     overall_t0 = time.time()
     if n_classes == 1:
@@ -3635,8 +3658,9 @@ def run_dense_k_class_em_adaptive(
     # Mirrors RELION's pushback semantics where each oversampled child inherits
     # its parent's prior weight (sampling_ml.cpp, ml_optimiser.cpp:5478 etc.).
     rotation_log_prior_in = pass2_kwargs.get("rotation_log_prior")
+    prior_dtype = np.float64 if pass2_kwargs.get("use_float64_scoring", False) else np.float32
     if rotation_log_prior_in is not None:
-        prior_np = np.asarray(rotation_log_prior_in, dtype=np.float32)
+        prior_np = np.asarray(rotation_log_prior_in, dtype=prior_dtype)
         if prior_np.ndim == 1:
             if prior_np.shape != (n_rot_coarse,):
                 raise ValueError(
@@ -3651,7 +3675,7 @@ def run_dense_k_class_em_adaptive(
             pass2_kwargs["rotation_log_prior"] = prior_np[:, rot_parent_map_np]
     class_rotation_log_prior_in = pass2_kwargs.get("class_rotation_log_prior")
     if class_rotation_log_prior_in is not None:
-        prior_np = np.asarray(class_rotation_log_prior_in, dtype=np.float32)
+        prior_np = np.asarray(class_rotation_log_prior_in, dtype=prior_dtype)
         if prior_np.ndim != 2 or prior_np.shape != (n_classes, n_rot_coarse):
             raise ValueError(
                 f"class_rotation_log_prior must have shape ({n_classes}, {n_rot_coarse}), got {prior_np.shape}",
@@ -3659,7 +3683,7 @@ def run_dense_k_class_em_adaptive(
         pass2_kwargs["class_rotation_log_prior"] = prior_np[:, rot_parent_map_np]
     translation_log_prior_in = pass2_kwargs.get("translation_log_prior")
     if translation_log_prior_in is not None:
-        prior_np = np.asarray(translation_log_prior_in, dtype=np.float32)
+        prior_np = np.asarray(translation_log_prior_in, dtype=prior_dtype)
         if prior_np.ndim == 1:
             if prior_np.shape != (n_trans_coarse,):
                 raise ValueError(

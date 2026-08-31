@@ -1290,12 +1290,13 @@ def run_local_bucket_big_jit(
         relion_x_half_mstep=mstep_relion_x_half,
     )
 
-    bucket_norm_correction = jnp.zeros((batch_size,), dtype=jnp.float32)
+    stats_dtype = reconstruction_probs.real.dtype
+    bucket_norm_correction = jnp.zeros((batch_size,), dtype=stats_dtype)
     if accumulate_noise:
-        support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
+        support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(stats_dtype)
         support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
-        translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
-        noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
+        translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(stats_dtype)
+        noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(stats_dtype))
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
         batch_img_power_per_image = _norm_correction_image_power_per_image(
             processed_noise_power_half,
@@ -1311,7 +1312,7 @@ def run_local_bucket_big_jit(
         batch_img_power = jnp.sum(
             (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
             axis=0,
-        ).astype(jnp.float32)
+        ).astype(stats_dtype)
         batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
         noise_img_power = noise_img_power + batch_img_power_shells
         noise_sumw = noise_sumw + jnp.sum(support_mass)
@@ -1365,7 +1366,7 @@ def run_local_bucket_big_jit(
             ctf_probs,
             noise_variance_for_noise,
         )
-        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(jnp.float32)
+        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(stats_dtype)
 
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
     if return_mstep_tensors:

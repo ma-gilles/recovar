@@ -1681,7 +1681,7 @@ def _prepare_per_image_pass2_inputs(
     full_support_candidate_mask_cache = None
 
     if rotation_log_prior is not None:
-        rotation_log_prior_np = np.asarray(rotation_log_prior, dtype=np.float32)
+        rotation_log_prior_np = np.asarray(rotation_log_prior, dtype=dtype)
     else:
         rotation_log_prior_np = None
 
@@ -1847,18 +1847,18 @@ def _prepare_per_image_pass2_inputs(
             if rotation_log_prior_np is not None:
                 if full_support_log_prior_cache is None:
                     full_support_log_prior_cache = rotation_log_prior_np[full_unique_rot][parent_map].astype(
-                        np.float32,
+                        dtype,
                         copy=False,
                     )
                 local_rotation_log_prior = full_support_log_prior_cache
             else:
                 if full_support_zero_log_prior_cache is None:
-                    full_support_zero_log_prior_cache = np.zeros(oversampled_rots.shape[0], dtype=np.float32)
+                    full_support_zero_log_prior_cache = np.zeros(oversampled_rots.shape[0], dtype=dtype)
                 local_rotation_log_prior = full_support_zero_log_prior_cache
         elif rotation_log_prior_np is not None:
             local_rotation_log_prior = rotation_log_prior_np[unique_rot][parent_map]
         else:
-            local_rotation_log_prior = np.zeros(oversampled_rots.shape[0], dtype=np.float32)
+            local_rotation_log_prior = np.zeros(oversampled_rots.shape[0], dtype=dtype)
 
         if use_full_candidate_mask:
             if full_support_candidate_mask_cache is None:
@@ -1921,7 +1921,7 @@ def _prepare_per_image_pass2_inputs(
         per_image_parent_map.append(parent_map)
         per_image_oversampled_rot_indices.append(oversampled_rot_indices)
         per_image_unique_rot.append(unique_rot)
-        per_image_log_prior.append(local_rotation_log_prior.astype(np.float32, copy=False))
+        per_image_log_prior.append(local_rotation_log_prior.astype(dtype, copy=False))
         per_image_candidate_mask.append(candidate_mask)
 
     assert len(per_image_oversampled_rots) == n_images
@@ -10716,7 +10716,7 @@ def compute_pass2_stats_sparse_bucketed(
 
     # Fine translations and prior mapping
     translations_source_np = np.asarray(translations)
-    translations_np = np.asarray(translations_source_np, dtype=np.float32)
+    translations_np = np.asarray(translations_source_np, dtype=precision_policy.score_real_dtype)
     if translation_step is None:
         unique_vals = np.unique(translations_np)
         diffs = np.diff(np.sort(unique_vals))
@@ -10728,11 +10728,11 @@ def compute_pass2_stats_sparse_bucketed(
             translation_step,
             oversampling_order=oversampling_order,
         )
-        fine_translations = np.asarray(fine_translations_source, dtype=np.float32)
+        fine_translations = np.asarray(fine_translations_source, dtype=precision_policy.score_real_dtype)
         fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     elif fine_translations_override is not None and fine_translation_parent_override is not None:
         fine_translations_source = np.asarray(fine_translations_override)
-        fine_translations = np.asarray(fine_translations_source, dtype=np.float32)
+        fine_translations = np.asarray(fine_translations_source, dtype=precision_policy.score_real_dtype)
         fine_translation_parent = np.asarray(fine_translation_parent_override, dtype=np.int32)
         if fine_translations.ndim != 2 or fine_translations.shape[1] != translations_np.shape[1]:
             raise ValueError(
@@ -10762,15 +10762,15 @@ def compute_pass2_stats_sparse_bucketed(
     if translation_log_prior is None:
         fine_translation_prior_2d = None
     else:
-        translation_log_prior_np = np.asarray(translation_log_prior, dtype=np.float32)
+        translation_log_prior_np = np.asarray(translation_log_prior, dtype=precision_policy.score_real_dtype)
         if translation_log_prior_np.ndim == 1:
             fine_tp = translation_log_prior_np[fine_translation_parent]
             fine_translation_prior_2d = np.broadcast_to(fine_tp, (n_images, n_fine_trans)).astype(
-                np.float32, copy=False
+                precision_policy.score_real_dtype, copy=False
             )
         elif translation_log_prior_np.ndim == 2:
             fine_translation_prior_2d = translation_log_prior_np[:, fine_translation_parent].astype(
-                np.float32, copy=False
+                precision_policy.score_real_dtype, copy=False
             )
         else:
             raise ValueError(
@@ -10995,14 +10995,14 @@ def compute_pass2_stats_sparse_bucketed(
         Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype)
         Ft_ctf_total = jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype)
         hard_assignment = np.empty(n_images, dtype=np.int32)
-        best_rotations = np.empty((n_images, 3, 3), dtype=np.float32)
+        best_rotations = np.empty((n_images, 3, 3), dtype=precision_policy.score_real_dtype)
         best_rotation_indices = np.empty(n_images, dtype=np.int64)
 
     # K-class assignment depends on small inter-class score deltas after adding
     # a large image-power offset. Keep these in float64 like dense run_em.
     log_evidence = np.empty(n_images, dtype=np.float64) if (return_stats or return_score_log_z_only) else None
     best_log_score = np.empty(n_images, dtype=np.float64) if return_stats else None
-    max_posterior = np.empty(n_images, dtype=np.float32) if return_stats else None
+    max_posterior = np.empty(n_images, dtype=precision_policy.score_real_dtype) if return_stats else None
     rotation_posterior_sums = np.zeros(n_coarse_rot, dtype=np.float64) if return_stats else None
     score_log_z = (
         np.empty(n_images, dtype=np.float64)
@@ -11483,9 +11483,9 @@ def compute_pass2_stats_sparse_bucketed(
             else None
         )
         bucket_scale_for_stats = (
-            jnp.asarray(np.asarray(scale_corrections, dtype=np.float32)[image_indices])
+            jnp.asarray(np.asarray(scale_corrections, dtype=precision_policy.score_real_dtype)[image_indices])
             if scale_corrections is not None
-            else jnp.ones(batch, dtype=jnp.float32)
+            else jnp.ones(batch, dtype=precision_policy.score_real_dtype)
         )
 
         translation_sqdist_ang = None
@@ -11503,9 +11503,11 @@ def compute_pass2_stats_sparse_bucketed(
 
         # Translation prior for this bucket (per-image)
         if fine_translation_prior_2d is None:
-            bucket_translation_prior = jnp.zeros((batch, n_fine_trans), dtype=jnp.float32)
+            bucket_translation_prior = jnp.zeros((batch, n_fine_trans), dtype=precision_policy.score_real_dtype)
         else:
-            bucket_translation_prior = jnp.asarray(fine_translation_prior_2d[image_indices], dtype=jnp.float32)
+            bucket_translation_prior = jnp.asarray(
+                fine_translation_prior_2d[image_indices], dtype=precision_policy.score_real_dtype
+            )
 
         contribution_preprocess_operands = None
         high_precision_operand_bundle = bucket_diagnostic_modes[
@@ -14605,7 +14607,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             mean_for_proj = class_volume
         mean_for_proj_by_class.append(mean_for_proj)
 
-    translations_np = np.asarray(translations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=precision_policy.score_real_dtype)
     if translation_step is None:
         unique_vals = np.unique(translations_np)
         diffs = np.diff(np.sort(unique_vals))
@@ -14617,10 +14619,10 @@ def compute_k_class_pass2_stats_sparse_fused(
             translation_step,
             oversampling_order=oversampling_order,
         )
-        fine_translations = np.asarray(fine_translations, dtype=np.float32)
+        fine_translations = np.asarray(fine_translations, dtype=precision_policy.score_real_dtype)
         fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     elif fine_translations_override is not None and fine_translation_parent_override is not None:
-        fine_translations = np.asarray(fine_translations_override, dtype=np.float32)
+        fine_translations = np.asarray(fine_translations_override, dtype=precision_policy.score_real_dtype)
         fine_translation_parent = np.asarray(fine_translation_parent_override, dtype=np.int32)
     else:
         raise ValueError(
@@ -14636,16 +14638,16 @@ def compute_k_class_pass2_stats_sparse_fused(
     if translation_log_prior is None:
         fine_translation_prior_2d = None
     else:
-        translation_log_prior_np = np.asarray(translation_log_prior, dtype=np.float32)
+        translation_log_prior_np = np.asarray(translation_log_prior, dtype=precision_policy.score_real_dtype)
         if translation_log_prior_np.ndim == 1:
             fine_tp = translation_log_prior_np[fine_translation_parent]
             fine_translation_prior_2d = np.broadcast_to(fine_tp, (n_images, n_fine_trans)).astype(
-                np.float32,
+                precision_policy.score_real_dtype,
                 copy=False,
             )
         elif translation_log_prior_np.ndim == 2:
             fine_translation_prior_2d = translation_log_prior_np[:, fine_translation_parent].astype(
-                np.float32,
+                precision_policy.score_real_dtype,
                 copy=False,
             )
         else:
@@ -15131,12 +15133,14 @@ def compute_k_class_pass2_stats_sparse_fused(
     Ft_y_total = [jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype) for _ in range(n_classes)]
     Ft_ctf_total = [jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype) for _ in range(n_classes)]
     class_hard_assignments = np.empty((n_classes, n_images), dtype=np.int32)
-    best_rotations = [np.empty((n_images, 3, 3), dtype=np.float32) for _ in range(n_classes)]
+    best_rotations = [
+        np.empty((n_images, 3, 3), dtype=precision_policy.score_real_dtype) for _ in range(n_classes)
+    ]
     best_rotation_indices = [np.empty(n_images, dtype=np.int64) for _ in range(n_classes)]
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
     class_score_log_z = np.empty((n_classes, n_images), dtype=np.float64)
     best_log_score = np.empty((n_classes, n_images), dtype=np.float64)
-    max_posterior = np.empty((n_classes, n_images), dtype=np.float32)
+    max_posterior = np.empty((n_classes, n_images), dtype=precision_policy.score_real_dtype)
     rotation_posterior_sums = np.zeros((n_classes, n_coarse_rot), dtype=np.float64)
     class_posterior_sums_mstep = np.zeros(n_classes, dtype=np.float64)
     compact_pair_check_max_abs_diff = 0.0
@@ -15767,9 +15771,9 @@ def compute_k_class_pass2_stats_sparse_fused(
             else None
         )
         bucket_scale_for_stats = (
-            jnp.asarray(np.asarray(scale_corrections, dtype=np.float32)[image_indices])
+            jnp.asarray(np.asarray(scale_corrections, dtype=precision_policy.score_real_dtype)[image_indices])
             if scale_corrections is not None
-            else jnp.ones(batch, dtype=jnp.float32)
+            else jnp.ones(batch, dtype=precision_policy.score_real_dtype)
         )
         _add_sparse_group_timing(group_timing, "fetch", time.time() - stage_t0)
 
@@ -15787,9 +15791,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                 experiment_dataset.voxel_size,
             )
         if fine_translation_prior_2d is None:
-            bucket_translation_prior = jnp.zeros((batch, n_fine_trans), dtype=jnp.float32)
+            bucket_translation_prior = jnp.zeros((batch, n_fine_trans), dtype=precision_policy.score_real_dtype)
         else:
-            bucket_translation_prior = jnp.asarray(fine_translation_prior_2d[image_indices], dtype=jnp.float32)
+            bucket_translation_prior = jnp.asarray(
+                fine_translation_prior_2d[image_indices], dtype=precision_policy.score_real_dtype
+            )
 
         (
             shifted_score_half,

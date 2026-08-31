@@ -40,6 +40,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import jax.numpy as jnp
 
 import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
 import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
@@ -1446,6 +1447,72 @@ def test_normalized_cc_firstiter_ignores_log_priors():
     assert "scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)" in dense_source
     assert "scores_pre_prior" in dense_source
     assert "scores_with_prior" in dense_source
+
+
+def test_k_class_pass1_priors_follow_scoring_precision():
+    """Pass-1 must not narrow RFLOAT priors before double-mode scoring."""
+
+    dense_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
+    assert "prior = np.asarray(rotation_log_prior, dtype=score_real_dtype)" in dense_source
+    assert "translation_log_prior = np.asarray(translation_log_prior, dtype=score_real_dtype)" in dense_source
+
+    single_source = inspect.getsource(sig_mod._compute_significance_batched)
+    assert "translation_log_prior = np.asarray(translation_log_prior, dtype=score_real_dtype)" in single_source
+    assert "rotation_log_prior = np.asarray(rotation_log_prior, dtype=score_real_dtype)" in single_source
+
+
+def test_stats_constructors_preserve_double_precision_by_default():
+    from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+
+    posterior = jnp.asarray([1.0 + 2.0**-40], dtype=jnp.float64)
+    relion_stats = make_relion_stats(
+        log_evidence_per_image=posterior,
+        best_log_score_per_image=posterior,
+        max_posterior_per_image=posterior,
+        rotation_posterior_sums=posterior,
+    )
+    noise_stats = make_noise_stats(
+        wsum_sigma2_noise=posterior,
+        wsum_img_power=posterior,
+        wsum_sigma2_offset=0.0,
+        sumw=1.0,
+    )
+
+    assert relion_stats.rotation_posterior_sums.dtype == jnp.float64
+    assert noise_stats.wsum_sigma2_noise.dtype == jnp.float64
+    assert float(relion_stats.rotation_posterior_sums[0]) == 1.0 + 2.0**-40
+    assert float(noise_stats.wsum_sigma2_noise[0]) == 1.0 + 2.0**-40
+
+
+def test_kclass_subset_helpers_preserve_double_precision():
+    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+
+    delta = 2.0**-40
+    subset = make_relion_stats(
+        log_evidence_per_image=np.asarray([1.0 + delta], dtype=np.float64),
+        best_log_score_per_image=np.asarray([2.0 + delta], dtype=np.float64),
+        max_posterior_per_image=np.asarray([0.5 + delta], dtype=np.float64),
+        rotation_posterior_sums=np.asarray([3.0 + delta], dtype=np.float64),
+    )
+    full = k_class_mod._full_stats_from_subset(
+        subset,
+        np.asarray([1]),
+        3,
+        class_log_evidence=np.asarray([4.0 + delta, 5.0 + delta, 6.0 + delta], dtype=np.float64),
+    )
+    noise = k_class_mod._zero_subset_noise_stats(
+        np.asarray([7.0 + delta], dtype=np.float64),
+        n_images=3,
+        full_group_count=2,
+    )
+
+    assert full.best_log_score_per_image.dtype == jnp.float64
+    assert full.max_posterior_per_image.dtype == jnp.float64
+    assert full.log_evidence_per_image.dtype == jnp.float64
+    assert float(full.best_log_score_per_image[1]) == 2.0 + delta
+    assert noise.wsum_sigma2_noise.dtype == jnp.float64
+    assert noise.wsum_norm_correction.dtype == jnp.float64
+    assert noise.wsum_scale_correction_xa.dtype == jnp.float64
 
 
 def test_adaptive_significance_forwards_firstiter_score_mode():

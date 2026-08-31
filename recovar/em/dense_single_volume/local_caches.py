@@ -130,7 +130,7 @@ def _build_local_raw_cache(experiment_dataset, n_images: int):
 def _all_integer_pre_shifts_or_none(image_pre_shifts, n_images: int):
     if image_pre_shifts is None:
         return None
-    shifts = np.asarray(image_pre_shifts, dtype=np.float32).reshape(int(n_images), 2)
+    shifts = np.asarray(image_pre_shifts).reshape(int(n_images), 2)
     rounded = np.rint(shifts)
     if not np.allclose(shifts, rounded, rtol=0.0, atol=1e-6):
         return None

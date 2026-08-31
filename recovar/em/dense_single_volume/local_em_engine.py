@@ -2299,7 +2299,9 @@ def run_local_em_exact(
         if reconstruction_probability_values_by_image is None:
             return
         image_indices_np = np.asarray(image_indices, dtype=np.int32)
-        probs_np = np.asarray(posterior_probs, dtype=np.float32).reshape(len(image_indices_np), -1)
+        probs_np = np.asarray(posterior_probs, dtype=precision_policy.score_real_dtype).reshape(
+            len(image_indices_np), -1
+        )
         for row, image_index in enumerate(image_indices_np):
             values = probs_np[row]
             values = values[values > 0.0]
@@ -5168,7 +5170,9 @@ def run_local_em_exact(
     }
     if reconstruction_probability_values_by_image is not None:
         profile_summary["reconstruction_probability_values_by_image"] = tuple(
-            np.concatenate(values).astype(np.float32, copy=False) if values else np.zeros(0, dtype=np.float32)
+            np.concatenate(values).astype(precision_policy.score_real_dtype, copy=False)
+            if values
+            else np.zeros(0, dtype=precision_policy.score_real_dtype)
             for values in reconstruction_probability_values_by_image
         )
     if reconstruction_sample_indices_by_image is not None:

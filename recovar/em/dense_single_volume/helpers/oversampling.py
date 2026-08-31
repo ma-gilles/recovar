@@ -145,7 +145,7 @@ def map_translation_log_prior_to_fine_grid(
     """Map coarse-grid translation priors onto oversampled translation children."""
     if translation_log_prior is None:
         return None
-    translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
+    translation_log_prior = np.asarray(translation_log_prior)
     fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int64)
     if translation_log_prior.ndim == 1:
         return translation_log_prior[fine_translation_parent]
@@ -549,11 +549,12 @@ def compute_pass2_stats(
         ha = np.zeros(n_images, dtype=np.int32)
         empty_indices = np.empty((0,), dtype=np.int64)
         if return_stats:
+            stats_dtype = jnp.float64 if use_float64_scoring else jnp.float32
             zero_stats = make_relion_stats(
-                log_evidence_per_image=jnp.full(n_images, -jnp.inf, dtype=jnp.float32),
-                best_log_score_per_image=jnp.full(n_images, -jnp.inf, dtype=jnp.float32),
-                max_posterior_per_image=jnp.zeros(n_images, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.zeros(n_coarse_rot, dtype=jnp.float32),
+                log_evidence_per_image=jnp.full(n_images, -jnp.inf, dtype=stats_dtype),
+                best_log_score_per_image=jnp.full(n_images, -jnp.inf, dtype=stats_dtype),
+                max_posterior_per_image=jnp.zeros(n_images, dtype=stats_dtype),
+                rotation_posterior_sums=jnp.zeros(n_coarse_rot, dtype=stats_dtype),
             )
             if return_rotation_indices:
                 return Ft_y, Ft_ctf, ha, coarse_rotations[:0], empty_indices, zero_stats
@@ -601,16 +602,18 @@ def compute_pass2_stats(
         oversampling_order=oversampling_order,
         random_perturbation=random_perturbation,
         return_rotation_indices=return_rotation_indices,
+        dtype=np.float64 if use_float64_scoring else np.float32,
     )
     if return_rotation_indices:
         oversampled_rots, parent_map, oversampled_rot_indices = oversampled_outputs
     else:
         oversampled_rots, parent_map = oversampled_outputs
-    oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
+    score_dtype = np.float64 if use_float64_scoring else np.float32
+    oversampled_rots = np.asarray(oversampled_rots, dtype=score_dtype)
     parent_map = np.asarray(parent_map, dtype=np.int32)
     oversampled_rotation_log_prior = None
     if rotation_log_prior is not None:
-        rotation_log_prior = np.asarray(rotation_log_prior, dtype=np.float32)
+        rotation_log_prior = np.asarray(rotation_log_prior, dtype=score_dtype)
         oversampled_rotation_log_prior = rotation_log_prior[sig_rot_indices][parent_map]
 
     logger.info(
@@ -619,7 +622,7 @@ def compute_pass2_stats(
         len(sig_rot_indices),
     )
 
-    translations_np = np.asarray(translations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=score_dtype)
     if translation_step is None:
         unique_vals = np.unique(translations_np)
         diffs = np.diff(np.sort(unique_vals))
@@ -630,7 +633,7 @@ def compute_pass2_stats(
         translation_step,
         oversampling_order=oversampling_order,
     )
-    oversampled_translations = np.asarray(oversampled_translations, dtype=np.float32)
+    oversampled_translations = np.asarray(oversampled_translations, dtype=score_dtype)
     oversampled_translation_prior = map_translation_log_prior_to_fine_grid(
         translation_log_prior,
         oversampled_translation_parent,
@@ -1034,7 +1037,8 @@ def _compute_pass2_stats_sparse_perimage_reference(
     Ft_y_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
     Ft_ctf_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
-    best_rotations = np.empty((n_images, 3, 3), dtype=np.float32)
+    score_dtype = np.float64 if use_float64_scoring else np.float32
+    best_rotations = np.empty((n_images, 3, 3), dtype=score_dtype)
     best_rotation_indices = np.empty(n_images, dtype=np.int64)
 
     log_evidence = None
@@ -1047,7 +1051,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
         # run_em.
         log_evidence = np.empty(n_images, dtype=np.float64)
         best_log_score = np.empty(n_images, dtype=np.float64)
-        max_posterior = np.empty(n_images, dtype=np.float32)
+        max_posterior = np.empty(n_images, dtype=score_dtype)
         rotation_posterior_sums = np.zeros(n_coarse_rot, dtype=np.float64)
 
     # Noise accumulators (additive across per-image calls)
@@ -1060,7 +1064,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
         noise_wsum_total = np.zeros(n_shells, dtype=np.float64)
         noise_img_power_total = np.zeros(n_shells, dtype=np.float64)
 
-    translations_np = np.asarray(translations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=score_dtype)
     if translation_step is None:
         unique_vals = np.unique(translations_np)
         diffs = np.diff(np.sort(unique_vals))
@@ -1071,7 +1075,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
         translation_step,
         oversampling_order=oversampling_order,
     )
-    fine_translations = np.asarray(fine_translations, dtype=np.float32)
+    fine_translations = np.asarray(fine_translations, dtype=score_dtype)
     fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     n_fine_trans = fine_translations.shape[0]
     fine_translation_prior = map_translation_log_prior_to_fine_grid(
@@ -1105,13 +1109,14 @@ def _compute_pass2_stats_sparse_perimage_reference(
             oversampling_order=oversampling_order,
             random_perturbation=random_perturbation,
             return_rotation_indices=True,
+            dtype=score_dtype,
         )
-        oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
+        oversampled_rots = np.asarray(oversampled_rots, dtype=score_dtype)
         parent_map = np.asarray(parent_map, dtype=np.int32)
         oversampled_rot_indices = np.asarray(oversampled_rot_indices, dtype=np.int64)
         local_rotation_log_prior = None
         if rotation_log_prior is not None:
-            rotation_log_prior = np.asarray(rotation_log_prior, dtype=np.float32)
+            rotation_log_prior = np.asarray(rotation_log_prior, dtype=score_dtype)
             local_rotation_log_prior = rotation_log_prior[unique_rot][parent_map]
 
         if use_full_candidate_mask:

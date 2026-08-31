@@ -307,15 +307,17 @@ def test_sealed_sampling_base_grids_honors_explicit_float64_dtype():
         "translations_y_angstrom": np.array([0.0, -1.5], dtype=np.float64),
     }
 
-    rotations_f32, eulers_f32, _ = iteration_loop_module._sealed_sampling_base_grids(
+    rotations_f32, eulers_f32, translations_f32 = iteration_loop_module._sealed_sampling_base_grids(
         sealed_state, voxel_size_angstrom=1.0
     )
-    rotations_f64, eulers_f64, _ = iteration_loop_module._sealed_sampling_base_grids(
+    rotations_f64, eulers_f64, translations_f64 = iteration_loop_module._sealed_sampling_base_grids(
         sealed_state, voxel_size_angstrom=1.0, dtype=np.float64
     )
 
     assert rotations_f32.dtype == np.float32
     assert rotations_f64.dtype == np.float64
+    assert translations_f32.dtype == np.float32
+    assert translations_f64.dtype == np.float64
     np.testing.assert_allclose(rotations_f32, rotations_f64, atol=1e-6, rtol=0.0)
     assert eulers_f32.dtype == np.float32
     assert eulers_f64.dtype == np.float32
@@ -2531,6 +2533,29 @@ def test_build_pass2_hypothesis_layout_accepts_fine_translation_log_prior():
         layout.translation_log_priors,
         np.broadcast_to(fine_prior[None, :], (2, fine_prior.shape[0])),
     )
+
+
+def test_build_pass2_hypothesis_layout_preserves_float64_operands():
+    delta = 2.0**-40
+    layout = build_pass2_hypothesis_layout(
+        [np.array([0], dtype=np.int32)],
+        n_coarse_rotations=rotation_grid_size(0),
+        n_coarse_translations=1,
+        nside_level=0,
+        translations=np.array([[1.0 + delta, 0.0]], dtype=np.float64),
+        oversampling_order=0,
+        rotation_log_prior=np.full(rotation_grid_size(0), 1.0 + delta, dtype=np.float64),
+        fine_translation_log_prior=np.array([1.0 + delta], dtype=np.float64),
+        dtype=np.float64,
+    )
+
+    assert layout.rotations_flat.dtype == np.float64
+    assert layout.translation_grid.dtype == np.float64
+    assert layout.rotation_log_priors_flat.dtype == np.float64
+    assert layout.translation_log_priors.dtype == np.float64
+    assert layout.translation_grid[0, 0] == 1.0 + delta
+    assert layout.rotation_log_priors_flat[0] == 1.0 + delta
+    assert layout.translation_log_priors[0, 0] == 1.0 + delta
 
 
 def test_build_pass2_hypothesis_layout_rejects_rotation_ids_outside_coarse_grid():

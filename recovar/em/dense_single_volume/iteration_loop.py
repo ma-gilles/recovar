@@ -4477,8 +4477,8 @@ def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom, d
     ty = np.asarray(state["translations_y_angstrom"], dtype=np.float64)
     if tx.shape != ty.shape or tx.ndim != 1 or tx.size < 1:
         raise ValueError("sealed sampling translation component shapes are inconsistent")
-    translations = np.stack([tx / voxel_size, ty / voxel_size], axis=1).astype(np.float32)
-    return rotations, eulers, jnp.asarray(translations, dtype=jnp.float32)
+    translations = np.stack([tx / voxel_size, ty / voxel_size], axis=1).astype(dtype)
+    return rotations, eulers, jnp.asarray(translations, dtype=dtype)
 
 
 def _sealed_sampling_rotation_ids(sealed_sampling_state):
@@ -4837,21 +4837,20 @@ def _run_relion_iteration_loop(
         ).astype(np.float64, copy=False)
         current_translations = jnp.asarray(
             base_translations,
-            dtype=jnp.float32,
+            dtype=_dense_global_scoring_dtype(),
         )
     else:
         current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
             current_healpix_order, dtype=_dense_global_scoring_dtype()
         )
         base_translations = np.asarray(translations, dtype=np.float64)
-        current_translations = jnp.asarray(translations, dtype=jnp.float32)
+        current_translations = jnp.asarray(translations, dtype=_dense_global_scoring_dtype())
     # Unperturbed base grid — `current_translations` may be replaced per-iter by
     # a perturbed copy (SamplingPerturbation). Keep the base so each iter
     # perturbs a fresh copy rather than compounding prior perturbations.
-    # Keep RELION's host-RFLOAT translation grid separate from the float32
-    # score/pose grid. The deployed RELION build forms fine translations in
-    # double and rounds only the CUDA angle; recovering double after this
-    # boundary is one ULP too late for some selected poses.
+    # Keep RELION's host-RFLOAT base grid separate so each perturbation starts
+    # from the unrounded coordinates.  In double mode the score/pose grid is
+    # also RFLOAT; explicit CUDA-f32 helpers cast only at their ABI boundary.
     if debug.save_intermediates_dir is not None:
         os.makedirs(debug.save_intermediates_dir, exist_ok=True)
 
@@ -5829,9 +5828,7 @@ def _run_relion_iteration_loop(
                 state.translation_step,
                 n_classes=n_classes,
             ).astype(np.float64, copy=False)
-            current_translations = jnp.array(
-                base_translations.astype(np.float32)
-            )
+            current_translations = jnp.asarray(base_translations, dtype=_dense_global_scoring_dtype())
             logger.info(
                 "New grid: %d rotations, %d translations (range=%.1f, step=%.1f)",
                 current_rotations.shape[0],
@@ -5847,12 +5844,10 @@ def _run_relion_iteration_loop(
                 state.translation_step,
                 n_classes=n_classes,
             ).astype(np.float64, copy=False)
-            _new_t = jnp.array(
-                _new_t_source.astype(np.float32)
-            )
+            _new_t = jnp.asarray(_new_t_source, dtype=_dense_global_scoring_dtype())
             if _new_t.shape != base_translations.shape or not jnp.allclose(
                 _new_t,
-                np.asarray(base_translations, dtype=np.float32),
+                np.asarray(base_translations, dtype=_dense_global_scoring_dtype()),
             ):
                 current_translations = _new_t
                 base_translations = _new_t_source
