@@ -88,6 +88,10 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
     def value(name: str) -> Any:
         return params.get(name, defaults[name])
 
+    exact_local_bucket_radix = int(value("exact_local_bucket_radix"))
+    if exact_local_bucket_radix not in (2, 4):
+        raise ValueError("InitialModel exact_local_bucket_radix must be 2 or 4")
+
     cmd = [
         *_recovar_cmd(),
         "initial_model",
@@ -135,6 +139,8 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
         str(value("rotation_block_size")),
         "--pass2-engine",
         str(value("pass2_engine")),
+        "--exact-local-bucket-radix",
+        str(exact_local_bucket_radix),
         "--bootstrap-min-particles",
         str(value("bootstrap_min_particles")),
         "--sigma2-min-particles",
@@ -154,6 +160,7 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
         ("--lazy", "lazy"),
         ("--write-iter-artifacts", "write_iter_artifacts"),
         ("--require-custom-cuda", "require_custom_cuda"),
+        ("--relion-wavg-sequential-cuda", "relion_wavg_sequential_cuda"),
     ):
         _add_boolean_option(cmd, flag, bool(value(name)))
 

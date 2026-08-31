@@ -48,6 +48,8 @@ def test_public_defaults_match_native_option_defaults():
         "image_batch_size",
         "rotation_block_size",
         "pass2_engine",
+        "relion_wavg_sequential_cuda",
+        "exact_local_bucket_radix",
         "bootstrap_min_particles",
         "sigma2_min_particles",
         "padding_factor",
@@ -72,6 +74,8 @@ def test_parser_resolves_gui_defaults_and_auto_gpu_backend():
     assert args.gpu_ids == "0"
     assert args.jax_compilation_cache is True
     assert args.jax_compilation_cache_dir == ""
+    assert options["relion_wavg_sequential_cuda"] is True
+    assert options["exact_local_bucket_radix"] == 4
 
 
 @pytest.mark.unit
@@ -118,6 +122,9 @@ def test_parser_accepts_important_overrides():
             "2",
             "--pass2-engine",
             "compact",
+            "--no-relion-wavg-sequential-cuda",
+            "--exact-local-bucket-radix",
+            "2",
             "--image-fourier-backend",
             "host_numpy",
             "--gpu",
@@ -149,9 +156,19 @@ def test_parser_accepts_important_overrides():
     assert options["offset_step_px"] == 1.5
     assert options["padding_factor"] == 2
     assert options["pass2_engine"] == "compact"
+    assert options["relion_wavg_sequential_cuda"] is False
+    assert options["exact_local_bucket_radix"] == 2
     assert options["image_fourier_backend"] == "host_numpy"
     assert options["deterministic_cuda"] is True
     assert args.require_custom_cuda is False
+
+
+@pytest.mark.unit
+def test_parser_rejects_unqualified_exact_local_bucket_radix():
+    with pytest.raises(SystemExit):
+        initial_model.make_parser().parse_args(
+            ["--i", "particles.star", "--exact-local-bucket-radix", "3"],
+        )
 
 
 @pytest.mark.unit

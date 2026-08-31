@@ -50,6 +50,8 @@ class GuiInitialModelDefaults:
     image_batch_size: int = 500
     rotation_block_size: int = 5000
     pass2_engine: str = "auto"
+    relion_wavg_sequential_cuda: bool = True
+    exact_local_bucket_radix: int = 4
     bootstrap_min_particles: int = 1000
     sigma2_min_particles: int = 1000
     padding_factor: int = 1

@@ -143,6 +143,8 @@ class NativeInitialModelOptions:
     image_batch_size: int = INITIAL_MODEL_GUI_DEFAULTS.image_batch_size
     rotation_block_size: int = INITIAL_MODEL_GUI_DEFAULTS.rotation_block_size
     pass2_engine: str = INITIAL_MODEL_GUI_DEFAULTS.pass2_engine
+    relion_wavg_sequential_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.relion_wavg_sequential_cuda
+    exact_local_bucket_radix: int = INITIAL_MODEL_GUI_DEFAULTS.exact_local_bucket_radix
     bootstrap_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.bootstrap_min_particles
     sigma2_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles
     padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
@@ -1278,6 +1280,8 @@ def _dense_estep_config(
         image_batch_size=effective_image_batch_size,
         rotation_block_size=int(opts.rotation_block_size),
         pass2_engine=str(opts.pass2_engine),
+        relion_wavg_sequential_cuda=bool(opts.relion_wavg_sequential_cuda),
+        exact_local_bucket_radix=int(opts.exact_local_bucket_radix),
         padding_factor=int(opts.padding_factor),
         relion_bpref_frame=True,
         relion_projector_frame=True,
@@ -1934,6 +1938,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise ValueError("nr_iter must be >= 1")
     if opts.grad_write_iter < 1:
         raise ValueError("grad_write_iter must be >= 1")
+    if int(opts.exact_local_bucket_radix) not in (2, 4):
+        raise ValueError("exact_local_bucket_radix must be 2 or 4")
     if opts.diagnostic_stop_after_iteration is not None and not (
         1 <= int(opts.diagnostic_stop_after_iteration) <= int(opts.nr_iter)
     ):

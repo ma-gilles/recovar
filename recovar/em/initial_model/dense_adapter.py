@@ -198,6 +198,8 @@ class DenseInitialModelEstepConfig:
     image_batch_size: int = 500
     rotation_block_size: int = 5000
     pass2_engine: str = "auto"
+    relion_wavg_sequential_cuda: bool = True
+    exact_local_bucket_radix: int = 4
     padding_factor: int = 1
     class_log_priors: Any | None = None
     relion_bpref_frame: bool = True
@@ -808,8 +810,11 @@ def _run_sparse_pass2_initial_model_estep(
         state.K,
         config.pass2_engine,
     )
+    if int(config.exact_local_bucket_radix) not in (2, 4):
+        raise ValueError("InitialModel exact_local_bucket_radix must be 2 or 4")
     pass1_time_s = 0.0
     pass2_time_s = 0.0
+    exact_local_runtime_policy_active = False
     n_significant_by_image: list[np.ndarray] = []
     use_exact_relion_projector = relion_projector_half_by_class is not None
     if use_exact_relion_projector and relion_projector_r_max is None:
@@ -1069,6 +1074,10 @@ def _run_sparse_pass2_initial_model_estep(
             and use_exact_relion_projector
             and _uses_relion_cuda_image_preprocessing(group_dataset)
         )
+        exact_local_runtime_policy_active = bool(
+            exact_local_runtime_policy_active
+            or (not use_compact_sparse_pass2 and use_exact_local_relion_operands)
+        )
         use_exact_fine_diff2 = bool(
             state.K == 1
             and use_exact_local_relion_operands
@@ -1235,6 +1244,16 @@ def _run_sparse_pass2_initial_model_estep(
                     ),
                     relion_exact_fine_diff2=use_exact_fine_diff2,
                     relion_exact_score_translation=use_exact_fine_diff2,
+                    relion_wavg_sequential_cuda=(
+                        bool(config.relion_wavg_sequential_cuda)
+                        if use_exact_local_relion_operands
+                        else None
+                    ),
+                    exact_local_bucket_radix=(
+                        int(config.exact_local_bucket_radix)
+                        if use_exact_local_relion_operands
+                        else None
+                    ),
                 )
         finally:
             sparse_diagnostics.clear_bpref_contribution_dump_context()
@@ -1283,6 +1302,20 @@ def _run_sparse_pass2_initial_model_estep(
         meta["joint_halfset_particle_stream"] = True
     _add_accumulator_weight_meta(meta, accumulators, state.K)
     meta["pass2_engine"] = "compact" if use_compact_sparse_pass2 else "local"
+    meta["requested_relion_wavg_sequential_cuda"] = bool(
+        config.relion_wavg_sequential_cuda
+    )
+    meta["requested_exact_local_bucket_radix"] = int(
+        config.exact_local_bucket_radix
+    )
+    meta["effective_relion_wavg_sequential_cuda"] = bool(
+        exact_local_runtime_policy_active and config.relion_wavg_sequential_cuda
+    )
+    meta["effective_exact_local_bucket_radix"] = (
+        int(config.exact_local_bucket_radix)
+        if exact_local_runtime_policy_active
+        else None
+    )
     out = DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,

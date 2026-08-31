@@ -128,6 +128,8 @@ function InitialModelFormLoaded({
   const [imageBatchSize, setImageBatchSize] = useState(String(pick("image_batch_size", defaults.image_batch_size)));
   const [rotationBlockSize, setRotationBlockSize] = useState(String(pick("rotation_block_size", defaults.rotation_block_size)));
   const [pass2Engine, setPass2Engine] = useState(String(pick("pass2_engine", defaults.pass2_engine)));
+  const [relionWavgSequentialCuda, setRelionWavgSequentialCuda] = useState(Boolean(pick("relion_wavg_sequential_cuda", defaults.relion_wavg_sequential_cuda)));
+  const [exactLocalBucketRadix, setExactLocalBucketRadix] = useState(String(pick("exact_local_bucket_radix", defaults.exact_local_bucket_radix)));
   const [bootstrapMin, setBootstrapMin] = useState(String(pick("bootstrap_min_particles", defaults.bootstrap_min_particles)));
   const [sigma2Min, setSigma2Min] = useState(String(pick("sigma2_min_particles", defaults.sigma2_min_particles)));
   const [translationSigma, setTranslationSigma] = useState(
@@ -178,6 +180,8 @@ function InitialModelFormLoaded({
       image_batch_size: parseInt(imageBatchSize),
       rotation_block_size: parseInt(rotationBlockSize),
       pass2_engine: pass2Engine,
+      relion_wavg_sequential_cuda: relionWavgSequentialCuda,
+      exact_local_bucket_radix: parseInt(exactLocalBucketRadix),
       bootstrap_min_particles: parseInt(bootstrapMin),
       sigma2_min_particles: parseInt(sigma2Min),
       padding_factor: parseInt(paddingFactor),
@@ -202,6 +206,7 @@ function InitialModelFormLoaded({
     gradEmIters, stepsize, mu, symName, particleDiameter,
     runInC1, doSolvent, doZeroMask, doCtf, randomSeed, healpixOrder, oversampling,
     offsetRange, offsetStep, perturbationFactor, imageBatchSize, rotationBlockSize, pass2Engine,
+    relionWavgSequentialCuda, exactLocalBucketRadix,
     bootstrapMin, sigma2Min, paddingFactor, imageBackend, gpuIds, lazy, writeArtifacts,
     requireCuda, deterministicCuda, useJaxCache, jaxCacheDir, randomPerturbation, translationSigma, datadir,
     stripPrefix, slurmOpts, localOpts, executorMode,
@@ -310,6 +315,12 @@ function InitialModelFormLoaded({
               </Select>
             </div>
             <div className="space-y-1">
+              <div className="flex items-center gap-1"><Label>Exact-local Bucket Radix</Label><TooltipIcon text={tooltips["initial_model.exact_local_bucket_radix"]} /></div>
+              <Select value={exactLocalBucketRadix} onChange={(event) => setExactLocalBucketRadix(event.target.value)}>
+                <option value="4">4 (qualified default)</option><option value="2">2 (legacy diagnostic)</option>
+              </Select>
+            </div>
+            <div className="space-y-1">
               <div className="flex items-center gap-1"><Label>GPU IDs</Label><TooltipIcon text={tooltips["initial_model.gpu_ids"]} /></div>
               <Input value={gpuIds} onChange={(event) => setGpuIds(event.target.value)} />
             </div>
@@ -323,6 +334,7 @@ function InitialModelFormLoaded({
             <CheckField label="Require custom CUDA" tooltip="initial_model.require_cuda" checked={requireCuda} onChange={setRequireCuda} />
             <CheckField label="Deterministic CUDA diagnostics" tooltip="initial_model.deterministic_cuda" checked={deterministicCuda} onChange={setDeterministicCuda} />
             <CheckField label="Reuse JAX compilation cache" tooltip="initial_model.jax_cache" checked={useJaxCache} onChange={setUseJaxCache} />
+            <CheckField label="RELION ordered Wavg CUDA" tooltip="initial_model.relion_wavg_sequential_cuda" checked={relionWavgSequentialCuda} onChange={setRelionWavgSequentialCuda} />
           </div>
           <div className="space-y-1">
             <div className="flex items-center gap-1"><Label>JAX Compilation Cache</Label><TooltipIcon text={tooltips["initial_model.jax_cache_dir"]} /></div>

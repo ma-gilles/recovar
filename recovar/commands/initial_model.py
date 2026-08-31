@@ -212,6 +212,19 @@ def make_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--relion-wavg-sequential-cuda",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULTS.relion_wavg_sequential_cuda,
+        help="Use the qualified shared CUDA kernel for RELION-ordered weighted sums",
+    )
+    parser.add_argument(
+        "--exact-local-bucket-radix",
+        type=int,
+        choices=(2, 4),
+        default=DEFAULTS.exact_local_bucket_radix,
+        help="Static-shape radix for exact-local K=1 hypothesis buckets",
+    )
+    parser.add_argument(
         "--bootstrap-min-particles",
         "--bootstrap_min_particles",
         dest="bootstrap_min_particles",
@@ -399,6 +412,8 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
         "image_batch_size": args.image_batch_size,
         "rotation_block_size": args.rotation_block_size,
         "pass2_engine": args.pass2_engine,
+        "relion_wavg_sequential_cuda": args.relion_wavg_sequential_cuda,
+        "exact_local_bucket_radix": args.exact_local_bucket_radix,
         "bootstrap_min_particles": args.bootstrap_min_particles,
         "sigma2_min_particles": args.sigma2_min_particles,
         "padding_factor": args.padding_factor,

@@ -32,6 +32,10 @@ export const tooltips: Record<string, string> = {
   "initial_model.rotation_block_size": "Orientations processed in one scoring block. Tune for GPU memory and throughput.",
   "initial_model.pass2_engine":
     "Adaptive pass-2 engine. Auto preserves the exact local K=1 path and uses joint class-by-pose compact scoring for K>1. Local and Compact are diagnostic overrides.",
+  "initial_model.relion_wavg_sequential_cuda":
+    "Use the bitwise-qualified shared CUDA implementation of RELION's ordered weighted-sum accumulation for exact K=1 runs.",
+  "initial_model.exact_local_bucket_radix":
+    "Static-shape palette for exact-local K=1 buckets. Radix 4 reduces JAX compilation churn; radix 2 is the legacy diagnostic setting.",
   "initial_model.bootstrap_min": "Minimum particle count used to form the initial bootstrap reference.",
   "initial_model.sigma2_min": "Minimum particle count used for initial noise-spectrum estimation.",
   "initial_model.translation_sigma": "Optional translation-prior standard deviation in Angstroms.",

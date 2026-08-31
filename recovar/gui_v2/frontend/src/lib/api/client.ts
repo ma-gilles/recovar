@@ -223,6 +223,8 @@ export interface InitialModelDefaults {
   image_batch_size: number;
   rotation_block_size: number;
   pass2_engine: "auto" | "local" | "compact";
+  relion_wavg_sequential_cuda: boolean;
+  exact_local_bucket_radix: 2 | 4;
   bootstrap_min_particles: number;
   sigma2_min_particles: number;
   padding_factor: number;

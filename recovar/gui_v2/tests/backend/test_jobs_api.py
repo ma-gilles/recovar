@@ -93,6 +93,8 @@ class TestCommandBuilders:
         assert "--require-custom-cuda" in cmd
         assert cmd[cmd.index("--padding-factor") + 1] == "2"
         assert cmd[cmd.index("--pass2-engine") + 1] == "auto"
+        assert "--relion-wavg-sequential-cuda" in cmd
+        assert cmd[cmd.index("--exact-local-bucket-radix") + 1] == "4"
         assert cmd[cmd.index("--grad-ini-frac") + 1] == "0.4"
         assert cmd[cmd.index("--grad-fin-frac") + 1] == "0.1"
         assert cmd[cmd.index("--grad-em-iters") + 1] == "3"
@@ -100,6 +102,16 @@ class TestCommandBuilders:
         assert cmd[cmd.index("--mu") + 1] == "0.7"
         assert "--jax-compilation-cache" in cmd
         assert cmd[cmd.index("--jax-compilation-cache-dir") + 1] == "/shared/jax-cache"
+
+    def test_initial_model_command_rejects_unqualified_bucket_radix(self):
+        with pytest.raises(ValueError, match="must be 2 or 4"):
+            build_initial_model_command(
+                {
+                    "input_star": "/data/particles.star",
+                    "outdir": "/out/InitialModel/job_0001",
+                    "exact_local_bucket_radix": 3,
+                }
+            )
 
     def test_pipeline_command_minimal(self):
         cmd = build_pipeline_command({
@@ -237,6 +249,8 @@ class TestJobsAPI:
         assert defaults_response.json()["require_custom_cuda"] is True
         assert defaults_response.json()["use_jax_compilation_cache"] is True
         assert defaults_response.json()["jax_compilation_cache_dir"] == ""
+        assert defaults_response.json()["relion_wavg_sequential_cuda"] is True
+        assert defaults_response.json()["exact_local_bucket_radix"] == 4
 
         project_dir = str(tmp_path / "initial_model_project")
         response = await client.post("/api/projects", json={"path": project_dir, "name": "InitialModel"})

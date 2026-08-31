@@ -989,6 +989,12 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_relion_exact_score_translation"] = kwargs[
             "relion_exact_score_translation"
         ]
+        calls["local_relion_wavg_sequential_cuda"] = kwargs[
+            "relion_wavg_sequential_cuda"
+        ]
+        calls["local_exact_local_bucket_radix"] = kwargs[
+            "exact_local_bucket_radix"
+        ]
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
@@ -1019,6 +1025,14 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     monkeypatch.setattr(
         "recovar.em.initial_model.dense_adapter._uses_relion_cuda_image_preprocessing",
         lambda dataset: True,
+    )
+    monkeypatch.setattr(
+        "recovar.em.sampling.get_relion_hidden_rotation_grid",
+        lambda _order, matrices=True: np.zeros((72, 3, 3), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        "recovar.em.sampling.get_relion_rotation_grid_eulers",
+        lambda _order, **_kwargs: np.zeros((72, 3), dtype=np.float32),
     )
 
     def fake_perturb(rotations, random_perturbation, angular_sampling_deg):
@@ -1126,8 +1140,14 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_preserve_bpref_particle_order"] is False
     assert calls["local_relion_exact_fine_diff2"] is True
     assert calls["local_relion_exact_score_translation"] is True
+    assert calls["local_relion_wavg_sequential_cuda"] is True
+    assert calls["local_exact_local_bucket_radix"] == 4
     assert calls["diagnostic_context"] == [{"iteration": 7, "half": 1}, "clear"]
     assert result.meta["sparse_pass2"] is True
+    assert result.meta["requested_relion_wavg_sequential_cuda"] is True
+    assert result.meta["requested_exact_local_bucket_radix"] == 4
+    assert result.meta["effective_relion_wavg_sequential_cuda"] is True
+    assert result.meta["effective_exact_local_bucket_radix"] == 4
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
     np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
@@ -1456,7 +1476,11 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
         coarse_sum_weight,
     )
     assert "normalization_log_evidence" not in calls
+    assert "relion_wavg_sequential_cuda" not in calls
+    assert "exact_local_bucket_radix" not in calls
     assert result.meta["pass2_engine"] == "compact"
+    assert result.meta["effective_relion_wavg_sequential_cuda"] is False
+    assert result.meta["effective_exact_local_bucket_radix"] is None
 
 
 def test_zero_oversampling_restores_k_class_coarse_argmax_metadata():
