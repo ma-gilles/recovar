@@ -13,7 +13,8 @@ commands
       set $vdam_cuda_start_status = (int) cudaProfilerStart()
       printf "VDAM_GDB_CUDA_PROFILER_START status=%d\n", $vdam_cuda_start_status
       if $vdam_cuda_start_status != 0
-        call (void) exit(86)
+        kill
+        quit 86
       end
     end
     continue
@@ -24,10 +25,12 @@ commands
       set $vdam_cuda_stop_status = (int) cudaProfilerStop()
       printf "VDAM_GDB_CUDA_PROFILER_STOP status=%d\n", $vdam_cuda_stop_status
       if $vdam_cuda_stop_status != 0
-        call (void) exit(87)
+        kill
+        quit 87
       end
     end
-    call (void) exit(0)
+    kill
+    quit 0
   end
   continue
 end

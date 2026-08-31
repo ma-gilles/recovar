@@ -49,6 +49,19 @@ RECOVAR_PROFILE=${ROOT}/recovar_profiled
 NSIGHT=${ROOT}/nsight
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 RELION_BIND_DIR=${RUNTIME}/relion_bind
+EXACT_LOCAL_BUCKET_RADIX=${EXACT_LOCAL_BUCKET_RADIX:-4}
+EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE=${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE:-0}
+
+on_error() {
+  local status=$?
+  local message="VDAM late profiler failed: status=${status} line=${BASH_LINENO[0]} command=${BASH_COMMAND}"
+  printf '%s\n' "${message}" >&2
+  if [[ -d "${PROVENANCE}" ]]; then
+    printf '%s\n' "${message}" > "${PROVENANCE}/failure.txt"
+  fi
+  exit "${status}"
+}
+trap on_error ERR
 
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
@@ -61,6 +74,8 @@ test -s "${DATA_STAR}"
 test -d "${DATA_DIR}"
 test -s "${PARTICLE_STACK}"
 test -s "${RELION_BIND_BINARY_OVERRIDE}"
+[[ "${EXACT_LOCAL_BUCKET_RADIX}" =~ ^(2|4)$ ]]
+[[ "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}" =~ ^[0-9]+$ ]]
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
@@ -80,6 +95,9 @@ git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no \
   > "${PROVENANCE}/repo_status.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${PROVENANCE}/selected_gpu_uuid.txt"
 printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/allocated_gpu_uuids.csv"
+printf 'exact_local_bucket_radix=%s\nexact_local_physical_order_chunk_size=%s\n' \
+  "${EXACT_LOCAL_BUCKET_RADIX}" "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}" \
+  > "${PROVENANCE}/candidate_parameters.txt"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 "${NSYS}" --version > "${PROVENANCE}/nsys_version.txt"
@@ -244,6 +262,8 @@ RECOVAR_COMMAND=(
   --nr-iter "${NR_ITER_SCHEDULE}"
   --random-seed 29
   --image-batch-size 500
+  --exact-local-bucket-radix "${EXACT_LOCAL_BUCKET_RADIX}"
+  --exact-local-physical-order-chunk-size "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}"
   --cuda-profiler-range
 )
 printf '%q ' "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \

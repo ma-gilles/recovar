@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.run_vdam_late_iteration_profile import _profile_metadata
+from scripts.run_vdam_late_iteration_profile import (
+    _process_resource_delta,
+    _profile_metadata,
+)
 from scripts.summarize_vdam_nsys_sqlite import summarize
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -98,6 +101,37 @@ def test_nsys_sqlite_summary_reports_invocations_shapes_and_busy_fraction(tmp_pa
     }
 
 
+def test_late_profile_resource_delta_reports_io_and_cpu_counters():
+    before = {
+        "user_cpu_s": 1.0,
+        "system_cpu_s": 2.0,
+        "minor_faults": 3,
+        "major_faults": 4,
+        "input_blocks": 5,
+        "output_blocks": 6,
+        "voluntary_context_switches": 7,
+        "involuntary_context_switches": 8,
+        "proc_io": {"read_bytes": 9, "syscr": 10},
+    }
+    after = {
+        "user_cpu_s": 1.5,
+        "system_cpu_s": 2.25,
+        "minor_faults": 13,
+        "major_faults": 4,
+        "input_blocks": 15,
+        "output_blocks": 16,
+        "voluntary_context_switches": 17,
+        "involuntary_context_switches": 18,
+        "proc_io": {"read_bytes": 109, "syscr": 30},
+    }
+
+    delta = _process_resource_delta(before, after)
+
+    assert delta["user_cpu_s"] == pytest.approx(0.5)
+    assert delta["input_blocks"] == 10
+    assert delta["proc_io"] == {"read_bytes": 100, "syscr": 20}
+
+
 def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     launcher = (ROOT / "scripts" / "run_vdam_late_iteration_profile.sbatch").read_text()
     gdb_commands = (ROOT / "scripts" / "vdam_relion_one_iteration.gdb").read_text()
@@ -115,3 +149,5 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert "VDAM_GDB_SECOND_EXPECTATION" in gdb_commands
     assert "cudaProfilerStart" in gdb_commands
     assert "cudaProfilerStop" in gdb_commands
+    assert "call (void) exit" not in gdb_commands
+    assert "process_resources" in (ROOT / "scripts" / "run_vdam_late_iteration_profile.py").read_text()

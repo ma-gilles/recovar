@@ -15,6 +15,7 @@ import ctypes
 import hashlib
 import json
 import os
+import resource
 import time
 from pathlib import Path
 from typing import Callable
@@ -30,6 +31,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--nr-iter", type=int, default=200)
     parser.add_argument("--random-seed", type=int, default=29)
     parser.add_argument("--image-batch-size", type=int, default=500)
+    parser.add_argument("--exact-local-bucket-radix", type=int, choices=(2, 4), default=4)
+    parser.add_argument("--exact-local-physical-order-chunk-size", type=int, default=0)
     parser.add_argument(
         "--cuda-profiler-range",
         action="store_true",
@@ -72,7 +75,7 @@ def _recovar_argv(
     output_prefix: Path,
 ) -> list[str]:
     stop_iteration = int(args.checkpoint_iteration) + 1
-    return [
+    command = [
         "--i",
         str(args.input_star),
         "--o",
@@ -115,6 +118,72 @@ def _recovar_argv(
         "--diagnostic_stop_after_iteration",
         str(stop_iteration),
     ]
+    command.extend(("--exact_local_bucket_radix", str(args.exact_local_bucket_radix)))
+    if int(args.exact_local_physical_order_chunk_size) > 0:
+        command.extend(
+            (
+                "--exact-local-physical-order-chunk-size",
+                str(args.exact_local_physical_order_chunk_size),
+            )
+        )
+    return command
+
+
+def _process_resource_snapshot() -> dict[str, object]:
+    """Capture monotonic process I/O counters and resident-memory state."""
+
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    proc_io: dict[str, int] = {}
+    for line in Path("/proc/self/io").read_text().splitlines():
+        key, value = line.split(":", 1)
+        proc_io[key] = int(value.strip())
+    proc_status: dict[str, int] = {}
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith(("VmRSS:", "VmHWM:")):
+            key, value, unit = line.split()
+            if unit != "kB":
+                raise RuntimeError(f"unexpected /proc/self/status unit: {line}")
+            proc_status[key.rstrip(":")] = int(value)
+    return {
+        "user_cpu_s": float(usage.ru_utime),
+        "system_cpu_s": float(usage.ru_stime),
+        "max_rss_kb": int(usage.ru_maxrss),
+        "minor_faults": int(usage.ru_minflt),
+        "major_faults": int(usage.ru_majflt),
+        "input_blocks": int(usage.ru_inblock),
+        "output_blocks": int(usage.ru_oublock),
+        "voluntary_context_switches": int(usage.ru_nvcsw),
+        "involuntary_context_switches": int(usage.ru_nivcsw),
+        "current_rss_kb": int(proc_status["VmRSS"]),
+        "high_water_rss_kb": int(proc_status["VmHWM"]),
+        "proc_io": proc_io,
+    }
+
+
+def _process_resource_delta(
+    before: dict[str, object],
+    after: dict[str, object],
+) -> dict[str, object]:
+    monotonic = (
+        "user_cpu_s",
+        "system_cpu_s",
+        "minor_faults",
+        "major_faults",
+        "input_blocks",
+        "output_blocks",
+        "voluntary_context_switches",
+        "involuntary_context_switches",
+    )
+    delta: dict[str, object] = {
+        key: float(after[key]) - float(before[key]) for key in monotonic
+    }
+    before_io = before["proc_io"]
+    after_io = after["proc_io"]
+    assert isinstance(before_io, dict) and isinstance(after_io, dict)
+    delta["proc_io"] = {
+        key: int(after_io[key]) - int(before_io[key]) for key in sorted(after_io)
+    }
+    return delta
 
 
 def _profile_metadata(output_prefix: Path, iteration: int) -> dict[str, object]:
@@ -180,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("checkpoint-iteration must be non-negative")
     if int(args.nr_iter) <= int(args.checkpoint_iteration):
         raise ValueError("nr-iter must exceed checkpoint-iteration")
+    if int(args.exact_local_physical_order_chunk_size) < 0:
+        raise ValueError("exact-local-physical-order-chunk-size must be non-negative")
     if output_root.exists():
         if any(output_root.iterdir()):
             raise FileExistsError(f"output root is not empty: {output_root}")
@@ -205,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         prefix.parent.mkdir(parents=True, exist_ok=False)
         command = _recovar_argv(args=args, output_prefix=prefix)
         capture = label == "warm" and profiler_start is not None
+        resources_before = _process_resource_snapshot()
         started = time.perf_counter()
         if capture:
             profiler_start()
@@ -216,11 +288,17 @@ def main(argv: list[str] | None = None) -> int:
                 assert profiler_stop is not None
                 profiler_stop()
         wall_s = float(time.perf_counter() - started)
+        resources_after = _process_resource_snapshot()
         if status != 0:
             raise RuntimeError(f"{label} continuation exited with status {status}")
         reports[label] = {
             "wall_s": wall_s,
             "argv": command,
+            "process_resources": {
+                "before": resources_before,
+                "after": resources_after,
+                "delta": _process_resource_delta(resources_before, resources_after),
+            },
             **_profile_metadata(prefix, target_iteration),
         }
 
@@ -236,6 +314,10 @@ def main(argv: list[str] | None = None) -> int:
         "input_star_sha256": _sha256(input_star),
         "data_dir": str(data_dir),
         "cuda_profiler_range": bool(args.cuda_profiler_range),
+        "exact_local_bucket_radix": int(args.exact_local_bucket_radix),
+        "exact_local_physical_order_chunk_size": int(
+            args.exact_local_physical_order_chunk_size
+        ),
         "cold": reports["cold"],
         "warm": reports["warm"],
         "cold_minus_warm_wall_s": float(reports["cold"]["wall_s"]) - float(reports["warm"]["wall_s"]),
