@@ -75,6 +75,19 @@ for ((iteration = 1; iteration <= TARGET_ITERATION; ++iteration)); do
 done
 
 source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
+exclusive_gpu_local_index=
+if [[ -z "${TARGET_GPU_UUID}" ]]; then
+  first_gpu=$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits | head -n 1)
+  exclusive_gpu_local_index=${first_gpu%%,*}
+  exclusive_gpu_local_index=${exclusive_gpu_local_index//[[:space:]]/}
+  TARGET_GPU_UUID=${first_gpu#*,}
+  TARGET_GPU_UUID=${TARGET_GPU_UUID//[[:space:]]/}
+  case "${exclusive_gpu_local_index}:${TARGET_GPU_UUID}" in
+    [0-9]*:GPU-*) ;;
+    *) echo "cannot select one H100 from the exclusive allocation: ${first_gpu}" >&2; exit 2 ;;
+  esac
+  export CUDA_VISIBLE_DEVICES=${exclusive_gpu_local_index}
+fi
 vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
 selected_gpu_uuid=${VDAM_SELECTED_GPU_UUID}
 
@@ -86,6 +99,8 @@ touch "${OUTPUT_ROOT}/SAFE_TO_DELETE" "${cache_control}/SAFE_TO_DELETE" \
   "${cache_candidate}/SAFE_TO_DELETE"
 printf '%s\n' "${ACTUAL_REPO_HEAD}" > "${OUTPUT_ROOT}/provenance/repo_head.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${OUTPUT_ROOT}/provenance/selected_gpu_uuid.txt"
+printf '%s\n' "${exclusive_gpu_local_index:-explicit-uuid}" \
+  > "${OUTPUT_ROOT}/provenance/selected_gpu_local_index.txt"
 printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${OUTPUT_ROOT}/provenance/allocated_gpu_uuids.csv"
 printf 'control\t%s\ncandidate\t%s\n' "${CONTROL_ROW_PIXELS}" "${CANDIDATE_ROW_PIXELS}" \
   > "${OUTPUT_ROOT}/provenance/arms.tsv"
