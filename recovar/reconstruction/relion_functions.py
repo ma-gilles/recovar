@@ -1130,6 +1130,62 @@ def _relion_window_centered_half_fourier(vol_half, old_volume_shape, new_volume_
     return out.at[axis_idx[:, None, None], axis_idx[None, :, None], col_idx[None, None, :]].set(vol_half)
 
 
+def _relion_pad_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_volume_shape):
+    """Pad centered packed Fourier data directly into raw FFTW ordering.
+
+    This is the padding branch of :func:`_relion_window_centered_half_fourier`
+    with the two non-packed axes emitted in the layout consumed by
+    ``irfftn``.  Building that layout directly avoids a box-scale
+    ``ifftshift`` copy immediately before a large inverse FFT.
+    """
+
+    old_volume_shape = tuple(int(s) for s in old_volume_shape)
+    new_volume_shape = tuple(int(s) for s in new_volume_shape)
+    if len(set(old_volume_shape)) != 1 or len(set(new_volume_shape)) != 1:
+        raise ValueError(
+            "RELION Fourier padding currently requires cubic shapes, got "
+            f"old={old_volume_shape}, new={new_volume_shape}"
+        )
+    old_dim = old_volume_shape[0]
+    new_dim = new_volume_shape[0]
+    if new_dim <= old_dim:
+        raise ValueError(f"direct FFTW padding requires new_dim > old_dim, got {new_dim} <= {old_dim}")
+
+    old_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(old_volume_shape)
+    new_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(new_volume_shape)
+    vol_half = vol_half.reshape(old_half_shape)
+    freq = _relion_centered_axis_fftw_frequencies(old_dim).astype(np.int32)
+    raw_axis_idx = jnp.asarray(np.where(freq >= 0, freq, new_dim + freq), dtype=jnp.int32)
+    col_idx = jnp.arange(old_half_shape[-1], dtype=jnp.int32)
+    col_freq = np.arange(old_half_shape[-1], dtype=np.int32)
+    max_r2 = int(old_half_shape[-1] - 1) ** 2
+    support = (
+        freq[:, None, None] * freq[:, None, None]
+        + freq[None, :, None] * freq[None, :, None]
+        + col_freq[None, None, :] * col_freq[None, None, :]
+    ) <= max_r2
+    vol_half = jnp.where(jnp.asarray(support), vol_half, jnp.zeros((), dtype=vol_half.dtype))
+    out = jnp.zeros(new_half_shape, dtype=vol_half.dtype)
+    return out.at[
+        raw_axis_idx[:, None, None],
+        raw_axis_idx[None, :, None],
+        col_idx[None, None, :],
+    ].set(vol_half)
+
+
+def _relion_idft3_real_from_fftw_half(vol_half, volume_shape):
+    """Inverse-transform a packed half-volume already in raw FFTW order."""
+
+    axes = (-3, -2, -1)
+    vol = jnp.fft.irfftn(
+        vol_half,
+        s=tuple(int(s) for s in volume_shape),
+        axes=axes,
+        norm=fourier_transform_utils.DEFAULT_FFT_NORM,
+    )
+    return jnp.fft.ifftshift(vol, axes=axes)
+
+
 def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
     """RELION ``Projector::decenter`` support: include ``r2 <= max_r2``.
 
@@ -1354,16 +1410,31 @@ def post_process_from_filter_v2(
     if input_half_volume:
         vol_half = vol.reshape(packed_shape)
         if reconstruction_volume_shape != upsampled_volume_shape:
-            vol_half = _relion_window_centered_half_fourier(
+            if (
+                use_large_reconstruction_single_precision
+                and reconstruction_volume_shape[0] > upsampled_volume_shape[0]
+            ):
+                vol_half = _relion_pad_centered_half_fourier_to_fftw(
+                    vol_half,
+                    upsampled_volume_shape,
+                    reconstruction_volume_shape,
+                )
+                vol = _relion_idft3_real_from_fftw_half(vol_half, reconstruction_volume_shape)
+            else:
+                vol_half = _relion_window_centered_half_fourier(
+                    vol_half,
+                    upsampled_volume_shape,
+                    reconstruction_volume_shape,
+                )
+                vol = fourier_transform_utils.get_idft3_real(
+                    vol_half,
+                    volume_shape=reconstruction_volume_shape,
+                )
+        else:
+            vol = fourier_transform_utils.get_idft3_real(
                 vol_half,
-                upsampled_volume_shape,
-                reconstruction_volume_shape,
+                volume_shape=reconstruction_volume_shape,
             )
-        packed_shape_for_ifft = fourier_transform_utils.volume_shape_to_half_volume_shape(reconstruction_volume_shape)
-        vol = fourier_transform_utils.get_idft3_real(
-            vol_half.reshape(packed_shape_for_ifft),
-            volume_shape=reconstruction_volume_shape,
-        )
     else:
         if reconstruction_volume_shape != upsampled_volume_shape:
             vol_half = fourier_transform_utils.full_volume_to_half_volume(
@@ -1375,11 +1446,8 @@ def post_process_from_filter_v2(
                 upsampled_volume_shape,
                 reconstruction_volume_shape,
             )
-            packed_shape_for_ifft = fourier_transform_utils.volume_shape_to_half_volume_shape(
-                reconstruction_volume_shape
-            )
             vol = fourier_transform_utils.get_idft3_real(
-                vol_half.reshape(packed_shape_for_ifft),
+                vol_half,
                 volume_shape=reconstruction_volume_shape,
             )
         else:

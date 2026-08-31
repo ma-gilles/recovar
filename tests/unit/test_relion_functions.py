@@ -926,6 +926,36 @@ def test_relion_window_centered_half_fourier_matches_binding(old_dim, new_dim):
     np.testing.assert_allclose(ours, relion_centered, atol=1e-12, rtol=1e-12)
 
 
+@pytest.mark.parametrize(("old_dim", "new_dim"), [(5, 16), (7, 10), (12, 16)])
+def test_relion_direct_fftw_half_padding_matches_centered_path_bitwise(old_dim, new_dim):
+    import recovar.core.fourier_transform_utils as ftu
+
+    rng = np.random.default_rng(803 + old_dim)
+    old_shape = (old_dim, old_dim, old_dim)
+    new_shape = (new_dim, new_dim, new_dim)
+    old_half_shape = ftu.volume_shape_to_half_volume_shape(old_shape)
+    vol_half = (
+        rng.standard_normal(old_half_shape) + 1j * rng.standard_normal(old_half_shape)
+    ).astype(np.complex64)
+
+    centered = rf._relion_window_centered_half_fourier(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    direct_fftw = rf._relion_pad_centered_half_fourier_to_fftw(
+        jnp.asarray(vol_half),
+        old_shape,
+        new_shape,
+    )
+    shifted_reference = jnp.fft.ifftshift(centered, axes=(0, 1))
+
+    np.testing.assert_array_equal(np.asarray(direct_fftw), np.asarray(shifted_reference))
+    direct_real = rf._relion_idft3_real_from_fftw_half(direct_fftw, new_shape)
+    centered_real = ftu.get_idft3_real(centered, volume_shape=new_shape)
+    np.testing.assert_array_equal(np.asarray(direct_real), np.asarray(centered_real))
+
+
 def test_relion_odd_accumulator_postprocess_windows_to_even_padded_grid():
     import recovar.core.fourier_transform_utils as ftu
 
