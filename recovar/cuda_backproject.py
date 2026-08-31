@@ -588,6 +588,9 @@ _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_FLAT_ROWS_F32 = (
     "cuda_relion_fine_diff2_fused_translate_flat_rows_f32"
 )
+_TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_RECTANGULAR_F32 = (
+    "cuda_relion_fine_diff2_fused_translate_runtime_rectangular_f32"
+)
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
 _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32 = (
     "cuda_relion_powerclass_spectrum_highres_f32"
@@ -699,6 +702,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_FLAT_ROWS_F32,
         "RelionFineDiff2FusedTranslateFlatRowsF32",
+    ),
+    (
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_RECTANGULAR_F32,
+        "RelionFineDiff2FusedTranslateRuntimeRectangularF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
     (
@@ -3296,32 +3303,15 @@ def relion_powerclass_spectrum_highres_f32(
     )
 
 
-@functools.partial(jax.jit, static_argnames=("current_size",))
-def relion_fine_diff2_fused_translate_rectangular_f32(
-    reference: jax.Array,
-    image: jax.Array,
-    translation_angles: jax.Array,
-    weight: jax.Array,
-    full_to_compact: jax.Array,
-    initial_diff2: jax.Array | None = None,
-    *,
-    current_size: int,
-) -> jax.Array:
-    """Evaluate RELION fine diff2 with translation inside the score kernel.
-
-    Shapes are ``reference=(B,R,N)``, ``image=(B,N)``,
-    ``translation_angles=(T,2)``, ``weight=(B,N)``, and
-    ``full_to_compact=(F,)``, and ``initial_diff2=(B,)``. The CUDA kernel
-    follows RELION's 256-lane REF3D topology: seven shared-memory translation
-    slots, with the deployed job builder filling at most four. The per-image
-    high-resolution addend is applied inside the kernel after the reduction,
-    matching RELION's final ``sum + sum_init`` operation. It returns
-    ``(B,R,T)``.
-
-    This entry point is intentionally separate from the production scorer
-    while the fused translation boundary is being qualified against native
-    RELION operand captures.
-    """
+def _prepare_relion_fine_diff2_fused_translate_rectangular_operands(
+    reference,
+    image,
+    translation_angles,
+    weight,
+    full_to_compact,
+    initial_diff2,
+):
+    """Validate operands shared by static- and runtime-cutoff fine scoring."""
 
     reference = jnp.asarray(reference)
     image = jnp.asarray(image)
@@ -3375,6 +3365,51 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
             "fused RELION fine diff2 initial_diff2 must be float32 with shape "
             f"({reference.shape[0]},), got {initial_diff2.shape} {initial_diff2.dtype}"
         )
+    return reference, image, translation_angles, weight, full_to_compact, initial_diff2
+
+
+@functools.partial(jax.jit, static_argnames=("current_size",))
+def relion_fine_diff2_fused_translate_rectangular_f32(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    initial_diff2: jax.Array | None = None,
+    *,
+    current_size: int,
+) -> jax.Array:
+    """Evaluate RELION fine diff2 with translation inside the score kernel.
+
+    Shapes are ``reference=(B,R,N)``, ``image=(B,N)``,
+    ``translation_angles=(T,2)``, ``weight=(B,N)``, and
+    ``full_to_compact=(F,)``, and ``initial_diff2=(B,)``. The CUDA kernel
+    follows RELION's 256-lane REF3D topology: seven shared-memory translation
+    slots, with the deployed job builder filling at most four. The per-image
+    high-resolution addend is applied inside the kernel after the reduction,
+    matching RELION's final ``sum + sum_init`` operation. It returns
+    ``(B,R,T)``.
+
+    This entry point is intentionally separate from the production scorer
+    while the fused translation boundary is being qualified against native
+    RELION operand captures.
+    """
+
+    (
+        reference,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    ) = _prepare_relion_fine_diff2_fused_translate_rectangular_operands(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    )
     current_size = int(current_size)
     expected_full_pixels = current_size * (current_size // 2 + 1)
     if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
@@ -3520,6 +3555,73 @@ def relion_fine_diff2_fused_translate_flat_rows_f32(
         initial_diff2,
         full_to_compact,
         current_size=current_size,
+    )
+
+
+@jax.jit
+def relion_fine_diff2_fused_translate_runtime_rectangular_f32(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    logical_current_size: jax.Array,
+    initial_diff2: jax.Array | None = None,
+) -> jax.Array:
+    """Evaluate fine diff2 with a runtime cutoff inside fixed-capacity buffers.
+
+    ``reference``, ``image``, ``weight``, and ``full_to_compact`` may have a
+    shared physical capacity larger than the active logical window.  The
+    scalar ``logical_current_size`` controls both the rectangular issue count
+    and the native coordinates inside CUDA.  Pixels after that logical prefix
+    are never issued, so the 256-lane accumulation tree is unchanged.
+    """
+
+    (
+        reference,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    ) = _prepare_relion_fine_diff2_fused_translate_rectangular_operands(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    )
+    logical_current_size = jnp.asarray(logical_current_size, dtype=jnp.int32)
+    if logical_current_size.shape != ():
+        raise ValueError(
+            "runtime fused RELION fine diff2 logical_current_size must be a scalar, "
+            f"got {logical_current_size.shape}",
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("runtime fused RELION fine diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "runtime fused RELION fine diff2 was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], reference.shape[1], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        logical_current_size,
     )
 
 

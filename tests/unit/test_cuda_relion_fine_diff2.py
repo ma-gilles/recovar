@@ -210,6 +210,9 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
     assert "translation_offset * kRelionFineDiff2BlockSize" in source
     assert "lane_sums[lane_index] = relion_fine_diff2_update_f32(" in source
     assert "initial_diff2[batch]" in source
+    assert "runtime_current_size[0]" in source
+    assert "logical_full_pixel_count" in source
+    assert "RelionFineDiff2FusedTranslateRuntimeRectangularF32" in source
 
 
 def test_relion_powerclass_cuda_source_pins_native_atomic_topology():
@@ -1984,6 +1987,86 @@ def test_relion_fused_translate_fine_diff2_adds_highres_in_native_order(
 
 
 @pytest.mark.gpu
+def test_relion_runtime_cutoff_fine_diff2_matches_static_paths_and_reuses_compile(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(932)
+    physical_size = 32
+    physical_pixels = physical_size * (physical_size // 2 + 1)
+    translation_angles = rng.normal(0, 0.2, (4, 2)).astype(np.float32)
+    initial_diff2 = np.asarray([0.022644043], dtype=np.float32)
+
+    def _operands_for_size(logical_size):
+        logical_pixels = logical_size * (logical_size // 2 + 1)
+        reference = (
+            rng.normal(0, 0.02, (1, 2, logical_pixels))
+            + 1j * rng.normal(0, 0.02, (1, 2, logical_pixels))
+        ).astype(np.complex64)
+        image = (
+            rng.normal(0, 0.02, (1, logical_pixels))
+            + 1j * rng.normal(0, 0.02, (1, logical_pixels))
+        ).astype(np.complex64)
+        weight = rng.uniform(0, 150_000, (1, logical_pixels)).astype(np.float32)
+        lookup = np.arange(logical_pixels, dtype=np.int32)
+        pad = physical_pixels - logical_pixels
+        return (
+            reference,
+            image,
+            weight,
+            lookup,
+            np.pad(reference, ((0, 0), (0, 0), (0, pad)), constant_values=np.complex64(7 + 3j)),
+            np.pad(image, ((0, 0), (0, pad)), constant_values=np.complex64(5 + 2j)),
+            np.pad(weight, ((0, 0), (0, pad)), constant_values=np.float32(1.25e5)),
+            # Keep the physical-only rectangle tail deliberately active.  A
+            # kernel using physical count/stride would re-issue compact pixel
+            # zero and fail the bitwise comparison.
+            np.pad(lookup, (0, pad), constant_values=0),
+        )
+
+    with jax.default_device(gpu_device):
+        runtime_function = (
+            cuda_backproject.relion_fine_diff2_fused_translate_runtime_rectangular_f32
+        )
+        for logical_size in (30, 32):
+            reference, image, weight, lookup, *physical = _operands_for_size(logical_size)
+            expected = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+                jnp.asarray(reference),
+                jnp.asarray(image),
+                jnp.asarray(translation_angles),
+                jnp.asarray(weight),
+                jnp.asarray(lookup),
+                jnp.asarray(initial_diff2),
+                current_size=logical_size,
+            )
+            actual = runtime_function(
+                jnp.asarray(physical[0]),
+                jnp.asarray(physical[1]),
+                jnp.asarray(translation_angles),
+                jnp.asarray(physical[2]),
+                jnp.asarray(physical[3]),
+                jnp.asarray(logical_size, dtype=jnp.int32),
+                jnp.asarray(initial_diff2),
+            )
+            expected, actual = jax.block_until_ready((expected, actual))
+            np.testing.assert_array_equal(
+                np.asarray(actual).view(np.uint32),
+                np.asarray(expected).view(np.uint32),
+            )
+            cache_size = runtime_function._cache_size()
+            if logical_size == 30:
+                first_cache_size = cache_size
+            else:
+                assert cache_size == first_cache_size
+
+
+@pytest.mark.gpu
 def test_relion_flat_rows_skip_invalid_rows_with_positive_infinity(
     monkeypatch,
     custom_cuda_lib,
@@ -2193,6 +2276,21 @@ def test_relion_fused_translate_fine_diff2_fails_closed_without_gpu(monkeypatch)
             jnp.ones((1, 1), dtype=jnp.float32),
             jnp.asarray([0], dtype=jnp.int32),
             current_size=1,
+        )
+
+
+def test_relion_runtime_cutoff_fine_diff2_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_fine_diff2_fused_translate_runtime_rectangular_f32.__wrapped__(
+            jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            jnp.asarray(2, dtype=jnp.int32),
         )
 
 

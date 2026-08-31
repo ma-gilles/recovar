@@ -9460,8 +9460,9 @@ void relion_fine_diff2_fused_translate_rows_f32_kernel(
     int64_t row_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
-    int64_t full_pixel_count,
-    int current_size)
+    int64_t full_pixel_capacity,
+    int current_size,
+    const int32_t* runtime_current_size)
 {
     const int64_t translation_chunks =
         (translation_count + kRelionFineDiff2Ref3dJobChunk - 1) /
@@ -9486,6 +9487,21 @@ void relion_fine_diff2_fused_translate_rows_f32_kernel(
         }
         return;
     }
+    const int logical_current_size = runtime_current_size == nullptr
+        ? current_size
+        : runtime_current_size[0];
+    const int64_t logical_full_pixel_count =
+        static_cast<int64_t>(logical_current_size) *
+        (logical_current_size / 2 + 1);
+    if (logical_current_size <= 0 || (logical_current_size & 1) != 0 ||
+        logical_full_pixel_count > full_pixel_capacity) {
+        if (threadIdx.x < translation_in_chunk) {
+            const int64_t translation = translation_start + threadIdx.x;
+            const int64_t output_index = row * translation_count + translation;
+            output[output_index] = nanf("");
+        }
+        return;
+    }
     __shared__ float lane_sums[
         kRelionFineDiff2BlockSize * kRelionFineDiff2TranslationCapacity];
     for (int translation_offset = 0;
@@ -9495,19 +9511,19 @@ void relion_fine_diff2_fused_translate_rows_f32_kernel(
             0.0f;
     }
 
-    const int current_half_width = current_size / 2 + 1;
+    const int current_half_width = logical_current_size / 2 + 1;
     const int pass_count = static_cast<int>(
-        (full_pixel_count + kRelionFineDiff2BlockSize - 1) /
+        (logical_full_pixel_count + kRelionFineDiff2BlockSize - 1) /
         kRelionFineDiff2BlockSize);
     for (int pass = 0; pass < pass_count; ++pass) {
         const int64_t full_pixel =
             static_cast<int64_t>(pass) * kRelionFineDiff2BlockSize + threadIdx.x;
-        if (full_pixel < full_pixel_count) {
+        if (full_pixel < logical_full_pixel_count) {
             const int32_t compact_pixel = full_to_compact[full_pixel];
             if (compact_pixel >= 0 && compact_pixel < compact_pixel_count) {
                 const int x = static_cast<int>(full_pixel % current_half_width);
                 int y = static_cast<int>(full_pixel / current_half_width);
-                if (y > current_size / 2) y -= current_size;
+                if (y > logical_current_size / 2) y -= logical_current_size;
                 const int64_t reference_index =
                     row * compact_pixel_count + compact_pixel;
                 const int64_t image_index =
@@ -9727,7 +9743,8 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
     int64_t translation_count,
     int64_t compact_pixel_count,
     int64_t full_pixel_count,
-    int current_size)
+    int current_size,
+    const int32_t* runtime_current_size)
 {
     const int64_t translation_chunks =
         (translation_count + kRelionFineDiff2Ref3dJobChunk - 1) /
@@ -9754,7 +9771,8 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
             translation_count,
             compact_pixel_count,
             full_pixel_count,
-            current_size);
+            current_size,
+            runtime_current_size);
     return cudaGetLastError();
 }
 
@@ -9799,7 +9817,8 @@ cudaError_t launch_relion_fine_diff2_fused_translate_flat_rows_f32(
             translation_count,
             compact_pixel_count,
             full_pixel_count,
-            current_size);
+            current_size,
+            nullptr);
     return cudaGetLastError();
 }
 
@@ -12569,9 +12588,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
-ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
+ffi::Error RelionFineDiff2FusedTranslateRectangularF32Common(
     cudaStream_t stream,
     int64_t current_size,
+    const ffi::AnyBuffer* runtime_current_size,
     ffi::AnyBuffer reference,
     ffi::AnyBuffer image,
     ffi::AnyBuffer translation_angles,
@@ -12593,7 +12613,14 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
     if (full_to_compact.element_type() != ffi::DataType::S32)
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2FusedTranslateRectangularF32: lookup must be S32");
-    if (current_size <= 0 || current_size > std::numeric_limits<int>::max())
+    if (runtime_current_size != nullptr &&
+        (runtime_current_size->element_type() != ffi::DataType::S32 ||
+         runtime_current_size->dimensions().size() != 0))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateRuntimeRectangularF32: "
+            "logical_current_size must be an S32 scalar");
+    if (runtime_current_size == nullptr &&
+        (current_size <= 0 || current_size > std::numeric_limits<int>::max()))
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2FusedTranslateRectangularF32: invalid current_size");
 
@@ -12604,12 +12631,14 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
     const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
-    const int64_t expected_full_pixels =
-        current_size * (current_size / 2 + 1);
+    const bool lookup_shape_valid = lookup_dims.size() == 1 && lookup_dims[0] > 0;
+    const int64_t expected_full_pixels = runtime_current_size == nullptr
+        ? current_size * (current_size / 2 + 1)
+        : (lookup_shape_valid ? lookup_dims[0] : 0);
     if (reference_dims.size() != 3 || image_dims.size() != 2 ||
         translation_dims.size() != 2 || translation_dims[1] != 2 ||
         weight_dims.size() != 2 || initial_dims.size() != 1 ||
-        lookup_dims.size() != 1 ||
+        !lookup_shape_valid ||
         output_dims.size() != 3 || reference_dims[0] <= 0 ||
         reference_dims[1] <= 0 || reference_dims[2] <= 0 ||
         image_dims[0] != reference_dims[0] ||
@@ -12647,11 +12676,30 @@ ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
         translation_dims[0],
         reference_dims[2],
         lookup_dims[0],
-        static_cast<int>(current_size));
+        static_cast<int>(current_size),
+        runtime_current_size == nullptr
+            ? nullptr
+            : static_cast<const int32_t*>(runtime_current_size->untyped_data()));
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
+}
+
+ffi::Error RelionFineDiff2FusedTranslateRectangularF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslateRectangularF32Common(
+        stream, current_size, nullptr, reference, image, translation_angles,
+        weight, initial_diff2, full_to_compact, output);
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -12760,6 +12808,37 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionFineDiff2FusedTranslateRuntimeRectangularF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer logical_current_size,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslateRectangularF32Common(
+        stream, 0, &logical_current_size, reference, image,
+        translation_angles, weight, initial_diff2, full_to_compact, output);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2FusedTranslateRuntimeRectangularF32,
+    RelionFineDiff2FusedTranslateRuntimeRectangularF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
