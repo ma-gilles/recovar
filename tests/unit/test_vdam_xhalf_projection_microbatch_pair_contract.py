@@ -14,6 +14,7 @@ def test_vdam_xhalf_projection_pair_is_same_gpu_warm_balanced_and_pinned():
         'ACTUAL_REPO_HEAD=$(git -C "${REPO_ROOT}" rev-parse HEAD)',
         ': "${RECOVAR_CUDA_LIB_OVERRIDE:?',
         ': "${LAYOUT_EVIDENCE_META:?',
+        "#SBATCH --exclusive",
         'vdam_select_target_gpu "${TARGET_GPU_UUID}" 0',
         "selected_gpu_uuid=${VDAM_SELECTED_GPU_UUID}",
         "cache_control=${OUTPUT_ROOT}_jax_cache_control",

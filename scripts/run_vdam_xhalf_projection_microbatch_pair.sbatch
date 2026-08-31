@@ -6,6 +6,7 @@
 #SBATCH --constraint=h100
 #SBATCH --gres=gpu:h100:1
 #SBATCH --nodes=1
+#SBATCH --exclusive
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=180G
