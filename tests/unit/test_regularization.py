@@ -167,7 +167,14 @@ def test_compute_relion_fsc_from_backprojector_uses_relion_rounding_and_half_lay
     np.testing.assert_allclose(fsc[1], 1.0, atol=1e-7, rtol=1e-7)
 
 
-def test_compute_relion_fsc_from_backprojector_accepts_packed_half_accumulators():
+def test_compute_relion_fsc_from_backprojector_accepts_packed_half_accumulators(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        regularization,
+        "_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS",
+        0,
+    )
     shape = (4, 4, 4)
     padding_factor = 2
     padded_shape = tuple(s * padding_factor for s in shape)
@@ -212,9 +219,17 @@ def test_compute_relion_fsc_from_backprojector_accepts_packed_half_accumulators(
     )
 
     np.testing.assert_allclose(fsc_from_half, fsc_from_full, atol=1e-6, rtol=1e-6)
+    np.testing.assert_array_equal(fsc_from_half, fsc_from_full)
 
 
-def test_compute_relion_fsc_from_backprojector_accepts_odd_packed_half_accumulators():
+def test_compute_relion_fsc_from_backprojector_accepts_odd_packed_half_accumulators(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        regularization,
+        "_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS",
+        0,
+    )
     shape = (8, 8, 8)
     padding_factor = 2
     accumulator_shape = (19, 19, 19)
@@ -271,6 +286,64 @@ def test_compute_relion_fsc_from_backprojector_accepts_odd_packed_half_accumulat
     )
 
     np.testing.assert_allclose(fsc_from_half, fsc_from_full, atol=1e-6, rtol=1e-6)
+    np.testing.assert_array_equal(fsc_from_half, fsc_from_full)
+
+
+def test_streamed_packed_half_backprojector_fsc_avoids_padded_full_allocation(
+    monkeypatch,
+):
+    shape = (6, 6, 6)
+    accumulator_shape = (13, 13, 13)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(
+        accumulator_shape
+    )
+    rng = np.random.default_rng(13)
+    data0 = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    data1 = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    weight0 = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+    weight1 = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+
+    monkeypatch.setattr(
+        regularization,
+        "_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS",
+        0,
+    )
+    monkeypatch.setenv("RECOVAR_MSTEP_FSC_DUMP_AVG", "1")
+    monkeypatch.delenv("RECOVAR_MSTEP_FSC_DUMP_DIR", raising=False)
+    original_empty = regularization.np.empty
+    original_zeros = regularization.np.zeros
+
+    def _reject_full_shape(allocator):
+        def checked(shape_arg, *args, **kwargs):
+            if tuple(np.atleast_1d(shape_arg)) == accumulator_shape:
+                raise AssertionError("streamed FSC allocated a padded full cube")
+            return allocator(shape_arg, *args, **kwargs)
+
+        return checked
+
+    monkeypatch.setattr(regularization.np, "empty", _reject_full_shape(original_empty))
+    monkeypatch.setattr(regularization.np, "zeros", _reject_full_shape(original_zeros))
+    fsc = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0.reshape(-1),
+            data1.reshape(-1),
+            weight0.reshape(-1),
+            weight1.reshape(-1),
+            shape,
+            padding_factor=2,
+            r_max=shape[0] // 2,
+            accumulator_volume_shape=accumulator_shape,
+        )
+    )
+
+    assert fsc.shape == (shape[0] // 2 + 1,)
+    assert np.all(np.isfinite(fsc))
 
 
 def test_compute_relion_fsc_from_backprojector_applies_exact_rmax_before_shell_binning():

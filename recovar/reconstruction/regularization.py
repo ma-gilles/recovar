@@ -19,12 +19,23 @@ logger = logging.getLogger(__name__)
 NVTX_DOMAIN_REG = "regularization"
 _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS = 200_000_000
 _LOW_RESOLUTION_JOIN_HOST_FALLBACK_MIN_ELEMENTS = 200_000_000
+_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS = 200_000_000
 
 
 def _relion_round_away_from_zero(x):
     """Mirror RELION's ``ROUND`` macro for NumPy arrays."""
     x = np.asarray(x)
     return np.trunc(np.where(x > 0, x + 0.5, x - 0.5)).astype(np.int64)
+
+
+def _relion_fsc_packed_stream_enabled(half_size):
+    threshold = int(
+        os.environ.get(
+            "RECOVAR_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS",
+            _RELION_FSC_PACKED_STREAM_MIN_ELEMENTS,
+        )
+    )
+    return int(half_size) >= threshold
 
 
 def _unscaled_fft_frequency_grid_np(n):
@@ -1085,6 +1096,211 @@ def compute_relion_tau2_from_weights(
     return prior, fsc_clamped, details
 
 
+def _compute_relion_fsc_from_packed_half_streamed(
+    Ft_y_0,
+    Ft_y_1,
+    Ft_ctf_0,
+    Ft_ctf_1,
+    volume_shape,
+    padded_shape,
+    *,
+    padding_factor,
+    r_max,
+):
+    """Reduce native packed-half BPref arrays without expanding full cubes.
+
+    The public packed layout stores the last Fourier axis as an RFFT half,
+    while RELION's logical compact x axis corresponds to public axis zero.
+    The legacy implementation first rebuilt four full padded cubes and then
+    built six more full coordinate/rounded-coordinate cubes.  At box 800
+    that path requires hundreds of GiB of host memory.
+
+    This implementation visits source coefficients in the same logical
+    ``(relion_z, relion_y, relion_x)`` order as the expanded implementation.
+    Source z planes that round to one native z coordinate are reduced
+    together, so every downsampled Fourier cell is completed in exactly one
+    bounded slab.  The final valid native cells are retained in canonical
+    z/y/x order and passed to one shell ``bincount`` per statistic; this
+    avoids changing the last-stage floating-point reduction topology.
+    """
+
+    volume_shape = tuple(int(value) for value in volume_shape)
+    padded_shape = tuple(int(value) for value in padded_shape)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
+    data0_half = np.asarray(Ft_y_0).reshape(half_shape)
+    data1_half = np.asarray(Ft_y_1).reshape(half_shape)
+    weight0_half = np.asarray(Ft_ctf_0).reshape(half_shape)
+    weight1_half = np.asarray(Ft_ctf_1).reshape(half_shape)
+
+    n = int(volume_shape[0])
+    pf = int(padding_factor)
+    half = n // 2
+    max_shell = half if r_max is None else int(r_max)
+    down_radius = max_shell + 1
+    down_size = 2 * down_radius + 1
+    down_xsize = down_size // 2 + 1
+    shell_count = half + 1
+
+    axes = [
+        np.asarray(
+            fourier_transform_utils.get_1d_frequency_grid(size, scaled=False),
+            dtype=np.float64,
+        )
+        for size in padded_shape
+    ]
+    rounded_relion_z = _relion_round_away_from_zero(axes[1] / pf)
+    rounded_relion_y = _relion_round_away_from_zero(axes[2] / pf)
+    rounded_relion_x = _relion_round_away_from_zero(axes[0] / pf)
+    source_z_indices = np.flatnonzero(
+        (rounded_relion_z >= -down_radius) & (rounded_relion_z <= down_radius)
+    ).astype(np.intp, copy=False)
+    source_y_indices = np.flatnonzero(
+        (rounded_relion_y >= -down_radius) & (rounded_relion_y <= down_radius)
+    ).astype(np.intp, copy=False)
+    source_x_indices = np.flatnonzero(
+        (rounded_relion_x >= 0) & (rounded_relion_x < down_xsize)
+    ).astype(np.intp, copy=False)
+
+    n0, n1, n2 = padded_shape
+    ic2 = n2 // 2
+    if n2 % 2 == 0:
+        packed_indices = np.concatenate(
+            [
+                np.arange(ic2, n2, dtype=np.intp),
+                np.asarray([0], dtype=np.intp),
+            ]
+        )
+        redundant_indices = np.arange(1, ic2, dtype=np.intp)
+    else:
+        packed_indices = np.arange(ic2, n2, dtype=np.intp)
+        redundant_indices = np.arange(0, ic2, dtype=np.intp)
+
+    full_to_half = np.full(n2, -1, dtype=np.intp)
+    full_to_half[packed_indices] = np.arange(packed_indices.size, dtype=np.intp)
+    full_to_half[redundant_indices] = ic2 - redundant_indices
+    if np.any(full_to_half < 0):
+        raise RuntimeError(
+            f"Could not map packed half axis for padded shape {padded_shape}"
+        )
+    is_redundant = np.zeros(n2, dtype=bool)
+    is_redundant[redundant_indices] = True
+    partner_i0 = (
+        (n0 - (n0 % 2) - np.arange(n0, dtype=np.intp)) % n0
+    ).astype(np.intp, copy=False)
+    partner_i1 = (
+        (n1 - (n1 % 2) - np.arange(n1, dtype=np.intp)) % n1
+    ).astype(np.intp, copy=False)
+
+    rounded_y_selected = rounded_relion_y[source_y_indices]
+    rounded_x_selected = rounded_relion_x[source_x_indices]
+    local_labels_one_z = (
+        (rounded_y_selected[:, None] + down_radius) * down_xsize
+        + rounded_x_selected[None, :]
+    ).reshape(-1)
+    local_size = down_size * down_xsize
+
+    target_y = np.arange(-down_radius, down_radius + 1, dtype=np.float64)
+    target_x = np.arange(0, down_xsize, dtype=np.float64)
+    target_radius_sq_yx = target_y[:, None] ** 2 + target_x[None, :] ** 2
+    valid_count_by_z = np.asarray(
+        [
+            np.count_nonzero(target_radius_sq_yx + float(z * z) <= float(max_shell * max_shell))
+            for z in range(-down_radius, down_radius + 1)
+        ],
+        dtype=np.int64,
+    )
+    valid_count = int(np.sum(valid_count_by_z, dtype=np.int64))
+    avg0_valid = np.empty(valid_count, dtype=np.complex128)
+    avg1_valid = np.empty(valid_count, dtype=np.complex128)
+    shell_labels = np.empty(valid_count, dtype=np.int64)
+
+    def _gather_full_slab(half_grid, z_indices, *, conjugate):
+        slab = np.empty(
+            (z_indices.size, source_y_indices.size, source_x_indices.size),
+            dtype=half_grid.dtype,
+        )
+        direct_positions = np.flatnonzero(~is_redundant[source_y_indices])
+        if direct_positions.size:
+            source_half_indices = full_to_half[source_y_indices[direct_positions]]
+            direct = half_grid[
+                np.ix_(source_x_indices, z_indices, source_half_indices)
+            ].transpose(1, 2, 0)
+            slab[:, direct_positions, :] = direct
+        redundant_positions = np.flatnonzero(is_redundant[source_y_indices])
+        if redundant_positions.size:
+            source_half_indices = full_to_half[source_y_indices[redundant_positions]]
+            mirrored = half_grid[
+                np.ix_(
+                    partner_i0[source_x_indices],
+                    partner_i1[z_indices],
+                    source_half_indices,
+                )
+            ].transpose(1, 2, 0)
+            if conjugate:
+                mirrored = np.conj(mirrored)
+            slab[:, redundant_positions, :] = mirrored
+        return slab.reshape(-1)
+
+    def _downsample_one_half(data_half, weight_half, z_indices, labels):
+        data_values = _gather_full_slab(data_half, z_indices, conjugate=True)
+        weight_values = _gather_full_slab(weight_half, z_indices, conjugate=True).real
+        sum_weight = np.bincount(labels, weights=weight_values, minlength=local_size)
+        sum_real = np.bincount(labels, weights=data_values.real, minlength=local_size)
+        sum_imag = np.bincount(labels, weights=data_values.imag, minlength=local_size)
+        average = sum_real + 1j * sum_imag
+        nonzero = sum_weight > 0.0
+        average[nonzero] /= sum_weight[nonzero]
+        average[~nonzero] = 0.0
+        return average.reshape((down_size, down_xsize))
+
+    cursor = 0
+    for offset, target_z in enumerate(range(-down_radius, down_radius + 1)):
+        count = int(valid_count_by_z[offset])
+        if count == 0:
+            continue
+        z_indices = source_z_indices[rounded_relion_z[source_z_indices] == target_z]
+        target_valid = target_radius_sq_yx + float(target_z * target_z) <= float(max_shell * max_shell)
+        target_shells = _relion_round_away_from_zero(
+            np.sqrt(target_radius_sq_yx + float(target_z * target_z))
+        )[target_valid]
+        if z_indices.size:
+            labels = np.tile(local_labels_one_z, z_indices.size)
+            avg0 = _downsample_one_half(data0_half, weight0_half, z_indices, labels)
+            avg1 = _downsample_one_half(data1_half, weight1_half, z_indices, labels)
+            avg0_valid[cursor : cursor + count] = avg0[target_valid]
+            avg1_valid[cursor : cursor + count] = avg1[target_valid]
+        else:
+            avg0_valid[cursor : cursor + count] = 0.0
+            avg1_valid[cursor : cursor + count] = 0.0
+        shell_labels[cursor : cursor + count] = target_shells
+        cursor += count
+    if cursor != valid_count:
+        raise RuntimeError(
+            f"Streamed RELION FSC filled {cursor} valid cells; expected {valid_count}"
+        )
+
+    numerator = np.bincount(
+        shell_labels,
+        weights=(np.conj(avg0_valid) * avg1_valid).real,
+        minlength=shell_count,
+    )
+    denom0 = np.bincount(
+        shell_labels,
+        weights=np.abs(avg0_valid) ** 2,
+        minlength=shell_count,
+    )
+    denom1 = np.bincount(
+        shell_labels,
+        weights=np.abs(avg1_valid) ** 2,
+        minlength=shell_count,
+    )
+    fsc = np.zeros(shell_count, dtype=np.float64)
+    nonzero = (denom0 * denom1) > 0.0
+    fsc[nonzero] = numerator[nonzero] / np.sqrt(denom0[nonzero] * denom1[nonzero])
+    fsc[0] = 1.0
+    return fsc, numerator, denom0, denom1
+
+
 def compute_relion_fsc_from_backprojector(
     Ft_y_0,
     Ft_y_1,
@@ -1124,6 +1340,51 @@ def compute_relion_fsc_from_backprojector(
     full_size = int(np.prod(padded_shape))
     half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
     half_size = int(np.prod(half_shape))
+    input_sizes = tuple(
+        int(np.size(value)) for value in (Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1)
+    )
+    dump_dir = os.environ.get("RECOVAR_MSTEP_FSC_DUMP_DIR")
+    dump_avg = bool(dump_dir) and os.environ.get(
+        "RECOVAR_MSTEP_FSC_DUMP_AVG", ""
+    ).lower() in {"1", "true", "yes", "on"}
+    packed_stream_eligible = (
+        half_size < full_size
+        and input_sizes == (half_size, half_size, half_size, half_size)
+        and _relion_fsc_packed_stream_enabled(half_size)
+    )
+    if packed_stream_eligible and dump_avg:
+        logger.warning(
+            "RELION backprojector average-grid dump requested; using the legacy "
+            "full-expansion FSC diagnostic path"
+        )
+    if packed_stream_eligible and not dump_avg:
+        logger.info(
+            "RELION backprojector FSC using streamed packed-half reduction: "
+            "shape=%s half_elements=%d",
+            padded_shape,
+            half_size,
+        )
+        fsc, numerator, denom0, denom1 = _compute_relion_fsc_from_packed_half_streamed(
+            Ft_y_0,
+            Ft_y_1,
+            Ft_ctf_0,
+            Ft_ctf_1,
+            volume_shape,
+            padded_shape,
+            padding_factor=pf,
+            r_max=r_max,
+        )
+        if dump_dir:
+            pathlib.Path(dump_dir).mkdir(parents=True, exist_ok=True)
+            tag = os.environ.get("RECOVAR_MSTEP_FSC_DUMP_TAG", "recovar")
+            np.savetxt(
+                pathlib.Path(dump_dir) / f"{tag}_downsampled_fsc.txt",
+                np.column_stack(
+                    [np.arange(fsc.size), numerator, denom0, denom1, fsc]
+                ),
+                header="shell num den1 den2 fsc",
+            )
+        return jnp.asarray(fsc, dtype=jnp.float32)
 
     def _packed_half_to_full_numpy(arr_np):
         """Expand RECOVAR's centered packed half-volume layout on host."""

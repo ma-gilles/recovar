@@ -215,6 +215,77 @@ def test_compute_fsc_from_bpref_matches_scheduler_emulation():
     np.testing.assert_allclose(emulated_fsc, relion_fsc, atol=1e-7, rtol=1e-7)
 
 
+def test_streamed_packed_half_fsc_matches_relion_binding(monkeypatch):
+    ori_size = 8
+    padding_factor = 2
+    current_size = 6
+    r_max = current_size // 2
+    pad_size = _relion_current_pad_size(current_size, padding_factor)
+    accumulator_shape = (pad_size,) * 3
+    half_shape = regularization.fourier_transform_utils.volume_shape_to_half_volume_shape(
+        accumulator_shape
+    )
+    rng = np.random.default_rng(20260831)
+    data_h1_half = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    data_h2_half = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    weight_h1_half = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+    weight_h2_half = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+    full_inputs = [
+        np.asarray(
+            regularization.fourier_transform_utils.half_volume_to_full_volume(
+                value,
+                accumulator_shape,
+            )
+        )
+        for value in (
+            data_h1_half,
+            data_h2_half,
+            weight_h1_half,
+            weight_h2_half,
+        )
+    ]
+
+    center = pad_size // 2
+
+    def to_relion_compact(array):
+        return np.ascontiguousarray(np.transpose(array, (1, 2, 0))[:, :, center:])
+
+    expected = np.asarray(
+        compute_fsc_from_bpref(
+            *(to_relion_compact(value) for value in full_inputs),
+            ori_size=ori_size,
+            padding_factor=padding_factor,
+            current_size=current_size,
+            r_max=r_max,
+        )
+    )
+    monkeypatch.setattr(
+        regularization,
+        "_RELION_FSC_PACKED_STREAM_MIN_ELEMENTS",
+        0,
+    )
+    actual = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data_h1_half.reshape(-1),
+            data_h2_half.reshape(-1),
+            weight_h1_half.reshape(-1),
+            weight_h2_half.reshape(-1),
+            (ori_size,) * 3,
+            padding_factor=padding_factor,
+            r_max=r_max,
+            accumulator_volume_shape=accumulator_shape,
+        )
+    )
+
+    np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-7)
+
+
 class TestBackprojectorDataShape:
     """Verify accumulator shapes match RELION's pad_size formula."""
 
