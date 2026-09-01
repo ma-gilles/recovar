@@ -11,6 +11,7 @@ from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
     DenseInitialModelEstepConfig,
+    _arrays_to_accumulators,
     _estep_meta,
     _initial_model_pass2_layout,
     _relion_projector_to_dense_volume,
@@ -70,6 +71,43 @@ def _fake_result_with_profile(n_classes: int, n: int, *, n_images: int = 2, n_gr
     result = _fake_result(n_classes, n, n_images=n_images, n_groups=n_groups)
     result.profile_summary = {"em_time_s": 1.25, "batches": 1}
     return result
+
+
+def test_arrays_to_accumulators_accepts_compact_k4_backprojector_cubes():
+    """Pin the real-data K=4 current-size bridge that failed on 59-cubed outputs."""
+
+    state = SimpleNamespace(K=4, ori_size=256, current_size=56)
+    compact_size = 59
+    compact_voxels = compact_size**3
+    data = np.stack(
+        [np.full(compact_voxels, class_index + 1j, dtype=np.complex64) for class_index in range(4)],
+    )
+    weight = np.stack(
+        [np.full(compact_voxels, class_index + 1, dtype=np.float32) for class_index in range(4)],
+    )
+
+    accumulators = _arrays_to_accumulators(
+        data,
+        weight,
+        state,
+        halfset_idx=0,
+        relion_bpref_frame=False,
+        relion_projector_frame=False,
+        padding_factor=1,
+    )
+
+    assert len(accumulators) == 4
+    assert [(accum.halfset_idx, accum.class_idx) for accum in accumulators] == [
+        (0, 0),
+        (0, 1),
+        (0, 2),
+        (0, 3),
+    ]
+    for class_index, accumulator in enumerate(accumulators):
+        assert accumulator.data.shape == (59, 59, 30)
+        assert accumulator.weight.shape == (59, 59, 30)
+        np.testing.assert_array_equal(accumulator.data, np.complex128(class_index + 1j))
+        np.testing.assert_array_equal(accumulator.weight, np.float64(class_index + 1))
 
 
 def test_split_pseudo_halfset_particle_ids_uses_particle_id_parity():
