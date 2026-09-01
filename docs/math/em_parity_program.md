@@ -29992,3 +29992,113 @@ fields differ, localize the first unequal per-particle tuple, posterior,
 significant support, or contribution operand.  If they agree, move to the
 exact reduction destination/order.  Do not enable a production treatment or
 run another complete trajectory before this boundary is classified.
+
+## 2026-09-01 EDT — PR #158 high-resolution real-data and K=4 checkpoint
+
+The fixed acceptance semantics are unchanged.  In particular, the generated
+real-data scorecard and its JSON remain pinned to subject commit
+`2249bf352377aae85ef9f3d378eda86dadef671f`; the live EMPIAR-10202 work below
+uses operational candidate `a0b4fcebf76058bbb18d49f84f8e27c663897915`
+and is not promoted into that scorecard until its full producer and sealed
+finalizer complete and the subject contract is deliberately repinned.
+
+The corrected box-800, set-6, I1 one-iteration smoke is green.  Job `13284165`
+completed `0:0` in `00:24:24` on one H100 with four CPUs and 500 GB host
+memory.  Its comparison report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/outputs/recovar_smoke/smoke_comparison.json`
+(SHA-256
+`ab91964c0c23dbc8b974fa66c8535a74ce5f61e18d3322ec6d0ed2a07f986690`).
+All 11 fixed checks pass.  The targeted full-grid M-step executes at
+`current_size=800` while carrying resolution shell 21, or
+`30.019047146751767` Angstrom; half-map RMS ratios are
+`1.0034626825477362` and `1.005038937011117`.  RECOVAR native-box average
+normalizations `263048/640000=0.4110125` and
+`263549/640000=0.4117953125` match RELION's `0.411014` and `0.411798`, and
+the RECOVAR noise-shell median is `1.0000000824462076`.  Peak sampled HBM was
+55,607 MiB.  The immutable command and launcher are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/provenance/command_13284165.sh`
+(SHA-256
+`1fec3fc2300ca3336fb6f84c425a4432b7ab1b9af5012d83350cc4794691471f`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/scripts/recovar_smoke.sbatch`
+(SHA-256
+`a84f65b79efd87fa2f37127730112f8c0e3d769a298ad0e5b77bd43ba8ddb2ad`).
+
+This smoke also closes the giant-iFFT normalization failure.  A padded
+1600-cubed inverse transform has `4,096,000,000` samples, beyond signed
+int32.  XLA's backward-normalized path silently omitted the reciprocal and
+inflated the map by approximately `4.096e9`.  Commits `fec83bf72`,
+`3eadda4f5`, and `a0b4fcebf` preserve the large Fourier padding, perform the
+backward transform, and apply the reciprocal in a separate donated device
+operation.  A100 production gate `13284074` passed five focused checks; its
+measured scale was `2.441406243836042e-10` versus expected
+`2.44140625e-10`, with buffer donation confirmed.  The immutable gate log is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_irfft_fix_gate_a0b4fcebf_20260831/logs/gate-13284074.out`
+(SHA-256
+`24043b1e0531bd4e0c9840157a0c47b40df751f7ad5aa6cb8851e6f2e0f6c058`).
+
+Full matched refinement job `13284813` is still live on one H100; dependent
+CPU mask/FSC job `13284814` remains pending with `afterok`.  Iteration 1 is a
+clean milestone, not a terminal result: RECOVAR and the sealed RELION oracle
+both use size 62 and `30.019` Angstrom, with `ave_Pmax=1.0000` and translation
+change `2.084` Angstrom.  RECOVAR average normalizations `262960/640000` and
+`262998/640000` remain in the RELION frame.  Peak sampled RECOVAR HBM through
+this milestone was 59,343 MiB, versus about 78,392 MiB per GPU for the sealed
+two-GPU RELION reference.  Final unmasked FSC, masked FSC, resolution, and
+scorecard disposition are **PENDING**; no terminal scientific claim should be
+made from iteration 1.  Reproduction artifacts are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/provenance/command_full_13284813.sh`
+(SHA-256
+`b582c090278cad36cc598e7caffab727b602281a674f3fd677172631b2d88f99`),
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/scripts/recovar_full.sbatch`
+(SHA-256
+`2f0ce47d22ba9e1eb09a57f9335a2a023bef3fff8c2f3500316bb36f08c806ee`),
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/scripts/postprocess_masked_fsc.sbatch`
+(SHA-256
+`fcf2be798d96105289b457f1cda378c9f8b5cd073d9f0acf20840b14faeafec4`).
+
+The K=4 exact-score-preprocessing r4 A/B is closed as a rejection.  Job
+`13278965` produced complete control and treatment trajectories and both pass
+the unchanged parity gates, but the wrapper correctly failed the formal seal:
+iteration-1 dormant-map hashes differed and the control rebuilt the external
+CUDA library after its pre-arm executable hash was recorded.  Final direct
+per-class FSC-AUC is
+`[0.9999016223, 0.9997591286, 0.9996454306, 0.9992526099]` for control and
+`[0.9999016395, 0.9997588509, 0.9996451188, 0.9992540152]` for treatment.
+The treatment-minus-control deltas are mixed and at the numerical/repeat
+floor; GT-FSC deltas also remain mixed and green.  Therefore
+`RECOVAR_RELION_KCLASS_EXACT_SCORE_PREPROCESSING=1` remains diagnostic-only:
+there is no quality improvement, no valid speed claim, and no justification
+for a 15-iteration promotion run.  The control/treatment reports are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exact_score_preprocess_ab_r4_edf199772_20260831/analysis/control_k4_fsc_trajectory.json`
+(SHA-256
+`149ce59a51536da211d5dd902175f2d86fe2fa8f30b59ee6ad8bb833a01a65c6`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exact_score_preprocess_ab_r4_edf199772_20260831/analysis/treatment_k4_fsc_trajectory.json`
+(SHA-256
+`c2f50b995245585a0415e7cf0fceaf8ba1e92a86dd6872bc39df3fb2de04e467`).
+
+Commit `1b9209cd8ea422d0ee04e8619eb2c6723a8359ab` adds the machinery to retain
+the joined half-0 numerator on device and reuse it in the K=1 large
+host-staged crop branch, releasing it before the giant iFFT.  The focused CPU
+regression gate, Ruff on the changed files, and `git diff --check` passed.
+Production default-BFC job `13285138` is nevertheless **RED** at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901`.
+Its predecessor `13285094` was canceled before the E-step because fresh
+worktree mtimes attempted an unnecessary CUDA rebuild; the sealed library was
+unchanged, and the correction is recorded in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901/provenance/attempts.md`
+(SHA-256
+`ac7d024f3902aaefd28f72fa2ecc28da8b8dc7e48814311f46955951e83f2749`).
+The corrected retry reached the configured retained join, but the production
+offload had already converted half-0 `Ft_y` to NumPy and deleted its device
+buffer.  The join therefore returned no retained device numerator, the Stage-A
+reuse marker was absent, and a fresh 15.35-GiB allocation failed under BFC.
+Job `13285138` failed `1:0` after `00:08:23`; its immutable stderr is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901/logs/recovar_smoke-13285138.err`
+(SHA-256
+`415fa6b88fa1ac215e63855b9a35a088bc9243e7bda22dbe0d61cda477ef36a4`).
+The commit is not production-qualified.  A wiring fix and replacement
+default-BFC gate are **PENDING**; do not promote the retained-buffer candidate
+from unit evidence.

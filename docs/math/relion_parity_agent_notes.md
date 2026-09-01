@@ -12378,3 +12378,300 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   producer success markers and prevents the previous hard-coded case-10/
   iteration-18 mismatch.  The active comparison remains fail-closed on fresh
   native inertness FSC-AUC `>=0.999999` before interpreting BPref fields.
+
+## 2026-09-01 00:45 EDT — PR #158 box-800, K=4, and memory evidence
+
+### Evidence contract
+
+This entry is an operational record for PR #158; it does not change an
+acceptance threshold or silently replace a frozen subject.  The generated
+real-data science-equivalence scorecard and JSON continue to name
+`2249bf352377aae85ef9f3d378eda86dadef671f` as their exact subject.  The
+EMPIAR-10202 set-6 run below is from the frozen source worktree
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_10202_giant_irfft_fixed_src_a0b4fcebf_20260831`
+at commit `a0b4fcebf76058bbb18d49f84f8e27c663897915`, tree
+`ab8b78f41a1c49f60363446ee4495e531c9e872e`.  It remains an operational
+candidate until the complete refinement, dependent masked-FSC postprocess,
+and sealed finalizer finish.  Promoting it to the fixed scorecard requires a
+deliberate subject-contract update; partial iteration evidence is not a
+substitute.
+
+### Corrected EMPIAR-10202 set-6 I1 smoke
+
+Job `13284165` completed `0:0` in `00:24:24` on `della-h19g3`, requesting and
+receiving exactly one H100, four CPUs, and 500 GB host memory.  The immutable
+run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831`.
+Its authoritative comparison is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/outputs/recovar_smoke/smoke_comparison.json`
+(SHA-256
+`ab91964c0c23dbc8b974fa66c8535a74ce5f61e18d3322ec6d0ed2a07f986690`).
+All 11 fixed checks are true and `gate_passed` is true.
+
+The targeted full-grid M-step runs at `current_size=800`, while carrying
+resolution shell 21, or `30.019047146751767` Angstrom, under `I1` with 60
+symmetry operators.  The numeric checks are:
+
+| Quantity | Half 1 | Half 2 |
+| --- | ---: | ---: |
+| RECOVAR map RMS | `0.00028716420638374984` | `0.00028976277098990977` |
+| RELION map RMS | `0.000286173279164359` | `0.000288309995085001` |
+| RECOVAR / RELION RMS | `1.0034626825477362` | `1.005038937011117` |
+| RECOVAR native-box average norm | `263048/640000 = 0.4110125` | `263549/640000 = 0.4117953125` |
+| RELION average norm | `0.411014` | `0.411798` |
+| Relative average-norm delta | `3.649510722232387e-6` | `6.526258019677306e-6` |
+
+The RECOVAR noise-shell median is `1.0000000824462076`, with range
+`[0.9807230428358287, 1.006476737397402]` in both halves.  The prior broken
+map scale is directly diagnosed by old/corrected RMS ratios
+`4096383180.2491903` and `4096362589.8005137`.  Sampled peak HBM is 55,607
+MiB.  The HBM CSV is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/logs/recovar_smoke-13284165-hbm.csv`
+(SHA-256
+`194f5cf9665d1015ad127d2a81ae10e5a5d54bc55668eb5dc43300336912ef46`),
+and the measured application wall time is `00:23:48.93`.
+
+The exact command is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/provenance/command_13284165.sh`
+(SHA-256
+`1fec3fc2300ca3336fb6f84c425a4432b7ab1b9af5012d83350cc4794691471f`),
+and the launcher is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/scripts/recovar_smoke.sbatch`
+(SHA-256
+`a84f65b79efd87fa2f37127730112f8c0e3d769a298ad0e5b77bd43ba8ddb2ad`).
+These two frozen files are the reproduction entry point; do not reconstruct a
+command from prose.
+
+### Giant-iFFT cause and production gate
+
+The required RELION-style padded inverse transform is 1600 cubed, or exactly
+`4,096,000,000` samples.  This exceeds signed int32.  On this boundary, XLA's
+backward-normalized transform silently omitted the reciprocal, yielding the
+observed approximately `4.096e9` inflation.  The fix is intentionally narrow:
+
+- `fec83bf72` preserves the large Fourier padding;
+- `3eadda4f5` detects the signed-int32 transform-size boundary and separates
+  normalization from the inverse transform; and
+- `a0b4fcebf` retains the backward giant-iFFT path and applies
+  `1/4,096,000,000` with a donated device operation in
+  `recovar/em/dense_single_volume/mean_helpers.py`.
+
+Dynamic GPU probe `13283588` measured raw sample `1.0`, scale
+`2.441406243836042e-10`, and scaled/expected ratio
+`0.9999999974752427`, while confirming pointer reuse.  Its immutable log is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_irfft_dynamic_scale_probe_20260831/logs/probe-13283588.out`
+(SHA-256
+`741c6e44710ee20fa1fff8542eb02a7e080679a96f24ea680890bdb55fc32684`).
+
+Production A100 gate `13284074` completed `0:0` in 11 seconds on exactly one
+A100, four CPUs, and 64 GB host memory.  Five focused tests passed with
+`BOX800_PRODUCTION_GATE={"donation_reused_buffer": true,
+"expected": 2.44140625e-10, "finish_seconds": 0.2785677909851074,
+"raw_sample": 1.0, "scale_seconds": 0.03989768028259277,
+"scaled_over_expected": 0.9999999974752427,
+"scaled_sample": 2.441406243836042e-10,
+"transform_size": 4096000000}`.  The immutable stdout is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_irfft_fix_gate_a0b4fcebf_20260831/logs/gate-13284074.out`
+(SHA-256
+`24043b1e0531bd4e0c9840157a0c47b40df751f7ad5aa6cb8851e6f2e0f6c058`),
+and the launcher is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_irfft_fix_gate_a0b4fcebf_20260831/run_gate.sbatch`
+(SHA-256
+`ef92a0fc88be45a0f14eba0cbb30d18a07e01a09fe50d9608d70eeb202c97138`).
+
+### Full set-6 refinement: iteration-1 milestone only
+
+At the documentation cutoff, full RECOVAR job `13284813` is live on one H100
+with exactly four CPUs and 500 GB host memory; dependent CPU job `13284814`
+is pending under `afterok` and will construct the RELION mask and report both
+masked and unmasked FSC.  No final resolution or terminal FSC exists yet.
+
+Iteration 1 completed cleanly.  RECOVAR reports `current_size=62`,
+`30.019` Angstrom, `ave_Pmax=1.0000`, translation change `2.084` Angstrom,
+and `750.4` seconds, with convergence false.  The sealed RELION iteration-1
+oracle reports size 62, `30.019046` Angstrom, Pmax `1.000000`, and offset
+change `2.084134` Angstrom.  RECOVAR native-box average normalizations are
+`262960/640000 = 0.410875` and `262998/640000 = 0.410934375`, consistent with
+the RELION halves.  Sampled peak HBM through this checkpoint is 59,343 MiB on
+the one RECOVAR H100; the sealed RELION reference used about 78,392 MiB per
+GPU on two GPUs.  This is useful controller and memory evidence, but it is not
+a reconstruction-quality verdict.
+
+The exact producer command and launchers are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/provenance/command_full_13284813.sh`
+  (SHA-256
+  `b582c090278cad36cc598e7caffab727b602281a674f3fd677172631b2d88f99`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/scripts/recovar_full.sbatch`
+  (SHA-256
+  `2f0ce47d22ba9e1eb09a57f9335a2a023bef3fff8c2f3500316bb36f08c806ee`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/scripts/postprocess_masked_fsc.sbatch`
+  (SHA-256
+  `fcf2be798d96105289b457f1cda378c9f8b5cd073d9f0acf20840b14faeafec4`);
+  and
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_giant_irfft_fixed_a0b4fcebf_20260831/scripts/run_postprocess.py`
+  (SHA-256
+  `2ade73633ca96a7981948ff30b377eb0424d83e57cc06dde4ac175f670ec94ed`).
+
+The following fields are deliberately left open for the sealed finalizer:
+
+| Field | Status |
+| --- | --- |
+| RECOVAR full producer | **LIVE**, job `13284813`; iteration 1 complete |
+| RELION-mask postprocess | **PENDING**, job `13284814` after `afterok:13284813` |
+| Final unmasked FSC / resolution | **PENDING** |
+| Final masked FSC / resolution | **PENDING** |
+| Fixed-scorecard promotion | **PENDING** deliberate subject repin and sealed finalizer |
+
+### K=4 r4 exact-score-preprocessing A/B: reject the candidate
+
+The immutable r4 root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exact_score_preprocess_ab_r4_edf199772_20260831`.
+Both arms used science subject
+`edf199772d93450fbb5cc1f6eeab7819aa9fdfd2`, tree
+`70a9e816eebac3115f76fc501015b92dcec73273`; the only intended arm difference
+was treatment environment variable
+`RECOVAR_RELION_KCLASS_EXACT_SCORE_PREPROCESSING=1`.  The arm-verification
+report SHA-256 is
+`cef2c05ad2394c4db350e75d7ac1b13324d160e21b580694356e0996e2fd9518`.
+
+Both complete trajectories independently pass the unchanged gates: class
+agreement at least `0.99`, every direct per-class FSC-AUC at least `0.995`,
+and every per-class GT-FSC delta at least `-0.002`.  The exact final metrics
+are:
+
+| Metric | Control | Treatment |
+| --- | --- | --- |
+| Iteration class agreement | `[1.0, 0.99966, 0.99798]` | `[1.0, 0.99966, 0.99797]` |
+| Final direct per-class FSC-AUC | `[0.9999016223006252, 0.9997591286234535, 0.9996454306252085, 0.9992526099273832]` | `[0.9999016394848752, 0.9997588509078564, 0.9996451188152892, 0.9992540151702805]` |
+| Final per-class GT-FSC delta | `[-3.387475500826742e-6, 8.263898511162715e-6, -4.03542291779746e-6, -5.216414616149301e-6]` | `[-2.65293863480065e-6, 6.641258074563394e-6, -5.739816324179525e-6, -4.309322155227058e-6]` |
+
+Treatment-minus-control direct-FSC deltas are
+`[1.718425002295021e-8, -2.7771559707456817e-7,
+-3.11809919328887e-7, 1.4052428972677333e-6]`; GT-delta shifts are
+`[7.34536866026092e-7, -1.6226404365993208e-6,
+-1.7043934063820654e-6, 9.07092460922243e-7]`.  The signs are mixed and the
+magnitudes are at the numerical/repeat floor.  The reports are:
+
+- control:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exact_score_preprocess_ab_r4_edf199772_20260831/analysis/control_k4_fsc_trajectory.json`,
+  SHA-256
+  `149ce59a51536da211d5dd902175f2d86fe2fa8f30b59ee6ad8bb833a01a65c6`;
+- treatment:
+  `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exact_score_preprocess_ab_r4_edf199772_20260831/analysis/treatment_k4_fsc_trajectory.json`,
+  SHA-256
+  `c2f50b995245585a0415e7cf0fceaf8ba1e92a86dd6872bc39df3fb2de04e467`;
+- control shellwise table SHA-256
+  `72370d62e204d8a738f1cef8795c60dab51560256cdb670cbac0316c5e177eed`;
+  and treatment shellwise table SHA-256
+  `13dc5a9b676fa6db47ffed0aedd68eb5edeed70b8e23ab770164dd2e0b5ff94a`.
+
+Parent job `13278965` is correctly recorded as `FAILED 1:0` even though both
+science arms completed.  The formal seal found iteration-1 dormant-map hash
+differences: control
+`92948c47ac940fc030cc2814501bc5224c2f07bdaee88563a60f4b58c686d9db`
+versus treatment
+`c4850d399b8127799c05d48a600069dd9e61fc6cd5fb66ec59a7447abf9ae853`.
+All eight iteration-0 half/class MRCs differed at relative L2 between
+`7.405664248140715e-8` and `8.005372451498138e-8`, RMSE between
+`1.4178038468251563e-10` and `1.7899650628632326e-10`, and maximum absolute
+difference between `7.450580596923828e-9` and
+`1.1175870895385742e-8`.  This is scientifically negligible here but proves
+the intended preprocessing dormancy was not bitwise deterministic.
+
+The executable seal also failed: the control arm rebuilt an external CUDA
+library after the pre-arm hash list was recorded.  Therefore the apparent
+runtime change, 3,812 seconds control versus 3,453 seconds treatment, is not a
+valid performance comparison.  The formal error log is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exact_score_preprocess_ab_r4_edf199772_20260831/monitor/slurm-13278965.err`
+(SHA-256
+`41f137494d63344bf102a2569b192b5221851bf864ca9280af2d0535d8be5f7e`),
+and the pre-arm seal list is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_exact_score_preprocess_ab_r4_edf199772_20260831/provenance/executable_seals_13278965.sha256`
+(SHA-256
+`b2de643aea613047c9cd851ec04dd6fc525917249d4434c615843b933f9f48c9`).
+
+Decision: both arms demonstrate excellent K=4 parity, but the preprocessing
+candidate is **REJECTED** as a default.  It does not improve quality, its
+dormant boundary is not bitwise stable, the formal executable seal failed,
+and the timing comparison is invalid.  Do not spend a 15-iteration trajectory
+on this candidate.
+
+### Retained half-0 numerator and default-BFC production gate
+
+Commit `1b9209cd8ea422d0ee04e8619eb2c6723a8359ab`, tree
+`a16a976c27aac869e26b39998e86ffe702d17225`, retains the exact joined half-0
+numerator on its original device allocation.  A donated sparse scatter writes
+the host-computed joined rows into that allocation, and Stage A reuses it only
+for the K=1 large host-staged crop path.  The buffer is released before the
+giant iFFT.  K>1 and equal/padding accumulator-shape paths do not use it.  At
+box 800 the retained packed-half numerator is 16,486,611,344 bytes
+(15.354353 GiB); the change replaces the same-sized free/reallocate cycle and
+does not claim uniformly lower occupancy at every earlier point.
+
+The authoritative pre-integration audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_retained_half0_fec83bf72_20260831/FINAL_AUDIT.txt`
+(SHA-256
+`359a542057bbeee8952f9119ea06e6d98a10a9e8fb562a76a8fd0f47a0f7ff25`).
+It records the exact CPU commands and results: three retained-join/HLO/real
+Stage-A tests passed in 171.39 seconds; four default-host-join/reuse/half-
+serialization/padding tests passed in 59.22 seconds; the K=1 handoff test
+passed in 97.90 seconds; and the end-to-end low-resolution wiring test passed
+with two pre-existing `ComplexWarning`s in 132.10 seconds.  In total, all nine
+named pre-integration tests passed.  The audit also records the exact Ruff
+command and its clean result.  A later integrated focused gate passed as well,
+but its exact node transcript is not sealed, so the audit above is the
+reproducible authority.
+
+The production default-BFC run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901`,
+with runtime state under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901`.
+The frozen source is
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_10202_bfc_gate_src_1b9209cd8_20260901`
+at the commit and tree above.
+
+Attempt `13285094` was canceled by the owner before the E-step because fresh
+worktree mtimes triggered an unnecessary rebuild into an older sealed CUDA
+path.  The old library remained unchanged at SHA-256
+`9e9900463fa000731c577645a902169608bd87d6f2e23ce774b564939f71c63c`.
+The correction is recorded in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901/provenance/attempts.md`
+(SHA-256
+`ac7d024f3902aaefd28f72fa2ecc28da8b8dc7e48814311f46955951e83f2749`).
+
+Corrected authoritative retry `13285138` requested and received exactly one
+H100, four CPUs, and 500 GB host memory on `della-h19g2`, with
+`XLA_PYTHON_CLIENT_PREALLOCATE=false` and the BFC allocator otherwise at its
+default.  Its exact command and import-provenance hashes are
+`1d8cdb8b3be8269e7f590d06fe9994d1df438070ef5b970b8a22fbe0afc6804b`
+and `d89ec880a6f80c541710db5f0b2b4dd0b752834bb1f5c7084542134382998cad`.
+The launcher SHA-256 is
+`235478e1ffc500c3084e159d38ba6772d355a4528a2e99163a446c8c7080eae3`.
+
+The production result is **RED**, not an infrastructure failure.  Job
+`13285138` failed `1:0` after `00:08:23` at the exact intended memory
+boundary.  The log reaches `retain_first_device=True`, but production helper
+`_maybe_host_offload_half0_local_accumulators` had already converted
+`Ft_y_0` to NumPy and deleted its device buffer.  Consequently,
+`_join_half_pair_at_indices_host` returned a null retained numerator, the
+Stage-A reuse marker never appeared, and
+`_post_process_from_filter_v2_donate_numerator` requested a fresh 15.35-GiB
+allocation.  BFC then raised `RESOURCE_EXHAUSTED`.
+
+The immutable stderr is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901/logs/recovar_smoke-13285138.err`
+(SHA-256
+`415fa6b88fa1ac215e63855b9a35a088bc9243e7bda22dbe0d61cda477ef36a4`).
+The HBM trace is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_default_bfc_retained_1b9209cd8_20260901/logs/recovar_smoke-13285138-hbm.csv`
+(SHA-256
+`b3065f7910b30f5e7f6147f55e65fee3f3cf83bec9ad820053d6e72ec2db2486`),
+with sampled peak use 78,931 MiB and minimum free memory 2,142 MiB.  At the
+failure boundary it held at 62,911 MiB used and 18,162 MiB free, but no
+retained 15.35-GiB buffer existed for Stage A.
+
+Decision: commit `1b9209cd8` is not production-qualified.  Its unit-level
+retention primitive is valid, but production offload wiring bypasses it.  A
+wiring fix and a replacement default-BFC production gate are **PENDING**; no
+promotion is allowed from the existing unit audit.
