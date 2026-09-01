@@ -39,10 +39,18 @@ projection-mean inputs even though the implementation comment names the
 loop-carried `Ft_y`/`Ft_ctf` accumulators.  Commit `13bfcce4a` corrects the
 mapping to signature positions `(7, 8)` and adds structural caller guards.
 The old mapping emitted an unusable donated-buffer warning in the CPU dry run;
-the corrected mapping does not.  The sealed harness and H100 runner require an
-independent review before submission.  The subsequent donation performance
-claim, if any, requires a separate same-binary/toggle or crossed-commit H100
-M-step runtime and peak-memory gate.
+the corrected mapping does not.  Independent review returned GO at sealed head
+`d880da3d0`.  H100 job `13288282` then passed `7/7` focused tests and all eight
+captured plus twelve uninstrumented production comparisons on
+`della-h21g4` / `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`.  Every reported
+score, centered-score, `log_Z`, best-score, posterior, and posterior-mass
+delta is exactly zero in both precision lanes; all discrete outputs and
+prepared operand bytes are exact.  The final source manifest remained
+`986f6c733672425e87c8de6b8c7dec18e5d4085c663145d5e2510af6d0a72e6c`.
+This closes the first correctness gate only.  A donation performance claim,
+if any, requires a separate same-binary/toggle or crossed-commit H100 M-step
+runtime and peak-memory gate; fixed-capacity speed and default promotion remain
+unqualified.
 
 ### 2026-08-31 late-trajectory one-iteration performance gate
 

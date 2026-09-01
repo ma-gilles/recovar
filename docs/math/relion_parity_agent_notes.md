@@ -12362,6 +12362,27 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   identity.  `COMPLETED` is written last.  Its result classification is
   `correctness_only`; `speed_claim_allowed` and `default_promotion_allowed`
   are false.
-- Next action: commit the harness separately from `13bfcce4a`, obtain an
-  independent review of both commits, then run only the sealed focused H100
-  gate.  Donation runtime/peak-memory qualification is a later separate gate.
+- Harness/test/runner commit `d880da3d0` remained separate from donation fix
+  `13bfcce4a`.  Independent review returned GO with no blockers.  Its reviewed
+  source-manifest digest is
+  `986f6c733672425e87c8de6b8c7dec18e5d4085c663145d5e2510af6d0a72e6c`.
+- H100 job `13288282` completed `0:0` in `00:01:23` on `della-h21g4`, UUID
+  `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`, with `7/7` focused tests.  It
+  ran eight diagnostic comparisons and twelve independent uninstrumented
+  output comparisons.  All max and p95 score/centered-score, `log_Z`, best
+  score, Pmax, posterior, and posterior-mass deltas are `0.0`; exact input
+  bytes, support, argmax, significant counts `[2,4,4]`, and reconstruction row
+  count `6` all pass.  Float32/float64 score dtypes are independently sealed.
+- Evidence root is
+  `/scratch/gpfs/GILLES/mg6942/fixed_capacity_local_score_gate_d880da3d0_20260901T065944Z`
+  with `SAFE_TO_DELETE` and `COMPLETED`.  CUDA SHA-256 is
+  `948a728b98e2d38c882a6832abba991cbbcb4ae87474b849f109166dd7158db6`;
+  diagnostics SHA-256 is
+  `f9b73b6facd9f74b41c4e7c76a46f6b47fb6d45734cc032f5a07f8fcadf64d25`;
+  gate JSON SHA-256 is
+  `065e2901accefe57e59e61e6048a3ae5e66d929e4ce470527c640bec19849f7f`;
+  JUnit SHA-256 is
+  `96dc875b31f7c0a5bbe61f3344cd9f07745a92bd0b1b8ee8ddb5408185d2082f`.
+- This result closes correctness only.  No speed or default claim is allowed.
+  Next run a separate donation M-step runtime/peak-memory gate, then continue
+  extending the fixed executor beyond call 0 before any production promotion.
