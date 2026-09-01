@@ -110,6 +110,87 @@ def test_arrays_to_accumulators_accepts_compact_k4_backprojector_cubes():
         np.testing.assert_array_equal(accumulator.weight, np.float64(class_index + 1))
 
 
+def test_arrays_to_accumulators_k4_compact_and_full_layouts_are_identical():
+    state = SimpleNamespace(K=4, ori_size=8, current_size=4)
+    r_max = state.current_size // 2
+    compact_size = 2 * (r_max + 1) + 1
+    compact_center = compact_size // 2
+    full_center = state.ori_size // 2
+    coordinates = np.arange(compact_size**3, dtype=np.float32).reshape((compact_size,) * 3)
+
+    compact_data = []
+    compact_weight = []
+    full_data = []
+    full_weight = []
+    for class_index in range(state.K):
+        data_cube = (coordinates + 1j * (coordinates[::-1] + 10 * class_index)).astype(np.complex64)
+        weight_cube = (coordinates + 1 + 100 * class_index).astype(np.float32)
+        data_full = np.zeros((state.ori_size,) * 3, dtype=np.complex64)
+        weight_full = np.zeros((state.ori_size,) * 3, dtype=np.float32)
+        full_slab = (
+            slice(full_center - (r_max + 1), full_center + (r_max + 1) + 1),
+            slice(full_center - (r_max + 1), full_center + (r_max + 1) + 1),
+            slice(full_center, full_center + (r_max + 1) + 1),
+        )
+        data_full[full_slab] = data_cube[:, :, compact_center:]
+        weight_full[full_slab] = weight_cube[:, :, compact_center:]
+        compact_data.append(data_cube.reshape(-1))
+        compact_weight.append(weight_cube.reshape(-1))
+        full_data.append(data_full.reshape(-1))
+        full_weight.append(weight_full.reshape(-1))
+
+    common = dict(
+        state=state,
+        halfset_idx=1,
+        relion_bpref_frame=False,
+        relion_projector_frame=False,
+        padding_factor=1,
+    )
+    compact = _arrays_to_accumulators(compact_data, compact_weight, **common)
+    full = _arrays_to_accumulators(full_data, full_weight, **common)
+
+    assert [(value.halfset_idx, value.class_idx) for value in compact] == [
+        (1, 0),
+        (1, 1),
+        (1, 2),
+        (1, 3),
+    ]
+    for compact_accumulator, full_accumulator in zip(compact, full):
+        np.testing.assert_array_equal(compact_accumulator.data, full_accumulator.data)
+        np.testing.assert_array_equal(compact_accumulator.weight, full_accumulator.weight)
+
+
+@pytest.mark.parametrize(
+    ("data_class_count", "weight_class_count"),
+    [(3, 4), (5, 4), (4, 3), (4, 5)],
+)
+def test_arrays_to_accumulators_rejects_missing_or_duplicated_k4_class_rows(
+    data_class_count,
+    weight_class_count,
+):
+    state = SimpleNamespace(K=4, ori_size=8, current_size=4)
+    compact_voxels = 7**3
+    data = [np.zeros(compact_voxels, dtype=np.complex64) for _ in range(data_class_count)]
+    weight = [np.zeros(compact_voxels, dtype=np.float32) for _ in range(weight_class_count)]
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "K-class accumulator class axes must each contain exactly 4 classes, "
+            f"got data={data_class_count} and weight={weight_class_count}"
+        ),
+    ):
+        _arrays_to_accumulators(
+            data,
+            weight,
+            state,
+            halfset_idx=0,
+            relion_bpref_frame=False,
+            relion_projector_frame=False,
+            padding_factor=1,
+        )
+
+
 def test_split_pseudo_halfset_particle_ids_uses_particle_id_parity():
     h0, h1 = split_pseudo_halfset_particle_ids(
         5,

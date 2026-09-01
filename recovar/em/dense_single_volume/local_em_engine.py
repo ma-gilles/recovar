@@ -656,23 +656,34 @@ def _visible_gpu_memory_bytes() -> int | None:
 
 
 def _exact_local_runtime_free_memory_bytes() -> int | None:
-    """Return allocator bytes not currently live on the first local GPU."""
+    """Return a conservative live free-memory estimate for the selected GPU.
 
+    Some H100 runs expose no JAX allocator statistics.  Keep the physical
+    ``nvidia-smi`` signal as a fallback so the score-only pre-window cap still
+    engages there; when both probes work, use the smaller value.
+    """
+
+    allocator_free_bytes = None
     try:
         devices = jax.local_devices()
-        if not devices:
-            return None
-        stats = devices[0].memory_stats()
+        stats = devices[0].memory_stats() if devices else None
     except Exception:
-        return None
-    if not stats:
-        return None
-    bytes_limit = stats.get("bytes_limit")
-    bytes_in_use = stats.get("bytes_in_use")
-    if bytes_limit is None or bytes_in_use is None:
-        return None
-    free_bytes = int(bytes_limit) - int(bytes_in_use)
-    return free_bytes if free_bytes > 0 else None
+        stats = None
+    if stats:
+        bytes_limit = stats.get("bytes_limit")
+        bytes_in_use = stats.get("bytes_in_use")
+        if bytes_limit is not None and bytes_in_use is not None:
+            free_bytes = int(bytes_limit) - int(bytes_in_use)
+            if free_bytes > 0:
+                allocator_free_bytes = free_bytes
+
+    physical_free_bytes = _sparse_pass2_diagnostics._device_free_memory_bytes()
+    candidates = [
+        int(value)
+        for value in (allocator_free_bytes, physical_free_bytes)
+        if value is not None and int(value) > 0
+    ]
+    return min(candidates) if candidates else None
 
 
 def _exact_local_default_target_row_pixels(*, allow_high_memory_default: bool = True) -> int:
@@ -1653,6 +1664,45 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     return int(max(1, min(effective_cap, score_tile_cap)))
 
 
+def _exact_local_score_only_preprocess_image_batch_size(
+    requested_image_batch_size: int,
+    *,
+    image_shape: tuple[int, int],
+    n_trans: int,
+    score_complex_dtype,
+    runtime_free_memory_bytes: int | None = None,
+) -> int:
+    """Cap score-only image batches for the pre-window translation tile.
+
+    The split exact-local preprocessing path applies translation phases to the
+    complete rFFT half image before selecting the active Fourier window.  Its
+    live complex tile is therefore ``images * translations * n_half`` even
+    when the later score tensor is much smaller.  Keep that tile within the
+    same bounded share of runtime-free memory as the score workspace.
+    """
+
+    requested = max(1, int(requested_image_batch_size))
+    if runtime_free_memory_bytes is None:
+        runtime_free_memory_bytes = _exact_local_runtime_free_memory_bytes()
+    if runtime_free_memory_bytes is None:
+        return requested
+    n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+    bytes_per_image = int(
+        np.ceil(
+            max(1, int(n_trans))
+            * max(1, n_half)
+            * np.dtype(score_complex_dtype).itemsize
+            * EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR
+        )
+    )
+    image_cap = int(
+        int(runtime_free_memory_bytes)
+        * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+        // max(1, bytes_per_image)
+    )
+    return int(max(1, min(requested, image_cap)))
+
+
 def _exact_local_xhalf_tail_microbatch_cap(
     cap: int,
     local_layout: LocalHypothesisLayout,
@@ -2501,6 +2551,30 @@ def run_local_em_exact(
             tuple(int(x) for x in image_shape),
             tuple(int(x) for x in recon_volume_shape),
         )
+    runtime_free_memory_bytes = _exact_local_runtime_free_memory_bytes() if score_only else None
+    score_only_image_batch_size = (
+        _exact_local_score_only_preprocess_image_batch_size(
+            image_batch_size,
+            image_shape=image_shape,
+            n_trans=n_trans,
+            score_complex_dtype=precision_policy.score_complex_dtype,
+            runtime_free_memory_bytes=runtime_free_memory_bytes,
+        )
+        if score_only
+        else int(image_batch_size)
+    )
+    if score_only_image_batch_size < int(image_batch_size):
+        full_half_pixels = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+        logger.info(
+            "Exact local score-only pre-window translation cap: image_batch_size=%d -> %d "
+            "(n_trans=%d full_half_pixels=%d runtime_free=%.2f GiB)",
+            int(image_batch_size),
+            int(score_only_image_batch_size),
+            int(n_trans),
+            int(full_half_pixels),
+            0.0 if runtime_free_memory_bytes is None else runtime_free_memory_bytes / float(1024**3),
+        )
+    image_batch_size = int(score_only_image_batch_size)
     max_hypotheses_per_microbatch = _exact_local_effective_max_hypotheses_per_microbatch(
         max_hypotheses_per_microbatch,
         n_windowed,
@@ -2513,6 +2587,7 @@ def run_local_em_exact(
         auto_boost_factor=xhalf_auto_microbatch_boost,
         allow_high_memory_default=not xhalf_bpref_mstep,
         score_only=score_only,
+        runtime_free_memory_bytes=runtime_free_memory_bytes,
     )
     if xhalf_bpref_mstep:
         uncapped_hypotheses_per_microbatch = int(max_hypotheses_per_microbatch)

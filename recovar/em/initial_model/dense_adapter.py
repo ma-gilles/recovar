@@ -852,6 +852,19 @@ def _arrays_to_accumulators(
     relion_projector_frame: bool,
     padding_factor: int,
 ) -> list[VdamAccumulator]:
+    # This adapter used to iterate only ``state.K`` and silently discard a
+    # duplicated trailing class.  Reject either axis before constructing a
+    # partially aligned accumulator list.
+    try:
+        data_class_count = len(Ft_y_by_class)
+        weight_class_count = len(Ft_ctf_by_class)
+    except TypeError as error:
+        raise ValueError("K-class accumulators must expose a leading class axis") from error
+    if data_class_count != int(state.K) or weight_class_count != int(state.K):
+        raise ValueError(
+            "K-class accumulator class axes must each contain exactly "
+            f"{int(state.K)} classes, got data={data_class_count} and weight={weight_class_count}",
+        )
     r_max = state.ori_size // 2 if state.current_size <= 0 else state.current_size // 2
     data_scale, weight_scale = (1.0, 1.0)
     if relion_bpref_frame:

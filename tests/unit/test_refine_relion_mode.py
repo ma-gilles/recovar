@@ -85,27 +85,18 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _combined_noise_stats,
     _estimate_relion_em_batch_sizes,
     _exhaustive_grid_order_for_state,
+    _normalize_noise_variance_per_half,
     _relion_expectation_coarse_size_order,
     _relion_local_pass1_current_size,
-    _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
     _rotation_eulers_for_canonical_or_custom_grid,
+    _should_use_adaptive_search,
     refine_single_volume,
     update_relion_norm_scale_corrections,
 )
-from recovar.em.dense_single_volume.refinement_options import (
-    AdaptiveOptions,
-    EngineDebugOptions,
-    KClassOptions,
-    LocalSearchOptions,
-    RefinementBatching,
-    RefinementOptions,
-    RefinementSchedule,
-    RelionParityOptions,
-    ReplayState,
-)
 from recovar.em.dense_single_volume.k_class import (
     KClassEMResult,
+    _assemble_result,
     _resolve_class_mstep_posterior_sums,
     _sum_noise_stats,
     run_dense_k_class_em,
@@ -123,9 +114,9 @@ from recovar.em.dense_single_volume.local_debug import (
     maybe_write_debug_score_dump,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
+    EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
     EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
-    EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
@@ -136,12 +127,13 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
     EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
+    _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
+    _exact_local_score_only_preprocess_image_batch_size,
     _exact_local_xhalf_projection_microbatch_cap,
     _exact_local_xhalf_tail_microbatch_cap,
-    _adjoint_slice_volume_maybe_windowed_row_chunks,
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
     _pad_local_big_jit_image_axis,
@@ -168,6 +160,17 @@ from recovar.em.dense_single_volume.local_score_pass import (
     normalize_local_scores_with_log_z_float32,
     score_local_bucket,
     score_local_bucket_abs2_weighted_on_demand,
+)
+from recovar.em.dense_single_volume.refinement_options import (
+    AdaptiveOptions,
+    EngineDebugOptions,
+    KClassOptions,
+    LocalSearchOptions,
+    RefinementBatching,
+    RefinementOptions,
+    RefinementSchedule,
+    RelionParityOptions,
+    ReplayState,
 )
 from recovar.em.sampling import (
     _get_relion_rotation_grid_eulers_float64,
@@ -1491,6 +1494,139 @@ def test_exact_local_score_only_cap_preserves_smaller_bucket_shape(monkeypatch):
 
     assert cap >= 168 * 198
     assert len(buckets) == 1
+
+
+def test_exact_local_score_only_preprocess_cap_covers_real_k4_box256_oom():
+    """Job 13300875 requested 14.27 GiB before applying its current-size window."""
+
+    image_shape = (256, 256)
+    n_trans = 116
+    requested_images = 500
+    full_half_pixels = image_shape[0] * (image_shape[1] // 2 + 1)
+    uncapped_bytes = requested_images * n_trans * full_half_pixels * np.dtype(np.complex64).itemsize
+    assert uncapped_bytes == 15_323_136_000
+
+    runtime_free_bytes = 14_778 * 1024**2
+    capped_images = _exact_local_score_only_preprocess_image_batch_size(
+        requested_images,
+        image_shape=image_shape,
+        n_trans=n_trans,
+        score_complex_dtype=jnp.complex64,
+        runtime_free_memory_bytes=runtime_free_bytes,
+    )
+    expected = int(
+        runtime_free_bytes
+        * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+        // (
+            n_trans
+            * full_half_pixels
+            * np.dtype(np.complex64).itemsize
+            * EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR
+        )
+    )
+
+    assert capped_images == expected == 80
+    capped_live_bytes = (
+        capped_images
+        * n_trans
+        * full_half_pixels
+        * np.dtype(np.complex64).itemsize
+        * EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR
+    )
+    assert capped_live_bytes <= runtime_free_bytes * EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION
+
+    n_images = requested_images
+    rotation_counts = np.ones(n_images, dtype=np.int32)
+    layout = LocalHypothesisLayout(
+        n_global_rotations=1,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.arange(n_images + 1, dtype=np.int64),
+        rotation_ids_flat=np.zeros(n_images, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (n_images, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(n_images, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((n_trans, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((n_images, n_trans), dtype=np.float32),
+    )
+    uncapped = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=requested_images,
+        rotation_block_size=1,
+        max_hypotheses_per_microbatch=10_000,
+    )
+    capped = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=capped_images,
+        rotation_block_size=1,
+        max_hypotheses_per_microbatch=10_000,
+    )
+    assert max(bucket.image_indices.size for bucket in capped) == capped_images
+    np.testing.assert_array_equal(
+        np.concatenate([bucket.image_indices for bucket in capped]),
+        np.concatenate([bucket.image_indices for bucket in uncapped]),
+    )
+
+
+def test_exact_local_runtime_free_memory_uses_physical_h100_fallback(monkeypatch):
+    from recovar.em.dense_single_volume import local_em_engine
+
+    physical_free_bytes = 14_778 * 1024**2
+
+    class FakeDevice:
+        @staticmethod
+        def memory_stats():
+            return {}
+
+    monkeypatch.setattr(local_em_engine.jax, "local_devices", lambda: [FakeDevice()])
+    monkeypatch.setattr(
+        local_em_engine._sparse_pass2_diagnostics,
+        "_device_free_memory_bytes",
+        lambda: physical_free_bytes,
+    )
+    assert local_em_engine._exact_local_runtime_free_memory_bytes() == physical_free_bytes
+
+    allocator_free_bytes = 13 * 1024**3
+    monkeypatch.setattr(
+        FakeDevice,
+        "memory_stats",
+        staticmethod(
+            lambda: {
+                "bytes_limit": 20 * 1024**3,
+                "bytes_in_use": 7 * 1024**3,
+            }
+        ),
+    )
+    assert local_em_engine._exact_local_runtime_free_memory_bytes() == allocator_free_bytes
+
+
+def test_non_c1_small_rotation_grid_keeps_adaptive_sparse_route():
+    """O symmetry has 12 coarse rotations and must not fall through to dense reconstruction."""
+
+    assert _should_use_adaptive_search(
+        adaptive_oversampling=1,
+        use_local=False,
+        n_rotations=12,
+        symmetry="O",
+    )
+    assert not _should_use_adaptive_search(
+        adaptive_oversampling=1,
+        use_local=False,
+        n_rotations=12,
+        symmetry="C1",
+    )
+    assert not _should_use_adaptive_search(
+        adaptive_oversampling=0,
+        use_local=False,
+        n_rotations=12,
+        symmetry="O",
+    )
+    assert not _should_use_adaptive_search(
+        adaptive_oversampling=1,
+        use_local=True,
+        n_rotations=12,
+        symmetry="O",
+    )
 
 
 def test_exact_local_xhalf_full_bpref_uses_conservative_high_memory_cap(monkeypatch):
@@ -5898,6 +6034,178 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
     )
 
 
+def _k4_assembly_inputs():
+    n_classes = 4
+    n_images = 4
+    class_probabilities = np.full((n_classes, n_images), 0.05, dtype=np.float64)
+    np.fill_diagonal(class_probabilities, 0.85)
+    class_log_evidence = np.log(class_probabilities)
+    per_class_stats = tuple(
+        RelionStats(
+            log_evidence_per_image=jnp.asarray(class_log_evidence[class_index], dtype=jnp.float32),
+            best_log_score_per_image=jnp.asarray(
+                class_log_evidence[class_index] - 0.25,
+                dtype=jnp.float32,
+            ),
+            max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.full(3, class_index + 1, dtype=jnp.float32),
+        )
+        for class_index in range(n_classes)
+    )
+    per_class_hard = np.stack(
+        [100 * class_index + np.arange(n_images, dtype=np.int32) for class_index in range(n_classes)],
+    )
+    per_class_best_rotations = tuple(
+        np.broadcast_to(
+            np.eye(3, dtype=np.float32) * (class_index + 1),
+            (n_images, 3, 3),
+        ).copy()
+        for class_index in range(n_classes)
+    )
+    per_class_best_translations = tuple(
+        np.stack(
+            [
+                np.full(n_images, class_index, dtype=np.float32),
+                np.arange(n_images, dtype=np.float32),
+            ],
+            axis=1,
+        )
+        for class_index in range(n_classes)
+    )
+    per_class_best_rotation_ids = tuple(
+        10 * class_index + np.arange(n_images, dtype=np.int32)
+        for class_index in range(n_classes)
+    )
+    return {
+        "class_log_evidence": class_log_evidence,
+        "new_means": None,
+        "Ft_y": [np.full(2, class_index + 1j, dtype=np.complex64) for class_index in range(n_classes)],
+        "Ft_ctf": [np.full(2, class_index + 1, dtype=np.float32) for class_index in range(n_classes)],
+        "per_class_hard_assignments": per_class_hard,
+        "per_class_stats": per_class_stats,
+        "noise_stats": None,
+        "per_class_best_pose_rotations": per_class_best_rotations,
+        "per_class_best_pose_translations": per_class_best_translations,
+        "per_class_best_pose_rotation_ids": per_class_best_rotation_ids,
+    }
+
+
+def test_k4_assembly_matches_float64_joint_posterior_and_all_class_pose_winners():
+    inputs = _k4_assembly_inputs()
+    result = _assemble_result(**inputs)
+
+    expected_responsibilities = np.exp(inputs["class_log_evidence"])
+    np.testing.assert_allclose(
+        np.asarray(result.class_responsibilities),
+        expected_responsibilities,
+        rtol=0.0,
+        atol=5e-8,
+    )
+    np.testing.assert_allclose(
+        np.sum(np.asarray(result.class_responsibilities), axis=0),
+        np.ones(4),
+        rtol=0.0,
+        atol=5e-8,
+    )
+    np.testing.assert_array_equal(np.asarray(result.class_assignments), np.arange(4, dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), [0, 101, 202, 303])
+    np.testing.assert_array_equal(np.asarray(result.best_pose_rotation_ids), [0, 11, 22, 33])
+    np.testing.assert_array_equal(
+        np.asarray(result.best_pose_translations),
+        np.asarray([[0, 0], [1, 1], [2, 2], [3, 3]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.ones(4), rtol=0.0, atol=5e-8)
+    np.testing.assert_allclose(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.full(4, 0.85 * np.exp(-0.25)),
+        rtol=2e-7,
+        atol=5e-8,
+    )
+    np.testing.assert_array_equal(np.asarray(result.stats.rotation_posterior_sums), np.full(3, 10.0))
+
+
+def test_k4_assembly_rejects_missing_or_duplicated_class_rows():
+    missing = _k4_assembly_inputs()
+    missing["per_class_stats"] = missing["per_class_stats"][:-1]
+    with pytest.raises(ValueError, match="per_class_stats must contain exactly 4 classes, got 3"):
+        _assemble_result(**missing)
+
+    duplicated = _k4_assembly_inputs()
+    duplicated["Ft_y"] = [*duplicated["Ft_y"], duplicated["Ft_y"][-1]]
+    with pytest.raises(ValueError, match="Ft_y must contain exactly 4 classes, got 5"):
+        _assemble_result(**duplicated)
+
+
+def test_local_k4_probe_is_score_only_and_preserves_all_class_pose_winners(monkeypatch):
+    import recovar.em.dense_single_volume.k_class as k_class_module
+
+    n_classes = 4
+    n_images = 4
+    dataset = type("Dataset", (), {"n_images": n_images, "n_units": n_images})()
+    means = jnp.zeros((n_classes, 4), dtype=jnp.complex64)
+    mean_variance = jnp.ones((n_classes, 4), dtype=jnp.float32)
+    noise_variance = jnp.ones(4, dtype=jnp.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=1,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.arange(n_images + 1, dtype=np.int64),
+        rotation_ids_flat=np.zeros(n_images, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (n_images, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(n_images, dtype=np.float32),
+        rotation_counts=np.ones(n_images, dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((n_images, 1), dtype=np.float32),
+    )
+    probabilities = np.full((n_classes, n_images), 0.05, dtype=np.float64)
+    np.fill_diagonal(probabilities, 0.85)
+    log_evidence = np.log(probabilities)
+    calls = []
+
+    def fake_run_local_em_exact(*_args, **kwargs):
+        class_index = len(calls) % n_classes
+        calls.append(kwargs)
+        stats = RelionStats(
+            log_evidence_per_image=jnp.asarray(log_evidence[class_index], dtype=jnp.float32),
+            best_log_score_per_image=jnp.asarray(log_evidence[class_index] - 0.25, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.full(1, class_index + 1, dtype=jnp.float32),
+        )
+        return (
+            jnp.full(4, class_index + 1j, dtype=jnp.complex64),
+            jnp.full(4, class_index + 1, dtype=jnp.float32),
+            jnp.asarray(100 * class_index + np.arange(n_images), dtype=jnp.int32),
+            stats,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
+
+    result = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=n_images,
+        rotation_block_size=1,
+        current_size=None,
+    )
+
+    assert len(calls) == 2 * n_classes
+    assert [bool(call.get("score_only", False)) for call in calls] == [True] * n_classes + [False] * n_classes
+    assert all(call["disable_adjoint_y"] and call["disable_adjoint_ctf"] for call in calls[:n_classes])
+    assert all("disable_adjoint_y" not in call and "disable_adjoint_ctf" not in call for call in calls[n_classes:])
+    np.testing.assert_allclose(
+        np.sum(np.asarray(result.class_responsibilities), axis=0),
+        np.ones(n_images),
+        rtol=0.0,
+        atol=5e-8,
+    )
+    np.testing.assert_array_equal(np.asarray(result.class_assignments), np.arange(n_classes, dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), [0, 101, 202, 303])
+
+
 def test_dense_k_class_identical_means_split_global_posterior(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=141)
@@ -6026,6 +6334,163 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
         np.full(2, dataset.n_images / 2.0, dtype=np.float32),
         rtol=5e-3,
         atol=1e-5,
+    )
+
+
+def test_local_k4_batch_and_rotation_blocks_match_float64_oracle(rng):
+    """K=4 production scoring is invariant to chunking and agrees with its f64 oracle."""
+
+    dataset = MockDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=160)
+    means = jnp.stack([mean, mean, mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    all_rotations = _make_rotations(6, seed=161)
+    rotation_ids = (
+        np.array([0, 1, 2], dtype=np.int32),
+        np.array([1, 3], dtype=np.int32),
+        np.array([0, 2, 4, 5], dtype=np.int32),
+    )
+    rotation_counts = np.asarray([values.size for values in rotation_ids], dtype=np.int32)
+    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
+    rotation_ids_flat = np.concatenate(rotation_ids)
+    translations = np.asarray([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=all_rotations.shape[0],
+        n_pixels=6,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=rotation_ids_flat,
+        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
+        rotation_log_priors_flat=np.linspace(0.0, -0.8, rotation_ids_flat.size, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=translations,
+        translation_log_priors=np.asarray(
+            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
+            dtype=np.float32,
+        ),
+    )
+    common = dict(
+        class_log_priors=np.log(np.asarray([0.4, 0.3, 0.2, 0.1], dtype=np.float64)),
+        current_size=6,
+        reconstruct_significant_only=False,
+        return_best_pose_details=True,
+        score_with_masked_images=True,
+        half_spectrum_scoring=True,
+        image_corrections=np.asarray([1.3, 0.8, 1.1], dtype=np.float32),
+        scale_corrections=np.asarray([0.7, 1.2, 0.9], dtype=np.float32),
+        image_pre_shifts=np.asarray([[1.0, -1.0], [-1.0, 1.0], [0.0, 0.0]], dtype=np.float32),
+    )
+
+    batched = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=3,
+        rotation_block_size=8,
+        **common,
+    )
+    microbatched = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=1,
+        **common,
+    )
+
+    np.testing.assert_array_equal(batched.class_assignments, microbatched.class_assignments)
+    np.testing.assert_array_equal(batched.pose_assignments, microbatched.pose_assignments)
+    np.testing.assert_array_equal(batched.best_pose_rotation_ids, microbatched.best_pose_rotation_ids)
+    np.testing.assert_array_equal(
+        batched.per_class_hard_assignments,
+        microbatched.per_class_hard_assignments,
+    )
+    np.testing.assert_allclose(
+        batched.class_responsibilities,
+        microbatched.class_responsibilities,
+        rtol=1e-4,
+        atol=3e-5,
+    )
+    np.testing.assert_allclose(
+        batched.class_posterior_sums,
+        microbatched.class_posterior_sums,
+        rtol=1e-4,
+        atol=4e-5,
+    )
+    np.testing.assert_allclose(
+        batched.best_pose_rotations,
+        microbatched.best_pose_rotations,
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        batched.best_pose_translations,
+        microbatched.best_pose_translations,
+        rtol=0.0,
+        atol=0.0,
+    )
+    for batched_value, microbatched_value in zip(batched.Ft_y, microbatched.Ft_y):
+        np.testing.assert_allclose(batched_value, microbatched_value, rtol=4e-4, atol=3e-4)
+    for batched_value, microbatched_value in zip(batched.Ft_ctf, microbatched.Ft_ctf):
+        np.testing.assert_allclose(batched_value, microbatched_value, rtol=4e-4, atol=3e-4)
+
+    float64_oracle = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=3,
+        rotation_block_size=8,
+        use_float64_scoring=True,
+        use_float64_projections=True,
+        **common,
+    )
+    float64_microbatched = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=1,
+        use_float64_scoring=True,
+        use_float64_projections=True,
+        **common,
+    )
+    np.testing.assert_allclose(
+        float64_oracle.class_responsibilities,
+        float64_microbatched.class_responsibilities,
+        rtol=1e-11,
+        atol=1e-12,
+    )
+    for oracle_value, microbatched_value in zip(float64_oracle.Ft_y, float64_microbatched.Ft_y):
+        np.testing.assert_allclose(oracle_value, microbatched_value, rtol=1e-11, atol=1e-12)
+    for oracle_value, microbatched_value in zip(float64_oracle.Ft_ctf, float64_microbatched.Ft_ctf):
+        np.testing.assert_allclose(oracle_value, microbatched_value, rtol=1e-11, atol=1e-12)
+    np.testing.assert_array_equal(batched.class_assignments, float64_oracle.class_assignments)
+    np.testing.assert_array_equal(batched.pose_assignments, float64_oracle.pose_assignments)
+    np.testing.assert_array_equal(batched.best_pose_rotation_ids, float64_oracle.best_pose_rotation_ids)
+    np.testing.assert_allclose(
+        batched.class_responsibilities,
+        float64_oracle.class_responsibilities,
+        rtol=1.2e-4,
+        atol=2e-5,
+    )
+    np.testing.assert_allclose(
+        np.sum(np.asarray(batched.class_responsibilities), axis=0),
+        np.ones(dataset.n_images),
+        rtol=0.0,
+        atol=1e-7,
     )
 
 

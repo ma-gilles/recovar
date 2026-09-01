@@ -2553,6 +2553,25 @@ def _validate_captured_relion_projector_for_iteration(
     )
 
 
+def _should_use_adaptive_search(
+    *,
+    adaptive_oversampling: int,
+    use_local: bool,
+    n_rotations: int,
+    symmetry: str,
+) -> bool:
+    """Keep non-C1 refinement on its supported sparse/x-half route.
+
+    Small C1 grids may use the direct dense path. Point-group symmetry cannot:
+    symmetry reduction itself can make a valid grid smaller than that cutoff,
+    while its reconstruction still requires the adaptive RELION x-half path.
+    """
+
+    if int(adaptive_oversampling) <= 0 or bool(use_local):
+        return False
+    return int(n_rotations) > 16 or str(symmetry).upper() != "C1"
+
+
 def _score_half_dense(
     *,
     k: int,
@@ -6667,7 +6686,12 @@ def _run_relion_iteration_loop(
         iter_sig_count_parts: list[np.ndarray] = []
         iter_recorded_sig_counts = None
         iter_recorded_sig_count_parts: list[np.ndarray] = []
-        use_adaptive = state.adaptive_oversampling > 0 and not use_local and effective_rotations.shape[0] > 16
+        use_adaptive = _should_use_adaptive_search(
+            adaptive_oversampling=state.adaptive_oversampling,
+            use_local=use_local,
+            n_rotations=effective_rotations.shape[0],
+            symmetry=symmetry,
+        )
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
         # oversampled grid (from pass 2), not effective_rotations.

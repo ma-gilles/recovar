@@ -1387,6 +1387,67 @@ def _assemble_result(
     mstep_full_half_axis: int | None = None,
     mstep_accumulator_shape: tuple[int, int, int] | None = None,
 ) -> KClassEMResult:
+    # Fail before class-indexed gathers: a trailing duplicated class used to be
+    # silently ignored, while a missing row failed later with an opaque index
+    # error and could leave the other class-aligned outputs unchecked.
+    class_log_evidence = np.asarray(class_log_evidence)
+    if class_log_evidence.ndim != 2 or int(class_log_evidence.shape[0]) < 1:
+        raise ValueError(
+            "class_log_evidence must have shape (n_classes, n_images), "
+            f"got {class_log_evidence.shape}",
+        )
+    n_classes, n_images = (int(value) for value in class_log_evidence.shape)
+
+    def _require_class_count(values, name: str) -> None:
+        if len(values) != n_classes:
+            raise ValueError(f"{name} must contain exactly {n_classes} classes, got {len(values)}")
+
+    _require_class_count(Ft_y, "Ft_y")
+    _require_class_count(Ft_ctf, "Ft_ctf")
+    _require_class_count(per_class_stats, "per_class_stats")
+    if new_means is not None:
+        _require_class_count(new_means, "new_means")
+    if noise_stats is not None:
+        _require_class_count(noise_stats, "noise_stats")
+
+    per_class_hard_assignments = np.asarray(per_class_hard_assignments)
+    if per_class_hard_assignments.shape != (n_classes, n_images):
+        raise ValueError(
+            "per_class_hard_assignments must have shape "
+            f"({n_classes}, {n_images}), got {per_class_hard_assignments.shape}",
+        )
+    for class_index, class_stats in enumerate(per_class_stats):
+        best_scores = np.asarray(class_stats.best_log_score_per_image)
+        if best_scores.shape != (n_images,):
+            raise ValueError(
+                f"per_class_stats[{class_index}].best_log_score_per_image must have shape "
+                f"({n_images},), got {best_scores.shape}",
+            )
+
+    best_pose_fields = (
+        per_class_best_pose_rotations,
+        per_class_best_pose_translations,
+        per_class_best_pose_rotation_ids,
+    )
+    if any(values is not None for values in best_pose_fields):
+        if any(values is None for values in best_pose_fields):
+            raise ValueError("per-class best-pose rotations, translations, and rotation IDs must be provided together")
+        for values, name in zip(
+            best_pose_fields,
+            (
+                "per_class_best_pose_rotations",
+                "per_class_best_pose_translations",
+                "per_class_best_pose_rotation_ids",
+            ),
+        ):
+            _require_class_count(values, name)
+            for class_index, class_values in enumerate(values):
+                if int(np.asarray(class_values).shape[0]) != n_images:
+                    raise ValueError(
+                        f"{name}[{class_index}] must have leading image axis {n_images}, "
+                        f"got {np.asarray(class_values).shape}",
+                    )
+
     global_log_evidence = _logsumexp_np(class_log_evidence, axis=0).astype(np.float64)
     # Guard against -inf - (-inf) = NaN when an entire (image, class) had all
     # poses masked out (e.g., RELION firstiter_cc_pass2_only_best_coarse where
@@ -2646,6 +2707,10 @@ def run_local_k_class_em(
                     class_log_prior=float(log_priors[class_index]),
                     disable_adjoint_y=True,
                     disable_adjoint_ctf=True,
+                    # This pass only establishes the shared K-class
+                    # normalization.  Marking it score-only engages bounded
+                    # preprocessing without changing scores or their order.
+                    score_only=True,
                     stats_use_reconstruction_probs=stats_use_reconstruction_probs,
                     return_profile=return_profile or collect_global_reconstruction_threshold,
                     return_reconstruction_probability_values=collect_global_reconstruction_threshold,
