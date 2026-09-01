@@ -1828,6 +1828,7 @@ def main() -> None:
                 # residual high-shell content from the regularization floor that
                 # RELION omits. Passing current_size matches RELION's max_r2 skip.
                 current_size=current_size,
+                accumulator_volume_shape=result.mstep_accumulator_shape,
             ).reshape(-1)
             if apply_firstiter_lowpass:
                 from recovar.em.dense_single_volume.mean_helpers import _apply_relion_initial_lowpass_filter
