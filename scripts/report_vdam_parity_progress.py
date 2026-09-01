@@ -431,7 +431,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "0ee14daa8a31dd07deaa2f0313391aa1ba247a5929369daf9b03fde491c814d8"
+PERFORMANCE_GATE_UPDATES_SHA256 = "b1fbced809812e3529ef2dcdc00be5a9ba641eedcfafb647771a43ef91bfa4fe"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -809,6 +809,29 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         is False
         and gate_updates.get("atomic_t29_reduction", {}).get("decision")
         == "ACCEPT_DEFAULT_OFF_TRAJECTORY_CANDIDATE_NOT_DEFAULT"
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("focused_gpu_job") == "13284195"
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("crossed_job") == "13284729"
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("report_json_sha256")
+        == "fb72197fb63e719ab07606993f2ea503d89e0935a497b826413c1c13bcc9f2f6"
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("performance", {}).get(
+            "change_percent", {}
+        ).get("warm_wall")
+        == -6.992939002198084
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("numerical_result", {}).get(
+            "all_discrete_metadata_exact"
+        )
+        is True
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("incremental_atomic_baseline_evaluated")
+        is True
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("tracking_derived_port_evaluated") is False
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("incremental_atomic_serial_gate", {}).get(
+            "job_id"
+        )
+        == "13284897"
+        and gate_updates.get("coarse_atomic_batched_lanes", {}).get("incremental_atomic_serial_gate", {}).get(
+            "report_json_sha256"
+        )
+        == "0a21380af341ba8159acf8401e71d9b9f5aaac9688c01df97f7d1920a518a512"
         and gate_updates.get("direct_relion_xhalf", {}).get("qualified_job") == "13281684"
         and gate_updates.get("direct_relion_xhalf", {}).get("direct_vs_legacy_bpref_bitwise") is True
         and gate_updates.get("direct_relion_xhalf", {}).get("crossed_live_job") == "13282815"
@@ -836,6 +859,10 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         == 53.547
         and gate_updates.get("local_compile_shape_decomposition", {}).get("runtime_profile_report_sha256")
         == "5ffa9ae565466aa924eccd1a836a3a5af1613df40cf4c584b344ec3dd4494165"
+        and gate_updates.get("local_compile_shape_decomposition", {}).get("sealed_analysis_report_sha256")
+        == "fd33935f77c275615249e6149abfdf9abf50d4b1c8463aa4dcbe11f2ea176def"
+        and gate_updates.get("local_compile_shape_decomposition", {}).get("nsight_sqlite_sha256")
+        == "b73f3ecb660d59484b280e2b0021763c5583c01106ed839efef71f5d50a55845"
         and gate_updates.get("local_compile_shape_decomposition", {}).get("pool_layout_report_sha256")
         == "aaa931b08e0decbbda8c91004fb7a6dde5e3e65d9d647466bb43247fb4a2946e"
         and _sha256_json(gate_updates) == PERFORMANCE_GATE_UPDATES_SHA256,
@@ -919,6 +946,12 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     atomic_cross = atomic_gate["multistream_crossed_gate"]
     atomic_cross_change = atomic_cross["atomic_multistream_change_percent"]
     atomic_cross_numerical = atomic_cross["numerical_result"]
+    batched_lane_gate = gate_updates["coarse_atomic_batched_lanes"]
+    batched_lane_change = batched_lane_gate["performance"]["change_percent"]
+    batched_lane_numerical = batched_lane_gate["numerical_result"]
+    batched_incremental = batched_lane_gate["incremental_atomic_serial_gate"]
+    batched_incremental_performance = batched_incremental["performance"]
+    batched_incremental_numerical = batched_incremental["numerical"]
     direct_xhalf_gate = gate_updates["direct_relion_xhalf"]
     posterior_executor_gate = gate_updates["shared_posterior_executor"]
     remaining_profile = gate_updates["remaining_profile_decomposition"]
@@ -958,8 +991,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "| Performance lanes | non-scoring | Cache-only is retained for repeat/scale; chunking is rejected. The "
         "shared eight-stream coarse scheduler is mathematically accepted and measurably faster, but held below the "
         "runtime target. The 65--128 single-lane specialization is inapplicable to GF46's actual T=29 coarse call; "
-        "native-atomic T=29 plus eight per-particle streams passes its one-iteration math/runtime gate, but remains "
-        "default-off while long-run no-growth and the coarse-grained batched-lane gate are active. |",
+        "native-atomic T=29 plus coarse-grained batched lanes passes its combined one-iteration math/runtime gate, "
+        "and the isolated lane-only gate is material, but it remains default-off while the tracking-derived manual "
+        "port and long-run no-growth gate are active. |",
         "| Numerical policy | non-scoring | Require mathematical equivalence plus stable, unbiased, non-growing "
         "repeat-bounded noise. Bitwise identity is not required. Measure discrete changes; rare marginal changes may "
         "be accepted only within control/native repeat variability, with the same basin and no material final-quality "
@@ -1004,16 +1038,17 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"ran the generic kernel because the live coarse operand has {single_lane_gate['actual_coarse_translation_count']} "
         "translations. | The earlier 116 count was oversampled/fine, not coarse; active-lanes=1 cannot accelerate "
         f"GF46. | {single_lane_gate['next_gate']} |",
-        f"| Native-atomic T=29 x eight streams `{atomic_gate['job_id']}/{atomic_cross['crossed_job']}` | "
-        f"**ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF.** Warm wall "
-        f"{atomic_cross_change['warm_wall']:.2f}%, expectation {atomic_cross_change['expectation']:.2f}%, pass 1 "
-        f"{atomic_cross_change['pass1']:.2f}%, GPU union {atomic_cross_change['gpu_kernel_union']:.2f}%, and coarse "
-        f"union {atomic_cross_change['coarse_union']:.2f}%. | All {atomic_cross_numerical['star_rows_and_all_columns_exact']} "
-        f"STAR rows/columns and discrete metadata are exact; warm cross-map rel-L2 "
-        f"`{atomic_cross_numerical['warm_cross_map_relative_l2_max']:.3e}` is below repeat envelope "
-        f"`{atomic_cross_numerical['warm_repeat_envelope']:.3e}`. Long-run no-growth is untested and per-image "
-        f"launches still inflate coarse work {atomic_cross_change['coarse_kernel_sum']:.2f}%. | "
-        f"{atomic_gate['next_gate']} |",
+        f"| Native atomic + coarse batched lanes `{batched_lane_gate['crossed_job']}/"
+        f"{batched_incremental['job_id']}` | **LANE-ONLY ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF.** Holding "
+        f"atomic math fixed, warm wall {batched_incremental_performance['warm_wall_change_percent']:.2f}%, "
+        f"expectation {batched_incremental_performance['expectation_change_percent']:.2f}%, pass 1 "
+        f"{batched_incremental_performance['pass1_change_percent']:.2f}%, coarse sum "
+        f"{batched_incremental_performance['coarse_kernel_sum_change_percent']:.2f}%, and coarse union "
+        f"{batched_incremental_performance['coarse_kernel_union_change_percent']:.2f}%; launches are 48 instead of "
+        "the earlier per-particle scheduler's 1,000. | All 3,000 STAR rows and discrete metadata are exact; "
+        "cold/warm cross maps remain inside repeat envelopes with negligible bias and scale drift. The experimental "
+        "source contains unmerged infrastructure, so it cannot be cherry-picked wholesale. | "
+        f"{batched_lane_gate['next_gate']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
         f"speedup is `{same_binary_lane['runtime_result']['warm_speedup']:.4f}x` | All four arms loaded CUDA SHA "
@@ -1123,12 +1158,15 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"2/2 passes, but GF46 is T={single_lane_gate['actual_coarse_translation_count']}; requested-vs-generic "
         f"coarse union changed only {single_lane_gate['nsight']['single_lane_coarse_union_effect_percent_multistream']:.4f}%. "
         f"No discrete/basin effect. | {single_lane_gate['next_gate']} |",
-        f"| **ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF** | Native-atomic x eight streams "
-        f"`{atomic_gate['job_id']}/{atomic_cross['crossed_job']}` | Warm wall improves "
-        f"{abs(atomic_cross_change['warm_wall']):.2f}%, expectation {abs(atomic_cross_change['expectation']):.2f}%, "
-        f"and coarse union {abs(atomic_cross_change['coarse_union']):.2f}%; all 3,000 rows/decisions are exact and "
-        "maps remain inside non-directional repeat noise. Long-run growth remains untested. | "
-        f"{atomic_gate['next_gate']} |",
+        f"| **LANE-ONLY ONE-ITERATION PASS / TRACKING PORT OPEN** | Native atomic + coarse batched lanes "
+        f"`{batched_lane_gate['crossed_job']}/{batched_incremental['job_id']}` | The combined canonical control "
+        f"improves warm wall {abs(batched_lane_change['warm_wall']):.2f}%; holding atomic math fixed still improves "
+        f"warm wall {abs(batched_incremental_performance['warm_wall_change_percent']):.2f}%, expectation "
+        f"{abs(batched_incremental_performance['expectation_change_percent']):.2f}%, and coarse union "
+        f"{abs(batched_incremental_performance['coarse_kernel_union_change_percent']):.2f}%. All "
+        f"{batched_incremental_numerical['star_rows_and_all_columns_exact']} STAR rows/discrete outputs are exact and "
+        f"maps are repeat-bounded. Lane-only report SHA-256 `{batched_incremental['report_json_sha256']}`. | "
+        f"{batched_lane_gate['next_gate']} |",
         f"| **MATH ACCEPTED / PERFORMANCE REJECTED** | Direct RELION x-half BPref "
         f"`{direct_xhalf_gate['qualified_job']}/{direct_xhalf_gate['crossed_live_job']}` | Actual CUDA K=1/K=3 "
         f"primitive outputs are bitwise; crossed GF46 decisions are exact and map/BPref remain in repeat noise. "
@@ -1158,7 +1196,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"({compile_profile['local_share_of_compile_percent']:.1f}%). Big-JIT plus fused x-half alone consume "
         f"{compile_big_jit_xhalf_seconds:.3f} s. "
         f"The compile-only forecast is {compile_forecast['compile_only_saving_percent_full_run']:.1f}% of the "
-        f"423 s run, before packed-work savings. | {compile_profile['next_candidate']} Runtime report SHA-256 "
+        f"423 s run, before packed-work savings. | {compile_profile['next_candidate']} Sealed analysis SHA-256 "
+        f"`{compile_profile['sealed_analysis_report_sha256']}`; runtime report SHA-256 "
         f"`{compile_profile['runtime_profile_report_sha256']}`. |",
         "",
         "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All listed "
@@ -1419,17 +1458,18 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            "1. Complete the crossed shared eight-stream canonical/atomic gate at T=29. The sealed single-stream ABBA "
-            "is mathematically accepted and cuts the hot coarse kernel 8.00%; require stable repeat-bounded unbiased "
-            "noise plus a material combined end-to-end gain before any default change.",
+            "1. Manually port only the contiguous batched-lane topology onto the tracking-derived shared atomic "
+            "kernel. Incremental gate 13284897 cuts warm wall 8.89% with exact discrete outputs and repeat-bounded "
+            "maps; repeat the focused GPU and atomic A-B-B-A live gates on the clean port before one true-200-iteration "
+            "no-growth trajectory.",
             "2. Keep direct x-half default-off: it is mathematically qualified and makes finalization 85.40% faster, "
             "but finalization is too small and warm wall improves only 2.12%. Preserve the primitive for a future "
             "larger fused finalization redesign; do not spend a trajectory on it alone.",
             "3. Keep the shared posterior executor rejected: it is mathematically qualified but saves only 3.37% "
             "warm wall while its posterior kernels regress 36.86%.",
-            "4. Implement the sealed profile's large shared lever: approximately eight coarse-grained batched lanes "
-            "plus pipelined data/layout and coarse-to-fine preparation. Target the measured 3.344 s excess idle while "
-            "avoiding both six serial monolithic kernels and 1000 work-inflating per-image launches.",
+            "4. Continue the sealed profile's larger shared lever: a fixed-capacity packed whole-local executor plus "
+            "pipelined data/layout and coarse-to-fine preparation. Target the measured 3.344 s excess idle and "
+            "53.547 s local compile churn while preserving shared EM/VDAM math and call chronology.",
             "5. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
             "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
             "and the combined B arm out of the production default.",

@@ -63,11 +63,57 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
     assert profile["forecast"]["packed_static_row_reduction_percent_range"] == [38, 79]
     assert "fixed-capacity packed whole-local executor" in profile["next_candidate"]
     assert "repeat-bounded" in profile["acceptance_rule"]
+    assert profile["slurm_job"] == "13248509"
+    assert profile["profiled_source_commit"] == "6b5e6568a4d2d05f9ac70f4a6bee9cfb450e94a8"
+    assert profile["sealed_analysis_report_sha256"] == (
+        "fd33935f77c275615249e6149abfdf9abf50d4b1c8463aa4dcbe11f2ea176def"
+    )
+    assert profile["nsight_sqlite_sha256"] == (
+        "b73f3ecb660d59484b280e2b0021763c5583c01106ed839efef71f5d50a55845"
+    )
 
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
     assert "SEALED COMPILE PROFILE / SHARED FIXED EXECUTOR TARGET" in rendered
     assert "53.547 of 57.833 s" in rendered
     assert profile["runtime_profile_report_sha256"] in rendered
+    assert profile["sealed_analysis_report_sha256"] in rendered
+
+
+def test_batched_lane_gate_separates_combined_from_incremental_gain(scorecard: dict) -> None:
+    gate = scorecard["performance_gate_updates"]["coarse_atomic_batched_lanes"]
+    assert gate["focused_gpu_job"] == "13284195"
+    assert gate["crossed_job"] == "13284729"
+    assert gate["crossed_result"] == "COMPLETED 0:0"
+    assert gate["performance"]["change_percent"]["warm_wall"] == pytest.approx(-6.992939)
+    assert gate["performance"]["change_percent"]["coarse_kernel_sum"] == pytest.approx(-16.074674)
+    assert gate["performance"]["atomic_batched_lanes_median"]["coarse_kernel_launches_per_repeat"] == 48
+    assert gate["numerical_result"]["all_discrete_metadata_exact"] is True
+    assert gate["numerical_result"]["cold_cross_map_relative_l2_max"] <= gate["numerical_result"][
+        "cold_repeat_envelope"
+    ]
+    assert gate["numerical_result"]["warm_cross_map_relative_l2_max"] <= gate["numerical_result"][
+        "warm_repeat_envelope"
+    ]
+    incremental = gate["incremental_atomic_serial_gate"]
+    assert gate["incremental_atomic_baseline_evaluated"] is True
+    assert gate["tracking_derived_port_evaluated"] is False
+    assert incremental["job_id"] == "13284897"
+    assert incremental["result"] == "COMPLETED 0:0"
+    assert incremental["performance"]["warm_wall_change_percent"] == pytest.approx(-8.890551)
+    assert incremental["performance"]["coarse_kernel_union_change_percent"] == pytest.approx(-10.86529)
+    assert incremental["numerical"]["all_discrete_metadata_exact"] is True
+    assert incremental["numerical"]["cold_cross_map_relative_l2_max"] <= incremental["numerical"][
+        "cold_repeat_envelope"
+    ]
+    assert incremental["numerical"]["warm_cross_map_relative_l2_max"] <= incremental["numerical"][
+        "warm_repeat_envelope"
+    ]
+    assert "Manually port only contiguous batched lanes" in gate["integration_caveat"]
+
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert "LANE-ONLY ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF" in rendered
+    assert "LANE-ONLY ONE-ITERATION PASS / TRACKING PORT OPEN" in rendered
+    assert incremental["report_json_sha256"] in rendered
 
 
 def test_suite_definition_identity_and_bytes_are_frozen() -> None:
@@ -497,10 +543,10 @@ def test_runtime_workboard_is_easy_to_scan() -> None:
     assert "Invalid jobs `13270868` and `13270984` stopped in preflight before science" in rendered
     assert "**REJECTED FOR GF46 / RETAINED PRIMITIVE** | Single-lane coarse" in rendered
     assert "13280613/13280655" in rendered
-    assert "**ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF** | Native-atomic x eight streams" in rendered
-    assert "`13281836/13283759`" in rendered
-    assert "Warm wall improves 6.93%, expectation 11.03%, and coarse union 17.94%" in rendered
-    assert "Long-run growth remains untested" in rendered
+    assert "**LANE-ONLY ONE-ITERATION PASS / TRACKING PORT OPEN** | Native atomic + coarse batched lanes" in rendered
+    assert "`13284729/13284897`" in rendered
+    assert "holding atomic math fixed still improves warm wall 8.89%, expectation 11.45%, and coarse union 10.87%" in rendered
+    assert "maps are repeat-bounded" in rendered
     assert "**MATH ACCEPTED / PERFORMANCE REJECTED** | Direct RELION x-half BPref" in rendered
     assert "`13281684/13282815`" in rendered
     assert "Finalize improves 85.40%, but warm wall improves only 2.12%" in rendered
