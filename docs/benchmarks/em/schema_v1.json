@@ -1,0 +1,338 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ma-gilles/recovar/docs/benchmarks/em/schema_v1.json",
+  "title": "RECOVAR EM benchmark evidence record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_id",
+    "recorded_at",
+    "record_type",
+    "subject",
+    "dataset",
+    "source",
+    "workload",
+    "inputs",
+    "execution",
+    "artifacts",
+    "quality",
+    "performance",
+    "gate",
+    "interpretation",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "record_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "record_type": {"enum": ["accepted_reference", "candidate"]},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "k", "particles", "box_size", "pixel_size_angstrom", "symmetry"],
+      "properties": {
+        "kind": {"enum": ["synthetic", "real"]},
+        "name": {"type": "string", "minLength": 1},
+        "k": {"type": "integer", "minimum": 1},
+        "particles": {"type": "integer", "minimum": 1},
+        "box_size": {"type": "integer", "minimum": 2},
+        "pixel_size_angstrom": {"type": "number", "exclusiveMinimum": 0},
+        "symmetry": {"type": "string", "minLength": 1}
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "provenance_status", "description", "generation_config", "class_manifest"],
+      "properties": {
+        "root": {"$ref": "#/$defs/absolutePath"},
+        "provenance_status": {"enum": ["EXACTLY_SEALED", "RECONSTRUCTED_FROM_CONFIG"]},
+        "description": {"type": "string", "minLength": 1},
+        "generation_config": {"anyOf": [{"$ref": "#/$defs/fileRef"}, {"type": "null"}]},
+        "class_manifest": {"anyOf": [{"$ref": "#/$defs/fileRef"}, {"type": "null"}]}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recovar", "relion"],
+      "properties": {
+        "recovar": {"$ref": "#/$defs/sourceRef"},
+        "relion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["commit", "executable", "source_diff_sha256"],
+          "properties": {
+            "commit": {"$ref": "#/$defs/gitSha"},
+            "executable": {"$ref": "#/$defs/fileRef"},
+            "source_diff_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["iterations", "seed", "trajectory_scope", "parameters", "recovar_command", "relion_command"],
+      "properties": {
+        "iterations": {"type": "integer", "minimum": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "trajectory_scope": {"type": "string", "minLength": 1},
+        "parameters": {
+          "type": "object",
+          "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]}
+        },
+        "recovar_command": {"type": "string", "minLength": 1},
+        "relion_command": {"type": "string", "minLength": 1}
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/inputRef"}
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobs", "environment", "same_physical_gpu"],
+      "properties": {
+        "jobs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/jobRef"}
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["set", "confirmed_unset"],
+          "properties": {
+            "set": {"type": "object", "additionalProperties": {"type": "string"}},
+            "confirmed_unset": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+          }
+        },
+        "same_physical_gpu": {"type": "boolean"}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/artifactRef"}
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matching", "trajectory", "final_classes", "final_class_populations", "halfmap_fsc", "class_assignment_agreement", "controller_rows_match", "ground_truth_available"],
+      "properties": {
+        "matching": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "recovar_to_relion", "matched_pair_to_gt"],
+          "properties": {
+            "method": {"const": "hungarian_max_fsc_auc"},
+            "recovar_to_relion": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+            "matched_pair_to_gt": {"type": "array", "items": {"type": "integer", "minimum": 1}}
+          }
+        },
+        "trajectory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metric", "formal_threshold", "evaluated_iterations", "evaluated_class_cells", "passing_class_cells", "all_class_passing_iterations", "earliest_failure"],
+          "properties": {
+            "metric": {"const": "direct_unmasked_fsc_auc"},
+            "formal_threshold": {"type": "number", "minimum": -1, "maximum": 1},
+            "evaluated_iterations": {"type": "integer", "minimum": 1},
+            "evaluated_class_cells": {"type": "integer", "minimum": 1},
+            "passing_class_cells": {"type": "integer", "minimum": 0},
+            "all_class_passing_iterations": {"type": "integer", "minimum": 0},
+            "earliest_failure": {"type": ["string", "null"]}
+          }
+        },
+        "final_classes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/finalClass"}
+        },
+        "final_class_populations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metric", "recovar", "relion", "recovar_posterior_fractions", "missing_reason"],
+          "properties": {
+            "metric": {"const": "hard_assignments"},
+            "recovar": {"type": "array", "items": {"type": ["integer", "null"], "minimum": 0}},
+            "relion": {"type": "array", "items": {"type": ["integer", "null"], "minimum": 0}},
+            "recovar_posterior_fractions": {"type": "array", "items": {"type": ["number", "null"], "minimum": 0, "maximum": 1}},
+            "missing_reason": {"type": ["string", "null"]}
+          }
+        },
+        "halfmap_fsc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mask", "recovar", "relion", "missing_reason"],
+          "properties": {
+            "mask": {"anyOf": [{"$ref": "#/$defs/fileRef"}, {"type": "null"}]},
+            "recovar": {"$ref": "#/$defs/halfmapMeasurement"},
+            "relion": {"$ref": "#/$defs/halfmapMeasurement"},
+            "missing_reason": {"type": ["string", "null"]}
+          }
+        },
+        "class_assignment_agreement": {"type": "number", "minimum": 0, "maximum": 1},
+        "controller_rows_match": {"type": "boolean"},
+        "ground_truth_available": {"type": "boolean"}
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recovar", "relion", "comparison"],
+      "properties": {
+        "recovar": {"$ref": "#/$defs/performanceMeasurement"},
+        "relion": {"$ref": "#/$defs/performanceMeasurement"},
+        "comparison": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hardware_comparable", "formal_speedup", "diagnostic_speedup", "reason"],
+          "properties": {
+            "hardware_comparable": {"type": "boolean"},
+            "formal_speedup": {"type": ["number", "null"], "exclusiveMinimum": 0},
+            "diagnostic_speedup": {"type": ["number", "null"], "exclusiveMinimum": 0},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frozen_policy_id", "frozen_policy", "formal_status", "science_status", "trajectory_exact", "classification", "comparator_record_id"],
+      "properties": {
+        "frozen_policy_id": {"const": "kclass_relion_trajectory_v1"},
+        "frozen_policy": {"type": "string", "minLength": 1},
+        "formal_status": {"enum": ["PASS", "FAIL"]},
+        "science_status": {"enum": ["PASS", "FAIL"]},
+        "trajectory_exact": {"type": "boolean"},
+        "classification": {"enum": ["SCIENCE_EQUIVALENT", "TRAJECTORY_EXACT", "NOT_EQUIVALENT"]},
+        "comparator_record_id": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9._-]+$"}
+      }
+    },
+    "interpretation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "limitations"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_checked_at", "commands"],
+      "properties": {
+        "evidence_checked_at": {"type": "string", "format": "date-time"},
+        "commands": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {"type": "string", "pattern": "^/"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree", "checkout", "clean"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/gitSha"},
+        "tree": {"$ref": "#/$defs/gitSha"},
+        "checkout": {"$ref": "#/$defs/absolutePath"},
+        "clean": {"const": true}
+      }
+    },
+    "inputRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256", "size_bytes"],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "jobRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "job_id", "status", "exit_code", "elapsed_s", "node", "gpu_model", "gpu_uuid", "req_tres", "alloc_tres", "max_rss_kib", "logs"],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "job_id": {"type": "string", "pattern": "^[0-9]+$"},
+        "status": {"const": "COMPLETED"},
+        "exit_code": {"const": "0:0"},
+        "elapsed_s": {"type": "integer", "minimum": 0},
+        "node": {"type": "string", "minLength": 1},
+        "gpu_model": {"type": ["string", "null"]},
+        "gpu_uuid": {"type": ["string", "null"]},
+        "req_tres": {"type": "string", "minLength": 1},
+        "alloc_tres": {"type": "string", "minLength": 1},
+        "max_rss_kib": {"type": ["integer", "null"], "minimum": 0},
+        "logs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/absolutePath"}}
+      }
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256"],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "finalClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recovar_class", "relion_class", "gt_class", "cross_engine_fsc_auc", "recovar_gt_fsc_auc", "relion_gt_fsc_auc", "gt_fsc_auc_delta"],
+      "properties": {
+        "recovar_class": {"type": "integer", "minimum": 1},
+        "relion_class": {"type": "integer", "minimum": 1},
+        "gt_class": {"type": ["integer", "null"], "minimum": 1},
+        "cross_engine_fsc_auc": {"type": "number", "minimum": -1, "maximum": 1},
+        "recovar_gt_fsc_auc": {"type": ["number", "null"], "minimum": -1, "maximum": 1},
+        "relion_gt_fsc_auc": {"type": ["number", "null"], "minimum": -1, "maximum": 1},
+        "gt_fsc_auc_delta": {"type": ["number", "null"], "minimum": -2, "maximum": 2}
+      }
+    },
+    "performanceMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_s", "iteration_sum_s", "peak_hbm_mib", "max_rss_kib", "missing_reason"],
+      "properties": {
+        "wall_s": {"type": ["number", "null"], "minimum": 0},
+        "iteration_sum_s": {"type": ["number", "null"], "minimum": 0},
+        "peak_hbm_mib": {"type": ["number", "null"], "minimum": 0},
+        "max_rss_kib": {"type": ["integer", "null"], "minimum": 0},
+        "missing_reason": {"type": ["string", "null"]}
+      }
+    },
+    "halfmapMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unmasked_fsc_auc", "masked_fsc_auc", "masked_resolution_0_143_angstrom"],
+      "properties": {
+        "unmasked_fsc_auc": {"type": "array", "items": {"type": ["number", "null"], "minimum": -1, "maximum": 1}},
+        "masked_fsc_auc": {"type": "array", "items": {"type": ["number", "null"], "minimum": -1, "maximum": 1}},
+        "masked_resolution_0_143_angstrom": {"type": "array", "items": {"type": ["number", "null"], "exclusiveMinimum": 0}}
+      }
+    }
+  }
+}

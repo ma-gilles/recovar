@@ -1,0 +1,247 @@
+{
+  "schema_version": 1,
+  "record_id": "k4-ribosembly-100k256-1b9209cd8-h100",
+  "recorded_at": "2026-09-01T12:00:00-04:00",
+  "record_type": "candidate",
+  "subject": {
+    "kind": "synthetic",
+    "name": "Ribosembly four-state completion fixture",
+    "k": 4,
+    "particles": 100000,
+    "box_size": 256,
+    "pixel_size_angstrom": 2.125,
+    "symmetry": "C1"
+  },
+  "dataset": {
+    "root": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123",
+    "provenance_status": "RECONSTRUCTED_FROM_CONFIG",
+    "description": "Four Ribosembly states (PDB 8c9c, 8c9b, 8c9a, 8c99), white noise level 1, B factor 80, cubic discretization, synthetic seed 42. The particle stack and all consumed maps are sealed, but the original PDB staging paths are gone and the historical generator command was not sealed.",
+    "generation_config": {
+      "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/generation_config.json",
+      "sha256": "e88514d680db1ff6d8d6170d1469934ad0cbd994f36a8d34a0dab0a258ee368a"
+    },
+    "class_manifest": {
+      "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/class_manifest.json",
+      "sha256": "c4495035053e0b075e2b2a46a2a6b5f14e17bb928bd93a6880a7765cc2369ae3"
+    }
+  },
+  "source": {
+    "recovar": {
+      "commit": "1b9209cd8ea422d0ee04e8619eb2c6723a8359ab",
+      "tree": "a16a976c27aac869e26b39998e86ffe702d17225",
+      "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_full15_1b9209cd8_20260901",
+      "clean": true
+    },
+    "relion": {
+      "commit": "d476e6f6a4f1f37627c06ace5227fc374c0c2b05",
+      "executable": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/build/bin/relion_refine_mpi",
+        "sha256": "01fa9cc870fdce6c19d981d6e917765753406972abcddb0311a40ef88e69a782"
+      },
+      "source_diff_sha256": "6987c5ce397cbdd98835682cf1481a150c38c48cda621e006341d01a77e11c11"
+    }
+  },
+  "workload": {
+    "iterations": 15,
+    "seed": 1778628798,
+    "trajectory_scope": "RECOVAR autonomous 15-iteration rerun against the immutable accepted RELION maps, optimiser, and dispatch schedule; no candidate RELION rerun was performed.",
+    "parameters": {
+      "n_classes": 4,
+      "healpix_order": 1,
+      "offset_range": 6,
+      "offset_step": 2,
+      "adaptive_oversampling": 1,
+      "init_resolution_angstrom": 60.0,
+      "particle_diameter_angstrom": 380,
+      "tau2_fudge": 4.0,
+      "firstiter_cc": true,
+      "apply_initial_lowpass": true,
+      "image_batch_size": 50,
+      "rotation_block_size": 2000,
+      "image_fourier_backend": "relion_cuda",
+      "relion_softmask_reduction": "control",
+      "skip_final_iteration": true,
+      "final_all_data_after_nonconvergence": false,
+      "final_all_data_grid_correct": false
+    },
+    "recovar_command": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_box800_texture_memory_20260830/.pixi/envs/default/bin/python -m scripts.run_full_refinement --data_dir /scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123 --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/output --max_iter 15 --skip_final_iteration --n_classes 4 --healpix_order 1 --offset_range 6 --offset_step 2 --adaptive_oversampling 1 --init_resolution 60.0 --apply-initial-lowpass --firstiter_cc --image-fourier-backend relion_cuda --relion-softmask-reduction control --image_batch_size 50 --rotation_block_size 2000 --seed 1778628798 --relion_optimiser /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/relion/run_it015_optimiser.star --relion_init_dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/relion --relion-dispatch-schedule /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/relion/dispatch_schedule_schema3_resolved_full15.npz --particle_diameter_ang 380 --tau2_fudge 4.0 --save_intermediates_dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/output/intermediates --save_intermediates_skip_unregularized --benchmark_ledger_json /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/output/benchmark_ledger.json --timing_dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/output/timing",
+    "relion_command": "srun --ntasks=3 --cpus-per-task=4 --cpu-bind=none /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/build/bin/relion_refine_mpi --i /scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/particles.star --ref /scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_init_classes_relion.star --o /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/relion/run --iter 15 --tau2_fudge 4 --particle_diameter 380 --K 4 --flatten_solvent --zero_mask --ctf --norm --scale --sym C1 --oversampling 1 --healpix_order 1 --offset_range 6 --offset_step 2 --pad 2 --pool 3 --trust_ref_size --firstiter_cc --ini_high 60 --dont_combine_weights_via_disc --gpu 0:0:0 --j 4 --random_seed 1778628798"
+  },
+  "inputs": [
+    {"role": "particles", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/particles.256.mrcs", "sha256": "df19cb8b0287629d293a478d2002205448fca97bc448e6e5a7b4829f2f42575e", "size_bytes": 26214401024},
+    {"role": "particle_metadata", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/particles.star", "sha256": "eea55f4e50c7c6c08d8df1b62820e948ff33bdb6f92135bfbafe9253a073b833", "size_bytes": 13859127},
+    {"role": "relion_initial_model_manifest", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_init_classes_relion.star", "sha256": "b5df1127685fcaddb4422a9c5da1980d6483ac478ca6b51a3382b4a5666ada95", "size_bytes": 337},
+    {"role": "initial_class_1", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_init_class001.mrc", "sha256": "a3aea3129aadd4aa50244e89f9319bf2cc01d778926dffa8fe93d78e64a2444c", "size_bytes": 67109888},
+    {"role": "initial_class_2", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_init_class002.mrc", "sha256": "ef301451ef202ceec8de522d9fd95e8745bfb27c19a79c5a28cce482f3693fb7", "size_bytes": 67109888},
+    {"role": "initial_class_3", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_init_class003.mrc", "sha256": "222f03a227209445a8c9c20519ab67d4b425336e07b54e3c1b44de1ea9bb4829", "size_bytes": 67109888},
+    {"role": "initial_class_4", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_init_class004.mrc", "sha256": "90b8b878acf4974436b328fca9936d1fb3c48f49465c3a1366c6d81fb4c21c7d", "size_bytes": 67109888},
+    {"role": "ground_truth_class_1", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_gt_class001.mrc", "sha256": "7cf5598595c4f0b10f619cd0979926c38289b0fced7fcb7436fae61bd5abc79d", "size_bytes": 67109888},
+    {"role": "ground_truth_class_2", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_gt_class002.mrc", "sha256": "54546fe41c3077595c4c5404bdb12fca22873f918da524127bb0e00e77b55653", "size_bytes": 67109888},
+    {"role": "ground_truth_class_3", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_gt_class003.mrc", "sha256": "0e29345d56995fff4ae7e4e0aca493d0d04cd76226649cd152c2eb472cf5aea6", "size_bytes": 67109888},
+    {"role": "ground_truth_class_4", "path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/reference_gt_class004.mrc", "sha256": "2d20f04d4b5a62a93cd4a462872133da018a0ba951eab99310accc2a9154a6a5", "size_bytes": 67109888}
+  ],
+  "execution": {
+    "jobs": [
+      {
+        "role": "candidate_recovar",
+        "job_id": "13285726",
+        "status": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_s": 24711,
+        "node": "della-h19g2",
+        "gpu_model": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-202f2d43-7a0a-bec1-135f-bb496ab059a7",
+        "req_tres": "billing=40,cpu=4,gres/gpu=1,mem=500G,node=1",
+        "alloc_tres": "billing=40,cpu=4,gres/gpu=1,mem=500G,node=1",
+        "max_rss_kib": 85677152,
+        "logs": [
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/logs/refinement_13285726.out",
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/logs/refinement_13285726.err",
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/monitor/slurm-13285726.out"
+        ]
+      },
+      {
+        "role": "immutable_relion_oracle_and_accepted_reference_producer",
+        "job_id": "11386135",
+        "status": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_s": 39151,
+        "node": "della-l08g3",
+        "gpu_model": "NVIDIA A100-SXM4-80GB",
+        "gpu_uuid": "GPU-98fb77aa-8391-8a59-9417-606deb654b53",
+        "req_tres": "billing=40,cpu=12,gres/gpu=1,mem=500G,node=1",
+        "alloc_tres": "billing=40,cpu=12,gres/gpu=1,mem=500G,node=1",
+        "max_rss_kib": 85154420,
+        "logs": [
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/logs/science_11386135.out",
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/logs/science_11386135.err"
+        ]
+      }
+    ],
+    "environment": {
+      "set": {
+        "PYTHONNOUSERSITE": "1",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "RECOVAR_CUDA_LIB": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/bin/libcuda_backproject.so",
+        "RECOVAR_EXPECTED_PIXI_ENV_ROOT": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_box800_texture_memory_20260830/.pixi/envs/default",
+        "RECOVAR_EXPECTED_REPO_ROOT": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_full15_1b9209cd8_20260901",
+        "RECOVAR_K1_RELION_EXACT_CTF_STAR": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_k4_g256_n100000_completion_20260512_171123/particles.star",
+        "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT": "0",
+        "RECOVAR_RELION_BIND_BUILD_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_symmetry_build_20260830/relion_bind",
+        "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION": "0.40",
+        "RECOVAR_SPARSE_KCLASS_FUSED": "1",
+        "RECOVAR_SPARSE_KCLASS_GROUP_TIMING": "1",
+        "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE": "on"
+      },
+      "confirmed_unset": [
+        "XLA_PYTHON_CLIENT_ALLOCATOR",
+        "XLA_PYTHON_CLIENT_MEM_FRACTION",
+        "TF_GPU_ALLOCATOR",
+        "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER",
+        "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT",
+        "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI",
+        "RECOVAR_RELION_KCLASS_SOURCE_FAITHFUL_PRIORS",
+        "RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION",
+        "RECOVAR_RELION_KCLASS_EXACT_SCORE_PREPROCESSING"
+      ]
+    },
+    "same_physical_gpu": false
+  },
+  "artifacts": [
+    {"role": "trajectory_audit", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/analysis/k4_fsc_trajectory.json", "sha256": "5c26f02be9bcd223e130f122b7d015554850900fd7425cd1b539c646c20fb23e"},
+    {"role": "shellwise_fsc", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/analysis/k4_fsc_trajectory_shellwise.npz", "sha256": "c445735c40386af405a32ab5840c175a7846f210554027e406dfa895d42c766f"},
+    {"role": "relion_oracle_particle_state_distribution", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/analysis/particle_state_distribution.json", "sha256": "d4aa8905ec0ed1bd27adcdfe2f4761bb192b1f44741ee94bdba6dc858cc6a636"},
+    {"role": "trajectory_summary", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/analysis/summary.json", "sha256": "9150073ec97dc7ff2e7af0ce0306fe175a538048803626deab50fba545604281"},
+    {"role": "accepted_comparison", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/analysis/full15_current_vs_accepted.txt", "sha256": "13bc892ef1b7c57d32e53d6daeb3a3679bb4226c03e255b4a3359d79e4846a1d"},
+    {"role": "benchmark_ledger", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/output/benchmark_ledger.json", "sha256": "c81bab0cf922071e600992eccd75f7ac003584560cfc25b172f76659d4f5dc69"},
+    {"role": "recovar_command", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/provenance/command.sh", "sha256": "90b02d21a8a3da84f7b679ff1dd52c0d3b1805b8ede1533b0ea44e59110afa10"},
+    {"role": "launcher", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/run_k4_full15.sbatch", "sha256": "a599c686b4b759f4c7738827e297436856bf2493143ca8cfb2af212c77171d41"},
+    {"role": "selected_environment", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/provenance/selected_environment_13285726.json", "sha256": "82e38e471d9fba2e100d54ca7715e88071831a89e506cb435455113105864828"},
+    {"role": "slurm_allocation_capture", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/provenance/scontrol_13285726.txt", "sha256": "5fd45c0fd3403ac97d855cda4937ecf3853f661891cec27b01607b094b0e07fe"},
+    {"role": "refinement_log", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/logs/refinement_13285726.err", "sha256": "2fac1a239919587519a4ddcabb3e1825916c04d9f4b1a0be695788df9f52474c"},
+    {"role": "gpu_monitor", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/monitor/gpu_13285726.csv", "sha256": "c1d59e78291e7062a05b02ae578988f3b86c75a833311633974d37694bbf3997"},
+    {"role": "refinement_results", "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/output/refinement_results.npz", "sha256": "db690c62d6ac95c15ba50d46ea2bca2931b47f656df5594c2703b4353f6de5a1"}
+  ],
+  "quality": {
+    "matching": {
+      "method": "hungarian_max_fsc_auc",
+      "recovar_to_relion": [1, 2, 3, 4],
+      "matched_pair_to_gt": [1, 2, 3, 4]
+    },
+    "trajectory": {
+      "metric": "direct_unmasked_fsc_auc",
+      "formal_threshold": 0.995,
+      "evaluated_iterations": 15,
+      "evaluated_class_cells": 60,
+      "passing_class_cells": 42,
+      "all_class_passing_iterations": 9,
+      "earliest_failure": "Iteration 10, RECOVAR class 2 / RELION class 2: 0.9946368261894772 < 0.995"
+    },
+    "final_classes": [
+      {"recovar_class": 1, "relion_class": 1, "gt_class": 1, "cross_engine_fsc_auc": 0.9938608951540555, "recovar_gt_fsc_auc": 0.25374401897863, "relion_gt_fsc_auc": 0.2537061262896486, "gt_fsc_auc_delta": 0.00003789268898141129},
+      {"recovar_class": 2, "relion_class": 2, "gt_class": 2, "cross_engine_fsc_auc": 0.9912348885091948, "recovar_gt_fsc_auc": 0.25664798813409356, "relion_gt_fsc_auc": 0.256966410018937, "gt_fsc_auc_delta": -0.0003184218848434339},
+      {"recovar_class": 3, "relion_class": 3, "gt_class": 3, "cross_engine_fsc_auc": 0.9912203708926483, "recovar_gt_fsc_auc": 0.2586199984047038, "relion_gt_fsc_auc": 0.2587845357673994, "gt_fsc_auc_delta": -0.00016453736269561592},
+      {"recovar_class": 4, "relion_class": 4, "gt_class": 4, "cross_engine_fsc_auc": 0.9943044225672475, "recovar_gt_fsc_auc": 0.26446493010043703, "relion_gt_fsc_auc": 0.26446014487473596, "gt_fsc_auc_delta": 0.00000478522570107609}
+    ],
+    "final_class_populations": {
+      "metric": "hard_assignments",
+      "recovar": [25075, 24415, 24088, 26422],
+      "relion": [25081, 24461, 24037, 26421],
+      "recovar_posterior_fractions": [0.25070245604096764, 0.24407751476411105, 0.2410087062302987, 0.2642113229646226],
+      "missing_reason": null
+    },
+    "halfmap_fsc": {
+      "mask": null,
+      "recovar": {
+        "unmasked_fsc_auc": [null, null, null, null],
+        "masked_fsc_auc": [null, null, null, null],
+        "masked_resolution_0_143_angstrom": [null, null, null, null]
+      },
+      "relion": {
+        "unmasked_fsc_auc": [null, null, null, null],
+        "masked_fsc_auc": [null, null, null, null],
+        "masked_resolution_0_143_angstrom": [null, null, null, null]
+      },
+      "missing_reason": "The candidate reused the accepted RELION oracle, whose half maps were not retained, and no common mask was sealed. These values must remain missing rather than being inferred from cross-engine FSC."
+    },
+    "class_assignment_agreement": 0.99282,
+    "controller_rows_match": true,
+    "ground_truth_available": true
+  },
+  "performance": {
+    "recovar": {"wall_s": 22199, "iteration_sum_s": 21952.1, "peak_hbm_mib": 33539, "max_rss_kib": 85677152, "missing_reason": null},
+    "relion": {"wall_s": 6045, "iteration_sum_s": null, "peak_hbm_mib": null, "max_rss_kib": 3718528, "missing_reason": "RELION metrics are inherited from the immutable accepted A100 oracle; no same-H100 candidate RELION run was performed and its exact HBM was not sampled."},
+    "comparison": {
+      "hardware_comparable": false,
+      "formal_speedup": null,
+      "diagnostic_speedup": 1.4857940698156442,
+      "reason": "The 1.4858x diagnostic is accepted A100 RECOVAR iteration sum divided by candidate H100 RECOVAR iteration sum. It is not a same-hardware speedup and must not be used as a performance acceptance result."
+    }
+  },
+  "gate": {
+    "frozen_policy_id": "kclass_relion_trajectory_v1",
+    "frozen_policy": "Every numbered iteration/class requires direct unmasked RECOVAR-to-RELION FSC-AUC >= 0.995; controller topology must match exactly; final RECOVAR-minus-RELION GT FSC-AUC delta must be >= -0.002; final class-assignment agreement must be >= 0.99.",
+    "formal_status": "FAIL",
+    "science_status": "PASS",
+    "trajectory_exact": false,
+    "classification": "SCIENCE_EQUIVALENT",
+    "comparator_record_id": "k4-ribosembly-100k256-ac5177d2-a100"
+  },
+  "interpretation": {
+    "summary": "Current PR-head K=4 trajectory is scientifically equivalent to the accepted reference: all controller rows match, Hungarian matching is identity, final assignment agreement is 99.282%, and every per-class RECOVAR-minus-RELION GT FSC-AUC delta is within 3.19e-4. It is not trajectory-exact because the frozen 0.995 direct-FSC threshold first fails at iteration 10.",
+    "limitations": [
+      "The RELION oracle and candidate RECOVAR run used different GPU models, so no formal speedup is reported.",
+      "This is one fixture and one refinement seed; it does not establish K=4 robustness across seeds or data regimes.",
+      "The original fixture-generation command and staged PDB files were not sealed, so byte-for-byte regeneration is not claimed.",
+      "No common-mask, within-engine half-map FSC was sealed for this historical run."
+    ]
+  },
+  "verification": {
+    "evidence_checked_at": "2026-09-01T12:00:00-04:00",
+    "commands": [
+      "sha256sum -c /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/data_inputs.sha256",
+      "sacct -j 13285726,11386135 --format=JobIDRaw,State,ExitCode,ElapsedRaw,NodeList,ReqTRES,AllocTRES,MaxRSS -P",
+      "python3 /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/analysis/compare_full15_audits.py /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_full15_current_1b9209cd8_20260901/analysis/k4_fsc_trajectory.json /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_100k_guigrid_localhighshell_samegpu_accept_ac5177d2_20260719T173500Z/analysis/k4_fsc_trajectory.json"
+    ]
+  }
+}
