@@ -11514,7 +11514,7 @@ def _maybe_dump_k_class_pass2_bucket(
                 raw_diff2_dense = np.asarray(
                     raw_diff2_by_batch_row[row],
                     dtype=np.float32,
-                )
+                )[:n_rot, :]
                 if raw_diff2_dense.shape != scores_with.shape:
                     raise ValueError(
                         "dense raw diff2 shape differs from scores: "
