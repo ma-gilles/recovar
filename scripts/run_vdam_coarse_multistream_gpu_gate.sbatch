@@ -20,11 +20,18 @@ set -euo pipefail
 : "${EXPECTED_SOURCE_MANIFEST_SHA256:?pin the source/test manifest}"
 : "${EXPECTED_NODE_NAME:?pin the Slurm node}"
 : "${TARGET_GPU_UUID:?pin the physical H100 UUID}"
+: "${PREBUILT_CUDA_BINARY:?set the exact binary built by the sealed first stage}"
+: "${EXPECTED_CUDA_SHA256:?pin the prebuilt CUDA binary}"
+: "${PRECOMPUTED_RESOURCE_REPORT:?set the login-node resource JSON}"
+: "${EXPECTED_RESOURCE_REPORT_SHA256:?pin the resource JSON}"
+: "${PRECOMPUTED_RESOURCE_DEMANGLED:?set the demangled cuobjdump report}"
+: "${EXPECTED_RESOURCE_DEMANGLED_SHA256:?pin the demangled cuobjdump report}"
 
 ROOT=${VDAM_COARSE_MULTISTREAM_TEST_ROOT}
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
-CUDA_TOOLKIT=${CUDA_TOOLKIT:-/usr/local/cuda-13.1}
+CUDA_BUILD_TOOLKIT=${CUDA_BUILD_TOOLKIT:-/usr/local/cuda-12.6}
+CUDA_RUNTIME_TOOLKIT=${CUDA_RUNTIME_TOOLKIT:-/usr/local/cuda-13.1}
 PROVENANCE=${ROOT}/provenance
 RUNTIME=${ROOT}/runtime
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
@@ -55,7 +62,11 @@ trap on_error ERR
 
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
-test -x "${CUDA_TOOLKIT}/bin/nvcc"
+test -x "${CUDA_BUILD_TOOLKIT}/bin/nvcc"
+test -d "${CUDA_RUNTIME_TOOLKIT}/lib64"
+test -s "${PREBUILT_CUDA_BINARY}"
+test -s "${PRECOMPUTED_RESOURCE_REPORT}"
+test -s "${PRECOMPUTED_RESOURCE_DEMANGLED}"
 test "${SLURMD_NODENAME:-$(hostname -s)}" = "${EXPECTED_NODE_NAME}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
@@ -86,20 +97,54 @@ printf '%s\n' "${gpu_name}" > "${PROVENANCE}/gpu_name.txt"
 printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/allocated_gpu_uuids.csv"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
-"${CUDA_TOOLKIT}/bin/nvcc" --version > "${PROVENANCE}/nvcc_version.txt"
+"${CUDA_BUILD_TOOLKIT}/bin/nvcc" --version > "${PROVENANCE}/nvcc_version.txt"
+printf '%s\n' "${CUDA_RUNTIME_TOOLKIT}" \
+  > "${PROVENANCE}/cuda_runtime_toolkit.txt"
 
 build_started=$(date +%s.%N)
-make -C "${REPO_ROOT}/recovar/cuda" \
-  PYTHON="${PIXI_PY}" \
-  NVCC="${CUDA_TOOLKIT}/bin/nvcc" \
-  CUDA_ARCH='-gencode arch=compute_90,code=sm_90' \
-  LIB="${CUDA_BINARY}" \
-  > "${PROVENANCE}/cuda_build.stdout" \
-  2> "${PROVENANCE}/cuda_build.stderr"
+test "$(sha256sum "${PREBUILT_CUDA_BINARY}" | awk '{print $1}')" = \
+  "${EXPECTED_CUDA_SHA256}"
+test "$(sha256sum "${PRECOMPUTED_RESOURCE_REPORT}" | awk '{print $1}')" = \
+  "${EXPECTED_RESOURCE_REPORT_SHA256}"
+test "$(sha256sum "${PRECOMPUTED_RESOURCE_DEMANGLED}" | awk '{print $1}')" = \
+  "${EXPECTED_RESOURCE_DEMANGLED_SHA256}"
+cp --reflink=auto "${PREBUILT_CUDA_BINARY}" "${CUDA_BINARY}"
+cp --reflink=auto "${PRECOMPUTED_RESOURCE_REPORT}" \
+  "${PROVENANCE}/coarse_kernel_resources.json"
+cp --reflink=auto "${PRECOMPUTED_RESOURCE_DEMANGLED}" \
+  "${PROVENANCE}/cuda_resource_usage.demangled.txt"
 build_finished=$(date +%s.%N)
 test -s "${CUDA_BINARY}"
 cuda_sha256=$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')
-printf '%s  %s\n' "${cuda_sha256}" "${CUDA_BINARY}" > "${PROVENANCE}/built_cuda.sha256"
+test "${cuda_sha256}" = "${EXPECTED_CUDA_SHA256}"
+printf '%s  %s\n' "${cuda_sha256}" "${CUDA_BINARY}" \
+  > "${PROVENANCE}/qualified_cuda.sha256"
+"${PIXI_PY}" - \
+  "${PROVENANCE}/coarse_kernel_resources.json" \
+  "${PROVENANCE}/cuda_resource_usage.demangled.txt" \
+  "${EXPECTED_CUDA_SHA256}" \
+  "${EXPECTED_RESOURCE_DEMANGLED_SHA256}" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text())
+resources = report["resources"]
+assert report["binary_sha256"] == sys.argv[3], report
+assert set(resources) == {"generic", "single_lane"}, resources
+assert (
+    resources["generic"]["static_shared_bytes"]
+    - resources["single_lane"]["static_shared_bytes"]
+) == 16 * 128 * 4, resources
+assert (
+    resources["single_lane"]["registers_per_thread"]
+    <= resources["generic"]["registers_per_thread"]
+), resources
+demangled_sha256 = hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest()
+assert demangled_sha256 == sys.argv[4], demangled_sha256
+assert report["demangled_resource_report_sha256"] == demangled_sha256, report
+PY
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV JAX_PLATFORM_NAME
 export PYTHONNOUSERSITE=1
@@ -116,8 +161,8 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export TMPDIR=${RUNTIME}/tmp
 export PIXI_HOME=${RUNTIME}/pixi_home
 export RATTLER_CACHE_DIR=${RUNTIME}/rattler_cache
-export PATH=${CUDA_TOOLKIT}/bin:${PATH}
-export LD_LIBRARY_PATH=${CUDA_TOOLKIT}/lib64:${CUDA_TOOLKIT}/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}
+export PATH=${CUDA_RUNTIME_TOOLKIT}/bin:${PATH}
+export LD_LIBRARY_PATH=${CUDA_RUNTIME_TOOLKIT}/lib64:${CUDA_RUNTIME_TOOLKIT}/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 touch "${JAX_COMPILATION_CACHE_DIR}/SAFE_TO_DELETE"
 
@@ -161,7 +206,7 @@ import xml.etree.ElementTree as ET
 root = ET.parse(sys.argv[1]).getroot()
 suite = root if root.tag == "testsuite" else root.find("testsuite")
 assert suite is not None
-assert int(suite.attrib["tests"]) == 1
+assert int(suite.attrib["tests"]) == 2
 assert int(suite.attrib.get("failures", 0)) == 0
 assert int(suite.attrib.get("errors", 0)) == 0
 assert int(suite.attrib.get("skipped", 0)) == 0
@@ -196,11 +241,11 @@ payload = {
     "gpu_name": sys.argv[6],
     "cuda_sha256": sys.argv[7],
     "source_manifest_sha256": sys.argv[8],
-    "cuda_build_wall_s": float(sys.argv[10]) - float(sys.argv[9]),
+    "cuda_stage_wall_s": float(sys.argv[10]) - float(sys.argv[9]),
     "test_wall_s": float(sys.argv[12]) - float(sys.argv[11]),
     "pytest_node": sys.argv[13],
-    "tests": 1,
-    "passed": 1,
+    "tests": 2,
+    "passed": 2,
     "science_promotion_allowed": False,
 }
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

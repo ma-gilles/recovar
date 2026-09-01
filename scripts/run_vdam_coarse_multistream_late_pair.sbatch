@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vdam-coarse-ms-pair
+#SBATCH --job-name=vdam-coarse-sl-2x2
 #SBATCH --account=gilles
 #SBATCH --partition=cryoem
 #SBATCH --qos=della-cryoem
@@ -198,23 +198,39 @@ PY
 ) > "${PROVENANCE}/runtime_gate.stdout" 2> "${PROVENANCE}/runtime_gate.stderr"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
-RUN_LABELS=(serial_1 multistream_1 multistream_2 serial_2)
-RUN_WORKERS=(0 8 8 0)
-printf 'order\tlabel\tworkers\tnsys_base\n' > "${PROVENANCE}/execution_order.tsv"
+RUN_LABELS=(
+  generic_serial_1
+  singlelane_serial_1
+  singlelane_multistream_1
+  generic_multistream_1
+  generic_multistream_2
+  singlelane_multistream_2
+  singlelane_serial_2
+  generic_serial_2
+)
+RUN_WORKERS=(0 0 8 8 8 8 0 0)
+RUN_SINGLE_LANE=(0 1 1 0 0 1 1 0)
+test "${#RUN_LABELS[@]}" -eq "${#RUN_WORKERS[@]}"
+test "${#RUN_LABELS[@]}" -eq "${#RUN_SINGLE_LANE[@]}"
+printf 'order\tlabel\tworkers\tsingle_lane_canonical\tnsys_base\n' \
+  > "${PROVENANCE}/execution_order.tsv"
 for index in "${!RUN_LABELS[@]}"; do
   label=${RUN_LABELS[index]}
   workers=${RUN_WORKERS[index]}
+  single_lane=${RUN_SINGLE_LANE[index]}
   run_root=${ROOT}/runs/${label}
   cache_root=${run_root}/jax_cache
   nsys_base=${NSIGHT}/${label}_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
   mkdir -p "${run_root}" "${cache_root}"
   touch "${cache_root}/SAFE_TO_DELETE"
-  printf '%d\t%s\t%s\t%s\n' "$((index + 1))" "${label}" "${workers}" "${nsys_base}" \
+  printf '%d\t%s\t%s\t%s\t%s\n' \
+    "$((index + 1))" "${label}" "${workers}" "${single_lane}" "${nsys_base}" \
     >> "${PROVENANCE}/execution_order.tsv"
   command=(
     env
     "LD_PRELOAD=${CUSPARSE_LIBRARY}"
     "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"
+    "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL=${single_lane}"
     "JAX_COMPILATION_CACHE_DIR=${cache_root}"
     "${PIXI_PY}" -m scripts.run_vdam_late_iteration_profile
     --checkpoint-optimiser "${CHECKPOINT}"
@@ -270,7 +286,7 @@ import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.vdam_coarse_multistream_late_pair.v1",
+    "schema": "recovar.vdam_coarse_single_lane_late_factorial.v1",
     "classification": "diagnostic_performance_only",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],
@@ -281,8 +297,18 @@ payload = {
     "source_manifest_sha256": sys.argv[8],
     "input_manifest_sha256": sys.argv[9],
     "qualified_gpu_gate_root": sys.argv[10],
-    "execution_order": ["serial_1", "multistream_1", "multistream_2", "serial_2"],
-    "coarse_multistream_workers": [0, 8, 8, 0],
+    "execution_order": [
+        "generic_serial_1",
+        "singlelane_serial_1",
+        "singlelane_multistream_1",
+        "generic_multistream_1",
+        "generic_multistream_2",
+        "singlelane_multistream_2",
+        "singlelane_serial_2",
+        "generic_serial_2",
+    ],
+    "coarse_multistream_workers": [0, 0, 8, 8, 8, 8, 0, 0],
+    "single_lane_canonical": [False, True, True, False, False, True, True, False],
     "raw_image_cache": "off",
     "exact_local_bucket_radix": 4,
     "exact_local_physical_order_chunk_size": 0,
