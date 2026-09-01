@@ -360,6 +360,7 @@ def _reconstruct_volume_eager(
     tau_is_1d=False,
     preserve_output_precision=False,
     relion_filter_scale=None,
+    retained_device_numerator=None,
 ):
     """Eager RELION-style reconstruction from full or half Fourier accumulators.
 
@@ -387,14 +388,20 @@ def _reconstruct_volume_eager(
         preserve_output_precision=preserve_output_precision,
         relion_filter_scale=relion_filter_scale,
     )
-    if not _should_host_stage_large_relion_ifft(
+    host_stage_large_ifft = _should_host_stage_large_relion_ifft(
         Ft_ctf,
         Ft_y,
         vol_shape,
         padding_factor,
         accumulator_volume_shape,
         relion_functions,
-    ):
+    )
+    if retained_device_numerator is not None and not host_stage_large_ifft:
+        raise ValueError(
+            "A retained device numerator is only valid for the large host-staged "
+            "RELION reconstruction path"
+        )
+    if not host_stage_large_ifft:
         return relion_functions.post_process_from_filter_v2(
             *postprocess_args,
             **postprocess_kwargs,
@@ -421,8 +428,29 @@ def _reconstruct_volume_eager(
         packed_half_bytes,
     )
     if accumulator_shape[0] > reconstruction_shape[0]:
+        stage_a_numerator = Ft_y
+        if retained_device_numerator is not None:
+            if tuple(retained_device_numerator.shape) != tuple(Ft_y.shape):
+                raise ValueError(
+                    "Retained device numerator shape does not match the host numerator: "
+                    f"{tuple(retained_device_numerator.shape)} != {tuple(Ft_y.shape)}"
+                )
+            if np.dtype(retained_device_numerator.dtype) != np.dtype(Ft_y.dtype):
+                raise ValueError(
+                    "Retained device numerator dtype does not match the host numerator: "
+                    f"{retained_device_numerator.dtype} != {Ft_y.dtype}"
+                )
+            stage_a_numerator = retained_device_numerator
+            logger.info(
+                "RELION Stage A reusing retained half-0 device numerator: shape=%s dtype=%s",
+                tuple(retained_device_numerator.shape),
+                retained_device_numerator.dtype,
+            )
         wiener_half_device = relion_functions._post_process_from_filter_v2_donate_numerator(
-            *postprocess_args,
+            Ft_ctf,
+            stage_a_numerator,
+            vol_shape,
+            padding_factor,
             **postprocess_kwargs,
             input_half_volume=True,
             return_wiener_half_before_window=True,
@@ -443,6 +471,11 @@ def _reconstruct_volume_eager(
         del wiener_half_host
         gc.collect()
     else:
+        if retained_device_numerator is not None:
+            raise ValueError(
+                "A retained device numerator is only valid for the crop branch of the "
+                "large host-staged RELION reconstruction path"
+            )
         fftw_half_device = relion_functions.post_process_from_filter_v2(
             *postprocess_args,
             **postprocess_kwargs,
@@ -582,6 +615,7 @@ def _reconstruct_and_postprocess_means(
     relion_fmask_edge: int,
     accumulator_volume_shape=None,
     mean_signal_variance_shells_per_half=None,
+    retained_Ft_y_0_device=None,
 ) -> None:
     """Run one iteration's regularized reconstruction + post-processing.
 
@@ -597,6 +631,8 @@ def _reconstruct_and_postprocess_means(
 
     _t_recon = time.time()
     cs_int = int(cs) if cs is not None else None
+    if k_class_enabled and retained_Ft_y_0_device is not None:
+        raise ValueError("The retained half-0 numerator path is only valid for K=1")
     if k_class_enabled:
         shared_class_maps = []
         for class_idx in range(n_classes):
@@ -677,6 +713,7 @@ def _reconstruct_and_postprocess_means(
                 tau_is_1d=mean_signal_variance_shells_per_half is not None,
                 preserve_output_precision=True,
                 relion_filter_scale=float(volume_shape[0] ** 4),
+                retained_device_numerator=(retained_Ft_y_0_device if k == 0 else None),
             ).reshape(-1)
             means[k] = _finish_host_staged_reconstruction(
                 reconstructed,

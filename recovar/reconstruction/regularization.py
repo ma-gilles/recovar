@@ -119,7 +119,26 @@ def _delete_if_jax_array(value):
             pass
 
 
-def _join_half_pair_at_indices_host(values_0, values_1, flat_indices, *, preserve_inputs=True):
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _scatter_joined_values_into_first_device(values_0, flat_indices, joined_values):
+    """Write host-computed join values while reusing the first device buffer."""
+
+    joined = values_0.reshape(-1).at[flat_indices].set(
+        joined_values,
+        indices_are_sorted=True,
+        unique_indices=True,
+    )
+    return joined.reshape(values_0.shape)
+
+
+def _join_half_pair_at_indices_host(
+    values_0,
+    values_1,
+    flat_indices,
+    *,
+    preserve_inputs=True,
+    retain_first_device=False,
+):
     values_0_np = np.asarray(jax.device_get(values_0))
     values_1_np = np.asarray(jax.device_get(values_1))
     if preserve_inputs or not values_0_np.flags.writeable:
@@ -132,9 +151,12 @@ def _join_half_pair_at_indices_host(values_0, values_1, flat_indices, *, preserv
     values_1_flat = values_1_np.reshape(-1)
     half_scalar = np.asarray(0.5, dtype=values_0_flat.real.dtype)
     if int(flat_indices_np.size) >= int(values_0_flat.size):
-        average = ((values_0_flat + values_1_flat) * half_scalar).astype(values_0_flat.dtype, copy=False)
-        values_0_np = average.reshape(values_0_np.shape)
-        values_1_np = average.reshape(values_1_np.shape).copy()
+        average_at_join = ((values_0_flat + values_1_flat) * half_scalar).astype(
+            values_0_flat.dtype,
+            copy=False,
+        )
+        values_0_np = average_at_join.reshape(values_0_np.shape)
+        values_1_np = average_at_join.reshape(values_1_np.shape).copy()
     else:
         average_at_join = (
             (values_0_flat[flat_indices_np] + values_1_flat[flat_indices_np]) * half_scalar
@@ -142,9 +164,24 @@ def _join_half_pair_at_indices_host(values_0, values_1, flat_indices, *, preserv
         values_0_flat[flat_indices_np] = average_at_join
         values_1_flat[flat_indices_np] = average_at_join
 
-    _delete_if_jax_array(values_0)
+    retained_first_device = None
+    if retain_first_device and not preserve_inputs and not isinstance(values_0, np.ndarray):
+        logger.info(
+            "Low-resolution half-join retaining first numerator device buffer: "
+            "elements=%d joined=%d dtype=%s",
+            int(values_0_flat.size),
+            int(flat_indices_np.size),
+            values_0.dtype,
+        )
+        retained_first_device = _scatter_joined_values_into_first_device(
+            values_0,
+            jnp.asarray(flat_indices_np, dtype=jnp.int32),
+            jnp.asarray(average_at_join),
+        )
+    else:
+        _delete_if_jax_array(values_0)
     _delete_if_jax_array(values_1)
-    return values_0_np, values_1_np
+    return values_0_np, values_1_np, retained_first_device
 
 
 def _join_half_pair_at_indices(values_0, values_1, flat_indices):
@@ -161,7 +198,12 @@ def _join_half_pair_at_indices(values_0, values_1, flat_indices):
             int(flat_indices.size),
             values_0.dtype,
         )
-        return _join_half_pair_at_indices_host(values_0, values_1, flat_indices)
+        joined_0, joined_1, _ = _join_half_pair_at_indices_host(
+            values_0,
+            values_1,
+            flat_indices,
+        )
+        return joined_0, joined_1
 
     average_at_join = 0.5 * (values_0_flat[flat_indices] + values_1_flat[flat_indices])
     joined_0 = values_0_flat.at[flat_indices].set(average_at_join)
@@ -1975,6 +2017,7 @@ def join_halves_at_low_resolution(
     current_resolution_angstrom=None,
     padding_factor=None,
     preserve_inputs=True,
+    return_retained_first_numerator=False,
 ):
     """RELION's ``--low_resol_join_halves`` operation on Fourier accumulators.
 
@@ -2041,6 +2084,13 @@ def join_halves_at_low_resolution(
         host arrays then update only the joined entries in existing storage,
         as RELION does. Final all-data reconstruction leaves this enabled
         because its unfiltered half maps retain the pre-join accumulators.
+    return_retained_first_numerator : bool
+        Internal K=1 memory option. When the large host fallback receives a
+        device-resident first numerator with ``preserve_inputs=False``, append
+        a fifth return value containing that buffer after donating it to an
+        exact sparse scatter of the host-computed joined entries. The four
+        ordinary returns remain host arrays for FSC/tau2. The default keeps the
+        public four-value API.
 
     Returns
     -------
@@ -2048,10 +2098,18 @@ def join_halves_at_low_resolution(
         Accumulators with the low-resolution shells averaged. Outside the
         joining sphere they are identical to the inputs. With
         ``preserve_inputs=False``, writable host inputs may be returned and
-        updated in place.
+        updated in place. If ``return_retained_first_numerator=True``, the
+        tuple has a fifth entry as described above, or ``None`` when no device
+        buffer was retained.
     """
+
+    def _format_result(values, retained_first_numerator=None):
+        if return_retained_first_numerator:
+            return (*values, retained_first_numerator)
+        return values
+
     if low_resol_join_halves_angstrom is None or low_resol_join_halves_angstrom <= 0:
-        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+        return _format_result((Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1))
 
     # Effective joining resolution: the larger (lower-frequency) of
     # low_resol_join_halves and current_resolution.
@@ -2061,7 +2119,7 @@ def join_halves_at_low_resolution(
 
     lowres_r_max = int(np.ceil(grid_size * voxel_size / myres))
     if lowres_r_max <= 0:
-        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+        return _format_result((Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1))
 
     # RELION BackProjector::getLowResDataAndWeight / setLowResDataAndWeight
     # uses squared coordinates, not rounded shell labels:
@@ -2095,7 +2153,7 @@ def join_halves_at_low_resolution(
 
     join_indices_np = _low_resolution_join_flat_indices(volume_shape, half_layout, lowres_r2_max)
     if join_indices_np.size == 0:
-        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+        return _format_result((Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1))
 
     max_input_size = max(
         ft_y_size,
@@ -2104,25 +2162,41 @@ def join_halves_at_low_resolution(
         int(np.size(Ft_ctf_1)),
     )
     if _low_resolution_join_host_fallback_enabled_for_size(max_input_size, join_indices_np.size):
+        retain_first_device = (
+            return_retained_first_numerator
+            and not preserve_inputs
+            and padding_factor is not None
+            and int(volume_shape[0]) > int(grid_size) * int(padding_factor)
+        )
         logger.info(
-            "Low-resolution half join using host fallback: size=%d join_voxels=%d preserve_inputs=%s",
+            "Low-resolution half join using host fallback: size=%d join_voxels=%d "
+            "preserve_inputs=%s retain_first_device=%s",
             max_input_size,
             int(join_indices_np.size),
             bool(preserve_inputs),
+            bool(retain_first_device),
         )
-        Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices_host(
+        (
+            Ft_y_0_joined,
+            Ft_y_1_joined,
+            retained_first_numerator,
+        ) = _join_half_pair_at_indices_host(
             Ft_y_0,
             Ft_y_1,
             join_indices_np,
             preserve_inputs=preserve_inputs,
+            retain_first_device=retain_first_device,
         )
-        Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices_host(
+        Ft_ctf_0_joined, Ft_ctf_1_joined, _ = _join_half_pair_at_indices_host(
             Ft_ctf_0,
             Ft_ctf_1,
             join_indices_np,
             preserve_inputs=preserve_inputs,
         )
-        return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
+        return _format_result(
+            (Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined),
+            retained_first_numerator,
+        )
 
     Ft_y_0_arr = jnp.asarray(Ft_y_0)
     Ft_y_1_arr = jnp.asarray(Ft_y_1)
@@ -2133,4 +2207,4 @@ def join_halves_at_low_resolution(
     Ft_y_0_joined, Ft_y_1_joined = _join_half_pair_at_indices(Ft_y_0_arr, Ft_y_1_arr, join_indices)
     Ft_ctf_0_joined, Ft_ctf_1_joined = _join_half_pair_at_indices(Ft_ctf_0_arr, Ft_ctf_1_arr, join_indices)
 
-    return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
+    return _format_result((Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined))

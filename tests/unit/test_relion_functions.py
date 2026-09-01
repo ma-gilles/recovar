@@ -1166,9 +1166,23 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
             **common,
         )
     )
+    retained_staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            retained_device_numerator=jnp.asarray(f_ty),
+            **common,
+        )
+    )
 
     assert staged.dtype == np.complex64
     np.testing.assert_array_equal(staged, monolithic)
+    np.testing.assert_array_equal(retained_staged, monolithic)
 
     for compiled in (
         rf.post_process_from_filter_v2,
@@ -1440,6 +1454,71 @@ def test_join_halves_at_low_resolution_host_fallback_matches_join(monkeypatch):
     np.testing.assert_allclose(joined_ctf1[idx_inside], 2.0, atol=1e-6)
     np.testing.assert_allclose(joined0[idx_outside], 20.0, atol=1e-6)
     np.testing.assert_allclose(joined1[idx_outside], 4.0, atol=1e-6)
+
+
+def test_join_halves_host_fallback_retains_bitwise_exact_half0_device_numerator(monkeypatch):
+    volume_shape = (8, 8, 8)
+    rng = np.random.default_rng(20260831)
+    ft_y_0 = (
+        rng.standard_normal(volume_shape) + 1j * rng.standard_normal(volume_shape)
+    ).astype(np.complex64)
+    ft_y_1 = (
+        rng.standard_normal(volume_shape) + 1j * rng.standard_normal(volume_shape)
+    ).astype(np.complex64)
+    ft_ctf_0 = rng.uniform(0.5, 1.5, volume_shape).astype(np.float32)
+    ft_ctf_1 = rng.uniform(0.5, 1.5, volume_shape).astype(np.float32)
+
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+    joined = regularization.join_halves_at_low_resolution(
+        jnp.asarray(ft_y_0).reshape(-1),
+        jnp.asarray(ft_y_1).reshape(-1),
+        jnp.asarray(ft_ctf_0).reshape(-1),
+        jnp.asarray(ft_ctf_1).reshape(-1),
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+        padding_factor=1,
+        preserve_inputs=False,
+        return_retained_first_numerator=True,
+    )
+
+    assert len(joined) == 5
+    assert all(isinstance(value, np.ndarray) for value in joined[:4])
+    retained_half0 = joined[4]
+    assert retained_half0 is not None
+    assert not isinstance(retained_half0, np.ndarray)
+    np.testing.assert_array_equal(np.asarray(retained_half0), joined[0])
+
+    padding_joined = regularization.join_halves_at_low_resolution(
+        jnp.asarray(ft_y_0).reshape(-1),
+        jnp.asarray(ft_y_1).reshape(-1),
+        jnp.asarray(ft_ctf_0).reshape(-1),
+        jnp.asarray(ft_ctf_1).reshape(-1),
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=16,
+        low_resol_join_halves_angstrom=40.0,
+        padding_factor=1,
+        preserve_inputs=False,
+        return_retained_first_numerator=True,
+    )
+    assert all(isinstance(value, np.ndarray) for value in padding_joined[:4])
+    assert padding_joined[4] is None
+
+
+def test_joined_value_scatter_lowering_aliases_donated_first_device_buffer():
+    compiled = regularization._scatter_joined_values_into_first_device
+    lowered = compiled.lower(
+        regularization.jax.ShapeDtypeStruct((32,), jnp.complex64),
+        regularization.jax.ShapeDtypeStruct((5,), jnp.int32),
+        regularization.jax.ShapeDtypeStruct((5,), jnp.complex64),
+    )
+    hlo_text = lowered.compiler_ir(dialect="hlo").as_hlo_text()
+    hlo_header = hlo_text.splitlines()[0]
+
+    assert "input_output_alias" in hlo_header
+    assert "(0, {}, may-alias)" in hlo_header
 
 
 def test_join_halves_at_low_resolution_host_fallback_can_reuse_numpy_storage(monkeypatch):

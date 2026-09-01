@@ -9639,6 +9639,7 @@ class TestRelionModeSmokeTest:
                 (
                     kwargs.get("current_resolution_angstrom"),
                     kwargs.get("preserve_inputs"),
+                    kwargs.get("return_retained_first_numerator"),
                 )
             )
             return original_join(*args, **kwargs)
@@ -9671,6 +9672,7 @@ class TestRelionModeSmokeTest:
         assert len(join_calls) == 1
         assert join_calls[0][0] == pytest.approx(expected_resolution)
         assert join_calls[0][1] is False
+        assert join_calls[0][2] is True
 
     def test_relion_final_iteration_scores_half_maps_after_convergence(
         self,
@@ -12858,12 +12860,23 @@ class TestRelionModeSmokeTest:
         from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
 
         calls = []
+        events = []
 
         def fake_reconstruct(*_args, **kwargs):
             calls.append(kwargs)
+            events.append("reconstruct")
             return jnp.ones(VOLUME_SIZE, dtype=jnp.complex128)
 
+        def fake_finish(result, *_accumulators):
+            events.append("finish")
+            return result
+
         monkeypatch.setattr(mean_helpers_module, "_reconstruct_volume_eager", fake_reconstruct)
+        monkeypatch.setattr(
+            mean_helpers_module,
+            "_finish_host_staged_reconstruction",
+            fake_finish,
+        )
 
         n_shells = VOLUME_SHAPE[0] // 2 + 1
         tau_full = [
@@ -12874,6 +12887,7 @@ class TestRelionModeSmokeTest:
             jnp.arange(n_shells, dtype=jnp.float32) + 101.0,
             jnp.arange(n_shells, dtype=jnp.float32) + 201.0,
         ]
+        retained_half0 = object()
         means = [None, None]
         mean_helpers_module._reconstruct_and_postprocess_means(
             means,
@@ -12903,9 +12917,13 @@ class TestRelionModeSmokeTest:
             relion_width_mask_edge=5,
             relion_fmask_edge=2,
             mean_signal_variance_shells_per_half=tau_shells,
+            retained_Ft_y_0_device=retained_half0,
         )
 
         assert len(calls) == 2
+        assert events == ["reconstruct", "finish", "reconstruct", "finish"]
+        assert calls[0]["retained_device_numerator"] is retained_half0
+        assert calls[1]["retained_device_numerator"] is None
         assert all(call["tau_is_1d"] is True for call in calls)
         assert all(call["tau"].dtype == jnp.float64 for call in calls)
         np.testing.assert_array_equal(np.asarray(calls[0]["tau"]), np.asarray(tau_shells[0]))
@@ -12943,8 +12961,12 @@ class TestRelionModeSmokeTest:
         assert returned is result
         assert events == []
 
-    def test_large_host_reconstruction_releases_pre_ifft_buffer_before_finish(self, monkeypatch, caplog):
-        """The split path must release stage A before dispatching the padded iFFT."""
+    def test_large_host_reconstruction_reuses_retained_numerator_and_releases_stage_a(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        """The retained half-0 buffer must feed Stage A and release before the iFFT."""
         from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
         from recovar.reconstruction import relion_functions
 
@@ -12958,8 +12980,14 @@ class TestRelionModeSmokeTest:
             def __del__(self):
                 events.append("release")
 
-        def fake_stage(*_args, **kwargs):
+        host_ctf = np.ones((5, 5, 3), dtype=np.float32)
+        host_numerator = np.ones((5, 5, 3), dtype=np.complex64)
+        retained_numerator = jnp.ones((5, 5, 3), dtype=jnp.complex64)
+
+        def fake_stage(*args, **kwargs):
             events.append("stage")
+            assert args[0] is host_ctf
+            assert args[1] is retained_numerator
             assert kwargs["input_half_volume"] is True
             assert kwargs["return_wiener_half_before_window"] is True
             return DeviceBoundary()
@@ -13006,15 +13034,17 @@ class TestRelionModeSmokeTest:
         volume_shape = (2, 2, 2)
         accumulator_shape = (5, 5, 5)
         half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+        assert half_shape == host_numerator.shape
         returned = mean_helpers_module._reconstruct_volume_eager(
-            np.ones(half_shape, dtype=np.float32),
-            np.ones(half_shape, dtype=np.complex64),
+            host_ctf,
+            host_numerator,
             volume_shape,
             2,
             tau=np.ones(np.prod(volume_shape), dtype=np.float32),
             tau2_fudge=1.0,
             projection_padding_factor=1,
             accumulator_volume_shape=accumulator_shape,
+            retained_device_numerator=retained_numerator,
         )
 
         assert returned is host_boundary

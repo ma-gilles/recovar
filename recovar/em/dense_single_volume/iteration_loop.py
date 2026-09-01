@@ -7572,6 +7572,7 @@ def _run_relion_iteration_loop(
         # (so we never join shells beyond the actual resolution of the
         # map). Mirrors the ``XMIPP_MAX(low_resol_join_halves,
         # 1./mymodel.current_resolution)`` in RELION's source.
+        retained_Ft_y_0_device = None
         if k_class_enabled:
             Ft_y_combined = _combine_optional_half_accumulators(Ft_y_0, Ft_y_1, label="Ft_y")
             Ft_ctf_combined = _combine_optional_half_accumulators(Ft_ctf_0, Ft_ctf_1, label="Ft_ctf")
@@ -7587,7 +7588,13 @@ def _run_relion_iteration_loop(
                     )
             elif np.isfinite(float(getattr(state, "current_resolution", float("inf")))):
                 prev_res_angstrom = float(state.current_resolution)
-            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
+            (
+                Ft_y_0,
+                Ft_y_1,
+                Ft_ctf_0,
+                Ft_ctf_1,
+                retained_Ft_y_0_device,
+            ) = regularization.join_halves_at_low_resolution(
                 Ft_y_0,
                 Ft_y_1,
                 Ft_ctf_0,
@@ -7599,6 +7606,7 @@ def _run_relion_iteration_loop(
                 current_resolution_angstrom=prev_res_angstrom,
                 padding_factor=PADDING_FACTOR,
                 preserve_inputs=False,
+                return_retained_first_numerator=True,
             )
 
         # --- RELION-exact M-step ordering ---
@@ -8097,6 +8105,7 @@ def _run_relion_iteration_loop(
             mean_signal_variance_shells_per_half=(
                 mean_signal_variance_shells_per_half if not k_class_enabled else None
             ),
+            retained_Ft_y_0_device=retained_Ft_y_0_device,
         )
 
         # RELION reconstructs the first-iteration CC maps with the untapered
