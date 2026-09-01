@@ -187,8 +187,20 @@ def _get_idft3_np(img, norm=fourier_transform_utils.DEFAULT_FFT_NORM, axes=(-3, 
     return img
 
 
+def _large_grid_postprocess_is_physically_large(grid_voxels):
+    """Return whether a RELION grid crosses the configured memory threshold."""
+
+    threshold = int(
+        os.environ.get(
+            "RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS",
+            _RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS,
+        )
+    )
+    return int(grid_voxels) >= threshold
+
+
 def _large_grid_postprocess_single_precision_enabled(grid_voxels):
-    """Return whether a large RELION postprocess grid should avoid complex128.
+    """Return whether a RELION postprocess grid should avoid complex128.
 
     RELION's GPU reconstruction path is single precision.  RECOVAR globally
     enables JAX x64, which can otherwise promote a large padded reconstruction
@@ -207,13 +219,7 @@ def _large_grid_postprocess_single_precision_enabled(grid_voxels):
             "Unrecognised RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION=%r; using auto",
             mode,
         )
-    threshold = int(
-        os.environ.get(
-            "RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS",
-            _RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS,
-        )
-    )
-    return int(grid_voxels) >= threshold
+    return _large_grid_postprocess_is_physically_large(grid_voxels)
 
 
 def _pad_volume_for_projection_host(

@@ -413,7 +413,7 @@ def _should_host_stage_large_relion_ifft(
     # accumulators can safely form and host-stage that one padded boundary.
     # Large accumulators still require the existing earlier host offload so
     # their storage cannot overlap the padded inverse-FFT workspace.
-    accumulator_is_large = relion_functions._large_grid_postprocess_single_precision_enabled(
+    accumulator_is_large = relion_functions._large_grid_postprocess_is_physically_large(
         int(np.prod(accumulator_shape)),
     )
     inputs_are_host = isinstance(Ft_ctf, np.ndarray) and isinstance(Ft_y, np.ndarray)
