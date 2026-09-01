@@ -224,6 +224,13 @@ The completed 14-case synthetic K=4 campaign is summarized in
 `k4_expanded14_20260901.md` and sealed machine-readably in
 `campaigns/k4-expanded14-3466e7a32-h100.json`.
 
+The post-campaign shared-build orchestration check is documented in
+`k4_shared_cuda_setup_qualification_20260901.md`. It records the rejected
+CPU-only setup attempt, the corrected one-H100 setup/case/summary dependency
+chain, sealed binary and launcher hashes, exact Slurm accounting, and the
+one-iteration case-21 smoke result. It is infrastructure evidence, not a
+converged K=4 trajectory record.
+
 ## Sealed C4/D4 three-seed symmetry results
 
 The completed three-seed C4 and D4 campaigns are documented in
