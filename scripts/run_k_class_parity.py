@@ -1025,6 +1025,15 @@ def main() -> None:
         help="Use the sparse bucketed adaptive pass-2 path instead of dense pass-2.",
     )
     parser.add_argument(
+        "--relion-kclass-firstiter-native-bpref-replay",
+        action="store_true",
+        help=(
+            "Experimental opt-in for the K=4 iteration-1 native RELION BPref "
+            "replay. Only forwarded to --adaptive-2pass; unsupported "
+            "configurations fail closed."
+        ),
+    )
+    parser.add_argument(
         "--relion-x-half-mstep",
         action="store_true",
         help=(
@@ -1569,6 +1578,8 @@ def main() -> None:
         adaptive_em_kwargs["image_batch_size"] = fine_batch_plan.image_batch_size
         adaptive_em_kwargs["rotation_block_size"] = fine_batch_plan.rotation_block_size
         adaptive_em_kwargs["relion_fine_mstep_prune"] = bool(args.sparse_pass2)
+        if args.relion_kclass_firstiter_native_bpref_replay:
+            adaptive_em_kwargs["relion_kclass_firstiter_native_bpref_replay"] = True
         result = run_dense_k_class_em_adaptive(
             ds,
             means,

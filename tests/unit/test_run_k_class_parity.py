@@ -355,6 +355,48 @@ def test_cropped_x_half_accumulator_reconstructs_when_shape_is_explicit():
     )
 
 
+def test_k_class_replay_parser_exposes_default_off_native_bpref_replay(monkeypatch):
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    class ParserCaptured(RuntimeError):
+        pass
+
+    captured = {}
+
+    def capture_parser(parser, *_args, **_kwargs):
+        captured["parser"] = parser
+        raise ParserCaptured
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", capture_parser)
+    with pytest.raises(ParserCaptured):
+        run_k_class_parity.main()
+
+    action = next(
+        action
+        for action in captured["parser"]._actions
+        if "--relion-kclass-firstiter-native-bpref-replay" in action.option_strings
+    )
+    assert action.default is False
+    assert action.const is True
+
+
+def test_k_class_replay_native_bpref_replay_is_forwarded_only_to_adaptive_engine():
+    import scripts.run_k_class_parity as run_k_class_parity
+
+    source = inspect.getsource(run_k_class_parity.main)
+    adaptive_start = source.index("adaptive_em_kwargs = dict(common_em_kwargs)")
+    adaptive_end = source.index("result = run_dense_k_class_em_adaptive(", adaptive_start)
+    adaptive_block = source[adaptive_start:adaptive_end]
+
+    assert "if args.relion_kclass_firstiter_native_bpref_replay:" in adaptive_block
+    assert (
+        'adaptive_em_kwargs["relion_kclass_firstiter_native_bpref_replay"] = True'
+        in adaptive_block
+    )
+    assert 'common_em_kwargs["relion_kclass_firstiter_native_bpref_replay"]' not in source
+    assert "**common_em_kwargs" in source[source.index("result = run_dense_k_class_em(") :]
+
+
 def test_k_class_replay_sets_numbered_half_capture_context():
     import scripts.run_k_class_parity as run_k_class_parity
 
