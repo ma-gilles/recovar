@@ -266,6 +266,21 @@ def _k1_coarse_single_lane_canonical_enabled(*, default: bool = False) -> bool:
     )
 
 
+def _k1_coarse_single_lane_canonical_selected(
+    *,
+    requested: bool,
+    score_mode: str,
+    translation_count: int,
+) -> bool:
+    """Select the specialization only where one thread owns a translation."""
+
+    return bool(
+        requested
+        and score_mode == "gaussian"
+        and 65 <= int(translation_count) <= 128
+    )
+
+
 def _k1_coarse_multistream_worker_count(*, default: int = 0) -> int:
     """Return the default-off RELION coarse particle-stream count.
 
@@ -2311,7 +2326,11 @@ def _compute_k_class_significance_batched(
         _k1_coarse_single_lane_canonical_enabled()
     )
     coarse_single_lane_canonical_enabled = (
-        coarse_single_lane_canonical_requested and score_mode == "gaussian"
+        _k1_coarse_single_lane_canonical_selected(
+            requested=coarse_single_lane_canonical_requested,
+            score_mode=score_mode,
+            translation_count=n_trans,
+        )
     )
     if coarse_single_lane_canonical_enabled:
         if not coarse_fused_projector_enabled:
@@ -2324,11 +2343,12 @@ def _compute_k_class_significance_batched(
                 f"{_K1_COARSE_SINGLE_LANE_CANONICAL_ENV}=1 requires "
                 f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV}=1",
             )
-        if not 65 <= int(n_trans) <= 128:
-            raise ValueError(
-                f"{_K1_COARSE_SINGLE_LANE_CANONICAL_ENV}=1 requires "
-                f"65--128 translations, got {n_trans}",
-            )
+    elif coarse_single_lane_canonical_requested and score_mode == "gaussian":
+        logger.debug(
+            "RELION coarse single-lane specialization unavailable for %d "
+            "translations; retaining generic canonical reduction",
+            n_trans,
+        )
     coarse_multistream_worker_count = _k1_coarse_multistream_worker_count()
     coarse_multistream_enabled = (
         coarse_multistream_worker_count > 0 and score_mode == "gaussian"

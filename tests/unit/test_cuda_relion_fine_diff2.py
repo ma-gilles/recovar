@@ -430,6 +430,36 @@ def test_k1_coarse_single_lane_canonical_is_default_off_and_fail_closed(
         significance._k1_coarse_single_lane_canonical_enabled()
 
 
+@pytest.mark.parametrize(
+    ("translation_count", "expected"),
+    [(29, False), (64, False), (65, True), (116, True), (128, True), (129, False)],
+)
+def test_k1_coarse_single_lane_selection_falls_back_outside_one_lane_range(
+    translation_count,
+    expected,
+):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    assert (
+        significance._k1_coarse_single_lane_canonical_selected(
+            requested=True,
+            score_mode="gaussian",
+            translation_count=translation_count,
+        )
+        is expected
+    )
+    assert not significance._k1_coarse_single_lane_canonical_selected(
+        requested=True,
+        score_mode="normalized_cc",
+        translation_count=translation_count,
+    )
+    assert not significance._k1_coarse_single_lane_canonical_selected(
+        requested=False,
+        score_mode="gaussian",
+        translation_count=translation_count,
+    )
+
+
 @pytest.mark.parametrize("translation_count", [1, 64, 129])
 def test_relion_coarse_single_lane_canonical_rejects_unsupported_counts(
     translation_count,
