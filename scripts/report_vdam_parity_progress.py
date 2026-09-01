@@ -438,7 +438,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "8d075291dcf0c500f6bb25755ed00026e2b9ebdf7969581bb5e7a0004028aa10"
+PERFORMANCE_GATE_UPDATES_SHA256 = "0e770adc7ee9ecb21741b526689d9aeecaa1caa728fc9bf2d2eed215f0bfe9c8"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -789,6 +789,11 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         "late-iteration numerical acceptance policy changed",
     )
     gate_updates = scorecard.get("performance_gate_updates")
+    runtime_accounting = gate_updates.get("gf46_runtime_work_accounting", {}) if isinstance(gate_updates, dict) else {}
+    donation_ab = gate_updates.get("local_mstep_donation_ab", {}) if isinstance(gate_updates, dict) else {}
+    deferred_executor = (
+        gate_updates.get("device_deferred_executor_ceiling", {}) if isinstance(gate_updates, dict) else {}
+    )
     fixed_executor = gate_updates.get("local_compile_shape_decomposition", {}) if isinstance(gate_updates, dict) else {}
     fixed_progress = fixed_executor.get("implementation_progress", {})
     fixed_score_gate = fixed_progress.get("h100_score_correctness_gate", {})
@@ -806,6 +811,51 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and gate_updates.get("frozen_scores_changed") is False
         and gate_updates.get("production_default_changed") is False
         and gate_updates.get("numerical_policy") == NUMERICAL_ACCEPTANCE_POLICY
+        and runtime_accounting.get("status")
+        == "HISTORICAL_9X_ROOT_CAUSE_FIXED_CURRENT_LATE_GAP_APPROX_1_94X"
+        and runtime_accounting.get("report") == "docs/math/vdam_gf46_runtime_accounting_20260901.md"
+        and sha256_file(REPO_ROOT / runtime_accounting["report"])
+        == runtime_accounting.get("report_sha256")
+        and runtime_accounting.get("frozen_full_trajectory", {}).get(
+            "recovar_physical_work_change_percent_vs_relion"
+        )
+        == 1.280182405
+        and runtime_accounting.get("frozen_full_trajectory", {}).get("wall_ratio") == 9.130536258
+        and runtime_accounting.get("iteration_181", {}).get("internal_iteration_ratio") == 1.939708
+        and runtime_accounting.get("iteration_181", {}).get("recovar_coarse_change_percent_vs_relion")
+        == -9.018505690
+        and runtime_accounting.get("stale_lane_is_ancestor_of_mature_combined") is False
+        and runtime_accounting.get("recommended_tracking_base")
+        == "be26b77dced34afc9e2011c3d667ab471a2509ee"
+        and donation_ab.get("status") == "NOT_APPLICABLE_NO_MATERIAL_GAIN"
+        and donation_ab.get("job_id") == "13294000"
+        and donation_ab.get("original_slurm_status") == "FAILED"
+        and donation_ab.get("all_arm_processes_completed") is True
+        and donation_ab.get("candidate_applicable") is False
+        and donation_ab.get("qualification_passed") is False
+        and donation_ab.get("topology", {}).get("big_jit_data_adjoint_enabled") is False
+        and donation_ab.get("topology", {}).get("big_jit_weight_adjoint_enabled") is False
+        and donation_ab.get("topology", {}).get("aliased_bytes") == 27183024
+        and donation_ab.get("performance", {}).get("median_donated_over_control") == 1.00363
+        and donation_ab.get("performance", {}).get("speed_claim_allowed") is False
+        and donation_ab.get("performance", {}).get("memory_claim_allowed") is False
+        and donation_ab.get("numerics", {}).get("discrete_topology_exact") is True
+        and donation_ab.get("closure", {}).get("completed_marker_present") is False
+        and donation_ab.get("closure", {}).get("rerun_required") is False
+        and donation_ab.get("provenance", {}).get("source_manifest_sha256")
+        == "7d819d69273aeab80ca60597611ce27bc92261a441d0d87edfd65cca07f50a61"
+        and donation_ab.get("provenance", {}).get("input_manifest_sha256")
+        == "f48093a82c2068140878aa6c83ffcf9861f9e2d15ce261c8910814ef711540d7"
+        and donation_ab.get("provenance", {}).get("launch_manifest_sha256")
+        == "34a5b74c50cf7d991e27b6e4af816df56ac3f37b194a76c82f2d2e27a4a9091f"
+        and deferred_executor.get("status") == "REJECT_NO_MATERIAL_END_TO_END_CEILING"
+        and deferred_executor.get("shared_em_vdam_path") is True
+        and deferred_executor.get("code_candidate_created") is False
+        and deferred_executor.get("same_h100_controls") == 2
+        and deferred_executor.get("perfect_removal_end_to_end_ceiling_percent") == [1.41, 2.94]
+        and deferred_executor.get("transitions", {}).get("score_to_bpref_count") == 14
+        and deferred_executor.get("transitions", {}).get("bpref_to_next_score_count") == 13
+        and deferred_executor.get("tail_padding", {}).get("default_200_iteration_result") == "slower"
         and gate_updates.get("single_lane_applicability", {}).get("late_factorial_job") == "13280655"
         and gate_updates.get("single_lane_applicability", {}).get("actual_coarse_translation_count") == 29
         and gate_updates.get("atomic_t29_reduction", {}).get("job_id") == "13281836"
@@ -984,7 +1034,8 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
             "independent_cpu_review"
         )
         == "GO"
-        and fixed_progress.get("status") == "PHASE_1E_H100_SCORE_CORRECTNESS_REVIEW_GO_RUNTIME_UNQUALIFIED"
+        and fixed_progress.get("status")
+        == "PHASE_1E_CORRECTNESS_PASS_FOLLOWUPS_REJECTED_NO_MATERIAL_GAIN"
         and fixed_progress.get("independent_h100_review") == "GO"
         and gate_updates.get("local_compile_shape_decomposition", {}).get("implementation_progress", {}).get(
             "production_invoked"
@@ -1107,6 +1158,12 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     coarse_means = coarse_gate["abba_means"]
     coarse_nsight = coarse_gate["nsight"]
     gate_updates = scorecard["performance_gate_updates"]
+    runtime_accounting = gate_updates["gf46_runtime_work_accounting"]
+    frozen_accounting = runtime_accounting["frozen_full_trajectory"]
+    current_accounting = runtime_accounting["iteration_181"]
+    donation_ab = gate_updates["local_mstep_donation_ab"]
+    donation_performance = donation_ab["performance"]
+    deferred_executor = gate_updates["device_deferred_executor_ceiling"]
     single_lane_gate = gate_updates["single_lane_applicability"]
     atomic_gate = gate_updates["atomic_t29_reduction"]
     atomic_cross = atomic_gate["multistream_crossed_gate"]
@@ -1159,33 +1216,60 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** | Unchanged; observed suite range "
         f"{min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x. Promotion requires a large reproducible gain "
         "without instability or quality loss. |",
+        f"| Latest mature late-stage speed | non-scoring diagnostic | The frozen GF46 run was "
+        f"{frozen_accounting['wall_ratio']:.2f}x, but exact work accounting shows only "
+        f"{frozen_accounting['recovar_physical_work_change_percent_vs_relion']:+.2f}% more physical coarse work. "
+        f"After shared projection reuse plus atomic/multistream scheduling, iteration 181 is approximately "
+        f"{current_accounting['internal_iteration_ratio']:.2f}x RELION and RECOVAR's coarse GPU union is "
+        f"{-current_accounting['recovar_coarse_change_percent_vs_relion']:.1f}% faster. The remaining gap is "
+        "host/posterior bookkeeping and exact-local sparse pass 2. |",
         "| Performance lanes | non-scoring | Cache-only is retained for repeat/scale; chunking is rejected. The "
-        "shared eight-stream coarse scheduler is mathematically accepted and measurably faster, but held below the "
-        "runtime target. The 65--128 single-lane specialization is inapplicable to GF46's actual T=29 coarse call; "
-        "the clean tracking-derived native-atomic T=29 batched-lane port cuts warm wall about 9%, but its frozen "
-        "two-repeat maximum-envelope smoke gate fails narrowly. The separate 8+8 panel passes its numerical and "
-        "material-runtime gates after an independently reviewed serializer-only recovery. The path remains "
-        "default-off. The first 4+4 true-200 seal and its crossed 6+6 repair both received independent NO-GO and "
-        "neither was submitted. The 6+6 seal clears provenance, geometry, and launch resolution, but its "
-        "max-over-14 no-growth acceptance statistic is underpowered on valid higher-dimensional drift/variance "
-        "alternatives. |",
+        "mature shared atomic-plus-eight-stream scheduling is the production candidate: one-iteration warm wall "
+        "improves 6.93% and coarse GPU union 17.94%, with exact discrete outputs and cross-map noise inside the "
+        "repeat envelope. The older 6f10 batched-lane branch predates projection reuse and is regression evidence "
+        "only; it must not be merged. Both prior true-200 seals are rejected, and the replacement must use a single "
+        "joint complete-path witness on the mature line. All candidates remain default-off. |",
         "| Numerical policy | non-scoring | Mathematical equivalence is required; bitwise identity is not a universal "
         "requirement. Tiny differences are acceptable only as stable, unbiased, non-growing, repeat-bounded noise "
         "that preserves discrete choices, basin, and final quality, and only with a material, large, reproducible "
         "end-to-end runtime advantage. Unstable numerics fail. |",
-        "| EM reuse | shared production primitives | The remaining boundary is execution topology/variability, "
-        f"not duplicate projector or scorer math. The default-off shared fixed-capacity score seam is at Phase 1e "
-        f"(`{fixed_executor_progress['commit'][:10]}`; {fixed_executor_progress['focused_tests']}; CPU review GO). "
-        f"Correctness-only H100 job `{fixed_score_gate['job_id']}` passed {fixed_score_gate['focused_gpu_tests']} "
-        f"focused tests plus {fixed_score_gate['captured_comparisons']} captured and "
-        f"{fixed_score_gate['production_comparisons']} production comparisons exactly; speed/default remain "
-        "unqualified. |",
+        "| EM reuse | shared production primitives | VDAM already dispatches the mature shared EM projector, "
+        "scorer, posterior, exact-local executor, radix planner, and CUDA accumulation primitives. Correctness-only "
+        f"H100 seam job `{fixed_score_gate['job_id']}` is exact, but donation job `{donation_ab['job_id']}` is not "
+        "applicable to the live accumulator and is slightly slower. A perfect device-deferred boundary removes only "
+        f"{deferred_executor['perfect_removal_end_to_end_ceiling_percent'][0]:.2f}--"
+        f"{deferred_executor['perfect_removal_end_to_end_ceiling_percent'][1]:.2f}% end to end, so both follow-ups "
+        "are closed and the material targets are pass 1 and sparse pass 2. |",
         "| Later gates | separate | K>1 remains unqualified; real data remains unscored. |",
         "",
         "## Current focus",
         "",
         "| Evidence | Result | What it rules out | Explicit next gate |",
         "|---|---|---|---|",
+        f"| Exact GF46 work/runtime accounting | **HISTORICAL 9.13x ROOT CAUSE FIXED; CURRENT LATE GAP "
+        f"~{current_accounting['internal_iteration_ratio']:.2f}x.** Frozen physical coarse work was only "
+        f"{frozen_accounting['recovar_physical_work_change_percent_vs_relion']:+.2f}% versus RELION, while the "
+        f"mature candidate's coarse GPU union is "
+        f"{-current_accounting['recovar_coarse_change_percent_vs_relion']:.1f}% faster than RELION. | This rules "
+        "out extra particle/halfset/scientific work and more coarse-kernel micro-tuning as explanations for the "
+        "remaining factor. | Keep the mature shared base; target the measured 1.618 s pass-1 non-coarse work, "
+        "1.876 s sparse pass 2, and 0.759 s expectation scaffolding, then qualify a full joint trajectory. See "
+        f"`{runtime_accounting['report']}`. |",
+        f"| Local M-step donation A/B `{donation_ab['job_id']}` | **NOT APPLICABLE / NO MATERIAL GAIN.** All six "
+        f"crossed arms and {donation_ab['focused_tests_in_job']} focused tests completed, but both in-JIT adjoints "
+        f"were disabled on the live source-faithful VDAM path. Donation aliased "
+        f"{donation_ab['topology']['aliased_bytes']:,} bytes of pass-through operands; median donated/control warm "
+        f"wall was `{donation_performance['median_donated_over_control']:.5f}`. | It cannot accelerate the real "
+        "custom-CUDA accumulator and supports no speed or memory claim. The failed Slurm status is the analyzer "
+        "correctly failing closed, not a quality failure. | Do not rerun or promote; retain as diagnostic evidence. |",
+        f"| Mature device-deferred executor ceiling | **REJECTED: PERFECT REMOVAL IS ONLY "
+        f"{deferred_executor['perfect_removal_end_to_end_ceiling_percent'][0]:.2f}--"
+        f"{deferred_executor['perfect_removal_end_to_end_ceiling_percent'][1]:.2f}% END TO END.** Two same-H100 "
+        f"controls expose only {deferred_executor['transitions']['control_1_gpu_idle_milliseconds']:.3f}--"
+        f"{deferred_executor['transitions']['control_2_gpu_idle_milliseconds']:.3f} ms removable idle in a "
+        f"{deferred_executor['warm_wall_seconds']:.3f} s warm iteration. | The score/BPref host boundary is real, "
+        "but too small to be the large missing GPU-utilization lever. | No production patch; optimize pass-1 "
+        "posterior/tensor materialization and sparse pass-2 reconstruction. |",
         f"| Same-H100 GF46 it180->181 factorial `{'/'.join(row['job_id'] for row in late_gate['factorial_arms'])}` | "
         f"**CACHE-ONLY RETAINED FOR REPEAT/SCALE; CHUNKING REJECTED.** Cache-only warm wall "
         f"{late_arms['C']['warm_wall_change_percent']:.2f}% and cold wall "
@@ -1400,21 +1484,26 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"underlap, while {remaining_coarse['recovar_per_image_kernel_count']} per-image launches inflate coarse "
         f"work {remaining_coarse['per_image_work_inflation_vs_serial_percent']:.2f}%. | "
         f"{remaining_profile['next_candidate']} Report SHA-256 `{remaining_profile['report_sha256']}`. |",
-        f"| **H100 SCORE CORRECTNESS PASS / RUNTIME UNQUALIFIED** | Shared fixed-capacity local executor | "
+        f"| **CORRECTNESS PASS / PERFORMANCE FOLLOW-UPS CLOSED** | Shared fixed-capacity local executor | "
         f"`local.run_local_em_exact` accounts for {compile_profile['local_executor_compile_seconds']:.3f} of "
         f"{compile_profile['xla_compile_seconds']:.3f} s XLA compile "
         f"({compile_profile['local_share_of_compile_percent']:.1f}%). Big-JIT plus fused x-half alone consume "
         f"{compile_big_jit_xhalf_seconds:.3f} s. "
-        f"The compile-only forecast is {compile_forecast['compile_only_saving_percent_full_run']:.1f}% of the "
-        f"423 s run, before packed-work savings. Phase 1e `{fixed_executor_progress['commit'][:10]}` seals the "
+        f"The old compile-only forecast was {compile_forecast['compile_only_saving_percent_full_run']:.1f}% of its "
+        f"423 s run, before the mature projection-reuse line changed the bottleneck. Phase 1e "
+        f"`{fixed_executor_progress['commit'][:10]}` seals the "
         f"default-off shared call-0 score seam through one mature EM/VDAM numeric wrapper. H100 job "
         f"`{fixed_score_gate['job_id']}` on `{fixed_score_gate['hardware']['node']}` / "
         f"`{fixed_score_gate['hardware']['gpu_uuid']}` passed {fixed_score_gate['focused_gpu_tests']} focused tests "
         f"and all {fixed_score_gate['captured_comparisons']}+{fixed_score_gate['production_comparisons']} float32/float64 "
         "comparisons: every score, centered-score, logZ, best-score, Pmax, posterior, and mass delta is exactly zero; "
         f"support/discrete state, significant counts `{fixed_score_gate['significant_counts']}`, and row count "
-        f"`{fixed_score_gate['reconstruction_row_count']}` are exact. This is correctness-only: no speed or default "
-        "promotion. | "
+        f"`{fixed_score_gate['reconstruction_row_count']}` are exact. Follow-up donation job "
+        f"`{donation_ab['job_id']}` is not applicable to the live custom-CUDA accumulator and has median warm ratio "
+        f"`{donation_performance['median_donated_over_control']:.5f}`; the mature device-deferred seam has only a "
+        f"{deferred_executor['perfect_removal_end_to_end_ceiling_percent'][0]:.2f}--"
+        f"{deferred_executor['perfect_removal_end_to_end_ceiling_percent'][1]:.2f}% perfect-removal ceiling. No speed "
+        "or default promotion is authorized. | "
         f"{fixed_executor_progress['next_gate']} Source manifest `{fixed_score_gate['source_manifest_sha256']}`; "
         f"CUDA `{fixed_score_gate['cuda_sha256']}`; diagnostics `{fixed_score_gate['diagnostics_sha256']}`; gate JSON "
         f"`{fixed_score_gate['gate_json_sha256']}`; JUnit `{fixed_score_gate['junit_sha256']}`. Sealed analysis SHA-256 "
@@ -1686,21 +1775,22 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"at `{batched_repeat_panel['serializer_recovery_commit'][:10]}`. The first true-200 seal "
             f"`{true200_review['sealed_commit'][:12]}` and repaired 6+6 seal "
             f"`{true200_repaired_review['sealed_commit'][:12]}` both received independent NO-GO and neither was "
-            "submitted. Replace the repaired seal's underpowered max-over-14 acceptance statistic with powered "
-            "predeclared terminal-drift and complement-symmetric absolute variance-gap families under familywise "
-            "error control, add the independent higher-dimensional counterexamples/null panels, and obtain another "
-            "independent review before Slurm.",
+            "submitted. The replacement must require one serial run to be a single joint complete-path witness "
+            "across every exact key/checkpoint/STAR identity and bind continuous maps to that same witness. It must "
+            "reject missing-lane paths, cross-key chimeras, checkpoint switches, and mismatched map witnesses before "
+            "independent review and Slurm.",
             "2. Keep direct x-half default-off: it is mathematically qualified and makes finalization 85.40% faster, "
             "but finalization is too small and warm wall improves only 2.12%. Preserve the primitive for a future "
             "larger fused finalization redesign; do not spend a trajectory on it alone.",
             "3. Keep the shared posterior executor rejected: it is mathematically qualified but saves only 3.37% "
             "warm wall while its posterior kernels regress 36.86%.",
-            f"4. Continue the sealed profile's larger shared lever from default-off Phase 1e "
-            f"`{fixed_executor_progress['commit'][:10]}`. Correctness-only H100 gate "
-            f"`{fixed_score_gate['job_id']}` is independently reviewed PASS. Next run a separately reviewed "
-            "same-binary/crossed donation runtime and peak-memory A/B, then widen the shared executor beyond call 0. "
-            "Target the measured 3.344 s excess idle and 53.547 s local compile churn while preserving shared "
-            "EM/VDAM math and call chronology; do not claim speed or promote the default from the correctness gate.",
+            f"4. Preserve the exact shared score seam from Phase 1e `{fixed_executor_progress['commit'][:10]}` and "
+            f"H100 correctness gate `{fixed_score_gate['job_id']}`, but close its two performance follow-ups. Donation "
+            f"job `{donation_ab['job_id']}` is not applicable to the live VDAM accumulator and is slightly slower; "
+            f"perfect device-deferred overlap is only {deferred_executor['perfect_removal_end_to_end_ceiling_percent'][0]:.2f}--"
+            f"{deferred_executor['perfect_removal_end_to_end_ceiling_percent'][1]:.2f}% end to end. Target the measured "
+            "1.618 s pass-1 posterior/bookkeeping and 1.876 s sparse pass-2 reconstruction costs with shared EM "
+            "primitives, and spend trajectory GPU time only after a material same-H100 win.",
             "5. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
             "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
             "and the combined B arm out of the production default.",

@@ -1593,6 +1593,152 @@
     "frozen_scores_changed": false,
     "production_default_changed": false,
     "numerical_policy": "Mathematical equivalence is required; bitwise identity is not a universal requirement. Tiny continuous or quality differences are acceptable only when they are stable numerical noise: repeat-bounded, unbiased, non-growing, preserve discrete choices and the optimization basin, and cause no material final-quality loss. Non-bitwise work also requires a material, large, reproducible end-to-end runtime advantage; unstable, biased, or growing numerics fail.",
+    "gf46_runtime_work_accounting": {
+      "status": "HISTORICAL_9X_ROOT_CAUSE_FIXED_CURRENT_LATE_GAP_APPROX_1_94X",
+      "role": "diagnostic_performance",
+      "score_impact": "none",
+      "production_change_authorized": false,
+      "report": "docs/math/vdam_gf46_runtime_accounting_20260901.md",
+      "report_sha256": "57a8e7ad5a7363c96b9f9d2d55171108493830cc8ecbbf6cea9baacb2a528940",
+      "frozen_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826/vdam-gf46/repeat-01/vdam-gf46",
+      "frozen_full_trajectory": {
+        "particle_iterations": 112400,
+        "relion_coarse_pixel_candidates": 563153698252800,
+        "recovar_real_coarse_pixel_candidates": 505872088934400,
+        "recovar_padded_physical_pixel_candidates": 570363092812800,
+        "recovar_physical_work_change_percent_vs_relion": 1.280182405,
+        "recovar_real_work_change_percent_vs_relion": -10.171576516,
+        "recovar_scorer_calls": 647,
+        "recovar_real_rows": 112400,
+        "recovar_padding_rows": 36472,
+        "recovar_external_wall_seconds": 4388.5886,
+        "relion_external_wall_seconds": 480.6496,
+        "wall_ratio": 9.130536258
+      },
+      "iteration_181": {
+        "selected_particles": 1000,
+        "orientations": 36864,
+        "translations": 29,
+        "fourier_pixels": 5100,
+        "batch_capacity": 187,
+        "batch_calls": 6,
+        "padding_slots": 122,
+        "score_tensor_float32_values": 199913472,
+        "score_tensor_gib": 0.744735718,
+        "recovar_candidate_coarse_gpu_union_seconds": 3.571017,
+        "relion_coarse_gpu_seconds": 3.924993,
+        "recovar_coarse_change_percent_vs_relion": -9.018505690,
+        "recovar_candidate_expectation_seconds": 7.823940,
+        "relion_expectation_seconds": 4.076,
+        "recovar_candidate_internal_iteration_seconds": 8.236,
+        "relion_internal_iteration_seconds": 4.246,
+        "internal_iteration_ratio": 1.939708,
+        "remaining_seconds": {
+          "pass1_outside_coarse_gpu_union": 1.617824,
+          "sparse_pass2": 1.876484,
+          "other_expectation_scaffolding": 0.758615
+        }
+      },
+      "dominant_fix_commit": "1d0cacd1990f",
+      "dominant_fix": "reuse coarse projections across translations",
+      "mature_combined_commit": "b261d16cfaadaaeb95b8f5c356d43630e05dc895",
+      "recommended_tracking_base": "be26b77dced34afc9e2011c3d667ab471a2509ee",
+      "stale_lane_commit": "6f10c2d3f075654a94caa6e44249a5b1275b48f6",
+      "stale_lane_is_ancestor_of_mature_combined": false,
+      "stale_lane_recommendation": "do_not_cherry_pick_or_use_as_production_base",
+      "conclusion": "The historical gap was old execution, not extra scientific work. Mature shared coarse GPU work is already at RELION speed; remaining material targets are posterior/tensor bookkeeping, host-device barriers, exact-local sparse pass 2, fixed shapes, and stage overlap.",
+      "next_gate": "Optimize the measured pass-1 posterior/bookkeeping and exact-local sparse pass-2 costs on the mature shared base, then run only material candidates through the joint complete-path true-200 gate before measuring a new full trajectory."
+    },
+    "local_mstep_donation_ab": {
+      "status": "NOT_APPLICABLE_NO_MATERIAL_GAIN",
+      "role": "diagnostic_performance",
+      "score_impact": "none",
+      "production_change_authorized": false,
+      "job_id": "13294000",
+      "original_slurm_status": "FAILED",
+      "failure_classification": "correct_fail_closed_no_in_jit_adjoint_workload",
+      "source_head": "23af346d52b23caaf2817f10c512aed1ea2ee8bb",
+      "preload_contract_commit": "a928c2f58c44c709735bcf9a5e568f4d82b93f59",
+      "pytree_reuse_fix_commit": "23af346d52b23caaf2817f10c512aed1ea2ee8bb",
+      "comment_correction_commit": "0ae1c7d3f",
+      "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_local_mstep_donation_ab_23af346d5_h21g4_20260901_r4",
+      "all_arm_processes_completed": true,
+      "arms": "3_control_plus_3_donated_crossed",
+      "focused_tests_in_job": "54/54",
+      "focused_tests_after_comment_correction": "55/55",
+      "candidate_applicable": false,
+      "qualification_passed": false,
+      "topology": {
+        "mode": "initial_model_k1_oversampling_zero_grouped_two_halfset_source_faithful_keep_all_bpref",
+        "big_jit_data_adjoint_enabled": false,
+        "big_jit_weight_adjoint_enabled": false,
+        "real_accumulator_path": "_accumulate_relion_vdam_physical_particle_grid custom CUDA VDAM M-step",
+        "donated_buffers": "pass-through Ft_y/Ft_ctf operands",
+        "aliased_bytes": 27183024
+      },
+      "performance": {
+        "control_warm_wall_seconds": [8.1058011460, 8.0771825360, 8.0224742549],
+        "donated_warm_wall_seconds": [8.0828607099, 8.1065386690, 8.0779427290],
+        "paired_warm_ratios": [0.99717, 1.00363, 1.00691],
+        "median_donated_over_control": 1.00363,
+        "median_big_jit_ratio": 0.99536,
+        "compiled_temporary_memory_change_megabytes": 9.45,
+        "speed_claim_allowed": false,
+        "memory_claim_allowed": false
+      },
+      "numerics": {
+        "discrete_topology_exact": true,
+        "pooled_map_relative_l2_range": [2.9e-08, 5.5e-08],
+        "directional_or_variance_inflation_detected": false,
+        "classification": "inconclusive_3x3_within_cuda_repeat_noise"
+      },
+      "closure": {
+        "completed_marker_present": false,
+        "analysis_json_present": false,
+        "run_json_present": false,
+        "post_run_manifest_closure_present": false,
+        "rerun_required": false
+      },
+      "provenance": {
+        "source_manifest_sha256": "7d819d69273aeab80ca60597611ce27bc92261a441d0d87edfd65cca07f50a61",
+        "input_manifest_sha256": "f48093a82c2068140878aa6c83ffcf9861f9e2d15ce261c8910814ef711540d7",
+        "launch_manifest_sha256": "34a5b74c50cf7d991e27b6e4af816df56ac3f37b194a76c82f2d2e27a4a9091f",
+        "failure_record_sha256": "45480104c55cdb3ecb534aea159729680bb1a6b133a674a6fcc03b2659ec174a",
+        "analysis_stderr_sha256": "1c82c96ca8e0bd36798c5dcc4fbfa76578f2c107adf5de12b57b9c71abccda58",
+        "pytest_junit_sha256": "186f7d780150693ba71efcda9a437afb4280ab0c85f86498d98b797b2996dbb7"
+      },
+      "decision": "Do not rerun or promote donation. It does not reach the live VDAM accumulator, has no material speed or memory benefit, and is retained only as a fail-closed diagnostic."
+    },
+    "device_deferred_executor_ceiling": {
+      "status": "REJECT_NO_MATERIAL_END_TO_END_CEILING",
+      "role": "diagnostic_performance",
+      "score_impact": "none",
+      "production_change_authorized": false,
+      "source_head": "a928c2f58c44c709735bcf9a5e568f4d82b93f59",
+      "shared_em_vdam_path": true,
+      "code_candidate_created": false,
+      "same_h100_controls": 2,
+      "warm_wall_seconds": 14.838,
+      "transitions": {
+        "score_to_bpref_count": 14,
+        "bpref_to_next_score_count": 13,
+        "control_1_gpu_idle_milliseconds": 209.654,
+        "control_2_gpu_idle_milliseconds": 435.650
+      },
+      "perfect_removal_end_to_end_ceiling_percent": [1.41, 2.94],
+      "unavoidable_modules_milliseconds": {
+        "score": 488.5,
+        "bpref": 103.3
+      },
+      "naive_two_phase_retained_unused_tensors_gigabytes": 6.7,
+      "tail_padding": {
+        "cold_compile_removed_seconds": 0.474,
+        "steady_iteration_cost_seconds": 0.004,
+        "break_even_iterations": 118,
+        "default_200_iteration_result": "slower"
+      },
+      "decision": "Do not implement this seam as the main performance lever. Even perfect overlap is below the material-speed gate; target pass-1 posterior bookkeeping and sparse pass-2 reconstruction instead."
+    },
     "single_lane_applicability": {
       "status": "REJECTED_FOR_GF46_RETAINED_PRIMITIVE_COVERAGE",
       "promotion_authorized": false,
@@ -2320,7 +2466,7 @@
       "pool_layout_report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_pool_layout_capture_it80_104dac4ef_20260831/analysis/pool_layout.json",
       "pool_layout_report_sha256": "aaa931b08e0decbbda8c91004fb7a6dde5e3e65d9d647466bb43247fb4a2946e",
       "implementation_progress": {
-        "status": "PHASE_1E_H100_SCORE_CORRECTNESS_REVIEW_GO_RUNTIME_UNQUALIFIED",
+        "status": "PHASE_1E_CORRECTNESS_PASS_FOLLOWUPS_REJECTED_NO_MATERIAL_GAIN",
         "commit": "793e3bb12a2e9e367ed7d1a302db95575b1ebb63",
         "phase_1d_commit": "41c1cdbd104cd85cf8f433080889ac6be3a5ef21",
         "phase_1e_initial_commit": "8318565b6c52c322312ef3644631707663afbc2d",
@@ -2369,7 +2515,7 @@
           "speed_claim_allowed": false,
           "default_promotion_allowed": false
         },
-        "next_gate": "Run an independently reviewed same-binary/crossed H100 donation runtime and peak-memory A/B; then widen the shared fixed executor beyond call 0. The correctness-only score gate authorizes neither a speed claim nor default promotion."
+        "next_gate": "Donation job 13294000 is not applicable to the live VDAM accumulator and the mature device-deferred seam has only a 1.41--2.94% perfect-removal ceiling. Preserve the shared correctness seam, but redirect performance work to pass-1 posterior bookkeeping and sparse pass-2 reconstruction."
       },
       "acceptance_rule": "Mathematical equivalence is mandatory; bitwise identity is not universally required. Tiny differences may be accepted only as stable, repeat-bounded, unbiased, non-growing numerical noise that preserves discrete choices and the optimization basin and causes no material final-quality loss, and only with a material, large, reproducible end-to-end runtime advantage. Unstable, biased, or growing numerics fail."
     }

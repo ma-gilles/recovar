@@ -72,6 +72,9 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
         "b73f3ecb660d59484b280e2b0021763c5583c01106ed839efef71f5d50a55845"
     )
     implementation = profile["implementation_progress"]
+    assert implementation["status"] == (
+        "PHASE_1E_CORRECTNESS_PASS_FOLLOWUPS_REJECTED_NO_MATERIAL_GAIN"
+    )
     assert implementation["commit"] == "793e3bb12a2e9e367ed7d1a302db95575b1ebb63"
     assert implementation["phase_1d_commit"] == "41c1cdbd104cd85cf8f433080889ac6be3a5ef21"
     assert implementation["focused_tests"] == "146 passed"
@@ -128,7 +131,7 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
     assert score_gate["default_promotion_allowed"] is False
 
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
-    assert "H100 SCORE CORRECTNESS PASS / RUNTIME UNQUALIFIED" in rendered
+    assert "CORRECTNESS PASS / PERFORMANCE FOLLOW-UPS CLOSED" in rendered
     assert "53.547 of 57.833 s" in rendered
     assert profile["runtime_profile_report_sha256"] in rendered
     assert profile["sealed_analysis_report_sha256"] in rendered
@@ -140,7 +143,42 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
     assert score_gate["diagnostics_sha256"] in rendered
     assert score_gate["gate_json_sha256"] in rendered
     assert score_gate["junit_sha256"] in rendered
-    assert "no speed or default promotion" in rendered
+    assert "No speed or default promotion" in rendered
+
+
+def test_mature_executor_followups_are_closed_without_speed_claim(scorecard: dict) -> None:
+    updates = scorecard["performance_gate_updates"]
+    donation = updates["local_mstep_donation_ab"]
+    assert donation["status"] == "NOT_APPLICABLE_NO_MATERIAL_GAIN"
+    assert donation["job_id"] == "13294000"
+    assert donation["original_slurm_status"] == "FAILED"
+    assert donation["all_arm_processes_completed"] is True
+    assert donation["candidate_applicable"] is False
+    assert donation["qualification_passed"] is False
+    assert donation["topology"]["big_jit_data_adjoint_enabled"] is False
+    assert donation["topology"]["big_jit_weight_adjoint_enabled"] is False
+    assert donation["topology"]["aliased_bytes"] == 27_183_024
+    assert donation["performance"]["median_donated_over_control"] == pytest.approx(1.00363)
+    assert donation["performance"]["speed_claim_allowed"] is False
+    assert donation["performance"]["memory_claim_allowed"] is False
+    assert donation["numerics"]["discrete_topology_exact"] is True
+    assert donation["closure"]["completed_marker_present"] is False
+    assert donation["closure"]["rerun_required"] is False
+
+    deferred = updates["device_deferred_executor_ceiling"]
+    assert deferred["status"] == "REJECT_NO_MATERIAL_END_TO_END_CEILING"
+    assert deferred["shared_em_vdam_path"] is True
+    assert deferred["code_candidate_created"] is False
+    assert deferred["perfect_removal_end_to_end_ceiling_percent"] == [1.41, 2.94]
+    assert deferred["transitions"]["score_to_bpref_count"] == 14
+    assert deferred["transitions"]["bpref_to_next_score_count"] == 13
+    assert deferred["tail_padding"]["default_200_iteration_result"] == "slower"
+
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert "NOT APPLICABLE / NO MATERIAL GAIN" in rendered
+    assert "median donated/control warm wall was `1.00363`" in rendered
+    assert "PERFECT REMOVAL IS ONLY 1.41--2.94% END TO END" in rendered
+    assert "The failed Slurm status is the analyzer correctly failing closed" in rendered
 
 
 def test_numerical_acceptance_requires_stability_and_large_runtime_advantage(scorecard: dict) -> None:
