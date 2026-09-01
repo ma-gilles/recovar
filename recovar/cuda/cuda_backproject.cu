@@ -4850,6 +4850,38 @@ static_assert(sizeof(RelionVdamProjectorKernel) == 64,
 static_assert(alignof(RelionVdamProjectorKernel) == 8,
               "RELION AccProjectorKernel ABI must remain 8-byte aligned");
 
+struct RelionVdamImageGeometry
+{
+    unsigned x;
+    unsigned y;
+    unsigned pixels;
+    bool valid;
+};
+
+__device__ __forceinline__ RelionVdamImageGeometry
+relion_vdam_runtime_image_geometry(
+    unsigned physical_x,
+    unsigned physical_y,
+    unsigned physical_pixels,
+    const int32_t* runtime_current_size)
+{
+    if (runtime_current_size == nullptr)
+        return {physical_x, physical_y, physical_pixels, true};
+    const int current_size = runtime_current_size[0];
+    const int64_t logical_pixels = static_cast<int64_t>(current_size) *
+        (current_size / 2 + 1);
+    const bool valid = current_size > 0 && (current_size & 1) == 0 &&
+        current_size <= static_cast<int>(physical_y) &&
+        current_size / 2 + 1 <= static_cast<int>(physical_x) &&
+        logical_pixels <= static_cast<int64_t>(physical_pixels);
+    return {
+        valid ? static_cast<unsigned>(current_size / 2 + 1) : 0U,
+        valid ? static_cast<unsigned>(current_size) : 0U,
+        valid ? static_cast<unsigned>(logical_pixels) : 0U,
+        valid,
+    };
+}
+
 __global__ void relion_vdam_native_project_f32_kernel(
     RelionVdamProjectorKernel projector,
     const float* eulers,
@@ -4857,20 +4889,25 @@ __global__ void relion_vdam_native_project_f32_kernel(
     unsigned image_x,
     unsigned image_y,
     unsigned image_xyz,
-    unsigned rotation_count)
+    unsigned rotation_count,
+    const int32_t* runtime_current_size)
 {
     const unsigned image = blockIdx.x;
     if (image >= rotation_count) return;
+    const RelionVdamImageGeometry logical =
+        relion_vdam_runtime_image_geometry(
+            image_x, image_y, image_xyz, runtime_current_size);
+    if (!logical.valid) return;
     __shared__ float shared_eulers[9];
     if (threadIdx.x < 9)
         shared_eulers[threadIdx.x] = eulers[image * 9 + threadIdx.x];
     __syncthreads();
-    const int image_y_half = image_y / 2;
-    for (unsigned pixel = threadIdx.x; pixel < image_xyz; pixel += blockDim.x)
+    const int image_y_half = logical.y / 2;
+    for (unsigned pixel = threadIdx.x; pixel < logical.pixels; pixel += blockDim.x)
     {
-        const int x = pixel % image_x;
-        int y = static_cast<int>(pixel / image_x);
-        if (y > image_y_half) y -= image_y;
+        const int x = pixel % logical.x;
+        int y = static_cast<int>(pixel / logical.x);
+        if (y > image_y_half) y -= logical.y;
         float real = 0.0f;
         float imag = 0.0f;
         projector.project3Dmodel(
@@ -5001,16 +5038,21 @@ __global__ void relion_vdam_native_residual_f32_kernel(
     unsigned image_x,
     unsigned image_y,
     unsigned image_xyz,
-    unsigned rotation_count)
+    unsigned rotation_count,
+    const int32_t* runtime_current_size)
 {
     const unsigned image = blockIdx.x;
     if (image >= rotation_count) return;
-    const int image_y_half = image_y / 2;
-    for (unsigned pixel = threadIdx.x; pixel < image_xyz; pixel += blockDim.x)
+    const RelionVdamImageGeometry logical =
+        relion_vdam_runtime_image_geometry(
+            image_x, image_y, image_xyz, runtime_current_size);
+    if (!logical.valid) return;
+    const int image_y_half = logical.y / 2;
+    for (unsigned pixel = threadIdx.x; pixel < logical.pixels; pixel += blockDim.x)
     {
-        const int x = pixel % image_x;
-        int y = static_cast<int>(pixel / image_x);
-        if (y > image_y_half) y -= image_y;
+        const int x = pixel % logical.x;
+        int y = static_cast<int>(pixel / logical.x);
+        if (y > image_y_half) y -= logical.y;
         const unsigned output = image * image_xyz + pixel;
         const float2 reference = references_and_residuals[output];
         float real;
@@ -5084,11 +5126,22 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     std::uint64_t trace_launch_sequence,
     std::int64_t trace_particle_id,
     std::int32_t trace_worker_id,
-    std::uint32_t trace_iteration)
+    std::uint32_t trace_iteration,
+    const int32_t* runtime_current_size)
 {
     unsigned tid = threadIdx.x;
+    const RelionVdamImageGeometry logical =
+        relion_vdam_runtime_image_geometry(
+            image_x, image_y, image_xyz, runtime_current_size);
+    if (!logical.valid) return;
     __shared__ int trace_first_atomic_claimed;
-    int image_y_half = image_y / 2;
+    int image_y_half = logical.y / 2;
+    if (runtime_current_size != nullptr)
+    {
+        const int logical_max_r = static_cast<int>(
+            static_cast<float>(logical.y / 2) * padding_factor);
+        max_r2 = logical_max_r * logical_max_r;
+    }
     int max_r2_volume = max_r2 * padding_factor * padding_factor;
     __shared__ float shared_eulers[9];
     float Fweight;
@@ -5134,13 +5187,13 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
         if (tid < 9) shared_eulers[tid] = eulers[image * 9 + tid];
         __syncthreads();
 
-        int pixel_pass_count = ceilf(static_cast<float>(image_xyz) / 128.0f);
+        int pixel_pass_count = ceilf(static_cast<float>(logical.pixels) / 128.0f);
         for (unsigned pass = 0;
              pass < static_cast<unsigned>(pixel_pass_count);
              ++pass)
         {
             unsigned pixel = pass * 128 + tid;
-            bool scatter_pixel = pixel < image_xyz;
+            bool scatter_pixel = pixel < logical.pixels;
             int x = 0;
             int y = 0;
             int x0 = 0;
@@ -5157,9 +5210,9 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
             float mfz = 0.0f;
             if (scatter_pixel)
             {
-                x = pixel % image_x;
-                y = static_cast<int>(pixel / image_x);
-                if (y > image_y_half) y -= image_y;
+                x = pixel % logical.x;
+                y = static_cast<int>(pixel / logical.x);
+                if (y > image_y_half) y -= logical.y;
 
                 if (precomputed_residuals != nullptr)
                 {
@@ -5345,9 +5398,27 @@ __global__ void relion_vdam_denominator_after_sgd_f32_kernel(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t logical_pixel_count,
-    int64_t pixel_capacity)
+    int64_t pixel_capacity,
+    const int32_t* runtime_current_size)
 {
     const int64_t output = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    bool valid_runtime_size = true;
+    if (runtime_current_size != nullptr)
+    {
+        const int current_size = runtime_current_size[0];
+        const int64_t runtime_pixel_count = static_cast<int64_t>(current_size) *
+            (current_size / 2 + 1);
+        valid_runtime_size = current_size > 0 && (current_size & 1) == 0 &&
+            runtime_pixel_count <= pixel_capacity;
+        logical_pixel_count = valid_runtime_size ? runtime_pixel_count : 0;
+    }
+    if (!valid_runtime_size)
+    {
+        const int64_t capacity_count =
+            particle_count * rotation_count * pixel_capacity;
+        if (output < capacity_count) denominator[output] = nanf("");
+        return;
+    }
     const int64_t logical_output_count =
         particle_count * rotation_count * logical_pixel_count;
     if (output >= logical_output_count) return;
@@ -5383,23 +5454,25 @@ cudaError_t launch_relion_vdam_mstep_denominator_f32(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t logical_pixel_count,
-    int64_t pixel_capacity)
+    int64_t pixel_capacity,
+    const int32_t* runtime_current_size)
 {
     const int64_t denominator_capacity =
         particle_count * rotation_count * pixel_capacity;
-    const int64_t logical_denominator_count =
-        particle_count * rotation_count * logical_pixel_count;
+    const int64_t launched_denominator_count = runtime_current_size == nullptr
+        ? particle_count * rotation_count * logical_pixel_count
+        : denominator_capacity;
     if (denominator_capacity == 0) return cudaSuccess;
     cudaError_t err = cudaMemsetAsync(
         denominator,
         0,
         static_cast<size_t>(denominator_capacity) * sizeof(float),
         stream);
-    if (err != cudaSuccess || logical_denominator_count == 0) return err;
+    if (err != cudaSuccess || launched_denominator_count == 0) return err;
     constexpr int block_size = 256;
     relion_vdam_denominator_after_sgd_f32_kernel<<<
         static_cast<unsigned int>(
-            (logical_denominator_count + block_size - 1) / block_size),
+            (launched_denominator_count + block_size - 1) / block_size),
         block_size,
         0,
         stream>>>(
@@ -5411,7 +5484,8 @@ cudaError_t launch_relion_vdam_mstep_denominator_f32(
         rotation_count,
         translation_count,
         logical_pixel_count,
-        pixel_capacity);
+        pixel_capacity,
+        runtime_current_size);
     return cudaGetLastError();
 }
 
@@ -5681,6 +5755,7 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     bool native_trace_shape_replay,
     bool captured_particle_timing_replay,
     bool candidate_trace_active,
+    const int32_t* runtime_current_size,
     float* quiesced_prelaunch_data_real,
     float* quiesced_prelaunch_data_imag,
     float* quiesced_prelaunch_weight,
@@ -5854,6 +5929,12 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         (captured_rotation_replay || serial_rotation_replay ||
          float64_accumulator_replay || device_trace_requested ||
          reverse_rotation_replay || rotation_replay_stride > 0))
+        return cudaErrorInvalidValue;
+    // Extracted RELION PTX receives logical image geometry through host ABI
+    // values.  A device-only runtime cutoff cannot safely rewrite those
+    // arguments, so keep that diagnostic route explicitly unsupported.
+    if (runtime_current_size != nullptr &&
+        (exact_native_ptx_requested || exact_wavg_predecessor_requested))
         return cudaErrorInvalidValue;
     if (exact_wavg_predecessor_requested && !exact_native_ptx_requested)
         return cudaErrorInvalidValue;
@@ -6595,7 +6676,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                     0,
                     0,
                     static_cast<std::int32_t>(lane),
-                    0);
+                    0,
+                    runtime_current_size);
                 return cudaGetLastError();
             };
             if (ordered_scatter_cuda_graph_requested)
@@ -6623,7 +6705,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         static_cast<unsigned>(image_w),
                         static_cast<unsigned>(image_h),
                         static_cast<unsigned>(pixel_count),
-                        static_cast<unsigned>(rotation_count));
+                        static_cast<unsigned>(rotation_count),
+                        runtime_current_size);
                 graph_error = cudaGetLastError();
                 if (graph_error != cudaSuccess) return graph_error;
                 relion_vdam_native_residual_f32_kernel<<<
@@ -6648,7 +6731,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                         static_cast<unsigned>(image_w),
                         static_cast<unsigned>(image_h),
                         static_cast<unsigned>(pixel_count),
-                        static_cast<unsigned>(rotation_count));
+                        static_cast<unsigned>(rotation_count),
+                        runtime_current_size);
                 graph_error = cudaGetLastError();
                 if (graph_error != cudaSuccess) return graph_error;
 
@@ -6968,7 +7052,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             static_cast<unsigned>(image_w),
                             static_cast<unsigned>(image_h),
                             static_cast<unsigned>(pixel_count),
-                            static_cast<unsigned>(operand_rotation_count));
+                            static_cast<unsigned>(operand_rotation_count),
+                            runtime_current_size);
                         const cudaError_t projection_error = cudaGetLastError();
                         if (projection_error != cudaSuccess)
                             return projection_error;
@@ -6998,7 +7083,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                 static_cast<unsigned>(image_w),
                                 static_cast<unsigned>(image_h),
                                 static_cast<unsigned>(pixel_count),
-                                static_cast<unsigned>(operand_rotation_count));
+                                static_cast<unsigned>(operand_rotation_count),
+                                runtime_current_size);
                             const cudaError_t residual_error = cudaGetLastError();
                             if (residual_error != cudaSuccess)
                                 return residual_error;
@@ -7097,7 +7183,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                                         : particle)
                                     : 0,
                                 static_cast<std::int32_t>(lane),
-                                candidate_trace_iteration);
+                                candidate_trace_iteration,
+                                runtime_current_size);
                             return cudaGetLastError();
                         }
                     };
@@ -7338,7 +7425,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             rotation_count,
             translation_count,
             pixel_count,
-            pixel_capacity);
+            pixel_capacity,
+            runtime_current_size);
         if (err != cudaSuccess) goto cleanup;
         err = cudaStreamSynchronize(stream);
     }
@@ -7654,6 +7742,7 @@ extern "C" int recovar_relion_vdam_exact_native_host_replay(
         false,
         false,
         false,
+        nullptr,
         arguments->quiesced_prelaunch_data_real,
         arguments->quiesced_prelaunch_data_imag,
         arguments->quiesced_prelaunch_weight,
@@ -10528,6 +10617,177 @@ ffi::Error RelionMakeScoringRotationsF32Impl(
     return ffi::Error::Success();
 }
 
+ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t pixel_capacity,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4,
+    int64_t physical_image_size,
+    int64_t projector_max_r,
+    int64_t projection_padding_factor,
+    int64_t reconstruction_group_count,
+    int64_t parallel_worker_replay,
+    int64_t captured_rotation_replay,
+    int64_t serial_rotation_replay,
+    int64_t float64_accumulator_replay,
+    int64_t reverse_rotation_replay,
+    int64_t rotation_replay_stride,
+    int64_t native_trace_shape_replay,
+    int64_t captured_particle_timing_replay,
+    int64_t candidate_trace_active,
+    ffi::AnyBuffer projector_full,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer eulers,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer reconstruction_group_ids,
+    ffi::AnyBuffer worker_lane_ids,
+    ffi::AnyBuffer particle_trace_ids,
+    ffi::AnyBuffer rotation_replay_order,
+    ffi::AnyBuffer rotation_replay_counts,
+    ffi::AnyBuffer particle_start_offsets_ns,
+    ffi::AnyBuffer data_real_volume_in,
+    ffi::AnyBuffer data_imag_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    const ffi::AnyBuffer* runtime_current_size,
+    ffi::Result<ffi::AnyBuffer> data_real_volume_out,
+    ffi::Result<ffi::AnyBuffer> data_imag_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out,
+    ffi::Result<ffi::AnyBuffer> denominator_sum);
+
+ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t pixel_capacity,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4,
+    int64_t physical_image_size,
+    int64_t projector_max_r,
+    int64_t projection_padding_factor,
+    int64_t reconstruction_group_count,
+    int64_t parallel_worker_replay,
+    int64_t captured_rotation_replay,
+    int64_t serial_rotation_replay,
+    int64_t float64_accumulator_replay,
+    int64_t reverse_rotation_replay,
+    int64_t rotation_replay_stride,
+    int64_t native_trace_shape_replay,
+    int64_t captured_particle_timing_replay,
+    int64_t candidate_trace_active,
+    ffi::AnyBuffer projector_full,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer eulers,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer reconstruction_group_ids,
+    ffi::AnyBuffer worker_lane_ids,
+    ffi::AnyBuffer particle_trace_ids,
+    ffi::AnyBuffer rotation_replay_order,
+    ffi::AnyBuffer rotation_replay_counts,
+    ffi::AnyBuffer particle_start_offsets_ns,
+    ffi::AnyBuffer data_real_volume_in,
+    ffi::AnyBuffer data_imag_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::Result<ffi::AnyBuffer> data_real_volume_out,
+    ffi::Result<ffi::AnyBuffer> data_imag_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out,
+    ffi::Result<ffi::AnyBuffer> denominator_sum)
+{
+    return RelionVdamMstepFusedProjectorXHalfCommon(
+        stream, image_h, image_w, pixel_capacity, N0, N1, N2, upsampling,
+        max_r2_x4, physical_image_size, projector_max_r,
+        projection_padding_factor, reconstruction_group_count,
+        parallel_worker_replay, captured_rotation_replay,
+        serial_rotation_replay, float64_accumulator_replay,
+        reverse_rotation_replay, rotation_replay_stride,
+        native_trace_shape_replay, captured_particle_timing_replay,
+        candidate_trace_active, projector_full, images, ctf, minvsigma2,
+        posterior, translation_angles, eulers, rot, reconstruction_group_ids,
+        worker_lane_ids, particle_trace_ids, rotation_replay_order,
+        rotation_replay_counts, particle_start_offsets_ns,
+        data_real_volume_in, data_imag_volume_in, weight_volume_in, nullptr,
+        data_real_volume_out, data_imag_volume_out, weight_volume_out,
+        denominator_sum);
+}
+
+ffi::Error RelionVdamMstepFusedProjectorRuntimeXHalfImpl(
+    cudaStream_t stream,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t pixel_capacity,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4,
+    int64_t physical_image_size,
+    int64_t projector_max_r,
+    int64_t projection_padding_factor,
+    int64_t reconstruction_group_count,
+    int64_t parallel_worker_replay,
+    int64_t captured_rotation_replay,
+    int64_t serial_rotation_replay,
+    int64_t float64_accumulator_replay,
+    int64_t reverse_rotation_replay,
+    int64_t rotation_replay_stride,
+    int64_t native_trace_shape_replay,
+    int64_t captured_particle_timing_replay,
+    int64_t candidate_trace_active,
+    ffi::AnyBuffer projector_full,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer ctf,
+    ffi::AnyBuffer minvsigma2,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer eulers,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer reconstruction_group_ids,
+    ffi::AnyBuffer worker_lane_ids,
+    ffi::AnyBuffer particle_trace_ids,
+    ffi::AnyBuffer rotation_replay_order,
+    ffi::AnyBuffer rotation_replay_counts,
+    ffi::AnyBuffer particle_start_offsets_ns,
+    ffi::AnyBuffer data_real_volume_in,
+    ffi::AnyBuffer data_imag_volume_in,
+    ffi::AnyBuffer weight_volume_in,
+    ffi::AnyBuffer logical_current_size,
+    ffi::Result<ffi::AnyBuffer> data_real_volume_out,
+    ffi::Result<ffi::AnyBuffer> data_imag_volume_out,
+    ffi::Result<ffi::AnyBuffer> weight_volume_out,
+    ffi::Result<ffi::AnyBuffer> denominator_sum)
+{
+    return RelionVdamMstepFusedProjectorXHalfCommon(
+        stream, image_h, image_w, pixel_capacity, N0, N1, N2, upsampling,
+        max_r2_x4, physical_image_size, projector_max_r,
+        projection_padding_factor, reconstruction_group_count,
+        parallel_worker_replay, captured_rotation_replay,
+        serial_rotation_replay, float64_accumulator_replay,
+        reverse_rotation_replay, rotation_replay_stride,
+        native_trace_shape_replay, captured_particle_timing_replay,
+        candidate_trace_active, projector_full, images, ctf, minvsigma2,
+        posterior, translation_angles, eulers, rot, reconstruction_group_ids,
+        worker_lane_ids, particle_trace_ids, rotation_replay_order,
+        rotation_replay_counts, particle_start_offsets_ns,
+        data_real_volume_in, data_imag_volume_in, weight_volume_in,
+        &logical_current_size, data_real_volume_out, data_imag_volume_out,
+        weight_volume_out, denominator_sum);
+}
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionMakeScoringRotationsF32, RelionMakeScoringRotationsF32Impl,
     ffi::Ffi::Bind()
@@ -11207,7 +11467,8 @@ ffi::Error RelionVdamMstepDenominatorF32Impl(
         posterior_dims[1],
         posterior_dims[2],
         ctf_dims[1],
-        ctf_dims[1]);
+        ctf_dims[1],
+        nullptr);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
@@ -11358,7 +11619,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
-ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
+ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
     cudaStream_t stream,
     int64_t image_h,
     int64_t image_w,
@@ -11397,6 +11658,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     ffi::AnyBuffer data_real_volume_in,
     ffi::AnyBuffer data_imag_volume_in,
     ffi::AnyBuffer weight_volume_in,
+    const ffi::AnyBuffer* runtime_current_size,
     ffi::Result<ffi::AnyBuffer> data_real_volume_out,
     ffi::Result<ffi::AnyBuffer> data_imag_volume_out,
     ffi::Result<ffi::AnyBuffer> weight_volume_out,
@@ -11425,6 +11687,12 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         denominator_sum->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid dtypes");
+    if (runtime_current_size != nullptr &&
+        (runtime_current_size->element_type() != ffi::DataType::S32 ||
+         runtime_current_size->dimensions().size() != 0))
+        return ffi::Error::InvalidArgument(
+            "RelionVdamMstepFusedProjectorRuntimeXHalf: "
+            "logical_current_size must be an S32 scalar");
     if (image_h <= 0 || image_w != image_h / 2 + 1 ||
         pixel_capacity < image_h * image_w ||
         N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
@@ -11559,6 +11827,9 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         native_trace_shape_replay != 0,
         captured_particle_timing_replay != 0,
         candidate_trace_active != 0,
+        runtime_current_size == nullptr
+            ? nullptr
+            : static_cast<const int32_t*>(runtime_current_size->untyped_data()),
         nullptr,
         nullptr,
         nullptr,
@@ -11598,6 +11869,56 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("native_trace_shape_replay")
         .Attr<int64_t>("captured_particle_timing_replay")
         .Attr<int64_t>("candidate_trace_active")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionVdamMstepFusedProjectorRuntimeXHalf,
+    RelionVdamMstepFusedProjectorRuntimeXHalfImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("pixel_capacity")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("physical_image_size")
+        .Attr<int64_t>("projector_max_r")
+        .Attr<int64_t>("projection_padding_factor")
+        .Attr<int64_t>("reconstruction_group_count")
+        .Attr<int64_t>("parallel_worker_replay")
+        .Attr<int64_t>("captured_rotation_replay")
+        .Attr<int64_t>("serial_rotation_replay")
+        .Attr<int64_t>("float64_accumulator_replay")
+        .Attr<int64_t>("reverse_rotation_replay")
+        .Attr<int64_t>("rotation_replay_stride")
+        .Attr<int64_t>("native_trace_shape_replay")
+        .Attr<int64_t>("captured_particle_timing_replay")
+        .Attr<int64_t>("candidate_trace_active")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

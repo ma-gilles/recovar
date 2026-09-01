@@ -529,9 +529,9 @@ def test_stable_bpref_uses_capacity_stride_but_logical_native_issue_count():
     assert "minvsigma2 + particle * image_stride" in launcher
     assert "launch_relion_vdam_mstep_denominator_f32(" in launcher
     assert "pixel_count," in launcher
-    assert "pixel_capacity);" in launcher
+    assert "pixel_capacity,\n            runtime_current_size);" in launcher
 
-    handler_start = source.index("ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(")
+    handler_start = source.rindex("ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(")
     handler = source[
         handler_start : source.index(
             "XLA_FFI_DEFINE_HANDLER_SYMBOL(",
@@ -613,11 +613,12 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
     )
 
     assert observed["target"] == (
-        cuda_backproject._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF
+        cuda_backproject._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
     )
-    assert observed["attrs"]["image_h"] == 4
-    assert observed["attrs"]["image_w"] == 3
+    assert observed["attrs"]["image_h"] == plan.physical_current_size
+    assert observed["attrs"]["image_w"] == plan.physical_current_size // 2 + 1
     assert observed["attrs"]["pixel_capacity"] == capacity
+    assert np.asarray(observed["args"][-1]).item() == 4
     dense_images = np.asarray(observed["args"][1])
     np.testing.assert_array_equal(
         dense_images[0, rectangle.exact_positions],
@@ -630,6 +631,145 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
         np.asarray(compact_denominator)[0, 0],
         rectangle.exact_positions.astype(np.float32),
     )
+
+
+def test_runtime_bpref_ffi_abi_keeps_default_static_target_separate():
+    root = Path(__file__).resolve().parents[3]
+    python_source = (root / "recovar" / "cuda_backproject.py").read_text()
+    cuda_source = (root / "recovar" / "cuda" / "cuda_backproject.cu").read_text()
+
+    assert "cuda_relion_vdam_mstep_fused_projector_x_half" in python_source
+    assert "cuda_relion_vdam_mstep_fused_projector_runtime_x_half" in python_source
+    assert "RelionVdamMstepFusedProjectorXHalfCommon(" in cuda_source
+    assert "RelionVdamMstepFusedProjectorRuntimeXHalfImpl(" in cuda_source
+    static_binding_start = cuda_source.index(
+        "XLA_FFI_DEFINE_HANDLER_SYMBOL(\n    RelionVdamMstepFusedProjectorXHalf,"
+    )
+    runtime_binding_start = cuda_source.index(
+        "XLA_FFI_DEFINE_HANDLER_SYMBOL(\n"
+        "    RelionVdamMstepFusedProjectorRuntimeXHalf,"
+    )
+    static_binding = cuda_source[static_binding_start:runtime_binding_start]
+    runtime_binding = cuda_source[
+        runtime_binding_start : cuda_source.index(
+            "ffi::Error RelionCoarseDiff2RectangularF32Impl(",
+            runtime_binding_start,
+        )
+    ]
+    assert static_binding.count(".Arg<ffi::AnyBuffer>()") == 17
+    assert runtime_binding.count(".Arg<ffi::AnyBuffer>()") == 18
+    runtime_handler = cuda_source[
+        cuda_source.index("ffi::Error RelionVdamMstepFusedProjectorRuntimeXHalfImpl(") :
+        cuda_source.index(
+            "XLA_FFI_DEFINE_HANDLER_SYMBOL(\n    RelionVdamMstepFusedProjectorXHalf,"
+        )
+    ]
+    assert "ffi::AnyBuffer logical_current_size" in runtime_handler
+    assert "&logical_current_size" in runtime_handler
+    common_start = cuda_source.rindex(
+        "ffi::Error RelionVdamMstepFusedProjectorXHalfCommon("
+    )
+    common = cuda_source[
+        common_start : cuda_source.index(
+            "XLA_FFI_DEFINE_HANDLER_SYMBOL(\n    RelionVdamMstepFusedProjectorXHalf,",
+            common_start,
+        )
+    ]
+    assert "const ffi::AnyBuffer* runtime_current_size" in common
+    assert "logical_current_size must be an S32 scalar" in common
+    assert "runtime_current_size->untyped_data()" in common
+    assert "runtime_current_size != nullptr &&" in cuda_source
+    assert "exact_native_ptx_requested || exact_wavg_predecessor_requested" in cuda_source
+    assert 'denominator[output] = nanf("")' in cuda_source
+
+
+def test_runtime_bpref_lowering_and_jit_cache_ignore_logical_size(monkeypatch):
+    import jax
+    import jax.numpy as jnp
+
+    from recovar import cuda_backproject
+
+    observed = []
+
+    def fake_ffi_call(target, result_types, **options):
+        def call(*args, **attrs):
+            observed.append((target, options, attrs, len(args)))
+            logical_current_size = args[-1]
+            denominator = jnp.broadcast_to(
+                logical_current_size.astype(jnp.float32),
+                result_types[-1].shape,
+            )
+            return args[14], args[15], args[16], denominator
+
+        return call
+
+    monkeypatch.delenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+    function = cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+    function.clear_cache()
+
+    image_shape = (128, 128)
+    physical_current_size = 72
+    capacity = physical_current_size * (physical_current_size // 2 + 1)
+    volume_shape = (75, 75, 75)
+    volume_count = volume_shape[0] * volume_shape[1] * (
+        volume_shape[2] // 2 + 1
+    )
+    rotations = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (1, 2, 3, 3))
+    arguments = (
+        jnp.zeros(volume_count, dtype=jnp.complex64),
+        jnp.zeros(volume_count, dtype=jnp.float32),
+        jnp.ones((1, capacity), dtype=jnp.complex64),
+        jnp.ones((1, capacity), dtype=jnp.float32),
+        jnp.ones((1, capacity), dtype=jnp.float32),
+        jnp.ones((1, 2, 1), dtype=jnp.float32),
+        jnp.zeros((1, 2), dtype=jnp.float32),
+        jnp.arange(capacity, dtype=jnp.int32),
+        jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+        rotations,
+        image_shape,
+        volume_shape,
+        float(physical_current_size // 2),
+        2,
+        1,
+    )
+    dynamic_arguments = {
+        "stable_dense_positions": jnp.arange(capacity, dtype=jnp.int32),
+    }
+
+    lowered_hlo = []
+    for logical_current_size in (68, 70, 72):
+        lowered = function.lower(
+            *arguments,
+            **dynamic_arguments,
+            logical_current_size=jnp.asarray(logical_current_size, dtype=jnp.int32),
+        )
+        lowered_hlo.append(str(lowered.compiler_ir("stablehlo")))
+        result = function(
+            *arguments,
+            **dynamic_arguments,
+            logical_current_size=jnp.asarray(logical_current_size, dtype=jnp.int32),
+        )
+        jax.block_until_ready(result)
+        if logical_current_size == 68:
+            first_cache_size = function._cache_size()
+        else:
+            assert function._cache_size() == first_cache_size
+
+    assert lowered_hlo[0] == lowered_hlo[1]
+    assert observed
+    assert {
+        target for target, _options, _attrs, _operand_count in observed
+    } == {
+        cuda_backproject._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
+    }
+    assert {operand_count for _target, _options, _attrs, operand_count in observed} == {18}
+    for _target, _options, attrs, _operand_count in observed:
+        assert attrs["image_h"] == physical_current_size
+        assert attrs["image_w"] == physical_current_size // 2 + 1
+        assert attrs["pixel_capacity"] == capacity
+        assert "logical_current_size" not in attrs
 
 
 def test_stable_bpref_helper_rejects_noninline_projector():

@@ -555,6 +555,9 @@ _TARGET_RELION_VDAM_MSTEP_FUSED_X_HALF = "cuda_relion_vdam_mstep_fused_x_half"
 _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF = (
     "cuda_relion_vdam_mstep_fused_projector_x_half"
 )
+_TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF = (
+    "cuda_relion_vdam_mstep_fused_projector_runtime_x_half"
+)
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
 )
@@ -670,6 +673,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
         "RelionVdamMstepFusedProjectorXHalf",
+    ),
+    (
+        _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF,
+        "RelionVdamMstepFusedProjectorRuntimeXHalf",
     ),
     (
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
@@ -2069,7 +2076,7 @@ def _run_vdam_external_host_replay_callback(
 
 @functools.partial(
     jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28, 30),
+    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28),
 )
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
@@ -2102,7 +2109,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     candidate_trace_active: bool = False,
     persistent_serial_rotation_replay: bool = False,
     stable_dense_positions: jax.Array | None = None,
-    logical_current_size: int | None = None,
+    logical_current_size: jax.Array | int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Project, form residuals, and scatter VDAM rows in one native launch."""
 
@@ -2157,16 +2164,12 @@ def relion_vdam_mstep_fused_projector_x_half(
             "stable_dense_positions"
         )
     if stable_capacity:
-        logical_current_size = int(logical_current_size)
         physical_current_size = 2 * int(round(float(max_r)))
-        if (
-            logical_current_size <= 0
-            or logical_current_size % 2
-            or logical_current_size > physical_current_size
-        ):
+        logical_current_size = jnp.asarray(logical_current_size, dtype=jnp.int32)
+        if logical_current_size.shape != ():
             raise ValueError(
-                "logical_current_size must be positive, even, and no larger "
-                f"than physical current size {physical_current_size}"
+                "stable VDAM BPref logical_current_size must be an S32 scalar, "
+                f"got {logical_current_size.shape}"
             )
         stable_dense_positions = jnp.asarray(stable_dense_positions, dtype=jnp.int32)
         if stable_dense_positions.shape != pixel_indices.shape:
@@ -2263,7 +2266,7 @@ def relion_vdam_mstep_fused_projector_x_half(
         dense_indices = stable_dense_positions
         ctf_indices = stable_dense_positions
         noise_indices = stable_dense_positions
-        current_h = int(logical_current_size)
+        current_h = physical_current_size
         current_w = current_h // 2 + 1
         ctf_h = noise_h = current_h
         ctf_w = noise_w = current_w
@@ -2294,10 +2297,6 @@ def relion_vdam_mstep_fused_projector_x_half(
         n_particles, n_rotations, 6
     )
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
-    if stable_capacity:
-        kw["max_r2_x4"] = _encode_max_r(
-            float(logical_current_size // 2) * float(kw["upsampling"])
-        )
     denominator_type = jax.ShapeDtypeStruct(
         (n_particles, n_rotations, pixel_capacity), jnp.float32
     )
@@ -2370,12 +2369,12 @@ def relion_vdam_mstep_fused_projector_x_half(
             )
         )
     else:
-        fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
-            _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF,
-            output_types,
-            input_output_aliases={14: 0, 15: 1, 16: 2},
-            vmap_method="sequential",
-        )(
+        target = (
+            _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
+            if stable_capacity
+            else _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF
+        )
+        operands = (
             projector_full,
             dense_images,
             dense_ctf,
@@ -2393,6 +2392,16 @@ def relion_vdam_mstep_fused_projector_x_half(
             data_real_volume,
             data_imag_volume,
             weight_volume,
+        )
+        if stable_capacity:
+            operands += (logical_current_size,)
+        fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
+            target,
+            output_types,
+            input_output_aliases={14: 0, 15: 1, 16: 2},
+            vmap_method="sequential",
+        )(
+            *operands,
             image_h=np.int64(current_h),
             image_w=np.int64(current_w),
             pixel_capacity=np.int64(pixel_capacity),
