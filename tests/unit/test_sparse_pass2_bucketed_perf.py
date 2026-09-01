@@ -6129,8 +6129,9 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
         centered_rows,
         dense_scale,
         projector_output_size=None,
+        persistent_texture=None,
     ):
-        del projector_output_size
+        del projector_output_size, persistent_texture
         calls.append(
             {
                 "n_rot": int(rotations_block.shape[0]),
