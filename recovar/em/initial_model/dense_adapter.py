@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -59,6 +60,90 @@ _SPARSE_PASS2_CONTROL_KEYS = {
     "pass1_current_size",
     "return_profile",
 }
+_LOCAL_SCORE_DUMP_STOP_ENV = "RECOVAR_INITIAL_MODEL_LOCAL_SCORE_DUMP_STOP_AFTER_TARGET"
+
+
+@contextmanager
+def _initial_model_pass2_dump_context(*, debug_iteration: int | None, halfset_idx: int):
+    """Scope the env-gated fine-pass diagnostic context without leaking it."""
+
+    if not os.environ.get("RECOVAR_PASS2_DUMP_DIR", "").strip():
+        yield
+        return
+    if debug_iteration is None:
+        raise ValueError("InitialModel pass-2 dump requires an explicit debug_iteration")
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+
+    sparse_pass2_bucketed.set_bpref_contribution_dump_context(
+        iteration=int(debug_iteration),
+        half=int(halfset_idx) + 1,
+    )
+    try:
+        yield
+    finally:
+        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+
+
+class InitialModelLocalScoreDumpComplete(RuntimeError):
+    """Raised after an explicit InitialModel K-class fine-score capture."""
+
+
+def _maybe_stop_after_initial_model_local_score_dump(
+    *,
+    debug_iteration: int | None,
+    n_classes: int,
+) -> None:
+    """Stop only after every requested exact-local K-class file is durable."""
+
+    if os.environ.get(_LOCAL_SCORE_DUMP_STOP_ENV, "").strip() != "1":
+        return
+    dump_dir_raw = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_DIR", "").strip()
+    target_indices_raw = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "").strip()
+    target_iteration_raw = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_ITERATION", "").strip()
+    if not dump_dir_raw or not target_indices_raw or not target_iteration_raw:
+        raise ValueError(
+            f"{_LOCAL_SCORE_DUMP_STOP_ENV}=1 requires the local-score dump directory, global indices, and iteration"
+        )
+    if os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_LABEL", "").strip():
+        raise ValueError(
+            f"{_LOCAL_SCORE_DUMP_STOP_ENV}=1 requires an unset "
+            "RECOVAR_LOCAL_SCORE_DUMP_LABEL so completion filenames "
+            "are unambiguous"
+        )
+    if debug_iteration is None:
+        raise ValueError(f"{_LOCAL_SCORE_DUMP_STOP_ENV}=1 requires an explicit debug_iteration")
+    try:
+        target_iteration = int(target_iteration_raw)
+        target_indices = {int(token.strip()) for token in target_indices_raw.split(",") if token.strip()}
+    except ValueError as error:
+        raise ValueError("InitialModel local-score target indices and iteration must be integers") from error
+    if target_iteration <= 0 or not target_indices or min(target_indices) < 0:
+        raise ValueError("InitialModel local-score targets require iteration > 0 and non-negative image indices")
+    if int(debug_iteration) != target_iteration:
+        return
+    if int(n_classes) <= 0:
+        raise ValueError("InitialModel local-score completion requires K > 0")
+
+    dump_dir = Path(dump_dir_raw)
+    if int(n_classes) == 1:
+        expected_paths = [
+            dump_dir / f"local_score_it{target_iteration:03d}_image_{image_index}_single_class.npz"
+            for image_index in sorted(target_indices)
+        ]
+    else:
+        expected_paths = [
+            dump_dir / (f"local_score_it{target_iteration:03d}_image_{image_index}_mstep_class{class_index:03d}.npz")
+            for image_index in sorted(target_indices)
+            for class_index in range(int(n_classes))
+        ]
+    completed_paths = [path for path in expected_paths if path.is_file() and path.stat().st_size > 0]
+    if len(completed_paths) != len(expected_paths):
+        return
+    raise InitialModelLocalScoreDumpComplete(
+        "requested InitialModel exact-local K-class score target set "
+        f"was written (files={len(completed_paths)}, iteration={target_iteration}, "
+        f"classes={int(n_classes)})"
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -657,6 +742,7 @@ def _run_sparse_pass2_initial_model_estep(
             do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
             square_window=bool(group_kwargs.get("square_window", False)),
             use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
+            debug_iteration=group_kwargs.get("debug_iteration"),
             relion_projector_half=relion_projector_half_by_class,
             relion_projector_r_max=relion_projector_r_max,
         )
@@ -707,46 +793,57 @@ def _run_sparse_pass2_initial_model_estep(
         local_layout = tuple(local_layouts)
 
         t0 = time.time()
-        result = run_local_k_class_em(
-            group_dataset,
-            means,
-            mean_variance,
-            config.noise_variance,
-            local_layout,
-            config.disc_type,
-            class_log_priors=class_log_priors,
-            image_batch_size=config.image_batch_size,
-            rotation_block_size=config.rotation_block_size,
-            current_size=group_kwargs.get("current_size"),
-            accumulate_noise=True,
-            projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
-            reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
-            score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-            half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
-            use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
-            use_float64_normalization=True,
-            use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
-            do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
-            square_window=bool(group_kwargs.get("square_window", False)),
-            image_corrections=group_kwargs.get("image_corrections"),
-            scale_corrections=group_kwargs.get("scale_corrections"),
-            image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-            mstep_subtract_ctf_projection=bool(group_kwargs.get("reconstruction_subtract_projected_reference", False)),
-            mstep_relion_x_half=bool(config.relion_bpref_frame),
-            reconstruct_significant_only=True,
-            adaptive_fraction=adaptive_fraction,
-            # RELION's gradient InitialModel cap defines the coarse pass-1
-            # support only. Fine pass-2 reconstruction uses adaptive_fraction
-            # without reapplying maximum_significants.
-            max_significants=-1,
-            unify_local_bucket_sizes=True,
-            stats_use_reconstruction_probs=True,
-            class_posterior_sums_from_noise=False,
-            return_profile=return_profile,
-            return_best_pose_details=True,
-            translation_prior_centers=group_kwargs.get("translation_prior_centers"),
-            relion_projector_half=relion_projector_half_by_class,
-            relion_projector_r_max=relion_projector_r_max,
+        with _initial_model_pass2_dump_context(
+            debug_iteration=group_kwargs.get("debug_iteration"),
+            halfset_idx=int(halfset_idx),
+        ):
+            result = run_local_k_class_em(
+                group_dataset,
+                means,
+                mean_variance,
+                config.noise_variance,
+                local_layout,
+                config.disc_type,
+                class_log_priors=class_log_priors,
+                image_batch_size=config.image_batch_size,
+                rotation_block_size=config.rotation_block_size,
+                current_size=group_kwargs.get("current_size"),
+                accumulate_noise=True,
+                projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
+                reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
+                score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
+                half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
+                use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
+                use_float64_normalization=True,
+                use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
+                do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
+                square_window=bool(group_kwargs.get("square_window", False)),
+                image_corrections=group_kwargs.get("image_corrections"),
+                scale_corrections=group_kwargs.get("scale_corrections"),
+                image_pre_shifts=group_kwargs.get("image_pre_shifts"),
+                mstep_subtract_ctf_projection=bool(
+                    group_kwargs.get("reconstruction_subtract_projected_reference", False)
+                ),
+                mstep_relion_x_half=bool(config.relion_bpref_frame),
+                reconstruct_significant_only=True,
+                adaptive_fraction=adaptive_fraction,
+                # RELION's gradient InitialModel cap defines the coarse pass-1
+                # support only. Fine pass-2 reconstruction uses adaptive_fraction
+                # without reapplying maximum_significants.
+                max_significants=-1,
+                unify_local_bucket_sizes=True,
+                stats_use_reconstruction_probs=True,
+                class_posterior_sums_from_noise=False,
+                return_profile=return_profile,
+                return_best_pose_details=True,
+                translation_prior_centers=group_kwargs.get("translation_prior_centers"),
+                debug_iteration=group_kwargs.get("debug_iteration"),
+                relion_projector_half=relion_projector_half_by_class,
+                relion_projector_r_max=relion_projector_r_max,
+            )
+        _maybe_stop_after_initial_model_local_score_dump(
+            debug_iteration=group_kwargs.get("debug_iteration"),
+            n_classes=state.K,
         )
         pass2_time_s += time.time() - t0
         halfset_results[int(halfset_idx)] = result

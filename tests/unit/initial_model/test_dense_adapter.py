@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,9 +12,12 @@ from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
     DenseInitialModelEstepConfig,
+    InitialModelLocalScoreDumpComplete,
     _arrays_to_accumulators,
     _estep_meta,
+    _initial_model_pass2_dump_context,
     _initial_model_pass2_layout,
+    _maybe_stop_after_initial_model_local_score_dump,
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
     _resolve_sparse_pass1_current_size,
@@ -763,7 +767,7 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
     np.testing.assert_allclose(result.accumulators[1].weight, 0.0)
 
 
-def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch):
+def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch, tmp_path):
     calls = {}
 
     def fake_significance(dataset, means, noise_variance, rotations, translations, disc_type, **kwargs):
@@ -773,6 +777,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["pass1_prior"] = np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy()
         calls["pass1_current_size"] = kwargs["current_size"]
         calls["pass1_max_significants"] = kwargs["max_significants"]
+        calls["pass1_debug_iteration"] = kwargs["debug_iteration"]
         n_images = int(dataset.n_images)
         n_rot = int(np.asarray(rotations).shape[0])
         significant = [[np.array([0], dtype=np.int32) for _ in range(n_images)]]
@@ -824,6 +829,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_unify_bucket_sizes"] = kwargs["unify_local_bucket_sizes"]
         calls["local_stats_use_reconstruction_probs"] = kwargs["stats_use_reconstruction_probs"]
         calls["local_class_posterior_sums_from_noise"] = kwargs["class_posterior_sums_from_noise"]
+        calls["local_debug_iteration"] = kwargs["debug_iteration"]
+        if os.environ.get("RECOVAR_INITIAL_MODEL_LOCAL_SCORE_DUMP_STOP_AFTER_TARGET") == "1":
+            (tmp_path / "local_score_it001_image_1_single_class.npz").write_bytes(b"durable-test-capture")
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
@@ -881,6 +889,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
             "image_pre_shifts": pre_shifts,
             "reconstruct_with_masked_images": True,
             "reconstruction_subtract_projected_reference": True,
+            "debug_iteration": 1,
         },
     )
 
@@ -895,6 +904,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_allclose(calls["pass1_prior"], coarse_prior[[1, 3]])
     assert calls["pass1_current_size"] == 6
     assert calls["pass1_max_significants"] == 100
+    assert calls["pass1_debug_iteration"] == 1
     assert calls["local_current_size"] == state.current_size
     assert calls["rotation_perturbation"] == (0.25, 60.0)
     assert np.max(calls["pass1_rotations"]) > 6.0
@@ -915,10 +925,68 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_unify_bucket_sizes"] is True
     assert calls["local_stats_use_reconstruction_probs"] is True
     assert calls["local_class_posterior_sums_from_noise"] is False
+    assert calls["local_debug_iteration"] == 1
     assert result.meta["sparse_pass2"] is True
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
     np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
+
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "1")
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_ITERATION", "1")
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_LABEL", raising=False)
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_LOCAL_SCORE_DUMP_STOP_AFTER_TARGET", "1")
+    with pytest.raises(InitialModelLocalScoreDumpComplete, match="files=1"):
+        run_dense_initial_model_estep(
+            _Dataset(),
+            state,
+            config,
+            particle_ids=np.asarray([1, 3], dtype=np.int64),
+        )
+
+
+def test_initial_model_local_score_stop_requires_complete_k_class_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_LOCAL_SCORE_DUMP_STOP_AFTER_TARGET", "1")
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "114,132")
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_ITERATION", "1")
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_LABEL", raising=False)
+
+    _maybe_stop_after_initial_model_local_score_dump(debug_iteration=2, n_classes=4)
+    for image_index in (114, 132):
+        for class_index in range(4):
+            if (image_index, class_index) == (132, 3):
+                continue
+            path = tmp_path / (f"local_score_it001_image_{image_index}_mstep_class{class_index:03d}.npz")
+            path.write_bytes(b"durable-test-capture")
+
+    _maybe_stop_after_initial_model_local_score_dump(debug_iteration=1, n_classes=4)
+    (tmp_path / "local_score_it001_image_132_mstep_class003.npz").write_bytes(b"durable-test-capture")
+    with pytest.raises(InitialModelLocalScoreDumpComplete, match="files=8"):
+        _maybe_stop_after_initial_model_local_score_dump(
+            debug_iteration=1,
+            n_classes=4,
+        )
+
+
+def test_initial_model_pass2_dump_context_clears_after_exception(monkeypatch, tmp_path):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+
+    sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+
+    with pytest.raises(RuntimeError, match="intentional test failure"):
+        with _initial_model_pass2_dump_context(debug_iteration=7, halfset_idx=1):
+            assert sparse_pass2_bucketed._bpref_contribution_context == {
+                "iteration": 7,
+                "half": 2,
+            }
+            raise RuntimeError("intentional test failure")
+
+    assert sparse_pass2_bucketed._bpref_contribution_context == {
+        "iteration": -1,
+        "half": -1,
+    }
 
 
 def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypatch):
@@ -944,9 +1012,7 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         del args
         calls["layouts"].append(
             {
-                "significant_samples": [
-                    np.asarray(samples, dtype=np.int32).copy() for samples in significant_samples
-                ],
+                "significant_samples": [np.asarray(samples, dtype=np.int32).copy() for samples in significant_samples],
                 "pass2_parent_prior": np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy(),
                 "fine_prior": kwargs["fine_translation_log_prior"],
                 "rotation_index_order": kwargs["rotation_index_order"],
