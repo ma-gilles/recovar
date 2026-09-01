@@ -59,7 +59,8 @@ def _audit(*, workers: int, atomic: bool) -> dict:
 
 def _metadata(*, workers: int, atomic: bool) -> dict:
     return {
-        "n_translations": 29,
+        "n_translations": 116,
+        "oversampling": 1,
         "joint_halfset_particle_stream": True,
         "halfset_ids": [0, 1],
         "selected_particle_ids": [0, 1, 2],
@@ -430,6 +431,11 @@ def test_extra_arm_fails_closed_on_topology(tmp_path):
             lambda audit: audit.update(wrapper="relion_coarse_diff2_projector_f32"),
             "wrong wrapper/target",
         ),
+        (
+            "canonical_serial_1",
+            lambda audit: audit.update(translation_count=30),
+            "effective selector differs",
+        ),
     ],
 )
 def test_selector_audit_mutations_fail_closed(tmp_path, label, mutate, message):
@@ -463,6 +469,32 @@ def test_selector_audit_mutations_fail_closed(tmp_path, label, mutate, message):
     ],
 )
 def test_joint_halfset_topology_mutations_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _mutate_metadata(root, "canonical_serial_1", mutate)
+
+    with pytest.raises(analyzer.LatePairSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda metadata: metadata.update(n_translations=115),
+            "not divisible by its oversampling factor",
+        ),
+        (
+            lambda metadata: metadata.update(oversampling=-1),
+            "oversampling must be non-negative",
+        ),
+        (
+            lambda metadata: metadata.pop("oversampling"),
+            "oversampling must be an integer",
+        ),
+    ],
+)
+def test_coarse_translation_topology_mutations_fail_closed(tmp_path, mutate, message):
     root, repo = _build_root(tmp_path)
     _mutate_metadata(root, "canonical_serial_1", mutate)
 

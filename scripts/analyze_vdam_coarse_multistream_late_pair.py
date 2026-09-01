@@ -578,6 +578,22 @@ def _integer(value: Any, label: str) -> int:
     return int(value)
 
 
+def _coarse_translation_count(metadata: dict[str, Any], label: str) -> int:
+    """Recover the pass-1 grid size from the serialized fine sampling plan."""
+
+    fine_count = _integer(metadata.get("n_translations"), f"{label} n_translations")
+    oversampling = _integer(metadata.get("oversampling"), f"{label} oversampling")
+    _require(fine_count > 0, f"{label} n_translations must be positive")
+    _require(oversampling >= 0, f"{label} oversampling must be non-negative")
+    _require(oversampling <= 8, f"{label} oversampling is implausibly large")
+    children_per_parent = 4**oversampling
+    _require(
+        fine_count % children_per_parent == 0,
+        f"{label} fine translation count is not divisible by its oversampling factor",
+    )
+    return fine_count // children_per_parent
+
+
 def _validate_selector_audit(
     audit: Any,
     *,
@@ -767,7 +783,7 @@ def _load_arm(root: Path, spec: tuple[str, int, bool, int]) -> dict[str, Any]:
     _require(recorded_meta == meta_path.resolve(), f"{label} warm metadata path differs")
     _require(_sha256(meta_path) == warm.get("meta_sha256"), f"{label} warm metadata digest differs")
     metadata = _load_json(meta_path, f"{label} warm metadata")
-    translations = _integer(metadata.get("n_translations"), f"{label} n_translations")
+    translations = _coarse_translation_count(metadata, label)
     _require(
         metadata.get("joint_halfset_particle_stream") is True,
         f"{label} did not record the joint-halfset particle stream",
