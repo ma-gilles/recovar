@@ -25,6 +25,13 @@ METRIC_POLICY = (
     "across every numbered checkpoint 0--200. Runtime is an independent gate and cannot change correctness. "
     "Correlation is not computed or gated."
 )
+NUMERICAL_ACCEPTANCE_POLICY = (
+    "Mathematical equivalence is required; bitwise identity is not a universal requirement. Tiny continuous or "
+    "quality differences are acceptable only when they are stable numerical noise: repeat-bounded, unbiased, "
+    "non-growing, preserve discrete choices and the optimization basin, and cause no material final-quality loss. "
+    "Non-bitwise work also requires a material, large, reproducible end-to-end runtime advantage; unstable, biased, "
+    "or growing numerics fail."
+)
 PANEL_POLICY = {
     "k1_strict_correctness": ("K=1 strict full-trajectory correctness", "release_gate"),
     "map_trajectory": ("Map trajectory", "diagnostic_component"),
@@ -431,7 +438,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "9027989d2d1e289c83133dee45c058cabd7a38ea9e2ad54510203428f7e661b3"
+PERFORMANCE_GATE_UPDATES_SHA256 = "71b43dea15931d928516b5bd23f6998acb7be341c56986a41e1e621df257d8b7"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -782,12 +789,16 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         "late-iteration numerical acceptance policy changed",
     )
     gate_updates = scorecard.get("performance_gate_updates")
+    fixed_executor = gate_updates.get("local_compile_shape_decomposition", {}) if isinstance(gate_updates, dict) else {}
+    fixed_progress = fixed_executor.get("implementation_progress", {})
+    fixed_score_gate = fixed_progress.get("h100_score_correctness_gate", {})
     _require(
         isinstance(gate_updates, dict)
         and gate_updates.get("role") == "diagnostic_performance"
         and gate_updates.get("score_impact") == "none"
         and gate_updates.get("frozen_scores_changed") is False
         and gate_updates.get("production_default_changed") is False
+        and gate_updates.get("numerical_policy") == NUMERICAL_ACCEPTANCE_POLICY
         and gate_updates.get("single_lane_applicability", {}).get("late_factorial_job") == "13280655"
         and gate_updates.get("single_lane_applicability", {}).get("actual_coarse_translation_count") == 29
         and gate_updates.get("atomic_t29_reduction", {}).get("job_id") == "13281836"
@@ -931,6 +942,8 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
             "independent_cpu_review"
         )
         == "GO"
+        and fixed_progress.get("status") == "PHASE_1E_H100_SCORE_CORRECTNESS_REVIEW_GO_RUNTIME_UNQUALIFIED"
+        and fixed_progress.get("independent_h100_review") == "GO"
         and gate_updates.get("local_compile_shape_decomposition", {}).get("implementation_progress", {}).get(
             "production_invoked"
         )
@@ -938,7 +951,44 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and gate_updates.get("local_compile_shape_decomposition", {}).get("implementation_progress", {}).get(
             "gpu_evaluated"
         )
-        is False
+        is True
+        and fixed_score_gate.get("classification") == "correctness_only"
+        and fixed_score_gate.get("result") == "PASS_INDEPENDENT_REVIEW_GO"
+        and fixed_score_gate.get("job_id") == "13288282"
+        and fixed_score_gate.get("source_head") == "d880da3d0f169f7e898d5b0fcf8c3a5cf3122000"
+        and fixed_score_gate.get("audit_docs_commit") == "9669350003b9aed1509513824741d79308d8885d"
+        and fixed_score_gate.get("hardware", {}).get("node") == "della-h21g4"
+        and fixed_score_gate.get("hardware", {}).get("gpu_uuid")
+        == "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+        and fixed_score_gate.get("focused_gpu_tests") == "7/7"
+        and fixed_score_gate.get("precision_lanes") == ["float32", "float64"]
+        and fixed_score_gate.get("captured_comparisons") == 8
+        and fixed_score_gate.get("production_comparisons") == 12
+        and fixed_score_gate.get("metrics_max_abs")
+        == {
+            "score": 0.0,
+            "centered_score": 0.0,
+            "log_z": 0.0,
+            "best_score": 0.0,
+            "max_posterior": 0.0,
+            "posterior": 0.0,
+            "posterior_mass": 0.0,
+        }
+        and fixed_score_gate.get("discrete_and_support_exact") is True
+        and fixed_score_gate.get("significant_counts") == [2, 4, 4]
+        and fixed_score_gate.get("reconstruction_row_count") == 6
+        and fixed_score_gate.get("source_manifest_sha256")
+        == "986f6c733672425e87c8de6b8c7dec18e5d4085c663145d5e2510af6d0a72e6c"
+        and fixed_score_gate.get("cuda_sha256")
+        == "948a728b98e2d38c882a6832abba991cbbcb4ae87474b849f109166dd7158db6"
+        and fixed_score_gate.get("diagnostics_sha256")
+        == "f9b73b6facd9f74b41c4e7c76a46f6b47fb6d45734cc032f5a07f8fcadf64d25"
+        and fixed_score_gate.get("gate_json_sha256")
+        == "065e2901accefe57e59e61e6048a3ae5e66d929e4ce470527c640bec19849f7f"
+        and fixed_score_gate.get("junit_sha256")
+        == "96dc875b31f7c0a5bbe61f3344cd9f07745a92bd0b1b8ee8ddb5408185d2082f"
+        and fixed_score_gate.get("speed_claim_allowed") is False
+        and fixed_score_gate.get("default_promotion_allowed") is False
         and _sha256_json(gate_updates) == PERFORMANCE_GATE_UPDATES_SHA256,
         "current performance gate updates changed without an evidence update",
     )
@@ -1036,6 +1086,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     compile_profile = gate_updates["local_compile_shape_decomposition"]
     compile_forecast = compile_profile["forecast"]
     fixed_executor_progress = compile_profile["implementation_progress"]
+    fixed_score_gate = fixed_executor_progress["h100_score_correctness_gate"]
     compile_big_jit_xhalf_seconds = sum(
         compile_profile["dominant_identities"][name]["seconds"]
         for name in (
@@ -1071,14 +1122,17 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "two-repeat maximum-envelope smoke gate fails narrowly. The separate 8+8 panel passes its numerical and "
         "material-runtime gates after an independently reviewed serializer-only recovery. The path remains "
         "default-off and no long trajectory is authorized until a new sealed true-200 harness exists. |",
-        "| Numerical policy | non-scoring | Require mathematical equivalence plus stable, unbiased, non-growing "
-        "repeat-bounded noise. Bitwise identity is not required. Measure discrete changes; rare marginal changes may "
-        "be accepted only within control/native repeat variability, with the same basin and no material final-quality "
-        "loss. A slight stable-envelope quality change is allowed only for a large runtime gain. |",
+        "| Numerical policy | non-scoring | Mathematical equivalence is required; bitwise identity is not a universal "
+        "requirement. Tiny differences are acceptable only as stable, unbiased, non-growing, repeat-bounded noise "
+        "that preserves discrete choices, basin, and final quality, and only with a material, large, reproducible "
+        "end-to-end runtime advantage. Unstable numerics fail. |",
         "| EM reuse | shared production primitives | The remaining boundary is execution topology/variability, "
         f"not duplicate projector or scorer math. The default-off shared fixed-capacity score seam is at Phase 1e "
-        f"(`{fixed_executor_progress['commit'][:10]}`; {fixed_executor_progress['focused_tests']}; CPU review GO), "
-        "with no production or GPU invocation yet. |",
+        f"(`{fixed_executor_progress['commit'][:10]}`; {fixed_executor_progress['focused_tests']}; CPU review GO). "
+        f"Correctness-only H100 job `{fixed_score_gate['job_id']}` passed {fixed_score_gate['focused_gpu_tests']} "
+        f"focused tests plus {fixed_score_gate['captured_comparisons']} captured and "
+        f"{fixed_score_gate['production_comparisons']} production comparisons exactly; speed/default remain "
+        "unqualified. |",
         "| Later gates | separate | K>1 remains unqualified; real data remains unscored. |",
         "",
         "## Current focus",
@@ -1292,17 +1346,24 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"underlap, while {remaining_coarse['recovar_per_image_kernel_count']} per-image launches inflate coarse "
         f"work {remaining_coarse['per_image_work_inflation_vs_serial_percent']:.2f}%. | "
         f"{remaining_profile['next_candidate']} Report SHA-256 `{remaining_profile['report_sha256']}`. |",
-        f"| **SEALED COMPILE PROFILE / SHARED FIXED EXECUTOR TARGET** | Iterations 47--80 | "
+        f"| **H100 SCORE CORRECTNESS PASS / RUNTIME UNQUALIFIED** | Shared fixed-capacity local executor | "
         f"`local.run_local_em_exact` accounts for {compile_profile['local_executor_compile_seconds']:.3f} of "
         f"{compile_profile['xla_compile_seconds']:.3f} s XLA compile "
         f"({compile_profile['local_share_of_compile_percent']:.1f}%). Big-JIT plus fused x-half alone consume "
         f"{compile_big_jit_xhalf_seconds:.3f} s. "
         f"The compile-only forecast is {compile_forecast['compile_only_saving_percent_full_run']:.1f}% of the "
         f"423 s run, before packed-work savings. Phase 1e `{fixed_executor_progress['commit'][:10]}` seals the "
-        f"default-off shared call-0 score seam ({fixed_executor_progress['focused_tests']}; independent CPU review "
-        "GO) through one mature EM/VDAM numeric wrapper, with authoritative dataset-operand checks and no "
-        "GPU/production wiring. | "
-        f"{fixed_executor_progress['next_gate']} Sealed analysis SHA-256 "
+        f"default-off shared call-0 score seam through one mature EM/VDAM numeric wrapper. H100 job "
+        f"`{fixed_score_gate['job_id']}` on `{fixed_score_gate['hardware']['node']}` / "
+        f"`{fixed_score_gate['hardware']['gpu_uuid']}` passed {fixed_score_gate['focused_gpu_tests']} focused tests "
+        f"and all {fixed_score_gate['captured_comparisons']}+{fixed_score_gate['production_comparisons']} float32/float64 "
+        "comparisons: every score, centered-score, logZ, best-score, Pmax, posterior, and mass delta is exactly zero; "
+        f"support/discrete state, significant counts `{fixed_score_gate['significant_counts']}`, and row count "
+        f"`{fixed_score_gate['reconstruction_row_count']}` are exact. This is correctness-only: no speed or default "
+        "promotion. | "
+        f"{fixed_executor_progress['next_gate']} Source manifest `{fixed_score_gate['source_manifest_sha256']}`; "
+        f"CUDA `{fixed_score_gate['cuda_sha256']}`; diagnostics `{fixed_score_gate['diagnostics_sha256']}`; gate JSON "
+        f"`{fixed_score_gate['gate_json_sha256']}`; JUnit `{fixed_score_gate['junit_sha256']}`. Sealed analysis SHA-256 "
         f"`{compile_profile['sealed_analysis_report_sha256']}`; runtime report SHA-256 "
         f"`{compile_profile['runtime_profile_report_sha256']}`. |",
         "",
@@ -1577,10 +1638,11 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "3. Keep the shared posterior executor rejected: it is mathematically qualified but saves only 3.37% "
             "warm wall while its posterior kernels regress 36.86%.",
             f"4. Continue the sealed profile's larger shared lever from default-off Phase 1e "
-            f"`{fixed_executor_progress['commit'][:10]}`: run the first correctness-only H100 call-0 gate through "
-            "the single mature big-JIT helper and compare scores, logZ, argmax, posterior/support diagnostics. "
+            f"`{fixed_executor_progress['commit'][:10]}`. Correctness-only H100 gate "
+            f"`{fixed_score_gate['job_id']}` is independently reviewed PASS. Next run a separately reviewed "
+            "same-binary/crossed donation runtime and peak-memory A/B, then widen the shared executor beyond call 0. "
             "Target the measured 3.344 s excess idle and 53.547 s local compile churn while preserving shared "
-            "EM/VDAM math and call chronology.",
+            "EM/VDAM math and call chronology; do not claim speed or promote the default from the correctness gate.",
             "5. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
             "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
             "and the combined B arm out of the production default.",

@@ -1592,7 +1592,7 @@
     "score_impact": "none",
     "frozen_scores_changed": false,
     "production_default_changed": false,
-    "numerical_policy": "Mathematical equivalence is required; bitwise identity is optional. Continuous differences must be repeat-bounded, unbiased, non-growing, remain in the same basin, and cause no material final-quality loss. A slight stable-envelope quality change is acceptable only for a large reproducible runtime gain; unstable numerics fail.",
+    "numerical_policy": "Mathematical equivalence is required; bitwise identity is not a universal requirement. Tiny continuous or quality differences are acceptable only when they are stable numerical noise: repeat-bounded, unbiased, non-growing, preserve discrete choices and the optimization basin, and cause no material final-quality loss. Non-bitwise work also requires a material, large, reproducible end-to-end runtime advantage; unstable, biased, or growing numerics fail.",
     "single_lane_applicability": {
       "status": "REJECTED_FOR_GF46_RETAINED_PRIMITIVE_COVERAGE",
       "promotion_authorized": false,
@@ -2263,20 +2263,58 @@
       "pool_layout_report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_pool_layout_capture_it80_104dac4ef_20260831/analysis/pool_layout.json",
       "pool_layout_report_sha256": "aaa931b08e0decbbda8c91004fb7a6dde5e3e65d9d647466bb43247fb4a2946e",
       "implementation_progress": {
-        "status": "PHASE_1E_DEFAULT_OFF_SCORE_SEAM_CPU_REVIEW_GO",
+        "status": "PHASE_1E_H100_SCORE_CORRECTNESS_REVIEW_GO_RUNTIME_UNQUALIFIED",
         "commit": "793e3bb12a2e9e367ed7d1a302db95575b1ebb63",
         "phase_1d_commit": "41c1cdbd104cd85cf8f433080889ac6be3a5ef21",
         "phase_1e_initial_commit": "8318565b6c52c322312ef3644631707663afbc2d",
         "focused_tests": "146 passed",
         "independent_cpu_review": "GO",
+        "independent_h100_review": "GO",
         "shared_em_vdam_path": true,
         "single_shared_numeric_wrapper": true,
         "authoritative_dataset_operand_check": true,
         "production_invoked": false,
-        "gpu_evaluated": false,
-        "next_gate": "Seal and run the first correctness-only H100 call-0 gate through the shared mature big-JIT wrapper; compare scores, logZ, argmax, max posterior, support, and significant-count diagnostics before widening to all calls."
+        "gpu_evaluated": true,
+        "h100_score_correctness_gate": {
+          "classification": "correctness_only",
+          "result": "PASS_INDEPENDENT_REVIEW_GO",
+          "job_id": "13288282",
+          "slurm_result": "COMPLETED 0:0",
+          "source_head": "d880da3d0f169f7e898d5b0fcf8c3a5cf3122000",
+          "audit_docs_commit": "9669350003b9aed1509513824741d79308d8885d",
+          "underlying_phase_1e_commit": "793e3bb12a2e9e367ed7d1a302db95575b1ebb63",
+          "hardware": {
+            "node": "della-h21g4",
+            "gpu": "NVIDIA H100 80GB HBM3",
+            "gpu_uuid": "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+          },
+          "focused_gpu_tests": "7/7",
+          "precision_lanes": ["float32", "float64"],
+          "captured_comparisons": 8,
+          "production_comparisons": 12,
+          "metrics_max_abs": {
+            "score": 0.0,
+            "centered_score": 0.0,
+            "log_z": 0.0,
+            "best_score": 0.0,
+            "max_posterior": 0.0,
+            "posterior": 0.0,
+            "posterior_mass": 0.0
+          },
+          "discrete_and_support_exact": true,
+          "significant_counts": [2, 4, 4],
+          "reconstruction_row_count": 6,
+          "source_manifest_sha256": "986f6c733672425e87c8de6b8c7dec18e5d4085c663145d5e2510af6d0a72e6c",
+          "cuda_sha256": "948a728b98e2d38c882a6832abba991cbbcb4ae87474b849f109166dd7158db6",
+          "diagnostics_sha256": "f9b73b6facd9f74b41c4e7c76a46f6b47fb6d45734cc032f5a07f8fcadf64d25",
+          "gate_json_sha256": "065e2901accefe57e59e61e6048a3ae5e66d929e4ce470527c640bec19849f7f",
+          "junit_sha256": "96dc875b31f7c0a5bbe61f3344cd9f07745a92bd0b1b8ee8ddb5408185d2082f",
+          "speed_claim_allowed": false,
+          "default_promotion_allowed": false
+        },
+        "next_gate": "Run an independently reviewed same-binary/crossed H100 donation runtime and peak-memory A/B; then widen the shared fixed executor beyond call 0. The correctness-only score gate authorizes neither a speed claim nor default promotion."
       },
-      "acceptance_rule": "Mathematical equivalence is mandatory. Prefer bitwise identity; if reduction grouping changes, accept only repeat-bounded, non-directional, non-growing noise with preserved discrete choices and basin, no meaningful final-quality loss, and a material end-to-end gain."
+      "acceptance_rule": "Mathematical equivalence is mandatory; bitwise identity is not universally required. Tiny differences may be accepted only as stable, repeat-bounded, unbiased, non-growing numerical noise that preserves discrete choices and the optimization basin and causes no material final-quality loss, and only with a material, large, reproducible end-to-end runtime advantage. Unstable, biased, or growing numerics fail."
     }
   },
   "shared_em_reuse": [

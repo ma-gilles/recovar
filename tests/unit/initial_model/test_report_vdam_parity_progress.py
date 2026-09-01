@@ -80,15 +80,93 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
     assert implementation["single_shared_numeric_wrapper"] is True
     assert implementation["authoritative_dataset_operand_check"] is True
     assert implementation["production_invoked"] is False
-    assert implementation["gpu_evaluated"] is False
+    assert implementation["gpu_evaluated"] is True
+    assert implementation["independent_h100_review"] == "GO"
+    score_gate = implementation["h100_score_correctness_gate"]
+    assert score_gate["classification"] == "correctness_only"
+    assert score_gate["result"] == "PASS_INDEPENDENT_REVIEW_GO"
+    assert score_gate["job_id"] == "13288282"
+    assert score_gate["source_head"] == "d880da3d0f169f7e898d5b0fcf8c3a5cf3122000"
+    assert score_gate["audit_docs_commit"] == "9669350003b9aed1509513824741d79308d8885d"
+    assert score_gate["hardware"] == {
+        "node": "della-h21g4",
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-099c0d77-bb85-f2e9-f628-148b733c9176",
+    }
+    assert score_gate["focused_gpu_tests"] == "7/7"
+    assert score_gate["precision_lanes"] == ["float32", "float64"]
+    assert (score_gate["captured_comparisons"], score_gate["production_comparisons"]) == (8, 12)
+    assert set(score_gate["metrics_max_abs"]) == {
+        "score",
+        "centered_score",
+        "log_z",
+        "best_score",
+        "max_posterior",
+        "posterior",
+        "posterior_mass",
+    }
+    assert all(value == 0.0 for value in score_gate["metrics_max_abs"].values())
+    assert score_gate["discrete_and_support_exact"] is True
+    assert score_gate["significant_counts"] == [2, 4, 4]
+    assert score_gate["reconstruction_row_count"] == 6
+    assert score_gate["source_manifest_sha256"] == (
+        "986f6c733672425e87c8de6b8c7dec18e5d4085c663145d5e2510af6d0a72e6c"
+    )
+    assert score_gate["cuda_sha256"] == (
+        "948a728b98e2d38c882a6832abba991cbbcb4ae87474b849f109166dd7158db6"
+    )
+    assert score_gate["diagnostics_sha256"] == (
+        "f9b73b6facd9f74b41c4e7c76a46f6b47fb6d45734cc032f5a07f8fcadf64d25"
+    )
+    assert score_gate["gate_json_sha256"] == (
+        "065e2901accefe57e59e61e6048a3ae5e66d929e4ce470527c640bec19849f7f"
+    )
+    assert score_gate["junit_sha256"] == (
+        "96dc875b31f7c0a5bbe61f3344cd9f07745a92bd0b1b8ee8ddb5408185d2082f"
+    )
+    assert score_gate["speed_claim_allowed"] is False
+    assert score_gate["default_promotion_allowed"] is False
 
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
-    assert "SEALED COMPILE PROFILE / SHARED FIXED EXECUTOR TARGET" in rendered
+    assert "H100 SCORE CORRECTNESS PASS / RUNTIME UNQUALIFIED" in rendered
     assert "53.547 of 57.833 s" in rendered
     assert profile["runtime_profile_report_sha256"] in rendered
     assert profile["sealed_analysis_report_sha256"] in rendered
     assert "Phase 1e `793e3bb12a`" in rendered
-    assert "146 passed" in rendered
+    assert "7/7 focused tests and all 8+12 float32/float64 comparisons" in rendered
+    assert "every score, centered-score, logZ, best-score, Pmax, posterior, and mass delta is exactly zero" in rendered
+    assert score_gate["source_manifest_sha256"] in rendered
+    assert score_gate["cuda_sha256"] in rendered
+    assert score_gate["diagnostics_sha256"] in rendered
+    assert score_gate["gate_json_sha256"] in rendered
+    assert score_gate["junit_sha256"] in rendered
+    assert "no speed or default promotion" in rendered
+
+
+def test_numerical_acceptance_requires_stability_and_large_runtime_advantage(scorecard: dict) -> None:
+    policy = scorecard["performance_gate_updates"]["numerical_policy"]
+    assert policy == progress_mod.NUMERICAL_ACCEPTANCE_POLICY
+    assert "bitwise identity is not a universal requirement" in policy
+    assert "stable numerical noise" in policy
+    assert "repeat-bounded, unbiased, non-growing" in policy
+    assert "preserve discrete choices and the optimization basin" in policy
+    assert "no material final-quality loss" in policy
+    assert "material, large, reproducible end-to-end runtime advantage" in policy
+    assert "unstable, biased, or growing numerics fail" in policy
+
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert "bitwise identity is not a universal requirement" in rendered
+    assert "material, large, reproducible end-to-end runtime advantage" in rendered
+    assert "Unstable numerics fail" in rendered
+
+
+def test_fixed_local_h100_score_gate_is_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    gate = scorecard["performance_gate_updates"]["local_compile_shape_decomposition"][
+        "implementation_progress"
+    ]["h100_score_correctness_gate"]
+    gate["gate_json_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="current performance gate updates changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
 
 
 def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(scorecard: dict) -> None:
