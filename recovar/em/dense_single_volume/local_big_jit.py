@@ -823,7 +823,7 @@ def _project_local_half_spectrum(
     # Ft_y and Ft_ctf are loop-carried M-step accumulators.  Donating them
     # lets XLA update multi-GB full-Nyquist BPref buffers in place instead of
     # allocating a same-sized output for every local-search bucket.
-    donate_argnums=(4, 5),
+    donate_argnums=(7, 8),
     static_argnames=(
         "mask_mode",
         "score_with_masked_images",

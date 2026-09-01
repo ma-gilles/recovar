@@ -8,7 +8,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume import local_big_jit, local_em_engine
 from recovar.em.dense_single_volume.batch_planning import (
     _plan_fixed_capacity_whole_local,
     _seal_fixed_capacity_physical_order,
@@ -747,6 +747,29 @@ def test_local_big_jit_shared_invocation_forwards_one_call_without_numeric_chang
 
     assert result is expected
     assert calls == [((positional,), {"marker": keyword})]
+
+
+def test_local_big_jit_donates_the_two_loop_carried_accumulators_by_signature_index():
+    parameter_names = tuple(inspect.signature(local_big_jit.run_local_bucket_big_jit).parameters)
+    source = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+
+    assert parameter_names[7:9] == ("Ft_y", "Ft_ctf")
+    assert "donate_argnums=(7, 8)" in source
+    assert "donate_argnums=(4, 5)" not in source
+
+
+def test_local_em_caller_allocates_and_forwards_fresh_donated_accumulators_per_run():
+    source = inspect.getsource(local_em_engine.run_local_em_exact)
+    allocation_y = source.index("Ft_y = jnp.zeros(")
+    allocation_ctf = source.index("Ft_ctf = jnp.zeros(")
+    bucket_loop = source.index("for bucket_index, bucket in enumerate(bucket_specs):")
+    invocation = source.index("_invoke_local_bucket_big_jit(")
+
+    assert allocation_y < bucket_loop < invocation
+    assert allocation_ctf < bucket_loop < invocation
+    invocation_source = source[invocation : source.index("debug_scores = None", invocation)]
+    positional_lines = [line.strip().rstrip(",") for line in invocation_source.splitlines()[1:10]]
+    assert positional_lines[7:9] == ["Ft_y", "Ft_ctf"]
 
 
 def test_fixed_capacity_call0_selector_is_private_default_off_and_uses_shared_mature_call():
