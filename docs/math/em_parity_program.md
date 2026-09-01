@@ -14,6 +14,36 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## VDAM active experiment — 2026-08-20
 
+### 2026-09-01 fixed-capacity call-0 correctness gate
+
+The first shared fixed-capacity executor gate is correctness-only and remains
+default-off.  It compares the mature, explicitly disabled-selector, and fixed
+call-0 arms on the same deterministic K=1 score-only call through the single
+shared `run_local_bucket_big_jit` wrapper.  The captured boundary includes the
+complete prepared operand set, scores, `log_Z`, best score/argmax, maximum
+posterior, posterior masses, exact sample/rotation support masks, significant
+counts, row counts, hard assignments, and public `RelionStats`.  Both float32
+and float64 companion lanes run in alternating same-process repeats, followed
+by an independent uninstrumented production-topology comparison.
+
+Because the present seam substitutes byte-validated operands immediately
+before the identical numeric call, its acceptance contract is bitwise exact;
+nonzero drift is unexplained and fails.  A future reduction-order optimization
+may use small nonzero envelopes only after a separate production speed gate
+shows a material win, and only with exact discrete decisions/support plus
+repeat-bounded, non-growing float32 drift and a float64 companion at least
+three orders tighter.  This gate cannot claim speed or promote a default.
+
+The gate audit exposed that `donate_argnums=(4, 5)` donated correction and
+projection-mean inputs even though the implementation comment names the
+loop-carried `Ft_y`/`Ft_ctf` accumulators.  Commit `13bfcce4a` corrects the
+mapping to signature positions `(7, 8)` and adds structural caller guards.
+The old mapping emitted an unusable donated-buffer warning in the CPU dry run;
+the corrected mapping does not.  The sealed harness and H100 runner require an
+independent review before submission.  The subsequent donation performance
+claim, if any, requires a separate same-binary/toggle or crossed-commit H100
+M-step runtime and peak-memory gate.
+
 ### 2026-08-31 late-trajectory one-iteration performance gate
 
 Validation scope is diagnostic/performance-only: it cannot promote science,

@@ -12333,3 +12333,35 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_native_preprocess_retry1_it2_1a6ce905_20260813T2005ET`,
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_live_it2_1a6ce905_20260813T2030ET`, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_nativepre_it2_1a6ce905_20260813T2030ET`.
+
+## 2026-09-01 — fixed-capacity call-0 score gate sealed for review
+
+- Scope is K=1, score-only call 0 with both adjoints disabled.  The fixed seam
+  remains private and default-off; unsupported diagnostics, correction paths,
+  M-step/noise work, K>1, and later calls still fail closed.
+- The deterministic gate has three active raw-real images, a four-image
+  physical capacity, radix 16, eight active rotation rows, two translations,
+  nonuniform priors and pre-shifts, and significant-support pruning.  It runs
+  mature/default, selector-disabled, and fixed arms through the same wrapper.
+- Diagnostic capture checks byte-identical prepared arrays and exact
+  scores/`log_Z`/argmax/Pmax/posterior/support/significant counts.  It then
+  checks the public score-only outputs and repeats the three arms through the
+  ordinary non-debug production topology.  Float32 and float64 are separate
+  lanes; the dormant future-noise envelope is at least `1e3` tighter in
+  float64 and cannot activate without a material speed result.
+- The first CPU dry run completed with zero mature/fixed and default/disabled
+  deltas in every continuous metric and exact discrete outputs.  It emitted a
+  JAX warning that exposed the existing donation-position error:
+  `donate_argnums=(4,5)` named `corr_img_rfloat_square_half` and
+  `mean_for_proj`, not the documented accumulators.  Dedicated commit
+  `13bfcce4a` changes the mapping to `(7,8)` (`Ft_y`, `Ft_ctf`) and adds
+  signature/caller guards; the corrected dry run emits no warning.
+- The Slurm seal pins the committed HEAD, full source manifest, H100 node and
+  physical GPU UUID, focused test count, isolated CUDA binary/runtime caches,
+  import/ancestry provenance, final clean tree, final manifest, and final GPU
+  identity.  `COMPLETED` is written last.  Its result classification is
+  `correctness_only`; `speed_claim_allowed` and `default_promotion_allowed`
+  are false.
+- Next action: commit the harness separately from `13bfcce4a`, obtain an
+  independent review of both commits, then run only the sealed focused H100
+  gate.  Donation runtime/peak-memory qualification is a later separate gate.
