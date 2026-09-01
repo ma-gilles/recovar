@@ -434,7 +434,11 @@ def _global_reconstruction_probability_thresholds(
     n_classes, n_images = class_log_evidence.shape
     if len(support_values_by_class) != n_classes:
         raise ValueError("support value class count does not match class_log_evidence")
-    thresholds = np.full(n_images, np.inf, dtype=np.float64)
+    # Rows without positive support must reconstruct nothing. Keep the public
+    # exact-local threshold finite while using a value that remains above every
+    # posterior probability after either float32 or float64 device casting.
+    no_support_threshold = float(np.finfo(np.float32).max)
+    thresholds = np.full(n_images, no_support_threshold, dtype=np.float64)
     target = float(adaptive_fraction)
     for image_index in range(n_images):
         values = []

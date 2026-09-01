@@ -7011,6 +7011,36 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
         np.testing.assert_allclose(threshold, np.asarray([0.0097]), rtol=1e-3, atol=1e-6)
 
 
+def test_global_reconstruction_threshold_uses_finite_no_support_sentinel():
+    from recovar.em.dense_single_volume.k_class import _global_reconstruction_probability_thresholds
+
+    thresholds = _global_reconstruction_probability_thresholds(
+        [
+            (
+                np.asarray([0.6, 0.4], dtype=np.float32),
+                np.asarray([], dtype=np.float32),
+            ),
+            (
+                np.asarray([], dtype=np.float32),
+                np.asarray([], dtype=np.float32),
+            ),
+        ],
+        class_log_evidence=np.asarray(
+            [
+                [0.0, -np.inf],
+                [-np.inf, -np.inf],
+            ],
+            dtype=np.float64,
+        ),
+        global_log_evidence=np.asarray([0.0, -np.inf], dtype=np.float64),
+        adaptive_fraction=0.9,
+    )
+
+    np.testing.assert_allclose(thresholds[0], 0.4, rtol=1e-6, atol=1e-7)
+    assert np.isfinite(thresholds[1])
+    assert thresholds[1] == float(np.finfo(np.float32).max)
+
+
 def test_local_search_iteration_k_class_returns_class_details(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=161)
@@ -15021,6 +15051,36 @@ def test_local_big_jit_sample_mask_none_matches_full_support():
         implicit_full[8],
         np.sum(rotation_mask, axis=1, dtype=np.int32) * n_trans,
     )
+
+
+def test_local_big_jit_finite_no_support_threshold_selects_nothing():
+    from recovar.em.dense_single_volume.local_big_jit import _score_normalize_support
+
+    result = _score_normalize_support(
+        jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+        jnp.zeros((1, 1), dtype=jnp.float32),
+        jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+        jnp.ones((1,), dtype=jnp.float32),
+        jnp.zeros((1, 1), dtype=jnp.float32),
+        jnp.zeros((1, 1), dtype=jnp.float32),
+        jnp.ones((1, 1), dtype=bool),
+        None,
+        jnp.ones((1,), dtype=bool),
+        jnp.zeros((1,), dtype=jnp.float32),
+        jnp.asarray([np.finfo(np.float32).max], dtype=jnp.float32),
+        has_normalization_log_z=False,
+        has_reconstruction_probability_threshold=True,
+        half_spectrum_scoring=False,
+        use_float64_normalization=False,
+        reconstruct_significant_only=True,
+        adaptive_fraction=0.999,
+        max_significants=-1,
+    )
+
+    np.testing.assert_array_equal(np.asarray(result[6]), False)
+    np.testing.assert_array_equal(np.asarray(result[7]), False)
+    np.testing.assert_array_equal(np.asarray(result[8]), 0)
+    np.testing.assert_array_equal(np.asarray(result[9]), 0.0)
 
 
 def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversampling_is_enabled(
