@@ -312,10 +312,13 @@ def _should_host_stage_large_relion_ifft(
     def _is_packed_half(array):
         return tuple(array.shape) == half_shape or (array.ndim == 1 and int(array.size) == half_size)
 
+    # The split is governed by the inverse-FFT grid, not the current-size
+    # accumulator. Early box-scale iterations can have a compact accumulator
+    # but still pad to a 1600^3 transform whose built-in normalization
+    # overflows XLA's signed-int32 transform-size product.
     return (
         _is_packed_half(Ft_ctf)
         and _is_packed_half(Ft_y)
-        and relion_functions._large_grid_postprocess_single_precision_enabled(int(np.prod(accumulator_shape)))
         and relion_functions._large_grid_postprocess_single_precision_enabled(int(np.prod(reconstruction_shape)))
     )
 

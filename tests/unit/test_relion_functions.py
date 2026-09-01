@@ -1194,11 +1194,137 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
             clear_cache()
 
 
+def test_large_host_staged_compact_padding_matches_monolith_bitwise(monkeypatch):
+    """Splitting before a larger iFFT preserves the compact-accumulator result."""
+
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260901)
+    ft_ctf = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    f_ty = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, np.prod(volume_shape)).astype(np.float64)
+    common = dict(
+        tau=tau,
+        tau2_fudge=1.0,
+        minres_map=0,
+        current_size=2,
+        accumulator_volume_shape=accumulator_shape,
+        tau_is_1d=False,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    monolithic = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            gridding_padding_factor=1,
+            input_half_volume=True,
+            **common,
+        )
+    )
+    staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            **common,
+        )
+    )
+
+    assert staged.dtype == np.complex64
+    np.testing.assert_array_equal(staged, monolithic)
+
+    for compiled in (
+        rf.post_process_from_filter_v2,
+        rf._post_process_from_filter_v2_donate_numerator,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
 def test_large_irfft_normalization_boundary_uses_signed_int32_limit():
     from recovar.em.dense_single_volume import mean_helpers
 
     assert not mean_helpers._large_irfft_requires_explicit_normalization((800, 800, 800))
     assert mean_helpers._large_irfft_requires_explicit_normalization((1600, 1600, 1600))
+
+
+def test_giant_irfft_host_stage_does_not_require_a_large_accumulator(monkeypatch):
+    """Early box-800 iterations must not bypass explicit iFFT normalization."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", raising=False)
+    volume_shape = (800, 800, 800)
+    accumulator_shape = (127, 127, 127)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = np.empty(half_shape, dtype=np.float32)
+    ft_y = np.empty(half_shape, dtype=np.complex64)
+
+    assert not rf._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+    assert rf._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(volume_shape, dtype=np.int64)) * 8
+    )
+    assert mean_helpers._should_host_stage_large_relion_ifft(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        accumulator_shape,
+        rf,
+    )
+
+
+def test_pre_ifft_boundary_accepts_compact_accumulator_for_large_reconstruction(monkeypatch):
+    """Only the padded inverse-FFT grid needs to cross the large-grid threshold."""
+
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+
+    boundary = rf.post_process_from_filter_v2(
+        jnp.ones(half_shape, dtype=jnp.float32),
+        jnp.ones(half_shape, dtype=jnp.complex64),
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        use_spherical_mask=False,
+        grid_correct=False,
+        input_half_volume=True,
+        accumulator_volume_shape=accumulator_shape,
+        return_fftw_half_before_ifft=True,
+    )
+
+    assert boundary.shape == ftu.volume_shape_to_half_volume_shape((8, 8, 8))
+    assert boundary.dtype == jnp.complex64
 
 
 def test_large_host_staged_irfft_uses_backward_transform_then_dynamic_normalization(monkeypatch):

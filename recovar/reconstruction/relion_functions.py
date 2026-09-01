@@ -1342,8 +1342,10 @@ def post_process_from_filter_v2(
     boundary.  It returns the single-precision packed half-volume in raw FFTW
     order immediately before the padded inverse FFT.  The eager EM
     reconstruction path host-stages this array and completes post-processing
-    with :func:`_finish_large_relion_postprocess_from_fftw_half`, preventing
-    the large accumulators and padded inverse-FFT workspace from overlapping.
+    with :func:`_finish_large_relion_postprocess_from_fftw_half`. This both
+    prevents large accumulators and the padded inverse-FFT workspace from
+    overlapping and keeps giant inverse-FFT normalization in the separate
+    executable even when the current-size accumulator itself is compact.
 
     ``return_wiener_half_before_window`` is the earlier boundary used by the
     donating large-grid executable. It returns the centered, Wiener-divided
@@ -1374,12 +1376,11 @@ def post_process_from_filter_v2(
     if return_fftw_half_before_ifft and not (
         input_half_volume
         and reconstruction_volume_shape != upsampled_volume_shape
-        and use_large_accumulator_single_precision
         and use_large_reconstruction_single_precision
     ):
         raise ValueError(
-            "The pre-IFFT host boundary requires distinct large single-precision "
-            "accumulator/reconstruction grids in packed half-volume layout"
+            "The pre-IFFT host boundary requires a distinct large single-precision "
+            "reconstruction grid in packed half-volume layout"
         )
     if return_wiener_half_before_window and not (
         input_half_volume
