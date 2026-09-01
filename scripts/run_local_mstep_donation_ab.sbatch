@@ -20,6 +20,7 @@ set -euo pipefail
 : "${VDAM_LATE_PROFILE_DATA_DIR:?set the frozen GF46 particle data directory}"
 : "${EXPECTED_REPO_HEAD:?pin the reviewed source head}"
 : "${EXPECTED_SOURCE_MANIFEST_SHA256:?pin the reviewed source manifest}"
+: "${EXPECTED_INPUT_MANIFEST_SHA256:?pin the reviewed deterministic GF46 input manifest}"
 : "${EXPECTED_NODE_NAME:?pin the H100 node}"
 : "${TARGET_GPU_UUID:?pin the physical H100 UUID}"
 : "${RELION_BIND_BINARY_OVERRIDE:?set the qualified RELION binding binary}"
@@ -32,15 +33,15 @@ DATA_STAR=${VDAM_LATE_PROFILE_DATA_STAR}
 DATA_DIR=${VDAM_LATE_PROFILE_DATA_DIR}
 PARTICLE_STACK=${VDAM_LATE_PROFILE_PARTICLE_STACK:-${DATA_DIR}/particles.128.mrcs}
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
-PIXI_PY=${PIXI_PY_OVERRIDE:-${REPO_ROOT}/.pixi/envs/default/bin/python}
+PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
 CUDA_BUILD_TOOLKIT=${CUDA_BUILD_TOOLKIT:-/usr/local/cuda-12.6}
 CUDA_RUNTIME_TOOLKIT=${CUDA_RUNTIME_TOOLKIT:-/usr/local/cuda-13.1}
 RELION_RUNTIME=${RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 MPI_ROOT=${MPI_ROOT:-/usr/local/openmpi/cuda-12.6/4.1.6/gcc}
 CUSPARSE_LIBRARY=${CUSPARSE_LIBRARY:-${CUDA_BUILD_TOOLKIT}/lib64/libcusparse.so.12}
-CHECKPOINT_ITERATION=${CHECKPOINT_ITERATION:-180}
-NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}
-PROFILED_ITERATION=$((CHECKPOINT_ITERATION + 1))
+CHECKPOINT_ITERATION=180
+PROFILED_ITERATION=181
+NR_ITER_SCHEDULE=200
 PROVENANCE=${ROOT}/provenance
 RUNTIME=${ROOT}/runtime
 RESULTS=${ROOT}/results
@@ -58,6 +59,12 @@ SOURCE_FILES=(
   recovar/cuda_backproject.py
   recovar/em/dense_single_volume/local_big_jit.py
   recovar/em/dense_single_volume/local_em_engine.py
+  recovar/em/initial_model/dense_adapter.py
+  recovar/em/initial_model/driver.py
+  recovar/em/initial_model/iteration_loop.py
+  recovar/em/initial_model/schedules.py
+  recovar/utils/parity_provenance.py
+  scripts/run_ab_initio.py
   scripts/run_vdam_late_iteration_profile.py
   scripts/run_local_mstep_donation_ab.py
   scripts/analyze_local_mstep_donation_ab.py
@@ -89,6 +96,29 @@ write_source_manifest() {
   )
 }
 
+write_input_manifest() {
+  local destination=$1
+  (
+    cd "${REPO_ROOT}"
+    env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
+      PYTHONNOUSERSITE=1 "${PIXI_PY}" - "${destination}" "${CHECKPOINT}" \
+      "${DATA_STAR}" "${PARTICLE_STACK}" <<'PY'
+import sys
+from pathlib import Path
+
+from scripts.run_local_mstep_donation_ab import write_gf46_input_manifest
+
+digest = write_gf46_input_manifest(
+    Path(sys.argv[1]),
+    Path(sys.argv[2]),
+    Path(sys.argv[3]),
+    Path(sys.argv[4]),
+)
+print(digest)
+PY
+  )
+}
+
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
 test -x "${CUDA_BUILD_TOOLKIT}/bin/nvcc"
@@ -101,7 +131,9 @@ test -s "${PARTICLE_STACK}"
 test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${EXPECTED_FOCUSED_TEST_COUNT}" =~ ^[1-9][0-9]*$ ]]
 test "${SLURMD_NODENAME:-$(hostname -s)}" = "${EXPECTED_NODE_NAME}"
-test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
+test "${CHECKPOINT_ITERATION}" -eq 180
+test "${PROFILED_ITERATION}" -eq 181
+test "${NR_ITER_SCHEDULE}" -eq 200
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
 test "$(sha256sum "${RELION_BIND_BINARY_OVERRIDE}" | awk '{print $1}')" = \
@@ -148,6 +180,10 @@ for path in "${STATIC_INPUTS[@]}"; do
   test -s "${path}"
 done
 sha256sum "${STATIC_INPUTS[@]}" > "${PROVENANCE}/static_inputs.sha256"
+write_input_manifest "${PROVENANCE}/input_manifest.json" \
+  > "${PROVENANCE}/input_manifest.writer.stdout"
+input_manifest_sha256=$(sha256sum "${PROVENANCE}/input_manifest.json" | awk '{print $1}')
+test "${input_manifest_sha256}" = "${EXPECTED_INPUT_MANIFEST_SHA256}"
 
 make -B -C "${REPO_ROOT}/recovar/cuda" \
   PYTHON="${PIXI_PY}" \
@@ -189,18 +225,25 @@ touch "${TMPDIR}/SAFE_TO_DELETE" "${PIXI_HOME}/SAFE_TO_DELETE" "${RATTLER_CACHE_
   env LD_PRELOAD="${CUSPARSE_LIBRARY}" "${PIXI_PY}" - <<'PY'
 import os
 import pathlib
+import sys
 
 import jax
 import recovar
 from recovar import cuda_backproject
 from recovar.relion_bind import _relion_bind_core as relion_bind_core
+from recovar.utils.parity_provenance import assert_parity_ancestors
 
 repo = pathlib.Path(os.environ["RECOVAR_EXPECTED_REPO_ROOT"]).resolve()
+pixi_env = (repo / ".pixi" / "envs" / "default").resolve()
 assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo) + "/")
+assert pathlib.Path(sys.prefix).resolve() == pixi_env
+assert pathlib.Path(sys.executable).resolve().is_relative_to(pixi_env)
+assert pathlib.Path(jax.__file__).resolve().is_relative_to(pixi_env)
 assert jax.default_backend() == "gpu"
 assert len(jax.devices("gpu")) == 1
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
 assert callable(getattr(relion_bind_core, "vdam_rnd_unif_sequence", None))
+assert_parity_ancestors()
 print("local donation A/B GPU/runtime gate passed", jax.devices(), recovar.__file__)
 PY
 ) > "${PROVENANCE}/runtime_gate.stdout" 2> "${PROVENANCE}/runtime_gate.stderr"
@@ -233,9 +276,32 @@ run_arm() {
   local run_dir=${RUNS}/repeat-${repeat}/${arm}
   local output_dir=${run_dir}/result
   local sample_file=${run_dir}/nvidia_smi.tsv
-  local cache_dir=${RUNTIME}/jax_cache/${arm}
-  mkdir -p "${run_dir}" "${cache_dir}"
-  touch "${run_dir}/SAFE_TO_DELETE" "${cache_dir}/SAFE_TO_DELETE"
+  local cache_dir=${run_dir}/jax_cache
+  mkdir -p "${run_dir}"
+  test ! -e "${cache_dir}"
+  mkdir "${cache_dir}"
+  test -z "$(find "${cache_dir}" -mindepth 1 -print -quit)"
+  touch "${run_dir}/SAFE_TO_DELETE"
+  "${PIXI_PY}" - "${run_dir}/launch_contract.json" "${ordinal}" \
+    "${repeat}" "${arm}" "${cache_dir}" "${input_manifest_sha256}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = {
+    "schema": "recovar.local_mstep_donation_launch.v1",
+    "ordinal": int(sys.argv[2]),
+    "repeat": sys.argv[3],
+    "arm": sys.argv[4],
+    "jax_cache_dir": str(Path(sys.argv[5]).resolve()),
+    "jax_cache_initial_empty": True,
+    "input_manifest_sha256": sys.argv[6],
+    "checkpoint_iteration": 180,
+    "profiled_iteration": 181,
+    "nr_iter_schedule": 200,
+}
+Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
   printf '%s\t%s\t%s\n' "${ordinal}" "${repeat}" "${arm}" \
     >> "${PROVENANCE}/execution_order.tsv"
   printf 'unix_ns\tmemory_mib\n' > "${sample_file}"
@@ -249,12 +315,17 @@ run_arm() {
         --checkpoint-optimiser "${CHECKPOINT}" \
         --input-star "${DATA_STAR}" \
         --data-dir "${DATA_DIR}" \
+        --particle-stack "${PARTICLE_STACK}" \
         --output-root "${output_dir}" \
         --checkpoint-iteration "${CHECKPOINT_ITERATION}" \
         --nr-iter "${NR_ITER_SCHEDULE}" \
         --random-seed 29 \
         --image-batch-size 500 \
         --exact-local-bucket-radix 4 \
+        --exact-local-physical-order-chunk-size 0 \
+        --input-manifest "${PROVENANCE}/input_manifest.json" \
+        --expected-input-manifest-sha256 "${input_manifest_sha256}" \
+        --expected-jax-cache-dir "${cache_dir}" \
         --expected-repo-head "${EXPECTED_REPO_HEAD}" \
         --expected-gpu-uuid "${selected_gpu_uuid}"
   ) > "${run_dir}/runner.stdout" 2> "${run_dir}/runner.stderr" &
@@ -274,6 +345,9 @@ run_arm() {
   test -s "${output_dir}/donation_arm_summary.json"
   test -s "${output_dir}/TIMED_BEGIN"
   test -s "${output_dir}/TIMED_END"
+  find "${cache_dir}" -mindepth 1 -printf '%P\n' | LC_ALL=C sort \
+    > "${run_dir}/jax_cache_entries.final.txt"
+  test -s "${run_dir}/jax_cache_entries.final.txt"
   vdam_verify_selected_gpu "${selected_gpu_uuid}"
 }
 
@@ -291,22 +365,29 @@ run_arm 6 03 control
     --root "${ROOT}" \
     --output "${ANALYSIS}" \
     --expected-repo-head "${EXPECTED_REPO_HEAD}" \
-    --expected-gpu-uuid "${selected_gpu_uuid}"
+    --expected-gpu-uuid "${selected_gpu_uuid}" \
+    --expected-input-manifest-sha256 "${input_manifest_sha256}"
 ) > "${RESULTS}/analysis.stdout" 2> "${RESULTS}/analysis.stderr"
 test -s "${ANALYSIS}"
-"${PIXI_PY}" - "${ANALYSIS}" <<'PY'
+"${PIXI_PY}" - "${ANALYSIS}" "${EXPECTED_INPUT_MANIFEST_SHA256}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text())
-assert payload["schema"] == "recovar.local_mstep_donation_ab_analysis.v1"
+assert payload["schema"] == "recovar.local_mstep_donation_ab_analysis.v2"
 assert payload["passed"] is True
-assert payload["same_source_exact_science_outputs"] is True
+assert payload["cold_and_warm_are_separate_phase_matched_cohorts"] is True
+assert payload["numeric_qualification_status"] in {"exact_pass", "inconclusive_3x3"}
+if payload["numeric_qualification_status"] == "inconclusive_3x3":
+    assert payload["numeric_qualification_allowed"] is False
+    assert payload["speed_claim_allowed"] is False
 assert payload["same_declared_discrete_science_metadata"] is True
 assert payload["arithmetic_changed"] is False
 assert payload["production_xhalf_adjoint_program_observed"] is True
 assert payload["alias_contract_passed"] is True
+assert payload["unique_fresh_jax_cache_count"] == 6
+assert payload["input_manifest_sha256"] == sys.argv[2]
 assert payload["default_promotion_allowed"] is False
 PY
 
@@ -315,31 +396,43 @@ test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
 write_source_manifest > "${PROVENANCE}/source_manifest.final.sha256"
 cmp "${PROVENANCE}/source_manifest.sha256" "${PROVENANCE}/source_manifest.final.sha256"
+sha256sum "${STATIC_INPUTS[@]}" > "${PROVENANCE}/static_inputs.final.sha256"
+cmp "${PROVENANCE}/static_inputs.sha256" "${PROVENANCE}/static_inputs.final.sha256"
+write_input_manifest "${PROVENANCE}/input_manifest.final.json" \
+  > "${PROVENANCE}/input_manifest.final.writer.stdout"
+cmp "${PROVENANCE}/input_manifest.json" "${PROVENANCE}/input_manifest.final.json"
+test "$(sha256sum "${PROVENANCE}/input_manifest.final.json" | awk '{print $1}')" = \
+  "${EXPECTED_INPUT_MANIFEST_SHA256}"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 analysis_sha256=$(sha256sum "${ANALYSIS}" | awk '{print $1}')
 junit_sha256=$(sha256sum "${RESULTS}/pytest.junit.xml" | awk '{print $1}')
 "${PIXI_PY}" - "${PROVENANCE}/run.json" "${SLURM_JOB_ID}" \
   "${EXPECTED_REPO_HEAD}" "${selected_gpu_uuid}" "${source_manifest_sha256}" \
-  "${cuda_sha256}" "${analysis_sha256}" "${junit_sha256}" <<'PY'
+  "${input_manifest_sha256}" "${cuda_sha256}" "${analysis_sha256}" "${junit_sha256}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.local_mstep_donation_ab_slurm.v1",
+    "schema": "recovar.local_mstep_donation_ab_slurm.v2",
     "classification": "diagnostic_performance_only",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],
     "gpu_uuid": sys.argv[4],
     "source_manifest_sha256": sys.argv[5],
-    "cuda_sha256": sys.argv[6],
-    "analysis_sha256": sys.argv[7],
-    "junit_sha256": sys.argv[8],
+    "input_manifest_sha256": sys.argv[6],
+    "cuda_sha256": sys.argv[7],
+    "analysis_sha256": sys.argv[8],
+    "junit_sha256": sys.argv[9],
     "execution_order": [
         "donated-01", "control-01", "control-02",
         "donated-02", "donated-03", "control-03",
     ],
     "fresh_process_per_arm": True,
+    "unique_fresh_jax_cache_per_arm": True,
+    "checkpoint_iteration": 180,
+    "profiled_iteration": 181,
+    "nr_iter_schedule": 200,
     "same_physical_h100": True,
     "default_promotion_allowed": False,
 }

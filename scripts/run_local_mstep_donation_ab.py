@@ -18,6 +18,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,9 +33,71 @@ from scripts.run_vdam_late_iteration_profile import (
     _sha256,
 )
 
-SCHEMA = "recovar.local_mstep_donation_ab.v1"
+SCHEMA = "recovar.local_mstep_donation_ab.v2"
+INPUT_MANIFEST_SCHEMA = "recovar.local_mstep_donation_gf46_inputs.v1"
 DONATED_POSITIONAL_NAMES = ("Ft_y", "Ft_ctf")
 DONATED_ARGNUMS = (7, 8)
+GF46_CHECKPOINT_ITERATION = 180
+GF46_PROFILED_ITERATION = 181
+GF46_NR_ITER_SCHEDULE = 200
+GF46_RANDOM_SEED = 29
+GF46_IMAGE_BATCH_SIZE = 500
+GF46_EXACT_LOCAL_BUCKET_RADIX = 4
+GF46_EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE = 0
+
+SEALED_NORMALIZED_OPTIONS = {
+    "checkpoint_iteration": GF46_CHECKPOINT_ITERATION,
+    "profiled_iteration": GF46_PROFILED_ITERATION,
+    "nr_iter_schedule": GF46_NR_ITER_SCHEDULE,
+    "random_seed": GF46_RANDOM_SEED,
+    "image_batch_size": GF46_IMAGE_BATCH_SIZE,
+    "exact_local_bucket_radix": GF46_EXACT_LOCAL_BUCKET_RADIX,
+    "exact_local_physical_order_chunk_size": GF46_EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE,
+}
+
+SEALED_NORMALIZED_RECOVAR_ARGV = [
+    "--i",
+    "<INPUT_STAR>",
+    "--o",
+    "<OUTPUT_PREFIX>",
+    "--nr_iter",
+    "200",
+    "--grad_write_iter",
+    "1",
+    "--K",
+    "1",
+    "--tau2_fudge",
+    "4",
+    "--sym",
+    "C1",
+    "--do_run_C1",
+    "1",
+    "--particle_diameter",
+    "200.0",
+    "--random_seed",
+    "29",
+    "--healpix_order",
+    "1",
+    "--oversampling",
+    "1",
+    "--offset_range",
+    "6",
+    "--offset_step",
+    "2",
+    "--padding_factor",
+    "1",
+    "--image_batch_size",
+    "500",
+    "--datadir",
+    "<DATA_DIR>",
+    "--gpu",
+    "0",
+    "--require_custom_cuda",
+    "--diagnostic_continue_optimiser",
+    "<CHECKPOINT_OPTIMISER>",
+    "--diagnostic_stop_after_iteration",
+    "181",
+]
 
 # A source change that alters the numeric boundary must update this diagnostic
 # deliberately.  Deriving this tuple from the candidate wrapper would make a
@@ -118,16 +181,251 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-optimiser", type=Path, required=True)
     parser.add_argument("--input-star", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--particle-stack", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--checkpoint-iteration", type=int, default=180)
-    parser.add_argument("--nr-iter", type=int, default=200)
-    parser.add_argument("--random-seed", type=int, default=29)
-    parser.add_argument("--image-batch-size", type=int, default=500)
-    parser.add_argument("--exact-local-bucket-radix", type=int, choices=(2, 4), default=4)
-    parser.add_argument("--exact-local-physical-order-chunk-size", type=int, default=0)
-    parser.add_argument("--expected-repo-head")
-    parser.add_argument("--expected-gpu-uuid")
+    parser.add_argument("--checkpoint-iteration", type=int, default=GF46_CHECKPOINT_ITERATION)
+    parser.add_argument("--nr-iter", type=int, default=GF46_NR_ITER_SCHEDULE)
+    parser.add_argument("--random-seed", type=int, default=GF46_RANDOM_SEED)
+    parser.add_argument(
+        "--image-batch-size",
+        type=int,
+        default=GF46_IMAGE_BATCH_SIZE,
+    )
+    parser.add_argument(
+        "--exact-local-bucket-radix",
+        type=int,
+        choices=(2, 4),
+        default=GF46_EXACT_LOCAL_BUCKET_RADIX,
+    )
+    parser.add_argument(
+        "--exact-local-physical-order-chunk-size",
+        type=int,
+        default=GF46_EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE,
+    )
+    parser.add_argument("--input-manifest", type=Path, required=True)
+    parser.add_argument("--expected-input-manifest-sha256", required=True)
+    parser.add_argument("--expected-jax-cache-dir", type=Path, required=True)
+    parser.add_argument("--expected-repo-head", required=True)
+    parser.add_argument("--expected-gpu-uuid", required=True)
     return parser.parse_args(argv)
+
+
+def _checkpoint_family_paths(checkpoint_optimiser: Path) -> list[tuple[str, Path]]:
+    suffix = "_optimiser.star"
+    checkpoint_text = str(checkpoint_optimiser)
+    if not checkpoint_text.endswith(suffix):
+        raise ValueError(f"checkpoint optimiser must end in {suffix}: {checkpoint_optimiser}")
+    prefix = Path(checkpoint_text[: -len(suffix)])
+    members = (
+        ("optimiser.star", checkpoint_optimiser),
+        ("model.star", Path(f"{prefix}_model.star")),
+        ("data.star", Path(f"{prefix}_data.star")),
+        ("sampling.star", Path(f"{prefix}_sampling.star")),
+        ("class001.mrc", Path(f"{prefix}_class001.mrc")),
+        ("1moment001.mrc", Path(f"{prefix}_1moment001.mrc")),
+        ("1moment002.mrc", Path(f"{prefix}_1moment002.mrc")),
+        ("2moment001.mrc", Path(f"{prefix}_2moment001.mrc")),
+    )
+    return [(f"checkpoint/{name}", path) for name, path in members]
+
+
+def gf46_input_manifest_payload(
+    checkpoint_optimiser: Path,
+    input_star: Path,
+    particle_stack: Path,
+) -> dict[str, Any]:
+    """Hash the sealed GF46 inputs without embedding machine-specific roots."""
+
+    named_paths = [
+        *_checkpoint_family_paths(checkpoint_optimiser),
+        (f"input/{input_star.name}", input_star),
+        (f"particles/{particle_stack.name}", particle_stack),
+    ]
+    entries = []
+    seen_names: set[str] = set()
+    for relative_name, raw_path in named_paths:
+        if relative_name in seen_names:
+            raise RuntimeError(f"duplicate input-manifest name: {relative_name}")
+        seen_names.add(relative_name)
+        path = raw_path.resolve(strict=True)
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise RuntimeError(f"sealed GF46 input is not a non-empty file: {path}")
+        entries.append(
+            {
+                "relative_name": relative_name,
+                "source_name": path.name,
+                "size_bytes": int(path.stat().st_size),
+                "sha256": _sha256(path),
+            }
+        )
+    return {
+        "schema": INPUT_MANIFEST_SCHEMA,
+        "entries": entries,
+    }
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def write_gf46_input_manifest(
+    output: Path,
+    checkpoint_optimiser: Path,
+    input_star: Path,
+    particle_stack: Path,
+) -> str:
+    payload = gf46_input_manifest_payload(checkpoint_optimiser, input_star, particle_stack)
+    encoded = _canonical_json_bytes(payload)
+    output.write_bytes(encoded)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verify_input_manifest(
+    manifest_path: Path,
+    *,
+    expected_sha256: str,
+    checkpoint_optimiser: Path,
+    input_star: Path,
+    particle_stack: Path,
+) -> dict[str, Any]:
+    manifest_path = manifest_path.resolve(strict=True)
+    observed_sha256 = _sha256(manifest_path)
+    if observed_sha256 != expected_sha256:
+        raise RuntimeError(
+            f"GF46 input-manifest SHA mismatch: expected {expected_sha256}, got {observed_sha256}"
+        )
+    observed = json.loads(manifest_path.read_text())
+    expected = gf46_input_manifest_payload(checkpoint_optimiser, input_star, particle_stack)
+    if observed != expected:
+        raise RuntimeError("GF46 inputs no longer match the reviewed input manifest")
+    return {
+        "path": str(manifest_path),
+        "sha256": observed_sha256,
+        "schema": INPUT_MANIFEST_SCHEMA,
+        "entries": expected["entries"],
+        "hashes": {
+            str(entry["relative_name"]): str(entry["sha256"])
+            for entry in expected["entries"]
+        },
+    }
+
+
+def _validate_sealed_gf46_options(args: argparse.Namespace) -> dict[str, int]:
+    observed = {
+        "checkpoint_iteration": int(args.checkpoint_iteration),
+        "profiled_iteration": int(args.checkpoint_iteration) + 1,
+        "nr_iter_schedule": int(args.nr_iter),
+        "random_seed": int(args.random_seed),
+        "image_batch_size": int(args.image_batch_size),
+        "exact_local_bucket_radix": int(args.exact_local_bucket_radix),
+        "exact_local_physical_order_chunk_size": int(args.exact_local_physical_order_chunk_size),
+    }
+    if observed != SEALED_NORMALIZED_OPTIONS:
+        raise RuntimeError(
+            "donation A/B only accepts the reviewed GF46 iteration-181 schedule: "
+            f"expected {SEALED_NORMALIZED_OPTIONS}, got {observed}"
+        )
+    return observed
+
+
+def _normalized_recovar_argv(
+    command: list[str],
+    *,
+    args: argparse.Namespace,
+    output_prefix: Path,
+) -> list[str]:
+    replacements = {
+        str(args.input_star): "<INPUT_STAR>",
+        str(output_prefix): "<OUTPUT_PREFIX>",
+        str(args.data_dir): "<DATA_DIR>",
+        str(args.checkpoint_optimiser): "<CHECKPOINT_OPTIMISER>",
+    }
+    normalized = [replacements.get(token, token) for token in command]
+    if normalized != SEALED_NORMALIZED_RECOVAR_ARGV:
+        raise RuntimeError(
+            "RECOVAR continuation argv drifted from the reviewed GF46 contract: "
+            f"expected {SEALED_NORMALIZED_RECOVAR_ARGV}, got {normalized}"
+        )
+    return normalized
+
+
+def _directory_manifest(root: Path) -> dict[str, Any]:
+    entries = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative_name = path.relative_to(root).as_posix()
+        if path.is_dir():
+            entries.append({"relative_name": relative_name, "type": "directory"})
+        elif path.is_file():
+            entries.append(
+                {
+                    "relative_name": relative_name,
+                    "type": "file",
+                    "size_bytes": int(path.stat().st_size),
+                    "sha256": _sha256(path),
+                }
+            )
+        else:
+            raise RuntimeError(f"unsupported entry in JAX cache: {path}")
+    payload = {"entries": entries}
+    payload["manifest_sha256"] = hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+    return payload
+
+
+def _assert_fresh_jax_cache(output_root: Path, expected_cache_dir: Path) -> dict[str, Any]:
+    cache_dir = expected_cache_dir.resolve(strict=True)
+    env_value = os.environ.get("JAX_COMPILATION_CACHE_DIR")
+    if env_value is None or Path(env_value).resolve() != cache_dir:
+        raise RuntimeError(
+            "JAX_COMPILATION_CACHE_DIR does not match --expected-jax-cache-dir: "
+            f"env={env_value!r}, expected={cache_dir}"
+        )
+    if cache_dir.parent != output_root.parent:
+        raise RuntimeError(
+            f"per-run JAX cache must be a sibling of result/: {cache_dir}, {output_root}"
+        )
+    initial_entries = list(cache_dir.iterdir())
+    if initial_entries:
+        raise RuntimeError(f"per-run JAX cache is not empty: {initial_entries[:5]}")
+    return {
+        "path": str(cache_dir),
+        "initial_empty": True,
+        "initial_entry_count": 0,
+    }
+
+
+def _runtime_provenance(repo_root: Path) -> dict[str, Any]:
+    import jax
+
+    import recovar
+    from recovar.utils.parity_provenance import (
+        REQUIRED_PARITY_ANCESTORS,
+        assert_parity_ancestors,
+    )
+
+    pixi_env = (repo_root / ".pixi" / "envs" / "default").resolve(strict=True)
+    python_executable = Path(sys.executable).resolve(strict=True)
+    python_prefix = Path(sys.prefix).resolve(strict=True)
+    jax_path = Path(jax.__file__).resolve(strict=True)
+    recovar_path = Path(recovar.__file__).resolve(strict=True)
+    if python_prefix != pixi_env:
+        raise RuntimeError(f"Python prefix is outside the exact worktree pixi env: {python_prefix} != {pixi_env}")
+    if not python_executable.is_relative_to(pixi_env):
+        raise RuntimeError(f"Python executable is outside the exact worktree pixi env: {python_executable}")
+    if not jax_path.is_relative_to(pixi_env):
+        raise RuntimeError(f"JAX import is outside the exact worktree pixi env: {jax_path}")
+    if not recovar_path.is_relative_to(repo_root):
+        raise RuntimeError(f"RECOVAR import is outside the exact worktree: {recovar_path}")
+    assert_parity_ancestors()
+    return {
+        "repo_root": str(repo_root),
+        "pixi_env": str(pixi_env),
+        "python_executable": str(python_executable),
+        "python_prefix": str(python_prefix),
+        "jax_path": str(jax_path),
+        "recovar_path": str(recovar_path),
+        "parity_ancestors_verified": True,
+        "required_parity_ancestors": [sha for sha, _description in REQUIRED_PARITY_ANCESTORS],
+    }
 
 
 def _jsonable_static(value: Any) -> Any:
@@ -331,8 +629,10 @@ def _device_memory_stats() -> dict[str, int]:
 def _science_outputs(prefix: Path, iteration: int) -> dict[str, dict[str, Any]]:
     paths = {
         "class_map": Path(f"{prefix}_it{iteration:03d}_class001.mrc"),
+        "initial_model_map": prefix.parent / "initial_model.mrc",
         "data_star": Path(f"{prefix}_it{iteration:03d}_data.star"),
         "model_star": Path(f"{prefix}_it{iteration:03d}_model.star"),
+        "recovar_meta": Path(f"{prefix}_it{iteration:03d}_recovar_meta.json"),
     }
     result = {}
     for name, path in paths.items():
@@ -354,20 +654,32 @@ def _git_head(repo_root: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     repo_root = Path(__file__).resolve().parents[1]
+    sealed_options = _validate_sealed_gf46_options(args)
     observed_head = _git_head(repo_root)
-    if args.expected_repo_head is not None and observed_head != args.expected_repo_head:
+    if observed_head != args.expected_repo_head:
         raise RuntimeError(f"repository head mismatch: expected {args.expected_repo_head}, got {observed_head}")
-    gpu_uuid = _gpu_uuid(args.expected_gpu_uuid)
     args.checkpoint_optimiser = args.checkpoint_optimiser.resolve(strict=True)
     args.input_star = args.input_star.resolve(strict=True)
     args.data_dir = args.data_dir.resolve(strict=True)
+    args.particle_stack = args.particle_stack.resolve(strict=True)
     args.output_root = args.output_root.resolve()
     if args.output_root.exists():
         raise FileExistsError(f"output root already exists: {args.output_root}")
+    cache_contract = _assert_fresh_jax_cache(
+        args.output_root,
+        args.expected_jax_cache_dir,
+    )
+    input_manifest = _verify_input_manifest(
+        args.input_manifest,
+        expected_sha256=args.expected_input_manifest_sha256,
+        checkpoint_optimiser=args.checkpoint_optimiser,
+        input_star=args.input_star,
+        particle_stack=args.particle_stack,
+    )
+    runtime_provenance = _runtime_provenance(repo_root)
+    gpu_uuid = _gpu_uuid(args.expected_gpu_uuid)
     args.output_root.mkdir(parents=True)
     (args.output_root / "SAFE_TO_DELETE").touch()
-    if int(args.checkpoint_iteration) < 0 or int(args.nr_iter) <= int(args.checkpoint_iteration):
-        raise ValueError("nr-iter must exceed the non-negative checkpoint iteration")
 
     os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
     os.environ.setdefault("JAX_LOG_COMPILES", "1")
@@ -382,6 +694,11 @@ def main(argv: list[str] | None = None) -> int:
             prefix = args.output_root / phase / "run"
             prefix.parent.mkdir(parents=True, exist_ok=False)
             command = _recovar_argv(args=args, output_prefix=prefix)
+            normalized_argv = _normalized_recovar_argv(
+                command,
+                args=args,
+                output_prefix=prefix,
+            )
             if phase == "warm":
                 _effects_barrier()
                 gc.collect()
@@ -415,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
             phase_reports[phase] = {
                 "wall_s": wall_s,
                 "argv": command,
+                "normalized_argv": normalized_argv,
                 "process_resources": {
                     "before": resources_before,
                     "after": resources_after,
@@ -431,6 +749,8 @@ def main(argv: list[str] | None = None) -> int:
 
         monitor_report = monitor.report()
 
+    cache_contract["final"] = _directory_manifest(Path(cache_contract["path"]))
+
     report = {
         "schema": SCHEMA,
         "classification": "diagnostic_performance_only",
@@ -438,6 +758,12 @@ def main(argv: list[str] | None = None) -> int:
         "arm": args.arm,
         "git_head": observed_head,
         "gpu_uuid": gpu_uuid,
+        "runtime_provenance": runtime_provenance,
+        "jax_persistent_cache": cache_contract,
+        "input_manifest": input_manifest,
+        "input_hashes": input_manifest["hashes"],
+        "normalized_options": sealed_options,
+        "normalized_recovar_argv": list(SEALED_NORMALIZED_RECOVAR_ARGV),
         "checkpoint_iteration": int(args.checkpoint_iteration),
         "profiled_iteration": target_iteration,
         "nr_iter_schedule": int(args.nr_iter),
@@ -446,10 +772,14 @@ def main(argv: list[str] | None = None) -> int:
         "input_star": str(args.input_star),
         "input_star_sha256": _sha256(args.input_star),
         "data_dir": str(args.data_dir),
+        "particle_stack": str(args.particle_stack),
+        "particle_stack_sha256": _sha256(args.particle_stack),
         "numeric_policy": {
             "mathematically_equivalent": True,
             "arithmetic_changed": False,
-            "donation_specific_exact_outputs_required": True,
+            "strict_exactness_is_strong_evidence_not_universal_requirement": True,
+            "phase_matched_continuous_repeat_noise_may_be_compatible": True,
+            "arbitrary_absolute_or_relative_tolerance_used": False,
             "broader_optimized_arithmetic_policy": {
                 "stable_repeat_bounded_noise_allowed": True,
                 "directional_bias_allowed": False,
