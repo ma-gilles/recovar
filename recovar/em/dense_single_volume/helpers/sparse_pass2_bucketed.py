@@ -48,6 +48,9 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
+from recovar.em.dense_single_volume.helpers.adjoint import (
+    adjoint_slice_volume_windowed_donating as _adjoint_slice_volume_windowed_donating,
+)
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
     compact_capture_requested_for_original_indices,
@@ -6662,7 +6665,7 @@ def _accumulate_relion_x_half_per_particle_launches(
                 max_r=max_r,
             )
         else:
-            y_volume = _adjoint_slice_volume_windowed(
+            y_volume = _adjoint_slice_volume_windowed_donating(
                 particle_values,
                 window_indices,
                 particle_rotations,
@@ -6675,7 +6678,7 @@ def _accumulate_relion_x_half_per_particle_launches(
                 max_r,
                 True,
             )
-            ctf_volume = _adjoint_slice_volume_windowed(
+            ctf_volume = _adjoint_slice_volume_windowed_donating(
                 particle_ctf_values,
                 window_indices,
                 particle_rotations,
@@ -6708,7 +6711,7 @@ def _accumulate_relion_x_half_per_particle_launches(
                 )
                 isolated_layout = "RECOVAR interleaved complex64 data plus float32 weight"
             else:
-                isolated_data = _adjoint_slice_volume_windowed(
+                isolated_data = _adjoint_slice_volume_windowed_donating(
                     particle_values,
                     window_indices,
                     particle_rotations,
@@ -6721,7 +6724,7 @@ def _accumulate_relion_x_half_per_particle_launches(
                     max_r,
                     True,
                 )
-                isolated_weight = _adjoint_slice_volume_windowed(
+                isolated_weight = _adjoint_slice_volume_windowed_donating(
                     particle_ctf_values,
                     window_indices,
                     particle_rotations,

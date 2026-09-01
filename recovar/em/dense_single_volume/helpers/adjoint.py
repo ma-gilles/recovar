@@ -41,6 +41,47 @@ def adjoint_slice_volume_windowed(
     )
 
 
+@partial(
+    jax.jit,
+    static_argnums=(4, 5, 6, 7, 8, 9, 10),
+    donate_argnums=(3,),
+)
+def adjoint_slice_volume_windowed_donating(
+    windowed_half,
+    window_indices,
+    rotations_block,
+    volume,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_image,
+    half_volume=False,
+    max_r=None,
+    relion_x_half=False,
+):
+    """Adjoint-slice while consuming the input accumulator buffer.
+
+    The CUDA indexed-backprojection FFI aliases its accumulator input and
+    output.  Donation exposes that ownership to the surrounding JIT so it
+    need not preserve a second full-volume copy.  Keep the ordinary wrapper
+    above non-donating for callers that intentionally reuse their input.
+    """
+
+    return core.adjoint_slice_volume_indexed(
+        windowed_half,
+        window_indices,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volume=volume,
+        half_image=half_image,
+        half_volume=half_volume,
+        max_r=max_r,
+        relion_x_half=relion_x_half,
+    )
+
+
 @partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def batch_adjoint_slice_volume_windowed(
     windowed_halves,
