@@ -64,11 +64,13 @@ def test_runner_allows_only_declared_benchmark_overlay() -> None:
         "recovar/data_io/image_loader.py",
         "recovar/em/initial_model/iteration_loop.py",
         "scripts/analyze_vdam_raw_cache_abba.py",
+        "scripts/probe_vdam_raw_cache_memory.py",
         "scripts/run_vdam_late_iteration_profile.py",
         "scripts/run_vdam_raw_cache_abba.sbatch",
         "tests/unit/test_image_loader.py",
         "tests/unit/initial_model/test_iteration_loop.py",
         "tests/unit/initial_model/test_vdam_late_iteration_profile.py",
+        "tests/unit/initial_model/test_vdam_raw_cache_memory_probe.py",
         "tests/unit/initial_model/test_vdam_raw_cache_abba_analyzer.py",
         "tests/unit/initial_model/test_vdam_raw_cache_abba_runner.py",
     ]
@@ -89,10 +91,12 @@ def test_runner_pins_source_and_exact_gf46_input_manifests() -> None:
         "tests/unit/initial_model/test_iteration_loop.py",
         "scripts/run_ab_initio.py",
         "scripts/run_vdam_late_iteration_profile.py",
+        "scripts/probe_vdam_raw_cache_memory.py",
         "scripts/summarize_vdam_nsys_sqlite.py",
         "scripts/analyze_vdam_raw_cache_abba.py",
         "scripts/run_vdam_raw_cache_abba.sbatch",
         "tests/unit/initial_model/test_vdam_raw_cache_abba_runner.py",
+        "tests/unit/initial_model/test_vdam_raw_cache_memory_probe.py",
     ):
         assert required in source_files
     assert "write_source_manifest > \"${PROVENANCE}/source_manifest.sha256\"" in source
@@ -185,6 +189,11 @@ def test_runner_invokes_future_analyzer_then_seals_all_artifacts() -> None:
     source = _source()
 
     assert 'touch "${ROOT}/ARMS_COMPLETED"' in source
+    assert '"${PIXI_PY}" -m scripts.probe_vdam_raw_cache_memory' in source
+    assert '--output-json "${PROVENANCE}/raw_cache_memory_probe.json"' in source
+    assert '--comparison-batch-size 500' in source
+    assert 'RECOVAR_CACHE_DIR=' in source
+    assert 'test -s "${PROVENANCE}/raw_cache_memory_probe.json"' in source
     assert '"schema": "recovar.vdam_raw_cache_abba.v1"' in source
     assert '"cache_auto_3", "cache_off_3", "cache_off_4", "cache_auto_4"' in source
     assert '"raw_image_cache_modes": ["off", "auto", "auto", "off", "auto", "off", "off", "auto"]' in source
@@ -193,9 +202,20 @@ def test_runner_invokes_future_analyzer_then_seals_all_artifacts() -> None:
     assert '"${PIXI_PY}" -m scripts.analyze_vdam_raw_cache_abba' in source
     assert '--output-json "${ANALYSIS}/report.json"' in source
     assert '--output-markdown "${ANALYSIS}/report.md"' in source
+    assert source.count("trap - ERR") >= 2
+    assert "trap on_error ERR" in source
     assert 'if [[ "${analyzer_status}" != 0 && "${analyzer_status}" != 1 ]]' in source
+    assert 'printf \'%s\\n\' "${analyzer_message}" > "${PROVENANCE}/failure.txt"' in source
     assert 'touch "${ROOT}/COMPLETED"' in source
     assert ') > "${ROOT}/SHA256SUMS"' in source
     assert 'sha256sum "${ROOT}/SHA256SUMS" > "${ROOT}/SHA256SUMS.sha256"' in source
     assert 'find "${ROOT}" -type f -exec chmod a-w {} +' in source
     assert 'find "${ROOT}" -depth -type d -exec chmod a-w {} +' in source
+    assert 'if [[ "${analyzer_status}" == 1 ]]' in source
+    arms_completed = source.index('touch "${ROOT}/ARMS_COMPLETED"')
+    memory_probe = source.index("memory_probe_command=(")
+    run_json = source.index('"${PIXI_PY}" - "${PROVENANCE}/run.json"')
+    analyzer_call = source.index('"${PIXI_PY}" -m scripts.analyze_vdam_raw_cache_abba')
+    completed = source.index('touch "${ROOT}/COMPLETED"')
+    no_go_exit = source.index('if [[ "${analyzer_status}" == 1 ]]')
+    assert arms_completed < memory_probe < run_json < analyzer_call < completed < no_go_exit

@@ -85,6 +85,7 @@ SOURCE_FILES=(
   recovar/commands/initial_model.py
   scripts/run_ab_initio.py
   scripts/run_vdam_late_iteration_profile.py
+  scripts/probe_vdam_raw_cache_memory.py
   scripts/summarize_vdam_nsys_sqlite.py
   scripts/analyze_vdam_raw_cache_abba.py
   scripts/run_vdam_raw_cache_abba.sbatch
@@ -92,6 +93,7 @@ SOURCE_FILES=(
   tests/unit/test_image_loader.py
   tests/unit/initial_model/test_iteration_loop.py
   tests/unit/initial_model/test_vdam_late_iteration_profile.py
+  tests/unit/initial_model/test_vdam_raw_cache_memory_probe.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_analyzer.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_runner.py
   pixi.lock
@@ -103,11 +105,13 @@ BENCHMARK_DIFF_ALLOWLIST=(
   recovar/data_io/image_loader.py
   recovar/em/initial_model/iteration_loop.py
   scripts/analyze_vdam_raw_cache_abba.py
+  scripts/probe_vdam_raw_cache_memory.py
   scripts/run_vdam_late_iteration_profile.py
   scripts/run_vdam_raw_cache_abba.sbatch
   tests/unit/test_image_loader.py
   tests/unit/initial_model/test_iteration_loop.py
   tests/unit/initial_model/test_vdam_late_iteration_profile.py
+  tests/unit/initial_model/test_vdam_raw_cache_memory_probe.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_analyzer.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_runner.py
 )
@@ -536,6 +540,28 @@ done
 
 touch "${ROOT}/ARMS_COMPLETED"
 
+memory_probe_command=(
+  env
+  JAX_PLATFORMS=cpu
+  JAX_PLATFORM_NAME=cpu
+  RECOVAR_CACHE_DIR=
+  "${PIXI_PY}" -m scripts.probe_vdam_raw_cache_memory
+  --input-star "${DATA_STAR}"
+  --data-dir "${DATA_DIR}"
+  --output-json "${PROVENANCE}/raw_cache_memory_probe.json"
+  --comparison-batch-size 500
+)
+printf '%q ' "${memory_probe_command[@]}" \
+  > "${PROVENANCE}/raw_cache_memory_probe_command.sh"
+printf '\n' >> "${PROVENANCE}/raw_cache_memory_probe_command.sh"
+(
+  cd "${REPO_ROOT}"
+  "${memory_probe_command[@]}"
+) > "${PROVENANCE}/raw_cache_memory_probe.stdout" \
+  2> "${PROVENANCE}/raw_cache_memory_probe.stderr"
+test -s "${PROVENANCE}/raw_cache_memory_probe.json"
+verify_frozen_inputs
+
 "${PIXI_PY}" - "${PROVENANCE}/run.json" "${SLURM_JOB_ID}" \
   "${EXPECTED_REPO_HEAD}" "${EXPECTED_REPO_TREE}" "${source_manifest_sha256}" \
   "${input_manifest_sha256}" "${selected_gpu_uuid}" "${gpu_name}" <<'PY'
@@ -588,6 +614,10 @@ payload = {
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 
+# A valid diagnostic NO_GO is analyzer exit 1.  Disable both errexit and the
+# ERR trap while collecting that status; ``set +e`` alone does not suppress an
+# ERR trap.  Restore fail-closed behavior immediately afterwards.
+trap - ERR
 set +e
 (
   cd "${REPO_ROOT}"
@@ -599,9 +629,12 @@ set +e
 ) > "${ANALYSIS}/analyzer.stdout" 2> "${ANALYSIS}/analyzer.stderr"
 analyzer_status=$?
 set -e
+trap on_error ERR
 printf '%s\n' "${analyzer_status}" > "${ANALYSIS}/analyzer_status.txt"
 if [[ "${analyzer_status}" != 0 && "${analyzer_status}" != 1 ]]; then
-  echo "raw-cache ABBA analyzer failed with setup/runtime status ${analyzer_status}" >&2
+  analyzer_message="raw-cache ABBA analyzer failed with setup/runtime status ${analyzer_status}"
+  printf '%s\n' "${analyzer_message}" >&2
+  printf '%s\n' "${analyzer_message}" > "${PROVENANCE}/failure.txt"
   exit "${analyzer_status}"
 fi
 test -s "${ANALYSIS}/report.json"
@@ -633,3 +666,7 @@ find "${ROOT}" -depth -type d -exec chmod a-w {} +
 
 printf 'VDAM raw-cache ABBA complete: %s (analyzer status %s)\n' \
   "${ROOT}" "${analyzer_status}"
+if [[ "${analyzer_status}" == 1 ]]; then
+  trap - ERR
+  exit 1
+fi

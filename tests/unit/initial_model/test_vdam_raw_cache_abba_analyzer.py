@@ -194,6 +194,74 @@ def _cache_event() -> dict:
     }
 
 
+def _memory_probe() -> dict:
+    event_topology = _cache_event()["loader_topology"]
+    topology = {
+        key: value
+        for key, value in event_topology.items()
+        if key not in {"leaf_cached_before", "leaf_cached_after"}
+    }
+    topology["leaf_cached"] = [False]
+    retained = analyzer.EXPECTED_CACHE_BYTES + 1024
+    peak = retained + 4096
+    digest = analyzer.EXPECTED_LOGICAL_IMAGES_SHA256
+    return {
+        "schema": analyzer.MEMORY_PROBE_SCHEMA,
+        "classification": "untimed_memory_and_bitwise_equivalence_canary",
+        "input_star": str(analyzer.EXPECTED_INPUT_STAR),
+        "input_star_sha256": analyzer.EXPECTED_INPUT_STAR_SHA256,
+        "data_dir": str(analyzer.EXPECTED_DATA_DIR),
+        "cache_dir_env": "",
+        "comparison_batch_size": 500,
+        "loader": {
+            "loader_type": analyzer.EXPECTED_CACHE_LOADER_TYPE,
+            "num_images": analyzer.EXPECTED_CACHE_IMAGES,
+            "image_size": analyzer.EXPECTED_IMAGE_SIZE,
+            "dtype": analyzer.EXPECTED_CACHE_DTYPE,
+            "estimated_bytes": analyzer.EXPECTED_CACHE_BYTES,
+            "cached_nbytes": analyzer.EXPECTED_CACHE_BYTES,
+            "cached_shape": [
+                analyzer.EXPECTED_CACHE_IMAGES,
+                analyzer.EXPECTED_IMAGE_SIZE,
+                analyzer.EXPECTED_IMAGE_SIZE,
+            ],
+            "cached_dtype": analyzer.EXPECTED_CACHE_DTYPE,
+            "cached_c_contiguous": True,
+            "cached_writeable": True,
+            "topology_before": topology,
+            "topology_after": topology,
+        },
+        "tracemalloc": {
+            "baseline_current_bytes": 0,
+            "baseline_peak_bytes": 0,
+            "after_current_bytes": retained,
+            "peak_bytes": peak,
+            "retained_delta_bytes": retained,
+            "peak_above_baseline_bytes": peak,
+            "elapsed_s": 0.25,
+        },
+        "rss_diagnostic": {
+            "current_before_bytes": 1_000_000_000,
+            "current_after_bytes": 1_000_000_000 + analyzer.EXPECTED_CACHE_BYTES,
+            "current_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
+            "high_water_before_bytes": 1_000_000_000,
+            "high_water_after_bytes": 1_000_000_000 + analyzer.EXPECTED_CACHE_BYTES,
+            "high_water_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
+        },
+        "bitwise_equivalence": {
+            "exact": True,
+            "cached_sha256": digest,
+            "streamed_uncached_sha256": digest,
+            "compared_images": analyzer.EXPECTED_CACHE_IMAGES,
+            "batch_count": 6,
+            "first_mismatch_index": None,
+            "comparison_loader_cached": False,
+            "comparison_topology_before": topology,
+            "comparison_topology_after": topology,
+        },
+    }
+
+
 def _write_nsight(
     sqlite_path: Path,
     summary_path: Path,
@@ -354,6 +422,14 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
         (input_star.resolve(), _sha256(input_star)),
         (particle_stack.resolve(), _sha256(particle_stack)),
     )
+    (provenance / "raw_cache_memory_probe_command.sh").write_text(
+        "env JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu RECOVAR_CACHE_DIR= "
+        f"{interpreter} -m scripts.probe_vdam_raw_cache_memory "
+        f"--input-star {input_star.resolve()} --data-dir {data_dir.resolve()} "
+        f"--output-json {(provenance / 'raw_cache_memory_probe.json').resolve()} "
+        "--comparison-batch-size 500\n"
+    )
+    _write_json(provenance / "raw_cache_memory_probe.json", _memory_probe())
 
     run = {
         "schema": analyzer.RUN_SCHEMA,
@@ -612,6 +688,18 @@ def _rewrite_cache_event(root: Path, label: str, phase: str, mutate) -> None:
     _write_json(admission_path, admission)
 
 
+def _rewrite_memory_probe(root: Path, mutate) -> None:
+    path = root / "provenance" / "raw_cache_memory_probe.json"
+    value = json.loads(path.read_text())
+    mutate(value)
+    _write_json(path, value)
+
+
+def _rewrite_memory_probe_command(root: Path, mutate) -> None:
+    path = root / "provenance" / "raw_cache_memory_probe_command.sh"
+    path.write_text(mutate(path.read_text()))
+
+
 def _rewrite_metadata(root: Path, label: str, phase: str, mutate) -> None:
     metadata_path = (
         root / "runs" / label / "profile" / phase / "run_it181_recovar_meta.json"
@@ -762,9 +850,17 @@ def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
     assert report["performance"]["cache_admission_memory"]["limit_bytes"] == (
         analyzer.EXPECTED_CACHE_BYTES + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES
     )
+    assert report["raw_cache_memory_probe"]["bitwise_equivalence"]["exact"] is True
+    assert report["decision"]["gates"]["raw_cache_bytes_exact_to_streamed_uncached_loader"] is True
+    assert report["decision"]["gates"]["raw_cache_and_streamed_digests_match_frozen_logical_images"] is True
+    assert report["performance"]["gates"]["untimed_trace_tracks_at_least_one_cache_buffer"] is True
+    assert report["performance"]["gates"]["untimed_traced_peak_within_cache_plus_64mib"] is True
     assert report["science"]["all_auto_repeat_maps_within_off_repeat_envelope"] is True
     assert report["science"]["all_cross_mode_maps_within_off_repeat_envelope"] is True
     assert report["provenance"]["final_source_manifest_state"] == "pending_runner_seal"
+    assert report["provenance"]["raw_cache_memory_probe_command"]["sha256"] == _sha256(
+        root / "provenance" / "raw_cache_memory_probe_command.sh"
+    )
     assert Path(report["provenance"]["interpreter"]["path"]).resolve() == (
         tmp_path / "external_python"
     ).resolve()
@@ -1048,7 +1144,7 @@ def test_auto_variability_cannot_inflate_its_own_science_envelope(tmp_path):
 
 
 @pytest.mark.unit
-def test_cache_admission_peak_gate_is_no_go(tmp_path):
+def test_stale_lifetime_hwm_is_diagnostic_not_an_admission_peak(tmp_path):
     root, repo = _build_root(tmp_path)
     excess = (
         analyzer.EXPECTED_CACHE_BYTES
@@ -1067,13 +1163,15 @@ def test_cache_admission_peak_gate_is_no_go(tmp_path):
 
     report = analyzer.analyze(root, repo=repo)
 
-    assert report["decision"]["status"] == "NO_GO"
+    assert report["decision"]["status"] == "GO"
     assert (
         report["performance"]["gates"][
-            "each_cache_admission_peak_and_retained_rss_within_cache_plus_64mib"
+            "each_timed_cache_retained_rss_within_cache_plus_64mib"
         ]
-        is False
+        is True
     )
+    memory = report["performance"]["cache_admission_memory"]["arms"]["cache_auto_1"]["warm"]
+    assert memory["peak_rss_above_call_baseline_bytes"] > report["performance"]["cache_admission_memory"]["limit_bytes"]
 
 
 @pytest.mark.unit
@@ -1096,10 +1194,191 @@ def test_preexisting_hwm_cannot_mask_excess_cache_admission_memory(tmp_path):
     report = analyzer.analyze(root, repo=repo)
 
     assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["each_timed_cache_retained_rss_within_cache_plus_64mib"] is False
     memory = report["performance"]["cache_admission_memory"]["arms"]["cache_auto_1"]["warm"]
     assert memory["high_water_rss_increment_bytes"] == 0
     assert memory["peak_rss_above_call_baseline_bytes"] == retained
     assert memory["current_rss_delta_bytes"] == retained
+
+
+@pytest.mark.unit
+def test_missing_memory_probe_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    (root / "provenance" / "raw_cache_memory_probe.json").unlink()
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="memory probe is missing"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_memory_probe_loader_topology_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_memory_probe(
+        root,
+        lambda value: value["loader"]["topology_after"]["leaf_loaders"][0].update(
+            io_path="/wrong/particles.mrcs"
+        ),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="memory-probe loader differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda text: text.replace("JAX_PLATFORMS=cpu", "JAX_PLATFORMS=cuda"),
+            "memory-probe environment differs",
+        ),
+        (
+            lambda text: text.replace("--comparison-batch-size 500", "--comparison-batch-size 501"),
+            "memory-probe argv differs",
+        ),
+    ],
+)
+def test_memory_probe_command_mutations_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_memory_probe_command(root, mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_missing_memory_probe_command_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    (root / "provenance" / "raw_cache_memory_probe_command.sh").unlink()
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="command ledger is missing"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["tracemalloc"].update(
+                baseline_current_bytes=1,
+                baseline_peak_bytes=0,
+                after_current_bytes=value["tracemalloc"]["retained_delta_bytes"] + 1,
+                peak_bytes=value["tracemalloc"]["peak_above_baseline_bytes"] + 1,
+            ),
+            "baseline peak is below current memory",
+        ),
+        (
+            lambda value: value["tracemalloc"].update(
+                peak_bytes=value["tracemalloc"]["after_current_bytes"] - 1,
+                peak_above_baseline_bytes=(
+                    value["tracemalloc"]["after_current_bytes"]
+                    - value["tracemalloc"]["baseline_current_bytes"]
+                    - 1
+                ),
+            ),
+            "peak is below an observed current value",
+        ),
+        (
+            lambda value: value["rss_diagnostic"].update(
+                current_after_bytes=value["rss_diagnostic"]["current_before_bytes"] - 1,
+                current_delta_bytes=-1,
+            ),
+            "RSS diagnostic contains a negative value",
+        ),
+    ],
+)
+def test_memory_probe_resource_invariants_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_memory_probe(root, mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_tracer_that_does_not_track_the_cache_is_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+    retained = analyzer.EXPECTED_CACHE_BYTES - 1
+
+    def shrink_trace(value):
+        trace = value["tracemalloc"]
+        trace.update(
+            after_current_bytes=trace["baseline_current_bytes"] + retained,
+            retained_delta_bytes=retained,
+        )
+
+    _rewrite_memory_probe(root, shrink_trace)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["untimed_trace_tracks_at_least_one_cache_buffer"] is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("field", ["peak", "retained"])
+def test_excess_traced_cache_memory_is_no_go(tmp_path, field):
+    root, repo = _build_root(tmp_path)
+    excess = analyzer.EXPECTED_CACHE_BYTES + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES + 1
+
+    def enlarge_trace(value):
+        trace = value["tracemalloc"]
+        if field == "retained":
+            trace.update(
+                after_current_bytes=trace["baseline_current_bytes"] + excess,
+                retained_delta_bytes=excess,
+                peak_bytes=trace["baseline_current_bytes"] + excess,
+                peak_above_baseline_bytes=excess,
+            )
+        else:
+            trace.update(
+                peak_bytes=trace["baseline_current_bytes"] + excess,
+                peak_above_baseline_bytes=excess,
+            )
+
+    _rewrite_memory_probe(root, enlarge_trace)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["untimed_traced_peak_within_cache_plus_64mib"] is False
+
+
+@pytest.mark.unit
+def test_nonidentical_streamed_cache_bytes_are_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+
+    def make_nonexact(value):
+        evidence = value["bitwise_equivalence"]
+        evidence.update(
+            exact=False,
+            streamed_uncached_sha256=hashlib.sha256(b"different").hexdigest(),
+            first_mismatch_index=17,
+        )
+
+    _rewrite_memory_probe(root, make_nonexact)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["decision"]["gates"]["raw_cache_bytes_exact_to_streamed_uncached_loader"] is False
+
+
+@pytest.mark.unit
+def test_equal_but_wrong_logical_image_digest_is_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+    wrong = hashlib.sha256(b"shared ordering bug").hexdigest()
+
+    def replace_digests(value):
+        value["bitwise_equivalence"].update(
+            cached_sha256=wrong,
+            streamed_uncached_sha256=wrong,
+        )
+
+    _rewrite_memory_probe(root, replace_digests)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["decision"]["gates"]["raw_cache_bytes_exact_to_streamed_uncached_loader"] is True
+    assert report["decision"]["gates"]["raw_cache_and_streamed_digests_match_frozen_logical_images"] is False
 
 
 @pytest.mark.unit

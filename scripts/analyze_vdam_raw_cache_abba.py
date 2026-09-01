@@ -53,6 +53,7 @@ RUN_SCHEMA = "recovar.vdam_raw_cache_abba.v1"
 PROFILE_SCHEMA = "recovar.vdam_late_iteration_profile.v1"
 NSIGHT_SCHEMA = "recovar.vdam_nsys_sqlite_summary.v1"
 CACHE_ADMISSION_SCHEMA = "recovar.vdam_raw_cache_admission.v2"
+MEMORY_PROBE_SCHEMA = "recovar.vdam_raw_cache_memory_probe.v1"
 PROFILED_ITERATION = 181
 EXPECTED_CACHE_BYTES = 196_608_000
 EXPECTED_CACHE_IMAGES = 3_000
@@ -64,6 +65,7 @@ EXPECTED_CACHE_LOADER_TYPE = "recovar.data_io.image_loader.StarLoader"
 EXPECTED_CACHE_LEAF_LOADER_TYPE = "recovar.data_io.image_loader.MRCLoader"
 EXPECTED_CACHE_MAPPING_SHA256 = "e02b912acbce6b05645063e4f0d43fdcb294ed3680917de7ac7cf71cfa9974b2"
 EXPECTED_CACHE_LEAF_SELECTION_SHA256 = "e8c9ceaf5aacc63c25b4cdd8542592f9d58aff50e3e8fc6c55591d3d8f596562"
+EXPECTED_LOGICAL_IMAGES_SHA256 = "22a428f01f6066294976140780cd0a622b871c49baa4692c690c65f5c0f40d65"
 EXPECTED_SCHEDULE = {
     "current_size": 128,
     "healpix_order": 3,
@@ -277,6 +279,50 @@ def _validate_command(
     expected_cache = (root / "runs" / label / "jax_cache").resolve()
     _require(cache_path == expected_cache, f"{label} JAX cache path differs")
     return {"sha256": _sha256(path), "jax_cache": str(cache_path)}
+
+
+def _validate_memory_probe_command(
+    path: Path,
+    *,
+    root: Path,
+    interpreter: Path,
+) -> dict[str, str]:
+    _require(path.is_file(), f"raw-cache memory-probe command ledger is missing: {path}")
+    try:
+        tokens = shlex.split(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise RawCacheSetupError(f"cannot parse raw-cache memory-probe command: {exc}") from exc
+    expected_prefix = [
+        "env",
+        "JAX_PLATFORMS=cpu",
+        "JAX_PLATFORM_NAME=cpu",
+        "RECOVAR_CACHE_DIR=",
+    ]
+    expected_tail = [
+        "-m",
+        "scripts.probe_vdam_raw_cache_memory",
+        "--input-star",
+        str(EXPECTED_INPUT_STAR),
+        "--data-dir",
+        str(EXPECTED_DATA_DIR),
+        "--output-json",
+        str((root / "provenance" / "raw_cache_memory_probe.json").resolve()),
+        "--comparison-batch-size",
+        "500",
+    ]
+    _require(
+        len(tokens) == len(expected_prefix) + 1 + len(expected_tail),
+        "raw-cache memory-probe command length differs",
+    )
+    _require(tokens[: len(expected_prefix)] == expected_prefix, "raw-cache memory-probe environment differs")
+    command_interpreter = Path(tokens[len(expected_prefix)]).resolve()
+    _require(command_interpreter == interpreter.resolve(), "raw-cache memory-probe interpreter differs")
+    _require(tokens[len(expected_prefix) + 1 :] == expected_tail, "raw-cache memory-probe argv differs")
+    return {
+        "path": str(path.resolve()),
+        "sha256": _sha256(path),
+        "interpreter": str(command_interpreter),
+    }
 
 
 def _validate_profile_argv(
@@ -592,6 +638,11 @@ def _validate_provenance(root: Path, repo: Path) -> tuple[dict[str, Any], dict[s
     cusparse = _validate_external_sha_line(
         provenance / "cusparse.sha256", CUSPARSE_SHA256, "cuSPARSE library"
     )
+    memory_probe_command = _validate_memory_probe_command(
+        provenance / "raw_cache_memory_probe_command.sh",
+        root=root,
+        interpreter=Path(interpreter["path"]),
+    )
     execution = _validate_execution_order(provenance / "execution_order.tsv", root)
     run_dirs = {path.name for path in (root / "runs").iterdir() if path.is_dir()}
     _require(run_dirs == set(ARM_LABELS), f"run-directory topology differs: {sorted(run_dirs)}")
@@ -617,6 +668,7 @@ def _validate_provenance(root: Path, repo: Path) -> tuple[dict[str, Any], dict[s
         "git_repository": {"path": str(repo), "resolved_head": resolved_head, "resolved_tree": resolved_tree},
         "execution_order": execution,
         "commands": commands,
+        "raw_cache_memory_probe_command": memory_probe_command,
         "jax_caches": caches,
         "final_source_manifest_state": "verified" if final_source.is_file() else "pending_runner_seal",
     }
@@ -816,7 +868,12 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
 
 def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
     _require(isinstance(event, dict), f"{label} cache event is invalid")
-    particle_stack = str(EXPECTED_PARTICLE_STACK)
+    expected_topology = _expected_loader_topology()
+    expected_topology.pop("leaf_cached")
+    expected_topology.update(
+        leaf_cached_before=[False],
+        leaf_cached_after=[False],
+    )
     expected = {
         "loader_type": EXPECTED_CACHE_LOADER_TYPE,
         "num_images": EXPECTED_CACHE_IMAGES,
@@ -830,32 +887,7 @@ def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
         "cached_dtype": EXPECTED_CACHE_DTYPE,
         "cached_c_contiguous": True,
         "cached_writeable": True,
-        "loader_topology": {
-            "mapped_rows": EXPECTED_CACHE_IMAGES,
-            "mapped_files": [particle_stack],
-            "mapped_file_count": 1,
-            "mapping_unique_index_count": EXPECTED_CACHE_IMAGES,
-            "mapping_min_index": 0,
-            "mapping_max_index": EXPECTED_CACHE_IMAGES - 1,
-            "mapping_is_unique": True,
-            "mapping_is_contiguous_set": True,
-            "mapping_is_strictly_ascending": False,
-            "mapping_mrc_indices_sha256": EXPECTED_CACHE_MAPPING_SHA256,
-            "leaf_loader_count": 1,
-            "leaf_loaders": [
-                {
-                    "path": particle_stack,
-                    "io_path": particle_stack,
-                    "loader_type": EXPECTED_CACHE_LEAF_LOADER_TYPE,
-                    "num_images": EXPECTED_CACHE_IMAGES,
-                    "image_size": EXPECTED_IMAGE_SIZE,
-                    "dtype": EXPECTED_CACHE_DTYPE,
-                    "selection_indices_sha256": EXPECTED_CACHE_LEAF_SELECTION_SHA256,
-                }
-            ],
-            "leaf_cached_before": [False],
-            "leaf_cached_after": [False],
-        },
+        "loader_topology": expected_topology,
     }
     mismatches = {key: (event.get(key), value) for key, value in expected.items() if event.get(key) != value}
     _require(not mismatches, f"{label} cache admission differs: {mismatches}")
@@ -892,6 +924,237 @@ def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
         f"{label} post-load high-water RSS is below current RSS",
     )
     return {**event, **memory, "elapsed_s": elapsed}
+
+
+def _expected_loader_topology() -> dict[str, Any]:
+    particle_stack = str(EXPECTED_PARTICLE_STACK)
+    return {
+        "mapped_rows": EXPECTED_CACHE_IMAGES,
+        "mapped_files": [particle_stack],
+        "mapped_file_count": 1,
+        "mapping_unique_index_count": EXPECTED_CACHE_IMAGES,
+        "mapping_min_index": 0,
+        "mapping_max_index": EXPECTED_CACHE_IMAGES - 1,
+        "mapping_is_unique": True,
+        "mapping_is_contiguous_set": True,
+        "mapping_is_strictly_ascending": False,
+        "mapping_mrc_indices_sha256": EXPECTED_CACHE_MAPPING_SHA256,
+        "leaf_loader_count": 1,
+        "leaf_loaders": [
+            {
+                "path": particle_stack,
+                "io_path": particle_stack,
+                "loader_type": EXPECTED_CACHE_LEAF_LOADER_TYPE,
+                "num_images": EXPECTED_CACHE_IMAGES,
+                "image_size": EXPECTED_IMAGE_SIZE,
+                "dtype": EXPECTED_CACHE_DTYPE,
+                "selection_indices_sha256": EXPECTED_CACHE_LEAF_SELECTION_SHA256,
+            }
+        ],
+        "leaf_cached": [False],
+    }
+
+
+def _validate_memory_probe(root: Path) -> dict[str, Any]:
+    """Load the fresh-process, untimed allocation and byte-identity canary."""
+
+    path = root / "provenance" / "raw_cache_memory_probe.json"
+    _require(path.is_file(), "raw-cache memory probe is missing")
+    value = _load_json(path, "raw-cache memory probe")
+    expected_scalar = {
+        "schema": MEMORY_PROBE_SCHEMA,
+        "classification": "untimed_memory_and_bitwise_equivalence_canary",
+        "input_star": str(EXPECTED_INPUT_STAR),
+        "input_star_sha256": EXPECTED_INPUT_STAR_SHA256,
+        "data_dir": str(EXPECTED_DATA_DIR),
+        "cache_dir_env": "",
+        "comparison_batch_size": 500,
+    }
+    mismatches = {
+        key: (value.get(key), expected)
+        for key, expected in expected_scalar.items()
+        if value.get(key) != expected
+    }
+    _require(not mismatches, f"raw-cache memory probe differs: {mismatches}")
+
+    loader = value.get("loader")
+    _require(isinstance(loader, dict), "raw-cache memory probe loader is missing")
+    expected_loader = {
+        "loader_type": EXPECTED_CACHE_LOADER_TYPE,
+        "num_images": EXPECTED_CACHE_IMAGES,
+        "image_size": EXPECTED_IMAGE_SIZE,
+        "dtype": EXPECTED_CACHE_DTYPE,
+        "estimated_bytes": EXPECTED_CACHE_BYTES,
+        "cached_nbytes": EXPECTED_CACHE_BYTES,
+        "cached_shape": [EXPECTED_CACHE_IMAGES, EXPECTED_IMAGE_SIZE, EXPECTED_IMAGE_SIZE],
+        "cached_dtype": EXPECTED_CACHE_DTYPE,
+        "cached_c_contiguous": True,
+        "cached_writeable": True,
+        "topology_before": _expected_loader_topology(),
+        "topology_after": _expected_loader_topology(),
+    }
+    loader_mismatches = {
+        key: (loader.get(key), expected)
+        for key, expected in expected_loader.items()
+        if loader.get(key) != expected
+    }
+    _require(not loader_mismatches, f"raw-cache memory-probe loader differs: {loader_mismatches}")
+    _require(set(loader) == set(expected_loader), "raw-cache memory-probe loader fields differ")
+
+    trace = value.get("tracemalloc")
+    _require(isinstance(trace, dict), "raw-cache tracemalloc evidence is missing")
+    trace_values = {
+        key: _integer(trace.get(key), f"raw-cache trace {key}")
+        for key in (
+            "baseline_current_bytes",
+            "baseline_peak_bytes",
+            "after_current_bytes",
+            "peak_bytes",
+            "retained_delta_bytes",
+            "peak_above_baseline_bytes",
+        )
+    }
+    _require(all(number >= 0 for number in trace_values.values()), "raw-cache trace contains a negative value")
+    _require(
+        trace_values["baseline_peak_bytes"] >= trace_values["baseline_current_bytes"],
+        "raw-cache traced baseline peak is below current memory",
+    )
+    _require(
+        trace_values["peak_bytes"]
+        >= max(trace_values["baseline_peak_bytes"], trace_values["after_current_bytes"]),
+        "raw-cache traced peak is below an observed current value",
+    )
+    _require(
+        trace_values["after_current_bytes"] - trace_values["baseline_current_bytes"]
+        == trace_values["retained_delta_bytes"],
+        "raw-cache traced retained delta differs",
+    )
+    _require(
+        trace_values["peak_bytes"] - trace_values["baseline_current_bytes"]
+        == trace_values["peak_above_baseline_bytes"],
+        "raw-cache traced peak delta differs",
+    )
+    _require(
+        trace_values["peak_above_baseline_bytes"] >= trace_values["retained_delta_bytes"],
+        "raw-cache traced peak is below retained memory",
+    )
+    elapsed = _finite_number(trace.get("elapsed_s"), "raw-cache traced load time", positive=True)
+    _require(
+        set(trace) == {*trace_values, "elapsed_s"},
+        "raw-cache tracemalloc fields differ",
+    )
+
+    rss = value.get("rss_diagnostic")
+    _require(isinstance(rss, dict), "raw-cache RSS diagnostic is missing")
+    rss_values = {
+        key: _integer(rss.get(key), f"raw-cache RSS {key}")
+        for key in (
+            "current_before_bytes",
+            "current_after_bytes",
+            "current_delta_bytes",
+            "high_water_before_bytes",
+            "high_water_after_bytes",
+            "high_water_delta_bytes",
+        )
+    }
+    _require(
+        all(
+            rss_values[key] >= 0
+            for key in (
+                "current_before_bytes",
+                "current_after_bytes",
+                "current_delta_bytes",
+                "high_water_before_bytes",
+                "high_water_after_bytes",
+                "high_water_delta_bytes",
+            )
+        ),
+        "raw-cache RSS diagnostic contains a negative value",
+    )
+    _require(
+        rss_values["current_after_bytes"] - rss_values["current_before_bytes"]
+        == rss_values["current_delta_bytes"],
+        "raw-cache RSS current delta differs",
+    )
+    _require(
+        rss_values["high_water_after_bytes"] - rss_values["high_water_before_bytes"]
+        == rss_values["high_water_delta_bytes"],
+        "raw-cache RSS high-water delta differs",
+    )
+    _require(rss_values["high_water_delta_bytes"] >= 0, "raw-cache RSS high-water decreased")
+    _require(
+        rss_values["high_water_before_bytes"] >= rss_values["current_before_bytes"]
+        and rss_values["high_water_after_bytes"] >= rss_values["current_after_bytes"],
+        "raw-cache RSS high-water is below current RSS",
+    )
+    _require(set(rss) == set(rss_values), "raw-cache RSS diagnostic fields differ")
+
+    bitwise = value.get("bitwise_equivalence")
+    _require(isinstance(bitwise, dict), "raw-cache bitwise evidence is missing")
+    for name in ("cached_sha256", "streamed_uncached_sha256"):
+        _require(
+            isinstance(bitwise.get(name), str) and _SHA256_RE.fullmatch(bitwise[name]),
+            f"raw-cache {name} is invalid",
+        )
+    _require(
+        _integer(bitwise.get("compared_images"), "raw-cache compared images")
+        == EXPECTED_CACHE_IMAGES,
+        "raw-cache compared image count differs",
+    )
+    _require(
+        _integer(bitwise.get("batch_count"), "raw-cache comparison batch count")
+        == math.ceil(EXPECTED_CACHE_IMAGES / 500),
+        "raw-cache comparison batch count differs",
+    )
+    _require(bitwise.get("comparison_loader_cached") is False, "comparison loader was cached")
+    _require(
+        bitwise.get("comparison_topology_before") == _expected_loader_topology()
+        and bitwise.get("comparison_topology_after") == _expected_loader_topology(),
+        "raw-cache comparison-loader topology differs",
+    )
+    exact = bitwise.get("exact")
+    _require(isinstance(exact, bool), "raw-cache bitwise exact flag is invalid")
+    first_mismatch = bitwise.get("first_mismatch_index")
+    if exact:
+        _require(first_mismatch is None, "exact raw-cache comparison records a mismatch")
+        _require(
+            bitwise["cached_sha256"] == bitwise["streamed_uncached_sha256"],
+            "exact raw-cache comparison digests differ",
+        )
+    else:
+        _require(
+            isinstance(first_mismatch, int)
+            and not isinstance(first_mismatch, bool)
+            and 0 <= first_mismatch < EXPECTED_CACHE_IMAGES,
+            "non-exact raw-cache comparison lacks a valid mismatch index",
+        )
+    expected_bitwise_fields = {
+        "exact",
+        "cached_sha256",
+        "streamed_uncached_sha256",
+        "compared_images",
+        "batch_count",
+        "first_mismatch_index",
+        "comparison_loader_cached",
+        "comparison_topology_before",
+        "comparison_topology_after",
+    }
+    _require(set(bitwise) == expected_bitwise_fields, "raw-cache bitwise evidence fields differ")
+    expected_top_level = {
+        *expected_scalar,
+        "loader",
+        "tracemalloc",
+        "rss_diagnostic",
+        "bitwise_equivalence",
+    }
+    _require(set(value) == expected_top_level, "raw-cache memory-probe fields differ")
+    return {
+        **value,
+        "path": str(path.resolve()),
+        "sha256": _sha256(path),
+        "tracemalloc": {**trace_values, "elapsed_s": elapsed},
+        "rss_diagnostic": rss_values,
+    }
 
 
 def _validate_cache_audit(phase: dict[str, Any], *, label: str, mode: str, phase_name: str) -> list[dict[str, Any]]:
@@ -1387,7 +1650,10 @@ def _gpu_timing_equivalence(
     }
 
 
-def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _performance(
+    arms: dict[str, dict[str, Any]],
+    memory_probe: dict[str, Any],
+) -> dict[str, Any]:
     modes = {}
     for mode in MODES:
         rows = [arms[f"cache_{mode}_{repeat}"]["performance"] for repeat in REPEAT_IDS]
@@ -1489,10 +1755,13 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
     admission_memory_ok = all(
         0 <= row["current_rss_delta_bytes"] <= admission_hwm_limit
-        and 0 <= row["peak_rss_above_call_baseline_bytes"] <= admission_hwm_limit
         for phases in admission_memory.values()
         for row in phases.values()
     )
+    traced_retained = memory_probe["tracemalloc"]["retained_delta_bytes"]
+    traced_peak = memory_probe["tracemalloc"]["peak_above_baseline_bytes"]
+    traced_cache_visible = traced_retained >= EXPECTED_CACHE_BYTES
+    traced_peak_ok = traced_retained <= traced_peak <= admission_hwm_limit
     paired_wall_wins = sum(
         row["warm_wall_s"]["auto_faster"] for row in adjacent.values()
     )
@@ -1512,9 +1781,9 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "total_sum_gpu_time_equivalent": gpu_timing["gpu_kernel_sum_s"]["equivalent"],
         "coarse_union_gpu_time_equivalent": gpu_timing["coarse_kernel_union_s"]["equivalent"],
         "total_union_gpu_time_equivalent": gpu_timing["gpu_kernel_union_s"]["equivalent"],
-        "each_cache_admission_peak_and_retained_rss_within_cache_plus_64mib": (
-            admission_memory_ok
-        ),
+        "each_timed_cache_retained_rss_within_cache_plus_64mib": admission_memory_ok,
+        "untimed_trace_tracks_at_least_one_cache_buffer": traced_cache_visible,
+        "untimed_traced_peak_within_cache_plus_64mib": traced_peak_ok,
     }
     return {
         "metric_order": list(PERFORMANCE_METRICS),
@@ -1546,6 +1815,8 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "cache_admission_memory": {
             "arms": admission_memory,
             "limit_bytes": admission_hwm_limit,
+            "timed_hwm_classification": "lifetime_diagnostic_only_not_an_admission_peak",
+            "untimed_tracemalloc": memory_probe["tracemalloc"],
         },
         "coarse_launches": {"expected_per_gpu": EXPECTED_COARSE_LAUNCHES, "repeat_envelope": launch_repeat_envelope},
         "kernel_signature_counts": {label: arms[label]["nsight"]["kernel_signature_counts"] for label in ARM_LABELS},
@@ -1606,7 +1877,7 @@ def _markdown(report: dict[str, Any]) -> str:
         lines.append("| " + " | ".join(values) + " |")
     preload = performance["preload"]
     admission_memory = performance["cache_admission_memory"]
-    max_admission_peak = max(
+    max_lifetime_hwm_above_call = max(
         row["peak_rss_above_call_baseline_bytes"]
         for phases in admission_memory["arms"].values()
         for row in phases.values()
@@ -1625,13 +1896,23 @@ def _markdown(report: dict[str, Any]) -> str:
             f"- Gross post-preload wall saving: `{preload['gross_post_preload_wall_saving_s']:.6f} s/iteration`.",
             f"- Break-even: `{preload['break_even_iterations']:.3f}` iterations "
             f"(ceiling `{preload['break_even_iterations_ceiling']}`).",
-            f"- Maximum cache-admission peak above call baseline: `{max_admission_peak}` bytes "
+            f"- Untimed traced retained/peak: "
+            f"`{admission_memory['untimed_tracemalloc']['retained_delta_bytes']}` / "
+            f"`{admission_memory['untimed_tracemalloc']['peak_above_baseline_bytes']}` bytes "
             f"(limit `{admission_memory['limit_bytes']}` bytes).",
             f"- Maximum retained RSS increase: `{max_admission_retained}` bytes "
             f"(limit `{admission_memory['limit_bytes']}` bytes).",
+            f"- Maximum lifetime HWM above a timed call baseline: "
+            f"`{max_lifetime_hwm_above_call}` bytes (diagnostic only; it may predate the call).",
             "",
             "## Correctness",
             "",
+            "- Cached and independently streamed logical image bytes exact: "
+            f"`{report['raw_cache_memory_probe']['bitwise_equivalence']['exact']}`.",
+            "- Cached/streamed logical-image SHA-256: "
+            f"`{report['raw_cache_memory_probe']['bitwise_equivalence']['cached_sha256']}` / "
+            f"`{report['raw_cache_memory_probe']['bitwise_equivalence']['streamed_uncached_sha256']}` "
+            f"(frozen `{EXPECTED_LOGICAL_IMAGES_SHA256}`).",
             f"- Particle STAR and discrete metadata exact: `{science['all_particle_star_and_discrete_metadata_exact']}`.",
             "- AUTO repeat maps within the OFF control envelope: "
             f"`{science['all_auto_repeat_maps_within_off_repeat_envelope']}`.",
@@ -1667,11 +1948,12 @@ def analyze(root: Path, *, repo: Path | None = None) -> dict[str, Any]:
     }
     observed_nsight = {path.name for path in (root / "nsight").iterdir() if path.is_file()}
     _require(observed_nsight == expected_nsight, f"Nsight artifact topology differs: {sorted(observed_nsight)}")
+    memory_probe = _validate_memory_probe(root)
     arms = {spec[0]: _load_arm(root, spec) for spec in ARM_SPECS}
     schedules = [arms[label][phase]["schedule"] for label in ARM_LABELS for phase in ("cold", "warm")]
     _require(all(schedule == schedules[0] for schedule in schedules[1:]), "GF46 schedule differs across arms")
     science = _science(arms)
-    performance = _performance(arms)
+    performance = _performance(arms, memory_probe)
     gates = {
         "provenance_topology_cache_selector_schedule": True,
         "particle_star_and_discrete_metadata_exact": science["all_particle_star_and_discrete_metadata_exact"],
@@ -1687,6 +1969,14 @@ def analyze(root: Path, *, repo: Path | None = None) -> dict[str, Any]:
         "cross_mode_map_signed_drift_nondirectional": science[
             "all_cross_mode_signed_drift_nondirectional"
         ],
+        "raw_cache_bytes_exact_to_streamed_uncached_loader": memory_probe[
+            "bitwise_equivalence"
+        ]["exact"],
+        "raw_cache_and_streamed_digests_match_frozen_logical_images": (
+            memory_probe["bitwise_equivalence"]["cached_sha256"]
+            == EXPECTED_LOGICAL_IMAGES_SHA256
+            == memory_probe["bitwise_equivalence"]["streamed_uncached_sha256"]
+        ),
         **performance["gates"],
     }
     passed = all(gates.values())
@@ -1708,6 +1998,7 @@ def analyze(root: Path, *, repo: Path | None = None) -> dict[str, Any]:
         },
         "schedule": schedules[0],
         "cache_audit": {label: arms[label]["cache_events"] for label in ARM_LABELS},
+        "raw_cache_memory_probe": memory_probe,
         "selector_audits": {
             label: {phase: arms[label][phase]["selector_audit"] for phase in ("cold", "warm")}
             for label in ARM_LABELS
