@@ -207,6 +207,14 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--translation_sigma_angstrom", type=float, default=None)
     p.add_argument("--eager_images", action="store_true", help="Load image stack eagerly instead of lazily")
     p.add_argument("--no_iter_artifacts", action="store_true", help="Only write final native output artifacts")
+    p.add_argument(
+        "--relion-kclass-firstiter-native-bpref-replay",
+        action="store_true",
+        help=(
+            "Experimental opt-in for the K=4 iteration-1 native RELION BPref "
+            "replay; unsupported configurations fail closed"
+        ),
+    )
     p.add_argument("--dry_run", action="store_true", help="Only print the assembled command(s)")
     p.add_argument(
         "--padding_factor",
@@ -281,6 +289,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         translation_sigma_angstrom=args.translation_sigma_angstrom,
         write_iter_artifacts=not args.no_iter_artifacts,
         padding_factor=int(args.padding_factor),
+        relion_kclass_firstiter_native_bpref_replay=bool(
+            args.relion_kclass_firstiter_native_bpref_replay
+        ),
     )
     result = run_native_initial_model(native_opts)
     print(f"recovar InitialModel complete: {result.final_mrc}")

@@ -90,6 +90,7 @@ class NativeInitialModelOptions:
     translation_sigma_angstrom: float | None = None
     write_iter_artifacts: bool = True
     run_relion_align_symmetry: bool = False
+    relion_kclass_firstiter_native_bpref_replay: bool = False
 
 
 @dataclass(frozen=True)
@@ -1089,6 +1090,8 @@ def _dense_estep_config(
             and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
         ),
     }
+    if opts.relion_kclass_firstiter_native_bpref_replay:
+        engine_kwargs["relion_kclass_firstiter_native_bpref_replay"] = True
     if int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(
             healpix_order=int(sampling_plan.healpix_order),
