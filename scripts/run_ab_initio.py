@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from recovar.commands.initial_model import _disabled_or_pool_aligned_chunk_size
 from recovar.em.initial_model.schedules import GuiInitialModelDefaults
 
 INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
@@ -281,6 +282,26 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--image_batch_size", type=int, default=INITIAL_MODEL_GUI_DEFAULTS.image_batch_size)
     p.add_argument("--rotation_block_size", type=int, default=INITIAL_MODEL_GUI_DEFAULTS.rotation_block_size)
     p.add_argument(
+        "--exact-local-bucket-radix",
+        "--exact_local_bucket_radix",
+        dest="exact_local_bucket_radix",
+        type=int,
+        choices=(2, 4),
+        default=INITIAL_MODEL_GUI_DEFAULTS.exact_local_bucket_radix,
+        help="Static-shape radix for exact-local K=1 hypothesis buckets",
+    )
+    p.add_argument(
+        "--exact-local-physical-order-chunk-size",
+        "--exact_local_physical_order_chunk_size",
+        dest="exact_local_physical_order_chunk_size",
+        type=_disabled_or_pool_aligned_chunk_size,
+        default=INITIAL_MODEL_GUI_DEFAULTS.exact_local_physical_order_chunk_size,
+        help=(
+            "Bound consecutive physical-order K=1 buckets; 0 keeps the "
+            "qualified run-global shape"
+        ),
+    )
+    p.add_argument(
         "--image_fourier_backend",
         choices=("auto", "host_numpy", "jax_gpu", "relion_cuda"),
         default="auto",
@@ -439,6 +460,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         random_perturbation=args.random_perturbation,
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,
+        exact_local_bucket_radix=args.exact_local_bucket_radix,
+        exact_local_physical_order_chunk_size=(
+            args.exact_local_physical_order_chunk_size
+        ),
         bootstrap_min_particles=args.bootstrap_min_particles,
         sigma2_min_particles=args.sigma2_min_particles,
         lazy=not args.eager_images,

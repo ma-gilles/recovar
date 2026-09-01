@@ -2104,6 +2104,10 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
             "1.5",
             "--random_perturbation",
             "0.25",
+            "--exact-local-bucket-radix",
+            "2",
+            "--exact-local-physical-order-chunk-size",
+            "220",
             "--translation_sigma_angstrom",
             "6.5",
             "--diagnostic_stop_after_iteration",
@@ -2126,6 +2130,8 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.offset_range_px == 4.5
     assert opts.offset_step_px == 1.5
     assert opts.random_perturbation == 0.25
+    assert opts.exact_local_bucket_radix == 2
+    assert opts.exact_local_physical_order_chunk_size == 220
     assert opts.translation_sigma_angstrom == 6.5
     assert opts.diagnostic_stop_after_iteration == 2
     assert opts.image_fourier_backend == "host_numpy"
