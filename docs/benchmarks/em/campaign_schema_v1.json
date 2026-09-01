@@ -295,7 +295,15 @@
         "cross_engine_fsc_auc": {"type": "number", "minimum": -1, "maximum": 1},
         "recovar_gt_fsc_auc": {"type": "number", "minimum": -1, "maximum": 1},
         "relion_gt_fsc_auc": {"type": "number", "minimum": -1, "maximum": 1},
-        "gt_fsc_auc_delta": {"type": "number", "minimum": -2, "maximum": 2}
+        "gt_fsc_auc_delta": {"type": "number", "minimum": -2, "maximum": 2},
+        "recovar_gt_resolution_0_143_angstrom": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "relion_gt_resolution_0_143_angstrom": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
       }
     },
     "occupancy": {

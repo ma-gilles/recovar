@@ -1,0 +1,1893 @@
+{
+  "schema_version": 1,
+  "campaign_id": "k4-c4-three-seed-c75cbfffc-h100",
+  "recorded_at": "2026-09-01T15:35:00+00:00",
+  "record_type": "synthetic_kclass_campaign",
+  "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901",
+  "subject": {
+    "kind": "synthetic",
+    "molecular_family": "Ribosembly 50S assembly intermediates",
+    "k": 4,
+    "iterations": 5,
+    "symmetry": "C4",
+    "trajectory_scope": "Three independent C4 seeds; every numbered RECOVAR half-map average and RELION Class3D full map at iterations 1-5, plus last-numbered final class maps."
+  },
+  "source": {
+    "recovar": {
+      "commit": "c75cbfffc930e4dac7bcc2785f9220ad8472a5a5",
+      "tree": "598f6cad6a17f3980bdded0d25524564b597c944",
+      "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_symmetry_multiseed_gate_c75cbfffc_20260901",
+      "clean": true
+    },
+    "relion": {
+      "commit": "d476e6f6a4f1f37627c06ace5227fc374c0c2b05",
+      "tree": "1633d228e89d91ede8ad0996e727ec6ab1bc96ee",
+      "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/source",
+      "source_diff_sha256": "6987c5ce397cbdd98835682cf1481a150c38c48cda621e006341d01a77e11c11",
+      "executable": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/build/bin/relion_refine_mpi",
+        "sha256": "01fa9cc870fdce6c19d981d6e917765753406972abcddb0311a40ef88e69a782",
+        "size_bytes": 11106320
+      }
+    },
+    "custom_cuda": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cuda/shared/libcuda_backproject.so",
+      "sha256": "266267fb9acfcf9994ec18ba22f74467b3e05369b96252ab936d885c819d98b2",
+      "size_bytes": 47142296
+    }
+  },
+  "reproduction": {
+    "setup_command": "sbatch /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_setup.sh",
+    "case_command_template": "sbatch /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed<SEED>.sh",
+    "summary_command": "sbatch /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_summary.sh",
+    "trajectory_audit_command": "sbatch --parsable --account=gilles --partition=cpu --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=16G --time=02:00:00 --output=<CASE_ROOT>/trajectory_analysis/audit_slurm-%j.out --error=<CASE_ROOT>/trajectory_analysis/audit_slurm-%j.err --wrap=\"unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV; export PYTHONNOUSERSITE=1 XLA_PYTHON_CLIENT_PREALLOCATE=false; cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_symmetry_multiseed_gate_c75cbfffc_20260901; /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/venv/bin/python scripts/audit_k4_fsc_trajectory.py --case-root <CASE_ROOT>\"",
+    "environment": {
+      "set": {
+        "PYTHONNOUSERSITE": "1",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "PIXI_FROZEN": "true",
+        "RECOVAR_EXPECTED_REPO_ROOT": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_symmetry_multiseed_gate_c75cbfffc_20260901",
+        "RECOVAR_CUDA_LIB": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cuda/shared/libcuda_backproject.so",
+        "RECOVAR_RELION_BIND_BUILD_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/relion_bind_build/shared",
+        "RELION_SRC_DIR": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/source/src",
+        "EM_KCLASS_MATRIX_THREE_SEED_VALUES": "41001,41002,41003"
+      },
+      "confirmed_unset": [
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "CONDA_PREFIX",
+        "VIRTUAL_ENV",
+        "TF_GPU_ALLOCATOR",
+        "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT",
+        "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"
+      ]
+    }
+  },
+  "shared_jobs": [
+    {
+      "role": "environment_setup",
+      "job_id": "13301401",
+      "status": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_s": 61,
+      "node": "della-r3c4n15",
+      "gpu_model": null,
+      "gpu_uuid": null,
+      "req_tres": "billing=16,cpu=8,mem=64G,node=1",
+      "alloc_tres": "billing=16,cpu=8,mem=64G,node=1",
+      "max_rss_kib": 3006748,
+      "logs": [
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_setup.out",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_setup.err"
+      ]
+    },
+    {
+      "role": "c4_seed_41001_trajectory_audit",
+      "job_id": "13303682",
+      "status": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_s": 159,
+      "node": "della-r3c4n5",
+      "gpu_model": null,
+      "gpu_uuid": null,
+      "req_tres": "billing=4,cpu=2,mem=16G,node=1",
+      "alloc_tres": "billing=4,cpu=2,mem=16G,node=1",
+      "max_rss_kib": null,
+      "logs": [
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/audit_slurm-13303682.out",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/audit_slurm-13303682.err"
+      ]
+    },
+    {
+      "role": "c4_seed_41002_trajectory_audit",
+      "job_id": "13303683",
+      "status": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_s": 149,
+      "node": "della-r3c4n7",
+      "gpu_model": null,
+      "gpu_uuid": null,
+      "req_tres": "billing=4,cpu=2,mem=16G,node=1",
+      "alloc_tres": "billing=4,cpu=2,mem=16G,node=1",
+      "max_rss_kib": null,
+      "logs": [
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/audit_slurm-13303683.out",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/audit_slurm-13303683.err"
+      ]
+    },
+    {
+      "role": "c4_seed_41003_trajectory_audit",
+      "job_id": "13303684",
+      "status": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_s": 164,
+      "node": "della-r3c4n10",
+      "gpu_model": null,
+      "gpu_uuid": null,
+      "req_tres": "billing=4,cpu=2,mem=16G,node=1",
+      "alloc_tres": "billing=4,cpu=2,mem=16G,node=1",
+      "max_rss_kib": null,
+      "logs": [
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/audit_slurm-13303684.out",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/audit_slurm-13303684.err"
+      ]
+    }
+  ],
+  "shared_artifacts": [
+    {
+      "role": "safe_to_delete_marker",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/SAFE_TO_DELETE",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    {
+      "role": "case_table",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/case_table.tsv",
+      "sha256": "cc7d2f64985c7537b72184d8a2c6a7bca81ffc4edd25c2090500cc8e0abf8a73",
+      "size_bytes": 14221
+    },
+    {
+      "role": "submission_environment",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/submission.env",
+      "sha256": "f71ef2a750887e019dc0f294781dc6b4b6fa3c91fa320253dd4bf43436dfe47a",
+      "size_bytes": 2201
+    },
+    {
+      "role": "endpoint_summary_json",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_robustness_summary.json",
+      "sha256": "ee4205d3136fb746eeb8201319adcc79868e25a5599248c6841cf0c195c2f8d3",
+      "size_bytes": 192583
+    },
+    {
+      "role": "endpoint_summary_markdown",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_robustness_summary.md",
+      "sha256": "5f072f34beb44bb907ce0147d5e79a80d3e5f459e3632aa51986f0f49ad7762a",
+      "size_bytes": 60229
+    },
+    {
+      "role": "multiseed_summary_json",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_multiseed_summary.json",
+      "sha256": "863d0c6b2b8606bce92849bae49c13ef3d29f53aec63563fc3d11e661f8e01e0",
+      "size_bytes": 49172
+    },
+    {
+      "role": "multiseed_summary_markdown",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_multiseed_summary.md",
+      "sha256": "aadd559d66fadcbe25f9e061f33eae20d754df9436743f7c7cdda769ccffeca9",
+      "size_bytes": 7755
+    },
+    {
+      "role": "case_slurm_accounting",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/slurm_case_accounting.json",
+      "sha256": "c04aca221013d18bcf9c291e58161609d747779e0a2e3ccc9fc89671c4199390",
+      "size_bytes": 10129
+    },
+    {
+      "role": "setup_launcher",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_setup.sh",
+      "sha256": "c319a9d053e984fa2a3ef5f66d9dc39ba2a6147d7ff5b0e726065b861e669b1e",
+      "size_bytes": 8007
+    },
+    {
+      "role": "summary_launcher",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_summary.sh",
+      "sha256": "7ac7aeee0b8ab97f3fd703426ff5459d2dcf4aa0ee1a2e8f6e2e3a33ef35fbc5",
+      "size_bytes": 5072
+    },
+    {
+      "role": "setup_stdout",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_setup.out",
+      "sha256": "ae5afe3ce0d5e6c3e839153e46a14d4d9d48c7052a2d6bde9e5da511abd57490",
+      "size_bytes": 9235
+    },
+    {
+      "role": "setup_stderr",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_setup.err",
+      "sha256": "ac4a6935976bbcad75218926a821c3f1b3b72c76e9b21a9c582f895010a97769",
+      "size_bytes": 2853
+    },
+    {
+      "role": "summary_stdout",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_summary.out",
+      "sha256": "0ef857c7fe0df9270f0b29ce2e958978715a6148ae0252f1bb61027e7d3b6d2c",
+      "size_bytes": 45738
+    },
+    {
+      "role": "summary_stderr",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_summary.err",
+      "sha256": "84106710d3fad599d4cdd05eb10d9d229970a28c75160b8715e3954c8b7a89ea",
+      "size_bytes": 38
+    },
+    {
+      "role": "relion_bind_checksum_seal",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/relion_bind_build/shared.sha256",
+      "sha256": "88c508d009a0ff0f854ee5a6922ea5406ce1c961b3610714788473fb7fdb5507",
+      "size_bytes": 227
+    },
+    {
+      "role": "trajectory_audit_scontrol_snapshot",
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/audit_k4_c4_d4_scontrol_snapshot_20260901.txt",
+      "sha256": "c70b99be3616d11194cd516a326e9d293e9069303484ead29bb2a773da69f461",
+      "size_bytes": 18246
+    },
+    {
+      "role": "source_pdb_class_001",
+      "path": "/projects/CRYOEM/singerlab/mg6942/cryobench2/Ribosembly/pdbs/000_8c9c.pdb",
+      "sha256": "7831ae537ecdaa0559fd8bd0a66bf64f28dc6abd7f68b1693fd4f6b711b565df",
+      "size_bytes": 1048862
+    },
+    {
+      "role": "source_pdb_class_002",
+      "path": "/projects/CRYOEM/singerlab/mg6942/cryobench2/Ribosembly/pdbs/001_8c9b.pdb",
+      "sha256": "c2d22cccc95d3938bc5902b8a262abb6cc4fc08b4f997035017def2cd0e4e80a",
+      "size_bytes": 1271112
+    },
+    {
+      "role": "source_pdb_class_003",
+      "path": "/projects/CRYOEM/singerlab/mg6942/cryobench2/Ribosembly/pdbs/002_8c9a.pdb",
+      "sha256": "248abfa5b6c47ae46e564d1b85d061d0512bae9be2713aaa50bc73b272d3cae2",
+      "size_bytes": 1453819
+    },
+    {
+      "role": "source_pdb_class_004",
+      "path": "/projects/CRYOEM/singerlab/mg6942/cryobench2/Ribosembly/pdbs/003_8c99.pdb",
+      "sha256": "a4d0990124b4400f64ba67d92cbb2961b832c5d75f6a9496568ecff30d82ddaa",
+      "size_bytes": 2241474
+    }
+  ],
+  "cases": [
+    {
+      "case_id": 41001,
+      "name": "ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001",
+      "particles": 5000,
+      "box_size": 128,
+      "configuration": {
+        "index": 31,
+        "name": "ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001",
+        "pdb_dir": "/home/mg6942/mytigress/cryobench2/Ribosembly/pdbs",
+        "n_classes": 4,
+        "n_images": 5000,
+        "grid_size": 128,
+        "noise_level": 1.0,
+        "noise_model": "white",
+        "dataset_params_option": "uniform",
+        "class_distribution": "uniform",
+        "seed": 41001,
+        "pdb_bfactor": 80.0,
+        "init_radius": 10,
+        "noise_scale_std": 0.0,
+        "contrast_std": 0.0,
+        "volume_radius": 0.7,
+        "image_offset_n_std": 0.0,
+        "percent_outliers": 0.0,
+        "max_iter": 5,
+        "gpu_monitor_interval_s": 5,
+        "legacy_combined_gpu_monitor_interval_s": 60,
+        "initial_resolution_ang": 60.0,
+        "particle_diameter_ang": 380.0,
+        "image_batch_size": 50,
+        "rotation_block_size": 2000,
+        "symmetry": "C4",
+        "base_name": "ribo_k4_5k_g128_white_noise1_c4_uniform",
+        "base_seed": 41001,
+        "seed_replicate": 1,
+        "case_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001",
+        "slurm_job_id": "13301414",
+        "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data",
+        "shared_input_group": null,
+        "shared_input_key": null,
+        "shared_input_role": null,
+        "shared_input_manifest": null,
+        "shared_relion_dir": null,
+        "shared_relion_manifest": null
+      },
+      "case_config": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/case_config.json",
+        "sha256": "516aa1ad59bb3bd7bf092d328749b6ab865df4faefa8d2427bec0be0ec406796",
+        "size_bytes": 1403
+      },
+      "launcher": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001.sh",
+        "sha256": "40947e0e30c206dbe3e0fce11119e6bad4a57b9dec307ebe644921ec36e4fa2e",
+        "size_bytes": 26306
+      },
+      "reproduction_command": "sbatch /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001.sh",
+      "inputs": [
+        {
+          "role": "data/class_manifest.json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/class_manifest.json",
+          "sha256": "039e4f6e0cafd6bc168a8121d5e774564f8057347f5b888282f2abb2d92c6327",
+          "size_bytes": 1754
+        },
+        {
+          "role": "data/ctf.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/ctf.pkl",
+          "sha256": "0adec5176666b57409221fcd6da31c5af7a27d9b1cb5972cca29d64e30926462",
+          "size_bytes": 180163
+        },
+        {
+          "role": "data/generation_config.json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/generation_config.json",
+          "sha256": "bfe3c5449efbb5a86bb5000c8223943ed9f46670f84f764b32a60815022c73ea",
+          "size_bytes": 3067
+        },
+        {
+          "role": "particles",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/particles.128.mrcs",
+          "sha256": "f037b438bc64f8b6779f2b36ad100dd88da6f1656ff5596a76b94b0d61af0f09",
+          "size_bytes": 327681024
+        },
+        {
+          "role": "data/particles.star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/particles.star",
+          "sha256": "f08d1c5281092e7c2965510c0d6a0d6910f097e1a29598bd4bcfc00d3116036b",
+          "size_bytes": 676852
+        },
+        {
+          "role": "data/poses.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/poses.pkl",
+          "sha256": "4c286463c5d1c4226c3bb871f93f0513e5a94ce14123966e41b946e7affc750d",
+          "size_bytes": 220203
+        },
+        {
+          "role": "data/reference_gt.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_gt.mrc",
+          "sha256": "9bb36f59de23b0e30a61b872bab8129cfd1a4e8ab7896a4e1cc4e66757ac707b",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_gt_class001.mrc",
+          "sha256": "ccf473795143f7a3538dcc4c29976605e09ad5f2666362f995d37e5debdeab12",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_gt_class002.mrc",
+          "sha256": "4a8f7b56fd33c54956326ddb5854b498e81ffff6a8fe7604b4ae7ff3c8b823f3",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_gt_class003.mrc",
+          "sha256": "a227726606bc419dc6ad1ace70fe0212a46fbeb8ef11cfa04dbc4e371bf41507",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class004.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_gt_class004.mrc",
+          "sha256": "f90f6c82b974c12140a725b491afee920e8127debd25711508019a04205cdb6e",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class001.mrc",
+          "sha256": "7079782b96b158cdab454d1a7331d50a0059e2724ce11ce196a6d547fc22e82b",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class002.mrc",
+          "sha256": "9f3e72d0d477229f88d01c28bf3ef6a76f9d67ec126c8ff8b32a1f0f2eb73dc7",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class003.mrc",
+          "sha256": "0d38a2546bf7f0eb3c5f6811b5fdf6c981a8d11c826afa6c4ad737f3296d9837",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class004.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class004.mrc",
+          "sha256": "1ae80e59188335c29ba0b328157e88eef94a884be556f9a66d61f9480d84724c",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class001_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class001_relion.mrc",
+          "sha256": "cef8b4f8083a8490f45c75b72a598007c6843684d42744687a0075724a7e5171",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class002_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class002_relion.mrc",
+          "sha256": "28d091798181ff0ffb607dc775848248f2e670a9fcd4e647e46c91ae4ca7fdbb",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class003_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class003_relion.mrc",
+          "sha256": "61dd4cb850c58585f7a37577b0109385c9f550c7a37d6e51fc591faacee98cb7",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class004_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_class004_relion.mrc",
+          "sha256": "2b956840d7cae0a43c5cc3e8f94220074fc14a05e36e1ce969f9c1519fc08e03",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_classes_relion.star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/reference_init_classes_relion.star",
+          "sha256": "0cb8997a067d0654ea7b5bae0f965a743087e8f22af461ef5a092ba4576b92c3",
+          "size_bytes": 337
+        },
+        {
+          "role": "data/simulation_info.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/simulation_info.pkl",
+          "sha256": "0f2554345fa17066e1cf6336b9d88fe2e07500d9d325cbcb6c94106c540c8684",
+          "size_bytes": 824445
+        },
+        {
+          "role": "data/pdb_volumes/vol0000.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/pdb_volumes/vol0000.mrc",
+          "sha256": "1e241e585263d34a4c7221b272605ff6f7ad9d35e7b058125b2e9052b73b2c38",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/pdb_volumes/vol0001.mrc",
+          "sha256": "8aaa5c06937519feb40499f52537741b8975e0392a9558ba020161c88a50804e",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/pdb_volumes/vol0002.mrc",
+          "sha256": "6d02dfb50784924ab912e10b90a2f96143f34a5ffe36f14dde555ffe29d474fe",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/data/pdb_volumes/vol0003.mrc",
+          "sha256": "aec26bc5f6ff428658ae81140b5035a4a8fecf82a75979d9f8f4536b79678350",
+          "size_bytes": 8389632
+        }
+      ],
+      "input_equivalence": {
+        "group": "c4-independent-seed-replicates",
+        "admissible_for_execution_invariance": false,
+        "reason": "Seeds 41001, 41002, and 41003 deliberately generate different particle stacks; the group tests stochastic robustness, not byte-identical execution invariance."
+      },
+      "execution": {
+        "role": "paired_c4_seed_41001",
+        "job_id": "13301414",
+        "status": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_s": 1272,
+        "node": "della-h20g1",
+        "gpu_model": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-fa2518be-28c1-06bc-a6cc-131e55fe503e",
+        "req_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+        "alloc_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+        "max_rss_kib": 9029960,
+        "logs": [
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001.out",
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001.err"
+        ]
+      },
+      "artifacts": [
+        {
+          "role": "paired_gpu_uuid",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/paired_gpu_uuid.json",
+          "sha256": "ee57fb0fc774fc01606864804629a647d6fa8b60a0aaf24633e5d46601e200a2",
+          "size_bytes": 241
+        },
+        {
+          "role": "physical_gpu_inventory",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/physical_gpu_inventory.csv",
+          "sha256": "92f4f746f8ac8d7dced9978d189a65ff13bc7c889fedfb0f165f5d26bd3d7e65",
+          "size_bytes": 179
+        },
+        {
+          "role": "recovar_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar_gpu_monitor.csv",
+          "sha256": "37c4cbd10568fd8804280e74ca7e23ccaa15746d97004bf8b561ac687d0ba3e2",
+          "size_bytes": 13474
+        },
+        {
+          "role": "relion_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_gpu_monitor.csv",
+          "sha256": "344bcbe3d934b74a4286caf6909d462cdc2e29b698e2253b4cd690754d9c08fa",
+          "size_bytes": 1092
+        },
+        {
+          "role": "recovar_walltime",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/slurm_walltime.json",
+          "sha256": "618e4871b58b9e9dd0d3d66c8051265f52b05b4f3767247e1b8ee8461532bdd7",
+          "size_bytes": 114
+        },
+        {
+          "role": "relion_walltime",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/slurm_walltime.json",
+          "sha256": "be55ed8356578f1963121d58a4f5385d6ceb314f9465ed959a8991725937c91b",
+          "size_bytes": 113
+        },
+        {
+          "role": "recovar_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/run_full_refinement.log",
+          "sha256": "a054c1be710ea15d5a8b470a16dcda30637333e8b8d3995a2c2df7e89b1fca4a",
+          "size_bytes": 155338
+        },
+        {
+          "role": "relion_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_class3d.log",
+          "sha256": "fe2e04a32784e30a9ae239907bb687bccf61594e3f10ac0e33310fccb742edf0",
+          "size_bytes": 169578
+        },
+        {
+          "role": "recovar_refinement_results",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/refinement_results.npz",
+          "sha256": "b9d19566521a2d3c2591a070ab167ba36b7961fb4d72c8de2a84b2d522723e99",
+          "size_bytes": 290169527
+        },
+        {
+          "role": "recovar_benchmark_ledger",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/benchmark_ledger.json",
+          "sha256": "9d5294c899c16deb528bd87fe8fbff29344eaf26ef424f6982c0a66e60779e11",
+          "size_bytes": 35523
+        },
+        {
+          "role": "numbered_class_map_audit",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/intermediates/numbered_class_map_audit.json",
+          "sha256": "42214a9c050fe475d59ef4c3cce8d10ea575120b913ea8495337996e12daea85",
+          "size_bytes": 16293
+        },
+        {
+          "role": "numbered_class_map_checksums",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/intermediates/numbered_class_maps.sha256",
+          "sha256": "3830d52691375ba7361c49b1664b7444266b649265aee066d1c0c01e468099be",
+          "size_bytes": 10400
+        },
+        {
+          "role": "recovar_endpoint_gt_fsc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/kclass_gt_fsc.json",
+          "sha256": "407c65062a53ec8fba881dc302583f45b7078189132abb794c7a1ff506b65c85",
+          "size_bytes": 15123
+        },
+        {
+          "role": "relion_endpoint_gt_fsc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_kclass_gt_fsc.json",
+          "sha256": "125c0cc22bfa005befc4336067a18b678e83959b665dbe915194fb5954c730fa",
+          "size_bytes": 15133
+        },
+        {
+          "role": "relion_class_population_audit",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/class_population_audit.json",
+          "sha256": "099acbb6aa5e400c1ff39cd68048a4017c231c8d80b0b2e198071620680001bb",
+          "size_bytes": 2786
+        },
+        {
+          "role": "relion_dispatch_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/dispatch.tsv",
+          "sha256": "874138feeb087eb88d7ead087b89a972c32eb20ae341dfde91ba43f8b621e0e9",
+          "size_bytes": 388932
+        },
+        {
+          "role": "relion_dispatch_schedule",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/dispatch_schedule.npz",
+          "sha256": "beaa8a8b7badc60d5dddb042af26c4b475f0e7bcaa0acfc2f5a975835b02bbec",
+          "size_bytes": 66523
+        },
+        {
+          "role": "slurm_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001.out",
+          "sha256": "082743c19bcc40abb58e59fe4cee06abad0a3dc17641d167f1a6f9c18bfc447a",
+          "size_bytes": 363735
+        },
+        {
+          "role": "slurm_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001.err",
+          "sha256": "4a5931ea9e4ffb92fbb19d9a037cfa34dbf843afebf50f93c8ac7c823c44d6db",
+          "size_bytes": 210
+        },
+        {
+          "role": "trajectory_report",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/k4_fsc_trajectory.json",
+          "sha256": "0c9977e36057fc5df8ee66225642f43b2c7623ab59ec0fab9601cb1ad02e2dff",
+          "size_bytes": 31049
+        },
+        {
+          "role": "trajectory_shellwise",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/k4_fsc_trajectory_shellwise.npz",
+          "sha256": "3d4a9be398ca87393d48c8555e305360cadc5e0d4d413d0625e4e07bcdbba61f",
+          "size_bytes": 49949
+        },
+        {
+          "role": "trajectory_markdown",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/k4_fsc_trajectory.md",
+          "sha256": "9429e4d9c1a36ef66c4412a38bd7f96a5ecc80a2bfaefa06ceda2855ea4c463e",
+          "size_bytes": 2511
+        },
+        {
+          "role": "trajectory_audit_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/audit_slurm-13303682.out",
+          "sha256": "0c9977e36057fc5df8ee66225642f43b2c7623ab59ec0fab9601cb1ad02e2dff",
+          "size_bytes": 31049
+        },
+        {
+          "role": "trajectory_audit_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/audit_slurm-13303682.err",
+          "sha256": "f7a4b3808e3f5f3f4c03b2213d2fdcefbeec02e1e557641b7ff82ee829aa741c",
+          "size_bytes": 6446
+        },
+        {
+          "role": "relion_iteration5_assignments",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/run_it005_data.star",
+          "sha256": "a12b7cefe177d3a3f080024c6bb29a248d5acc937d2fa478eb1c88098b83f8c7",
+          "size_bytes": 1274677
+        },
+        {
+          "role": "recovar_final_class_001",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/final_class001.mrc",
+          "sha256": "0086ff11871b0b704d3afdde1c46998fb50a0e29843c2c638938397ba1e35dc8",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_001",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/run_it005_class001.mrc",
+          "sha256": "7797c68349f6086d3df4c5b023115b1bd213d51c2bcfc4abc9506dd02631251c",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_002",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/final_class002.mrc",
+          "sha256": "0bbbd97ee392e4ce1e524212259d7dc8c354a35bc015ff985b814c709644bd0c",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_002",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/run_it005_class002.mrc",
+          "sha256": "4439474294c777e3abd70ee98ca4fae39c668ba50bfa9d5fd23bc3a61cd5c231",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_003",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/final_class003.mrc",
+          "sha256": "86fddf0405dff68709447abef54909a17fe9188101b39ce070ed0598a46370d4",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_003",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/run_it005_class003.mrc",
+          "sha256": "932c3473778658d3ce239c00e286ab4c42713eef59b5ceb88748c1ca76d30a9a",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_004",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/recovar/final_class004.mrc",
+          "sha256": "8a7512d0a92ea8e23490d89439f2566d7209171d4c10e48e6d36ea049f2188f8",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_004",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/relion_ref/run_it005_class004.mrc",
+          "sha256": "d5237fa2134fd2c6f84dbf429b2bbfa92add104278353cb30370c1eeca3661ed",
+          "size_bytes": 8389632
+        }
+      ],
+      "quality": {
+        "matching_method": "hungarian_max_fsc_auc",
+        "final_classes": [
+          {
+            "recovar_class": 1,
+            "relion_class": 1,
+            "gt_class": 1,
+            "cross_engine_fsc_auc": 0.9998363099181758,
+            "recovar_gt_fsc_auc": 0.18244062643638292,
+            "relion_gt_fsc_auc": 0.18252347362609844,
+            "gt_fsc_auc_delta": -8.284718971551808e-05,
+            "recovar_gt_resolution_0_143_angstrom": 34.0,
+            "relion_gt_resolution_0_143_angstrom": 34.0
+          },
+          {
+            "recovar_class": 2,
+            "relion_class": 2,
+            "gt_class": 2,
+            "cross_engine_fsc_auc": 0.9998194625391402,
+            "recovar_gt_fsc_auc": 0.19547785196852502,
+            "relion_gt_fsc_auc": 0.19543268425942384,
+            "gt_fsc_auc_delta": 4.516770910117929e-05,
+            "recovar_gt_resolution_0_143_angstrom": 32.0,
+            "relion_gt_resolution_0_143_angstrom": 32.0
+          },
+          {
+            "recovar_class": 3,
+            "relion_class": 3,
+            "gt_class": 3,
+            "cross_engine_fsc_auc": 0.9996492579584862,
+            "recovar_gt_fsc_auc": 0.19431640335525438,
+            "relion_gt_fsc_auc": 0.19441320994327896,
+            "gt_fsc_auc_delta": -9.680658802457831e-05,
+            "recovar_gt_resolution_0_143_angstrom": 32.0,
+            "relion_gt_resolution_0_143_angstrom": 32.0
+          },
+          {
+            "recovar_class": 4,
+            "relion_class": 4,
+            "gt_class": 4,
+            "cross_engine_fsc_auc": 0.9978365573379238,
+            "recovar_gt_fsc_auc": 0.27182119296145746,
+            "relion_gt_fsc_auc": 0.2720637613391984,
+            "gt_fsc_auc_delta": -0.0002425683777409482,
+            "recovar_gt_resolution_0_143_angstrom": 24.727272727272727,
+            "relion_gt_resolution_0_143_angstrom": 24.727272727272727
+          }
+        ],
+        "mean_recovar_gt_fsc_auc": 0.21101401868040495,
+        "mean_relion_gt_fsc_auc": 0.2111082822919999,
+        "mean_gt_fsc_auc_delta": -9.426361159496632e-05,
+        "class_assignment_agreement": 0.9994,
+        "occupancy": {
+          "source_iteration": 5,
+          "recovar_metric": "hard_assignments",
+          "recovar_counts": [
+            1141,
+            1174,
+            1039,
+            1646
+          ],
+          "recovar_fractions": null,
+          "relion_counts": [
+            1141,
+            1176,
+            1037,
+            1646
+          ],
+          "collapse_threshold_fraction": 0.01,
+          "recovar_flagged_classes": [],
+          "relion_flagged_classes": [],
+          "status": "CLEAR",
+          "note": "Hard assignments come from RECOVAR class_assignments_by_image_iter_004 and RELION run_it005_data.star; flags are mechanical counts below 1% of 5000 particles."
+        },
+        "trajectory": {
+          "report": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41001/trajectory_analysis/k4_fsc_trajectory.json",
+            "sha256": "0c9977e36057fc5df8ee66225642f43b2c7623ab59ec0fab9601cb1ad02e2dff",
+            "size_bytes": 31049
+          },
+          "formal_thresholds": {
+            "direct_fsc_auc_min": 0.995,
+            "gt_fsc_auc_delta_min": -0.002,
+            "class_assignment_agreement_min": 0.99
+          },
+          "status": "PASS",
+          "evaluated_iterations": 5,
+          "evaluated_class_cells": 20,
+          "passing_class_cells": 20,
+          "earliest_failure": null
+        }
+      },
+      "performance": {
+        "recovar_wall_s": 866.0,
+        "relion_wall_s": 64.0,
+        "recovar_peak_hbm_mib": 18109.0,
+        "relion_peak_hbm_mib": 79579.0,
+        "hardware_comparable": true,
+        "recovar_over_relion_wall_ratio": 13.53125
+      },
+      "outcome": {
+        "endpoint_status": "COMPLETE",
+        "formal_status": "PASS",
+        "science_status": "PASS",
+        "classification": "TRAJECTORY_EXACT",
+        "reason": "All 20 numbered class-map cells pass the frozen thresholds for seed 41001; final assignment agreement is 0.9994, hard populations are clear, and the final signed mean GT FSC-AUC delta is -9.4263611595e-05. The independent endpoint evaluator reports mean RECOVAR/RELION GT FSC-AUC 0.207839941986/0.207937857674."
+      }
+    },
+    {
+      "case_id": 41002,
+      "name": "ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002",
+      "particles": 5000,
+      "box_size": 128,
+      "configuration": {
+        "index": 31,
+        "name": "ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002",
+        "pdb_dir": "/home/mg6942/mytigress/cryobench2/Ribosembly/pdbs",
+        "n_classes": 4,
+        "n_images": 5000,
+        "grid_size": 128,
+        "noise_level": 1.0,
+        "noise_model": "white",
+        "dataset_params_option": "uniform",
+        "class_distribution": "uniform",
+        "seed": 41002,
+        "pdb_bfactor": 80.0,
+        "init_radius": 10,
+        "noise_scale_std": 0.0,
+        "contrast_std": 0.0,
+        "volume_radius": 0.7,
+        "image_offset_n_std": 0.0,
+        "percent_outliers": 0.0,
+        "max_iter": 5,
+        "gpu_monitor_interval_s": 5,
+        "legacy_combined_gpu_monitor_interval_s": 60,
+        "initial_resolution_ang": 60.0,
+        "particle_diameter_ang": 380.0,
+        "image_batch_size": 50,
+        "rotation_block_size": 2000,
+        "symmetry": "C4",
+        "base_name": "ribo_k4_5k_g128_white_noise1_c4_uniform",
+        "base_seed": 41001,
+        "seed_replicate": 2,
+        "case_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002",
+        "slurm_job_id": "13301415",
+        "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data",
+        "shared_input_group": null,
+        "shared_input_key": null,
+        "shared_input_role": null,
+        "shared_input_manifest": null,
+        "shared_relion_dir": null,
+        "shared_relion_manifest": null
+      },
+      "case_config": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/case_config.json",
+        "sha256": "5dc8f58237a1cb20f217842837c90c3610be0f4e0c79246cfdd0b1b1ac730efe",
+        "size_bytes": 1403
+      },
+      "launcher": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002.sh",
+        "sha256": "e32fae296de70c8a5c439365abcf26f8403d69aa7b3209155d15f58cea681d09",
+        "size_bytes": 26306
+      },
+      "reproduction_command": "sbatch /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002.sh",
+      "inputs": [
+        {
+          "role": "data/class_manifest.json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/class_manifest.json",
+          "sha256": "284fe79877372f3d09d455a5a059dd4ba14bda08c1395b07165afd3670dbf719",
+          "size_bytes": 1754
+        },
+        {
+          "role": "data/ctf.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/ctf.pkl",
+          "sha256": "0adec5176666b57409221fcd6da31c5af7a27d9b1cb5972cca29d64e30926462",
+          "size_bytes": 180163
+        },
+        {
+          "role": "data/generation_config.json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/generation_config.json",
+          "sha256": "7f93ccc0f51b14af8c6b63090d3f1d546fe0f0fe0bac4af6f314473b38442516",
+          "size_bytes": 3067
+        },
+        {
+          "role": "particles",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/particles.128.mrcs",
+          "sha256": "4b3e9ecfa2e9e0b454a6a30fb69022505b3afa4c31fcd32a36019a5d94cbc3ed",
+          "size_bytes": 327681024
+        },
+        {
+          "role": "data/particles.star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/particles.star",
+          "sha256": "40e2743d9e5c56487c4f36b484ce7418a1b2075c9bb8b81c4ed47882ca2175b6",
+          "size_bytes": 676852
+        },
+        {
+          "role": "data/poses.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/poses.pkl",
+          "sha256": "4c286463c5d1c4226c3bb871f93f0513e5a94ce14123966e41b946e7affc750d",
+          "size_bytes": 220203
+        },
+        {
+          "role": "data/reference_gt.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_gt.mrc",
+          "sha256": "7d5513b35a9eb21985fa32b8e95be5de15daf0083d2f766bea8dfdab03aa1784",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_gt_class001.mrc",
+          "sha256": "30d4e1db8c2ebe2f8b72df11f72299496ae1dc7a43ac496bd3d9ba0c6862c2ae",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_gt_class002.mrc",
+          "sha256": "bf08fcd82e24c1e97c45a46dde611e5fb5db6cb9a315f3d2c1f83a6c5ceb24b7",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_gt_class003.mrc",
+          "sha256": "a9f87a3758a2130d05fa9d238848f887683c58b798155fd71e0be1a5eb2aa61c",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class004.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_gt_class004.mrc",
+          "sha256": "19108305519a07517fd278af5a8151ecd444550bdffa0eb6f10aa45d30da4d58",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class001.mrc",
+          "sha256": "afbab4d65608a56420413164a90818695cbfe5b52c6869c002a92b4ae1a2f986",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class002.mrc",
+          "sha256": "2a63326add923e157778ed116fa72a973fde23cf934e1d43383248e51c571d0f",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class003.mrc",
+          "sha256": "e7e94efc401f3f28b5d855926596db0d58633bf02b357df38d44fcc0cd698e73",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class004.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class004.mrc",
+          "sha256": "bb048f18c75bc525dbad722719e56b58b17bdae93f4268d74415bb52b00199ec",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class001_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class001_relion.mrc",
+          "sha256": "734c210c02a632b15418241462e130e82b434b0bef37c279a0aa0b67164e94a5",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class002_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class002_relion.mrc",
+          "sha256": "6aeb58e6013c6562fa9b7be6a425745ca91a52d26f8da349e41c7b38302945f6",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class003_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class003_relion.mrc",
+          "sha256": "b7b07d58719dfce14bb22e75a8b0c4e1f6c141d2cfbc23d7c690db9f91f7d4f3",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class004_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_class004_relion.mrc",
+          "sha256": "c59388c2fc717ccbe9d87957814bc204c133e8aec02c3423941fd4a92b8feb35",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_classes_relion.star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/reference_init_classes_relion.star",
+          "sha256": "45d9b36f5e20433c968384e2606a10f8b5f9f1da8e2b5d60cca48dd46a866bce",
+          "size_bytes": 337
+        },
+        {
+          "role": "data/simulation_info.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/simulation_info.pkl",
+          "sha256": "d7dacbfe56e407e4da31573438f7a263286b56402e6b0d4fcb7536ddab3059ae",
+          "size_bytes": 824445
+        },
+        {
+          "role": "data/pdb_volumes/vol0000.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/pdb_volumes/vol0000.mrc",
+          "sha256": "741ec8c616d431b4f5df41c0d4287fe560329232c02ee4b2ff0b3174e5a7b9d9",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/pdb_volumes/vol0001.mrc",
+          "sha256": "b4f5120d6ab47ab0d30461a969ac0a0906c41aa150c3e81e6fe4146555b5db44",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/pdb_volumes/vol0002.mrc",
+          "sha256": "f56ea81449c881452f90faa2c7cb8f9647150a182f874e65296f5315d65e6137",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/data/pdb_volumes/vol0003.mrc",
+          "sha256": "0638b0cf3c31fb0b595a753f5b42a81f206e2e4b68c35f8c43e2d35f08356bd0",
+          "size_bytes": 8389632
+        }
+      ],
+      "input_equivalence": {
+        "group": "c4-independent-seed-replicates",
+        "admissible_for_execution_invariance": false,
+        "reason": "Seeds 41001, 41002, and 41003 deliberately generate different particle stacks; the group tests stochastic robustness, not byte-identical execution invariance."
+      },
+      "execution": {
+        "role": "paired_c4_seed_41002",
+        "job_id": "13301415",
+        "status": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_s": 1268,
+        "node": "della-h20g2",
+        "gpu_model": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-35bc7e90-cea1-2c58-9092-aa2a3e6bcbc0",
+        "req_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+        "alloc_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+        "max_rss_kib": 8996888,
+        "logs": [
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002.out",
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002.err"
+        ]
+      },
+      "artifacts": [
+        {
+          "role": "paired_gpu_uuid",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/paired_gpu_uuid.json",
+          "sha256": "98da0f3468f405f0ab14e39f123612d9a371783da4e559c17077f6a2198da170",
+          "size_bytes": 241
+        },
+        {
+          "role": "physical_gpu_inventory",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/physical_gpu_inventory.csv",
+          "sha256": "50ac85f4136f0a7d967b945c962675800dd3ffd7e35020b99cff3ec246b53657",
+          "size_bytes": 179
+        },
+        {
+          "role": "recovar_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar_gpu_monitor.csv",
+          "sha256": "77850a360f87a07d52ba69a05a0f1b0a328f9115f4206e4d35f8998e2a3d4601",
+          "size_bytes": 13397
+        },
+        {
+          "role": "relion_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_gpu_monitor.csv",
+          "sha256": "8a9954ebc7714fef2e7a718cd5df7944eda3470bfdc05de8c1c09f5253bddfb9",
+          "size_bytes": 1092
+        },
+        {
+          "role": "recovar_walltime",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/slurm_walltime.json",
+          "sha256": "7f16d1b6c9113e7400b9871b3043a9a8154e1fbe587483dd4b3a72fe35d81c22",
+          "size_bytes": 114
+        },
+        {
+          "role": "relion_walltime",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/slurm_walltime.json",
+          "sha256": "cc751eb7cff91141a5d7426f11ff220bdc8d01fa5b6329b69e7a012cdd959c49",
+          "size_bytes": 113
+        },
+        {
+          "role": "recovar_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/run_full_refinement.log",
+          "sha256": "7392af14131725d26088b27e4a938ada49e1d98b9a1dc304e62627ffbc781940",
+          "size_bytes": 155342
+        },
+        {
+          "role": "relion_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_class3d.log",
+          "sha256": "12007a27c72cec9b2d648d4aea17748c239f17fdcb73f9b8dd5795db2da1bb3c",
+          "size_bytes": 169583
+        },
+        {
+          "role": "recovar_refinement_results",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/refinement_results.npz",
+          "sha256": "563067561367f8721c6d42ebb8ec260a893fecae40257b38215203af1a6109de",
+          "size_bytes": 290194066
+        },
+        {
+          "role": "recovar_benchmark_ledger",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/benchmark_ledger.json",
+          "sha256": "e93bbcbb3a6f36852f485b6aff18e10fee298dc13dedfbf4ff46fc8555d2a2a1",
+          "size_bytes": 35537
+        },
+        {
+          "role": "numbered_class_map_audit",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/intermediates/numbered_class_map_audit.json",
+          "sha256": "4945afc84a9834ff35f9e833f5ea340b4357a7066ad81c2aaf26cf3f11585db6",
+          "size_bytes": 16293
+        },
+        {
+          "role": "numbered_class_map_checksums",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/intermediates/numbered_class_maps.sha256",
+          "sha256": "6db22198feec95503f495306d864b7d434471b7e2bd49a43b6cfb5f53ecc1d1e",
+          "size_bytes": 10400
+        },
+        {
+          "role": "recovar_endpoint_gt_fsc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/kclass_gt_fsc.json",
+          "sha256": "86ddea186e21793a207a9f4727e0fb3054b744b512061e8d2f71b37d1f277615",
+          "size_bytes": 15108
+        },
+        {
+          "role": "relion_endpoint_gt_fsc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_kclass_gt_fsc.json",
+          "sha256": "405a1cd9f04978f10552ebfee8b1e5f1570fab75e97ec032bf78dae7df87fa18",
+          "size_bytes": 15119
+        },
+        {
+          "role": "relion_class_population_audit",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/class_population_audit.json",
+          "sha256": "d0c60d2d2dba4376bcc08f5d86ba64d0e37bb4a0bef41a057bee4ef9fca0e6e1",
+          "size_bytes": 2837
+        },
+        {
+          "role": "relion_dispatch_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/dispatch.tsv",
+          "sha256": "624d7f9c6e918dfaee0c94efa9875bf621a502fc84aff84f829784d19a0d8b27",
+          "size_bytes": 388932
+        },
+        {
+          "role": "relion_dispatch_schedule",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/dispatch_schedule.npz",
+          "sha256": "4a494de5c675878c978d3ce0f579e03416350c662da3ad1265f7c4e338dfb407",
+          "size_bytes": 66511
+        },
+        {
+          "role": "slurm_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002.out",
+          "sha256": "fddb526e0a04196042912208efebec572505d55c3d49cc437f5b6b8fa5e0ce52",
+          "size_bytes": 364478
+        },
+        {
+          "role": "slurm_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002.err",
+          "sha256": "e1118e0d7c0a78746707e72bc1516c52cfb2bb52e91fcf757233f56a200f5aab",
+          "size_bytes": 26171
+        },
+        {
+          "role": "trajectory_report",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/k4_fsc_trajectory.json",
+          "sha256": "fd519b77cab0c03ee34a26cdec7c555ccf6d3ab9c3d3fa777ad1710dd2791039",
+          "size_bytes": 31038
+        },
+        {
+          "role": "trajectory_shellwise",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/k4_fsc_trajectory_shellwise.npz",
+          "sha256": "8dce0bd8f150a5b4b1f80f33d0e891afc5d10d59f7508b62b9cdc97eeafdf5cd",
+          "size_bytes": 50067
+        },
+        {
+          "role": "trajectory_markdown",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/k4_fsc_trajectory.md",
+          "sha256": "001bd21439366cb9614da7629ba3bbb45efe7257ed34b221ad7266ec9cade0c1",
+          "size_bytes": 2507
+        },
+        {
+          "role": "trajectory_audit_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/audit_slurm-13303683.out",
+          "sha256": "fd519b77cab0c03ee34a26cdec7c555ccf6d3ab9c3d3fa777ad1710dd2791039",
+          "size_bytes": 31038
+        },
+        {
+          "role": "trajectory_audit_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/audit_slurm-13303683.err",
+          "sha256": "5d00a0e874104b77c4e579782a340968b6fe1457c082a8f5bfa7a3de69888491",
+          "size_bytes": 6446
+        },
+        {
+          "role": "relion_iteration5_assignments",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/run_it005_data.star",
+          "sha256": "792cdf9892aaef25eefc947279c7c356cade1a24168b6c2fbc72f5ad90bba59a",
+          "size_bytes": 1274677
+        },
+        {
+          "role": "recovar_final_class_001",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/final_class001.mrc",
+          "sha256": "1ba9d1686dcbc0f53c5d0c69aa121ab16a4459800a769485f3f3a8a4876c8bb1",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_001",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/run_it005_class001.mrc",
+          "sha256": "0a8e060c3a62656bcb8f80b44d06a167affa83f958477c1305be734956322c37",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_002",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/final_class002.mrc",
+          "sha256": "30342a0817aca73d48ca79cb9c192e5acf8f8fd36c55b3b0aed4acd22f7605b8",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_002",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/run_it005_class002.mrc",
+          "sha256": "eef43f252aa177256b1967da4b05baf8bbfe5a0c45c8759717af289d9b879895",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_003",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/final_class003.mrc",
+          "sha256": "61f7f0831e48847fb00bf1bb5e28fbaa90210697cfa443335aceaafab905f716",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_003",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/run_it005_class003.mrc",
+          "sha256": "e5dd2cf99f68a2dda147d6283e4d988a9ad35fda03ed122e4b4d43c271632770",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_004",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/recovar/final_class004.mrc",
+          "sha256": "5e426ebba390756887169d33ed0617bd0c6bf9104bb8396539386bdcf3359a73",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_004",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/relion_ref/run_it005_class004.mrc",
+          "sha256": "d8b008d10c450aad7a89a6f7543df23457fad00194ef929724631e4c6293e37b",
+          "size_bytes": 8389632
+        }
+      ],
+      "quality": {
+        "matching_method": "hungarian_max_fsc_auc",
+        "final_classes": [
+          {
+            "recovar_class": 1,
+            "relion_class": 1,
+            "gt_class": 1,
+            "cross_engine_fsc_auc": 0.9999878325233398,
+            "recovar_gt_fsc_auc": 0.18364768886123176,
+            "relion_gt_fsc_auc": 0.18364299056689626,
+            "gt_fsc_auc_delta": 4.6982943354978435e-06,
+            "recovar_gt_resolution_0_143_angstrom": 32.0,
+            "relion_gt_resolution_0_143_angstrom": 32.0
+          },
+          {
+            "recovar_class": 2,
+            "relion_class": 2,
+            "gt_class": 2,
+            "cross_engine_fsc_auc": 0.999952961925261,
+            "recovar_gt_fsc_auc": 0.19949881694420973,
+            "relion_gt_fsc_auc": 0.19945036016980752,
+            "gt_fsc_auc_delta": 4.84567744022113e-05,
+            "recovar_gt_resolution_0_143_angstrom": 32.0,
+            "relion_gt_resolution_0_143_angstrom": 32.0
+          },
+          {
+            "recovar_class": 3,
+            "relion_class": 3,
+            "gt_class": 3,
+            "cross_engine_fsc_auc": 0.999050842180715,
+            "recovar_gt_fsc_auc": 0.1994981063817883,
+            "relion_gt_fsc_auc": 0.19951773109476503,
+            "gt_fsc_auc_delta": -1.9624712976729075e-05,
+            "recovar_gt_resolution_0_143_angstrom": 28.63157894736842,
+            "relion_gt_resolution_0_143_angstrom": 28.63157894736842
+          },
+          {
+            "recovar_class": 4,
+            "relion_class": 4,
+            "gt_class": 4,
+            "cross_engine_fsc_auc": 0.9992778070952333,
+            "recovar_gt_fsc_auc": 0.28403126585628513,
+            "relion_gt_fsc_auc": 0.28391544147993775,
+            "gt_fsc_auc_delta": 0.0001158243763473843,
+            "recovar_gt_resolution_0_143_angstrom": 23.652173913043477,
+            "relion_gt_resolution_0_143_angstrom": 23.652173913043477
+          }
+        ],
+        "mean_recovar_gt_fsc_auc": 0.21666896951087875,
+        "mean_relion_gt_fsc_auc": 0.21663163082785164,
+        "mean_gt_fsc_auc_delta": 3.733868302709109e-05,
+        "class_assignment_agreement": 0.998,
+        "occupancy": {
+          "source_iteration": 5,
+          "recovar_metric": "hard_assignments",
+          "recovar_counts": [
+            1173,
+            1037,
+            1099,
+            1691
+          ],
+          "recovar_fractions": null,
+          "relion_counts": [
+            1173,
+            1033,
+            1102,
+            1692
+          ],
+          "collapse_threshold_fraction": 0.01,
+          "recovar_flagged_classes": [],
+          "relion_flagged_classes": [],
+          "status": "CLEAR",
+          "note": "Hard assignments come from RECOVAR class_assignments_by_image_iter_004 and RELION run_it005_data.star; flags are mechanical counts below 1% of 5000 particles."
+        },
+        "trajectory": {
+          "report": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41002/trajectory_analysis/k4_fsc_trajectory.json",
+            "sha256": "fd519b77cab0c03ee34a26cdec7c555ccf6d3ab9c3d3fa777ad1710dd2791039",
+            "size_bytes": 31038
+          },
+          "formal_thresholds": {
+            "direct_fsc_auc_min": 0.995,
+            "gt_fsc_auc_delta_min": -0.002,
+            "class_assignment_agreement_min": 0.99
+          },
+          "status": "PASS",
+          "evaluated_iterations": 5,
+          "evaluated_class_cells": 20,
+          "passing_class_cells": 20,
+          "earliest_failure": null
+        }
+      },
+      "performance": {
+        "recovar_wall_s": 860.0,
+        "relion_wall_s": 64.0,
+        "recovar_peak_hbm_mib": 18109.0,
+        "relion_peak_hbm_mib": 79587.0,
+        "hardware_comparable": true,
+        "recovar_over_relion_wall_ratio": 13.4375
+      },
+      "outcome": {
+        "endpoint_status": "COMPLETE",
+        "formal_status": "PASS",
+        "science_status": "PASS",
+        "classification": "TRAJECTORY_EXACT",
+        "reason": "All 20 numbered class-map cells pass the frozen thresholds for seed 41002; final assignment agreement is 0.9980, hard populations are clear, and the final signed mean GT FSC-AUC delta is +3.73386830271e-05. The independent endpoint evaluator reports mean RECOVAR/RELION GT FSC-AUC 0.21380817844/0.213789795545."
+      }
+    },
+    {
+      "case_id": 41003,
+      "name": "ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003",
+      "particles": 5000,
+      "box_size": 128,
+      "configuration": {
+        "index": 31,
+        "name": "ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003",
+        "pdb_dir": "/home/mg6942/mytigress/cryobench2/Ribosembly/pdbs",
+        "n_classes": 4,
+        "n_images": 5000,
+        "grid_size": 128,
+        "noise_level": 1.0,
+        "noise_model": "white",
+        "dataset_params_option": "uniform",
+        "class_distribution": "uniform",
+        "seed": 41003,
+        "pdb_bfactor": 80.0,
+        "init_radius": 10,
+        "noise_scale_std": 0.0,
+        "contrast_std": 0.0,
+        "volume_radius": 0.7,
+        "image_offset_n_std": 0.0,
+        "percent_outliers": 0.0,
+        "max_iter": 5,
+        "gpu_monitor_interval_s": 5,
+        "legacy_combined_gpu_monitor_interval_s": 60,
+        "initial_resolution_ang": 60.0,
+        "particle_diameter_ang": 380.0,
+        "image_batch_size": 50,
+        "rotation_block_size": 2000,
+        "symmetry": "C4",
+        "base_name": "ribo_k4_5k_g128_white_noise1_c4_uniform",
+        "base_seed": 41001,
+        "seed_replicate": 3,
+        "case_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003",
+        "slurm_job_id": "13301416",
+        "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data",
+        "shared_input_group": null,
+        "shared_input_key": null,
+        "shared_input_role": null,
+        "shared_input_manifest": null,
+        "shared_relion_dir": null,
+        "shared_relion_manifest": null
+      },
+      "case_config": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/case_config.json",
+        "sha256": "86164d277a123df0a049446b68bcf4303613158f3becc46ab8539af6ab9e468e",
+        "size_bytes": 1403
+      },
+      "launcher": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003.sh",
+        "sha256": "1352bfe6edbca1b8d5d616cf2770644a3de6503b1f7531c8aeacaaeb936ecfcc",
+        "size_bytes": 26306
+      },
+      "reproduction_command": "sbatch /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/jobs/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003.sh",
+      "inputs": [
+        {
+          "role": "data/class_manifest.json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/class_manifest.json",
+          "sha256": "d0451cc79cd894f56ce67a74f37a5ea72b4fdbdd1272035425dc6a2f9079bae4",
+          "size_bytes": 1754
+        },
+        {
+          "role": "data/ctf.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/ctf.pkl",
+          "sha256": "0adec5176666b57409221fcd6da31c5af7a27d9b1cb5972cca29d64e30926462",
+          "size_bytes": 180163
+        },
+        {
+          "role": "data/generation_config.json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/generation_config.json",
+          "sha256": "cee23d76c03125130880a5aab26bdea7cd420a30d5234c6e1d38a0151a3675d8",
+          "size_bytes": 3067
+        },
+        {
+          "role": "particles",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/particles.128.mrcs",
+          "sha256": "645793ac4e66c09fa4881061192742e95213979642ac867c5415bd7250cb3a2d",
+          "size_bytes": 327681024
+        },
+        {
+          "role": "data/particles.star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/particles.star",
+          "sha256": "40e2743d9e5c56487c4f36b484ce7418a1b2075c9bb8b81c4ed47882ca2175b6",
+          "size_bytes": 676852
+        },
+        {
+          "role": "data/poses.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/poses.pkl",
+          "sha256": "4c286463c5d1c4226c3bb871f93f0513e5a94ce14123966e41b946e7affc750d",
+          "size_bytes": 220203
+        },
+        {
+          "role": "data/reference_gt.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_gt.mrc",
+          "sha256": "8b7b77e6d2c41152ce45989c1ffeb7cffc4b4675bebc695fd39c2ef6a677e945",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_gt_class001.mrc",
+          "sha256": "f400a440fedce1a1265f6e5b3a96fac0c00f3ba4512f9f31f06c66fae20380b4",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_gt_class002.mrc",
+          "sha256": "450c4fe530c03ea94fdcdec7b12fe6f59f703ce88f898dc349133ef2a760e2d4",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_gt_class003.mrc",
+          "sha256": "84763ed1cd960cc1a5322eaec1a81cb3502607b56364225a190b315f7a98b36d",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_gt_class004.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_gt_class004.mrc",
+          "sha256": "19108305519a07517fd278af5a8151ecd444550bdffa0eb6f10aa45d30da4d58",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class001.mrc",
+          "sha256": "afbab4d65608a56420413164a90818695cbfe5b52c6869c002a92b4ae1a2f986",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class002.mrc",
+          "sha256": "2a63326add923e157778ed116fa72a973fde23cf934e1d43383248e51c571d0f",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class003.mrc",
+          "sha256": "e7e94efc401f3f28b5d855926596db0d58633bf02b357df38d44fcc0cd698e73",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class004.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class004.mrc",
+          "sha256": "bb048f18c75bc525dbad722719e56b58b17bdae93f4268d74415bb52b00199ec",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class001_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class001_relion.mrc",
+          "sha256": "734c210c02a632b15418241462e130e82b434b0bef37c279a0aa0b67164e94a5",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class002_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class002_relion.mrc",
+          "sha256": "6aeb58e6013c6562fa9b7be6a425745ca91a52d26f8da349e41c7b38302945f6",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class003_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class003_relion.mrc",
+          "sha256": "b7b07d58719dfce14bb22e75a8b0c4e1f6c141d2cfbc23d7c690db9f91f7d4f3",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_class004_relion.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_class004_relion.mrc",
+          "sha256": "c59388c2fc717ccbe9d87957814bc204c133e8aec02c3423941fd4a92b8feb35",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/reference_init_classes_relion.star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/reference_init_classes_relion.star",
+          "sha256": "45d9b36f5e20433c968384e2606a10f8b5f9f1da8e2b5d60cca48dd46a866bce",
+          "size_bytes": 337
+        },
+        {
+          "role": "data/simulation_info.pkl",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/simulation_info.pkl",
+          "sha256": "2ce6b6420497034402eccb8aa6a9c9a691f1fa2b742e61f07bc780a4530a230e",
+          "size_bytes": 824445
+        },
+        {
+          "role": "data/pdb_volumes/vol0000.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/pdb_volumes/vol0000.mrc",
+          "sha256": "f7fbc89265c14819ad14cc0d780e034ceb6b923abd7ffe28248d37f6bf791beb",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0001.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/pdb_volumes/vol0001.mrc",
+          "sha256": "4e7f8a658358012abf7059fd63cef77f8bfe5e4d97445fb273571228953ac1c3",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0002.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/pdb_volumes/vol0002.mrc",
+          "sha256": "bc1e4c476a4ba507634fef77a78b9ba96d6485c6bb4def1e309f0f5d84db56ef",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "data/pdb_volumes/vol0003.mrc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/data/pdb_volumes/vol0003.mrc",
+          "sha256": "a7b7a3ae45e3ab6c0e44a597706d09b70f9a2136baed8c4bcd27bf3cfadaa687",
+          "size_bytes": 8389632
+        }
+      ],
+      "input_equivalence": {
+        "group": "c4-independent-seed-replicates",
+        "admissible_for_execution_invariance": false,
+        "reason": "Seeds 41001, 41002, and 41003 deliberately generate different particle stacks; the group tests stochastic robustness, not byte-identical execution invariance."
+      },
+      "execution": {
+        "role": "paired_c4_seed_41003",
+        "job_id": "13301416",
+        "status": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_s": 1255,
+        "node": "della-h20g2",
+        "gpu_model": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-49c1a223-be61-858b-49d8-d8b0347ac252",
+        "req_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+        "alloc_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+        "max_rss_kib": 9019232,
+        "logs": [
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003.out",
+          "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003.err"
+        ]
+      },
+      "artifacts": [
+        {
+          "role": "paired_gpu_uuid",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/paired_gpu_uuid.json",
+          "sha256": "8ce690d5e4c2892b4b5d54a2b7057a948dcfc5aa268b6acfb3d121f44f0be113",
+          "size_bytes": 241
+        },
+        {
+          "role": "physical_gpu_inventory",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/physical_gpu_inventory.csv",
+          "sha256": "14fa95eb75e92d4c5c507d4929304627e70420d99e6a4be0b146b9efa077c844",
+          "size_bytes": 179
+        },
+        {
+          "role": "recovar_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar_gpu_monitor.csv",
+          "sha256": "1781dcac77f2655c1d6c9fc17bd6443b23dcfd14d8859d638ae3d042562cfe1b",
+          "size_bytes": 13173
+        },
+        {
+          "role": "relion_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_gpu_monitor.csv",
+          "sha256": "cafd5e6ed98dad85062afec6c7ac648ca1b1349e312abceeb34c2d9966ebc057",
+          "size_bytes": 1092
+        },
+        {
+          "role": "recovar_walltime",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/slurm_walltime.json",
+          "sha256": "c2453e8c5aea8cda3578f67f9004a053bf5888127f0a0fa8ec94a4cfedfedddb",
+          "size_bytes": 114
+        },
+        {
+          "role": "relion_walltime",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/slurm_walltime.json",
+          "sha256": "504de7c2e679ca43fa99a122ef34eaa65673d31ff43ee7a204ce53899c57b8bc",
+          "size_bytes": 113
+        },
+        {
+          "role": "recovar_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/run_full_refinement.log",
+          "sha256": "ffe3e0b3e61e28a60fa5fb57be5e1bf8be7e279b2cd3e03949b13302138c6b57",
+          "size_bytes": 155358
+        },
+        {
+          "role": "relion_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_class3d.log",
+          "sha256": "939a1476903378a31cd6a35fe367c39edf7b9c1737e4900f6a36c60fbec72da5",
+          "size_bytes": 169577
+        },
+        {
+          "role": "recovar_refinement_results",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/refinement_results.npz",
+          "sha256": "37233437085a3830501eeec0c04c8a7ed74cd0108f9f4dbfc6098413be66b288",
+          "size_bytes": 290173427
+        },
+        {
+          "role": "recovar_benchmark_ledger",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/benchmark_ledger.json",
+          "sha256": "a87afa9eb04c368335c7b02b498ac958e4416204cde31dd747da9ba82c8f0441",
+          "size_bytes": 35508
+        },
+        {
+          "role": "numbered_class_map_audit",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/intermediates/numbered_class_map_audit.json",
+          "sha256": "759d8fa9244509626ef126b4917c67b52069f24d034bb350896bf75910d7c1af",
+          "size_bytes": 16293
+        },
+        {
+          "role": "numbered_class_map_checksums",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/intermediates/numbered_class_maps.sha256",
+          "sha256": "fd0e3ff8f4cee1d3b0061450aabbd1b90c341a9d745070f12bde620cbe5d978c",
+          "size_bytes": 10400
+        },
+        {
+          "role": "recovar_endpoint_gt_fsc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/kclass_gt_fsc.json",
+          "sha256": "429f21150d86ccd290ab12aafbc3438b323ef8d9ba0992198191964e9493b5db",
+          "size_bytes": 15142
+        },
+        {
+          "role": "relion_endpoint_gt_fsc",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_kclass_gt_fsc.json",
+          "sha256": "d6a05b55a4e273bb08b753eb37441c2eb8524252c3d480cef9f1ce2dc3a2ab80",
+          "size_bytes": 15146
+        },
+        {
+          "role": "relion_class_population_audit",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/class_population_audit.json",
+          "sha256": "a948febf5ba0a1f36fac0ee74800f54e74f797ab265ca780acf1e4e48d028f08",
+          "size_bytes": 2787
+        },
+        {
+          "role": "relion_dispatch_log",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/dispatch.tsv",
+          "sha256": "146c5b3b16a43e6456dd91a9ab45442aeb3e7eaf47804a0860a7aed144ce3672",
+          "size_bytes": 388932
+        },
+        {
+          "role": "relion_dispatch_schedule",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/dispatch_schedule.npz",
+          "sha256": "88faf7a44a6e33d98c635e350e40aab0fdfadd5666468323ad195ff93ba619b7",
+          "size_bytes": 66583
+        },
+        {
+          "role": "slurm_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003.out",
+          "sha256": "3eb1edd6657a5077d04e02f867c07449f273a4ce46e0ceaac6288a0d4050f7f7",
+          "size_bytes": 363754
+        },
+        {
+          "role": "slurm_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/em_kclass_matrix_31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003.err",
+          "sha256": "4a5931ea9e4ffb92fbb19d9a037cfa34dbf843afebf50f93c8ac7c823c44d6db",
+          "size_bytes": 210
+        },
+        {
+          "role": "trajectory_report",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/k4_fsc_trajectory.json",
+          "sha256": "042a6267dc683fd37df5e00d00e70cde9ab8d113b729bb21ba15a60da24b207a",
+          "size_bytes": 31055
+        },
+        {
+          "role": "trajectory_shellwise",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/k4_fsc_trajectory_shellwise.npz",
+          "sha256": "c1ccaaa78694c7d5c2eeadaa58bc954871d55839c1d01f6f689b48b914a333f5",
+          "size_bytes": 51056
+        },
+        {
+          "role": "trajectory_markdown",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/k4_fsc_trajectory.md",
+          "sha256": "795fdc1ffcbcd917209585dbfc93692f0425af9ec1c4cfa61de91e9b64084111",
+          "size_bytes": 2511
+        },
+        {
+          "role": "trajectory_audit_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/audit_slurm-13303684.out",
+          "sha256": "042a6267dc683fd37df5e00d00e70cde9ab8d113b729bb21ba15a60da24b207a",
+          "size_bytes": 31055
+        },
+        {
+          "role": "trajectory_audit_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/audit_slurm-13303684.err",
+          "sha256": "45d851eb4bd7c70a10edbeaf4496e76df5f583288179599455db1d119eb1b3fd",
+          "size_bytes": 6446
+        },
+        {
+          "role": "relion_iteration5_assignments",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/run_it005_data.star",
+          "sha256": "de279e75e8219f918133f083c40ce6a961062c39d75a640cfe310c5fd2bfaf65",
+          "size_bytes": 1274677
+        },
+        {
+          "role": "recovar_final_class_001",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/final_class001.mrc",
+          "sha256": "5552f175721650063e38bef47aff511c53fbd553713160df0b86f214dbeebe47",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_001",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/run_it005_class001.mrc",
+          "sha256": "4233d5625c635b328c69e92a1747a8be8f1efafc8de7d30485fc9d0748eea4fc",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_002",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/final_class002.mrc",
+          "sha256": "8178a10fa56e89fadfabdbe023d1348fcee9f6bb751acc3b404aee1d64fdc96f",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_002",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/run_it005_class002.mrc",
+          "sha256": "96730ab5d8f91408fbcefbf6402fb565b5ae9652389e50d7e75141c4cc06f1af",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_003",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/final_class003.mrc",
+          "sha256": "4b51ef7ef34ecabf02df65137832b52011e85ee86432f7763ab81d843003dad8",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_003",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/run_it005_class003.mrc",
+          "sha256": "20fc7429aa4f6aa6fdb3be5a11bd6355ca6b3692aa677f1160fac06b730914ba",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "recovar_final_class_004",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/recovar/final_class004.mrc",
+          "sha256": "85dc818a42e67f149016f6810b4710d2697609640f96945f9f5c6c22713787ce",
+          "size_bytes": 8389632
+        },
+        {
+          "role": "relion_iteration5_class_004",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/relion_ref/run_it005_class004.mrc",
+          "sha256": "eb3f3de6cce116d87ed83f796fc0c9d933e663ea9ca9c01ce2d7ab43b60244b2",
+          "size_bytes": 8389632
+        }
+      ],
+      "quality": {
+        "matching_method": "hungarian_max_fsc_auc",
+        "final_classes": [
+          {
+            "recovar_class": 1,
+            "relion_class": 1,
+            "gt_class": 1,
+            "cross_engine_fsc_auc": 0.9993516382831477,
+            "recovar_gt_fsc_auc": 0.17723765195624,
+            "relion_gt_fsc_auc": 0.17728780906586633,
+            "gt_fsc_auc_delta": -5.015710962633091e-05,
+            "recovar_gt_resolution_0_143_angstrom": 32.0,
+            "relion_gt_resolution_0_143_angstrom": 32.0
+          },
+          {
+            "recovar_class": 2,
+            "relion_class": 2,
+            "gt_class": 2,
+            "cross_engine_fsc_auc": 0.9997031515793346,
+            "recovar_gt_fsc_auc": 0.20530402685586707,
+            "relion_gt_fsc_auc": 0.20513380619038016,
+            "gt_fsc_auc_delta": 0.00017022066548691428,
+            "recovar_gt_resolution_0_143_angstrom": 28.63157894736842,
+            "relion_gt_resolution_0_143_angstrom": 28.63157894736842
+          },
+          {
+            "recovar_class": 3,
+            "relion_class": 3,
+            "gt_class": 3,
+            "cross_engine_fsc_auc": 0.997797570930335,
+            "recovar_gt_fsc_auc": 0.20328830416206248,
+            "relion_gt_fsc_auc": 0.2031844257413217,
+            "gt_fsc_auc_delta": 0.00010387842074077724,
+            "recovar_gt_resolution_0_143_angstrom": 28.63157894736842,
+            "relion_gt_resolution_0_143_angstrom": 28.63157894736842
+          },
+          {
+            "recovar_class": 4,
+            "relion_class": 4,
+            "gt_class": 4,
+            "cross_engine_fsc_auc": 0.9976127254367431,
+            "recovar_gt_fsc_auc": 0.28334397516039317,
+            "relion_gt_fsc_auc": 0.28361234624986,
+            "gt_fsc_auc_delta": -0.0002683710894668123,
+            "recovar_gt_resolution_0_143_angstrom": 23.652173913043477,
+            "relion_gt_resolution_0_143_angstrom": 23.652173913043477
+          }
+        ],
+        "mean_recovar_gt_fsc_auc": 0.2172934895336407,
+        "mean_relion_gt_fsc_auc": 0.21730459681185704,
+        "mean_gt_fsc_auc_delta": -1.1107278216362926e-05,
+        "class_assignment_agreement": 0.9918,
+        "occupancy": {
+          "source_iteration": 5,
+          "recovar_metric": "hard_assignments",
+          "recovar_counts": [
+            1029,
+            1134,
+            1123,
+            1714
+          ],
+          "recovar_fractions": null,
+          "relion_counts": [
+            1033,
+            1124,
+            1129,
+            1714
+          ],
+          "collapse_threshold_fraction": 0.01,
+          "recovar_flagged_classes": [],
+          "relion_flagged_classes": [],
+          "status": "CLEAR",
+          "note": "Hard assignments come from RECOVAR class_assignments_by_image_iter_004 and RELION run_it005_data.star; flags are mechanical counts below 1% of 5000 particles."
+        },
+        "trajectory": {
+          "report": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_symmetry_multiseed_c75cbfffc_20260901/cases/31_ribo_k4_5k_g128_white_noise1_c4_uniform_seed41003/trajectory_analysis/k4_fsc_trajectory.json",
+            "sha256": "042a6267dc683fd37df5e00d00e70cde9ab8d113b729bb21ba15a60da24b207a",
+            "size_bytes": 31055
+          },
+          "formal_thresholds": {
+            "direct_fsc_auc_min": 0.995,
+            "gt_fsc_auc_delta_min": -0.002,
+            "class_assignment_agreement_min": 0.99
+          },
+          "status": "PASS",
+          "evaluated_iterations": 5,
+          "evaluated_class_cells": 20,
+          "passing_class_cells": 20,
+          "earliest_failure": null
+        }
+      },
+      "performance": {
+        "recovar_wall_s": 847.0,
+        "relion_wall_s": 65.0,
+        "recovar_peak_hbm_mib": 18109.0,
+        "relion_peak_hbm_mib": 79583.0,
+        "hardware_comparable": true,
+        "recovar_over_relion_wall_ratio": 13.03076923076923
+      },
+      "outcome": {
+        "endpoint_status": "COMPLETE",
+        "formal_status": "PASS",
+        "science_status": "PASS",
+        "classification": "TRAJECTORY_EXACT",
+        "reason": "All 20 numbered class-map cells pass the frozen thresholds for seed 41003; final assignment agreement is 0.9918, hard populations are clear, and the final signed mean GT FSC-AUC delta is -1.11072782164e-05. The independent endpoint evaluator reports mean RECOVAR/RELION GT FSC-AUC 0.209187548083/0.209179160336."
+      }
+    }
+  ],
+  "limitations": [
+    "This is a three-seed C4, 5000-particle, 128-box, white-noise-1 campaign with a five-iteration cap; it does not replace a converged 100k/256 K=4 completion run or real-data validation.",
+    "RECOVAR did not converge before the cap and final-all-data reconstruction was not forced; final_class maps are exact copies of the last numbered half-map averages.",
+    "RELION Class3D emits full class maps rather than independent half maps, so half-map FSC and masked half-map resolution are outside this campaign's scope.",
+    "The checked per-class 0.143 GT resolutions come from the independently sealed rigid-alignment endpoint evaluator; the frozen trajectory gate uses the unmodified shellwise FSC audit and retains its own GT FSC-AUC values.",
+    "Peak HBM is a lower bound sampled every five seconds from engine-specific nvidia-smi monitors, not an allocator-exact maximum.",
+    "The top-level summary dependency job 13301426 remains pending because unrelated selected cases failed; the sealed summary files were generated directly from the retained summary launcher after all case jobs reached terminal state.",
+    "The post-hoc trajectory audits ran on CPU jobs 13303682-13303687 with the audit script from the original clean c75cbfffc source checkout; their resource/accounting snapshot is retained and hashed.",
+    "The run predates the later fixed-state hardening integrated at 22efd8065; this record is evidence only for source commit c75cbfffc."
+  ],
+  "verification": {
+    "evidence_checked_at": "2026-09-01T15:35:00+00:00",
+    "commands": [
+      "git -C /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_symmetry_multiseed_gate_c75cbfffc_20260901 rev-parse HEAD HEAD^{tree} && git -C /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_symmetry_multiseed_gate_c75cbfffc_20260901 status --short",
+      "scontrol show job -o 13301414  # repeated separately for jobs 13301414-13301419 and 13303682-13303687",
+      "pixi run python scripts/validate_em_benchmark_registry.py --verify-files",
+      "pixi run pytest tests/unit/test_validate_em_benchmark_registry.py"
+    ]
+  }
+}

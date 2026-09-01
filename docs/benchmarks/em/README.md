@@ -209,3 +209,17 @@ O, or I1) to the generator, RELION, and RECOVAR.
 The completed 14-case synthetic K=4 campaign is summarized in
 `k4_expanded14_20260901.md` and sealed machine-readably in
 `campaigns/k4-expanded14-3466e7a32-h100.json`.
+
+## Sealed C4/D4 three-seed symmetry results
+
+The completed three-seed C4 and D4 campaigns are documented in
+`k4_symmetry_c4_d4_multiseed_20260901.md` and sealed in
+`campaigns/k4-c4-three-seed-c75cbfffc-h100.json` and
+`campaigns/k4-d4-three-seed-c75cbfffc-h100.json`. All six 5,000-particle,
+box-128 trajectories pass all 20 numbered iteration/class cells, final
+assignment agreement is 99.18--100%, no class is below 1%, and all 24 matched
+per-class GT FSC=0.143 resolutions agree exactly between RECOVAR and RELION.
+The records include three seeds per symmetry, generated-input hashes,
+per-class signed GT FSC-AUC, hard populations, matched-H100 wall/HBM, Slurm
+accounting, source/executable provenance, independent trajectory-audit jobs,
+and copy-safe rerun instructions.

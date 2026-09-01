@@ -36,6 +36,20 @@ CAMPAIGN = json.loads(
         / "k4-expanded14-3466e7a32-h100"
     ).with_suffix(".json").read_text()
 )
+C4_SYMMETRY_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k4-c4-three-seed-c75cbfffc-h100"
+    ).with_suffix(".json").read_text()
+)
+D4_SYMMETRY_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k4-d4-three-seed-c75cbfffc-h100"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -47,6 +61,8 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-ribosembly-10k128-radial3-nonuniform-linear-0050dc54f-h100",
         "k4-ribosembly-10k128-radial3-nonuniform-outliers20-0050dc54f-h100",
         "k4-ribosembly-10k128-white1-uniform-0050dc54f-h100",
+        "k4-c4-three-seed-c75cbfffc-h100",
+        "k4-d4-three-seed-c75cbfffc-h100",
         "k4-expanded14-3466e7a32-h100",
     ]
     assert [case["case_id"] for case in CAMPAIGN["cases"]] == list(range(16, 30))
@@ -54,6 +70,39 @@ def test_checked_in_em_benchmark_registry_is_valid():
     assert classifications[17] == "NEGATIVE_ZERO_CLASS_BOUNDARY"
     assert classifications[20] == "TRAJECTORY_EXACT_NEAR_COLLAPSE"
     assert classifications[27] == "UNRESOLVED_TRAJECTORY_FAILURE"
+
+
+@pytest.mark.parametrize(
+    ("campaign", "symmetry"),
+    [
+        (C4_SYMMETRY_CAMPAIGN, "C4"),
+        (D4_SYMMETRY_CAMPAIGN, "D4"),
+    ],
+)
+def test_three_seed_symmetry_campaigns_retain_complete_trajectory_evidence(campaign, symmetry):
+    assert [case["case_id"] for case in campaign["cases"]] == [41001, 41002, 41003]
+    assert {case["configuration"]["symmetry"] for case in campaign["cases"]} == {symmetry}
+    for case in campaign["cases"]:
+        assert case["outcome"]["classification"] == "TRAJECTORY_EXACT"
+        assert case["quality"]["trajectory"]["status"] == "PASS"
+        assert case["quality"]["trajectory"]["evaluated_class_cells"] == 20
+        assert case["quality"]["trajectory"]["passing_class_cells"] == 20
+        for class_result in case["quality"]["final_classes"]:
+            assert class_result["recovar_gt_resolution_0_143_angstrom"] > 0
+            assert class_result["relion_gt_resolution_0_143_angstrom"] > 0
+
+
+def test_campaign_per_class_resolution_requires_both_engines():
+    campaign = copy.deepcopy(C4_SYMMETRY_CAMPAIGN)
+    del campaign["cases"][0]["quality"]["final_classes"][0][
+        "relion_gt_resolution_0_143_angstrom"
+    ]
+
+    with pytest.raises(
+        RegistryValidationError,
+        match="per-class 0.143 GT resolutions must be recorded for both engines",
+    ):
+        validate_campaign(campaign, CAMPAIGN_SCHEMA)
 
 
 def test_completed_job_requires_identical_requested_and_allocated_tres():

@@ -272,6 +272,14 @@ def _campaign_semantic_errors(campaign: dict[str, Any]) -> list[str]:
                         row["gt_fsc_auc_delta"], expected_delta, rel_tol=0.0, abs_tol=1e-12
                     ):
                         errors.append(f"{prefix} per-class signed GT FSC-AUC delta is inconsistent")
+                    resolution_keys = (
+                        "recovar_gt_resolution_0_143_angstrom",
+                        "relion_gt_resolution_0_143_angstrom",
+                    )
+                    if sum(key in row for key in resolution_keys) == 1:
+                        errors.append(
+                            f"{prefix} per-class 0.143 GT resolutions must be recorded for both engines"
+                        )
                 expected_means = {
                     "mean_recovar_gt_fsc_auc": sum(
                         row["recovar_gt_fsc_auc"] for row in final_classes
