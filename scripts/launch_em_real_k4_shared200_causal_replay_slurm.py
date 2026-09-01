@@ -425,11 +425,11 @@ def write_fixed_image_identity_mapping(
     stack_indices = np.asarray([_stack_index(value) for value in particles[image_column]], dtype=np.int64)
     expected = np.arange(1, len(particles) + 1, dtype=np.int64)
     _require(
-        np.array_equal(stack_indices, expected),
-        "fixture image identities must be the contiguous one-based stack order",
+        np.array_equal(np.sort(stack_indices), expected),
+        "fixture image identities must be a permutation of the contiguous one-based stack indices",
     )
     absolute_stack = particle_stack.resolve()
-    identities = [f"{index}@{absolute_stack}" for index in stack_indices.tolist()]
+    identities = [f"{index}@{absolute_stack}" for index in expected.tolist()]
     width = max(map(len, identities), default=1)
     np.save(output, np.asarray(identities, dtype=f"<U{width}"), allow_pickle=False)
 

@@ -154,6 +154,10 @@ def test_image_identity_mapping_is_fixed_width_absolute_and_deterministic(tmp_pa
     assert identities.dtype.kind == "U"
     assert identities.tolist() == [f"1@{stack}", f"2@{stack}"]
 
+    shuffled = particles.iloc[::-1].reset_index(drop=True)
+    launcher.write_fixed_image_identity_mapping(output=second, particles=shuffled, particle_stack=stack)
+    assert launcher.np.load(second, allow_pickle=False).tolist() == identities.tolist()
+
 
 def test_iteration0_continuation_bundle_restores_preinitialisation_offsets(tmp_path):
     pair = tmp_path / "pair"
