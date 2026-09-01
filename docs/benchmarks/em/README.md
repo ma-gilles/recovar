@@ -236,6 +236,19 @@ or changing any generator field within the group, fails closed. Cases 31--34
 generate symmetric GT volumes and pass one identical canonical label (C4, D4,
 O, or I1) to the generator, RELION, and RECOVAR.
 
+The completed exact-input cases 25--27 campaign is documented in
+`k4_exact_input_invariance_20260901.md`. Across three seeds, changing the image
+batch from 50 to 17 or requested rotation block from 8192 to 257 preserved all
+final image-level class assignments. The worst numbered-map FSC-AUC was
+0.9999999733 and the worst per-class GT FSC-AUC delta was -8.90e-7. The maps
+were not bitwise equal, so this is accepted scientific execution invariance,
+not a bitwise claim. The durable analyzer also explains why the generic
+summary's three fixture-root `pending` rows are not part of the nine completed
+trajectories and why consumers correctly have no separate RELION timing/HBM.
+This variant-versus-baseline acceptance is separate from the individual
+RECOVAR-versus-RELION trajectory gate: the campaign record preserves mixed
+formal cross-engine pass/fail outcomes rather than promoting them to passes.
+
 The completed 14-case synthetic K=4 campaign is summarized in
 `k4_expanded14_20260901.md` and sealed machine-readably in
 `campaigns/k4-expanded14-3466e7a32-h100.json`.

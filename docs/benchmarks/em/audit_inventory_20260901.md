@@ -13,7 +13,7 @@ The repository has substantial K-class implementation coverage:
 - fast parity integration in `tests/integration/test_em_parity_fast.py`;
 - a production-scale K=4 case in `tests/long_test/test_em_parity_long.py` and
   `scripts/run_em_parity_long_slurm.sh`;
-- `scripts/run_em_kclass_robustness_matrix_slurm.py`, whose 29 default cases
+- `scripts/run_em_kclass_robustness_matrix_slurm.py`, whose 36 default cases
   span K=2/4/8/16, four PDB families, white/radial and low/very-high noise,
   uniform/nonuniform/Kent/no-CTF poses, class imbalance, contrast/noise
   scaling, offsets, 20%/50% outliers, 128/256 grids, three independent seeds,

@@ -186,6 +186,15 @@ volume, GT, particle, model, or schedule bytes differ. A consumer selected
 without its producer, multiple producers, a changed generator axis, a reused
 scratch root, or a hash mismatch fails before refinement.
 
+This gate is complete for cases 25--27 at source commit
+`91e8a30f4ebc9a88f834b1b9220dcfc3b34c31b7`: three seeds each for image batch
+50 / rotation block 8192, image batch 17 / rotation block 8192, and image batch
+50 / rotation block 257. All six exact-input comparisons retained identical
+controller decisions and final particle assignments; worst numbered-map
+FSC-AUC was 0.9999999733 and worst per-class GT FSC-AUC delta was -8.90e-7.
+See `k4_exact_input_invariance_20260901.md` for exact jobs, HBM/wall time,
+artifact hashes, the fixture-root accounting caveat, and the rerun command.
+
 ## Tier 3: grid and particle scaling
 
 Run eight iterations after Tier 2 passes.

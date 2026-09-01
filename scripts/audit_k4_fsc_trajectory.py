@@ -17,26 +17,23 @@ import argparse
 import json
 import math
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-if __package__:
-    from scripts.summarize_em_completion_bench import (
-        _load_recovar_volume,
-        _load_relion_volume,
-        normalized_fsc_auc,
-        shell_fsc,
-    )
-else:
-    from summarize_em_completion_bench import (
-        _load_recovar_volume,
-        _load_relion_volume,
-        normalized_fsc_auc,
-        shell_fsc,
-    )
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from scripts.summarize_em_completion_bench import (  # noqa: E402, I001
+    _load_recovar_volume,
+    _load_relion_volume,
+    normalized_fsc_auc,
+    shell_fsc,
+)
 
 
 SCHEMA = "em_k4_fsc_trajectory_audit_v2"

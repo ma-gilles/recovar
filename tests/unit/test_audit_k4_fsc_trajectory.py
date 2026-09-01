@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +10,21 @@ import pandas as pd
 import pytest
 
 from scripts import audit_k4_fsc_trajectory as auditor
+
+
+def test_script_path_invocation_resolves_repository_imports(tmp_path) -> None:
+    script = Path(__file__).resolve().parents[2] / "scripts" / "audit_k4_fsc_trajectory.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--case-root" in result.stdout
 
 
 def _touch(path: Path) -> Path:

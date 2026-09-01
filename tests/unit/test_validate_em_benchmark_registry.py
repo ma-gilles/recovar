@@ -67,6 +67,13 @@ I1_SYMMETRY_CAMPAIGN = json.loads(
         / "k4-i1-three-seed-22efd8065-h100"
     ).with_suffix(".json").read_text()
 )
+EXACT_INPUT_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k4-exact-input-invariance-91e8a30f4-h100"
+    ).with_suffix(".json").read_text()
+)
 NEGATIVE_DIAGNOSTIC = json.loads(
     (
         REGISTRY_ROOT
@@ -87,6 +94,7 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-ribosembly-10k128-white1-uniform-0050dc54f-h100",
         "k4-c4-three-seed-c75cbfffc-h100",
         "k4-d4-three-seed-c75cbfffc-h100",
+        "k4-exact-input-invariance-91e8a30f4-h100",
         "k4-expanded14-3466e7a32-h100",
         "k4-i1-three-seed-22efd8065-h100",
         "k4-o-three-seed-22efd8065-h100",
@@ -97,6 +105,36 @@ def test_checked_in_em_benchmark_registry_is_valid():
     assert classifications[17] == "NEGATIVE_ZERO_CLASS_BOUNDARY"
     assert classifications[20] == "TRAJECTORY_EXACT_NEAR_COLLAPSE"
     assert classifications[27] == "UNRESOLVED_TRAJECTORY_FAILURE"
+
+
+def test_exact_input_campaign_does_not_promote_gt_only_equivalence():
+    by_seed: dict[int, list[dict]] = {}
+    for case in EXACT_INPUT_CAMPAIGN["cases"]:
+        by_seed.setdefault(int(case["configuration"]["seed"]), []).append(case)
+
+    assert {seed: len(cases) for seed, cases in by_seed.items()} == {
+        41001: 3,
+        41002: 3,
+        41003: 3,
+    }
+    for case in by_seed[41002]:
+        assert case["outcome"]["classification"] == "TRAJECTORY_EXACT"
+        assert case["outcome"]["science_status"] == "PASS"
+    for seed in (41001, 41003):
+        for case in by_seed[seed]:
+            assert case["outcome"]["classification"] == "UNRESOLVED_TRAJECTORY_FAILURE"
+            assert case["outcome"]["science_status"] == "UNRESOLVED"
+            assert all(
+                row["gt_fsc_auc_delta"] >= -0.002
+                for row in case["quality"]["final_classes"]
+            )
+            assert (
+                min(
+                    row["cross_engine_fsc_auc"]
+                    for row in case["quality"]["final_classes"]
+                )
+                < 0.99
+            )
 
 
 def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
