@@ -726,12 +726,61 @@ def test_live_markdown_reports_route_resolutions_and_key_metrics(tmp_path: Path)
     assert "`none_unqualified`" in markdown
     assert "Supporting RELION corrected-masked FSC" in markdown
     assert "cannot rescue an unmasked failure" in markdown
-    assert "| RELION | complete | 2.511554 | 2.122559 | pass | `13217551` / `13254149` |" in markdown
-    assert "| RECOVAR | pending | -- | -- | pending | -- |" in markdown
+    assert "## Submitted EMPIAR-10202 scoring evidence" in markdown
+    assert "terminal status is `pass`" in markdown
+    assert "| RECOVAR | pending | -- | -- | pending | -- |" not in markdown
+    assert "RECOVAR and every cross-engine acceptance metric remain pending" not in markdown
     assert MODULE.REPRODUCTION_REPLAY_COMMAND in markdown
     assert "No original `sbatch` argv was separately sealed" in markdown
     assert "3.8 A sharpened full-complex map" in markdown
     assert "EMD-9012 records 1.86 A" in markdown
+
+
+@pytest.mark.parametrize("terminal_status", ("pass", "fail", "invalid"))
+def test_terminal_markdown_never_reverts_to_pending_result_prose(
+    tmp_path: Path,
+    terminal_status: str,
+) -> None:
+    scorecard = _frozen_target_scorecard()
+    evidence_path = _write_evidence(tmp_path, scorecard)
+    _attach_science_diagnostics(evidence_path, scorecard)
+    evidence = json.loads(evidence_path.read_text())
+
+    if terminal_status == "fail":
+        curves_path = Path(evidence["collector"]["fsc_curves_npz"])
+        with np.load(curves_path, allow_pickle=False) as archive:
+            curves = {name: np.asarray(archive[name]) for name in archive.files}
+        recovar_half = np.full(260, 0.8, dtype=np.float64)
+        recovar_half[0] = 1.0
+        recovar_half[180:] = 0.1
+        curves["recovar_final_half_fsc"] = recovar_half
+        np.savez(curves_path, **curves)
+        evidence["collector"]["curves_sha256"] = MODULE.sha256_file(curves_path)
+        _reseal_execution_envelope(evidence)
+    elif terminal_status == "invalid":
+        evidence["input_contract"]["k"] = 2
+    evidence_path.write_text(json.dumps(evidence))
+
+    report = MODULE.build_report(
+        scorecard,
+        scorecard_path=MODULE.DEFAULT_SCORECARD,
+        evidence_paths=(evidence_path,),
+    )
+    target = next(row for row in report["cases"] if row["id"] == MODULE.TARGET_CASE_ID)
+    markdown = MODULE.render_markdown(report)
+
+    assert target["status"] == terminal_status
+    assert "RECOVAR and every cross-engine acceptance metric remain pending" not in markdown
+    assert "pending until the RECOVAR full refinement" not in markdown
+    assert "| RECOVAR | pending | -- | -- | pending | -- |" not in markdown
+    if terminal_status == "invalid":
+        assert "## Rejected EMPIAR-10202 scoring evidence" in markdown
+        assert "not admitted as a two-engine scientific result" in markdown
+        assert "Validation failures: `k_is_one`." in markdown
+        assert "Both engines are represented by the submitted target evidence" not in markdown
+    else:
+        assert "## Submitted EMPIAR-10202 scoring evidence" in markdown
+        assert f"terminal status is `{terminal_status}`" in markdown
 
 
 @pytest.mark.parametrize(

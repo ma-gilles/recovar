@@ -2161,43 +2161,75 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         ]
     )
     target = cases[TARGET_CASE_ID]
-    partial = target["partial_engine_results"]
-    partial_relion = partial["relion"]
-    partial_recovar = partial["recovar"]
-    partial_jobs = partial_relion["jobs"]
-    partial_artifacts = partial_relion["artifacts"]
     reproduction = report["reproduction"]
     unmasked_reproduction = reproduction["unmasked"]
     masked_reproduction = reproduction["masked"]
-    lines.extend(
-        [
-            "",
-            "## Available EMPIAR-10202 per-engine evidence",
-            "",
-            "This is a deliberately partial report. RELION is sealed and complete;",
-            "RECOVAR and every cross-engine acceptance metric remain pending.",
-            "The RELION-only result cannot pass the fixed scoring case.",
-            "",
-            "| Engine | Status | Unmasked FSC=0.143 (A) | Corrected masked FSC=0.143 (A) | <= 3.0 A arm | Jobs |",
-            "| --- | --- | ---: | ---: | --- | --- |",
-            f"| RELION | {partial_relion['status']} | {_fmt(partial_relion['unmasked']['resolution_angstrom'])} | "
-            f"{_fmt(partial_relion['corrected_masked']['resolution_angstrom'])} | "
-            f"{'pass' if partial_relion['unmasked']['high_resolution_gate_pass'] else 'fail'} | "
-            f"`{partial_jobs['refinement']['job_id']}` / `{partial_jobs['postprocess']['job_id']}` |",
-            f"| RECOVAR | {partial_recovar['status']} | -- | -- | pending | -- |",
-            "",
-            "The 2.511554-A value is RELION's final unmasked FSC estimate sealed by",
-            "the postprocess result manifest. The 2.122559-A corrected masked value is",
-            "supporting-only and cannot rescue an unmasked or cross-engine failure.",
-            "The fixed scorecard's three-consecutive-shell joint-band metric is still",
-            "unavailable until RECOVAR supplies its independent half maps.",
-            "",
-            f"RELION refinement stdout SHA-256: `{partial_artifacts['refinement_stdout']['sha256']}`.",
-            f"Matched harness manifest SHA-256: `{partial_artifacts['launch_manifest']['sha256']}`.",
-            f"Postprocess result-manifest SHA-256: `{partial_artifacts['postprocess_result_manifest']['sha256']}`.",
-            f"Common mask SHA-256: `{partial_artifacts['common_mask']['sha256']}`.",
-        ]
-    )
+    if target["status"] == "pending":
+        partial = target["partial_engine_results"]
+        partial_relion = partial["relion"]
+        partial_recovar = partial["recovar"]
+        partial_jobs = partial_relion["jobs"]
+        partial_artifacts = partial_relion["artifacts"]
+        lines.extend(
+            [
+                "",
+                "## Available EMPIAR-10202 per-engine evidence",
+                "",
+                "This is a deliberately partial report. RELION is sealed and complete;",
+                "RECOVAR and every cross-engine acceptance metric remain pending.",
+                "The RELION-only result cannot pass the fixed scoring case.",
+                "",
+                "| Engine | Status | Unmasked FSC=0.143 (A) | Corrected masked FSC=0.143 (A) | <= 3.0 A arm | Jobs |",
+                "| --- | --- | ---: | ---: | --- | --- |",
+                f"| RELION | {partial_relion['status']} | {_fmt(partial_relion['unmasked']['resolution_angstrom'])} | "
+                f"{_fmt(partial_relion['corrected_masked']['resolution_angstrom'])} | "
+                f"{'pass' if partial_relion['unmasked']['high_resolution_gate_pass'] else 'fail'} | "
+                f"`{partial_jobs['refinement']['job_id']}` / `{partial_jobs['postprocess']['job_id']}` |",
+                f"| RECOVAR | {partial_recovar['status']} | -- | -- | pending | -- |",
+                "",
+                "The 2.511554-A value is RELION's final unmasked FSC estimate sealed by",
+                "the postprocess result manifest. The 2.122559-A corrected masked value is",
+                "supporting-only and cannot rescue an unmasked or cross-engine failure.",
+                "The fixed scorecard's three-consecutive-shell joint-band metric is still",
+                "unavailable until RECOVAR supplies its independent half maps.",
+                "",
+                f"RELION refinement stdout SHA-256: `{partial_artifacts['refinement_stdout']['sha256']}`.",
+                f"Matched harness manifest SHA-256: `{partial_artifacts['launch_manifest']['sha256']}`.",
+                f"Postprocess result-manifest SHA-256: `{partial_artifacts['postprocess_result_manifest']['sha256']}`.",
+                f"Common mask SHA-256: `{partial_artifacts['common_mask']['sha256']}`.",
+            ]
+        )
+    elif target["status"] in {"pass", "fail"}:
+        lines.extend(
+            [
+                "",
+                "## Submitted EMPIAR-10202 scoring evidence",
+                "",
+                "Both engines are represented by the submitted target evidence. Its",
+                f"terminal status is `{target['status']}`; the scored unmasked half-map",
+                "resolutions and cross-engine FSC metrics are reported below. The frozen",
+                "RELION-only partial record is retained for provenance but is not rendered",
+                "as the current result.",
+            ]
+        )
+    else:
+        provenance_failures = target.get("provenance_failures") or []
+        failure_text = ", ".join(f"`{failure}`" for failure in provenance_failures)
+        if not failure_text:
+            failure_text = "`unspecified_fail_closed_validation_error`"
+        lines.extend(
+            [
+                "",
+                "## Rejected EMPIAR-10202 scoring evidence",
+                "",
+                "The submitted target evidence failed fail-closed validation and was",
+                "not admitted as a two-engine scientific result. Any populated diagnostic",
+                "values below are non-scoring. The frozen RELION-only partial record is",
+                "retained for provenance but is not rendered as the current result.",
+                "",
+                f"Validation failures: {failure_text}.",
+            ]
+        )
     target_metrics = target.get("primary_metrics") or {}
     target_band = target.get("jointly_resolved_band") or {}
     target_alignment = target.get("science_diagnostics", {}).get("proper_so3_alignment", {})
@@ -2207,6 +2239,23 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     equivalence_text = "--" if equivalence_status is None else ("pass" if equivalence_status else "fail")
     route = target.get("equivalence_route") or "--"
     high_resolution_status = high_resolution.get("status", "pending")
+    if target["status"] == "pending":
+        target_completion_lines = [
+            "ancestry is insufficient. The RELION arm is complete; the case remains",
+            "pending until the RECOVAR full refinement and sealed two-engine FSC",
+            "analysis complete.",
+        ]
+    elif target["status"] == "invalid":
+        target_completion_lines = [
+            "ancestry is insufficient. The RELION arm is complete, but the submitted",
+            "RECOVAR/two-engine evidence was rejected by the fail-closed validation",
+            "reported above.",
+        ]
+    else:
+        target_completion_lines = [
+            "ancestry is insufficient. Both engine arms and the sealed two-engine FSC",
+            f"analysis are complete; the terminal scoring status is `{target['status']}`.",
+        ]
     lines.extend(
         [
             "",
@@ -2251,9 +2300,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "`d66afb30`; RELION/RECOVAR initial-map file prefixes `4f83710c` and",
             "`d77516a0`; exact shared canonical-array prefix `b617f90d`. There are no",
             "pending preparation hashes. The subject commit must match exactly;",
-            "ancestry is insufficient. The RELION arm is complete; the case remains",
-            "pending until the RECOVAR full refinement and sealed two-engine FSC",
-            "analysis complete.",
+            *target_completion_lines,
             "",
             "## Reproduction and artifact replay",
             "",
