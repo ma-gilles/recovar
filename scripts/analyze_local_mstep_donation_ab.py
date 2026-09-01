@@ -17,10 +17,13 @@ import numpy as np
 import starfile
 
 from scripts.run_local_mstep_donation_ab import (
+    _LAUNCH_MANIFEST_KEYS,
     GF46_CHECKPOINT_ITERATION,
     GF46_NR_ITER_SCHEDULE,
     GF46_PROFILED_ITERATION,
     INPUT_MANIFEST_SCHEMA,
+    LAUNCH_MANIFEST_SCHEMA,
+    RESOLVED_INPUT_CONTRACT_SCHEMA,
     SEALED_ARM_ENVIRONMENT_NAMES,
     SEALED_ARM_ENVIRONMENT_SCHEMA,
     SEALED_NORMALIZED_OPTIONS,
@@ -28,8 +31,22 @@ from scripts.run_local_mstep_donation_ab import (
 )
 from scripts.run_local_mstep_donation_ab import SCHEMA as ARM_SCHEMA
 
-SCHEMA = "recovar.local_mstep_donation_ab_analysis.v3"
+SCHEMA = "recovar.local_mstep_donation_ab_analysis.v4"
 EXPECTED_REPEATS_PER_ARM = 3
+MATERIAL_E2E_RATIO = 0.90
+MAX_PAIRED_E2E_REGRESSION_RATIO = 1.10
+MAX_PAIRED_E2E_SPREAD_FACTOR = 1.25
+RUNTIME_CLAIM_SCOPE = "same_job_preliminary_only_runtime_contents_not_archivally_hashed"
+_CHECKPOINT_INPUT_ROLES = (
+    "checkpoint/optimiser.star",
+    "checkpoint/model.star",
+    "checkpoint/data.star",
+    "checkpoint/sampling.star",
+    "checkpoint/class001.mrc",
+    "checkpoint/1moment001.mrc",
+    "checkpoint/1moment002.mrc",
+    "checkpoint/2moment001.mrc",
+)
 EXPECTED_CROSSED_ORDER = {
     1: ("01", "donated"),
     2: ("01", "control"),
@@ -47,6 +64,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-repo-head", required=True)
     parser.add_argument("--expected-gpu-uuid", required=True)
     parser.add_argument("--expected-input-manifest-sha256", required=True)
+    parser.add_argument("--expected-launch-manifest-sha256", required=True)
     return parser.parse_args()
 
 
@@ -538,7 +556,15 @@ def _phase_numeric_gate(samples_by_arm: dict[str, list[dict[str, Any]]], phase: 
     control_within = _within_values(matrix, control_indices)
     donated_within = _within_values(matrix, donated_indices)
     cross = _cross_values(matrix, control_indices, donated_indices)
-    exact_continuous = bool(np.all(matrix == 0.0))
+    field_names = sorted(samples[0]["continuous"])
+    exact_continuous = all(
+        np.array_equal(
+            np.asarray(sample["continuous"][field_name]),
+            np.asarray(samples[0]["continuous"][field_name]),
+        )
+        for sample in samples[1:]
+        for field_name in field_names
+    )
 
     observed_energy = float(
         2.0 * statistics.mean(cross)
@@ -661,8 +687,20 @@ def _median_metrics(values: list[dict[str, float]]) -> dict[str, float]:
 
 
 def _ratio(candidate: float, control: float) -> float:
-    if control <= 0.0:
-        raise RuntimeError(f"control metric must be positive, got {control}")
+    if not math.isfinite(candidate) or not math.isfinite(control) or candidate <= 0.0 or control <= 0.0:
+        raise RuntimeError(
+            "runtime ratio operands must be finite and positive, "
+            f"got candidate={candidate}, control={control}"
+        )
+    return float(candidate / control)
+
+
+def _nonnegative_diagnostic_ratio(candidate: float, control: float) -> float:
+    if not math.isfinite(candidate) or not math.isfinite(control) or candidate < 0.0 or control <= 0.0:
+        raise RuntimeError(
+            "diagnostic ratio requires a finite non-negative candidate and positive control, "
+            f"got candidate={candidate}, control={control}"
+        )
     return float(candidate / control)
 
 
@@ -674,12 +712,183 @@ def _load_runs(root: Path) -> list[tuple[Path, dict[str, Any]]]:
     return runs
 
 
+def _canonical_existing_path(value: Any, *, label: str, directory: bool = False) -> Path:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise RuntimeError(f"{label} is not a non-empty path string")
+    path = Path(value)
+    if not path.is_absolute():
+        raise RuntimeError(f"{label} is not absolute: {value!r}")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError(f"{label} does not resolve to an existing target: {value!r}") from error
+    if str(resolved) != value:
+        raise RuntimeError(f"{label} is not a canonical path: {value!r} != {str(resolved)!r}")
+    expected_kind = resolved.is_dir() if directory else resolved.is_file()
+    if not expected_kind:
+        kind = "directory" if directory else "file"
+        raise RuntimeError(f"{label} is not an existing {kind}: {value!r}")
+    return resolved
+
+
+def _validate_transitive_input_contract(
+    *,
+    report: dict[str, Any],
+    input_manifest: dict[str, Any],
+    launch_payload: dict[str, Any],
+    report_path: Path,
+) -> dict[str, Any]:
+    """Validate the path-bearing mirror of the reviewed content manifest."""
+
+    entries = input_manifest.get("entries")
+    hashes = input_manifest.get("hashes")
+    resolved_inputs = input_manifest.get("resolved_inputs")
+    if set(input_manifest) != {
+        "path",
+        "sha256",
+        "schema",
+        "entries",
+        "resolved_inputs",
+        "hashes",
+    }:
+        raise RuntimeError(f"arm GF46 input manifest has unexpected fields: {report_path}")
+    if not isinstance(entries, list) or not entries or not isinstance(hashes, dict):
+        raise RuntimeError(f"arm GF46 input manifest has invalid entries/hashes: {report_path}")
+    if not isinstance(resolved_inputs, dict):
+        raise RuntimeError(f"arm GF46 input manifest lacks resolved inputs: {report_path}")
+    if set(resolved_inputs) != {"schema", "data_dir", "consumed", "particle_stacks"}:
+        raise RuntimeError(f"arm resolved-input contract has unexpected fields: {report_path}")
+    if resolved_inputs.get("schema") != RESOLVED_INPUT_CONTRACT_SCHEMA:
+        raise RuntimeError(f"arm resolved-input schema drifted: {report_path}")
+
+    data_dir = _canonical_existing_path(
+        resolved_inputs.get("data_dir"),
+        label=f"resolved GF46 data_dir in {report_path}",
+        directory=True,
+    )
+    if report.get("data_dir") != str(data_dir) or launch_payload.get("data_dir") != str(data_dir):
+        raise RuntimeError(f"arm GF46 data_dir differs across resolved/report/launch contracts: {report_path}")
+
+    consumed = resolved_inputs.get("consumed")
+    resolved_particles = resolved_inputs.get("particle_stacks")
+    reported_particles = report.get("particle_stacks")
+    launch_particles = launch_payload.get("particle_stacks")
+    if (
+        not isinstance(consumed, list)
+        or not isinstance(resolved_particles, list)
+        or not resolved_particles
+        or not isinstance(reported_particles, list)
+        or not isinstance(launch_particles, list)
+        or not (
+            len(consumed) == len(entries)
+            and len(resolved_particles) == len(reported_particles) == len(launch_particles)
+        )
+    ):
+        raise RuntimeError(f"arm transitive input topology drifted: {report_path}")
+
+    canonical_particles = [
+        _canonical_existing_path(
+            value,
+            label=f"resolved GF46 particle stack {index} in {report_path}",
+        )
+        for index, value in enumerate(resolved_particles)
+    ]
+    canonical_particle_strings = [str(path) for path in canonical_particles]
+    if canonical_particle_strings != sorted(set(canonical_particle_strings)):
+        raise RuntimeError(f"arm resolved particle stacks are not sorted and unique: {report_path}")
+    if launch_particles != canonical_particle_strings:
+        raise RuntimeError(f"arm launch particle stacks differ from resolved inputs: {report_path}")
+
+    checkpoint_path = _canonical_existing_path(
+        report.get("checkpoint_optimiser"),
+        label=f"arm checkpoint optimiser in {report_path}",
+    )
+    input_star = _canonical_existing_path(
+        report.get("input_star"),
+        label=f"arm input STAR in {report_path}",
+    )
+    if (
+        launch_payload.get("checkpoint_optimiser") != str(checkpoint_path)
+        or launch_payload.get("input_star") != str(input_star)
+    ):
+        raise RuntimeError(f"arm checkpoint/input paths differ from the positional launch contract: {report_path}")
+    expected_roles = [
+        *_CHECKPOINT_INPUT_ROLES,
+        f"input/{input_star.name}",
+        *(
+            f"particles/{index:03d}/{particle_path.name}"
+            for index, particle_path in enumerate(canonical_particles)
+        ),
+    ]
+    if len(expected_roles) != len(entries):
+        raise RuntimeError(f"arm transitive input role count drifted: {report_path}")
+
+    observed_hashes: dict[str, str] = {}
+    consumed_paths: dict[str, str] = {}
+    for index, (expected_role, entry, consumed_item) in enumerate(
+        zip(expected_roles, entries, consumed, strict=True)
+    ):
+        if not isinstance(entry, dict) or not isinstance(consumed_item, dict):
+            raise RuntimeError(f"arm transitive input row {index} is not an object: {report_path}")
+        if set(entry) != {"relative_name", "source_name", "size_bytes", "sha256"}:
+            raise RuntimeError(f"arm input-manifest row {index} has unexpected fields: {report_path}")
+        if set(consumed_item) != {"role", "path"}:
+            raise RuntimeError(f"arm resolved-input row {index} has unexpected fields: {report_path}")
+        role = entry.get("relative_name")
+        if role != expected_role or consumed_item.get("role") != expected_role:
+            raise RuntimeError(f"arm transitive input role/order drifted at row {index}: {report_path}")
+        consumed_path = _canonical_existing_path(
+            consumed_item.get("path"),
+            label=f"resolved GF46 role {expected_role} in {report_path}",
+        )
+        sha256 = entry.get("sha256")
+        if (
+            not isinstance(sha256, str)
+            or len(sha256) != 64
+            or any(character not in "0123456789abcdef" for character in sha256)
+            or entry.get("source_name") != consumed_path.name
+            or not isinstance(entry.get("size_bytes"), int)
+            or entry["size_bytes"] <= 0
+        ):
+            raise RuntimeError(f"arm transitive input metadata is invalid for {expected_role}: {report_path}")
+        observed_hashes[expected_role] = sha256
+        consumed_paths[expected_role] = str(consumed_path)
+
+    if len(observed_hashes) != len(entries) or hashes != observed_hashes:
+        raise RuntimeError(f"arm transitive input hashes/roles disagree: {report_path}")
+    if consumed_paths["checkpoint/optimiser.star"] != str(checkpoint_path):
+        raise RuntimeError(f"arm checkpoint path differs from its resolved role: {report_path}")
+    if (
+        consumed_paths["checkpoint/data.star"] != str(input_star)
+        or consumed_paths[f"input/{input_star.name}"] != str(input_star)
+    ):
+        raise RuntimeError(f"arm input STAR differs from its resolved optimiser data role: {report_path}")
+
+    particle_entries = entries[-len(canonical_particles) :]
+    particle_consumed = consumed[-len(canonical_particles) :]
+    for index, (path, reported_particle, entry, consumed_item) in enumerate(
+        zip(canonical_particle_strings, reported_particles, particle_entries, particle_consumed, strict=True)
+    ):
+        if not isinstance(reported_particle, dict) or set(reported_particle) != {"path", "sha256"}:
+            raise RuntimeError(f"arm reported particle-stack row {index} is invalid: {report_path}")
+        if (
+            reported_particle.get("path") != path
+            or consumed_item.get("path") != path
+            or reported_particle.get("sha256") != entry.get("sha256")
+        ):
+            raise RuntimeError(
+                f"arm particle-stack path/hash disagrees with its transitive manifest: {report_path}"
+            )
+    return resolved_inputs
+
+
 def analyze(
     root: Path,
     *,
     expected_repo_head: str,
     expected_gpu_uuid: str,
     expected_input_manifest_sha256: str,
+    expected_launch_manifest_sha256: str,
 ) -> dict[str, Any]:
     runs = _load_runs(root)
     by_arm: dict[str, list[dict[str, Any]]] = {"control": [], "donated": []}
@@ -687,8 +896,10 @@ def analyze(
         phase: {"control": [], "donated": []} for phase in ("cold", "warm")
     }
     run_rows = []
+    by_repeat: dict[str, dict[str, dict[str, Any]]] = {}
     reference_contract_source = None
     reference_input_manifest = None
+    reference_launch_manifest = None
     cache_paths: set[str] = set()
     launch_ordinals: set[int] = set()
     program_tables: dict[str, dict[str, dict[str, Any]]] = {
@@ -702,6 +913,43 @@ def analyze(
             raise RuntimeError(f"arm report source head drifted: {path}")
         if report.get("gpu_uuid") != expected_gpu_uuid:
             raise RuntimeError(f"arm report GPU drifted: {path}")
+        launch_manifest = report.get("launch_manifest")
+        if not isinstance(launch_manifest, dict) or set(launch_manifest) != {
+            "path",
+            "sha256",
+            "schema",
+            "payload",
+        }:
+            raise RuntimeError(f"arm report lacks its positional launch manifest: {path}")
+        if launch_manifest.get("schema") != LAUNCH_MANIFEST_SCHEMA:
+            raise RuntimeError(f"arm report launch-manifest schema drifted: {path}")
+        if launch_manifest.get("sha256") != expected_launch_manifest_sha256:
+            raise RuntimeError(f"arm report launch-manifest SHA drifted: {path}")
+        launch_payload = launch_manifest.get("payload")
+        if not isinstance(launch_payload, dict) or set(launch_payload) != _LAUNCH_MANIFEST_KEYS:
+            raise RuntimeError(f"arm report launch-manifest payload is invalid: {path}")
+        launch_root = _canonical_existing_path(
+            launch_payload.get("output_root"),
+            label=f"launch output root in {path}",
+            directory=True,
+        )
+        if launch_root != root.resolve(strict=True):
+            raise RuntimeError(f"arm report launch output root drifted: {path}")
+        if (
+            launch_payload.get("expected_repo_head") != expected_repo_head
+            or launch_payload.get("target_gpu_uuid") != expected_gpu_uuid
+            or launch_payload.get("expected_input_manifest_sha256")
+            != expected_input_manifest_sha256
+        ):
+            raise RuntimeError(f"arm report positional launch identity drifted: {path}")
+        if reference_launch_manifest is None:
+            reference_launch_manifest = {
+                key: launch_manifest[key] for key in ("sha256", "schema", "payload")
+            }
+        elif {
+            key: launch_manifest[key] for key in ("sha256", "schema", "payload")
+        } != reference_launch_manifest:
+            raise RuntimeError(f"positional launch manifest differs across arms: {path}")
         if report.get("checkpoint_iteration") != GF46_CHECKPOINT_ITERATION:
             raise RuntimeError(f"arm report checkpoint schedule drifted: {path}")
         if report.get("profiled_iteration") != GF46_PROFILED_ITERATION:
@@ -725,29 +973,45 @@ def analyze(
             raise RuntimeError(f"arm report GF46 input-manifest SHA drifted: {path}")
         if report.get("input_hashes") != input_manifest.get("hashes"):
             raise RuntimeError(f"arm report input hashes disagree with its manifest: {path}")
+        resolved_inputs = _validate_transitive_input_contract(
+            report=report,
+            input_manifest=input_manifest,
+            launch_payload=launch_payload,
+            report_path=path,
+        )
         input_hashes = input_manifest["hashes"]
         if report.get("checkpoint_optimiser_sha256") != input_hashes.get("checkpoint/optimiser.star"):
             raise RuntimeError(f"arm checkpoint hash disagrees with its GF46 input manifest: {path}")
         input_star_key = f"input/{Path(report.get('input_star', '')).name}"
         if report.get("input_star_sha256") != input_hashes.get(input_star_key):
             raise RuntimeError(f"arm input STAR hash disagrees with its GF46 input manifest: {path}")
-        particle_key = f"particles/{Path(report.get('particle_stack', '')).name}"
-        if report.get("particle_stack_sha256") != input_hashes.get(particle_key):
-            raise RuntimeError(f"arm particle-stack hash disagrees with its GF46 input manifest: {path}")
         if reference_input_manifest is None:
             reference_input_manifest = {
-                key: input_manifest[key] for key in ("sha256", "schema", "entries", "hashes")
+                key: input_manifest[key]
+                for key in ("sha256", "schema", "entries", "hashes", "resolved_inputs")
             }
         elif {
-            key: input_manifest[key] for key in ("sha256", "schema", "entries", "hashes")
+            key: input_manifest[key]
+            for key in ("sha256", "schema", "entries", "hashes", "resolved_inputs")
         } != reference_input_manifest:
             raise RuntimeError(f"GF46 input manifest differs across arms: {path}")
 
         runtime = report.get("runtime_provenance", {})
         if runtime.get("parity_ancestors_verified") is not True:
             raise RuntimeError(f"arm did not verify required parity ancestors: {path}")
+        if (
+            runtime.get("installed_runtime_content_hash_complete") is not False
+            or runtime.get("reproducible_runtime_speed_claim_allowed") is not False
+            or runtime.get("runtime_claim_scope") != RUNTIME_CLAIM_SCOPE
+            or report.get("speed_claim_allowed") is not False
+            or report.get("same_job_preliminary_speed_signal_allowed") is not False
+            or report.get("runtime_claim_scope") != RUNTIME_CLAIM_SCOPE
+        ):
+            raise RuntimeError(f"arm runtime provenance does not disable archival speed claims: {path}")
         repo_root = Path(runtime.get("repo_root", "")).resolve()
         pixi_env = Path(runtime.get("pixi_env", "")).resolve()
+        if launch_payload.get("repo_root") != str(repo_root):
+            raise RuntimeError(f"arm runtime repo differs from the positional launch contract: {path}")
         if pixi_env != repo_root / ".pixi" / "envs" / "default":
             raise RuntimeError(f"arm did not use the exact worktree pixi env: {path}")
         for key in ("python_executable", "python_prefix", "jax_path"):
@@ -759,6 +1023,9 @@ def analyze(
         cache = report.get("jax_persistent_cache", {})
         cache_path = Path(cache.get("path", "")).resolve()
         run_dir = path.parents[1]
+        if path.resolve() != (run_dir / "result" / "donation_arm_summary.json").resolve():
+            raise RuntimeError(f"arm report is outside its canonical result path: {path}")
+        repeat = run_dir.parent.name.removeprefix("repeat-")
         expected_cache_path = (run_dir / "jax_cache").resolve()
         if cache_path != expected_cache_path:
             raise RuntimeError(f"arm JAX cache is not private to its run directory: {path}")
@@ -808,6 +1075,8 @@ def analyze(
             raise RuntimeError(f"arm launch contract did not seal an empty cache: {path}")
         if launch.get("input_manifest_sha256") != expected_input_manifest_sha256:
             raise RuntimeError(f"arm launch-contract input manifest drifted: {path}")
+        if launch.get("launch_manifest_sha256") != expected_launch_manifest_sha256:
+            raise RuntimeError(f"arm launch-contract positional manifest drifted: {path}")
         if {
             key: launch.get(key)
             for key in ("checkpoint_iteration", "profiled_iteration", "nr_iter_schedule")
@@ -834,6 +1103,12 @@ def analyze(
 
         phase_science: dict[str, dict[str, Any]] = {}
         for phase in ("cold", "warm"):
+            expected_prefix = (run_dir / "result" / phase / "run").resolve()
+            observed_prefix = Path(
+                report.get(phase, {}).get("science_outputs", {}).get("output_prefix", {}).get("path", "")
+            ).resolve()
+            if observed_prefix != expected_prefix:
+                raise RuntimeError(f"{phase} science output prefix drifted: {path}")
             snapshot = science_snapshot(report, phase)
             components = science_components(report, phase)
             phase_science[phase] = snapshot
@@ -854,6 +1129,8 @@ def analyze(
         row = {
             "report": str(path.resolve()),
             "arm": arm,
+            "repeat": repeat,
+            "launch_ordinal": int(launch["ordinal"]),
             "metrics": metrics,
             "whole_process_jax_peak_bytes": _jax_peak_bytes(report),
             "sampled_memory": samples,
@@ -869,6 +1146,10 @@ def analyze(
         }
         run_rows.append(row)
         by_arm[arm].append(row)
+        repeat_table = by_repeat.setdefault(repeat, {})
+        if arm in repeat_table:
+            raise RuntimeError(f"duplicate {arm} report for repeat {repeat}")
+        repeat_table[arm] = row
         for program in report["compiled_local_programs"]["programs"]:
             prior = program_tables[arm].setdefault(program["program_key"], program)
             if program != prior:
@@ -877,6 +1158,12 @@ def analyze(
     for arm, values in by_arm.items():
         if len(values) != EXPECTED_REPEATS_PER_ARM:
             raise RuntimeError(f"expected {EXPECTED_REPEATS_PER_ARM} {arm} runs, got {len(values)}")
+    expected_repeats = {f"{index:02d}" for index in range(1, EXPECTED_REPEATS_PER_ARM + 1)}
+    if set(by_repeat) != expected_repeats or any(
+        set(repeat_table) != {"control", "donated"}
+        for repeat_table in by_repeat.values()
+    ):
+        raise RuntimeError(f"runs do not form the sealed repeat-matched panel: {sorted(by_repeat)}")
     if len(cache_paths) != 2 * EXPECTED_REPEATS_PER_ARM:
         raise RuntimeError(f"expected six unique per-run JAX caches, got {sorted(cache_paths)}")
     if launch_ordinals != set(range(1, 2 * EXPECTED_REPEATS_PER_ARM + 1)):
@@ -934,37 +1221,83 @@ def analyze(
                 statistics.median(value["sampled_memory"]["peak_mib"] for value in values)
             ),
         }
-    ratios = {
+    # These unpaired arm medians are retained for diagnosis only.  Every speed
+    # gate below is based on control/donated measurements from the same repeat.
+    arm_median_ratios = {
         name: _ratio(
             arm_summary["donated"]["median_metrics"][name],
             arm_summary["control"]["median_metrics"][name],
         )
         for name in arm_summary["control"]["median_metrics"]
     }
-    ratios["jax_whole_process_peak"] = _ratio(
+    arm_median_ratios["jax_whole_process_peak"] = _nonnegative_diagnostic_ratio(
         arm_summary["donated"]["median_whole_process_jax_peak_bytes"],
         arm_summary["control"]["median_whole_process_jax_peak_bytes"],
     )
-    ratios["sampled_peak"] = _ratio(
+    arm_median_ratios["sampled_peak"] = _nonnegative_diagnostic_ratio(
         arm_summary["donated"]["median_sampled_peak_mib"],
         arm_summary["control"]["median_sampled_peak_mib"],
     )
-    material_runtime_win = bool(ratios["e2e_wall_s"] <= 0.90)
-    material_stage_win = bool(ratios["expectation_s"] <= 0.90 or ratios["big_jit_bucket_s"] <= 0.90)
-    sampled_memory_diagnostic_below_0_95 = bool(ratios["sampled_peak"] <= 0.95)
+
+    runtime_metric_names = tuple(arm_summary["control"]["median_metrics"])
+    paired_runtime_rows = []
+    for repeat in sorted(by_repeat):
+        control_metrics = by_repeat[repeat]["control"]["metrics"]
+        donated_metrics = by_repeat[repeat]["donated"]["metrics"]
+        paired_runtime_rows.append(
+            {
+                "repeat": repeat,
+                "control": control_metrics,
+                "donated": donated_metrics,
+                "donated_over_control": {
+                    name: _ratio(donated_metrics[name], control_metrics[name])
+                    for name in runtime_metric_names
+                },
+            }
+        )
+    paired_median_runtime_ratios = {
+        name: float(
+            statistics.median(row["donated_over_control"][name] for row in paired_runtime_rows)
+        )
+        for name in runtime_metric_names
+    }
+    paired_e2e_ratios = [
+        float(row["donated_over_control"]["e2e_wall_s"])
+        for row in paired_runtime_rows
+    ]
+    paired_e2e_median_ratio = float(statistics.median(paired_e2e_ratios))
+    paired_e2e_max_ratio = float(max(paired_e2e_ratios))
+    paired_e2e_spread_factor = float(max(paired_e2e_ratios) / min(paired_e2e_ratios))
+    paired_median_material_runtime_win = bool(paired_e2e_median_ratio <= MATERIAL_E2E_RATIO)
+    paired_e2e_no_material_regression = bool(
+        paired_e2e_max_ratio <= MAX_PAIRED_E2E_REGRESSION_RATIO
+    )
+    paired_e2e_spread_guard_passed = bool(
+        paired_e2e_spread_factor <= MAX_PAIRED_E2E_SPREAD_FACTOR
+    )
+    paired_runtime_consistency_gate_passed = bool(
+        paired_e2e_no_material_regression and paired_e2e_spread_guard_passed
+    )
+    material_runtime_win = bool(
+        paired_median_material_runtime_win and paired_runtime_consistency_gate_passed
+    )
+    material_stage_win = bool(
+        paired_median_runtime_ratios["expectation_s"] <= MATERIAL_E2E_RATIO
+        or paired_median_runtime_ratios["big_jit_bucket_s"] <= MATERIAL_E2E_RATIO
+    )
+    sampled_memory_diagnostic_below_0_95 = bool(arm_median_ratios["sampled_peak"] <= 0.95)
     # The 50 ms nvidia-smi poller can miss a short peak entirely (including a
     # one-row trace).  Keep its ratio visible, but never use it for acceptance
     # or a memory claim until a defensible process-HWM measurement exists.
     material_memory_win = False
-    no_material_regression = bool(
-        ratios["e2e_wall_s"] <= 1.10
-        and ratios["expectation_s"] <= 1.10
-        and ratios["big_jit_bucket_s"] <= 1.10
-    )
+    no_material_regression = paired_runtime_consistency_gate_passed
     passed = bool(
         alias_contract_passed
         and no_material_regression
         and numeric_qualification_status != "fail"
+    )
+    same_job_preliminary_speed_signal_allowed = bool(
+        passed and numeric_qualification_allowed and material_runtime_win
     )
     return {
         "schema": SCHEMA,
@@ -1020,18 +1353,41 @@ def analyze(
         "sampled_memory_diagnostic_below_0_95": sampled_memory_diagnostic_below_0_95,
         "sampled_memory_acceptance_use": "diagnostic_only_not_used_for_acceptance",
         "memory_claim_policy": "disabled_until_defensible_process_high_water_mark",
-        "speed_claim_allowed": bool(passed and numeric_qualification_allowed and material_runtime_win),
+        "runtime_pairing_policy": "within_repeat_donated_over_control_finite_positive_ratios",
+        "paired_runtime_thresholds": {
+            "median_e2e_material_win_ratio_max": MATERIAL_E2E_RATIO,
+            "max_e2e_opposite_regression_ratio": MAX_PAIRED_E2E_REGRESSION_RATIO,
+            "max_e2e_ratio_spread_factor": MAX_PAIRED_E2E_SPREAD_FACTOR,
+        },
+        "paired_runtime_rows": paired_runtime_rows,
+        "paired_median_runtime_ratios": paired_median_runtime_ratios,
+        "paired_e2e_ratios": paired_e2e_ratios,
+        "paired_e2e_median_ratio": paired_e2e_median_ratio,
+        "paired_e2e_max_ratio": paired_e2e_max_ratio,
+        "paired_e2e_spread_factor": paired_e2e_spread_factor,
+        "paired_median_material_runtime_win": paired_median_material_runtime_win,
+        "paired_e2e_no_material_regression": paired_e2e_no_material_regression,
+        "paired_e2e_spread_guard_passed": paired_e2e_spread_guard_passed,
+        "paired_runtime_consistency_gate_passed": paired_runtime_consistency_gate_passed,
+        "speed_claim_allowed": False,
+        "same_job_preliminary_speed_signal_allowed": same_job_preliminary_speed_signal_allowed,
+        "runtime_claim_scope": RUNTIME_CLAIM_SCOPE,
+        "installed_runtime_content_hash_complete": False,
+        "reproducible_runtime_speed_claim_allowed": False,
         "memory_claim_allowed": False,
         "default_promotion_allowed": False,
         "repo_head": expected_repo_head,
         "gpu_uuid": expected_gpu_uuid,
+        "launch_manifest_sha256": expected_launch_manifest_sha256,
+        "launch_manifest": reference_launch_manifest,
         "input_manifest_sha256": expected_input_manifest_sha256,
         "input_manifest": reference_input_manifest,
         "unique_fresh_jax_cache_count": len(cache_paths),
         "numeric_source_sha256": reference_contract_source,
         "qualifying_programs": qualifying,
         "arm_summary": arm_summary,
-        "donated_over_control_ratios": ratios,
+        "donated_over_control_ratios": arm_median_ratios,
+        "donated_over_control_ratio_scope": "unpaired_arm_medians_diagnostic_only",
         "runs": run_rows,
     }
 
@@ -1043,6 +1399,7 @@ def main() -> int:
         expected_repo_head=args.expected_repo_head,
         expected_gpu_uuid=args.expected_gpu_uuid,
         expected_input_manifest_sha256=args.expected_input_manifest_sha256,
+        expected_launch_manifest_sha256=args.expected_launch_manifest_sha256,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

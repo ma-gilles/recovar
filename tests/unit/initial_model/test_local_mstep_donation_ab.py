@@ -19,6 +19,7 @@ pytestmark = pytest.mark.unit
 
 
 INPUT_MANIFEST_SHA256 = "b" * 64
+LAUNCH_MANIFEST_SHA256 = "1" * 64
 
 
 def _write_products(
@@ -174,6 +175,94 @@ def _sealed_environment(run_dir: Path, gpu_uuid: str) -> dict:
     }
 
 
+def _sealed_analysis_inputs(root: Path, *, git_head: str, gpu_uuid: str) -> dict:
+    sealed = root / "sealed"
+    data_dir = sealed / "particles"
+    provenance = root / "provenance"
+    data_dir.mkdir(parents=True)
+    provenance.mkdir()
+    checkpoint_prefix = sealed / "run_it180"
+    checkpoint_optimiser = Path(f"{checkpoint_prefix}_optimiser.star")
+    input_star = Path(f"{checkpoint_prefix}_data.star")
+    particle_stack = data_dir / "particles.128.mrcs"
+    named_paths = [
+        ("checkpoint/optimiser.star", checkpoint_optimiser),
+        ("checkpoint/model.star", Path(f"{checkpoint_prefix}_model.star")),
+        ("checkpoint/data.star", input_star),
+        ("checkpoint/sampling.star", Path(f"{checkpoint_prefix}_sampling.star")),
+        ("checkpoint/class001.mrc", Path(f"{checkpoint_prefix}_class001.mrc")),
+        ("checkpoint/1moment001.mrc", Path(f"{checkpoint_prefix}_1moment001.mrc")),
+        ("checkpoint/1moment002.mrc", Path(f"{checkpoint_prefix}_1moment002.mrc")),
+        ("checkpoint/2moment001.mrc", Path(f"{checkpoint_prefix}_2moment001.mrc")),
+        (f"input/{input_star.name}", input_star),
+        (f"particles/000/{particle_stack.name}", particle_stack),
+    ]
+    for index, (_role, path) in enumerate(named_paths):
+        if not path.exists():
+            path.write_bytes(f"sealed-analysis-input-{index}\n".encode())
+    entries = [
+        {
+            "relative_name": role,
+            "source_name": path.name,
+            "size_bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        }
+        for role, path in named_paths
+    ]
+    hashes = {entry["relative_name"]: entry["sha256"] for entry in entries}
+    resolved_inputs = {
+        "schema": runner.RESOLVED_INPUT_CONTRACT_SCHEMA,
+        "data_dir": str(data_dir.resolve()),
+        "consumed": [
+            {"role": role, "path": str(path.resolve())}
+            for role, path in named_paths
+        ],
+        "particle_stacks": [str(particle_stack.resolve())],
+    }
+    input_manifest_path = provenance / "input_manifest.json"
+    input_manifest_path.write_text("{}\n")
+    input_manifest = {
+        "path": str(input_manifest_path.resolve()),
+        "sha256": INPUT_MANIFEST_SHA256,
+        "schema": runner.INPUT_MANIFEST_SCHEMA,
+        "entries": entries,
+        "resolved_inputs": resolved_inputs,
+        "hashes": hashes,
+    }
+    launch_payload = {
+        "schema": runner.LAUNCH_MANIFEST_SCHEMA,
+        "output_root": str(root.resolve()),
+        "repo_root": str(Path.cwd().resolve()),
+        "checkpoint_optimiser": str(checkpoint_optimiser.resolve()),
+        "input_star": str(input_star.resolve()),
+        "data_dir": str(data_dir.resolve()),
+        "particle_stacks": [str(particle_stack.resolve())],
+        "expected_repo_head": git_head,
+        "expected_source_manifest_sha256": "2" * 64,
+        "expected_input_manifest_sha256": INPUT_MANIFEST_SHA256,
+        "expected_node_name": "test-node",
+        "target_gpu_uuid": gpu_uuid,
+        "relion_bind_binary": "/bin/true",
+        "expected_relion_bind_sha256": "3" * 64,
+        "expected_focused_test_count": 1,
+    }
+    launch_manifest_path = provenance / "launch_manifest.json"
+    launch_manifest_path.write_text(json.dumps(launch_payload, indent=2, sort_keys=True) + "\n")
+    return {
+        "checkpoint_optimiser": str(checkpoint_optimiser.resolve()),
+        "input_star": str(input_star.resolve()),
+        "data_dir": str(data_dir.resolve()),
+        "particle_stack": str(particle_stack.resolve()),
+        "input_manifest": input_manifest,
+        "launch_manifest": {
+            "path": str(launch_manifest_path.resolve()),
+            "sha256": LAUNCH_MANIFEST_SHA256,
+            "schema": runner.LAUNCH_MANIFEST_SCHEMA,
+            "payload": launch_payload,
+        },
+    }
+
+
 def _arm_report(
     cold_prefix: Path,
     warm_prefix: Path,
@@ -182,6 +271,7 @@ def _arm_report(
     git_head: str,
     gpu_uuid: str,
     run_dir: Path,
+    sealed_inputs: dict,
 ) -> dict:
     alias_bytes = 96 if arm == "donated" else 0
     speed = 9.0 if arm == "donated" else 10.0
@@ -217,46 +307,26 @@ def _arm_report(
         "nr_iter_schedule": runner.GF46_NR_ITER_SCHEDULE,
         "normalized_options": runner.SEALED_NORMALIZED_OPTIONS,
         "normalized_recovar_argv": runner.SEALED_NORMALIZED_RECOVAR_ARGV,
-        "input_manifest": {
-            "path": "/sealed/input_manifest.json",
-            "sha256": INPUT_MANIFEST_SHA256,
-            "schema": runner.INPUT_MANIFEST_SCHEMA,
-            "entries": [
-                {
-                    "relative_name": "checkpoint/optimiser.star",
-                    "source_name": "run_it180_optimiser.star",
-                    "size_bytes": 1,
-                    "sha256": "c" * 64,
-                },
-                {
-                    "relative_name": "input/run_it180_data.star",
-                    "source_name": "run_it180_data.star",
-                    "size_bytes": 1,
-                    "sha256": "e" * 64,
-                },
-                {
-                    "relative_name": "particles/particles.128.mrcs",
-                    "source_name": "particles.128.mrcs",
-                    "size_bytes": 1,
-                    "sha256": "f" * 64,
-                },
-            ],
-            "hashes": {
-                "checkpoint/optimiser.star": "c" * 64,
-                "input/run_it180_data.star": "e" * 64,
-                "particles/particles.128.mrcs": "f" * 64,
-            },
-        },
-        "input_hashes": {
-            "checkpoint/optimiser.star": "c" * 64,
-            "input/run_it180_data.star": "e" * 64,
-            "particles/particles.128.mrcs": "f" * 64,
-        },
-        "checkpoint_optimiser_sha256": "c" * 64,
-        "input_star": "/sealed/run_it180_data.star",
-        "input_star_sha256": "e" * 64,
-        "particle_stack": "/sealed/particles.128.mrcs",
-        "particle_stack_sha256": "f" * 64,
+        "launch_manifest": sealed_inputs["launch_manifest"],
+        "input_manifest": sealed_inputs["input_manifest"],
+        "input_hashes": sealed_inputs["input_manifest"]["hashes"],
+        "checkpoint_optimiser": sealed_inputs["checkpoint_optimiser"],
+        "checkpoint_optimiser_sha256": sealed_inputs["input_manifest"]["hashes"][
+            "checkpoint/optimiser.star"
+        ],
+        "input_star": sealed_inputs["input_star"],
+        "input_star_sha256": sealed_inputs["input_manifest"]["hashes"][
+            "input/run_it180_data.star"
+        ],
+        "data_dir": sealed_inputs["data_dir"],
+        "particle_stacks": [
+            {
+                "path": sealed_inputs["particle_stack"],
+                "sha256": sealed_inputs["input_manifest"]["hashes"][
+                    "particles/000/particles.128.mrcs"
+                ],
+            }
+        ],
         "runtime_provenance": {
             "repo_root": str(Path.cwd().resolve()),
             "pixi_env": str((Path.cwd() / ".pixi/envs/default").resolve()),
@@ -266,7 +336,15 @@ def _arm_report(
             "recovar_path": str((Path.cwd() / "recovar/__init__.py").resolve()),
             "parity_ancestors_verified": True,
             "required_parity_ancestors": ["ancestor"],
+            "installed_runtime_content_hash_complete": False,
+            "reproducible_runtime_speed_claim_allowed": False,
+            "runtime_claim_scope": analyzer.RUNTIME_CLAIM_SCOPE,
         },
+        "speed_claim_allowed": False,
+        "same_job_preliminary_speed_signal_allowed": False,
+        "runtime_claim_scope": analyzer.RUNTIME_CLAIM_SCOPE,
+        "memory_claim_allowed": False,
+        "default_promotion_allowed": False,
         "sealed_environment": _sealed_environment(run_dir, gpu_uuid),
         "jax_persistent_cache": {
             "path": str((run_dir / "jax_cache").resolve()),
@@ -293,8 +371,10 @@ def _analysis_tree(
     warm_delta: float = 0.0,
 ) -> tuple[Path, str, str]:
     root = tmp_path / "gate"
+    root.mkdir(parents=True)
     git_head = "a" * 40
     gpu_uuid = "GPU-test"
+    sealed_inputs = _sealed_analysis_inputs(root, git_head=git_head, gpu_uuid=gpu_uuid)
     ordinal_by_run = {
         (1, "donated"): 1,
         (1, "control"): 2,
@@ -322,6 +402,7 @@ def _analysis_tree(
                         "jax_cache_dir": str((run_dir / "jax_cache").resolve()),
                         "jax_cache_initial_empty": True,
                         "input_manifest_sha256": INPUT_MANIFEST_SHA256,
+                        "launch_manifest_sha256": LAUNCH_MANIFEST_SHA256,
                         "checkpoint_iteration": 180,
                         "profiled_iteration": 181,
                         "nr_iter_schedule": 200,
@@ -337,6 +418,7 @@ def _analysis_tree(
                 git_head=git_head,
                 gpu_uuid=gpu_uuid,
                 run_dir=run_dir,
+                sealed_inputs=sealed_inputs,
             )
             report["warm"]["jax_memory_after"]["peak_bytes_in_use"] = 900 if arm == "donated" else 1000
             summary = run_dir / "result" / "donation_arm_summary.json"
@@ -410,6 +492,7 @@ def test_aggregate_requires_exact_science_and_qualifies_expected_alias(tmp_path)
         expected_repo_head=git_head,
         expected_gpu_uuid=gpu_uuid,
         expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
     )
 
     assert payload["passed"] is True
@@ -429,7 +512,17 @@ def test_aggregate_requires_exact_science_and_qualifies_expected_alias(tmp_path)
     assert payload["alias_contract_passed"] is True
     assert payload["qualifying_programs"][0]["accumulator_bytes"] == 96
     assert payload["donated_over_control_ratios"]["e2e_wall_s"] == pytest.approx(0.9)
-    assert payload["speed_claim_allowed"] is True
+    assert payload["donated_over_control_ratio_scope"] == "unpaired_arm_medians_diagnostic_only"
+    assert payload["paired_e2e_ratios"] == pytest.approx([0.9, 0.9, 0.9])
+    assert payload["paired_e2e_median_ratio"] == pytest.approx(0.9)
+    assert payload["paired_e2e_max_ratio"] == pytest.approx(0.9)
+    assert payload["paired_e2e_spread_factor"] == pytest.approx(1.0)
+    assert payload["paired_runtime_consistency_gate_passed"] is True
+    assert payload["material_runtime_win"] is True
+    assert payload["speed_claim_allowed"] is False
+    assert payload["same_job_preliminary_speed_signal_allowed"] is True
+    assert payload["reproducible_runtime_speed_claim_allowed"] is False
+    assert payload["runtime_claim_scope"] == analyzer.RUNTIME_CLAIM_SCOPE
     assert {run["sampled_memory"]["sample_count"] for run in payload["runs"]} == {1}
     assert payload["sampled_memory_diagnostic_below_0_95"] is True
     assert payload["sampled_memory_acceptance_use"] == "diagnostic_only_not_used_for_acceptance"
@@ -441,6 +534,55 @@ def test_aggregate_requires_exact_science_and_qualifies_expected_alias(tmp_path)
     assert policy["iteration_amplified_drift_allowed"] is False
     assert policy["material_end_to_end_runtime_gain_required"] is True
     assert payload["default_promotion_allowed"] is False
+
+
+def test_paired_runtime_gate_rejects_hidden_single_repeat_regression(tmp_path):
+    root, git_head, gpu_uuid = _analysis_tree(tmp_path)
+    report_path = root / "runs/repeat-03/donated/result/donation_arm_summary.json"
+    report = json.loads(report_path.read_text())
+    report["warm"]["wall_s"] = 12.0
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
+
+    payload = analyzer.analyze(
+        root,
+        expected_repo_head=git_head,
+        expected_gpu_uuid=gpu_uuid,
+        expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
+    )
+
+    # The unpaired arm medians still show an apparent 10% win, but repeat 03
+    # regresses by 20% and makes the paired signal too dispersed to qualify.
+    assert payload["donated_over_control_ratios"]["e2e_wall_s"] == pytest.approx(0.9)
+    assert payload["paired_e2e_ratios"] == pytest.approx([0.9, 0.9, 1.2])
+    assert payload["paired_e2e_median_ratio"] == pytest.approx(0.9)
+    assert payload["paired_median_material_runtime_win"] is True
+    assert payload["paired_e2e_no_material_regression"] is False
+    assert payload["paired_e2e_spread_factor"] == pytest.approx(4.0 / 3.0)
+    assert payload["paired_e2e_spread_guard_passed"] is False
+    assert payload["paired_runtime_consistency_gate_passed"] is False
+    assert payload["material_runtime_win"] is False
+    assert payload["passed"] is False
+    assert payload["speed_claim_allowed"] is False
+    assert payload["same_job_preliminary_speed_signal_allowed"] is False
+
+
+@pytest.mark.parametrize("bad_runtime", [0.0, float("nan")], ids=("zero", "nan"))
+def test_paired_runtime_gate_rejects_nonpositive_or_nonfinite_values(tmp_path, bad_runtime):
+    root, git_head, gpu_uuid = _analysis_tree(tmp_path)
+    report_path = root / "runs/repeat-02/donated/result/donation_arm_summary.json"
+    report = json.loads(report_path.read_text())
+    report["warm"]["wall_s"] = bad_runtime
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
+
+    with pytest.raises(RuntimeError, match="runtime ratio operands must be finite and positive"):
+        analyzer.analyze(
+            root,
+            expected_repo_head=git_head,
+            expected_gpu_uuid=gpu_uuid,
+            expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
+        )
 
 
 def test_nonexact_map_noise_is_explicitly_inconclusive_with_only_3x3(tmp_path):
@@ -455,6 +597,7 @@ def test_nonexact_map_noise_is_explicitly_inconclusive_with_only_3x3(tmp_path):
         expected_repo_head=git_head,
         expected_gpu_uuid=gpu_uuid,
         expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
     )
 
     assert payload["passed"] is True
@@ -463,6 +606,7 @@ def test_nonexact_map_noise_is_explicitly_inconclusive_with_only_3x3(tmp_path):
     assert payload["numeric_qualification_status"] == "inconclusive_3x3"
     assert payload["numeric_qualification_allowed"] is False
     assert payload["speed_claim_allowed"] is False
+    assert payload["same_job_preliminary_speed_signal_allowed"] is False
 
 
 def test_cold_only_noise_does_not_contaminate_the_warm_cohort(tmp_path):
@@ -476,6 +620,7 @@ def test_cold_only_noise_does_not_contaminate_the_warm_cohort(tmp_path):
         expected_repo_head=git_head,
         expected_gpu_uuid=gpu_uuid,
         expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
     )
 
     assert payload["phase_numeric_gates"]["cold"]["status"] == "inconclusive_3x3"
@@ -495,6 +640,7 @@ def test_non_timing_recovar_meta_noise_is_measured_not_hidden(tmp_path):
         expected_repo_head=git_head,
         expected_gpu_uuid=gpu_uuid,
         expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
     )
 
     warm = payload["phase_numeric_gates"]["warm"]
@@ -502,6 +648,7 @@ def test_non_timing_recovar_meta_noise_is_measured_not_hidden(tmp_path):
     assert warm["exact_continuous_science"] is False
     assert "meta/class_direction_posterior_sums" in warm["continuous_distance"]["field_names"]
     assert payload["speed_claim_allowed"] is False
+    assert payload["same_job_preliminary_speed_signal_allowed"] is False
 
 
 def test_cold_and_warm_may_differ_when_each_phase_matched_cohort_is_exact(tmp_path):
@@ -511,6 +658,7 @@ def test_cold_and_warm_may_differ_when_each_phase_matched_cohort_is_exact(tmp_pa
         expected_repo_head=git_head,
         expected_gpu_uuid=gpu_uuid,
         expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
     )
 
     assert payload["numeric_qualification_status"] == "exact_pass"
@@ -532,6 +680,19 @@ def test_control_repeat_variation_calibrates_nonexact_3x3_as_inconclusive():
     assert gate["nondirectional_distribution_failure"] is False
     assert gate["variance_inflation_failure"] is False
     assert gate["hard_failure"] is False
+
+
+@pytest.mark.parametrize("delta", [1e-200, np.nextafter(0.0, 1.0)])
+def test_exactness_does_not_use_underflowed_l2_distance(delta: float):
+    gate = _numeric_gate(
+        control=[0.0, 0.0, 0.0],
+        donated=[delta, delta, delta],
+    )
+
+    assert gate["continuous_distance"]["matrix"] == [[0.0] * 6 for _ in range(6)]
+    assert gate["exact_continuous_science"] is False
+    assert gate["exact_parsed_science"] is False
+    assert gate["status"] == "inconclusive_3x3"
 
 
 def test_phase_gate_rejects_a_consistent_donated_shift():
@@ -623,6 +784,7 @@ def test_common_iref_replay_path_across_every_arm_is_forbidden(tmp_path):
             expected_repo_head=git_head,
             expected_gpu_uuid=gpu_uuid,
             expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
         )
 
 
@@ -702,6 +864,7 @@ def test_aggregate_cannot_qualify_a_reported_replay_environment(tmp_path):
             expected_repo_head=git_head,
             expected_gpu_uuid=gpu_uuid,
             expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
         )
 
 
@@ -719,6 +882,7 @@ def test_aggregate_rejects_shared_or_nonempty_jax_cache_provenance(tmp_path):
             expected_repo_head=git_head,
             expected_gpu_uuid=gpu_uuid,
             expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
         )
 
 
@@ -748,6 +912,7 @@ def test_aggregate_rejects_input_manifest_or_schedule_drift(tmp_path):
             expected_repo_head=git_head,
             expected_gpu_uuid=gpu_uuid,
             expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
         )
 
 
@@ -764,6 +929,24 @@ def test_aggregate_rejects_input_manifest_drift_with_sealed_schedule(tmp_path):
             expected_repo_head=git_head,
             expected_gpu_uuid=gpu_uuid,
             expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
+        )
+
+
+def test_aggregate_rejects_incomplete_transitive_particle_topology(tmp_path):
+    root, git_head, gpu_uuid = _analysis_tree(tmp_path)
+    report_path = root / "runs/repeat-01/control/result/donation_arm_summary.json"
+    report = json.loads(report_path.read_text())
+    report["input_manifest"]["entries"].pop()
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
+
+    with pytest.raises(RuntimeError, match="transitive input topology drifted"):
+        analyzer.analyze(
+            root,
+            expected_repo_head=git_head,
+            expected_gpu_uuid=gpu_uuid,
+            expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
         )
 
 
@@ -778,7 +961,7 @@ def test_runner_rejects_any_override_of_the_reviewed_gf46_schedule():
             "run_it180_data.star",
             "--data-dir",
             "data",
-            "--particle-stack",
+            "--expected-particle-stack",
             "data/particles.128.mrcs",
             "--output-root",
             "out",
@@ -786,6 +969,10 @@ def test_runner_rejects_any_override_of_the_reviewed_gf46_schedule():
             "manifest.json",
             "--expected-input-manifest-sha256",
             INPUT_MANIFEST_SHA256,
+            "--launch-manifest",
+            "launch.json",
+            "--expected-launch-manifest-sha256",
+            LAUNCH_MANIFEST_SHA256,
             "--expected-jax-cache-dir",
             "cache",
             "--expected-cuda-lib",
@@ -806,41 +993,6 @@ def test_runner_rejects_any_override_of_the_reviewed_gf46_schedule():
         runner._validate_sealed_gf46_options(args)
 
 
-def test_gf46_input_manifest_is_root_independent_and_content_sensitive(tmp_path):
-    def make_fixture(root: Path) -> tuple[Path, Path, Path]:
-        checkpoint = root / "checkpoint/run_it180_optimiser.star"
-        checkpoint.parent.mkdir(parents=True)
-        prefix = Path(str(checkpoint)[: -len("_optimiser.star")])
-        for suffix in (
-            "optimiser.star",
-            "model.star",
-            "data.star",
-            "sampling.star",
-            "class001.mrc",
-            "1moment001.mrc",
-            "1moment002.mrc",
-            "2moment001.mrc",
-        ):
-            Path(f"{prefix}_{suffix}").write_bytes(f"fixture:{suffix}".encode())
-        input_star = root / "input/run_it180_data.star"
-        particle_stack = root / "particles/particles.128.mrcs"
-        input_star.parent.mkdir()
-        particle_stack.parent.mkdir()
-        input_star.write_text("input-star")
-        particle_stack.write_bytes(b"particle-stack")
-        return checkpoint, input_star, particle_stack
-
-    left = make_fixture(tmp_path / "left")
-    right = make_fixture(tmp_path / "right")
-    left_payload = runner.gf46_input_manifest_payload(*left)
-    right_payload = runner.gf46_input_manifest_payload(*right)
-    assert left_payload == right_payload
-    assert all("/left/" not in json.dumps(entry) for entry in left_payload["entries"])
-
-    right[2].write_bytes(b"particle-stack-drift")
-    assert runner.gf46_input_manifest_payload(*right) != left_payload
-
-
 def test_aggregate_rejects_missing_runtime_ancestry(tmp_path):
     root, git_head, gpu_uuid = _analysis_tree(tmp_path)
     report_path = root / "runs/repeat-01/donated/result/donation_arm_summary.json"
@@ -855,6 +1007,7 @@ def test_aggregate_rejects_missing_runtime_ancestry(tmp_path):
             expected_repo_head=git_head,
             expected_gpu_uuid=gpu_uuid,
             expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
         )
 
 
@@ -871,6 +1024,7 @@ def test_aggregate_rejects_jax_outside_exact_worktree_pixi_env(tmp_path):
             expected_repo_head=git_head,
             expected_gpu_uuid=gpu_uuid,
             expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+            expected_launch_manifest_sha256=LAUNCH_MANIFEST_SHA256,
         )
 
 
@@ -879,12 +1033,13 @@ def test_slurm_runner_is_crossed_fresh_process_and_fail_closed():
     source = (repo_root / "scripts/run_local_mstep_donation_ab.sbatch").read_text()
 
     required = (
-        ': "${EXPECTED_REPO_HEAD:',
-        ': "${EXPECTED_SOURCE_MANIFEST_SHA256:',
-        ': "${EXPECTED_INPUT_MANIFEST_SHA256:',
-        ': "${EXPECTED_NODE_NAME:',
-        ': "${TARGET_GPU_UUID:',
-        'test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"',
+        "#!/bin/bash",
+        "#SBATCH --export=NIL",
+        "if (( $# != 2 ))",
+        "readonly LAUNCH_MANIFEST_ARG=$1",
+        "readonly EXPECTED_LAUNCH_MANIFEST_SHA256=$2",
+        'test "$(/usr/bin/sha256sum "${LAUNCH_MANIFEST}"',
+        'test -z "$(/usr/bin/git -C "${REPO_ROOT}" status --porcelain=v1)"',
         "run_arm 1 01 donated",
         "run_arm 2 01 control",
         "run_arm 3 02 control",
@@ -893,14 +1048,15 @@ def test_slurm_runner_is_crossed_fresh_process_and_fail_closed():
         "run_arm 6 03 control",
         "local cache_dir=${run_dir}/jax_cache",
         'test ! -e "${cache_dir}"',
-        'test -z "$(find "${cache_dir}" -mindepth 1 -print -quit)"',
-        'env -i "${SEALED_COMMON_ENV[@]}"',
-        "reject_unexpected_inherited_tuning_environment",
-        "RECOVAR_*|JAX*|XLA*|CUDA*|TF_*",
-        "LD_LIBRARY_PATH|LIBRARY_PATH|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH",
-        "NVCC_PREPEND_FLAGS|NVCC_APPEND_FLAGS|MAKEFLAGS|MFLAGS|GNUMAKEFLAGS|MAKEOVERRIDES",
-        "RELION_RUNTIME|MPI_ROOT|CUSPARSE_LIBRARY",
+        'test -z "$(/usr/bin/find "${cache_dir}" -mindepth 1 -print -quit)"',
+        '/usr/bin/env -i "${SEALED_COMMON_ENV[@]}"',
+        "/usr/bin/env -i HOME=\"${SEALED_BUILD_HOME}\" PATH=/usr/bin:/bin",
+        "/usr/bin/make -rR -B",
         "RECOVAR_INITIAL_MODEL_PROFILE=1",
+        '"${particle_args[@]}"',
+        '--expected-particle-stack "${particle}"',
+        '--launch-manifest "${PROVENANCE}/launch_manifest.json"',
+        '--expected-launch-manifest-sha256 "${EXPECTED_LAUNCH_MANIFEST_SHA256}"',
         '--expected-jax-cache-dir "${cache_dir}"',
         '--expected-cuda-lib "${CUDA_BINARY}"',
         '--expected-relion-bind-dir "${RELION_BIND_DIR}"',
@@ -911,43 +1067,46 @@ def test_slurm_runner_is_crossed_fresh_process_and_fail_closed():
         'assert payload["numeric_qualification_status"] in {"exact_pass", "inconclusive_3x3"}',
         'assert payload["numeric_qualification_allowed"] is False',
         'assert payload["speed_claim_allowed"] is False',
+        'assert payload["same_job_preliminary_speed_signal_allowed"] is False',
         "assert_parity_ancestors()",
         "pathlib.Path(jax.__file__).resolve().is_relative_to(pixi_env)",
         'assert payload["production_xhalf_adjoint_program_observed"] is True',
         'assert payload["alias_contract_passed"] is True',
         'assert payload["memory_claim_allowed"] is False',
-        'cmp "${PROVENANCE}/source_manifest.sha256"',
-        'cmp "${PROVENANCE}/input_manifest.json"',
-        'touch "${ROOT}/COMPLETED"',
+        '/usr/bin/cmp "${PROVENANCE}/source_manifest.sha256"',
+        '/usr/bin/cmp "${PROVENANCE}/input_manifest.json"',
+        '/usr/bin/cmp "${PROVENANCE}/resolved_inputs.json"',
+        '/usr/bin/touch "${ROOT}/COMPLETED"',
     )
     for fragment in required:
         assert fragment in source
     harness = (repo_root / "scripts/run_local_mstep_donation_ab.py").read_text()
     assert "clear_memory_stats" not in harness
     assert "whole_process_cumulative_not_warm_isolated" in harness
-    assert source.rindex('touch "${ROOT}/COMPLETED"') > source.rindex('cmp "${PROVENANCE}/source_manifest.sha256"')
+    assert source.rindex('/usr/bin/touch "${ROOT}/COMPLETED"') > source.rindex(
+        '/usr/bin/cmp "${PROVENANCE}/source_manifest.sha256"'
+    )
 
 
 def test_slurm_runner_rejects_pre_arm_loader_and_toolchain_overrides():
     repo_root = Path(__file__).resolve().parents[3]
     source = (repo_root / "scripts/run_local_mstep_donation_ab.sbatch").read_text()
-    reject_body = source.split("reject_unexpected_inherited_tuning_environment() {", 1)[1].split("\n}\n", 1)[0]
-
-    dangerous = {
-        "LD_LIBRARY_PATH",
-        "LIBRARY_PATH",
-        "CPATH",
-        "C_INCLUDE_PATH",
-        "CPLUS_INCLUDE_PATH",
-        "NVCC_PREPEND_FLAGS",
-        "NVCC_APPEND_FLAGS",
-        "MAKEFLAGS",
-        "MFLAGS",
-        "GNUMAKEFLAGS",
-        "MAKEOVERRIDES",
-        "RELION_RUNTIME",
-        "MPI_ROOT",
-        "CUSPARSE_LIBRARY",
-    }
-    assert all(name in reject_body for name in dangerous)
-    assert "CUDA_VISIBLE_DEVICES) ;;" in reject_body
+    assert source.startswith("#!/bin/bash\n")
+    assert "#SBATCH --export=NIL" in source
+    assert '${LOCAL_MSTEP_DONATION_ROOT' not in source
+    assert '${VDAM_LATE_PROFILE_' not in source
+    assert '${EXPECTED_REPO_HEAD:-' not in source
+    assert ': "${EXPECTED_REPO_HEAD' not in source
+    assert '${CUDA_BUILD_TOOLKIT:-' not in source
+    assert '${RELION_RUNTIME:-' not in source
+    assert '${MPI_ROOT:-' not in source
+    assert '${CUSPARSE_LIBRARY:-' not in source
+    assert "MAKEFILES=" not in source
+    assert "NVCC_CCBIN=" not in source
+    assert "/usr/bin/env -i HOME=\"${SEALED_BUILD_HOME}\" PATH=/usr/bin:/bin" in source
+    assert 'NVCC="${CUDA_BUILD_TOOLKIT}/bin/nvcc"' in source
+    assert '/usr/bin/git -C "${REPO_ROOT}"' in source
+    assert '/usr/bin/sha256sum "${LAUNCH_MANIFEST}"' in source
+    assert '/usr/bin/cp --reflink=auto "${LAUNCH_MANIFEST}"' in source
+    assert '"schema": "recovar.local_mstep_donation_ab_slurm.v4"' in source
+    assert '"speed_claim_allowed": False' in source

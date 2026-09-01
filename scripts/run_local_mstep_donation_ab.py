@@ -22,7 +22,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 from scripts.run_vdam_late_iteration_profile import (
     _effects_barrier,
@@ -33,8 +33,10 @@ from scripts.run_vdam_late_iteration_profile import (
     _sha256,
 )
 
-SCHEMA = "recovar.local_mstep_donation_ab.v3"
-INPUT_MANIFEST_SCHEMA = "recovar.local_mstep_donation_gf46_inputs.v1"
+SCHEMA = "recovar.local_mstep_donation_ab.v4"
+INPUT_MANIFEST_SCHEMA = "recovar.local_mstep_donation_gf46_inputs.v2"
+RESOLVED_INPUT_CONTRACT_SCHEMA = "recovar.local_mstep_donation_gf46_resolved_inputs.v1"
+LAUNCH_MANIFEST_SCHEMA = "recovar.local_mstep_donation_launch_manifest.v1"
 SEALED_ARM_ENVIRONMENT_SCHEMA = "recovar.local_mstep_donation_arm_environment.v1"
 DONATED_POSITIONAL_NAMES = ("Ft_y", "Ft_ctf")
 DONATED_ARGNUMS = (7, 8)
@@ -218,6 +220,34 @@ _MEMORY_ANALYSIS_FIELDS = (
     "host_temp_size_in_bytes",
 )
 
+_LAUNCH_MANIFEST_KEYS = frozenset(
+    {
+        "schema",
+        "output_root",
+        "repo_root",
+        "checkpoint_optimiser",
+        "input_star",
+        "data_dir",
+        "particle_stacks",
+        "expected_repo_head",
+        "expected_source_manifest_sha256",
+        "expected_input_manifest_sha256",
+        "expected_node_name",
+        "target_gpu_uuid",
+        "relion_bind_binary",
+        "expected_relion_bind_sha256",
+        "expected_focused_test_count",
+    }
+)
+_LAUNCH_PATH_KEYS = (
+    "output_root",
+    "repo_root",
+    "checkpoint_optimiser",
+    "input_star",
+    "data_dir",
+    "relion_bind_binary",
+)
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -225,7 +255,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-optimiser", type=Path, required=True)
     parser.add_argument("--input-star", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--particle-stack", type=Path, required=True)
+    parser.add_argument(
+        "--expected-particle-stack",
+        action="append",
+        type=Path,
+        required=True,
+        help="Canonical particle-stack path; repeat for every unique stack consumed by the STAR.",
+    )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--checkpoint-iteration", type=int, default=GF46_CHECKPOINT_ITERATION)
     parser.add_argument("--nr-iter", type=int, default=GF46_NR_ITER_SCHEDULE)
@@ -248,6 +284,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--input-manifest", type=Path, required=True)
     parser.add_argument("--expected-input-manifest-sha256", required=True)
+    parser.add_argument("--launch-manifest", type=Path, required=True)
+    parser.add_argument("--expected-launch-manifest-sha256", required=True)
     parser.add_argument("--expected-jax-cache-dir", type=Path, required=True)
     parser.add_argument("--expected-cuda-lib", type=Path, required=True)
     parser.add_argument("--expected-relion-bind-dir", type=Path, required=True)
@@ -276,18 +314,158 @@ def _checkpoint_family_paths(checkpoint_optimiser: Path) -> list[tuple[str, Path
     return [(f"checkpoint/{name}", path) for name, path in members]
 
 
-def gf46_input_manifest_payload(
+def _canonical_json_bytes(value: Any) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _resolve_gf46_consumed_inputs(
     checkpoint_optimiser: Path,
     input_star: Path,
-    particle_stack: Path,
-) -> dict[str, Any]:
-    """Hash the sealed GF46 inputs without embedding machine-specific roots."""
+    data_dir: Path,
+    expected_particle_stacks: Sequence[Path],
+) -> tuple[list[tuple[str, Path]], dict[str, Any]]:
+    """Resolve and pin the exact transitive inputs consumed by continuation.
+
+    The continuation loader follows paths embedded in the optimiser/model STAR
+    files, while the image loader separately resolves every ``rlnImageName``
+    through ``--datadir`` and its extension fallbacks.  Reusing those exact
+    resolvers here prevents a conventional same-prefix file from being hashed
+    while execution silently consumes another target.
+    """
+
+    import starfile
+
+    from recovar.data_io.image_loader import StarLoader
+    from recovar.em.initial_model.driver import (
+        _relion_star_list_value,
+        _resolve_relion_checkpoint_path,
+        _second_pseudo_half_moment_path,
+    )
+
+    checkpoint_optimiser = checkpoint_optimiser.resolve(strict=True)
+    input_star = input_star.resolve(strict=True)
+    data_dir = data_dir.resolve(strict=True)
+    canonical = {
+        name: path.resolve(strict=True)
+        for name, path in _checkpoint_family_paths(checkpoint_optimiser)
+    }
+    optimiser_text = checkpoint_optimiser.read_text()
+    actual_model = _resolve_relion_checkpoint_path(
+        _relion_star_list_value(optimiser_text, "rlnModelStarFile"),
+        owner=checkpoint_optimiser,
+    )
+    actual_data = _resolve_relion_checkpoint_path(
+        _relion_star_list_value(optimiser_text, "rlnExperimentalDataStarFile"),
+        owner=checkpoint_optimiser,
+    )
+    actual_sampling = _resolve_relion_checkpoint_path(
+        _relion_star_list_value(optimiser_text, "rlnOrientSamplingStarFile"),
+        owner=checkpoint_optimiser,
+    )
+    if actual_data != input_star:
+        raise RuntimeError(
+            "GF46 optimiser data STAR differs from the pinned --input-star: "
+            f"{actual_data} != {input_star}"
+        )
+
+    model = starfile.read(actual_model, always_dict=True)
+    general = model.get("model_general")
+    classes = model.get("model_classes")
+    if (
+        not isinstance(general, dict)
+        or int(general.get("rlnNrClasses", -1)) != 1
+        or classes is None
+        or len(classes) != 1
+    ):
+        raise RuntimeError("donation A/B requires the canonical K=1 GF46 model_classes table")
+    row = classes.iloc[0]
+    actual_reference = _resolve_relion_checkpoint_path(
+        str(row["rlnReferenceImage"]), owner=actual_model
+    )
+    actual_moment1 = _resolve_relion_checkpoint_path(
+        str(row["rlnGradMoment1"]), owner=actual_model
+    )
+    actual_moment1_pseudo_half = _second_pseudo_half_moment_path(
+        actual_moment1,
+        nr_classes=1,
+    )
+    actual_moment2 = _resolve_relion_checkpoint_path(
+        str(row["rlnGradMoment2"]), owner=actual_model
+    )
+    actual_checkpoint_paths = {
+        "checkpoint/optimiser.star": checkpoint_optimiser,
+        "checkpoint/model.star": actual_model,
+        "checkpoint/data.star": actual_data,
+        "checkpoint/sampling.star": actual_sampling,
+        "checkpoint/class001.mrc": actual_reference,
+        "checkpoint/1moment001.mrc": actual_moment1,
+        "checkpoint/1moment002.mrc": actual_moment1_pseudo_half,
+        "checkpoint/2moment001.mrc": actual_moment2,
+    }
+    mismatches = {
+        role: {"expected": str(canonical[role]), "resolved": str(path)}
+        for role, path in actual_checkpoint_paths.items()
+        if path != canonical[role]
+    }
+    if mismatches:
+        raise RuntimeError(
+            "GF46 continuation references non-canonical checkpoint targets: "
+            f"{mismatches}"
+        )
+
+    image_loader = StarLoader(
+        str(input_star),
+        datadir=str(data_dir),
+        lazy=True,
+        max_threads=1,
+        skip_staging=True,
+    )
+    try:
+        resolved_particle_stacks = tuple(
+            sorted(
+                {
+                    Path(path).resolve(strict=True)
+                    for path in image_loader._file_map["mrc_file"].unique()
+                },
+                key=lambda path: path.as_posix(),
+            )
+        )
+    finally:
+        image_loader.close()
+    expected_paths_raw = [Path(path).resolve(strict=True) for path in expected_particle_stacks]
+    expected_paths = tuple(sorted(set(expected_paths_raw), key=lambda path: path.as_posix()))
+    if len(expected_paths) != len(expected_paths_raw):
+        raise RuntimeError("pinned particle-stack list contains duplicate canonical paths")
+    if resolved_particle_stacks != expected_paths:
+        raise RuntimeError(
+            "GF46 rlnImageName particle stacks differ from the pinned canonical targets: "
+            f"resolved={[str(path) for path in resolved_particle_stacks]}, "
+            f"expected={[str(path) for path in expected_paths]}"
+        )
 
     named_paths = [
-        *_checkpoint_family_paths(checkpoint_optimiser),
+        *actual_checkpoint_paths.items(),
         (f"input/{input_star.name}", input_star),
-        (f"particles/{particle_stack.name}", particle_stack),
+        *(
+            (f"particles/{index:03d}/{path.name}", path)
+            for index, path in enumerate(resolved_particle_stacks)
+        ),
     ]
+    resolved_contract = {
+        "schema": RESOLVED_INPUT_CONTRACT_SCHEMA,
+        "data_dir": str(data_dir),
+        "consumed": [
+            {"role": role, "path": str(path.resolve(strict=True))}
+            for role, path in named_paths
+        ],
+        "particle_stacks": [str(path) for path in resolved_particle_stacks],
+    }
+    return named_paths, resolved_contract
+
+
+def _input_manifest_payload_from_named_paths(
+    named_paths: Sequence[tuple[str, Path]],
+) -> dict[str, Any]:
     entries = []
     seen_names: set[str] = set()
     for relative_name, raw_path in named_paths:
@@ -311,19 +489,59 @@ def gf46_input_manifest_payload(
     }
 
 
-def _canonical_json_bytes(value: Any) -> bytes:
-    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+def gf46_input_manifest_payload(
+    checkpoint_optimiser: Path,
+    input_star: Path,
+    data_dir: Path,
+    expected_particle_stacks: Sequence[Path],
+) -> dict[str, Any]:
+    """Hash every exact consumed GF46 input without embedding host roots."""
+
+    named_paths, _resolved_contract = _resolve_gf46_consumed_inputs(
+        checkpoint_optimiser,
+        input_star,
+        data_dir,
+        expected_particle_stacks,
+    )
+    return _input_manifest_payload_from_named_paths(named_paths)
 
 
 def write_gf46_input_manifest(
     output: Path,
     checkpoint_optimiser: Path,
     input_star: Path,
-    particle_stack: Path,
+    data_dir: Path,
+    expected_particle_stacks: Sequence[Path],
+    *,
+    resolved_output: Path | None = None,
 ) -> str:
-    payload = gf46_input_manifest_payload(checkpoint_optimiser, input_star, particle_stack)
+    named_paths, resolved_contract = _resolve_gf46_consumed_inputs(
+        checkpoint_optimiser,
+        input_star,
+        data_dir,
+        expected_particle_stacks,
+    )
+    payload = _input_manifest_payload_from_named_paths(named_paths)
     encoded = _canonical_json_bytes(payload)
     output.write_bytes(encoded)
+    if resolved_output is not None:
+        # Include hashes here as path-specific provenance without making the
+        # reviewed content manifest depend on one filesystem root.
+        resolved_by_role = {
+            role: {
+                "path": str(path.resolve(strict=True)),
+                "sha256": _sha256(path.resolve(strict=True)),
+            }
+            for role, path in named_paths
+        }
+        resolved_output.write_bytes(
+            _canonical_json_bytes(
+                {
+                    **resolved_contract,
+                    "resolved_by_role": resolved_by_role,
+                }
+            )
+        )
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -333,7 +551,8 @@ def _verify_input_manifest(
     expected_sha256: str,
     checkpoint_optimiser: Path,
     input_star: Path,
-    particle_stack: Path,
+    data_dir: Path,
+    expected_particle_stacks: Sequence[Path],
 ) -> dict[str, Any]:
     manifest_path = manifest_path.resolve(strict=True)
     observed_sha256 = _sha256(manifest_path)
@@ -342,7 +561,13 @@ def _verify_input_manifest(
             f"GF46 input-manifest SHA mismatch: expected {expected_sha256}, got {observed_sha256}"
         )
     observed = json.loads(manifest_path.read_text())
-    expected = gf46_input_manifest_payload(checkpoint_optimiser, input_star, particle_stack)
+    named_paths, resolved_contract = _resolve_gf46_consumed_inputs(
+        checkpoint_optimiser,
+        input_star,
+        data_dir,
+        expected_particle_stacks,
+    )
+    expected = _input_manifest_payload_from_named_paths(named_paths)
     if observed != expected:
         raise RuntimeError("GF46 inputs no longer match the reviewed input manifest")
     return {
@@ -350,10 +575,94 @@ def _verify_input_manifest(
         "sha256": observed_sha256,
         "schema": INPUT_MANIFEST_SCHEMA,
         "entries": expected["entries"],
+        "resolved_inputs": resolved_contract,
         "hashes": {
             str(entry["relative_name"]): str(entry["sha256"])
             for entry in expected["entries"]
         },
+    }
+
+
+def _validate_launch_manifest_payload(payload: Any) -> dict[str, Any]:
+    """Validate the reviewed, positional launch contract without defaults."""
+
+    if not isinstance(payload, dict) or set(payload) != _LAUNCH_MANIFEST_KEYS:
+        observed = set(payload) if isinstance(payload, dict) else set()
+        raise RuntimeError(
+            "donation launch manifest keys drifted: "
+            f"missing={sorted(_LAUNCH_MANIFEST_KEYS - observed)}, "
+            f"unexpected={sorted(observed - _LAUNCH_MANIFEST_KEYS)}"
+        )
+    if payload.get("schema") != LAUNCH_MANIFEST_SCHEMA:
+        raise RuntimeError(f"donation launch manifest schema drifted: {payload.get('schema')!r}")
+    for key, value in payload.items():
+        if key in {"particle_stacks", "expected_focused_test_count"}:
+            continue
+        if not isinstance(value, str) or not value or any(character in value for character in "\0\r\n"):
+            raise RuntimeError(f"donation launch manifest {key} must be one non-empty line")
+    for key in (
+        "expected_source_manifest_sha256",
+        "expected_input_manifest_sha256",
+        "expected_relion_bind_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", payload[key]) is None:
+            raise RuntimeError(f"donation launch manifest {key} is not a lowercase SHA-256")
+    if re.fullmatch(r"[0-9a-f]{40,64}", payload["expected_repo_head"]) is None:
+        raise RuntimeError("donation launch manifest expected_repo_head is not a full commit ID")
+    if re.fullmatch(r"GPU-[0-9A-Fa-f-]+", payload["target_gpu_uuid"]) is None:
+        raise RuntimeError("donation launch manifest target_gpu_uuid is not a physical GPU UUID")
+    focused_count = payload["expected_focused_test_count"]
+    if isinstance(focused_count, bool) or not isinstance(focused_count, int) or focused_count <= 0:
+        raise RuntimeError("donation launch manifest expected_focused_test_count must be positive")
+
+    particles = payload["particle_stacks"]
+    if not isinstance(particles, list) or not particles:
+        raise RuntimeError("donation launch manifest particle_stacks must be a non-empty list")
+    if any(
+        not isinstance(value, str)
+        or not value
+        or any(character in value for character in "\0\r\n")
+        for value in particles
+    ):
+        raise RuntimeError("donation launch manifest particle_stacks contains an invalid path")
+
+    normalized = dict(payload)
+    for key in _LAUNCH_PATH_KEYS:
+        path = Path(payload[key])
+        if not path.is_absolute():
+            raise RuntimeError(f"donation launch manifest {key} is not absolute: {path}")
+        strict = key != "output_root"
+        resolved = path.resolve(strict=strict)
+        if resolved != path:
+            raise RuntimeError(
+                f"donation launch manifest {key} is not canonical: {path} != {resolved}"
+            )
+        normalized[key] = str(resolved)
+    normalized_particles = [str(Path(value).resolve(strict=True)) for value in particles]
+    if normalized_particles != particles or normalized_particles != sorted(set(normalized_particles)):
+        raise RuntimeError(
+            "donation launch manifest particle_stacks must be sorted, unique canonical paths"
+        )
+    normalized["particle_stacks"] = normalized_particles
+    return normalized
+
+
+def _verify_launch_manifest(path: Path, expected_sha256: str) -> dict[str, Any]:
+    path = path.resolve(strict=True)
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise RuntimeError("expected launch-manifest digest is not a lowercase SHA-256")
+    observed_sha256 = _sha256(path)
+    if observed_sha256 != expected_sha256:
+        raise RuntimeError(
+            "donation launch-manifest SHA mismatch: "
+            f"expected {expected_sha256}, got {observed_sha256}"
+        )
+    payload = _validate_launch_manifest_payload(json.loads(path.read_text()))
+    return {
+        "path": str(path),
+        "sha256": observed_sha256,
+        "schema": LAUNCH_MANIFEST_SCHEMA,
+        "payload": payload,
     }
 
 
@@ -528,6 +837,13 @@ def _runtime_provenance(repo_root: Path) -> dict[str, Any]:
         "recovar_path": str(recovar_path),
         "parity_ancestors_verified": True,
         "required_parity_ancestors": [sha for sha, _description in REQUIRED_PARITY_ANCESTORS],
+        # The worktree interpreter/import paths are pinned, but every shared
+        # object loaded by that interpreter is not recursively content-hashed.
+        # Consequently this experiment may report only a same-job preliminary
+        # timing signal; it cannot make an archival/replayable speed claim.
+        "installed_runtime_content_hash_complete": False,
+        "runtime_claim_scope": "same_job_preliminary_only_runtime_contents_not_archivally_hashed",
+        "reproducible_runtime_speed_claim_allowed": False,
     }
 
 
@@ -710,7 +1026,7 @@ def _gpu_uuid(expected: str | None) -> str | None:
     devices = jax.devices("gpu")
     if len(devices) != 1:
         raise RuntimeError(f"donation A/B requires one visible GPU, got {devices}")
-    command = ["nvidia-smi"]
+    command = ["/usr/bin/nvidia-smi"]
     if expected is not None:
         command.append(f"--id={expected}")
     command.extend(("--query-gpu=uuid", "--format=csv,noheader"))
@@ -751,7 +1067,10 @@ def _science_outputs(prefix: Path, iteration: int) -> dict[str, dict[str, Any]]:
 
 
 def _git_head(repo_root: Path) -> str:
-    return subprocess.check_output(["git", "-C", str(repo_root), "rev-parse", "HEAD"], text=True).strip()
+    return subprocess.check_output(
+        ["/usr/bin/git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -764,13 +1083,43 @@ def main(argv: list[str] | None = None) -> int:
     args.checkpoint_optimiser = args.checkpoint_optimiser.resolve(strict=True)
     args.input_star = args.input_star.resolve(strict=True)
     args.data_dir = args.data_dir.resolve(strict=True)
-    args.particle_stack = args.particle_stack.resolve(strict=True)
+    args.expected_particle_stack = [
+        path.resolve(strict=True) for path in args.expected_particle_stack
+    ]
     args.expected_cuda_lib = args.expected_cuda_lib.resolve(strict=True)
     args.expected_relion_bind_dir = args.expected_relion_bind_dir.resolve(strict=True)
     args.expected_cusparse_library = args.expected_cusparse_library.resolve(strict=True)
     args.output_root = args.output_root.resolve()
     if args.output_root.exists():
         raise FileExistsError(f"output root already exists: {args.output_root}")
+    launch_manifest = _verify_launch_manifest(
+        args.launch_manifest,
+        args.expected_launch_manifest_sha256,
+    )
+    launch = launch_manifest["payload"]
+    expected_launch_values = {
+        "repo_root": str(repo_root.resolve(strict=True)),
+        "checkpoint_optimiser": str(args.checkpoint_optimiser),
+        "input_star": str(args.input_star),
+        "data_dir": str(args.data_dir),
+        "particle_stacks": [str(path) for path in args.expected_particle_stack],
+        "expected_repo_head": args.expected_repo_head,
+        "expected_input_manifest_sha256": args.expected_input_manifest_sha256,
+        "target_gpu_uuid": args.expected_gpu_uuid,
+    }
+    launch_drift = {
+        name: {"manifest": launch.get(name), "runner": expected}
+        for name, expected in expected_launch_values.items()
+        if launch.get(name) != expected
+    }
+    launch_root = Path(launch["output_root"])
+    if not args.output_root.is_relative_to(launch_root / "runs"):
+        launch_drift["output_root"] = {
+            "manifest_runs_root": str(launch_root / "runs"),
+            "runner": str(args.output_root),
+        }
+    if launch_drift:
+        raise RuntimeError(f"arm arguments drifted from the positional launch manifest: {launch_drift}")
     sealed_environment = _assert_sealed_arm_environment(
         repo_root=repo_root,
         cache_dir=args.expected_jax_cache_dir,
@@ -788,7 +1137,8 @@ def main(argv: list[str] | None = None) -> int:
         expected_sha256=args.expected_input_manifest_sha256,
         checkpoint_optimiser=args.checkpoint_optimiser,
         input_star=args.input_star,
-        particle_stack=args.particle_stack,
+        data_dir=args.data_dir,
+        expected_particle_stacks=args.expected_particle_stack,
     )
     runtime_provenance = _runtime_provenance(repo_root)
     gpu_uuid = _gpu_uuid(args.expected_gpu_uuid)
@@ -871,6 +1221,7 @@ def main(argv: list[str] | None = None) -> int:
         "gpu_uuid": gpu_uuid,
         "runtime_provenance": runtime_provenance,
         "sealed_environment": sealed_environment,
+        "launch_manifest": launch_manifest,
         "jax_persistent_cache": cache_contract,
         "input_manifest": input_manifest,
         "input_hashes": input_manifest["hashes"],
@@ -884,8 +1235,10 @@ def main(argv: list[str] | None = None) -> int:
         "input_star": str(args.input_star),
         "input_star_sha256": _sha256(args.input_star),
         "data_dir": str(args.data_dir),
-        "particle_stack": str(args.particle_stack),
-        "particle_stack_sha256": _sha256(args.particle_stack),
+        "particle_stacks": [
+            {"path": str(path), "sha256": _sha256(path)}
+            for path in args.expected_particle_stack
+        ],
         "numeric_policy": {
             "mathematically_equivalent": True,
             "arithmetic_changed": False,
@@ -902,6 +1255,8 @@ def main(argv: list[str] | None = None) -> int:
             },
         },
         "speed_claim_allowed": False,
+        "same_job_preliminary_speed_signal_allowed": False,
+        "runtime_claim_scope": "same_job_preliminary_only_runtime_contents_not_archivally_hashed",
         "memory_claim_allowed": False,
         "default_promotion_allowed": False,
         "cold": phase_reports["cold"],
