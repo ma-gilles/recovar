@@ -431,7 +431,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "a30c27fa067ab21598cceccdb4b1f9aa0a8c0a230bd6a41c98fc6d9162e3726e"
+PERFORMANCE_GATE_UPDATES_SHA256 = "5284b54879b8bef9e6f517e879b1423aa624d7e013a7db5073abbf76c71e772d"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -798,6 +798,9 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and gate_updates.get("direct_relion_xhalf", {}).get("qualified_job") == "13281684"
         and gate_updates.get("direct_relion_xhalf", {}).get("direct_vs_legacy_bpref_bitwise") is True
         and gate_updates.get("shared_posterior_executor", {}).get("qualified_gpu_job") == "13280796"
+        and gate_updates.get("shared_posterior_executor", {}).get("crossed_live_job") == "13281970"
+        and gate_updates.get("shared_posterior_executor", {}).get("decision")
+        == "REJECT_NO_MATERIAL_WARM_RUNTIME_WIN"
         and _sha256_json(gate_updates) == PERFORMANCE_GATE_UPDATES_SHA256,
         "current performance gate updates changed without an evidence update",
     )
@@ -1071,13 +1074,18 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{abs(atomic_gate['abba_means']['warm_wall_change_percent']):.2f}% faster; all 3,000 winners are exact and "
         "map differences remain inside unbiased control-repeat noise. Default-off. | "
         f"{atomic_gate['next_gate']} |",
-        f"| **ACCEPTED GPU PRIMITIVE / LIVE PAIR PENDING** | Direct RELION x-half BPref "
+        f"| **ACCEPTED GPU PRIMITIVE / HARNESS RETRY PENDING** | Direct RELION x-half BPref "
         f"`{direct_xhalf_gate['qualified_job']}` | {direct_xhalf_gate['qualified_result']}; actual CUDA K=1 even/odd "
         "and K=3x2-group outputs are bitwise identical to the poisoned legacy roundtrip. "
-        f"`{direct_xhalf_gate['invalid_harness_job']}` is invalid collection-only. | {direct_xhalf_gate['next_gate']} |",
-        f"| **ACCEPTED GPU PRIMITIVE / LIVE RETRY PENDING** | Shared posterior executor "
-        f"`{posterior_executor_gate['qualified_gpu_job']}` | Adversarial executor-vs-scalar passes; support/counts/"
-        f"winners are exact. `{posterior_executor_gate['invalid_live_job']}` stopped before executor execution. | "
+        f"`{direct_xhalf_gate['invalid_harness_job']}` is invalid collection-only; jobs "
+        f"`{'/'.join(row['job_id'] for row in direct_xhalf_gate['invalid_live_jobs'])}` stopped before science. | "
+        f"{direct_xhalf_gate['next_gate']} |",
+        f"| **MATH ACCEPTED / PERFORMANCE REJECTED** | Shared posterior executor "
+        f"`{posterior_executor_gate['qualified_gpu_job']}/{posterior_executor_gate['crossed_live_job']}` | Every "
+        f"discrete result is exact and map rel-L2 is at most "
+        f"`{posterior_executor_gate['numerical_result']['map_relative_l2_max']:.3e}`; warm wall improves only "
+        f"{abs(posterior_executor_gate['crossed_medians']['warm_wall_change_percent']):.2f}% while posterior-kernel "
+        f"time regresses {posterior_executor_gate['crossed_medians']['posterior_kernel_time_change_percent']:.2f}%. | "
         f"{posterior_executor_gate['next_gate']} |",
         "",
         "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All listed "
@@ -1343,9 +1351,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "noise plus a material combined end-to-end gain before any default change.",
             "2. Complete the crossed GF46 legacy/direct x-half pair after the 7/7 bitwise actual-CUDA primitive gate. "
             "Report finalization time, wall, expectation, HWM, exact discrete state, maps, and both BPref halves.",
-            "3. Retry the shared coarse/fine posterior executor GF46 pair through the direct continuation driver. Keep "
-            "independent one-row RELION sort/scan arithmetic and mature eight-worker ownership; report allocation/free/"
-            "sync removal, GPU union, numerical stability, and end-to-end gain.",
+            "3. Keep the shared posterior executor rejected: it is mathematically qualified but saves only 3.37% "
+            "warm wall while its posterior kernels regress 36.86%. Decompose the sealed native/RECOVAR profiles to "
+            "select a larger execution-topology boundary instead of spending a trajectory on this implementation.",
             "4. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
             "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
             "and the combined B arm out of the production default.",

@@ -1737,12 +1737,26 @@
       "next_gate": "Cross canonical and atomic reduction with the accepted shared eight-stream EM/VDAM scheduler; require the same stable numerical envelope and a material combined end-to-end gain before any default change."
     },
     "direct_relion_xhalf": {
-      "status": "PRIMITIVE_ACCEPTED_LIVE_PAIR_PENDING",
+      "status": "PRIMITIVE_ACCEPTED_LIVE_PAIR_HARNESS_RETRY_PENDING",
       "promotion_authorized": false,
       "implementation_head": "9cfa9d9b9372159b05fc14423d6b6edaa78dde9b",
       "test_head": "8d00f3a4dbf32b8fe53824e256a18b983e788db6",
       "invalid_harness_job": "13281543",
       "invalid_harness_reason": "pytest 9 rejected a tuple-valued module pytestmark during collection; zero candidate science executed",
+      "invalid_live_jobs": [
+        {
+          "job_id": "13281914",
+          "reason": "fail-closed allocation selected the wrong physical H100; zero RECOVAR inference"
+        },
+        {
+          "job_id": "13281950",
+          "reason": "fail-closed allocation again selected the wrong physical H100; zero RECOVAR inference"
+        },
+        {
+          "job_id": "13282022",
+          "reason": "the older branch CLI lacked the diagnostic continuation option; argparse stopped before the first iteration"
+        }
+      ],
       "qualified_job": "13281684",
       "qualified_result": "7/7 passed",
       "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_direct_xhalf_gpu_gate_8d00f3a4d_h21g4_20260831_r2",
@@ -1758,19 +1772,62 @@
         "layout/dtype fail-closed"
       ],
       "direct_vs_legacy_bpref_bitwise": true,
-      "next_gate": "Run crossed GF46 legacy1/direct1/direct2/legacy2 with one binary and report finalize time, wall, expectation, HWM, exact discrete state, maps, and both BPref halves."
+      "next_gate": "Port only the established diagnostic continuation entry point, then run crossed GF46 legacy1/direct1/direct2/legacy2 with one binary and report finalize time, wall, expectation, HWM, exact discrete state, maps, and both BPref halves."
     },
     "shared_posterior_executor": {
-      "status": "PRIMITIVE_ACCEPTED_LIVE_PAIR_RETRY_PENDING",
+      "status": "MATH_ACCEPTED_PERFORMANCE_REJECTED",
       "promotion_authorized": false,
       "implementation_head": "616d231811cc06f492eb8fe05c2b5073fb23acda",
+      "diagnostic_head": "c0ab36af78f97da5a8a1d040fe077db5b7f0ee27",
       "qualified_cuda_sha256": "f745cb8aa72c000640065b0e796ef21e7be757ed459df1279324b9668a1df8bc",
       "focused_cpu_source_result": "20+1 passed",
       "qualified_gpu_job": "13280796",
       "qualified_gpu_result": "1/1 adversarial executor-vs-scalar passed",
       "invalid_live_job": "13281609",
       "invalid_live_reason": "The older CLI wrapper did not expose the underlying continuation flag; execution stopped before the executor ran.",
-      "next_gate": "Retry the sealed GF46 C1/E1/E2/C2 pair through a direct driver shim, retaining one-row CUB arithmetic and shared mature eight-worker stream ownership."
+      "crossed_live_job": "13281970",
+      "crossed_live_wrapper_result": "FAILED 1:0 after all four science arms; post-run analyzer only",
+      "crossed_live_analyzer_failure": "numpy.isposinf rejected complex128 BPref Fourier accumulators",
+      "posthoc_analyzer_sha256": "382c515514c4e7d130b49a043a85deb5486bd292c36bfd2bda5dba95397b4d75",
+      "posthoc_report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shared_posterior_ab_c0ab36af7_h21g4_20260831_r2/shared_posterior_ab.json",
+      "posthoc_report_sha256": "38f816c471c3a7e96c20acdb9362cf6ecfbb610c2e091a642dfef6483ff3a249",
+      "execution_order": "control_1,executor_1,executor_2,control_2",
+      "numerical_result": {
+        "all_discrete_exact": true,
+        "all_continuous_qualified": true,
+        "map_relative_l2_max": 2.347711343633698e-09,
+        "map_relative_bias_max": 4.153441299960726e-11,
+        "bpref_relative_l2_max": 5.4406846502835275e-08,
+        "bpref_relative_bias_max": 1.2055175479651117e-09,
+        "meta_relative_l2_max": 3.2779526347072663e-07,
+        "meta_relative_bias_max": 9.68103207113546e-08,
+        "classification": "stable_float32_envelope_no_discrete_or_basin_effect"
+      },
+      "crossed_medians": {
+        "control_cold_wall_seconds": 29.196712041506544,
+        "executor_cold_wall_seconds": 26.947784064570442,
+        "cold_wall_change_percent": -7.70,
+        "control_warm_wall_seconds": 14.838143528904766,
+        "executor_warm_wall_seconds": 14.338669172488153,
+        "warm_wall_change_percent": -3.37,
+        "control_expectation_seconds": 9.957099886378273,
+        "executor_expectation_seconds": 9.586199449957348,
+        "expectation_change_percent": -3.73,
+        "control_pass1_seconds": 5.990109920501709,
+        "executor_pass1_seconds": 5.639445781707764,
+        "pass1_change_percent": -5.85,
+        "control_pass2_seconds": 2.351261019706726,
+        "executor_pass2_seconds": 2.381399393081665,
+        "pass2_change_percent": 1.28,
+        "kernel_count_control": 64587,
+        "kernel_count_executor": 58151,
+        "allocation_count_control": 2484,
+        "allocation_count_executor": 332,
+        "posterior_kernel_time_change_percent": 36.86
+      },
+      "decision": "REJECT_NO_MATERIAL_WARM_RUNTIME_WIN",
+      "reason": "The executor removes 90% of allocations and 10% of total kernel launches, but its posterior kernels are 36.86% slower and warm wall improves only 3.37%, below the material runtime gate.",
+      "next_gate": "Keep default-off and do not spend a trajectory on this implementation. Use the sealed native/RECOVAR profiles to identify a larger remaining execution-topology boundary."
     }
   },
   "shared_em_reuse": [

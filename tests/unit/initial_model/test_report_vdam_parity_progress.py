@@ -466,10 +466,12 @@ def test_runtime_workboard_is_easy_to_scan() -> None:
     assert "13280613/13280655" in rendered
     assert "**MATH ACCEPTED / MATERIAL SINGLE-STREAM** | Native-atomic T=29 `13281836`" in rendered
     assert "Hot coarse is 8.00% faster" in rendered
-    assert "**ACCEPTED GPU PRIMITIVE / LIVE PAIR PENDING** | Direct RELION x-half BPref" in rendered
+    assert "**ACCEPTED GPU PRIMITIVE / HARNESS RETRY PENDING** | Direct RELION x-half BPref" in rendered
     assert "`13281684`" in rendered
-    assert "**ACCEPTED GPU PRIMITIVE / LIVE RETRY PENDING** | Shared posterior executor" in rendered
-    assert "`13280796`" in rendered
+    assert "13281914/13281950/13282022" in rendered
+    assert "**MATH ACCEPTED / PERFORMANCE REJECTED** | Shared posterior executor" in rendered
+    assert "`13280796/13281970`" in rendered
+    assert "posterior-kernel time regresses 36.86%" in rendered
     assert "**PENDING** | None" not in rendered
     assert "trajectory next" not in rendered.lower()
     assert "default-off/unwired" in rendered
