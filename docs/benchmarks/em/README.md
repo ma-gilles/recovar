@@ -177,7 +177,9 @@ The proposed expansion from the current single-fixture K=4 evidence is in
 `k4_validation_matrix.md`. The audited inventory and unresolved provenance
 gaps are in `audit_inventory_20260901.md`. The runnable 10k real-data K=4
 InitialModel diagnostic and its explicit half-map limitations are documented
-in `real_kclass_initialmodel_pairs.md`.
+in `real_kclass_initialmodel_pairs.md`. The fixed iteration-1 EMPIAR-10076
+shared-200 candidate/posterior/reconstruction discriminator is documented in
+`real_k4_shared200_causal_replay.md`.
 
 ## Repeating the K-class robustness panel
 
