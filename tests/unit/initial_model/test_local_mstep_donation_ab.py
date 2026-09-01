@@ -458,6 +458,33 @@ def test_control_and_donated_wrappers_share_one_sealed_numeric_source():
     assert tuple(donated.contract()["static_argnames"]) == runner.SEALED_STATIC_ARGNAMES
 
 
+def test_compiled_executable_key_preserves_bound_process_function_identity():
+    from recovar.core.configs import ForwardModelConfig
+    from recovar.core.ctf import CTFEvaluator
+
+    class Dataset:
+        def process(self, value):
+            return value
+
+    def config(dataset):
+        return ForwardModelConfig(
+            image_shape=(8, 8),
+            volume_shape=(8, 8, 8),
+            grid_size=8,
+            voxel_size=1.0,
+            padding=0,
+            disc_type="linear_interp",
+            ctf=CTFEvaluator(),
+            process_fn=dataset.process,
+        )
+
+    first = runner._executable_variant_key("stable-program", (config(Dataset()),))
+    second = runner._executable_variant_key("stable-program", (config(Dataset()),))
+
+    assert first[0] == second[0]
+    assert first != second
+
+
 def test_science_snapshot_normalizes_only_output_prefix_and_keeps_exact_values(tmp_path):
     left = tmp_path / "left" / "warm" / "run"
     right = tmp_path / "right" / "warm" / "run"

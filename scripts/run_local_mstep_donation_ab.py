@@ -886,6 +886,22 @@ def _program_key(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[str, di
     return hashlib.sha256(encoded).hexdigest(), payload
 
 
+def _executable_variant_key(program_key: str, args: tuple[Any, ...]) -> tuple[str, Any]:
+    """Retain process-local static PyTree identity for compiled executables.
+
+    ``_program_key`` intentionally redacts object addresses so equivalent
+    programs can be compared across fresh processes.  A compiled JAX
+    executable is stricter: Equinox static metadata such as a dataset-bound
+    ``ForwardModelConfig.process_fn`` must match the exact input PyTree used by
+    ``lower``.  Keep both identities instead of reusing an executable across
+    equivalent-but-distinct continuation datasets.
+    """
+
+    import jax
+
+    return program_key, jax.tree_util.tree_structure(args)
+
+
 def _memory_analysis_dict(stats: Any) -> dict[str, int]:
     if stats is None:
         raise RuntimeError("XLA compiled memory analysis is unavailable")
@@ -941,7 +957,8 @@ class LocalMstepDonationMonitor:
         self.arm = arm
         self.production = production
         self.selected = selected
-        self.executables: dict[str, Any] = {}
+        self.executables: dict[tuple[str, Any], Any] = {}
+        self.executable_variant_counts: dict[str, int] = {}
         self.records: dict[str, dict[str, Any]] = {}
         self.call_keys: list[str] = []
         self.phase = "setup"
@@ -955,12 +972,13 @@ class LocalMstepDonationMonitor:
             extra = sorted(set(kwargs) - set(SEALED_STATIC_ARGNAMES))
             raise RuntimeError(f"local big-JIT static kwargs changed: missing={missing}, extra={extra}")
         key, signature = _program_key(args, kwargs)
-        executable = self.executables.get(key)
+        variant_key = _executable_variant_key(key, args)
+        executable = self.executables.get(variant_key)
         if executable is None:
             lowered = self.selected.lower(*args, **kwargs)
             executable = lowered.compile()
-            self.executables[key] = executable
-            self.records[key] = {
+            self.executables[variant_key] = executable
+            record = {
                 "program_key": key,
                 "first_phase": self.phase,
                 "signature": signature,
@@ -973,6 +991,20 @@ class LocalMstepDonationMonitor:
                 "mstep_relion_x_half": bool(kwargs["mstep_relion_x_half"]),
                 "memory_analysis": _memory_analysis_dict(executable.memory_analysis()),
             }
+            prior = self.records.get(key)
+            if prior is None:
+                self.records[key] = record
+            else:
+                # Only the process-local static PyTree identity may differ.
+                # The stable program contract and compiled memory behavior
+                # must remain identical across cold/warm continuation objects.
+                record["first_phase"] = prior["first_phase"]
+                if record != prior:
+                    raise RuntimeError(
+                        "equivalent local program variants compiled differently: "
+                        f"program_key={key}"
+                    )
+            self.executable_variant_counts[key] = self.executable_variant_counts.get(key, 0) + 1
         self.call_keys.append(key)
         # All keyword arguments are static and were captured by ``lower``.
         # The compiled executable therefore accepts only the positional dynamic
@@ -997,7 +1029,13 @@ class LocalMstepDonationMonitor:
             "unique_program_count": len(self.records),
             "call_count": len(self.call_keys),
             "call_program_keys": list(self.call_keys),
-            "programs": [self.records[key] for key in sorted(self.records)],
+            "programs": [
+                {
+                    **self.records[key],
+                    "compiled_pytree_variant_count": self.executable_variant_counts[key],
+                }
+                for key in sorted(self.records)
+            ],
         }
 
 
