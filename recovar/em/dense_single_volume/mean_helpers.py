@@ -303,6 +303,29 @@ def _should_host_stage_large_relion_ifft(
     )
 
 
+def _crop_relion_wiener_half_to_fftw_host(
+    wiener_half,
+    accumulator_shape,
+    reconstruction_shape,
+    relion_functions,
+):
+    """Crop a centered packed half-volume into raw FFTW order on the host."""
+
+    accumulator_shape = tuple(int(s) for s in accumulator_shape)
+    reconstruction_shape = tuple(int(s) for s in reconstruction_shape)
+    accumulator_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(
+        accumulator_shape,
+    )
+    wiener_half = np.asarray(wiener_half).reshape(accumulator_half_shape)
+    centered_axis_idx = relion_functions._relion_centered_axis_take_indices(
+        accumulator_shape[0],
+        reconstruction_shape[0],
+    )
+    raw_axis_idx = np.fft.ifftshift(centered_axis_idx)
+    col_idx = np.arange(reconstruction_shape[-1] // 2 + 1, dtype=np.int32)
+    return wiener_half[np.ix_(raw_axis_idx, raw_axis_idx, col_idx)]
+
+
 def _reconstruct_volume_eager(
     Ft_ctf,
     Ft_y,
@@ -380,15 +403,26 @@ def _reconstruct_volume_eager(
         reconstruction_shape,
         packed_half_bytes,
     )
-    fftw_half_device = relion_functions.post_process_from_filter_v2(
+    wiener_half_device = relion_functions._post_process_from_filter_v2_donate_numerator(
         *postprocess_args,
         **postprocess_kwargs,
         input_half_volume=True,
-        return_fftw_half_before_ifft=True,
+        return_wiener_half_before_window=True,
     )
-    fftw_half_device.block_until_ready()
-    fftw_half_host = np.asarray(jax.device_get(fftw_half_device))
-    del fftw_half_device
+    wiener_half_device.block_until_ready()
+    wiener_half_host = np.asarray(jax.device_get(wiener_half_device)).reshape(
+        fourier_transform_utils.volume_shape_to_half_volume_shape(accumulator_shape),
+    )
+    del wiener_half_device
+    gc.collect()
+
+    fftw_half_host = _crop_relion_wiener_half_to_fftw_host(
+        wiener_half_host,
+        accumulator_shape,
+        reconstruction_shape,
+        relion_functions,
+    )
+    del wiener_half_host
     gc.collect()
 
     return relion_functions._finish_large_relion_postprocess_from_fftw_half(

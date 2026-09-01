@@ -1028,6 +1028,36 @@ def test_relion_direct_fftw_half_crop_matches_centered_path_bitwise(old_dim, new
     np.testing.assert_array_equal(np.asarray(direct_real), np.asarray(centered_real))
 
 
+@pytest.mark.parametrize(("old_dim", "new_dim"), [(11, 8), (11, 9), (12, 8), (12, 9)])
+def test_relion_host_fftw_half_crop_matches_device_crop_bitwise(old_dim, new_dim):
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    rng = np.random.default_rng(1229 + old_dim + new_dim)
+    old_shape = (old_dim, old_dim, old_dim)
+    new_shape = (new_dim, new_dim, new_dim)
+    old_half_shape = ftu.volume_shape_to_half_volume_shape(old_shape)
+    vol_half = (
+        rng.standard_normal(old_half_shape) + 1j * rng.standard_normal(old_half_shape)
+    ).astype(np.complex64)
+
+    device_crop = np.asarray(
+        rf._relion_crop_centered_half_fourier_to_fftw(
+            jnp.asarray(vol_half),
+            old_shape,
+            new_shape,
+        )
+    )
+    host_crop = mean_helpers._crop_relion_wiener_half_to_fftw_host(
+        vol_half,
+        old_shape,
+        new_shape,
+        rf,
+    )
+
+    np.testing.assert_array_equal(host_crop, device_crop)
+
+
 def test_large_odd_accumulator_crop_routes_directly_to_fftw(monkeypatch):
     import recovar.core.fourier_transform_utils as ftu
 
@@ -1083,6 +1113,7 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
     for compiled in (
         rf.post_process_from_filter_v2,
+        rf._post_process_from_filter_v2_donate_numerator,
         rf._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
@@ -1141,6 +1172,7 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
 
     for compiled in (
         rf.post_process_from_filter_v2,
+        rf._post_process_from_filter_v2_donate_numerator,
         rf._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
@@ -1979,6 +2011,53 @@ def test_adjust_regularization_relion_style_gpu(gpu_device):
         gpu_out = np.asarray(rf.adjust_regularization_relion_style(filt_g, volume_shape=(4, 4, 4)))
 
     np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_large_wiener_host_boundary_donates_numerator_buffer(monkeypatch, gpu_device):
+    import recovar.core.fourier_transform_utils as ftu
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    compiled_fn = rf._post_process_from_filter_v2_donate_numerator
+    clear_cache = getattr(compiled_fn, "clear_cache", None)
+    if callable(clear_cache):
+        clear_cache()
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    half_size = int(np.prod(half_shape))
+    with jax.default_device(gpu_device):
+        lowered = compiled_fn.lower(
+            jax.ShapeDtypeStruct((half_size,), jnp.float32),
+            jax.ShapeDtypeStruct((half_size,), jnp.complex64),
+            volume_shape,
+            2,
+            tau=jax.ShapeDtypeStruct((int(np.prod(volume_shape)),), jnp.float64),
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            tau2_fudge=1.0,
+            gridding_padding_factor=1,
+            minres_map=0,
+            current_size=4,
+            accumulator_volume_shape=accumulator_shape,
+            tau_is_1d=False,
+            preserve_output_precision=True,
+            relion_filter_scale=float(volume_shape[0] ** 4),
+            input_half_volume=True,
+            return_wiener_half_before_window=True,
+        )
+        memory = lowered.compile().memory_analysis()
+
+    numerator_bytes = half_size * np.dtype(np.complex64).itemsize
+    assert memory.output_size_in_bytes == numerator_bytes
+    assert memory.alias_size_in_bytes == numerator_bytes
+
+    if callable(clear_cache):
+        clear_cache()
 
 
 @pytest.mark.gpu

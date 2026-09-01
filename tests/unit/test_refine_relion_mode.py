@@ -12949,7 +12949,7 @@ class TestRelionModeSmokeTest:
         from recovar.reconstruction import relion_functions
 
         events = []
-        host_boundary = np.ones((4, 4, 3), dtype=np.complex64)
+        host_boundary = np.ones((5, 5, 3), dtype=np.complex64)
 
         class DeviceBoundary:
             def block_until_ready(self):
@@ -12961,7 +12961,7 @@ class TestRelionModeSmokeTest:
         def fake_stage(*_args, **kwargs):
             events.append("stage")
             assert kwargs["input_half_volume"] is True
-            assert kwargs["return_fftw_half_before_ifft"] is True
+            assert kwargs["return_wiener_half_before_window"] is True
             return DeviceBoundary()
 
         def fake_device_get(_value):
@@ -12970,8 +12970,17 @@ class TestRelionModeSmokeTest:
 
         def fake_finish(value, *_args, **kwargs):
             events.append("finish")
-            assert events == ["stage", "block", "device_get", "release", "collect", "finish"]
-            assert value is host_boundary
+            assert events == [
+                "stage",
+                "block",
+                "device_get",
+                "release",
+                "collect",
+                "collect",
+                "finish",
+            ]
+            assert value.shape == (4, 4, 3)
+            np.testing.assert_array_equal(value, np.ones((4, 4, 3), dtype=np.complex64))
             assert kwargs["gridding_correct"] == "radial"
             return host_boundary
 
@@ -12980,7 +12989,11 @@ class TestRelionModeSmokeTest:
             "_large_grid_postprocess_single_precision_enabled",
             lambda _voxels: True,
         )
-        monkeypatch.setattr(relion_functions, "post_process_from_filter_v2", fake_stage)
+        monkeypatch.setattr(
+            relion_functions,
+            "_post_process_from_filter_v2_donate_numerator",
+            fake_stage,
+        )
         monkeypatch.setattr(
             relion_functions,
             "_finish_large_relion_postprocess_from_fftw_half",
@@ -13005,7 +13018,15 @@ class TestRelionModeSmokeTest:
         )
 
         assert returned is host_boundary
-        assert events == ["stage", "block", "device_get", "release", "collect", "finish"]
+        assert events == [
+            "stage",
+            "block",
+            "device_get",
+            "release",
+            "collect",
+            "collect",
+            "finish",
+        ]
         assert (
             "RELION split pre-IFFT host boundary: accumulator_shape=(5, 5, 5) "
             "reconstruction_shape=(4, 4, 4) packed_half_bytes=384"

@@ -1289,10 +1289,10 @@ def post_process_from_filter(
     )
 
 
-@functools.partial(
-    jax.jit,
-    static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21, 22, 23],
-)
+_POSTPROCESS_STATIC_ARGNUMS = (2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21, 22, 23, 24)
+
+
+@functools.partial(jax.jit, static_argnums=_POSTPROCESS_STATIC_ARGNUMS)
 def post_process_from_filter_v2(
     Ft_ctf,
     F_ty,
@@ -1318,6 +1318,7 @@ def post_process_from_filter_v2(
     preserve_output_precision=False,
     relion_filter_scale=None,
     return_fftw_half_before_ifft=False,
+    return_wiener_half_before_window=False,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -1343,6 +1344,12 @@ def post_process_from_filter_v2(
     reconstruction path host-stages this array and completes post-processing
     with :func:`_finish_large_relion_postprocess_from_fftw_half`, preventing
     the large accumulators and padded inverse-FFT workspace from overlapping.
+
+    ``return_wiener_half_before_window`` is the earlier boundary used by the
+    donating large-grid executable. It returns the centered, Wiener-divided
+    accumulator before the crop to the reconstruction grid. The output has
+    the same shape and dtype as the complex numerator so XLA can reuse that
+    input buffer; the eager caller performs the byte-only crop on the host.
     """
     upsampled_volume_shape = (
         tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
@@ -1374,6 +1381,19 @@ def post_process_from_filter_v2(
             "The pre-IFFT host boundary requires distinct large single-precision "
             "accumulator/reconstruction grids in packed half-volume layout"
         )
+    if return_wiener_half_before_window and not (
+        input_half_volume
+        and reconstruction_volume_shape != upsampled_volume_shape
+        and use_large_accumulator_single_precision
+        and use_large_reconstruction_single_precision
+    ):
+        raise ValueError(
+            "The pre-window Wiener host boundary requires distinct large "
+            "single-precision accumulator/reconstruction grids in packed "
+            "half-volume layout"
+        )
+    if return_fftw_half_before_ifft and return_wiener_half_before_window:
+        raise ValueError("Only one large-grid host boundary may be requested")
 
     # Wiener spatial mask: match RELION's max_r2 skip when current_size given.
     current_size_limited = current_size is not None and current_size > 0
@@ -1468,6 +1488,8 @@ def post_process_from_filter_v2(
         # complex128 allocation merely because the current-size accumulator
         # itself is small.
         vol = vol.astype(jnp.complex64)
+    if return_wiener_half_before_window:
+        return vol.reshape(F_ty.shape)
 
     # iDFT → crop to original size
     if input_half_volume:
@@ -1555,6 +1577,13 @@ def post_process_from_filter_v2(
     if input_half_volume:
         vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
     return vol if preserve_output_precision else vol.astype(F_ty_flat.dtype)
+
+
+_post_process_from_filter_v2_donate_numerator = jax.jit(
+    post_process_from_filter_v2.__wrapped__,
+    static_argnums=_POSTPROCESS_STATIC_ARGNUMS,
+    donate_argnums=(1,),
+)
 
 
 @functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 9, 10])
