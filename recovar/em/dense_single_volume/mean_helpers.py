@@ -36,6 +36,102 @@ def _large_irfft_requires_explicit_normalization(volume_shape) -> bool:
     return math.prod(int(size) for size in volume_shape) > _LARGE_IRFFT_TRANSFORM_SIZE_LIMIT
 
 
+def _large_relion_host_irfft_enabled(volume_shape) -> bool:
+    """Return whether a padded RELION inverse FFT should execute on the host."""
+
+    mode = os.environ.get("RECOVAR_RELION_HOST_IRFFT", "auto").strip().lower()
+    if mode in {"0", "false", "no", "off", "never"}:
+        return False
+    if mode in {"1", "true", "yes", "on", "always"}:
+        return True
+    if mode != "auto":
+        logger.warning(
+            "Unrecognised RECOVAR_RELION_HOST_IRFFT=%r; using auto",
+            mode,
+        )
+    return _large_irfft_requires_explicit_normalization(volume_shape)
+
+
+def _relion_host_fft_workers() -> int:
+    configured = os.environ.get("RECOVAR_RELION_HOST_FFT_WORKERS")
+    if configured is None:
+        configured = os.environ.get("SLURM_CPUS_PER_TASK", "1")
+    try:
+        workers = int(configured)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid RELION host FFT worker count %r; using one worker",
+            configured,
+        )
+        return 1
+    return max(1, workers)
+
+
+def _host_irfft_and_center_crop(
+    fftw_half,
+    reconstruction_shape,
+    output_shape,
+    *,
+    workers=None,
+):
+    """Run a normalized c64-to-f32 inverse FFT and retain only its center crop.
+
+    ``fftw_half`` is already in raw FFTW order.  The crop indices combine
+    ``ifftshift`` with RELION's spatial unpadding so the host never allocates a
+    second reconstruction-sized real volume merely to shift it.
+    """
+
+    from scipy import fft as scipy_fft
+
+    reconstruction_shape = tuple(int(size) for size in reconstruction_shape)
+    output_shape = tuple(int(size) for size in output_shape)
+    if len(reconstruction_shape) != 3 or len(output_shape) != 3:
+        raise ValueError(
+            "RELION host inverse FFT requires three-dimensional shapes, got "
+            f"reconstruction={reconstruction_shape} output={output_shape}"
+        )
+    if any(output > reconstruction for output, reconstruction in zip(output_shape, reconstruction_shape)):
+        raise ValueError(
+            "RELION host inverse FFT crop cannot exceed its reconstruction: "
+            f"reconstruction={reconstruction_shape} output={output_shape}"
+        )
+
+    expected_half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(
+        reconstruction_shape,
+    )
+    fftw_half = np.asarray(fftw_half, dtype=np.complex64, order="C").reshape(
+        expected_half_shape,
+    )
+    workers = _relion_host_fft_workers() if workers is None else max(1, int(workers))
+    real_raw = scipy_fft.irfftn(
+        fftw_half,
+        s=reconstruction_shape,
+        axes=(-3, -2, -1),
+        norm="backward",
+        overwrite_x=True,
+        workers=workers,
+    )
+    if real_raw.dtype != np.float32:
+        raise TypeError(f"RELION host inverse FFT returned {real_raw.dtype}, expected float32")
+
+    raw_indices = []
+    for reconstruction, output in zip(reconstruction_shape, output_shape):
+        padding_width = reconstruction - output
+        pad_before = padding_width // 2
+        centered_indices = np.arange(pad_before, pad_before + output, dtype=np.intp)
+        # ``np.fft.ifftshift`` takes centered output index ``i`` from raw
+        # input index ``i + floor(N / 2)``.  Keep the explicit floor because
+        # the distinction matters for odd reconstruction sizes.
+        raw_indices.append((centered_indices + reconstruction // 2) % reconstruction)
+    cropped = np.asarray(
+        real_raw[np.ix_(*raw_indices)],
+        dtype=np.float32,
+        order="C",
+    )
+    del real_raw
+    return cropped
+
+
 @functools.partial(jax.jit, donate_argnums=(0,))
 def _normalize_large_irfft_result_donate(result, inverse_transform_scale):
     """Normalize a large raw inverse FFT in a separate donating executable."""
@@ -500,26 +596,60 @@ def _reconstruct_volume_eager(
     explicit_irfft_normalization = _large_irfft_requires_explicit_normalization(
         reconstruction_shape,
     )
-    result = relion_functions._finish_large_relion_postprocess_from_fftw_half(
-        fftw_half_host,
-        vol_shape,
-        padding_factor,
-        kernel="triangular",
-        use_spherical_mask=use_spherical_mask,
-        grid_correct=grid_correct,
-        gridding_correct="radial",
-        kernel_width=1,
-        return_real_space=return_real_space,
-        gridding_padding_factor=projection_padding_factor,
-    )
+    host_irfft = _large_relion_host_irfft_enabled(reconstruction_shape)
+    if host_irfft:
+        workers = _relion_host_fft_workers()
+        logger.info(
+            "RELION padded inverse FFT using host scipy.fft: reconstruction_shape=%s "
+            "output_shape=%s input_bytes=%d workers=%d",
+            reconstruction_shape,
+            tuple(int(size) for size in vol_shape),
+            int(fftw_half_host.nbytes),
+            workers,
+        )
+        unpadded_real_host = _host_irfft_and_center_crop(
+            fftw_half_host,
+            reconstruction_shape,
+            vol_shape,
+            workers=workers,
+        )
+        del fftw_half_host
+        gc.collect()
+        result = relion_functions._finish_large_relion_postprocess_from_unpadded_real(
+            unpadded_real_host,
+            vol_shape,
+            padding_factor,
+            kernel="triangular",
+            use_spherical_mask=use_spherical_mask,
+            grid_correct=grid_correct,
+            gridding_correct="radial",
+            kernel_width=1,
+            return_real_space=return_real_space,
+            gridding_padding_factor=projection_padding_factor,
+        )
+    else:
+        result = relion_functions._finish_large_relion_postprocess_from_fftw_half(
+            fftw_half_host,
+            vol_shape,
+            padding_factor,
+            kernel="triangular",
+            use_spherical_mask=use_spherical_mask,
+            grid_correct=grid_correct,
+            gridding_correct="radial",
+            kernel_width=1,
+            return_real_space=return_real_space,
+            gridding_padding_factor=projection_padding_factor,
+        )
     if explicit_irfft_normalization:
         transform_size = math.prod(reconstruction_shape)
         logger.info(
             "RELION large inverse-FFT normalization boundary: "
-            "reconstruction_shape=%s transform_size=%d",
+            "reconstruction_shape=%s transform_size=%d implementation=%s",
             reconstruction_shape,
             transform_size,
+            "scipy_host_backward" if host_irfft else "jax_dynamic_scale",
         )
+    if explicit_irfft_normalization and not host_irfft:
         # XLA's built-in ``norm='backward'`` normalization overflows its
         # signed-int32 transform-size product at 1600^3 and silently omits the
         # reciprocal. Apply that reciprocal in a separate executable after

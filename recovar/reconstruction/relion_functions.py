@@ -1587,6 +1587,84 @@ _post_process_from_filter_v2_donate_numerator = jax.jit(
 )
 
 
+def _finish_large_relion_postprocess_from_unpadded_real_impl(
+    vol,
+    og_volume_shape,
+    volume_upsampling_factor,
+    kernel="triangular",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
+    volume_mask=None,
+    return_real_space=False,
+    return_half_volume=False,
+    gridding_padding_factor=None,
+    gridding_order=None,
+):
+    """Finish large-grid post-processing from an unpadded real volume."""
+
+    vol = jnp.asarray(vol).reshape(og_volume_shape)
+    if use_spherical_mask:
+        vol, _ = mask.soft_mask_outside_map(vol, cosine_width=3)
+
+    if volume_mask is not None:
+        vol = vol * volume_mask
+
+    vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
+
+    if grid_correct:
+        order = gridding_order if gridding_order is not None else (1 if kernel == "triangular" else 0)
+        grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
+        gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
+        vol, _ = grid_fn(vol, og_volume_shape[0], gc_pf / kernel_width, order=order)
+        vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
+
+    if return_real_space:
+        return vol.real.astype(jnp.float32)
+
+    vol = fourier_transform_utils.get_dft3_real(vol)
+    if return_half_volume:
+        return vol.reshape(-1).astype(jnp.complex64)
+    vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
+    return vol.astype(jnp.complex64)
+
+
+@functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 9, 10])
+def _finish_large_relion_postprocess_from_unpadded_real(
+    vol,
+    og_volume_shape,
+    volume_upsampling_factor,
+    kernel="triangular",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
+    volume_mask=None,
+    return_real_space=False,
+    return_half_volume=False,
+    gridding_padding_factor=None,
+    gridding_order=None,
+):
+    """Finish a host-iFFT reconstruction after its real-space center crop."""
+
+    return _finish_large_relion_postprocess_from_unpadded_real_impl(
+        vol,
+        og_volume_shape,
+        volume_upsampling_factor,
+        kernel=kernel,
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct=gridding_correct,
+        kernel_width=kernel_width,
+        volume_mask=volume_mask,
+        return_real_space=return_real_space,
+        return_half_volume=return_half_volume,
+        gridding_padding_factor=gridding_padding_factor,
+        gridding_order=gridding_order,
+    )
+
+
 @functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 9, 10])
 def _finish_large_relion_postprocess_from_fftw_half(
     vol_half,
@@ -1617,30 +1695,21 @@ def _finish_large_relion_postprocess_from_fftw_half(
     )
     vol = _relion_idft3_real_from_fftw_half(vol_half, reconstruction_volume_shape)
     vol = padding.unpad_volume_spatial_domain(vol, reconstruction_volume_shape[0] - og_volume_shape[0])
-
-    if use_spherical_mask:
-        vol, _ = mask.soft_mask_outside_map(vol, cosine_width=3)
-
-    if volume_mask is not None:
-        vol = vol * volume_mask
-
-    vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
-
-    if grid_correct:
-        order = gridding_order if gridding_order is not None else (1 if kernel == "triangular" else 0)
-        grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
-        gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
-        vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], gc_pf / kernel_width, order=order)
-        vol = vol.astype(jnp.complex64 if np.issubdtype(vol.dtype, np.complexfloating) else jnp.float32)
-
-    if return_real_space:
-        return vol.real.astype(jnp.float32)
-
-    vol = fourier_transform_utils.get_dft3_real(vol.reshape(og_volume_shape))
-    if return_half_volume:
-        return vol.reshape(-1).astype(jnp.complex64)
-    vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
-    return vol.astype(jnp.complex64)
+    return _finish_large_relion_postprocess_from_unpadded_real_impl(
+        vol,
+        og_volume_shape,
+        volume_upsampling_factor,
+        kernel=kernel,
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct=gridding_correct,
+        kernel_width=kernel_width,
+        volume_mask=volume_mask,
+        return_real_space=return_real_space,
+        return_half_volume=return_half_volume,
+        gridding_padding_factor=gridding_padding_factor,
+        gridding_order=gridding_order,
+    )
 
 
 def relion_reconstruct(

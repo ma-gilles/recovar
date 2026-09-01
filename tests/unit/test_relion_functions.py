@@ -1114,6 +1114,7 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     for compiled in (
         rf.post_process_from_filter_v2,
         rf._post_process_from_filter_v2_donate_numerator,
+        rf._finish_large_relion_postprocess_from_unpadded_real,
         rf._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
@@ -1154,7 +1155,8 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
             **common,
         )
     )
-    staged = np.asarray(
+    monkeypatch.setenv("RECOVAR_RELION_HOST_IRFFT", "never")
+    device_staged = np.asarray(
         mean_helpers._reconstruct_volume_eager(
             ft_ctf,
             f_ty,
@@ -1166,7 +1168,8 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
             **common,
         )
     )
-    retained_staged = np.asarray(
+    monkeypatch.setenv("RECOVAR_RELION_HOST_IRFFT", "always")
+    host_staged = np.asarray(
         mean_helpers._reconstruct_volume_eager(
             ft_ctf,
             f_ty,
@@ -1180,13 +1183,120 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
         )
     )
 
-    assert staged.dtype == np.complex64
-    np.testing.assert_array_equal(staged, monolithic)
-    np.testing.assert_array_equal(retained_staged, monolithic)
+    assert device_staged.dtype == np.complex64
+    assert host_staged.dtype == np.complex64
+    np.testing.assert_array_equal(device_staged, monolithic)
+    np.testing.assert_array_equal(host_staged, monolithic)
 
     for compiled in (
         rf.post_process_from_filter_v2,
         rf._post_process_from_filter_v2_donate_numerator,
+        rf._finish_large_relion_postprocess_from_unpadded_real,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
+@pytest.mark.parametrize(
+    ("reconstruction_size", "output_size"),
+    [(8, 4), (10, 6), (9, 5), (11, 6)],
+)
+def test_host_irfft_center_crop_matches_jax_without_full_shift(
+    monkeypatch,
+    reconstruction_size,
+    output_size,
+):
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.core import padding
+    from recovar.em.dense_single_volume import mean_helpers
+
+    reconstruction_shape = (reconstruction_size,) * 3
+    output_shape = (output_size,) * 3
+    half_shape = ftu.volume_shape_to_half_volume_shape(reconstruction_shape)
+    rng = np.random.default_rng(20260901 + reconstruction_size)
+    fftw_half = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    expected = np.asarray(
+        padding.unpad_volume_spatial_domain(
+            rf._relion_idft3_real_from_fftw_half(
+                jnp.asarray(fftw_half),
+                reconstruction_shape,
+            ),
+            reconstruction_size - output_size,
+        ),
+    )
+
+    def reject_full_shift(*_args, **_kwargs):
+        raise AssertionError("host crop must not allocate a full shifted real volume")
+
+    monkeypatch.setattr(np.fft, "ifftshift", reject_full_shift)
+    actual = mean_helpers._host_irfft_and_center_crop(
+        fftw_half.copy(),
+        reconstruction_shape,
+        output_shape,
+        workers=1,
+    )
+
+    assert actual.dtype == np.float32
+    assert actual.flags.c_contiguous
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_host_unpadded_tail_matches_existing_fftw_half_finish_bitwise():
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    for compiled in (
+        rf._finish_large_relion_postprocess_from_unpadded_real,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+    volume_shape = (4, 4, 4)
+    reconstruction_shape = rf._relion_reconstruction_padded_shape(volume_shape, 2)
+    half_shape = ftu.volume_shape_to_half_volume_shape(reconstruction_shape)
+    rng = np.random.default_rng(20260901)
+    fftw_half = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    common = dict(
+        kernel="triangular",
+        use_spherical_mask=True,
+        grid_correct=True,
+        gridding_correct="radial",
+        kernel_width=1,
+        return_real_space=False,
+        gridding_padding_factor=1,
+    )
+
+    existing = np.asarray(
+        rf._finish_large_relion_postprocess_from_fftw_half(
+            jnp.asarray(fftw_half),
+            volume_shape,
+            2,
+            **common,
+        ),
+    )
+    unpadded_real = mean_helpers._host_irfft_and_center_crop(
+        fftw_half.copy(),
+        reconstruction_shape,
+        volume_shape,
+        workers=1,
+    )
+    host = np.asarray(
+        rf._finish_large_relion_postprocess_from_unpadded_real(
+            unpadded_real,
+            volume_shape,
+            2,
+            **common,
+        ),
+    )
+
+    np.testing.assert_array_equal(host, existing)
+
+    for compiled in (
+        rf._finish_large_relion_postprocess_from_unpadded_real,
         rf._finish_large_relion_postprocess_from_fftw_half,
     ):
         clear_cache = getattr(compiled, "clear_cache", None)
@@ -1474,6 +1584,11 @@ def test_large_host_staged_irfft_uses_backward_transform_then_dynamic_normalizat
         lambda *_args, **_kwargs: True,
     )
     monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_host_irfft_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
         rf,
         "_relion_reconstruction_padded_shape",
         lambda *_args, **_kwargs: reconstruction_shape,
@@ -1502,6 +1617,81 @@ def test_large_host_staged_irfft_uses_backward_transform_then_dynamic_normalizat
         np.asarray([2.0 / transform_size], dtype=np.complex64),
         rtol=0.0,
         atol=0.0,
+    )
+
+
+def test_large_host_irfft_is_already_normalized(monkeypatch):
+    from recovar.em.dense_single_volume import mean_helpers
+
+    reconstruction_shape = (1600, 1600, 1600)
+    events = []
+
+    def fake_stage(*_args, **kwargs):
+        events.append("stage")
+        assert kwargs["input_half_volume"] is True
+        assert kwargs["return_fftw_half_before_ifft"] is True
+        return jnp.ones((2, 2, 2), dtype=jnp.complex64)
+
+    def fake_host_irfft(value, current_reconstruction_shape, output_shape, *, workers):
+        events.append("host_irfft")
+        assert np.asarray(value).shape == (2, 2, 2)
+        assert current_reconstruction_shape == reconstruction_shape
+        assert output_shape == (2, 2, 2)
+        assert workers == 3
+        return np.ones(output_shape, dtype=np.float32)
+
+    def fake_finish(value, *_args, **_kwargs):
+        events.append("finish")
+        assert np.asarray(value).dtype == np.float32
+        return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    def reject_double_normalization(*_args, **_kwargs):
+        raise AssertionError("SciPy's backward inverse FFT must not be normalized twice")
+
+    monkeypatch.setenv("RECOVAR_RELION_HOST_FFT_WORKERS", "3")
+    monkeypatch.setattr(
+        mean_helpers,
+        "_should_host_stage_large_relion_ifft",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_host_irfft_enabled",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
+    monkeypatch.setattr(mean_helpers, "_host_irfft_and_center_crop", fake_host_irfft)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_unpadded_real",
+        fake_finish,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_normalize_large_irfft_result_donate",
+        reject_double_normalization,
+    )
+
+    result = mean_helpers._reconstruct_volume_eager(
+        np.ones((2, 2, 2), dtype=np.float32),
+        np.ones((2, 2, 2), dtype=np.complex64),
+        (2, 2, 2),
+        2,
+        tau=np.ones(8, dtype=np.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=(3, 3, 3),
+    )
+
+    assert events == ["stage", "host_irfft", "finish"]
+    np.testing.assert_array_equal(
+        np.asarray(result),
+        np.asarray([2.0 + 0.0j], dtype=np.complex64),
     )
 
 
