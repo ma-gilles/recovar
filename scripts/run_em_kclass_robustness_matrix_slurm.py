@@ -1238,6 +1238,7 @@ if [[ ! -x "${{BASE_PIXI_PY}}" ]]; then
   echo "ERROR: EM_KCLASS_MATRIX_PIXI_PY must name an installed pixi Python: ${{BASE_PIXI_PY}}" >&2
   exit 2
 fi
+export BASE_PIXI_PY
 flock {q(scratch_dir / "install-recovar.lock")} bash -lc '
 set -euo pipefail
 rm -rf "${{RECOVAR_RELION_BIND_BUILD_DIR:?}}"
