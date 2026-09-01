@@ -89,6 +89,26 @@ on_error() {
 }
 trap on_error ERR
 
+reject_unexpected_inherited_tuning_environment() {
+  local -a unexpected=()
+  local name
+  while IFS= read -r name; do
+    case "${name}" in
+      CUDA_VISIBLE_DEVICES) ;;
+      RECOVAR_*|JAX*|XLA*|CUDA*|TF_*|NVIDIA_*|CUBLAS_*|CUDNN_*|NCCL_*|OMP_*|MKL_*|OPENBLAS_*|NUMEXPR_*|PYTHONPATH|PYTHONHOME|LD_PRELOAD|LD_AUDIT)
+        unexpected+=("${name}")
+        ;;
+    esac
+  done < <(compgen -e | LC_ALL=C sort)
+  if (( ${#unexpected[@]} != 0 )); then
+    printf 'unexpected inherited science/performance environment: %s\n' \
+      "${unexpected[*]}" >&2
+    return 2
+  fi
+}
+
+reject_unexpected_inherited_tuning_environment
+
 write_source_manifest() {
   (
     cd "${REPO_ROOT}"
@@ -200,29 +220,44 @@ RELION_BIND_BINARY=${RELION_BIND_DIR}/$(basename "${RELION_BIND_BINARY_OVERRIDE}
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = \
   "${EXPECTED_RELION_BIND_SHA256}"
 
-unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV JAX_PLATFORM_NAME
-unset RECOVAR_DISABLE_CUDA RECOVAR_CUDA_LIB RECOVAR_ENABLE_CUSTOM_CUDA
-export PYTHONNOUSERSITE=1
-export PYTHONUNBUFFERED=1
-export CUDA_VISIBLE_DEVICES=${selected_gpu_uuid}
-export CUDA_LAUNCH_BLOCKING=0
-export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
-export RECOVAR_CUDA_LIB=${CUDA_BINARY}
-export RECOVAR_ENABLE_CUSTOM_CUDA=1
-export RECOVAR_RELION_BIND_BUILD_DIR=${RELION_BIND_DIR}
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
-export TMPDIR=${JOB_TMP_ROOT}
-export PIXI_HOME=${JOB_PIXI_HOME}
-export RATTLER_CACHE_DIR=${JOB_RATTLER_CACHE}
-export PATH=${CUDA_RUNTIME_TOOLKIT}/bin:${PATH}
-export LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${CUDA_BUILD_TOOLKIT}/lib64:${CUDA_BUILD_TOOLKIT}/targets/x86_64-linux/lib:${CUDA_RUNTIME_TOOLKIT}/lib64:${CUDA_RUNTIME_TOOLKIT}/targets/x86_64-linux/lib
-mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
-touch "${TMPDIR}/SAFE_TO_DELETE" "${PIXI_HOME}/SAFE_TO_DELETE" "${RATTLER_CACHE_DIR}/SAFE_TO_DELETE"
+SEALED_HOME=${JOB_TMP_ROOT}/home
+SEALED_PROCESS_PATH=${CUDA_RUNTIME_TOOLKIT}/bin:${REPO_ROOT}/.pixi/envs/default/bin:/usr/bin:/bin
+SEALED_LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${CUDA_BUILD_TOOLKIT}/lib64:${CUDA_BUILD_TOOLKIT}/targets/x86_64-linux/lib:${CUDA_RUNTIME_TOOLKIT}/lib64:${CUDA_RUNTIME_TOOLKIT}/targets/x86_64-linux/lib
+SEALED_COMMON_ENV=(
+  HOME="${SEALED_HOME}"
+  PATH="${SEALED_PROCESS_PATH}"
+  LD_LIBRARY_PATH="${SEALED_LD_LIBRARY_PATH}"
+  LD_PRELOAD="${CUSPARSE_LIBRARY}"
+  LANG=C.UTF-8
+  LC_ALL=C.UTF-8
+  PYTHONHASHSEED=0
+  PYTHONNOUSERSITE=1
+  PYTHONUNBUFFERED=1
+  PYTHONUTF8=1
+  TMPDIR="${JOB_TMP_ROOT}"
+  PIXI_HOME="${JOB_PIXI_HOME}"
+  RATTLER_CACHE_DIR="${JOB_RATTLER_CACHE}"
+  CUDA_VISIBLE_DEVICES="${selected_gpu_uuid}"
+  CUDA_LAUNCH_BLOCKING=0
+  RECOVAR_EXPECTED_REPO_ROOT="${REPO_ROOT}"
+  RECOVAR_CUDA_LIB="${CUDA_BINARY}"
+  RECOVAR_ENABLE_CUSTOM_CUDA=1
+  RECOVAR_INITIAL_MODEL_PROFILE=1
+  RECOVAR_RELION_BIND_BUILD_DIR="${RELION_BIND_DIR}"
+  XLA_PYTHON_CLIENT_PREALLOCATE=false
+  JAX_LOG_COMPILES=1
+  JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
+)
+PRECHECK_CACHE=${RUNTIME}/precheck_jax_cache
+mkdir -p "${SEALED_HOME}" "${JOB_TMP_ROOT}" "${JOB_PIXI_HOME}" \
+  "${JOB_RATTLER_CACHE}" "${PRECHECK_CACHE}"
+touch "${SEALED_HOME}/SAFE_TO_DELETE" "${JOB_TMP_ROOT}/SAFE_TO_DELETE" \
+  "${JOB_PIXI_HOME}/SAFE_TO_DELETE" "${JOB_RATTLER_CACHE}/SAFE_TO_DELETE"
 
 (
   cd "${REPO_ROOT}"
-  env LD_PRELOAD="${CUSPARSE_LIBRARY}" "${PIXI_PY}" - <<'PY'
+  env -i "${SEALED_COMMON_ENV[@]}" \
+    JAX_COMPILATION_CACHE_DIR="${PRECHECK_CACHE}" "${PIXI_PY}" - <<'PY'
 import os
 import pathlib
 import sys
@@ -251,7 +286,9 @@ vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
 (
   cd "${REPO_ROOT}"
-  env LD_PRELOAD="${CUSPARSE_LIBRARY}" "${PIXI_PY}" -m pytest -vv --run-gpu \
+  env -i "${SEALED_COMMON_ENV[@]}" \
+    JAX_COMPILATION_CACHE_DIR="${PRECHECK_CACHE}" \
+    "${PIXI_PY}" -m pytest -vv --run-gpu \
     --junitxml="${RESULTS}/pytest.junit.xml" "${FOCUSED_TEST}"
 ) > "${RESULTS}/pytest.stdout" 2> "${RESULTS}/pytest.stderr"
 "${PIXI_PY}" - "${RESULTS}/pytest.junit.xml" "${EXPECTED_FOCUSED_TEST_COUNT}" <<'PY'
@@ -307,8 +344,7 @@ PY
   printf 'unix_ns\tmemory_mib\n' > "${sample_file}"
   (
     cd "${REPO_ROOT}"
-    env \
-      LD_PRELOAD="${CUSPARSE_LIBRARY}" \
+    env -i "${SEALED_COMMON_ENV[@]}" \
       JAX_COMPILATION_CACHE_DIR="${cache_dir}" \
       "${PIXI_PY}" -m scripts.run_local_mstep_donation_ab \
         --arm "${arm}" \
@@ -326,6 +362,9 @@ PY
         --input-manifest "${PROVENANCE}/input_manifest.json" \
         --expected-input-manifest-sha256 "${input_manifest_sha256}" \
         --expected-jax-cache-dir "${cache_dir}" \
+        --expected-cuda-lib "${CUDA_BINARY}" \
+        --expected-relion-bind-dir "${RELION_BIND_DIR}" \
+        --expected-cusparse-library "${CUSPARSE_LIBRARY}" \
         --expected-repo-head "${EXPECTED_REPO_HEAD}" \
         --expected-gpu-uuid "${selected_gpu_uuid}"
   ) > "${run_dir}/runner.stdout" 2> "${run_dir}/runner.stderr" &
@@ -361,7 +400,9 @@ run_arm 6 03 control
 
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" -m scripts.analyze_local_mstep_donation_ab \
+  env -i "${SEALED_COMMON_ENV[@]}" \
+    JAX_COMPILATION_CACHE_DIR="${PRECHECK_CACHE}" \
+    "${PIXI_PY}" -m scripts.analyze_local_mstep_donation_ab \
     --root "${ROOT}" \
     --output "${ANALYSIS}" \
     --expected-repo-head "${EXPECTED_REPO_HEAD}" \
@@ -375,7 +416,7 @@ import sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text())
-assert payload["schema"] == "recovar.local_mstep_donation_ab_analysis.v2"
+assert payload["schema"] == "recovar.local_mstep_donation_ab_analysis.v3"
 assert payload["passed"] is True
 assert payload["cold_and_warm_are_separate_phase_matched_cohorts"] is True
 assert payload["numeric_qualification_status"] in {"exact_pass", "inconclusive_3x3"}
@@ -387,6 +428,7 @@ assert payload["arithmetic_changed"] is False
 assert payload["production_xhalf_adjoint_program_observed"] is True
 assert payload["alias_contract_passed"] is True
 assert payload["unique_fresh_jax_cache_count"] == 6
+assert payload["memory_claim_allowed"] is False
 assert payload["input_manifest_sha256"] == sys.argv[2]
 assert payload["default_promotion_allowed"] is False
 PY
@@ -414,7 +456,7 @@ import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.local_mstep_donation_ab_slurm.v2",
+    "schema": "recovar.local_mstep_donation_ab_slurm.v3",
     "classification": "diagnostic_performance_only",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],

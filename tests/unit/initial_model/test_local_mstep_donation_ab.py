@@ -155,6 +155,25 @@ def _phase_report(prefix: Path, speed: float) -> dict:
     }
 
 
+def _sealed_environment(run_dir: Path, gpu_uuid: str) -> dict:
+    observed = {name: "sealed-test-value" for name in runner.SEALED_ARM_ENVIRONMENT_NAMES}
+    observed.update(
+        {
+            "CUDA_VISIBLE_DEVICES": gpu_uuid,
+            "JAX_COMPILATION_CACHE_DIR": str((run_dir / "jax_cache").resolve()),
+            "RECOVAR_EXPECTED_REPO_ROOT": str(Path.cwd().resolve()),
+        }
+    )
+    return {
+        "schema": runner.SEALED_ARM_ENVIRONMENT_SCHEMA,
+        "exact_allowlist": True,
+        "allowed_names": sorted(runner.SEALED_ARM_ENVIRONMENT_NAMES),
+        "observed": observed,
+        "unexpected_names": [],
+        "iref_replay_forbidden": True,
+    }
+
+
 def _arm_report(
     cold_prefix: Path,
     warm_prefix: Path,
@@ -248,6 +267,7 @@ def _arm_report(
             "parity_ancestors_verified": True,
             "required_parity_ancestors": ["ancestor"],
         },
+        "sealed_environment": _sealed_environment(run_dir, gpu_uuid),
         "jax_persistent_cache": {
             "path": str((run_dir / "jax_cache").resolve()),
             "initial_empty": True,
@@ -410,6 +430,11 @@ def test_aggregate_requires_exact_science_and_qualifies_expected_alias(tmp_path)
     assert payload["qualifying_programs"][0]["accumulator_bytes"] == 96
     assert payload["donated_over_control_ratios"]["e2e_wall_s"] == pytest.approx(0.9)
     assert payload["speed_claim_allowed"] is True
+    assert {run["sampled_memory"]["sample_count"] for run in payload["runs"]} == {1}
+    assert payload["sampled_memory_diagnostic_below_0_95"] is True
+    assert payload["sampled_memory_acceptance_use"] == "diagnostic_only_not_used_for_acceptance"
+    assert payload["material_memory_win"] is False
+    assert payload["memory_claim_allowed"] is False
     policy = payload["broader_optimized_arithmetic_policy"]
     assert policy["stable_repeat_bounded_noise_allowed"] is True
     assert policy["directional_bias_allowed"] is False
@@ -582,6 +607,104 @@ def test_meta_exclusion_allowlist_is_narrow_and_timing_only(tmp_path):
     assert analyzer.recovar_meta_science_snapshot(left) != analyzer.recovar_meta_science_snapshot(right)
 
 
+def test_common_iref_replay_path_across_every_arm_is_forbidden(tmp_path):
+    root, git_head, gpu_uuid = _analysis_tree(tmp_path)
+    for report_path in root.glob("runs/repeat-*/**/donation_arm_summary.json"):
+        report = json.loads(report_path.read_text())
+        for phase in ("cold", "warm"):
+            meta_path = Path(report[phase]["science_outputs"]["recovar_meta"]["path"])
+            meta = json.loads(meta_path.read_text())
+            meta["diagnostic_iref_replay_paths"] = ["/path/to/unpinned_replay.mrc"]
+            meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+
+    with pytest.raises(RuntimeError, match="IREF replay is forbidden"):
+        analyzer.analyze(
+            root,
+            expected_repo_head=git_head,
+            expected_gpu_uuid=gpu_uuid,
+            expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        )
+
+
+def test_runner_rejects_inherited_iref_replay_environment(tmp_path):
+    repo_root = tmp_path / "repo"
+    cache_dir = tmp_path / "run/jax_cache"
+    cuda_lib = tmp_path / "runtime/libcuda_backproject.so"
+    relion_bind_dir = tmp_path / "runtime/relion_bind"
+    cusparse = tmp_path / "runtime/libcusparse.so.12"
+    for directory in (
+        repo_root,
+        cache_dir,
+        relion_bind_dir,
+        tmp_path / "home",
+        tmp_path / "pixi_home",
+        tmp_path / "rattler_cache",
+        tmp_path / "tmp",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    cuda_lib.parent.mkdir(parents=True, exist_ok=True)
+    cuda_lib.write_bytes(b"cuda")
+    cusparse.write_bytes(b"cusparse")
+    environment = {name: "sealed-test-value" for name in runner.SEALED_ARM_ENVIRONMENT_NAMES}
+    environment.update(runner._SEALED_ARM_STATIC_ENVIRONMENT)
+    environment.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PIXI_HOME": str(tmp_path / "pixi_home"),
+            "RATTLER_CACHE_DIR": str(tmp_path / "rattler_cache"),
+            "TMPDIR": str(tmp_path / "tmp"),
+            "PATH": "/usr/bin:/bin",
+            "LD_LIBRARY_PATH": "/sealed/lib",
+            "LD_PRELOAD": str(cusparse.resolve()),
+            "CUDA_VISIBLE_DEVICES": "GPU-test",
+            "JAX_COMPILATION_CACHE_DIR": str(cache_dir.resolve()),
+            "RECOVAR_CUDA_LIB": str(cuda_lib.resolve()),
+            "RECOVAR_EXPECTED_REPO_ROOT": str(repo_root.resolve()),
+            "RECOVAR_RELION_BIND_BUILD_DIR": str(relion_bind_dir.resolve()),
+        }
+    )
+    contract = runner._assert_sealed_arm_environment(
+        repo_root=repo_root,
+        cache_dir=cache_dir,
+        cuda_lib=cuda_lib,
+        relion_bind_dir=relion_bind_dir,
+        cusparse_library=cusparse,
+        gpu_uuid="GPU-test",
+        environment=environment,
+    )
+    assert contract["exact_allowlist"] is True
+
+    environment["RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE"] = "/path/to/unpinned_replay.mrc"
+    with pytest.raises(RuntimeError, match="unexpected=.*RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE"):
+        runner._assert_sealed_arm_environment(
+            repo_root=repo_root,
+            cache_dir=cache_dir,
+            cuda_lib=cuda_lib,
+            relion_bind_dir=relion_bind_dir,
+            cusparse_library=cusparse,
+            gpu_uuid="GPU-test",
+            environment=environment,
+        )
+
+
+def test_aggregate_cannot_qualify_a_reported_replay_environment(tmp_path):
+    root, git_head, gpu_uuid = _analysis_tree(tmp_path)
+    report_path = root / "runs/repeat-01/donated/result/donation_arm_summary.json"
+    report = json.loads(report_path.read_text())
+    replay_name = "RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE"
+    report["sealed_environment"]["observed"][replay_name] = "/path/to/unpinned_replay.mrc"
+    report["sealed_environment"]["unexpected_names"] = [replay_name]
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
+
+    with pytest.raises(RuntimeError, match="unexpected variables"):
+        analyzer.analyze(
+            root,
+            expected_repo_head=git_head,
+            expected_gpu_uuid=gpu_uuid,
+            expected_input_manifest_sha256=INPUT_MANIFEST_SHA256,
+        )
+
+
 def test_aggregate_rejects_shared_or_nonempty_jax_cache_provenance(tmp_path):
     root, git_head, gpu_uuid = _analysis_tree(tmp_path)
     report_path = root / "runs/repeat-03/donated/result/donation_arm_summary.json"
@@ -665,6 +788,12 @@ def test_runner_rejects_any_override_of_the_reviewed_gf46_schedule():
             INPUT_MANIFEST_SHA256,
             "--expected-jax-cache-dir",
             "cache",
+            "--expected-cuda-lib",
+            "libcuda_backproject.so",
+            "--expected-relion-bind-dir",
+            "relion_bind",
+            "--expected-cusparse-library",
+            "libcusparse.so.12",
             "--expected-repo-head",
             "a" * 40,
             "--expected-gpu-uuid",
@@ -765,7 +894,14 @@ def test_slurm_runner_is_crossed_fresh_process_and_fail_closed():
         "local cache_dir=${run_dir}/jax_cache",
         'test ! -e "${cache_dir}"',
         'test -z "$(find "${cache_dir}" -mindepth 1 -print -quit)"',
+        'env -i "${SEALED_COMMON_ENV[@]}"',
+        "reject_unexpected_inherited_tuning_environment",
+        "RECOVAR_*|JAX*|XLA*|CUDA*|TF_*",
+        "RECOVAR_INITIAL_MODEL_PROFILE=1",
         '--expected-jax-cache-dir "${cache_dir}"',
+        '--expected-cuda-lib "${CUDA_BINARY}"',
+        '--expected-relion-bind-dir "${RELION_BIND_DIR}"',
+        '--expected-cusparse-library "${CUSPARSE_LIBRARY}"',
         '--expected-input-manifest-sha256 "${input_manifest_sha256}"',
         "--query-gpu=memory.used",
         'assert payload["cold_and_warm_are_separate_phase_matched_cohorts"] is True',
@@ -776,6 +912,7 @@ def test_slurm_runner_is_crossed_fresh_process_and_fail_closed():
         "pathlib.Path(jax.__file__).resolve().is_relative_to(pixi_env)",
         'assert payload["production_xhalf_adjoint_program_observed"] is True',
         'assert payload["alias_contract_passed"] is True',
+        'assert payload["memory_claim_allowed"] is False',
         'cmp "${PROVENANCE}/source_manifest.sha256"',
         'cmp "${PROVENANCE}/input_manifest.json"',
         'touch "${ROOT}/COMPLETED"',

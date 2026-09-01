@@ -21,12 +21,14 @@ from scripts.run_local_mstep_donation_ab import (
     GF46_NR_ITER_SCHEDULE,
     GF46_PROFILED_ITERATION,
     INPUT_MANIFEST_SCHEMA,
+    SEALED_ARM_ENVIRONMENT_NAMES,
+    SEALED_ARM_ENVIRONMENT_SCHEMA,
     SEALED_NORMALIZED_OPTIONS,
     SEALED_NORMALIZED_RECOVAR_ARGV,
 )
 from scripts.run_local_mstep_donation_ab import SCHEMA as ARM_SCHEMA
 
-SCHEMA = "recovar.local_mstep_donation_ab_analysis.v2"
+SCHEMA = "recovar.local_mstep_donation_ab_analysis.v3"
 EXPECTED_REPEATS_PER_ARM = 3
 EXPECTED_CROSSED_ORDER = {
     1: ("01", "donated"),
@@ -107,7 +109,7 @@ _HALFSET_PROFILE_TIMING_KEYS = frozenset(
         "unattributed_em_time_s",
     }
 )
-_META_TOP_LEVEL_PATH_KEYS = frozenset({"diagnostic_iref_replay_paths"})
+_FORBIDDEN_META_KEY_FRAGMENTS = frozenset({"iref_replay"})
 
 
 def _bytes_sha256(value: bytes) -> str:
@@ -230,9 +232,13 @@ def _recovar_meta_science(value: Any, path: tuple[str, ...] = ()) -> tuple[Any, 
         container = path[-1] if path else ""
         for key, item in value.items():
             key = str(key)
+            if any(fragment in key.casefold() for fragment in _FORBIDDEN_META_KEY_FRAGMENTS):
+                raise RuntimeError(
+                    "IREF replay is forbidden by the sealed donation A/B gate: "
+                    f"/{'/'.join((*path, key))}"
+                )
             excluded_here = bool(
-                (not path and key in _META_TOP_LEVEL_PATH_KEYS)
-                or (container == "vdam_iteration_profile_summary" and key in _ITERATION_PROFILE_TIMING_KEYS)
+                (container == "vdam_iteration_profile_summary" and key in _ITERATION_PROFILE_TIMING_KEYS)
                 or (container == "sparse_pass2_profile_summary" and key in _SPARSE_PASS2_TIMING_KEYS)
                 or (
                     container.startswith("halfset_")
@@ -760,6 +766,30 @@ def analyze(
             raise RuntimeError(f"arm JAX cache was not fresh at launch: {path}")
         if not isinstance(cache.get("final", {}).get("manifest_sha256"), str):
             raise RuntimeError(f"arm JAX cache lacks its sealed final manifest: {path}")
+        sealed_environment = report.get("sealed_environment", {})
+        if sealed_environment.get("schema") != SEALED_ARM_ENVIRONMENT_SCHEMA:
+            raise RuntimeError(f"arm environment-contract schema drifted: {path}")
+        if sealed_environment.get("exact_allowlist") is not True:
+            raise RuntimeError(f"arm did not run under the exact environment allowlist: {path}")
+        if sealed_environment.get("iref_replay_forbidden") is not True:
+            raise RuntimeError(f"arm environment did not forbid IREF replay: {path}")
+        if sealed_environment.get("unexpected_names") != []:
+            raise RuntimeError(f"arm environment contains unexpected variables: {path}")
+        if sealed_environment.get("allowed_names") != sorted(SEALED_ARM_ENVIRONMENT_NAMES):
+            raise RuntimeError(f"arm environment allowlist drifted: {path}")
+        observed_environment = sealed_environment.get("observed", {})
+        if set(observed_environment) != SEALED_ARM_ENVIRONMENT_NAMES:
+            raise RuntimeError(f"arm observed environment names drifted: {path}")
+        expected_environment_values = {
+            "CUDA_VISIBLE_DEVICES": expected_gpu_uuid,
+            "JAX_COMPILATION_CACHE_DIR": str(cache_path),
+            "RECOVAR_EXPECTED_REPO_ROOT": str(repo_root),
+        }
+        if any(
+            observed_environment.get(name) != expected
+            for name, expected in expected_environment_values.items()
+        ):
+            raise RuntimeError(f"arm observed environment values drifted: {path}")
         cache_paths.add(str(cache_path))
         arm = str(report["arm"])
         if arm not in by_arm:
@@ -921,12 +951,15 @@ def analyze(
     )
     material_runtime_win = bool(ratios["e2e_wall_s"] <= 0.90)
     material_stage_win = bool(ratios["expectation_s"] <= 0.90 or ratios["big_jit_bucket_s"] <= 0.90)
-    material_memory_win = bool(ratios["sampled_peak"] <= 0.95)
+    sampled_memory_diagnostic_below_0_95 = bool(ratios["sampled_peak"] <= 0.95)
+    # The 50 ms nvidia-smi poller can miss a short peak entirely (including a
+    # one-row trace).  Keep its ratio visible, but never use it for acceptance
+    # or a memory claim until a defensible process-HWM measurement exists.
+    material_memory_win = False
     no_material_regression = bool(
         ratios["e2e_wall_s"] <= 1.10
         and ratios["expectation_s"] <= 1.10
         and ratios["big_jit_bucket_s"] <= 1.10
-        and ratios["sampled_peak"] <= 1.10
     )
     passed = bool(
         alias_contract_passed
@@ -965,7 +998,8 @@ def analyze(
                 "sparse_pass2_profile_summary": sorted(_SPARSE_PASS2_TIMING_KEYS),
                 "halfset_*_profile_summary": sorted(_HALFSET_PROFILE_TIMING_KEYS),
             },
-            "explicit_top_level_diagnostic_path_keys": sorted(_META_TOP_LEVEL_PATH_KEYS),
+            "forbidden_meta_key_fragments": sorted(_FORBIDDEN_META_KEY_FRAGMENTS),
+            "iref_replay_forbidden": True,
             "suffix_or_substring_exclusion_rules_used": False,
         },
         "arithmetic_changed": False,
@@ -983,8 +1017,11 @@ def analyze(
         "material_runtime_win": material_runtime_win,
         "material_stage_win": material_stage_win,
         "material_memory_win": material_memory_win,
+        "sampled_memory_diagnostic_below_0_95": sampled_memory_diagnostic_below_0_95,
+        "sampled_memory_acceptance_use": "diagnostic_only_not_used_for_acceptance",
+        "memory_claim_policy": "disabled_until_defensible_process_high_water_mark",
         "speed_claim_allowed": bool(passed and numeric_qualification_allowed and material_runtime_win),
-        "memory_claim_allowed": bool(passed and numeric_qualification_allowed and material_memory_win),
+        "memory_claim_allowed": False,
         "default_promotion_allowed": False,
         "repo_head": expected_repo_head,
         "gpu_uuid": expected_gpu_uuid,

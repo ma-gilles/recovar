@@ -22,7 +22,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from scripts.run_vdam_late_iteration_profile import (
     _effects_barrier,
@@ -33,8 +33,9 @@ from scripts.run_vdam_late_iteration_profile import (
     _sha256,
 )
 
-SCHEMA = "recovar.local_mstep_donation_ab.v2"
+SCHEMA = "recovar.local_mstep_donation_ab.v3"
 INPUT_MANIFEST_SCHEMA = "recovar.local_mstep_donation_gf46_inputs.v1"
+SEALED_ARM_ENVIRONMENT_SCHEMA = "recovar.local_mstep_donation_arm_environment.v1"
 DONATED_POSITIONAL_NAMES = ("Ft_y", "Ft_ctf")
 DONATED_ARGNUMS = (7, 8)
 GF46_CHECKPOINT_ITERATION = 180
@@ -44,6 +45,49 @@ GF46_RANDOM_SEED = 29
 GF46_IMAGE_BATCH_SIZE = 500
 GF46_EXACT_LOCAL_BUCKET_RADIX = 4
 GF46_EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE = 0
+
+SEALED_ARM_ENVIRONMENT_NAMES = frozenset(
+    {
+        "CUDA_LAUNCH_BLOCKING",
+        "CUDA_VISIBLE_DEVICES",
+        "HOME",
+        "JAX_COMPILATION_CACHE_DIR",
+        "JAX_LOG_COMPILES",
+        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
+        "LANG",
+        "LC_ALL",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PATH",
+        "PIXI_HOME",
+        "PYTHONHASHSEED",
+        "PYTHONNOUSERSITE",
+        "PYTHONUNBUFFERED",
+        "PYTHONUTF8",
+        "RATTLER_CACHE_DIR",
+        "RECOVAR_CUDA_LIB",
+        "RECOVAR_ENABLE_CUSTOM_CUDA",
+        "RECOVAR_EXPECTED_REPO_ROOT",
+        "RECOVAR_INITIAL_MODEL_PROFILE",
+        "RECOVAR_RELION_BIND_BUILD_DIR",
+        "TMPDIR",
+        "XLA_PYTHON_CLIENT_PREALLOCATE",
+    }
+)
+_SEALED_ARM_STATIC_ENVIRONMENT = {
+    "CUDA_LAUNCH_BLOCKING": "0",
+    "JAX_LOG_COMPILES": "1",
+    "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "0",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "PYTHONHASHSEED": "0",
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONUTF8": "1",
+    "RECOVAR_ENABLE_CUSTOM_CUDA": "1",
+    "RECOVAR_INITIAL_MODEL_PROFILE": "1",
+    "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+}
 
 SEALED_NORMALIZED_OPTIONS = {
     "checkpoint_iteration": GF46_CHECKPOINT_ITERATION,
@@ -205,6 +249,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input-manifest", type=Path, required=True)
     parser.add_argument("--expected-input-manifest-sha256", required=True)
     parser.add_argument("--expected-jax-cache-dir", type=Path, required=True)
+    parser.add_argument("--expected-cuda-lib", type=Path, required=True)
+    parser.add_argument("--expected-relion-bind-dir", type=Path, required=True)
+    parser.add_argument("--expected-cusparse-library", type=Path, required=True)
     parser.add_argument("--expected-repo-head", required=True)
     parser.add_argument("--expected-gpu-uuid", required=True)
     return parser.parse_args(argv)
@@ -390,6 +437,62 @@ def _assert_fresh_jax_cache(output_root: Path, expected_cache_dir: Path) -> dict
         "path": str(cache_dir),
         "initial_empty": True,
         "initial_entry_count": 0,
+    }
+
+
+def _assert_sealed_arm_environment(
+    *,
+    repo_root: Path,
+    cache_dir: Path,
+    cuda_lib: Path,
+    relion_bind_dir: Path,
+    cusparse_library: Path,
+    gpu_uuid: str,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Reject every variable outside the explicitly reconstructed arm env."""
+
+    observed = dict(os.environ if environment is None else environment)
+    observed_names = set(observed)
+    if observed_names != SEALED_ARM_ENVIRONMENT_NAMES:
+        missing = sorted(SEALED_ARM_ENVIRONMENT_NAMES - observed_names)
+        unexpected = sorted(observed_names - SEALED_ARM_ENVIRONMENT_NAMES)
+        raise RuntimeError(
+            "arm process environment is not the sealed allowlist: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    expected_values = {
+        **_SEALED_ARM_STATIC_ENVIRONMENT,
+        "CUDA_VISIBLE_DEVICES": gpu_uuid,
+        "JAX_COMPILATION_CACHE_DIR": str(cache_dir.resolve(strict=True)),
+        "LD_PRELOAD": str(cusparse_library.resolve(strict=True)),
+        "RECOVAR_CUDA_LIB": str(cuda_lib.resolve(strict=True)),
+        "RECOVAR_EXPECTED_REPO_ROOT": str(repo_root.resolve(strict=True)),
+        "RECOVAR_RELION_BIND_BUILD_DIR": str(relion_bind_dir.resolve(strict=True)),
+    }
+    drift = {
+        name: {"expected": expected, "observed": observed.get(name)}
+        for name, expected in expected_values.items()
+        if observed.get(name) != expected
+    }
+    if drift:
+        raise RuntimeError(f"arm process environment values drifted: {drift}")
+    for name in ("HOME", "PIXI_HOME", "RATTLER_CACHE_DIR", "TMPDIR"):
+        path = Path(observed[name])
+        if not path.is_absolute() or not path.is_dir():
+            raise RuntimeError(
+                f"sealed arm environment {name} is not an existing absolute directory: {path}"
+            )
+    for name in ("PATH", "LD_LIBRARY_PATH"):
+        if not observed[name]:
+            raise RuntimeError(f"sealed arm environment {name} is empty")
+    return {
+        "schema": SEALED_ARM_ENVIRONMENT_SCHEMA,
+        "exact_allowlist": True,
+        "allowed_names": sorted(SEALED_ARM_ENVIRONMENT_NAMES),
+        "observed": {name: observed[name] for name in sorted(observed)},
+        "unexpected_names": [],
+        "iref_replay_forbidden": True,
     }
 
 
@@ -662,9 +765,20 @@ def main(argv: list[str] | None = None) -> int:
     args.input_star = args.input_star.resolve(strict=True)
     args.data_dir = args.data_dir.resolve(strict=True)
     args.particle_stack = args.particle_stack.resolve(strict=True)
+    args.expected_cuda_lib = args.expected_cuda_lib.resolve(strict=True)
+    args.expected_relion_bind_dir = args.expected_relion_bind_dir.resolve(strict=True)
+    args.expected_cusparse_library = args.expected_cusparse_library.resolve(strict=True)
     args.output_root = args.output_root.resolve()
     if args.output_root.exists():
         raise FileExistsError(f"output root already exists: {args.output_root}")
+    sealed_environment = _assert_sealed_arm_environment(
+        repo_root=repo_root,
+        cache_dir=args.expected_jax_cache_dir,
+        cuda_lib=args.expected_cuda_lib,
+        relion_bind_dir=args.expected_relion_bind_dir,
+        cusparse_library=args.expected_cusparse_library,
+        gpu_uuid=args.expected_gpu_uuid,
+    )
     cache_contract = _assert_fresh_jax_cache(
         args.output_root,
         args.expected_jax_cache_dir,
@@ -680,9 +794,6 @@ def main(argv: list[str] | None = None) -> int:
     gpu_uuid = _gpu_uuid(args.expected_gpu_uuid)
     args.output_root.mkdir(parents=True)
     (args.output_root / "SAFE_TO_DELETE").touch()
-
-    os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
-    os.environ.setdefault("JAX_LOG_COMPILES", "1")
 
     from scripts.run_ab_initio import main as run_ab_initio
 
@@ -705,8 +816,8 @@ def main(argv: list[str] | None = None) -> int:
                 # Installed JAX exposes cumulative allocator stats but no
                 # peak-reset API.  Keep before/after values explicitly labeled
                 # whole-process diagnostics; the Slurm runner's nvidia-smi
-                # sampler is delimited by the two timestamps below and owns
-                # the warm-only peak claim.
+                # sampler is delimited by the two timestamps below but remains
+                # diagnostic-only because sparse polling cannot prove a HWM.
                 memory_before = _device_memory_stats()
                 timed_start_unix_ns = time.time_ns()
                 (args.output_root / "TIMED_BEGIN").write_text(f"{timed_start_unix_ns}\n")
@@ -759,6 +870,7 @@ def main(argv: list[str] | None = None) -> int:
         "git_head": observed_head,
         "gpu_uuid": gpu_uuid,
         "runtime_provenance": runtime_provenance,
+        "sealed_environment": sealed_environment,
         "jax_persistent_cache": cache_contract,
         "input_manifest": input_manifest,
         "input_hashes": input_manifest["hashes"],
@@ -790,6 +902,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         },
         "speed_claim_allowed": False,
+        "memory_claim_allowed": False,
         "default_promotion_allowed": False,
         "cold": phase_reports["cold"],
         "warm": phase_reports["warm"],
