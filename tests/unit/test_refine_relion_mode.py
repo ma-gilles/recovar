@@ -12931,6 +12931,98 @@ class TestRelionModeSmokeTest:
         assert means[0].shape == (VOLUME_SIZE,)
         assert means[1].shape == (VOLUME_SIZE,)
 
+    def test_k1_numpy_join_reservation_reaches_first_stage_a_only(self, monkeypatch):
+        """Production host join must hand one live exact buffer to half-0 Stage A."""
+
+        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+
+        accumulator_shape = (9, 9, 9)
+        half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+        rng = np.random.default_rng(20260901)
+        ft_y_0 = (
+            rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+        ).astype(np.complex64)
+        ft_y_1 = (
+            rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+        ).astype(np.complex64)
+        ft_ctf_0 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+        ft_ctf_1 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+
+        monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+        joined = regularization_module.join_halves_at_low_resolution(
+            ft_y_0,
+            ft_y_1,
+            ft_ctf_0,
+            ft_ctf_1,
+            volume_shape=accumulator_shape,
+            voxel_size=10.0,
+            grid_size=4,
+            low_resol_join_halves_angstrom=40.0,
+            padding_factor=2,
+            preserve_inputs=False,
+            return_retained_first_numerator=True,
+        )
+        retained_half0 = joined[4]
+        assert retained_half0 is not None
+        np.testing.assert_array_equal(np.asarray(retained_half0), joined[0])
+
+        calls = []
+
+        def fake_reconstruct(*args, **kwargs):
+            calls.append((args, kwargs))
+            return jnp.ones(4**3, dtype=jnp.complex128)
+
+        monkeypatch.setattr(mean_helpers_module, "_reconstruct_volume_eager", fake_reconstruct)
+        monkeypatch.setattr(
+            mean_helpers_module,
+            "_finish_host_staged_reconstruction",
+            lambda result, *_accumulators: result,
+        )
+
+        means = [None, None]
+        mean_helpers_module._reconstruct_and_postprocess_means(
+            means,
+            Ft_y_0=joined[0],
+            Ft_y_1=joined[1],
+            Ft_ctf_0=joined[2],
+            Ft_ctf_1=joined[3],
+            Ft_y_combined=None,
+            Ft_ctf_combined=None,
+            mean_signal_variance=None,
+            mean_signal_variance_shells=None,
+            mean_signal_variance_per_half=[
+                jnp.ones(4**3, dtype=jnp.float32),
+                jnp.ones(4**3, dtype=jnp.float32),
+            ],
+            n_classes=1,
+            k_class_enabled=False,
+            cs=4,
+            iteration=0,
+            grid_size=4,
+            cryo=SimpleNamespace(voxel_size=1.0),
+            volume_shape=(4, 4, 4),
+            tau2_fudge=1.0,
+            padding_factor=2,
+            projection_padding_factor=1,
+            relion_minres_map=0,
+            particle_diameter_ang=None,
+            relion_firstiter_cc_this_iter=False,
+            relion_firstiter_ini_high_angstrom=None,
+            relion_width_mask_edge=5,
+            relion_fmask_edge=2,
+            accumulator_volume_shape=accumulator_shape,
+            mean_signal_variance_shells_per_half=[
+                jnp.ones(3, dtype=jnp.float32),
+                jnp.ones(3, dtype=jnp.float32),
+            ],
+            retained_Ft_y_0_device=retained_half0,
+        )
+
+        assert len(calls) == 2
+        assert calls[0][0][1] is joined[0]
+        assert calls[0][1]["retained_device_numerator"] is retained_half0
+        assert calls[1][1]["retained_device_numerator"] is None
+
     def test_host_staged_k1_reconstruction_blocks_before_next_half(self, monkeypatch):
         """Host-staged box-scale reconstruction must serialize its FFT workspace."""
         from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module

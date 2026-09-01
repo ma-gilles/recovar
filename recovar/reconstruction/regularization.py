@@ -165,19 +165,30 @@ def _join_half_pair_at_indices_host(
         values_1_flat[flat_indices_np] = average_at_join
 
     retained_first_device = None
-    if retain_first_device and not preserve_inputs and not isinstance(values_0, np.ndarray):
-        logger.info(
-            "Low-resolution half-join retaining first numerator device buffer: "
-            "elements=%d joined=%d dtype=%s",
-            int(values_0_flat.size),
-            int(flat_indices_np.size),
-            values_0.dtype,
-        )
-        retained_first_device = _scatter_joined_values_into_first_device(
-            values_0,
-            jnp.asarray(flat_indices_np, dtype=jnp.int32),
-            jnp.asarray(average_at_join),
-        )
+    if retain_first_device and not preserve_inputs:
+        if isinstance(values_0, np.ndarray):
+            logger.info(
+                "Low-resolution half-join reserving joined first numerator on device: "
+                "elements=%d joined=%d dtype=%s",
+                int(values_0_flat.size),
+                int(flat_indices_np.size),
+                values_0_np.dtype,
+            )
+            retained_first_device = jnp.asarray(values_0_np)
+            retained_first_device.block_until_ready()
+        else:
+            logger.info(
+                "Low-resolution half-join retaining first numerator device buffer: "
+                "elements=%d joined=%d dtype=%s",
+                int(values_0_flat.size),
+                int(flat_indices_np.size),
+                values_0.dtype,
+            )
+            retained_first_device = _scatter_joined_values_into_first_device(
+                values_0,
+                jnp.asarray(flat_indices_np, dtype=jnp.int32),
+                jnp.asarray(average_at_join),
+            )
     else:
         _delete_if_jax_array(values_0)
     _delete_if_jax_array(values_1)

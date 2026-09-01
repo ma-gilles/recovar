@@ -1755,6 +1755,49 @@ def test_join_halves_host_fallback_retains_bitwise_exact_half0_device_numerator(
     assert padding_joined[4] is None
 
 
+def test_join_halves_host_fallback_reserves_joined_numpy_half0_for_crop(monkeypatch, caplog):
+    """The box-scale host path must reserve its joined numerator before FSC/tau2."""
+
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (9, 9, 9)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    rng = np.random.default_rng(20260901)
+    ft_y_0 = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    ft_y_1 = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    ft_ctf_0 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    ft_ctf_1 = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+
+    monkeypatch.setenv("RECOVAR_LOWRES_JOIN_HOST_FALLBACK", "always")
+    caplog.set_level("INFO", logger=regularization.__name__)
+    joined = regularization.join_halves_at_low_resolution(
+        ft_y_0,
+        ft_y_1,
+        ft_ctf_0,
+        ft_ctf_1,
+        volume_shape=volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+        padding_factor=2,
+        preserve_inputs=False,
+        return_retained_first_numerator=True,
+    )
+
+    assert joined[0] is ft_y_0
+    assert joined[1] is ft_y_1
+    assert joined[2] is ft_ctf_0
+    assert joined[3] is ft_ctf_1
+    assert joined[4] is not None
+    assert not isinstance(joined[4], np.ndarray)
+    np.testing.assert_array_equal(np.asarray(joined[4]), joined[0])
+    assert "Low-resolution half-join reserving joined first numerator on device" in caplog.text
+
+
 def test_joined_value_scatter_lowering_aliases_donated_first_device_buffer():
     compiled = regularization._scatter_joined_values_into_first_device
     lowered = compiled.lower(
