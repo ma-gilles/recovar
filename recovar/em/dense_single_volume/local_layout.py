@@ -13,6 +13,9 @@ from recovar import utils
 from recovar.em.dense_single_volume.batch_planning import (
     _FixedCapacityLocalCall,
     _FixedCapacityPhysicalOrder,
+    _FixedCapacityWholeLocalPlan,
+    _pack_fixed_capacity_local_candidate_rows,
+    _pack_fixed_capacity_local_images,
     _plan_consecutive_padded_batches,
 )
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
@@ -171,6 +174,28 @@ class LocalBucketSpec:
     local_mstep_rotations: np.ndarray | None = None
 
 
+@dataclass(frozen=True)
+class _FixedCapacityLocalHypothesisProgram:
+    """Immutable host payloads for one sealed fixed-capacity local program."""
+
+    physical_image_capacity: int
+    physical_row_capacity: int
+    valid_image_count: int
+    valid_row_count: int
+    image_indices: np.ndarray
+    row_offsets: np.ndarray
+    valid_image_mask: np.ndarray
+    valid_candidate_row_mask: np.ndarray
+    local_rotation_ids: np.ndarray
+    local_rotations: np.ndarray
+    local_mstep_rotations: np.ndarray
+    local_rotation_log_prior: np.ndarray
+    translation_log_prior: np.ndarray
+    local_rotation_posterior_ids: np.ndarray | None
+    local_sample_mask: np.ndarray | None
+    mstep_rotations_fall_back_to_score: bool
+
+
 def _fixed_capacity_calls_from_local_buckets(
     bucket_specs: Sequence[LocalBucketSpec],
     *,
@@ -250,6 +275,420 @@ def _fixed_capacity_calls_from_local_buckets(
     if not np.array_equal(chronological_indices, expected_order.image_indices):
         raise ValueError("fixed-capacity local bucket chronology does not match the sealed physical order")
     return tuple(calls)
+
+
+def _validate_fixed_capacity_plan_matches_local_calls(
+    plan: _FixedCapacityWholeLocalPlan,
+    calls: Sequence[_FixedCapacityLocalCall],
+    expected_order: _FixedCapacityPhysicalOrder,
+) -> None:
+    """Fail closed unless ``plan`` is the exact fixed arena for ``calls``."""
+
+    if not isinstance(plan, _FixedCapacityWholeLocalPlan):
+        raise ValueError("fixed-capacity hypothesis packing requires a fixed-capacity local plan")
+
+    for field_name in (
+        "physical_image_capacity",
+        "physical_row_capacity",
+        "physical_call_capacity",
+        "valid_image_count",
+        "valid_row_count",
+        "valid_call_count",
+    ):
+        raw_value = getattr(plan, field_name)
+        if isinstance(raw_value, (bool, np.bool_)) or not isinstance(raw_value, Integral):
+            raise ValueError(f"fixed-capacity hypothesis plan {field_name} must be an integer")
+    physical_image_capacity = int(plan.physical_image_capacity)
+    physical_row_capacity = int(plan.physical_row_capacity)
+    physical_call_capacity = int(plan.physical_call_capacity)
+    if min(physical_image_capacity, physical_row_capacity, physical_call_capacity) <= 0:
+        raise ValueError("fixed-capacity hypothesis plan capacities must be positive")
+
+    calls = tuple(calls)
+    row_counts = np.concatenate([np.asarray(call.row_counts, dtype=np.int64) for call in calls])
+    valid_image_count = int(row_counts.size)
+    valid_row_count = int(np.sum(row_counts, dtype=np.int64))
+    valid_call_count = len(calls)
+    if valid_image_count > physical_image_capacity:
+        raise ValueError(
+            "fixed-capacity hypothesis image capacity overflow: "
+            f"valid={valid_image_count}, capacity={physical_image_capacity}",
+        )
+    if valid_row_count > physical_row_capacity:
+        raise ValueError(
+            "fixed-capacity hypothesis candidate-row capacity overflow: "
+            f"valid={valid_row_count}, capacity={physical_row_capacity}",
+        )
+    if valid_call_count > physical_call_capacity:
+        raise ValueError(
+            "fixed-capacity hypothesis call capacity overflow: "
+            f"valid={valid_call_count}, capacity={physical_call_capacity}",
+        )
+    if (
+        int(plan.valid_image_count) != valid_image_count
+        or int(plan.valid_row_count) != valid_row_count
+        or int(plan.valid_call_count) != valid_call_count
+    ):
+        raise ValueError("fixed-capacity hypothesis plan/bucket valid counts do not match")
+
+    expected_image_indices = np.full(physical_image_capacity, -1, dtype=np.int64)
+    expected_image_indices[:valid_image_count] = expected_order.image_indices
+    expected_row_offsets = np.full(
+        physical_image_capacity + 1,
+        valid_row_count,
+        dtype=np.int64,
+    )
+    expected_row_offsets[0] = 0
+    expected_row_offsets[1 : valid_image_count + 1] = np.cumsum(row_counts, dtype=np.int64)
+
+    expected_call_valid_mask = np.zeros(physical_call_capacity, dtype=bool)
+    expected_call_valid_mask[:valid_call_count] = True
+    expected_call_image_offsets = np.full(
+        physical_call_capacity,
+        valid_image_count,
+        dtype=np.int64,
+    )
+    expected_call_row_offsets = np.full(
+        physical_call_capacity,
+        valid_row_count,
+        dtype=np.int64,
+    )
+    expected_call_valid_images = np.zeros(physical_call_capacity, dtype=np.int64)
+    expected_call_valid_rows = np.zeros(physical_call_capacity, dtype=np.int64)
+    expected_call_image_capacities = np.zeros(physical_call_capacity, dtype=np.int64)
+    expected_call_radix_buckets = np.zeros(physical_call_capacity, dtype=np.int64)
+
+    running_images = 0
+    running_rows = 0
+    for call_index, call in enumerate(calls):
+        call_valid_images = int(np.asarray(call.image_indices).size)
+        call_valid_rows = int(np.sum(np.asarray(call.row_counts), dtype=np.int64))
+        expected_call_image_offsets[call_index] = running_images
+        expected_call_row_offsets[call_index] = running_rows
+        expected_call_valid_images[call_index] = call_valid_images
+        expected_call_valid_rows[call_index] = call_valid_rows
+        expected_call_image_capacities[call_index] = int(call.image_capacity)
+        expected_call_radix_buckets[call_index] = int(call.radix_bucket)
+        running_images += call_valid_images
+        running_rows += call_valid_rows
+
+    expected_arrays = {
+        "image_indices": expected_image_indices,
+        "row_offsets": expected_row_offsets,
+        "call_valid_mask": expected_call_valid_mask,
+        "call_image_offsets": expected_call_image_offsets,
+        "call_row_offsets": expected_call_row_offsets,
+        "call_valid_images": expected_call_valid_images,
+        "call_valid_rows": expected_call_valid_rows,
+        "call_image_capacities": expected_call_image_capacities,
+        "call_radix_buckets": expected_call_radix_buckets,
+    }
+    for field_name, expected in expected_arrays.items():
+        actual = np.asarray(getattr(plan, field_name))
+        if actual.shape != expected.shape or not np.array_equal(actual, expected):
+            raise ValueError(
+                f"fixed-capacity hypothesis plan/bucket mismatch in {field_name}",
+            )
+
+
+def _fixed_capacity_local_payload_array(
+    bucket: LocalBucketSpec,
+    bucket_index: int,
+    field_name: str,
+    expected_shape: tuple[int, ...],
+    *,
+    dtype_kind: str,
+) -> np.ndarray:
+    value = np.asarray(getattr(bucket, field_name))
+    if value.shape != expected_shape:
+        raise ValueError(
+            f"fixed-capacity local bucket {bucket_index} {field_name} has shape "
+            f"{value.shape}; expected {expected_shape}",
+        )
+    if dtype_kind == "integer" and not np.issubdtype(value.dtype, np.integer):
+        raise ValueError(f"fixed-capacity local bucket {bucket_index} {field_name} must be integer")
+    if dtype_kind == "floating" and not np.issubdtype(value.dtype, np.floating):
+        raise ValueError(f"fixed-capacity local bucket {bucket_index} {field_name} must be floating point")
+    if dtype_kind == "boolean" and value.dtype != np.bool_:
+        raise ValueError(f"fixed-capacity local bucket {bucket_index} {field_name} must be boolean")
+    return value
+
+
+def _fixed_capacity_optional_topology(bucket_specs: Sequence[LocalBucketSpec], field_name: str) -> bool:
+    present = tuple(getattr(bucket, field_name) is not None for bucket in bucket_specs)
+    if any(present) and not all(present):
+        raise ValueError(
+            f"fixed-capacity hypothesis buckets have mixed optional topology for {field_name}",
+        )
+    return all(present)
+
+
+def _validate_fixed_capacity_bucket_poison_tails(
+    *,
+    bucket_index: int,
+    rotation_mask: np.ndarray,
+    rotation_ids: np.ndarray,
+    rotations: np.ndarray,
+    mstep_rotations: np.ndarray,
+    rotation_log_prior: np.ndarray,
+    posterior_ids: np.ndarray | None,
+    sample_mask: np.ndarray | None,
+) -> None:
+    """Verify that discarded rectangular radix tails carry canonical sentinels."""
+
+    inactive = ~rotation_mask
+    if np.any(rotation_ids[inactive] != -1):
+        raise ValueError(
+            f"fixed-capacity local bucket {bucket_index} has malformed local_rotation_ids poison tails",
+        )
+    expected_identity = np.eye(3, dtype=rotations.dtype)
+    if not np.array_equal(
+        rotations[inactive],
+        np.broadcast_to(expected_identity, rotations[inactive].shape),
+    ):
+        raise ValueError(
+            f"fixed-capacity local bucket {bucket_index} has malformed local_rotations poison tails",
+        )
+    expected_mstep_identity = np.eye(3, dtype=mstep_rotations.dtype)
+    if not np.array_equal(
+        mstep_rotations[inactive],
+        np.broadcast_to(expected_mstep_identity, mstep_rotations[inactive].shape),
+    ):
+        raise ValueError(
+            f"fixed-capacity local bucket {bucket_index} has malformed local_mstep_rotations poison tails",
+        )
+    log_prior_poison = np.asarray(-1e30, dtype=rotation_log_prior.dtype)
+    if np.any(rotation_log_prior[inactive] != log_prior_poison):
+        raise ValueError(
+            f"fixed-capacity local bucket {bucket_index} has malformed local_rotation_log_prior poison tails",
+        )
+    if posterior_ids is not None and np.any(posterior_ids[inactive] != -1):
+        raise ValueError(
+            f"fixed-capacity local bucket {bucket_index} has malformed local_rotation_posterior_ids poison tails",
+        )
+    if sample_mask is not None and np.any(sample_mask[inactive]):
+        raise ValueError(
+            f"fixed-capacity local bucket {bucket_index} has malformed local_sample_mask poison tails",
+        )
+
+
+def _pack_fixed_capacity_local_hypothesis_program(
+    bucket_specs: Sequence[LocalBucketSpec],
+    plan: _FixedCapacityWholeLocalPlan,
+    expected_order: _FixedCapacityPhysicalOrder,
+    *,
+    enabled: bool = False,
+) -> _FixedCapacityLocalHypothesisProgram | None:
+    """Pack one authoritative bucket program without carrying radix padding.
+
+    This host-only seam is deliberately inert by default.  When enabled, it
+    requires the independently sealed physical order and the exact plan made
+    from the same buckets.  All payload arrays are snapshots; their active
+    rows preserve source bits while inactive fixed-capacity tails use field-
+    specific sentinels guarded by explicit valid masks.
+    """
+
+    if not enabled:
+        return None
+    if not isinstance(expected_order, _FixedCapacityPhysicalOrder):
+        raise ValueError("fixed-capacity hypothesis packing requires an independently sealed physical order")
+
+    bucket_specs = tuple(bucket_specs)
+    calls = _fixed_capacity_calls_from_local_buckets(
+        bucket_specs,
+        expected_order=expected_order,
+    )
+    _validate_fixed_capacity_plan_matches_local_calls(plan, calls, expected_order)
+
+    has_mstep_rotations = _fixed_capacity_optional_topology(bucket_specs, "local_mstep_rotations")
+    has_posterior_ids = _fixed_capacity_optional_topology(bucket_specs, "local_rotation_posterior_ids")
+    has_sample_mask = _fixed_capacity_optional_topology(bucket_specs, "local_sample_mask")
+
+    rotation_ids_by_call = []
+    rotations_by_call = []
+    mstep_rotations_by_call = []
+    rotation_log_prior_by_call = []
+    translation_log_prior_by_call = []
+    posterior_ids_by_call = []
+    sample_mask_by_call = []
+
+    for bucket_index, (bucket, call) in enumerate(zip(bucket_specs, calls, strict=True)):
+        valid_images = int(np.asarray(call.image_indices).size)
+        radix = int(call.radix_bucket)
+        candidate_shape = (valid_images, radix)
+        rotation_mask = np.asarray(bucket.local_rotation_mask)
+        rotation_ids = _fixed_capacity_local_payload_array(
+            bucket,
+            bucket_index,
+            "local_rotation_ids",
+            candidate_shape,
+            dtype_kind="integer",
+        )
+        rotations = _fixed_capacity_local_payload_array(
+            bucket,
+            bucket_index,
+            "local_rotations",
+            candidate_shape + (3, 3),
+            dtype_kind="floating",
+        )
+        if has_mstep_rotations:
+            mstep_rotations = _fixed_capacity_local_payload_array(
+                bucket,
+                bucket_index,
+                "local_mstep_rotations",
+                candidate_shape + (3, 3),
+                dtype_kind="floating",
+            )
+        else:
+            mstep_rotations = rotations
+        rotation_log_prior = _fixed_capacity_local_payload_array(
+            bucket,
+            bucket_index,
+            "local_rotation_log_prior",
+            candidate_shape,
+            dtype_kind="floating",
+        )
+
+        translation_log_prior = np.asarray(bucket.translation_log_prior)
+        if (
+            translation_log_prior.ndim != 2
+            or translation_log_prior.shape[0] != valid_images
+            or translation_log_prior.shape[1] <= 0
+            or not np.issubdtype(translation_log_prior.dtype, np.floating)
+        ):
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} translation_log_prior must be a "
+                "nonempty floating-point matrix with one row per real image",
+            )
+
+        posterior_ids = None
+        if has_posterior_ids:
+            posterior_ids = _fixed_capacity_local_payload_array(
+                bucket,
+                bucket_index,
+                "local_rotation_posterior_ids",
+                candidate_shape,
+                dtype_kind="integer",
+            )
+        sample_mask = None
+        if has_sample_mask:
+            sample_mask = _fixed_capacity_local_payload_array(
+                bucket,
+                bucket_index,
+                "local_sample_mask",
+                candidate_shape + (translation_log_prior.shape[1],),
+                dtype_kind="boolean",
+            )
+
+        if np.any(rotation_ids[rotation_mask] < 0):
+            raise ValueError(f"fixed-capacity local bucket {bucket_index} has negative active rotation IDs")
+        if posterior_ids is not None and np.any(posterior_ids[rotation_mask] < 0):
+            raise ValueError(f"fixed-capacity local bucket {bucket_index} has negative active posterior IDs")
+        _validate_fixed_capacity_bucket_poison_tails(
+            bucket_index=bucket_index,
+            rotation_mask=rotation_mask,
+            rotation_ids=rotation_ids,
+            rotations=rotations,
+            mstep_rotations=mstep_rotations,
+            rotation_log_prior=rotation_log_prior,
+            posterior_ids=posterior_ids,
+            sample_mask=sample_mask,
+        )
+
+        rotation_ids_by_call.append(rotation_ids)
+        rotations_by_call.append(rotations)
+        mstep_rotations_by_call.append(mstep_rotations)
+        rotation_log_prior_by_call.append(rotation_log_prior)
+        translation_log_prior_by_call.append(translation_log_prior)
+        if posterior_ids is not None:
+            posterior_ids_by_call.append(posterior_ids)
+        if sample_mask is not None:
+            sample_mask_by_call.append(sample_mask)
+
+    local_rotation_ids = _pack_fixed_capacity_local_candidate_rows(
+        plan,
+        rotation_ids_by_call,
+        fill_value=-1,
+    )
+    local_rotations = _pack_fixed_capacity_local_candidate_rows(
+        plan,
+        rotations_by_call,
+        fill_value=np.nan,
+    )
+    local_mstep_rotations = _pack_fixed_capacity_local_candidate_rows(
+        plan,
+        mstep_rotations_by_call,
+        fill_value=np.nan,
+    )
+    local_rotation_log_prior = _pack_fixed_capacity_local_candidate_rows(
+        plan,
+        rotation_log_prior_by_call,
+        fill_value=-np.inf,
+    )
+    translation_log_prior = _pack_fixed_capacity_local_images(
+        plan,
+        translation_log_prior_by_call,
+        fill_value=-np.inf,
+    )
+    local_rotation_posterior_ids = (
+        _pack_fixed_capacity_local_candidate_rows(
+            plan,
+            posterior_ids_by_call,
+            fill_value=-1,
+        )
+        if has_posterior_ids
+        else None
+    )
+    local_sample_mask = (
+        _pack_fixed_capacity_local_candidate_rows(
+            plan,
+            sample_mask_by_call,
+            fill_value=False,
+        )
+        if has_sample_mask
+        else None
+    )
+
+    image_indices = np.asarray(plan.image_indices).copy()
+    row_offsets = np.asarray(plan.row_offsets).copy()
+    valid_image_mask = np.arange(plan.physical_image_capacity, dtype=np.int64) < int(plan.valid_image_count)
+    valid_candidate_row_mask = np.arange(plan.physical_row_capacity, dtype=np.int64) < int(plan.valid_row_count)
+    arrays = [
+        image_indices,
+        row_offsets,
+        valid_image_mask,
+        valid_candidate_row_mask,
+        local_rotation_ids,
+        local_rotations,
+        local_mstep_rotations,
+        local_rotation_log_prior,
+        translation_log_prior,
+    ]
+    if local_rotation_posterior_ids is not None:
+        arrays.append(local_rotation_posterior_ids)
+    if local_sample_mask is not None:
+        arrays.append(local_sample_mask)
+    for value in arrays:
+        value.setflags(write=False)
+
+    return _FixedCapacityLocalHypothesisProgram(
+        physical_image_capacity=int(plan.physical_image_capacity),
+        physical_row_capacity=int(plan.physical_row_capacity),
+        valid_image_count=int(plan.valid_image_count),
+        valid_row_count=int(plan.valid_row_count),
+        image_indices=image_indices,
+        row_offsets=row_offsets,
+        valid_image_mask=valid_image_mask,
+        valid_candidate_row_mask=valid_candidate_row_mask,
+        local_rotation_ids=local_rotation_ids,
+        local_rotations=local_rotations,
+        local_mstep_rotations=local_mstep_rotations,
+        local_rotation_log_prior=local_rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+        local_rotation_posterior_ids=local_rotation_posterior_ids,
+        local_sample_mask=local_sample_mask,
+        mstep_rotations_fall_back_to_score=not has_mstep_rotations,
+    )
 
 
 def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, grid_metadata):
@@ -636,9 +1075,7 @@ def build_local_hypothesis_layout(
                 "rotation_grid_mstep_rotations must match the scoring grid size: "
                 f"{rotation_grid_mstep_rotations.shape[0]} vs {expected_rotation_count}",
             )
-    generate_relion_mstep_rotations = bool(
-        generate_relion_mstep_rotations or rotation_grid_mstep_rotations is not None
-    )
+    generate_relion_mstep_rotations = bool(generate_relion_mstep_rotations or rotation_grid_mstep_rotations is not None)
     translations = np.asarray(translations, dtype=np.float32)
     prior_translations = np.asarray(prior_translations, dtype=np.float32).reshape(-1, translations.shape[1])
     rotation_log_prior_np = None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=np.float32)
@@ -708,9 +1145,9 @@ def build_local_hypothesis_layout(
                 f"({int(grid_metadata['n_pixels']) * int(grid_metadata['n_psi'])}); "
                 f"got {rotation_log_prior_np.shape}"
             )
-        rotation_log_priors_flat = rotation_log_priors_flat + rotation_log_prior_np[
-            np.asarray(rotation_ids_flat, dtype=np.int64)
-        ]
+        rotation_log_priors_flat = (
+            rotation_log_priors_flat + rotation_log_prior_np[np.asarray(rotation_ids_flat, dtype=np.int64)]
+        )
     rotations_flat = (
         rotations_flat_override
         if rotations_flat_override is not None
@@ -881,8 +1318,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
         if not np.all(matched_parent_ids):
             missing = unique_rot[~matched_parent_ids]
             raise ValueError(
-                f"Image {image_idx} has significant rotations outside its local parent support: "
-                f"{missing[:8].tolist()}"
+                f"Image {image_idx} has significant rotations outside its local parent support: {missing[:8].tolist()}"
             )
 
         oversampled_rots, parent_map, oversampled_rot_indices, oversampled_mstep_rots = (
@@ -1328,8 +1764,7 @@ def bucket_local_hypothesis_layout(
             np.r_[True, bucket_sizes[processing_order][1:] != bucket_sizes[processing_order][:-1], True]
         )
         bucket_groups = [
-            processing_order[start:stop]
-            for start, stop in zip(boundaries[:-1], boundaries[1:], strict=True)
+            processing_order[start:stop] for start, stop in zip(boundaries[:-1], boundaries[1:], strict=True)
         ]
     else:
         bucket_groups = [
