@@ -4971,10 +4971,16 @@ def _make_relion_wavg_rectangle(
     while retaining the model-coordinate radius for Projector/BackProjector.
     The rectangle and its rounded noise-shell mask therefore use the particle
     size, while the exact projected terms use ``reconstruction_current_size``.
+
+    The EM window helpers use ``None`` as a full-box sentinel.  RELION does
+    not: its Wavg kernel still receives the full integer image size and walks
+    the complete FFTW half-image, with ``Mresol_fine == -1`` excluding corner
+    pixels from shell statistics.  Preserve that issue stream by mapping every
+    unwindowed centered-half pixel when both sizes are full-box.
     """
 
     image_shape = tuple(int(value) for value in image_shape)
-    current_size = int(current_size)
+    current_size = image_shape[0] if current_size is None else int(current_size)
     model_current_size = (
         current_size
         if reconstruction_current_size is None
@@ -5009,11 +5015,24 @@ def _make_relion_wavg_rectangle(
         include_dc=True,
         exact_radius=True,
     )
-    recon_indices = np.asarray(recon_window_indices, dtype=np.int32).reshape(-1)
-    if not np.array_equal(np.sort(recon_indices), exact_indices):
+    full_box_unwindowed = bool(
+        recon_window_indices is None
+        and current_size == image_shape[0]
+        and model_current_size == image_shape[0]
+    )
+    if full_box_unwindowed:
+        recon_indices = np.arange(
+            image_shape[0] * (image_shape[1] // 2 + 1),
+            dtype=np.int32,
+        )
+        expected_recon_indices = recon_indices
+    else:
+        recon_indices = np.asarray(recon_window_indices, dtype=np.int32).reshape(-1)
+        expected_recon_indices = exact_indices
+    if not np.array_equal(np.sort(recon_indices), expected_recon_indices):
         raise ValueError(
             "RELION Wavg rectangle requires the complete exact-radius BPref window: "
-            f"got {recon_indices.size} pixels, expected {exact_indices.size}"
+            f"got {recon_indices.size} pixels, expected {expected_recon_indices.size}"
         )
 
     rectangle_position = {
@@ -13804,6 +13823,13 @@ def compute_pass2_stats_sparse_bucketed(
             direct_native_corr_img_score = direct_native_corr_img_half
             direct_ctf_rfloat_score = direct_ctf_rfloat_half
             direct_ctf_rfloat_recon = direct_ctf_rfloat_half
+        # ``None`` is RECOVAR's full-window sentinel, whereas RELION always
+        # passes an integer image_current_size into powerClass/Wavg. Keep the
+        # sentinel for score/projection layout decisions and resolve it only
+        # for these native noise-statistics boundaries.
+        relion_wavg_current_size = (
+            int(image_shape[0]) if current_size is None else int(current_size)
+        )
         relion_highres_xi2_half = None
         if (
             use_exact_relion_gaussian
@@ -13812,14 +13838,14 @@ def compute_pass2_stats_sparse_bucketed(
             relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
                 processed_score_half_for_noise,
                 image_shape=image_shape,
-                current_size=current_size,
+                current_size=relion_wavg_current_size,
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
             if source_faithful_spectrum_norm:
                 relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
                     processed_score_half_for_noise,
                     image_shape=image_shape,
-                    current_size=current_size,
+                    current_size=relion_wavg_current_size,
                 )
             else:
                 relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
@@ -13880,18 +13906,22 @@ def compute_pass2_stats_sparse_bucketed(
                 ),
             )
         )
-        if relion_wavg_atomic_direct_noise and current_size is None:
-            raise ValueError("direct Wavg noise replacement requires current_size")
+        if relion_wavg_atomic_direct_norm and relion_norm_high_shell is None:
+            # A full-box Wavg has no shell above image_current_size.  Preserve
+            # the direct-norm tuple shape without launching powerClass on
+            # legacy non-exact paths that historically skipped it.
+            relion_norm_high_shell = jnp.zeros(
+                (processed_score_half_for_noise.shape[0],),
+                dtype=jnp.float32,
+            )
         if relion_wavg_atomic_scale_aa:
             if relion_score_translation_angles is None:
                 raise ValueError(
                     "Wavg atomic parity requires RELION translation angles"
                 )
-            if current_size is None:
-                raise ValueError("Wavg atomic parity requires current_size")
             relion_wavg_rectangle = _make_relion_wavg_rectangle(
                 image_shape,
-                current_size,
+                relion_wavg_current_size,
                 recon_window_indices,
                 reconstruction_current_size=mstep_current_size,
             )
@@ -13905,7 +13935,7 @@ def compute_pass2_stats_sparse_bucketed(
                 :, :, relion_wavg_rectangle.exact_positions
             ]
         if relion_wavg_atomic_direct_noise:
-            direct_noise_log_key = int(current_size)
+            direct_noise_log_key = relion_wavg_current_size
             if direct_noise_log_key not in _relion_wavg_direct_noise_log_keys:
                 _relion_wavg_direct_noise_log_keys.add(direct_noise_log_key)
                 logger.info(
@@ -13914,7 +13944,7 @@ def compute_pass2_stats_sparse_bucketed(
                     "shells [0, %d] with direct residual atomics; per-particle "
                     "norm mode=%s",
                     int(relion_wavg_rectangle.centered_indices.size),
-                    int(current_size // 2),
+                    int(relion_wavg_current_size // 2),
                     "direct" if relion_wavg_atomic_direct_norm else "production-algebraic",
                 )
 
@@ -15282,7 +15312,7 @@ def compute_pass2_stats_sparse_bucketed(
                             weighted_img_shells_np,
                             relion_wavg_atomic_diff2_pixels_np,
                             relion_wavg_rectangle.shell_indices,
-                            exclusive_shell_stop=int(current_size // 2) + 1,
+                            exclusive_shell_stop=int(relion_wavg_current_size // 2) + 1,
                         )
                     )
                     noise_wsum_total += direct_residual_shells
@@ -16429,7 +16459,7 @@ def compute_pass2_stats_sparse_bucketed(
                         weighted_img_shells_np,
                         relion_wavg_atomic_scale_triplet_pixels_np[:, :, 2],
                         relion_wavg_rectangle.shell_indices,
-                        exclusive_shell_stop=int(current_size // 2) + 1,
+                        exclusive_shell_stop=int(relion_wavg_current_size // 2) + 1,
                     )
                 )
                 noise_wsum_total += direct_residual_shells

@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _fresh_k1_direct_noise_default,
     _make_relion_wavg_rectangle,
     _prioritize_stopped_pass2_dump_buckets,
+    _relion_cuda_powerclass_highres_xi2_half,
     _relion_exact_bpref_operands_enabled,
     _relion_firstiter_fused_bpref_enabled,
     _relion_powerclass_spectrum_norm_enabled,
@@ -24,6 +26,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_wavg_sequential_triplet_terms,
     _replace_low_shell_noise_with_relion_wavg_direct_residual,
     _select_optional_wavg_exact_pixels,
+    compute_pass2_stats_sparse_bucketed,
 )
 from scripts.analyze_k1_scale_aa_pixels import analyze
 
@@ -60,6 +63,58 @@ def test_fresh_k1_default_enables_direct_noise_but_explicit_zero_disables(monkey
 
     monkeypatch.setenv("RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY", "0")
     assert _relion_wavg_direct_modes(**kwargs) == (False, False)
+
+
+def test_full_box_wavg_rectangle_resolves_unwindowed_current_size_sentinel():
+    image_shape = (8, 8)
+    rectangle = _make_relion_wavg_rectangle(
+        image_shape,
+        current_size=None,
+        recon_window_indices=None,
+    )
+
+    n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+    assert rectangle.centered_indices.shape == (n_half,)
+    assert rectangle.exact_positions.shape == (n_half,)
+    np.testing.assert_array_equal(
+        np.sort(rectangle.centered_indices),
+        np.arange(n_half, dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        np.sort(rectangle.exact_positions),
+        np.arange(n_half, dtype=np.int32),
+    )
+    np.testing.assert_array_equal(
+        rectangle.centered_indices[rectangle.exact_positions],
+        np.arange(n_half, dtype=np.int32),
+    )
+    assert np.any(rectangle.shell_indices == -1)
+    rounded_indices, _ = make_fourier_window_indices_np(
+        image_shape,
+        image_shape[0],
+        include_dc=True,
+        exact_radius=False,
+    )
+    assert np.count_nonzero(rectangle.shell_indices >= 0) == rounded_indices.size
+
+    high_shell = _relion_cuda_powerclass_highres_xi2_half(
+        jnp.ones((2, n_half), dtype=jnp.complex64),
+        image_shape=image_shape,
+        current_size=image_shape[0],
+    )
+    np.testing.assert_array_equal(np.asarray(high_shell), np.zeros(2, dtype=np.float32))
+
+
+def test_full_box_wavg_noise_uses_numeric_size_in_both_accumulation_routes():
+    source = inspect.getsource(compute_pass2_stats_sparse_bucketed)
+
+    assert "direct Wavg noise replacement requires current_size" not in source
+    assert source.count(
+        "exclusive_shell_stop=int(relion_wavg_current_size // 2) + 1"
+    ) == 2
+    assert source.count(
+        "norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2)"
+    ) == 2
 
 
 @pytest.mark.parametrize(

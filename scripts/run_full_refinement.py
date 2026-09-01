@@ -5464,7 +5464,11 @@ def main():
 
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
-        init_volume=jnp.asarray(init_vol_ft),
+        # Keep the box-scale cold start host-owned across the wrapper call.
+        # _normalize_initial_means performs the sole device conversion inside
+        # the iteration loop, where its lifetime can be ended before the next
+        # reconstruction rather than retained by this suspended caller frame.
+        init_volume=init_vol_ft,
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
         rotations=rotations,

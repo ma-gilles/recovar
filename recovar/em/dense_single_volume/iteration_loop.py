@@ -5359,6 +5359,10 @@ def _run_relion_iteration_loop(
     # an explicit leading class axis; single-class callers keep the historical
     # flat per-half reference layout.
     means = _normalize_initial_means(init_volume, n_classes)
+    # ``_normalize_initial_means`` may place the same cold-start device buffer
+    # in both half slots.  The argument itself is otherwise dead; dropping this
+    # third alias lets the K=1 release boundary return that buffer to JAX.
+    del init_volume
     initial_real_references_by_half = [None, None]
     if init_reference_real is not None:
         expected_volume_shape = tuple(int(value) for value in volume_shape)
