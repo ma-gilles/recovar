@@ -10,7 +10,8 @@
     ],
     "calibration_case_ids": [
       "empiar-10073-native-c1",
-      "empiar-10345-native-c1"
+      "empiar-10345-native-c1",
+      "empiar-10097-native-c1"
     ]
   },
   "metric_policy": {
@@ -50,8 +51,129 @@
   },
   "diagnostic_producer": {
     "path": "scripts/collect_em_k1_science_diagnostics.py",
-    "sha256": "01b432c5c735a060f69d55569c897ac42aca8c2af6c3fa3a23b334fb2378ac9c",
+    "sha256": "fff385a6ec362679798b588d5a8a4684d47b46b1dfd9be9e5bd2d5c640436428",
     "schema": "recovar.em_k1_science_diagnostics.v1"
+  },
+  "masked_fsc_support": {
+    "role": "supporting_only",
+    "acceptance_metric": false,
+    "can_rescue": false,
+    "dataset_ids": [
+      "10073",
+      "10345",
+      "10097"
+    ],
+    "artifacts": {
+      "aggregate_summary": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/aggregate_summary.json",
+        "sha256": "0c6930e801b2d4364fdde8d69d3982250b397f20c6bf17caecc9b6862f0f28ad"
+      },
+      "all_fsc_curves": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/all_fsc_curves.csv",
+        "sha256": "43e3e8bd66247a8eab76ee65f2210b2d7c57c14feefdfb942fd26a0204525e06"
+      },
+      "corrected_masked_fsc_summary": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/corrected_masked_fsc_summary.csv",
+        "sha256": "acb517e7dd686582588cb78c44c9958db7d531fba808d6199c92c3cc73a103c5"
+      },
+      "provenance": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/PROVENANCE.json",
+        "sha256": "6d9d4779f06a45c52117eb9e2226c598bcfc923949757792bac80f750634a5a9"
+      },
+      "readme": {
+        "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/README.md",
+        "sha256": "9e64edf33afd7edbd5a27c2a22fde8e452bef7bd0194fd76d87a792b286c84e2"
+      }
+    },
+    "producer_jobs": {
+      "13273806": {
+        "datasets": [
+          "10073",
+          "10345"
+        ],
+        "state": "FAILED only on the later 10097 component audit",
+        "ReqTRES": "cpu=4,mem=64G,node=1,billing=5",
+        "AllocTRES": "cpu=4,mem=64G,node=1,billing=5"
+      },
+      "13274377": {
+        "datasets": [
+          "10097"
+        ],
+        "state": "COMPLETED",
+        "ReqTRES": "cpu=4,mem=32G,node=1,billing=4",
+        "AllocTRES": "cpu=4,mem=32G,node=1,billing=4"
+      }
+    },
+    "relion_binaries": {
+      "relion_image_handler": {
+        "path": "/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_image_handler",
+        "sha256": "b3045272c25e73a22a59d2e8cad116508667a7a084483625530b5a4ae1c0c551"
+      },
+      "relion_mask_create": {
+        "path": "/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_mask_create",
+        "sha256": "b74db2ff68bda3312d90e27981654bad07bb80e8556f111a684dded7a1a67b80"
+      },
+      "relion_postprocess": {
+        "path": "/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_postprocess",
+        "sha256": "b47642c9d20b7f8d926ba5f81e877a9cde949d808aff63d18e34095ec2747277"
+      }
+    },
+    "postprocess_policy": {
+      "same_mask_for_both_engines": true,
+      "force_mask": true,
+      "skip_fsc_weighting": true,
+      "low_pass_angstrom": 0,
+      "randomize_at_fsc": 0.8,
+      "random_seed": 42
+    },
+    "mask_policy": {
+      "source": "RELION merged map in native RELION file frame",
+      "lowpass_angstrom": 15,
+      "threshold": "global median + 0.05 * (99.99th percentile - global median) of the RELION 15-A-lowpass merged map",
+      "extend_pixels": 5,
+      "soft_edge_pixels": 8
+    },
+    "mask_header_nondeterminism": {
+      "dataset": "10097",
+      "audited_mask_sha256": "b47439f30167283ad4ef4cbd67140cb484163e5225d70f644ab7b71f5562ec38",
+      "regenerated_file_sha256": "891cafb1bcebe0dba88ec9f1dba5cc7500de2af3ea71712824ecd687f6a49c2c",
+      "identical_voxel_payload_sha256": "80ee44d1dd05718a3544a0e5456068875909757441ea8f2aca67e48debe901ec",
+      "differing_one_based_file_bytes": [
+        249,
+        250,
+        253
+      ],
+      "postprocess_used_literal_audited_mask": true
+    },
+    "expected_corrected_metrics": {
+      "10073": {
+        "recovar_crossing_shell": 128,
+        "recovar_resolution_angstrom": 4.156282488256693,
+        "relion_crossing_shell": 130,
+        "relion_resolution_angstrom": 4.092339680745051,
+        "curve_rmse": 0.004180381008706353,
+        "band_auc_absolute_delta": 0.001600259842519991,
+        "mask_sha256": "49ba576a4c44c655b6ff9eb633866a8ab59833a2d06e9d960939fd69e2ffd9df"
+      },
+      "10345": {
+        "recovar_crossing_shell": 77,
+        "recovar_resolution_angstrom": 5.240259851728167,
+        "relion_crossing_shell": 77,
+        "relion_resolution_angstrom": 5.240259851728167,
+        "curve_rmse": 0.004789530197541076,
+        "band_auc_absolute_delta": 0.0003128289473686152,
+        "mask_sha256": "14f572e495523340fb8902f43baf0e0274e903e333147fb03c5d5984a4065137"
+      },
+      "10097": {
+        "recovar_crossing_shell": 58,
+        "recovar_resolution_angstrom": 5.782060294315733,
+        "relion_crossing_shell": 59,
+        "relion_resolution_angstrom": 5.684059272378178,
+        "curve_rmse": 0.008370045789977243,
+        "band_auc_absolute_delta": 0.002112736842105223,
+        "mask_sha256": "b47439f30167283ad4ef4cbd67140cb484163e5225d70f644ab7b71f5562ec38"
+      }
+    }
   },
   "cases": [
     {
@@ -165,7 +287,8 @@
         "merged_cross_engine_band_auc": 0.9691362193064661,
         "half1_cross_engine_band_auc": 0.9408020515354473,
         "half2_cross_engine_band_auc": 0.9415304729655856
-      }
+      },
+      "expected_cross_engine_route": "raw_canonical"
     },
     {
       "id": "empiar-10345-native-c1",
@@ -200,7 +323,120 @@
         "merged_cross_engine_band_auc": 0.9756097026599992,
         "half1_cross_engine_band_auc": 0.9658667061929587,
         "half2_cross_engine_band_auc": 0.9650894354317021
-      }
+      },
+      "expected_cross_engine_route": "raw_canonical"
+    },
+    {
+      "id": "empiar-10097-native-c1",
+      "role": "calibration",
+      "dataset": "10097",
+      "subject_commit": "8502fc50c7f68b8c6f696874f60b6041e9d5d308",
+      "slurm_job_id": 13124450,
+      "input_contract": {
+        "particle_count": 130000,
+        "box_size": 256,
+        "voxel_size_angstrom": 1.3099979040033536,
+        "prepared_star_sha256": "97a03b3debad6c7b52132d3f560bc8076fc5bc600ca8946cf22f5cda553778a7",
+        "symmetry": {
+          "family": "cyclic",
+          "requested_label": "C1",
+          "label": "C1",
+          "operator_count": 1,
+          "operator_order": "identity only",
+          "left_operator_policy": "identity",
+          "hash_encoding": "float64 rounded to 12 decimals, stacked [left,right], little-endian C-order bytes",
+          "operators_sha256": "08d94fcf4e14c682e988305422e5563f5c7fc2f7dec91824379bd8352a7c7994"
+        }
+      },
+      "artifacts": {
+        "metrics_json": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/per_dataset/10097/metrics/metrics.json",
+          "sha256": "209487bef7bc09e1e647c90761db316053690fa0da7940a4bdd50145877176f6"
+        },
+        "fsc_curves_npz": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/per_dataset/10097/metrics/fsc_curves.npz",
+          "sha256": "ade7183112425335138cad19e6d2ac7b8c1790a9f6f0b4b930c36fa0624dbdc3"
+        },
+        "input_manifest": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/per_dataset/10097/inputs/input_manifest.json",
+          "sha256": "bdb8dd6ae68a509b701a99c153e7af53449370b5f57856c553d3e87019484faa"
+        },
+        "run_readme": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/README.md",
+          "sha256": "a5d816c80e3100496f3ff7eda6911af542489fc072672478879006bf1384c470"
+        }
+      },
+      "expected_metrics": {
+        "half_resolution_ratio": 1.0227272727272727,
+        "half_curve_rmse": 0.00492607016375037,
+        "half_band_auc_abs_delta": 0.0015007730672029762,
+        "merged_cross_engine_band_auc": 0.9357355621429695,
+        "half1_cross_engine_band_auc": 0.8858029562913453,
+        "half2_cross_engine_band_auc": 0.8889382693911168
+      },
+      "proper_so3_diagnostics": {
+        "slurm_job_id": 13276576,
+        "subject_commit": "915470fb5b9b733035b09e44d9c911a4cab9302f",
+        "launch_script": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/scripts/run_proper_so3_identity.sbatch",
+          "sha256": "47539fc253d4a9db56b6559e534ddcd37811cba3436ee727acc98449b01c2f92"
+        },
+        "slurm_stdout": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/logs/slurm-13276576.out",
+          "sha256": "34ce324171ea5eb07aadde2a7fa91c5bd13aae190aedb9915126611d32785425"
+        },
+        "slurm_stderr": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/logs/slurm-13276576.err",
+          "sha256": "bf45fbff069442f27394a47cd1519ae5c99a1f8d85363eb6d41b404ef7329526"
+        },
+        "resources": {
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:01:17",
+          "node": "della-h14n18",
+          "ReqTRES": "billing=8,cpu=4,mem=32G,node=1",
+          "AllocTRES": "billing=8,cpu=4,mem=32G,node=1",
+          "batch_MaxRSS_KiB": 2744176
+        },
+        "artifacts": {
+          "science_diagnostics": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/output/science_diagnostics.json",
+            "sha256": "833e7393a31b9982cdae9025b00f2fcf91dad4eaf79250884194e1666008b98d",
+            "schema": "recovar.em_k1_science_diagnostics.v1"
+          },
+          "curve_archive": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/output/science_diagnostic_curves.npz",
+            "sha256": "3cf93d3f37c3b92be3bb586ed644f1f619d583db271ed66cf888705bafb2a8ed",
+            "fields": [
+              "final_cross_engine_half1_proper_aligned",
+              "final_cross_engine_half1_proper_aligned_common_masked",
+              "final_cross_engine_half2_proper_aligned",
+              "final_cross_engine_half2_proper_aligned_common_masked",
+              "final_cross_engine_proper_aligned",
+              "final_cross_engine_proper_aligned_common_masked",
+              "recovar_final_half_fsc_common_masked",
+              "relion_final_half_fsc_common_masked"
+            ]
+          },
+          "common_mask": {
+            "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/output/common_soft_mask.mrc",
+            "sha256": "9e361194f432851043d52f10b55b33bd381e7e787b4e08e198f4bddc36f874da"
+          }
+        },
+        "expected_metrics": {
+          "merged_cross_engine_band_auc": 0.9354267534361663,
+          "half1_cross_engine_band_auc": 0.8855173152657688,
+          "half2_cross_engine_band_auc": 0.888483075371504
+        },
+        "expected_can_rescue_cross_engine": false,
+        "superseded_diagnostic": {
+          "slurm_job_id": 13275901,
+          "science_diagnostics_sha256": "f8bf64d6be3587389f5ae65a12b59b579f21d4c8675f243fd21aa3c13f9944a5",
+          "curve_archive_sha256": "4e1be40dd8af2c04673e0e18033cb1fa16b600b40575f3b1632188265316ea2a",
+          "reason": "invalid alignment seed search omitted canonical identity; retained for audit and excluded from all scorecard metrics"
+        }
+      },
+      "expected_cross_engine_route": "none_unqualified"
     }
   ]
 }

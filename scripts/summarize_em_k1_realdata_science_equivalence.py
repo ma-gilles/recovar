@@ -43,7 +43,17 @@ TARGET_CASE_ID = "empiar-10202-set06-k1-I1"
 CALIBRATION_CASE_IDS = (
     "empiar-10073-native-c1",
     "empiar-10345-native-c1",
+    "empiar-10097-native-c1",
 )
+MASKED_SUPPORT_DATASET_IDS = ("10073", "10345", "10097")
+MASKED_SUPPORT_ARTIFACT_KEYS = (
+    "aggregate_summary",
+    "all_fsc_curves",
+    "corrected_masked_fsc_summary",
+    "provenance",
+    "readme",
+)
+MASKED_SUPPORT_REPLAY_ATOL = 5.0e-13
 CURVE_KEYS = (
     "relion_final_half_fsc",
     "recovar_final_half_fsc",
@@ -342,6 +352,152 @@ def _validate_thresholds(thresholds: Mapping[str, Any]) -> None:
             _require(float(observed) == expected, f"scorecard threshold {key} changed")
 
 
+def _validate_masked_fsc_support_contract(support: Mapping[str, Any]) -> None:
+    """Validate the frozen, non-acceptance RELION masked-FSC manifest."""
+
+    _require(support.get("role") == "supporting_only", "masked FSC role changed")
+    _require(support.get("acceptance_metric") is False, "masked FSC became an acceptance metric")
+    _require(support.get("can_rescue") is False, "masked FSC became a rescue route")
+    _require(tuple(support.get("dataset_ids", ())) == MASKED_SUPPORT_DATASET_IDS, "masked FSC dataset set changed")
+    artifacts = support.get("artifacts", {})
+    _require(set(artifacts) == set(MASKED_SUPPORT_ARTIFACT_KEYS), "masked FSC artifact set changed")
+    for name, artifact in artifacts.items():
+        _require(Path(artifact.get("path", "")).is_absolute(), f"masked FSC {name} path is not absolute")
+        _require(_is_sha256(artifact.get("sha256")), f"masked FSC {name} SHA-256 is invalid")
+
+    jobs = support.get("producer_jobs", {})
+    _require(set(jobs) == {"13273806", "13274377"}, "masked FSC producer jobs changed")
+    _require(jobs["13273806"].get("datasets") == ["10073", "10345"], "masked FSC job 13273806 scope changed")
+    _require(jobs["13274377"].get("datasets") == ["10097"], "masked FSC job 13274377 scope changed")
+    for job_id, job in jobs.items():
+        _require(job.get("ReqTRES") == job.get("AllocTRES"), f"masked FSC job {job_id} allocation changed")
+
+    binaries = support.get("relion_binaries", {})
+    _require(
+        set(binaries) == {"relion_image_handler", "relion_mask_create", "relion_postprocess"},
+        "masked FSC RELION binary set changed",
+    )
+    for name, binary in binaries.items():
+        _require(Path(binary.get("path", "")).is_absolute(), f"masked FSC {name} path is not absolute")
+        _require(_is_sha256(binary.get("sha256")), f"masked FSC {name} SHA-256 is invalid")
+
+    _require(
+        support.get("postprocess_policy")
+        == {
+            "same_mask_for_both_engines": True,
+            "force_mask": True,
+            "skip_fsc_weighting": True,
+            "low_pass_angstrom": 0,
+            "randomize_at_fsc": 0.8,
+            "random_seed": 42,
+        },
+        "masked FSC postprocess policy changed",
+    )
+    mask_policy = support.get("mask_policy", {})
+    _require(mask_policy.get("source") == "RELION merged map in native RELION file frame", "mask source changed")
+    _require(mask_policy.get("lowpass_angstrom") == 15, "mask low-pass changed")
+    _require(mask_policy.get("extend_pixels") == 5, "mask extension changed")
+    _require(mask_policy.get("soft_edge_pixels") == 8, "mask soft edge changed")
+    header_audit = support.get("mask_header_nondeterminism", {})
+    _require(header_audit.get("dataset") == "10097", "mask header audit dataset changed")
+    _require(header_audit.get("postprocess_used_literal_audited_mask") is True, "literal 10097 mask was not used")
+    _require(
+        header_audit.get("differing_one_based_file_bytes") == [249, 250, 253],
+        "10097 mask header-byte audit changed",
+    )
+
+    expected = support.get("expected_corrected_metrics", {})
+    _require(tuple(expected) == MASKED_SUPPORT_DATASET_IDS, "masked FSC expected dataset order changed")
+    for dataset, metrics in expected.items():
+        _require(int(metrics.get("recovar_crossing_shell", 0)) > 0, f"{dataset} RECOVAR masked crossing is invalid")
+        _require(int(metrics.get("relion_crossing_shell", 0)) > 0, f"{dataset} RELION masked crossing is invalid")
+        for key in ("recovar_resolution_angstrom", "relion_resolution_angstrom", "curve_rmse", "band_auc_absolute_delta"):
+            _finite_float(metrics.get(key), f"{dataset} {key}")
+        _require(_is_sha256(metrics.get("mask_sha256")), f"{dataset} mask SHA-256 is invalid")
+
+
+def _validate_calibration_route_contract(
+    case: Mapping[str, Any],
+    thresholds: Mapping[str, Any],
+) -> None:
+    """Validate one calibration without making cross-engine parity mandatory."""
+
+    case_id = str(case["id"])
+    expected = case.get("expected_metrics", {})
+    _require(
+        not apply_half_map_quality_gates(expected, thresholds),
+        f"{case_id} no longer passes mandatory half-map calibration",
+    )
+    raw_failures = apply_cross_engine_gates(expected, thresholds)
+    route = case.get("expected_cross_engine_route")
+    _require(route in {"raw_canonical", "continuous_proper_so3_rigid", "none_unqualified"}, f"{case_id} route is invalid")
+    diagnostics = case.get("proper_so3_diagnostics")
+    if route == "raw_canonical":
+        _require(not raw_failures, f"{case_id} raw route no longer passes")
+        _require(diagnostics is None, f"{case_id} has unnecessary proper-SO3 diagnostics")
+        return
+
+    _require(raw_failures, f"{case_id} proper-SO3 route supplied despite a passing raw route")
+    _require(isinstance(diagnostics, Mapping), f"{case_id} proper-SO3 diagnostics are missing")
+    _require(_is_git_sha(diagnostics.get("subject_commit")), f"{case_id} diagnostic commit is invalid")
+    _require(int(diagnostics.get("slurm_job_id", 0)) > 0, f"{case_id} diagnostic job is invalid")
+    for name in ("launch_script", "slurm_stdout", "slurm_stderr"):
+        artifact = diagnostics.get(name, {})
+        _require(Path(artifact.get("path", "")).is_absolute(), f"{case_id} {name} path is not absolute")
+        _require(_is_sha256(artifact.get("sha256")), f"{case_id} {name} SHA-256 is invalid")
+    resources = diagnostics.get("resources", {})
+    _require(resources.get("state") == "COMPLETED", f"{case_id} diagnostic job did not complete")
+    _require(resources.get("exit_code") == "0:0", f"{case_id} diagnostic job exit code changed")
+    _require(resources.get("ReqTRES") == resources.get("AllocTRES"), f"{case_id} diagnostic allocation changed")
+    artifacts = diagnostics.get("artifacts", {})
+    _require(
+        set(artifacts) == {"science_diagnostics", "curve_archive", "common_mask"},
+        f"{case_id} diagnostic artifact set changed",
+    )
+    for name, artifact in artifacts.items():
+        _require(Path(artifact.get("path", "")).is_absolute(), f"{case_id} diagnostic {name} path is not absolute")
+        _require(_is_sha256(artifact.get("sha256")), f"{case_id} diagnostic {name} SHA-256 is invalid")
+    _require(
+        artifacts["science_diagnostics"].get("schema") == SCIENCE_DIAGNOSTICS_SCHEMA,
+        f"{case_id} diagnostic schema changed",
+    )
+    expected_aligned = diagnostics.get("expected_metrics", {})
+    _require(
+        set(expected_aligned)
+        == {
+            "merged_cross_engine_band_auc",
+            "half1_cross_engine_band_auc",
+            "half2_cross_engine_band_auc",
+        },
+        f"{case_id} diagnostic metric set changed",
+    )
+    for key, value in expected_aligned.items():
+        _finite_float(value, f"{case_id} {key}")
+    aligned_pass = not apply_cross_engine_gates(expected_aligned, thresholds)
+    _require(
+        diagnostics.get("expected_can_rescue_cross_engine") is aligned_pass,
+        f"{case_id} diagnostic rescue expectation changed",
+    )
+    expected_route = "continuous_proper_so3_rigid" if aligned_pass else "none_unqualified"
+    _require(route == expected_route, f"{case_id} expected route disagrees with diagnostic gates")
+    superseded = diagnostics.get("superseded_diagnostic")
+    if superseded is not None:
+        _require(superseded.get("slurm_job_id") == 13275901, f"{case_id} superseded job changed")
+        _require(
+            _is_sha256(superseded.get("science_diagnostics_sha256")),
+            f"{case_id} superseded diagnostic SHA-256 is invalid",
+        )
+        _require(
+            _is_sha256(superseded.get("curve_archive_sha256")),
+            f"{case_id} superseded curve SHA-256 is invalid",
+        )
+        _require(
+            superseded.get("reason")
+            == "invalid alignment seed search omitted canonical identity; retained for audit and excluded from all scorecard metrics",
+            f"{case_id} superseded diagnostic reason changed",
+        )
+
+
 def load_and_validate_scorecard(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
     """Load the frozen manifest and validate its denominator and policy."""
 
@@ -423,6 +579,7 @@ def load_and_validate_scorecard(path: Path = DEFAULT_SCORECARD) -> dict[str, Any
         sha256_file(producer_path) == diagnostic_producer["sha256"],
         "proper-SO3 diagnostic producer SHA-256 changed",
     )
+    _validate_masked_fsc_support_contract(scorecard.get("masked_fsc_support", {}))
 
     cases = scorecard.get("cases", [])
     ids = [case.get("id") for case in cases]
@@ -563,8 +720,7 @@ def load_and_validate_scorecard(path: Path = DEFAULT_SCORECARD) -> dict[str, Any
         case = by_id[case_id]
         _require(case.get("role") == "calibration", f"{case_id} is not calibration-only")
         _require(_is_git_sha(case.get("subject_commit")), f"{case_id} subject commit is invalid")
-        expected = case.get("expected_metrics", {})
-        _require(not apply_primary_gates(expected, scorecard["thresholds"]), f"{case_id} no longer passes")
+        _validate_calibration_route_contract(case, scorecard["thresholds"])
         for artifact in case.get("artifacts", {}).values():
             _require(Path(artifact["path"]).is_absolute(), f"{case_id} artifact path is not absolute")
             _require(_is_sha256(artifact.get("sha256")), f"{case_id} artifact digest is invalid")
@@ -636,15 +792,133 @@ def replay_calibration_case(
         thresholds=scorecard["thresholds"],
     )
     _compare_calibration_metrics(case, scored["primary_metrics"])
-    _require(scored["primary_pass"], f"{case['id']} calibration no longer passes")
+    _require(scored["half_map_quality_pass"], f"{case['id']} half-map calibration no longer passes")
+
+    science_diagnostics: dict[str, Any] = {"status": "not_supplied"}
+    diagnostic_spec = case.get("proper_so3_diagnostics")
+    if diagnostic_spec is not None:
+        for name in ("launch_script", "slurm_stdout", "slurm_stderr"):
+            artifact = diagnostic_spec[name]
+            path = Path(artifact["path"])
+            _require(path.is_file(), f"missing calibration {name}: {path}")
+            _require(sha256_file(path) == artifact["sha256"], f"calibration {name} SHA-256 changed")
+        science_diagnostics, science_failures = _validate_science_diagnostics(
+            scorecard,
+            case,
+            {"analysis_artifacts": diagnostic_spec["artifacts"]},
+            metrics,
+            first_shell=int(scored["jointly_resolved_band"]["first_shell"]),
+            last_shell=int(scored["jointly_resolved_band"]["last_shell"]),
+            expected_curve_length=int(curves[CURVE_KEYS[0]].size),
+        )
+        _require(not science_failures, f"calibration diagnostics invalid: {', '.join(science_failures)}")
+        aligned_metrics = science_diagnostics["proper_so3_alignment"]["metrics"]
+        for key, expected_value in diagnostic_spec["expected_metrics"].items():
+            actual = _finite_float(aligned_metrics[key], key)
+            _require(
+                math.isclose(actual, float(expected_value), rel_tol=0.0, abs_tol=CALIBRATION_REPLAY_ATOL),
+                f"{case['id']} diagnostic metric {key} changed: {actual} != {expected_value}",
+            )
+        _require(
+            science_diagnostics["proper_so3_alignment"]["can_rescue_cross_engine"]
+            is diagnostic_spec["expected_can_rescue_cross_engine"],
+            f"{case['id']} diagnostic rescue result changed",
+        )
+
+    if scored["raw_cross_engine_pass"]:
+        observed_route = "raw_canonical"
+    elif science_diagnostics.get("proper_so3_alignment", {}).get("can_rescue_cross_engine") is True:
+        observed_route = "continuous_proper_so3_rigid"
+    else:
+        observed_route = "none_unqualified"
+    _require(observed_route == case["expected_cross_engine_route"], f"{case['id']} cross-engine route changed")
+    science_equivalence_pass = observed_route != "none_unqualified"
     return {
         "id": case["id"],
         "role": "calibration",
         "status": "pass",
         "subject_commit": case["subject_commit"],
         **scored,
-        "science_diagnostics": {"status": "not_supplied"},
+        "cross_engine_route": observed_route,
+        "science_equivalence_pass": science_equivalence_pass,
+        "science_diagnostics": science_diagnostics,
         "artifacts": case["artifacts"],
+    }
+
+
+def replay_masked_fsc_support(scorecard: Mapping[str, Any]) -> dict[str, Any]:
+    """Verify the sealed RELION corrected-masked FSC bundle without scoring it."""
+
+    support = scorecard["masked_fsc_support"]
+    _validate_masked_fsc_support_contract(support)
+    for name, artifact in support["artifacts"].items():
+        path = Path(artifact["path"])
+        _require(path.is_file(), f"missing masked FSC {name}: {path}")
+        _require(sha256_file(path) == artifact["sha256"], f"masked FSC {name} SHA-256 changed")
+    for name, binary in support["relion_binaries"].items():
+        path = Path(binary["path"])
+        _require(path.is_file(), f"missing masked FSC RELION binary {name}: {path}")
+        _require(sha256_file(path) == binary["sha256"], f"masked FSC RELION binary {name} SHA-256 changed")
+
+    aggregate = json.loads(Path(support["artifacts"]["aggregate_summary"]["path"]).read_text())
+    _require(tuple(aggregate.get("datasets", {})) == MASKED_SUPPORT_DATASET_IDS, "masked FSC aggregate dataset order changed")
+    observed_jobs = aggregate.get("producer_jobs", {})
+    for job_id, expected_job in support["producer_jobs"].items():
+        observed_job = observed_jobs.get(job_id, {})
+        for key, value in expected_job.items():
+            _require(observed_job.get(key) == value, f"masked FSC job {job_id} {key} changed")
+    for name, expected_binary in support["relion_binaries"].items():
+        observed_binary = aggregate.get("relion_binaries", {}).get(name, {})
+        _require(observed_binary.get("path") == expected_binary["path"], f"masked FSC {name} path changed")
+        _require(observed_binary.get("sha256") == expected_binary["sha256"], f"masked FSC {name} digest changed")
+    _require(aggregate.get("postprocess_policy") == support["postprocess_policy"], "masked FSC aggregate policy changed")
+    for key, value in support["mask_policy"].items():
+        _require(aggregate.get("mask_policy", {}).get(key) == value, f"masked FSC mask policy {key} changed")
+    header_audit = aggregate.get("mask_header_nondeterminism", {})
+    expected_header = support["mask_header_nondeterminism"]
+    for expected_key, aggregate_key in (
+        ("audited_mask_sha256", "audited_10097_mask_sha256"),
+        ("regenerated_file_sha256", "regenerated_file_sha256"),
+        ("identical_voxel_payload_sha256", "identical_voxel_payload_sha256"),
+        ("differing_one_based_file_bytes", "differing_one_based_file_bytes"),
+        ("postprocess_used_literal_audited_mask", "postprocess_used_literal_audited_mask"),
+    ):
+        _require(
+            header_audit.get(aggregate_key) == expected_header[expected_key],
+            f"masked FSC 10097 header audit {expected_key} changed",
+        )
+
+    for dataset, expected in support["expected_corrected_metrics"].items():
+        observed_dataset = aggregate["datasets"][dataset]
+        _require(observed_dataset.get("producer_job") in (13273806, 13274377), f"{dataset} producer job changed")
+        _require(observed_dataset.get("same_literal_mask_path_for_both_engines") is True, f"{dataset} mask reuse changed")
+        _require(observed_dataset.get("same_postprocess_policy_for_both_engines") is True, f"{dataset} policy reuse changed")
+        _require(observed_dataset.get("mask", {}).get("sha256") == expected["mask_sha256"], f"{dataset} mask changed")
+        corrected = observed_dataset.get("curve_comparisons", {}).get("corrected_masked_fsc", {})
+        crossings = corrected.get("threshold_crossings", {}).get("0.143", {})
+        observed = {
+            "recovar_crossing_shell": crossings.get("recovar", {}).get("first_below_shell"),
+            "recovar_resolution_angstrom": crossings.get("recovar", {}).get("first_below_resolution_angstrom"),
+            "relion_crossing_shell": crossings.get("relion", {}).get("first_below_shell"),
+            "relion_resolution_angstrom": crossings.get("relion", {}).get("first_below_resolution_angstrom"),
+            "curve_rmse": corrected.get("curve_rmse"),
+            "band_auc_absolute_delta": corrected.get("band_auc_absolute_delta"),
+        }
+        for key in ("recovar_crossing_shell", "relion_crossing_shell"):
+            _require(observed[key] == expected[key], f"{dataset} masked FSC {key} changed")
+        for key in ("recovar_resolution_angstrom", "relion_resolution_angstrom", "curve_rmse", "band_auc_absolute_delta"):
+            _require(
+                math.isclose(float(observed[key]), float(expected[key]), rel_tol=0.0, abs_tol=MASKED_SUPPORT_REPLAY_ATOL),
+                f"{dataset} masked FSC {key} changed",
+            )
+    return {
+        "status": "verified",
+        "role": "supporting_only",
+        "acceptance_metric": False,
+        "can_rescue": False,
+        "artifacts": support["artifacts"],
+        "producer_jobs": support["producer_jobs"],
+        "expected_corrected_metrics": support["expected_corrected_metrics"],
     }
 
 
@@ -1044,9 +1318,10 @@ def _validate_science_diagnostics(
     check(alignment.get("fit_source") == "merged_low_frequency", "fit_source")
     check(
         alignment.get("method")
-        == "HEALPix proper-rotation seed plus continuous scipy rotvec Powell and subpixel translation",
+        == "identity-augmented HEALPix proper-rotation seed plus continuous scipy rotvec Powell and subpixel translation",
         "alignment_method",
     )
+    check(alignment.get("seed_source") == "identity_augmented_RELION_HEALPix_grid", "alignment_seed_source")
     check(alignment.get("continuous_so3_refinement") is True, "continuous_so3_refinement")
     check(alignment.get("translation_subpixel") is True, "translation_subpixel")
     check(
@@ -1358,16 +1633,38 @@ def _frozen_case_rows(scorecard: Mapping[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for case in scorecard["cases"]:
         if case["role"] == "calibration":
-            failed = apply_primary_gates(case["expected_metrics"], scorecard["thresholds"])
+            half_failures = apply_half_map_quality_gates(case["expected_metrics"], scorecard["thresholds"])
+            route = case["expected_cross_engine_route"]
+            diagnostic_spec = case.get("proper_so3_diagnostics")
+            science_diagnostics = (
+                {
+                    "status": "frozen_not_replayed",
+                    "proper_so3_alignment": {
+                        "status": "frozen_not_replayed",
+                        "can_rescue_cross_engine": diagnostic_spec["expected_can_rescue_cross_engine"],
+                        "metrics": diagnostic_spec["expected_metrics"],
+                    },
+                    "artifacts": diagnostic_spec["artifacts"],
+                }
+                if diagnostic_spec is not None
+                else {"status": "not_supplied"}
+            )
             rows.append(
                 {
                     "id": case["id"],
                     "role": "calibration",
-                    "status": "pass" if not failed else "fail",
+                    "status": "pass" if not half_failures else "fail",
                     "subject_commit": case["subject_commit"],
                     "primary_metrics": case["expected_metrics"],
-                    "failed_gates": failed,
-                    "science_diagnostics": {"status": "not_supplied"},
+                    "primary_pass": not half_failures and route != "none_unqualified",
+                    "half_map_quality_pass": not half_failures,
+                    "failed_gates": [
+                        *half_failures,
+                        *([] if route != "none_unqualified" else ["cross_engine_equivalence"]),
+                    ],
+                    "cross_engine_route": route,
+                    "science_equivalence_pass": route != "none_unqualified",
+                    "science_diagnostics": science_diagnostics,
                 }
             )
         else:
@@ -1390,6 +1687,7 @@ def build_report(
     *,
     scorecard_path: Path,
     verify_calibrations: bool = False,
+    verify_masked_support: bool = False,
     evidence_paths: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     """Build a fixed-denominator report from frozen and optionally live evidence."""
@@ -1413,6 +1711,19 @@ def build_report(
         "pending": sum(row["status"] == "pending" for row in scoring),
         "invalid": sum(row["status"] == "invalid" for row in scoring),
     }
+    masked_support = (
+        replay_masked_fsc_support(scorecard)
+        if verify_masked_support
+        else {
+            "status": "frozen_not_replayed",
+            "role": "supporting_only",
+            "acceptance_metric": False,
+            "can_rescue": False,
+            "artifacts": scorecard["masked_fsc_support"]["artifacts"],
+            "producer_jobs": scorecard["masked_fsc_support"]["producer_jobs"],
+            "expected_corrected_metrics": scorecard["masked_fsc_support"]["expected_corrected_metrics"],
+        }
+    )
     return {
         "schema": REPORT_SCHEMA,
         "suite": scorecard["suite"],
@@ -1434,6 +1745,7 @@ def build_report(
         "target_high_resolution_gate": scorecard["target_high_resolution_gate"],
         "cases": rows,
         "aggregate": aggregate,
+        "masked_fsc_support": masked_support,
     }
 
 
@@ -1475,20 +1787,35 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         "## Frozen calibration replay",
         "",
-        "The completed 10073 and 10345 runs calibrate the metric only. They ran a",
-        "descendant commit and do not count in the PR #158 scoring denominator.",
+        "The completed 10073, 10345, and 10097 runs calibrate the metric only. They",
+        "ran descendant commits and do not count in the PR #158 scoring denominator.",
+        "A calibration status is determined only by the mandatory unmasked, unaligned",
+        "within-engine half-map gates; cross-engine qualification is reported separately.",
         "",
-        "| Case | Status | Half RMSE | Half AUC delta | Merged band AUC | Minimum half band AUC |",
-        "| --- | --- | ---: | ---: | ---: | ---: |",
+        "| Case | Half-map calibration | Half RMSE | Half AUC delta | Raw merged/min-half AUC | Proper merged/min-half AUC | Qualified route |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
     ]
     for case_id in CALIBRATION_CASE_IDS:
         row = cases[case_id]
         metrics = row["primary_metrics"]
+        alignment = row.get("science_diagnostics", {}).get("proper_so3_alignment", {})
+        aligned_metrics = alignment.get("metrics") or {}
+        aligned_merged = aligned_metrics.get("merged_cross_engine_band_auc")
+        aligned_min_half = (
+            min(
+                aligned_metrics["half1_cross_engine_band_auc"],
+                aligned_metrics["half2_cross_engine_band_auc"],
+            )
+            if aligned_metrics
+            else None
+        )
+        proper_text = "--" if aligned_merged is None else f"{_fmt(aligned_merged)}/{_fmt(aligned_min_half)}"
         lines.append(
             f"| `{case_id}` | {row['status']} | {_fmt(metrics['half_curve_rmse'])} | "
             f"{_fmt(metrics['half_band_auc_abs_delta'])} | "
-            f"{_fmt(metrics['merged_cross_engine_band_auc'])} | "
-            f"{_fmt(min(metrics['half1_cross_engine_band_auc'], metrics['half2_cross_engine_band_auc']))} |"
+            f"{_fmt(metrics['merged_cross_engine_band_auc'])}/"
+            f"{_fmt(min(metrics['half1_cross_engine_band_auc'], metrics['half2_cross_engine_band_auc']))} | "
+            f"{proper_text} | `{row['cross_engine_route']}` |"
         )
     lines.extend(
         [
@@ -1497,7 +1824,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "the deposited publication workflows. Both engines crossed the",
             "three-consecutive-shell unmasked half-map FSC 1/7 threshold at shell 81 on",
             "10073 and shell 49 on 10345. Under the frozen resolution formula, these are",
-            "6.568 A and 8.235 A, respectively. They are worse than the 3.7 A deposited",
+            "6.568 A and 8.235 A, respectively. On 10097, RECOVAR and RELION cross at",
+            "shells 44 and 45 (7.622 A and 7.452 A). These values are worse than the",
+            "3.7 A deposited",
             "resolution for [EMD-8012](https://www.ebi.ac.uk/emdb/EMD-8012) and the 3.51 A",
             "focused resolution for [EMD-20795](https://www.ebi.ac.uk/emdb/EMD-20795),",
             "which also deposits a 3.8 A sharpened full-complex map.",
@@ -1512,13 +1841,68 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "classification, but its final maps used non-uniform and local-resolution",
             "refinement, local-resolution estimation, sharpening, and local filtering;",
             "the deposited primary map is a focused refinement. C1 is the appropriate",
-            "symmetry for both calibration datasets and is not the cause of the gap.",
+            "symmetry for 10073 and 10345 and is not the cause of that gap.",
             "",
-            "Accordingly, these cases establish that RECOVAR and RELION reach essentially",
-            "the same reconstruction under the matched protocol. They do not establish",
+            "The 10073 and 10345 cases establish that RECOVAR and RELION reach essentially",
+            "the same reconstruction under the matched protocol. The 10097 within-engine",
+            "half-map comparison also passes strongly, but its raw cross-engine AUCs",
+            "(0.935736 merged; 0.885803/0.888938 halves) miss the frozen cross-engine",
+            "gates. Corrected job 13276576 tested the allowed proper-SO(3)+translation",
+            "route after explicitly adding canonical identity to the HEALPix seed set.",
+            "It fitted only a 0.244-degree rotation and 0.084-voxel translation, but its",
+            "0.935427/0.885517/0.888483 aligned AUCs still miss the same gates. The route",
+            "is therefore recorded as unqualified and does not rescue 10097; a small",
+            "global rigid drift does not explain the residual cross-engine difference.",
+            "Job 13275901 is retained only as a superseded audit artifact because its",
+            "seed search omitted identity and selected a false distant orientation.",
+            "",
+            "These calibration results do not establish",
             "that this intentionally stripped-down protocol reproduces the published",
             "reconstruction. Absolute high-resolution achievement is tested separately by",
             "the frozen 10202 case below.",
+        ]
+    )
+    masked_support = report["masked_fsc_support"]
+    masked_metrics = masked_support["expected_corrected_metrics"]
+    aggregate_artifact = masked_support["artifacts"]["aggregate_summary"]
+    lines.extend(
+        [
+            "",
+            "## Supporting RELION corrected-masked FSC",
+            "",
+            "These measurements are supporting-only: they do not enter any acceptance",
+            "gate, cannot rescue an unmasked failure, and do not change the scoring",
+            "denominator. Each mask was generated only from the RELION merged map and",
+            "then passed byte-for-byte to both engines' independent half-map postprocess.",
+            "",
+            "| Dataset | RECOVAR corrected masked (A; shell) | RELION corrected masked (A; shell) | Curve RMSE | AUC delta | Mask SHA-256 prefix |",
+            "| --- | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for dataset in MASKED_SUPPORT_DATASET_IDS:
+        metrics = masked_metrics[dataset]
+        lines.append(
+            f"| {dataset} | {_fmt(metrics['recovar_resolution_angstrom'], 3)}; {metrics['recovar_crossing_shell']} | "
+            f"{_fmt(metrics['relion_resolution_angstrom'], 3)}; {metrics['relion_crossing_shell']} | "
+            f"{_fmt(metrics['curve_rmse'])} | {_fmt(metrics['band_auc_absolute_delta'])} | "
+            f"`{metrics['mask_sha256'][:12]}` |"
+        )
+    lines.extend(
+        [
+            "",
+            "RELION first low-pass filtered each merged map to 15 A, then used",
+            "`relion_mask_create --extend_inimask 5 --width_soft_edge 8`. Both",
+            "postprocess calls used `--force_mask --skip_fsc_weighting --low_pass 0",
+            "--randomize_at_fsc 0.8 --random_seed 42`. Exact per-dataset argv, input",
+            "hashes, mask thresholds, and output hashes are sealed in the aggregate",
+            f"artifact with SHA-256 `{aggregate_artifact['sha256']}`.",
+            "",
+            "Producer jobs were `13273806` for 10073/10345 and `13274377` for",
+            "10097; requested and allocated resources matched. The first job's nonzero",
+            "state occurred only after its two retained datasets, at the later 10097",
+            "component audit. The isolated second job reused the literal audited 10097",
+            "mask. Regenerating that mask changed only MRC header-statistic bytes 249,",
+            "250, and 253; the voxel payload was identical.",
         ]
     )
     target = cases[TARGET_CASE_ID]
@@ -1614,6 +1998,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scorecard", type=Path, default=DEFAULT_SCORECARD)
     parser.add_argument("--verify-calibrations", action="store_true")
+    parser.add_argument("--verify-masked-support", action="store_true")
     parser.add_argument("--evidence", type=Path, action="append", default=[])
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-markdown", type=Path)
@@ -1629,6 +2014,7 @@ def main(argv: list[str] | None = None) -> int:
         scorecard,
         scorecard_path=scorecard_path,
         verify_calibrations=bool(args.verify_calibrations),
+        verify_masked_support=bool(args.verify_masked_support),
         evidence_paths=tuple(path.resolve() for path in args.evidence),
     )
     markdown = render_markdown(report)

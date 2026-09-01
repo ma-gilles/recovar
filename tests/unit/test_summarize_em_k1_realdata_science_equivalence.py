@@ -266,7 +266,8 @@ def _attach_science_diagnostics(
         "diagnostics": {
             "proper_so3_alignment": {
                 "fit_source": "merged_low_frequency",
-                "method": "HEALPix proper-rotation seed plus continuous scipy rotvec Powell and subpixel translation",
+                "method": "identity-augmented HEALPix proper-rotation seed plus continuous scipy rotvec Powell and subpixel translation",
+                "seed_source": "identity_augmented_RELION_HEALPix_grid",
                 "continuous_so3_refinement": True,
                 "translation_subpixel": True,
                 "fit_max_shell_full_box": MODULE.PROPER_ALIGNMENT_FIT_MAX_SHELL_FULL_BOX,
@@ -339,6 +340,9 @@ def test_fixed_scorecard_is_valid_and_markdown_is_fresh() -> None:
         "invalid": 0,
     }
     assert _target(scorecard)["scope"] == "06_Final_Stack only; image set 07 is excluded"
+    assert report["masked_fsc_support"]["role"] == "supporting_only"
+    assert report["masked_fsc_support"]["acceptance_metric"] is False
+    assert report["masked_fsc_support"]["can_rescue"] is False
     assert MODULE.DEFAULT_MARKDOWN.read_text() == MODULE.render_markdown(report)
 
 
@@ -368,12 +372,33 @@ def test_joint_band_and_resolution_use_crossing_shell() -> None:
     assert band["relion_resolution_angstrom"] == pytest.approx(800 * 0.788 / 6)
 
 
-def test_frozen_calibration_rows_pass_every_primary_gate() -> None:
+def test_frozen_calibrations_pass_half_map_gates_and_report_cross_engine_separately() -> None:
     scorecard = MODULE.load_and_validate_scorecard()
 
     for case in scorecard["cases"]:
         if case["role"] == "calibration":
-            assert MODULE.apply_primary_gates(case["expected_metrics"], scorecard["thresholds"]) == []
+            assert MODULE.apply_half_map_quality_gates(case["expected_metrics"], scorecard["thresholds"]) == []
+    by_id = {case["id"]: case for case in scorecard["cases"]}
+    assert by_id["empiar-10073-native-c1"]["expected_cross_engine_route"] == "raw_canonical"
+    assert by_id["empiar-10345-native-c1"]["expected_cross_engine_route"] == "raw_canonical"
+    case_10097 = by_id["empiar-10097-native-c1"]
+    assert MODULE.apply_cross_engine_gates(case_10097["expected_metrics"], scorecard["thresholds"])
+    assert case_10097["expected_cross_engine_route"] == "none_unqualified"
+    assert case_10097["proper_so3_diagnostics"]["expected_can_rescue_cross_engine"] is False
+    report = MODULE.build_report(scorecard, scorecard_path=MODULE.DEFAULT_SCORECARD)
+    row_10097 = next(row for row in report["cases"] if row["id"] == "empiar-10097-native-c1")
+    assert row_10097["status"] == "pass"
+    assert row_10097["half_map_quality_pass"] is True
+    assert row_10097["primary_pass"] is False
+    assert row_10097["science_equivalence_pass"] is False
+
+
+def test_masked_support_contract_cannot_become_a_rescue_route() -> None:
+    scorecard = MODULE.load_and_validate_scorecard()
+    scorecard["masked_fsc_support"]["can_rescue"] = True
+
+    with pytest.raises(ValueError, match="masked FSC became a rescue route"):
+        MODULE._validate_masked_fsc_support_contract(scorecard["masked_fsc_support"])
 
 
 @pytest.mark.parametrize(
@@ -638,6 +663,10 @@ def test_live_markdown_reports_route_resolutions_and_key_metrics(tmp_path: Path)
     assert "threshold at shell 81 on" in markdown
     assert "10073 and shell 49 on 10345" in markdown
     assert "6.568 A and 8.235 A" in markdown
+    assert "shells 44 and 45 (7.622 A and 7.452 A)" in markdown
+    assert "`none_unqualified`" in markdown
+    assert "Supporting RELION corrected-masked FSC" in markdown
+    assert "cannot rescue an unmasked failure" in markdown
     assert "3.8 A sharpened full-complex map" in markdown
     assert "EMD-9012 records 1.86 A" in markdown
 
