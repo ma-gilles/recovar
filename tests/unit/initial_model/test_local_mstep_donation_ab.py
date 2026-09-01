@@ -897,6 +897,9 @@ def test_slurm_runner_is_crossed_fresh_process_and_fail_closed():
         'env -i "${SEALED_COMMON_ENV[@]}"',
         "reject_unexpected_inherited_tuning_environment",
         "RECOVAR_*|JAX*|XLA*|CUDA*|TF_*",
+        "LD_LIBRARY_PATH|LIBRARY_PATH|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH",
+        "NVCC_PREPEND_FLAGS|NVCC_APPEND_FLAGS|MAKEFLAGS|MFLAGS|GNUMAKEFLAGS|MAKEOVERRIDES",
+        "RELION_RUNTIME|MPI_ROOT|CUSPARSE_LIBRARY",
         "RECOVAR_INITIAL_MODEL_PROFILE=1",
         '--expected-jax-cache-dir "${cache_dir}"',
         '--expected-cuda-lib "${CUDA_BINARY}"',
@@ -923,3 +926,28 @@ def test_slurm_runner_is_crossed_fresh_process_and_fail_closed():
     assert "clear_memory_stats" not in harness
     assert "whole_process_cumulative_not_warm_isolated" in harness
     assert source.rindex('touch "${ROOT}/COMPLETED"') > source.rindex('cmp "${PROVENANCE}/source_manifest.sha256"')
+
+
+def test_slurm_runner_rejects_pre_arm_loader_and_toolchain_overrides():
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "scripts/run_local_mstep_donation_ab.sbatch").read_text()
+    reject_body = source.split("reject_unexpected_inherited_tuning_environment() {", 1)[1].split("\n}\n", 1)[0]
+
+    dangerous = {
+        "LD_LIBRARY_PATH",
+        "LIBRARY_PATH",
+        "CPATH",
+        "C_INCLUDE_PATH",
+        "CPLUS_INCLUDE_PATH",
+        "NVCC_PREPEND_FLAGS",
+        "NVCC_APPEND_FLAGS",
+        "MAKEFLAGS",
+        "MFLAGS",
+        "GNUMAKEFLAGS",
+        "MAKEOVERRIDES",
+        "RELION_RUNTIME",
+        "MPI_ROOT",
+        "CUSPARSE_LIBRARY",
+    }
+    assert all(name in reject_body for name in dangerous)
+    assert "CUDA_VISIBLE_DEVICES) ;;" in reject_body
