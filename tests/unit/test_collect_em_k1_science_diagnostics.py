@@ -54,6 +54,25 @@ def test_continuous_proper_fit_recovers_small_rigid_drift() -> None:
     assert np.linalg.norm(fitted_rotation.T @ fitted_rotation - np.eye(3), ord="fro") < 1.0e-10
 
 
+def test_global_fit_always_considers_canonical_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _asymmetric_volume()
+    distant_seed = Rotation.from_euler("z", 180.0, degrees=True).as_matrix()[None, ...]
+    monkeypatch.setattr(MODULE, "relion_alignment_rotations", lambda _order: distant_seed)
+
+    fit = MODULE.fit_proper_rigid_transform(
+        source,
+        source,
+        fit_max_shell=6,
+        refine_healpix_orders=(),
+        max_continuous_rotation_degrees=5.0,
+        max_translation_fit_voxels=1.0,
+    )
+
+    assert fit["seed_source"] == "identity_augmented_RELION_HEALPix_grid"
+    np.testing.assert_array_equal(fit["seed_rotation_matrix"], np.eye(3))
+    assert fit["fit_correlation"] > 0.999
+
+
 def test_transform_rejects_reflection() -> None:
     volume = _asymmetric_volume(16)
 

@@ -155,7 +155,19 @@ def fit_proper_rigid_transform(
     recovar_fit = lowpass_volume_by_shell(recovar, max_shell, output_size=fit_size).astype(np.float32)
     relion_fit = lowpass_volume_by_shell(relion, max_shell, output_size=fit_size).astype(np.float32)
     if seed_rotation_matrix is None:
-        coarse_rotations = relion_alignment_rotations(int(coarse_healpix_order))
+        # The RELION orientation grid is a projection-search grid and is not
+        # guaranteed to contain the identity.  Canonical-frame maps can
+        # therefore be forced onto a distant, lower-scoring orientation even
+        # when their raw low-frequency correlation is already nearly one.
+        # Identity is a physically valid proper rotation and must compete
+        # explicitly with the HEALPix seeds.
+        coarse_rotations = np.concatenate(
+            [
+                np.eye(3, dtype=np.float64)[None, ...],
+                relion_alignment_rotations(int(coarse_healpix_order)),
+            ],
+            axis=0,
+        )
         seed = align_volume_to_reference(
             recovar_fit,
             relion_fit,
@@ -167,7 +179,7 @@ def fit_proper_rigid_transform(
             refine_orders=tuple(int(order) for order in refine_healpix_orders),
         )
         seed_rotation = np.asarray(seed.rotation_matrix, dtype=np.float64)
-        seed_source = "RELION_HEALPix_grid"
+        seed_source = "identity_augmented_RELION_HEALPix_grid"
     else:
         seed_rotation = np.asarray(seed_rotation_matrix, dtype=np.float64)
         determinant, orthogonality = _proper_rotation_metrics(seed_rotation)
@@ -463,7 +475,7 @@ def collect_diagnostics(args: argparse.Namespace) -> dict[str, Any]:
         "diagnostics": {
             "proper_so3_alignment": {
                 "fit_source": "merged_low_frequency",
-                "method": "HEALPix proper-rotation seed plus continuous scipy rotvec Powell and subpixel translation",
+                "method": "identity-augmented HEALPix proper-rotation seed plus continuous scipy rotvec Powell and subpixel translation",
                 "continuous_so3_refinement": True,
                 "translation_subpixel": True,
                 "applied_unchanged_to": ["merged", "half1", "half2"],
