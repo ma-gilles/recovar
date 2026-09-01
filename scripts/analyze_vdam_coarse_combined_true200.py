@@ -1179,19 +1179,22 @@ def _validate_coarse_selector_profile_audits(
     multistream_workers: int,
     native_atomic_reduction: int,
 ) -> list[dict[str, Any]]:
-    """Prove the configured coarse selector actually ran at one checkpoint."""
+    """Prove the configured coarse selector ran for one joint-halfset checkpoint."""
 
     from recovar.em.dense_single_volume.helpers.significance import (
         _validate_coarse_selector_audit,
     )
 
-    profile_keys = sorted(
-        key for key in metadata if _HALFSET_PROFILE_RE.fullmatch(str(key))
+    _require(
+        metadata.get("joint_halfset_particle_stream") is True,
+        f"{label} iteration {iteration} is not a joint-halfset particle stream",
     )
-    expected_profile_keys = [
-        "halfset_0_profile_summary",
-        "halfset_1_profile_summary",
-    ]
+    _require(
+        _values_equal(metadata.get("halfset_ids"), [0, 1]),
+        f"{label} iteration {iteration} joint-halfset IDs differ",
+    )
+    profile_keys = sorted(key for key in metadata if _HALFSET_PROFILE_RE.fullmatch(str(key)))
+    expected_profile_keys = ["halfset_0_profile_summary"]
     _require(
         profile_keys == expected_profile_keys,
         f"{label} iteration {iteration} halfset profile topology differs: "
@@ -1258,7 +1261,9 @@ def _validate_coarse_selector_profile_audits(
             {
                 "label": label,
                 "iteration": int(iteration),
-                "halfset": int(match.group("halfset")),
+                "profile_halfset": int(match.group("halfset")),
+                "joint_halfset_ids": [0, 1],
+                "joint_halfset_particle_stream": True,
                 "audit": audit,
             }
         )
@@ -2949,13 +2954,17 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
     for label in labels:
         arm_rows = [row for row in coarse_selector_audit_rows if row["label"] == label]
         _require(
-            len(arm_rows) == 2 * len(state_iterations)
-            and sorted({row["halfset"] for row in arm_rows}) == [0, 1],
-            f"{label} coarse selector halfset audit coverage differs",
+            len(arm_rows) == len(state_iterations)
+            and sorted({row["profile_halfset"] for row in arm_rows}) == [0]
+            and all(row["joint_halfset_ids"] == [0, 1] for row in arm_rows)
+            and all(row["joint_halfset_particle_stream"] is True for row in arm_rows),
+            f"{label} coarse selector joint-halfset audit coverage differs",
         )
         selector_by_arm[label] = {
             "checkpoint_count": len({row["iteration"] for row in arm_rows}),
-            "halfsets": sorted({row["halfset"] for row in arm_rows}),
+            "profile_halfsets": sorted({row["profile_halfset"] for row in arm_rows}),
+            "joint_halfset_ids": [0, 1],
+            "joint_halfset_particle_stream": True,
             "audit_count": len(arm_rows),
             "total_fused_calls": sum(row["audit"]["counts"]["fused_calls"] for row in arm_rows),
             "total_actual_rows": sum(row["audit"]["counts"]["actual_rows"] for row in arm_rows),
@@ -2968,8 +2977,8 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
         }
     coarse_selector_execution = {
         "policy": (
-            "every sealed post-initialization halfset profile must prove the requested and "
-            "effective selector, exact wrapper/target, and host-observed execution counts; "
+            "every sealed post-initialization joint-halfset profile must prove the requested "
+            "and effective selector, exact wrapper/target, and host-observed execution counts; "
             "serial controls must use the serial fused wrapper with zero multistream/native-atomic counts"
         ),
         "checkpoint_count": len(state_iterations),

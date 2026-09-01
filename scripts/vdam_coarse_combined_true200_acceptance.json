@@ -169,6 +169,7 @@
     "joint_exact_complete_path_metadata_keys": [
       "selected_particle_ids",
       "halfset_ids",
+      "joint_halfset_particle_stream",
       "class_assignments",
       "halfset_0_class_assignments",
       "best_pose_rotation_ids",
@@ -211,7 +212,7 @@
   },
   "required_gates": {
     "artifact_and_provenance_complete": true,
-    "coarse_selector_execution_proven_every_postinit_halfset": true,
+    "coarse_selector_execution_proven_every_postinit_joint_stream": true,
     "state_joint_exact_complete_path_serial_witness": true,
     "map_each_checkpoint_serial_leave_one_out_is_diagnostic_only": true,
     "whole_trajectory_centroid_over_pooled_run_rms_at_most": 1.0,

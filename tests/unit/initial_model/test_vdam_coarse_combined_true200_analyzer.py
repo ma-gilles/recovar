@@ -306,19 +306,20 @@ def _selector_audit(*, workers: int, atomic: bool) -> dict[str, object]:
     }
 
 
+def _joint_stream_metadata(audit: dict[str, object]) -> dict[str, object]:
+    return {
+        "n_translations": 29,
+        "halfset_ids": [0, 1],
+        "joint_halfset_particle_stream": True,
+        "halfset_0_profile_summary": {"coarse_selector_audit": audit},
+    }
+
+
 def test_selector_proof_accepts_serial_control_and_combined_candidate() -> None:
     control_audit = _selector_audit(workers=0, atomic=False)
     candidate_audit = _selector_audit(workers=8, atomic=True)
-    control = {
-        "n_translations": 29,
-        "halfset_0_profile_summary": {"coarse_selector_audit": control_audit},
-        "halfset_1_profile_summary": {"coarse_selector_audit": control_audit},
-    }
-    candidate = {
-        "n_translations": 29,
-        "halfset_0_profile_summary": {"coarse_selector_audit": candidate_audit},
-        "halfset_1_profile_summary": {"coarse_selector_audit": candidate_audit},
-    }
+    control = _joint_stream_metadata(control_audit)
+    candidate = _joint_stream_metadata(candidate_audit)
     control_rows = analyzer._validate_coarse_selector_profile_audits(
         control,
         label="control_serial_1",
@@ -333,6 +334,10 @@ def test_selector_proof_accepts_serial_control_and_combined_candidate() -> None:
         multistream_workers=8,
         native_atomic_reduction=1,
     )
+    assert len(control_rows) == len(candidate_rows) == 1
+    assert control_rows[0]["profile_halfset"] == 0
+    assert control_rows[0]["joint_halfset_ids"] == [0, 1]
+    assert control_rows[0]["joint_halfset_particle_stream"] is True
     assert control_rows[0]["audit"]["counts"]["fused_calls"] > 0
     assert control_rows[0]["audit"]["counts"]["multistream_calls"] == 0
     assert candidate_rows[0]["audit"]["counts"]["native_atomic_selected_calls"] > 0
@@ -353,11 +358,7 @@ def test_selector_proof_rejects_requested_effective_or_target_mutation(
 ) -> None:
     audit = _selector_audit(workers=8, atomic=True)
     audit[field] = value
-    metadata = {
-        "n_translations": 29,
-        "halfset_0_profile_summary": {"coarse_selector_audit": audit},
-        "halfset_1_profile_summary": {"coarse_selector_audit": audit},
-    }
+    metadata = _joint_stream_metadata(audit)
     with pytest.raises(analyzer.GateSetupError, match="coarse selector"):
         analyzer._validate_coarse_selector_profile_audits(
             metadata,
@@ -368,17 +369,11 @@ def test_selector_proof_rejects_requested_effective_or_target_mutation(
         )
 
 
-def test_selector_proof_validates_every_sealed_halfset_profile() -> None:
+def test_selector_proof_validates_joint_stream_profile_counts() -> None:
     bad = _selector_audit(workers=8, atomic=True)
     bad["counts"] = dict(bad["counts"], actual_rows=0)
-    metadata = {
-        "n_translations": 29,
-        "halfset_0_profile_summary": {
-            "coarse_selector_audit": _selector_audit(workers=8, atomic=True)
-        },
-        "halfset_1_profile_summary": {"coarse_selector_audit": bad},
-    }
-    with pytest.raises(analyzer.GateSetupError, match="halfset_1_profile_summary"):
+    metadata = _joint_stream_metadata(bad)
+    with pytest.raises(analyzer.GateSetupError, match="halfset_0_profile_summary"):
         analyzer._validate_coarse_selector_profile_audits(
             metadata,
             label="combined_candidate_1",
@@ -388,13 +383,46 @@ def test_selector_proof_validates_every_sealed_halfset_profile() -> None:
         )
 
 
-def test_selector_proof_rejects_missing_halfset_profile() -> None:
-    metadata = {
-        "n_translations": 29,
-        "halfset_0_profile_summary": {
+@pytest.mark.parametrize("joint_flag", ("missing", False))
+def test_selector_proof_rejects_missing_or_false_joint_stream_flag(joint_flag: object) -> None:
+    metadata = _joint_stream_metadata(_selector_audit(workers=0, atomic=False))
+    if joint_flag == "missing":
+        metadata.pop("joint_halfset_particle_stream")
+    else:
+        metadata["joint_halfset_particle_stream"] = joint_flag
+    with pytest.raises(analyzer.GateSetupError, match="not a joint-halfset particle stream"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="control_serial_1",
+            iteration=1,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+        )
+
+
+@pytest.mark.parametrize("halfset_ids", ([], [0], [1, 0], [0, 2]))
+def test_selector_proof_rejects_wrong_joint_halfset_ids(halfset_ids: list[int]) -> None:
+    metadata = _joint_stream_metadata(_selector_audit(workers=0, atomic=False))
+    metadata["halfset_ids"] = halfset_ids
+    with pytest.raises(analyzer.GateSetupError, match="joint-halfset IDs differ"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="control_serial_1",
+            iteration=1,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+        )
+
+
+@pytest.mark.parametrize("profile_mutation", ("missing", "extra"))
+def test_selector_proof_rejects_missing_or_extra_halfset_profile(profile_mutation: str) -> None:
+    metadata = _joint_stream_metadata(_selector_audit(workers=0, atomic=False))
+    if profile_mutation == "missing":
+        metadata.pop("halfset_0_profile_summary")
+    else:
+        metadata["halfset_1_profile_summary"] = {
             "coarse_selector_audit": _selector_audit(workers=0, atomic=False)
-        },
-    }
+        }
     with pytest.raises(analyzer.GateSetupError, match="halfset profile topology differs"):
         analyzer._validate_coarse_selector_profile_audits(
             metadata,
@@ -1430,6 +1458,13 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     )
     assert contract["numerical_acceptance_policy"]["joint_exact_complete_path_serial_witness_required"] is True
     assert contract["numerical_acceptance_policy"]["map_must_match_same_exact_state_witness"] is True
+    exact_state_keys = contract["state_contract"]["joint_exact_complete_path_metadata_keys"]
+    assert "halfset_ids" in exact_state_keys
+    assert "joint_halfset_particle_stream" in exact_state_keys
+    assert (
+        contract["required_gates"]["coarse_selector_execution_proven_every_postinit_joint_stream"]
+        is True
+    )
     assert contract["trajectory"]["exact_state_first_iteration"] == 1
     assert contract["trajectory"]["exact_state_last_iteration"] == 200
     native = contract["native_reference"]
