@@ -381,6 +381,19 @@ def _candidate_table_from_recovar(
         rot_indices = np.arange(n_rot, dtype=np.int64)
         trans_indices = np.arange(n_trans, dtype=np.int64)
         selected = np.isfinite(scores_with)
+        selected_field = "finite_scores_pre_prior_per_class"
+        reconstruction_n_significant = None
+        if reconstruction_only and "significant_mask" in z:
+            significant_mask = np.asarray(z["significant_mask"], dtype=bool)
+            if significant_mask.size != scores_by_class.size:
+                raise ValueError(
+                    "RECOVAR significance dump significant_mask must contain one value per "
+                    f"class/rotation/translation score; got {significant_mask.size} values for "
+                    f"{scores_by_class.size} scores"
+                )
+            selected = significant_mask.reshape(scores_by_class.shape)[class_index]
+            selected_field = "significant_mask"
+            reconstruction_n_significant = int(np.sum(selected))
         rot_grid, trans_grid = np.meshgrid(rot_indices, trans_indices, indexing="ij")
         flat_selected = selected.reshape(-1)
         rotations = np.asarray(z["rotations"], dtype=np.float64)
@@ -398,8 +411,8 @@ def _candidate_table_from_recovar(
             "local_index": int(np.asarray(z["local_index"]).item()),
             "class_index": int(class_index),
             "current_size": int(np.asarray(z["current_size"]).item()),
-            "selected_field": "finite_scores_pre_prior_per_class",
-            "reconstruction_n_significant": None,
+            "selected_field": selected_field,
+            "reconstruction_n_significant": reconstruction_n_significant,
             "keys_global": np.stack(
                 [rot_grid.reshape(-1)[flat_selected], trans_grid.reshape(-1)[flat_selected]],
                 axis=1,
@@ -966,6 +979,13 @@ def _candidate_table_from_relion(
         if adaptive_pass0:
             candidate_class_idx = payload.get("pass0_coarse_candidate_class_idx")
             reconstruction_mask = payload.get("pass0_coarse_candidate_in_threshold_set")
+            # ``candidate_translation_{x,y}`` was resolved before the explicit
+            # pass-0 table was selected.  A real adaptive dump also contains a
+            # much shorter pass-1 candidate table, whose physical coordinates
+            # must not be attached to the dense pass-0 rows.  The RELION-grid
+            # matcher uses the explicit coarse translation indices directly.
+            candidate_translation_x = None
+            candidate_translation_y = None
         else:
             candidate_class_idx = generic_candidate_field("candidate_class_idx")
             reconstruction_mask = generic_candidate_field("candidate_in_reconstruction_set")

@@ -327,6 +327,8 @@ def test_compare_explicit_adaptive_pass0_coarse_grid(tmp_path):
     _write_flat_int(relion_dir / "pass1_acc_trans_idx.bin", [0])
     _write_flat_real(relion_dir / "pass1_candidate_weight_normalized.bin", [1.0])
     _write_flat_real(relion_dir / "pass1_exp_Mweight_raw_preprior.bin", [-100.0])
+    _write_flat_real(relion_dir / "pass1_candidate_translation_x.bin", [123.0])
+    _write_flat_real(relion_dir / "pass1_candidate_translation_y.bin", [-456.0])
 
     recovar_npz = tmp_path / "recovar_significance.npz"
     scores_pre = np.array([[-12.0, -11.0], [-10.0, -9.0]], dtype=np.float64)
@@ -340,6 +342,7 @@ def test_compare_explicit_adaptive_pass0_coarse_grid(tmp_path):
         scores_pre_prior_per_class=scores_pre[None],
         scores_with_prior_per_class=scores_with[None],
         weights_per_class=np.array([[[0.1, 0.2], [0.3, 0.4]]], dtype=np.float64),
+        significant_mask=np.array([False, False, True, True]),
         rotations=np.broadcast_to(np.eye(3), (2, 3, 3)).copy(),
         rotation_log_prior=np.array([[-1.0, -2.0]], dtype=np.float64),
         translation_log_prior=np.array([-0.1, -0.2], dtype=np.float64),
@@ -365,6 +368,20 @@ def test_compare_explicit_adaptive_pass0_coarse_grid(tmp_path):
     assert result["common_rotation_log_prior_diff"]["max_abs"] == 0.0
     assert result["common_translation_log_prior_diff"]["max_abs"] == 0.0
     assert result["common_combined_log_prior_diff"]["max_abs"] == 0.0
+
+    reconstruction = compare_dumps(
+        relion_dir,
+        recovar_npz,
+        reconstruction_only=True,
+        relion_firstiter_pass="pass0",
+        recovar_class_index=0,
+        match_mode="global",
+    )
+    assert reconstruction["recovar_selected_field"] == "significant_mask"
+    assert reconstruction["recovar_candidate_count"] == 2
+    assert reconstruction["recovar_reconstruction_n_significant"] == 2
+    assert reconstruction["relion_candidate_count"] == 2
+    assert reconstruction["candidate_jaccard"] == 1.0
 
 
 def test_compare_relion_recovar_estep_dump_reports_both_engines_top_candidate_terms(tmp_path):
