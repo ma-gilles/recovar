@@ -1,7 +1,9 @@
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 import mrcfile
@@ -61,19 +63,20 @@ def _schedule() -> dict:
 
 
 def _metadata(pass1_s: float, pass2_s: float) -> dict:
+    subset_size = analyzer.EXPECTED_SUBSET_SIZE
     return {
         **_schedule(),
         "oversampling": 1,
         "joint_halfset_particle_stream": True,
         "halfset_ids": [0, 1],
-        "selected_particle_ids": list(range(3000)),
-        "best_pose_rotation_ids": [3] * 3000,
-        "best_pose_rotations": [[0.0, 0.0, 0.0]] * 3000,
-        "best_pose_translations": [[0.0, 0.0]] * 3000,
-        "class_assignments": [0] * 3000,
-        "max_posterior_per_image": [0.75] * 3000,
-        "pose_assignments": [1] * 3000,
-        "halfset_0_class_assignments": [0] * 3000,
+        "selected_particle_ids": list(range(subset_size)),
+        "best_pose_rotation_ids": [3] * subset_size,
+        "best_pose_rotations": [[0.0, 0.0, 0.0]] * subset_size,
+        "best_pose_translations": [[0.0, 0.0]] * subset_size,
+        "class_assignments": [0] * subset_size,
+        "max_posterior_per_image": [0.75] * subset_size,
+        "pose_assignments": [1] * subset_size,
+        "halfset_0_class_assignments": [0] * subset_size,
         "sparse_pass2_profile_summary": {
             "pass1_time_s": pass1_s,
             "pass2_time_s": pass2_s,
@@ -148,6 +151,8 @@ def _resource_snapshot(*, hwm_kb: int) -> dict:
 
 
 def _cache_event() -> dict:
+    rss_before = 1_000_000_000
+    hwm_before = 1_100_000_000
     return {
         "loader_type": "recovar.data_io.image_loader.MRCLoader",
         "num_images": 3000,
@@ -158,6 +163,12 @@ def _cache_event() -> dict:
         "cached_after": True,
         "cached_nbytes": analyzer.EXPECTED_CACHE_BYTES,
         "elapsed_s": 0.20,
+        "current_rss_before_bytes": rss_before,
+        "current_rss_after_bytes": rss_before + analyzer.EXPECTED_CACHE_BYTES,
+        "current_rss_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
+        "high_water_rss_before_bytes": hwm_before,
+        "high_water_rss_after_bytes": hwm_before + analyzer.EXPECTED_CACHE_BYTES,
+        "high_water_rss_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
     }
 
 
@@ -345,7 +356,16 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
     ]
     base_map = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
     map_values = {}
-    for label, delta in (("cache_off_1", 0.0), ("cache_off_2", 0.010), ("cache_auto_1", 0.004), ("cache_auto_2", 0.006)):
+    for label, delta in (
+        ("cache_off_1", 0.0),
+        ("cache_off_2", 8 / 1024),
+        ("cache_off_3", -6 / 1024),
+        ("cache_off_4", 3 / 1024),
+        ("cache_auto_1", 4 / 1024),
+        ("cache_auto_2", 6 / 1024),
+        ("cache_auto_3", -4 / 1024),
+        ("cache_auto_4", 7 / 1024),
+    ):
         value = base_map.copy()
         value[0, 0, 0] += delta
         value[0, 0, 1] -= delta
@@ -355,6 +375,10 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
         "cache_auto_1": (9.0, 7.0, 3.6, 2.8),
         "cache_auto_2": (8.9, 6.9, 3.5, 2.8),
         "cache_off_2": (10.2, 8.2, 4.1, 3.0),
+        "cache_auto_3": (9.1, 7.1, 3.6, 2.8),
+        "cache_off_3": (10.1, 8.1, 4.0, 3.0),
+        "cache_off_4": (9.9, 7.9, 4.0, 2.9),
+        "cache_auto_4": (9.0, 7.0, 3.5, 2.8),
     }
     for order, (label, mode, _repeat) in enumerate(analyzer.ARM_SPECS, start=1):
         run_root = root / "runs" / label
@@ -455,6 +479,118 @@ def _rewrite_summary(root: Path, label: str, mutate) -> None:
     _write_json(path, value)
 
 
+def _rewrite_cache_event(root: Path, label: str, phase: str, mutate) -> None:
+    summary_path = root / "runs" / label / "profile" / "profile_summary.json"
+    summary = json.loads(summary_path.read_text())
+    event = summary[phase]["raw_image_cache_audit"]["load_all_events"][0]
+    mutate(event)
+    _write_json(summary_path, summary)
+
+    admission_path = root / "runs" / label / "cache_admission.json"
+    admission = json.loads(admission_path.read_text())
+    admission["phases"][phase]["load_all_events"] = [event]
+    _write_json(admission_path, admission)
+
+
+def _rewrite_metadata(root: Path, label: str, phase: str, mutate) -> None:
+    metadata_path = (
+        root / "runs" / label / "profile" / phase / "run_it181_recovar_meta.json"
+    )
+    metadata = json.loads(metadata_path.read_text())
+    mutate(metadata)
+    _write_json(metadata_path, metadata)
+    _rewrite_summary(
+        root,
+        label,
+        lambda summary: summary[phase].update(meta_sha256=_sha256(metadata_path)),
+    )
+
+
+def _kernel_signature(name: str, *, block_x: int, grid_x: int) -> str:
+    return json.dumps(
+        {
+            "name": name,
+            "device": 0,
+            "blockX": block_x,
+            "blockY": 1,
+            "blockZ": 1,
+            "gridX": grid_x,
+            "gridY": 1,
+            "gridZ": 1,
+        },
+        sort_keys=True,
+    )
+
+
+@pytest.mark.unit
+def test_kernel_topology_allows_xla_geometry_but_pins_recovar_geometry():
+    recovar = _kernel_signature(analyzer.COARSE_KERNEL_NAME, block_x=128, grid_x=2304)
+    xla_a = _kernel_signature("input_reduce_fusion_1", block_x=256, grid_x=47)
+    xla_b = _kernel_signature("input_reduce_fusion_1", block_x=128, grid_x=94)
+
+    topology_a = analyzer._normalized_kernel_topology({recovar: 1000, xla_a: 12})
+    topology_b = analyzer._normalized_kernel_topology({recovar: 1000, xla_b: 12})
+
+    assert topology_a == topology_b
+    changed_recovar = _kernel_signature(
+        analyzer.COARSE_KERNEL_NAME, block_x=256, grid_x=1152
+    )
+    topology_bad = analyzer._normalized_kernel_topology(
+        {changed_recovar: 1000, xla_b: 12}
+    )
+    assert topology_bad != topology_a
+
+
+@pytest.mark.unit
+def test_gpu_timing_equivalence_requires_one_percent_medians_and_two_percent_arms():
+    metric = "gpu_kernel_sum_s"
+
+    def panel(values: dict[str, float]) -> dict:
+        return {
+            label: {"performance": {metric: values[label]}}
+            for label in analyzer.ARM_LABELS
+        }
+
+    equivalent_values = {
+        "cache_off_1": 1.000,
+        "cache_off_2": 1.002,
+        "cache_off_3": 0.998,
+        "cache_off_4": 1.001,
+        "cache_auto_1": 1.004,
+        "cache_auto_2": 1.003,
+        "cache_auto_3": 1.005,
+        "cache_auto_4": 1.002,
+    }
+    bounded = analyzer._gpu_timing_equivalence(
+        panel(equivalent_values),
+        metric=metric,
+        off_median=float(np.median([equivalent_values[f"cache_off_{i}"] for i in analyzer.REPEAT_IDS])),
+        auto_median=float(np.median([equivalent_values[f"cache_auto_{i}"] for i in analyzer.REPEAT_IDS])),
+    )
+    assert bounded["equivalent"] is True
+
+    shifted = dict(equivalent_values)
+    for repeat in analyzer.REPEAT_IDS:
+        shifted[f"cache_auto_{repeat}"] = 1.015
+    excessive_median = analyzer._gpu_timing_equivalence(
+        panel(shifted),
+        metric=metric,
+        off_median=1.0,
+        auto_median=1.015,
+    )
+    assert excessive_median["equivalent"] is False
+
+    outlier = dict(equivalent_values)
+    outlier["cache_auto_4"] = 1.03
+    excessive_arm = analyzer._gpu_timing_equivalence(
+        panel(outlier),
+        metric=metric,
+        off_median=1.0,
+        auto_median=1.0045,
+    )
+    assert excessive_arm["equivalent"] is False
+
+
 @pytest.mark.unit
 def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
     root, repo = _build_root(tmp_path)
@@ -466,7 +602,10 @@ def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
     assert report["performance"]["median_percent_improvement"]["warm_wall_s"] > 5.0
     assert report["performance"]["median_off_minus_auto"]["stage_no_kernel_s"] >= 0.3
     assert report["performance"]["preload"]["break_even_iterations_ceiling"] == 1
-    assert report["performance"]["hwm"]["auto_minus_off_median_hwm_bytes"] == 100_000 * 1024
+    assert report["schedule"]["subset_size"] == analyzer.EXPECTED_SUBSET_SIZE
+    assert report["performance"]["cache_admission_memory"]["limit_bytes"] == (
+        analyzer.EXPECTED_CACHE_BYTES + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES
+    )
     assert report["science"]["all_cross_mode_maps_within_repeat_envelope"] is True
     assert report["provenance"]["final_source_manifest_state"] == "pending_runner_seal"
     assert Path(report["provenance"]["interpreter"]["path"]).resolve() == (
@@ -482,11 +621,37 @@ def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
     assert json.loads(output_json.read_text())["decision"]["status"] == "GO"
     assert output_markdown.read_text().startswith("# GO")
 
+    subprocess_json = tmp_path / "analysis" / "subprocess_report.json"
+    subprocess_markdown = tmp_path / "analysis" / "subprocess_report.md"
+    environment = dict(os.environ)
+    environment.update(JAX_PLATFORMS="cpu", JAX_PLATFORM_NAME="cpu")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.analyze_vdam_raw_cache_abba",
+            "--root",
+            str(root),
+            "--repo",
+            str(repo),
+            "--output-json",
+            str(subprocess_json),
+            "--output-markdown",
+            str(subprocess_markdown),
+        ],
+        cwd=Path(__file__).resolve().parents[3],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(subprocess_json.read_text())["decision"]["status"] == "GO"
 
-@pytest.mark.unit
+
 def test_valid_but_slow_auto_reports_no_go_and_cli_exit_one(tmp_path):
     root, repo = _build_root(tmp_path)
-    for repeat in (1, 2):
+    for repeat in analyzer.REPEAT_IDS:
         _rewrite_summary(
             root,
             f"cache_auto_{repeat}",
@@ -496,7 +661,7 @@ def test_valid_but_slow_auto_reports_no_go_and_cli_exit_one(tmp_path):
     report = analyzer.analyze(root, repo=repo)
 
     assert report["decision"]["status"] == "NO_GO"
-    assert report["decision"]["gates"]["both_adjacent_warm_wall_faster"] is False
+    assert report["decision"]["gates"]["at_least_3_of_4_paired_warm_wall_faster"] is False
     output_json = tmp_path / "report.json"
     output_md = tmp_path / "report.md"
     assert analyzer.main(
@@ -521,11 +686,44 @@ def test_discrete_mismatch_is_no_go_not_setup_error(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda metadata: metadata.pop("subset_size"), "lacks schedule field subset_size"),
+        (
+            lambda metadata: metadata.update(subset_size=None),
+            "metadata schedule differs for subset_size",
+        ),
+    ],
+)
+def test_missing_or_null_subset_metadata_fails_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_metadata(root, "cache_auto_1", "warm", mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_selected_particle_count_must_match_gf46_subset(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_metadata(
+        root,
+        "cache_auto_1",
+        "warm",
+        lambda metadata: metadata["selected_particle_ids"].pop(),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="selected particle count differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
 def test_directional_cross_mode_map_drift_is_no_go(tmp_path):
     root, repo = _build_root(tmp_path)
     shifted = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
     shifted += 0.001
-    for repeat in (1, 2):
+    for repeat in analyzer.REPEAT_IDS:
         _write_map(root / "runs" / f"cache_auto_{repeat}" / "profile" / "warm" / "run_it181_class001.mrc", shifted)
 
     report = analyzer.analyze(root, repo=repo)
@@ -535,20 +733,68 @@ def test_directional_cross_mode_map_drift_is_no_go(tmp_path):
 
 
 @pytest.mark.unit
-def test_hwm_overhead_gate_is_no_go(tmp_path):
+def test_cache_admission_hwm_gate_is_no_go(tmp_path):
     root, repo = _build_root(tmp_path)
-    excess_kb = (analyzer.EXPECTED_CACHE_BYTES + analyzer.HWM_SLACK_BYTES) // 1024 + 1
-    for repeat in (1, 2):
-        _rewrite_summary(
-            root,
-            f"cache_auto_{repeat}",
-            lambda value: value["warm"].update(process_resources=_resource_snapshot(hwm_kb=1_000_000 + excess_kb)),
+    excess = (
+        analyzer.EXPECTED_CACHE_BYTES
+        + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES
+        + 1
+    )
+    _rewrite_cache_event(
+        root,
+        "cache_auto_1",
+        "warm",
+        lambda event: event.update(
+            high_water_rss_after_bytes=event["high_water_rss_before_bytes"] + excess,
+            high_water_rss_delta_bytes=excess,
+        ),
+    )
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["each_cache_admission_hwm_within_cache_plus_64mib"] is False
+
+
+@pytest.mark.unit
+def test_stage_kernel_count_change_is_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_auto_1.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET start = ?, end = ? WHERE rowid = 1",
+            (7_000_000_000, 7_001_000_000),
         )
 
     report = analyzer.analyze(root, repo=repo)
 
     assert report["decision"]["status"] == "NO_GO"
-    assert report["performance"]["gates"]["hwm_auto_minus_off_overhead_within_cache_plus_128mib"] is False
+    assert report["performance"]["gates"]["cuda_kernel_names_and_recovar_geometry_exact"] is False
+
+
+@pytest.mark.unit
+def test_kernel_name_and_coarse_count_change_is_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_auto_1.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "INSERT INTO StringIds(id, value) VALUES (?, ?)",
+            (6, "generic_replacement_kernel"),
+        )
+        connection.execute(
+            "UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET shortName = 6 WHERE rowid = 1"
+        )
+    summary_path = root / "nsight" / "cache_auto_1_summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["kernels"][0]["count"] = 999
+    summary["kernels"][0]["total_ns"] = 999_000_000
+    _write_json(summary_path, summary)
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["coarse_launches_exactly_1000_all_arms"] is False
+    assert report["performance"]["gates"]["cuda_kernel_names_and_recovar_geometry_exact"] is False
 
 
 @pytest.mark.unit
@@ -583,6 +829,14 @@ def test_hwm_overhead_gate_is_no_go(tmp_path):
                 lambda value: value["warm"]["schedule"].update(healpix_order=2),
             ),
             "GF46 iteration-181 schedule differs",
+        ),
+        (
+            lambda root: _rewrite_summary(
+                root,
+                "cache_off_1",
+                lambda value: value["warm"]["schedule"].update(subset_size=None),
+            ),
+            "GF46 subset size differs",
         ),
     ],
 )

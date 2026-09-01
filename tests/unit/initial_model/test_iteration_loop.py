@@ -471,6 +471,11 @@ class TestRunVdamIterations:
             pseudo_halfsets=True,
         )
         seen_meta = []
+        seen_subset_sizes = []
+
+        def sink(current, iteration, meta):
+            seen_subset_sizes.append(int(current.subset_size))
+            seen_meta.append(meta)
 
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "1")
         monkeypatch.setattr(loop, "vdam_m_step", lambda current, accumulators, **kwargs: current)
@@ -486,10 +491,11 @@ class TestRunVdamIterations:
             random_seed=0,
             rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=lambda current, particle_ids, halfset_ids: ([], {}),
-            iter_artifact_sink=lambda current, iteration, meta: seen_meta.append(meta),
+            iter_artifact_sink=sink,
             refresh_tau2_from_projector=False,
         )
 
+        assert seen_meta[0]["subset_size"] == seen_subset_sizes[0]
         summary = seen_meta[0]["vdam_iteration_profile_summary"]
         expected = {
             "schedule_time_s",

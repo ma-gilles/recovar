@@ -46,7 +46,7 @@ def test_runner_pins_qualified_gate_runtime_and_exact_h100() -> None:
     assert '[[ "${gpu_name}" == *H100* ]]' in source
 
 
-def test_runner_rejects_any_science_change_over_frozen_base() -> None:
+def test_runner_allows_only_declared_benchmark_overlay() -> None:
     source = _source()
 
     assert ': "${EXPECTED_REPO_HEAD:?pin the committed harness head}"' in source
@@ -57,16 +57,21 @@ def test_runner_rejects_any_science_change_over_frozen_base() -> None:
     assert 'status --porcelain=v1 --untracked-files=all' in source
     assert 'merge-base --is-ancestor "${SCIENCE_BASE_HEAD}" "${EXPECTED_REPO_HEAD}"' in source
     assert "diff --name-only --diff-filter=ACDMRTUXB" in source
-    assert "science-base overlay contains a non-harness path" in source
-    assert _array("HARNESS_DIFF_ALLOWLIST") == [
+    assert "science-base overlay contains an unapproved benchmark path" in source
+    assert _array("BENCHMARK_DIFF_ALLOWLIST") == [
+        "recovar/data_io/image_loader.py",
+        "recovar/em/initial_model/iteration_loop.py",
         "scripts/analyze_vdam_raw_cache_abba.py",
         "scripts/run_vdam_late_iteration_profile.py",
         "scripts/run_vdam_raw_cache_abba.sbatch",
+        "tests/unit/test_image_loader.py",
+        "tests/unit/initial_model/test_iteration_loop.py",
         "tests/unit/initial_model/test_vdam_late_iteration_profile.py",
         "tests/unit/initial_model/test_vdam_raw_cache_abba_analyzer.py",
         "tests/unit/initial_model/test_vdam_raw_cache_abba_runner.py",
     ]
-    assert 'test "$(validate_harness_overlay)" = "${harness_overlay}"' in source
+    assert 'test "$(validate_benchmark_overlay)" = "${benchmark_overlay}"' in source
+    assert '"${PROVENANCE}/benchmark_overlay.txt"' in source
 
 
 def test_runner_pins_source_and_exact_gf46_input_manifests() -> None:
@@ -78,6 +83,8 @@ def test_runner_pins_source_and_exact_gf46_input_manifests() -> None:
         "recovar/data_io/staging.py",
         "recovar/em/dense_single_volume/batch_planning.py",
         "recovar/em/initial_model/driver.py",
+        "tests/unit/test_image_loader.py",
+        "tests/unit/initial_model/test_iteration_loop.py",
         "scripts/run_ab_initio.py",
         "scripts/run_vdam_late_iteration_profile.py",
         "scripts/summarize_vdam_nsys_sqlite.py",
@@ -102,8 +109,11 @@ def test_runner_pins_source_and_exact_gf46_input_manifests() -> None:
 def test_runner_executes_exact_off_auto_auto_off_panel_without_force() -> None:
     source = _source()
 
-    assert "RUN_LABELS=(cache_off_1 cache_auto_1 cache_auto_2 cache_off_2)" in source
-    assert "RUN_MODES=(off auto auto off)" in source
+    assert (
+        "RUN_LABELS=(cache_off_1 cache_auto_1 cache_auto_2 cache_off_2 "
+        "cache_auto_3 cache_off_3 cache_off_4 cache_auto_4)"
+    ) in source
+    assert "RUN_MODES=(off auto auto off auto off off auto)" in source
     assert '"RECOVAR_EM_RAW_IMAGE_CACHE=${mode}"' in source
     assert '"RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB=${RAW_IMAGE_CACHE_MAX_GB}"' in source
     assert "readonly RAW_IMAGE_CACHE_MAX_GB=16" in source
@@ -167,9 +177,10 @@ def test_runner_invokes_future_analyzer_then_seals_all_artifacts() -> None:
 
     assert 'touch "${ROOT}/ARMS_COMPLETED"' in source
     assert '"schema": "recovar.vdam_raw_cache_abba.v1"' in source
-    assert '"execution_order": ["cache_off_1", "cache_auto_1", "cache_auto_2", "cache_off_2"]' in source
-    assert '"raw_image_cache_modes": ["off", "auto", "auto", "off"]' in source
+    assert '"cache_auto_3", "cache_off_3", "cache_off_4", "cache_auto_4"' in source
+    assert '"raw_image_cache_modes": ["off", "auto", "auto", "off", "auto", "off", "off", "auto"]' in source
     assert '"science_promotion_allowed": False' in source
+    assert "env JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu" in source
     assert '"${PIXI_PY}" -m scripts.analyze_vdam_raw_cache_abba' in source
     assert '--output-json "${ANALYSIS}/report.json"' in source
     assert '--output-markdown "${ANALYSIS}/report.md"' in source

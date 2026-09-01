@@ -211,6 +211,38 @@ def _profile_metadata(output_prefix: Path, iteration: int) -> dict[str, object]:
     profile = meta.get("vdam_iteration_profile_summary")
     if not isinstance(profile, dict) or not profile:
         raise RuntimeError("RECOVAR_INITIAL_MODEL_PROFILE did not emit stage timings")
+    schedule_keys = (
+        "current_size",
+        "healpix_order",
+        "n_rotations",
+        "n_translations",
+        "subset_size",
+        "random_perturbation",
+    )
+    missing_schedule = [key for key in schedule_keys if key not in meta]
+    if missing_schedule:
+        raise RuntimeError(f"iteration metadata lacks required schedule fields: {missing_schedule}")
+    try:
+        subset_size = int(meta["subset_size"])
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("iteration metadata subset_size is invalid") from exc
+    if subset_size == 0 or subset_size < -1:
+        raise RuntimeError(f"iteration metadata subset_size is invalid: {subset_size}")
+    selected_particle_ids = meta.get("selected_particle_ids")
+    if not isinstance(selected_particle_ids, list):
+        raise RuntimeError("iteration metadata lacks selected_particle_ids")
+    if any(
+        isinstance(particle_id, bool) or not isinstance(particle_id, int) or particle_id < 0
+        for particle_id in selected_particle_ids
+    ):
+        raise RuntimeError("iteration metadata selected_particle_ids are invalid")
+    if len(set(selected_particle_ids)) != len(selected_particle_ids):
+        raise RuntimeError("iteration metadata selected_particle_ids are not unique")
+    if subset_size > 0 and len(selected_particle_ids) != subset_size:
+        raise RuntimeError(
+            "iteration metadata subset_size does not match selected_particle_ids: "
+            f"{subset_size} != {len(selected_particle_ids)}"
+        )
     return {
         "meta_path": str(meta_path.resolve()),
         "meta_sha256": _sha256(meta_path),
@@ -220,17 +252,7 @@ def _profile_metadata(output_prefix: Path, iteration: int) -> dict[str, object]:
         "halfset_profiles": {
             key: value for key, value in meta.items() if key.startswith("halfset_") and key.endswith("_profile_summary")
         },
-        "schedule": {
-            key: meta.get(key)
-            for key in (
-                "current_size",
-                "healpix_order",
-                "n_rotations",
-                "n_translations",
-                "subset_size",
-                "random_perturbation",
-            )
-        },
+        "schedule": {key: meta[key] for key in schedule_keys},
     }
 
 
@@ -264,10 +286,16 @@ def _capture_raw_image_cache_loads(
         num_images = int(getattr(loader, "num_images"))
         image_size = int(getattr(loader, "image_size"))
         dtype = np.dtype(getattr(loader, "_dtype", np.float32))
+        resources_before = _process_resource_snapshot()
         started = time.perf_counter()
         result = original(loader)
         elapsed_s = float(time.perf_counter() - started)
+        resources_after = _process_resource_snapshot()
         cached_after = getattr(loader, "_cached", None)
+        rss_before = int(resources_before["current_rss_kb"]) * 1024
+        rss_after = int(resources_after["current_rss_kb"]) * 1024
+        hwm_before = int(resources_before["high_water_rss_kb"]) * 1024
+        hwm_after = int(resources_after["high_water_rss_kb"]) * 1024
         events.append(
             {
                 "loader_type": f"{type(loader).__module__}.{type(loader).__qualname__}",
@@ -279,6 +307,12 @@ def _capture_raw_image_cache_loads(
                 "cached_after": cached_after is not None,
                 "cached_nbytes": int(getattr(cached_after, "nbytes", 0)),
                 "elapsed_s": elapsed_s,
+                "current_rss_before_bytes": rss_before,
+                "current_rss_after_bytes": rss_after,
+                "current_rss_delta_bytes": rss_after - rss_before,
+                "high_water_rss_before_bytes": hwm_before,
+                "high_water_rss_after_bytes": hwm_after,
+                "high_water_rss_delta_bytes": hwm_after - hwm_before,
             }
         )
         return result

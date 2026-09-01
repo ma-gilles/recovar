@@ -86,6 +86,8 @@ SOURCE_FILES=(
   scripts/analyze_vdam_raw_cache_abba.py
   scripts/run_vdam_raw_cache_abba.sbatch
   scripts/vdam_gpu_selection.sh
+  tests/unit/test_image_loader.py
+  tests/unit/initial_model/test_iteration_loop.py
   tests/unit/initial_model/test_vdam_late_iteration_profile.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_analyzer.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_runner.py
@@ -94,10 +96,14 @@ SOURCE_FILES=(
   pyproject.toml
 )
 
-HARNESS_DIFF_ALLOWLIST=(
+BENCHMARK_DIFF_ALLOWLIST=(
+  recovar/data_io/image_loader.py
+  recovar/em/initial_model/iteration_loop.py
   scripts/analyze_vdam_raw_cache_abba.py
   scripts/run_vdam_late_iteration_profile.py
   scripts/run_vdam_raw_cache_abba.sbatch
+  tests/unit/test_image_loader.py
+  tests/unit/initial_model/test_iteration_loop.py
   tests/unit/initial_model/test_vdam_late_iteration_profile.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_analyzer.py
   tests/unit/initial_model/test_vdam_raw_cache_abba_runner.py
@@ -134,7 +140,7 @@ write_source_manifest() {
   )
 }
 
-validate_harness_overlay() {
+validate_benchmark_overlay() {
   local candidate
   local allowed
   local matched
@@ -146,14 +152,14 @@ validate_harness_overlay() {
   test "${#changed[@]}" -gt 0
   for candidate in "${changed[@]}"; do
     matched=0
-    for allowed in "${HARNESS_DIFF_ALLOWLIST[@]}"; do
+    for allowed in "${BENCHMARK_DIFF_ALLOWLIST[@]}"; do
       if [[ "${candidate}" == "${allowed}" ]]; then
         matched=1
         break
       fi
     done
     if [[ "${matched}" != 1 ]]; then
-      echo "science-base overlay contains a non-harness path: ${candidate}" >&2
+      echo "science-base overlay contains an unapproved benchmark path: ${candidate}" >&2
       return 2
     fi
   done
@@ -213,7 +219,7 @@ test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"
 test "$(git -C "${REPO_ROOT}" rev-parse "${SCIENCE_BASE_HEAD}^{tree}")" = \
   "${SCIENCE_BASE_TREE}"
 git -C "${REPO_ROOT}" merge-base --is-ancestor "${SCIENCE_BASE_HEAD}" "${EXPECTED_REPO_HEAD}"
-harness_overlay=$(validate_harness_overlay)
+benchmark_overlay=$(validate_benchmark_overlay)
 for source_file in "${SOURCE_FILES[@]}"; do
   test -s "${REPO_ROOT}/${source_file}"
 done
@@ -261,7 +267,7 @@ git -C "${REPO_ROOT}" diff --binary --no-ext-diff HEAD -- | sha256sum \
   > "${PROVENANCE}/repo_diff.sha256"
 printf '%s\n' "${SCIENCE_BASE_HEAD}" > "${PROVENANCE}/science_base_head.txt"
 printf '%s\n' "${SCIENCE_BASE_TREE}" > "${PROVENANCE}/science_base_tree.txt"
-printf '%s\n' "${harness_overlay}" > "${PROVENANCE}/harness_overlay.txt"
+printf '%s\n' "${benchmark_overlay}" > "${PROVENANCE}/benchmark_overlay.txt"
 printf '%s\n' "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job_id.txt"
 printf '%s\n' "${TARGET_NODE}" > "${PROVENANCE}/node.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${PROVENANCE}/selected_gpu_uuid.txt"
@@ -329,8 +335,8 @@ PY
 ) > "${PROVENANCE}/runtime_gate.stdout" 2> "${PROVENANCE}/runtime_gate.stderr"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
-RUN_LABELS=(cache_off_1 cache_auto_1 cache_auto_2 cache_off_2)
-RUN_MODES=(off auto auto off)
+RUN_LABELS=(cache_off_1 cache_auto_1 cache_auto_2 cache_off_2 cache_auto_3 cache_off_3 cache_off_4 cache_auto_4)
+RUN_MODES=(off auto auto off auto off off auto)
 test "${#RUN_LABELS[@]}" -eq "${#RUN_MODES[@]}"
 printf 'order\tlabel\traw_image_cache_mode\traw_image_cache_max_gb\tworkers\tsingle_lane_canonical\tnative_atomic_reduction\tnsys_base\n' \
   > "${PROVENANCE}/execution_order.tsv"
@@ -417,6 +423,15 @@ for phase in ("cold", "warm"):
         assert event["cached_after"] is True, event
         assert event["cached_nbytes"] == expected_bytes, event
         assert float(event["elapsed_s"]) >= 0.0, event
+        assert (
+            event["current_rss_after_bytes"] - event["current_rss_before_bytes"]
+            == event["current_rss_delta_bytes"]
+        ), event
+        assert (
+            event["high_water_rss_after_bytes"] - event["high_water_rss_before_bytes"]
+            == event["high_water_rss_delta_bytes"]
+        ), event
+        assert event["high_water_rss_delta_bytes"] >= 0, event
     phases[phase] = {
         "load_all_count": len(events),
         "load_all_events": events,
@@ -485,8 +500,11 @@ payload = {
     "interpreter_sha256": "48556a44c0dd1570866beb838e6fcbea771bce93d413acd4197bb2f254b72d23",
     "nsys_sha256": "9b32b4e9beee469bc8c26640db228b04583234505c315e23f7e622efd61a68ab",
     "cusparse_sha256": "58ffc54edb1d007f56a1718aaadcb30f45bbf662f43515920ea8ff094304bdbf",
-    "execution_order": ["cache_off_1", "cache_auto_1", "cache_auto_2", "cache_off_2"],
-    "raw_image_cache_modes": ["off", "auto", "auto", "off"],
+    "execution_order": [
+        "cache_off_1", "cache_auto_1", "cache_auto_2", "cache_off_2",
+        "cache_auto_3", "cache_off_3", "cache_off_4", "cache_auto_4",
+    ],
+    "raw_image_cache_modes": ["off", "auto", "auto", "off", "auto", "off", "off", "auto"],
     "raw_image_cache_max_gb": 16.0,
     "raw_image_cache_expected_bytes": 196608000,
     "raw_image_cache_force_used": False,
@@ -508,7 +526,8 @@ PY
 set +e
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" -m scripts.analyze_vdam_raw_cache_abba \
+  env JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu \
+    "${PIXI_PY}" -m scripts.analyze_vdam_raw_cache_abba \
     --root "${ROOT}" --repo "${REPO_ROOT}" \
     --output-json "${ANALYSIS}/report.json" \
     --output-markdown "${ANALYSIS}/report.md"
@@ -526,7 +545,7 @@ test -s "${ANALYSIS}/report.md"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO_ROOT}" rev-parse 'HEAD^{tree}')" = "${EXPECTED_REPO_TREE}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"
-test "$(validate_harness_overlay)" = "${harness_overlay}"
+test "$(validate_benchmark_overlay)" = "${benchmark_overlay}"
 write_source_manifest > "${PROVENANCE}/source_manifest.final.sha256"
 cmp "${PROVENANCE}/source_manifest.sha256" "${PROVENANCE}/source_manifest.final.sha256"
 verify_frozen_inputs

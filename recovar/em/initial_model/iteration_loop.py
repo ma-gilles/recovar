@@ -792,6 +792,7 @@ def run_vdam_iterations(
                 "current_resolution": float(current.current_resolution),
                 "current_resolution_shell": int(current.current_resolution_shell),
                 "ave_Pmax": float(current.ave_Pmax),
+                "subset_size": int(current.subset_size),
             }
         )
         if profile_iterations:

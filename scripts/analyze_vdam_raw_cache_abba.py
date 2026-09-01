@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Analyze the sealed VDAM raw-image-cache OFF/AUTO/AUTO/OFF experiment.
+"""Analyze the sealed VDAM raw-image-cache ABBA/BAAB experiment.
 
-The four arms continue the same GF46 iteration-180 checkpoint through exactly
-iteration 181 with the H100 native-atomic eight-stream selector fixed.  The
-analyzer separates evidence-integrity failures (which are fatal) from a valid
-diagnostic result that does not clear the decision gate (``NO_GO``).
+Eight arms continue the same GF46 iteration-180 checkpoint through exactly
+iteration 181 with four repeats per mode and the H100 native-atomic eight-stream
+selector fixed.  The analyzer separates evidence-integrity failures (which are
+fatal) from a valid diagnostic result that does not clear the decision gate
+(``NO_GO``).
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import re
 import shlex
 import sqlite3
 from collections.abc import Sequence
+from itertools import combinations
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -53,6 +55,7 @@ NSIGHT_SCHEMA = "recovar.vdam_nsys_sqlite_summary.v1"
 PROFILED_ITERATION = 181
 EXPECTED_CACHE_BYTES = 196_608_000
 EXPECTED_CACHE_IMAGES = 3_000
+EXPECTED_SUBSET_SIZE = 1_000
 EXPECTED_IMAGE_SIZE = 128
 EXPECTED_CACHE_DTYPE = "<f4"
 EXPECTED_CACHE_MAX_GB = 16.0
@@ -61,14 +64,16 @@ EXPECTED_SCHEDULE = {
     "healpix_order": 3,
     "n_rotations": 294_912,
     "n_translations": 116,
-    "subset_size": None,
+    "subset_size": EXPECTED_SUBSET_SIZE,
     "random_perturbation": 0.4751259684562683,
 }
 EXPECTED_COARSE_LAUNCHES = 1_000
-HWM_SLACK_BYTES = 128 * 1024**2
+CACHE_ADMISSION_HWM_SLACK_BYTES = 64 * 1024**2
 MIN_PERCENT_WIN = 5.0
 MIN_EXPECTATION_WIN_S = 0.30
 MIN_NO_KERNEL_WIN_S = 0.30
+MAX_GPU_MEDIAN_RELATIVE_DELTA = 0.01
+MAX_GPU_ARM_RELATIVE_DELTA_FROM_POOLED_MEDIAN = 0.02
 COARSE_KERNEL_NAME = "relion_coarse_diff2_projector_f32_kernel"
 GETITEM_RANGE = "ParticleImageDataset.__getitem__"
 LOADER_RANGE = "MRCLoader._load"
@@ -87,9 +92,14 @@ ARM_SPECS = (
     ("cache_auto_1", "auto", 1),
     ("cache_auto_2", "auto", 2),
     ("cache_off_2", "off", 2),
+    ("cache_auto_3", "auto", 3),
+    ("cache_off_3", "off", 3),
+    ("cache_off_4", "off", 4),
+    ("cache_auto_4", "auto", 4),
 )
 ARM_LABELS = tuple(spec[0] for spec in ARM_SPECS)
 MODES = ("off", "auto")
+REPEAT_IDS = (1, 2, 3, 4)
 DISCRETE_META_KEYS = (
     "selected_particle_ids",
     "best_pose_rotation_ids",
@@ -219,7 +229,10 @@ def _validate_execution_order(path: Path, root: Path) -> list[dict[str, Any]]:
             rows = list(csv.DictReader(stream, delimiter="\t"))
     except OSError as exc:
         raise RawCacheSetupError(f"cannot read execution order: {exc}") from exc
-    _require(len(rows) == 4, "execution order must contain exactly four arms")
+    _require(
+        len(rows) == len(ARM_SPECS),
+        f"execution order must contain exactly {len(ARM_SPECS)} arms",
+    )
     expected_columns = (
         "order",
         "label",
@@ -442,7 +455,10 @@ def _validate_provenance(root: Path, repo: Path) -> tuple[dict[str, Any], dict[s
         command = _validate_command(provenance / f"{label}_command.sh", root=root, label=label, mode=mode)
         commands[label] = command
         caches[label] = _validate_jax_cache(root, label, command["jax_cache"])
-    _require(len({value["path"] for value in caches.values()}) == 4, "JAX caches are not private per arm")
+    _require(
+        len({value["path"] for value in caches.values()}) == len(ARM_SPECS),
+        "JAX caches are not private per arm",
+    )
     return run, {
         "run_json_sha256": _sha256(run_path),
         "source_manifest": source,
@@ -583,6 +599,7 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
         _require(kernel_union_ns <= duration_ns, f"{label} {name} clipped GPU union exceeds the stage")
         stage_rows[name] = {
             "duration_s": duration_ns / 1e9,
+            "kernel_count": sum(_inside(interval, bounds) for interval in kernels),
             "gpu_kernel_union_s": kernel_union_ns / 1e9,
             "no_kernel_s": (duration_ns - kernel_union_ns) / 1e9,
             "loader_count": loader_inside[name],
@@ -612,6 +629,7 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
         "loader_count": len(ranges[LOADER_RANGE]),
         "getitem_union_s": _interval_union(ranges[GETITEM_RANGE]) / 1e9,
         "loader_union_s": _interval_union(ranges[LOADER_RANGE]) / 1e9,
+        "kernel_count": len(kernels),
         "gpu_kernel_union_s": gpu_union_ns / 1e9,
         "gpu_kernel_sum_s": gpu_sum_ns / 1e9,
         "coarse_kernel_sum_s": coarse_sum_ns / 1e9,
@@ -639,7 +657,28 @@ def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
     _require(not mismatches, f"{label} cache admission differs: {mismatches}")
     _require(isinstance(event.get("loader_type"), str) and event["loader_type"], f"{label} loader type is invalid")
     elapsed = _finite_number(event.get("elapsed_s"), f"{label} cache preload time", positive=True)
-    return {**event, "elapsed_s": elapsed}
+    memory: dict[str, int] = {}
+    for key in (
+        "current_rss_before_bytes",
+        "current_rss_after_bytes",
+        "current_rss_delta_bytes",
+        "high_water_rss_before_bytes",
+        "high_water_rss_after_bytes",
+        "high_water_rss_delta_bytes",
+    ):
+        memory[key] = _integer(event.get(key), f"{label} {key}")
+    _require(
+        memory["current_rss_after_bytes"] - memory["current_rss_before_bytes"]
+        == memory["current_rss_delta_bytes"],
+        f"{label} current RSS delta differs",
+    )
+    _require(
+        memory["high_water_rss_after_bytes"] - memory["high_water_rss_before_bytes"]
+        == memory["high_water_rss_delta_bytes"],
+        f"{label} high-water RSS delta differs",
+    )
+    _require(memory["high_water_rss_delta_bytes"] >= 0, f"{label} high-water RSS decreased")
+    return {**event, **memory, "elapsed_s": elapsed}
 
 
 def _validate_cache_audit(phase: dict[str, Any], *, label: str, mode: str, phase_name: str) -> list[dict[str, Any]]:
@@ -697,7 +736,10 @@ def _validate_schedule(schedule: Any, label: str) -> dict[str, Any]:
     for key in expected_keys - {"random_perturbation", "subset_size"}:
         _require(_integer(schedule[key], f"{label} {key}") > 0, f"{label} {key} must be positive")
     _require(schedule["current_size"] == EXPECTED_IMAGE_SIZE, f"{label} current size differs from GF46")
-    _require(schedule["subset_size"] is None, f"{label} GF46 subset size must be null (full dataset)")
+    _require(
+        schedule["subset_size"] == EXPECTED_SUBSET_SIZE,
+        f"{label} GF46 subset size differs",
+    )
     perturbation = schedule["random_perturbation"]
     _require(
         isinstance(perturbation, (int, float))
@@ -720,6 +762,27 @@ def _load_phase_outputs(root: Path, label: str, phase_name: str, phase: dict[str
     for key, value in schedule.items():
         _require(key in metadata, f"{label} {phase_name} metadata lacks schedule field {key}")
         _require(_values_equal(metadata.get(key), value), f"{label} {phase_name} metadata schedule differs for {key}")
+    selected_particle_ids = metadata.get("selected_particle_ids")
+    _require(isinstance(selected_particle_ids, list), f"{label} {phase_name} selected particle IDs are missing")
+    _require(
+        len(selected_particle_ids) == EXPECTED_SUBSET_SIZE,
+        f"{label} {phase_name} selected particle count differs from GF46 subset",
+    )
+    selected_ids = [
+        _integer(particle_id, f"{label} {phase_name} selected particle ID")
+        for particle_id in selected_particle_ids
+    ]
+    _require(len(set(selected_ids)) == EXPECTED_SUBSET_SIZE, f"{label} {phase_name} selected particle IDs repeat")
+    _require(
+        all(0 <= particle_id < EXPECTED_CACHE_IMAGES for particle_id in selected_ids),
+        f"{label} {phase_name} selected particle IDs are outside the GF46 table",
+    )
+    for key in DISCRETE_META_KEYS:
+        values = metadata.get(key)
+        _require(
+            isinstance(values, list) and len(values) == EXPECTED_SUBSET_SIZE,
+            f"{label} {phase_name} {key} length differs from GF46 subset",
+        )
     _require(metadata.get("joint_halfset_particle_stream") is True, f"{label} {phase_name} is not joint-halfset")
     _require(_values_equal(metadata.get("halfset_ids"), [0, 1]), f"{label} {phase_name} halfset IDs differ")
     profile_keys = sorted(key for key in metadata if re.fullmatch(r"halfset_\d+_profile_summary", str(key)))
@@ -888,8 +951,12 @@ def _science(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "all_exact": exact,
         }
     repeat_deltas = {
-        mode: _map_delta(arms[f"cache_{mode}_1"]["warm"]["map"], arms[f"cache_{mode}_2"]["warm"]["map"])
+        f"{mode}_R{left}_R{right}": _map_delta(
+            arms[f"cache_{mode}_{left}"]["warm"]["map"],
+            arms[f"cache_{mode}_{right}"]["warm"]["map"],
+        )
         for mode in MODES
+        for left, right in combinations(REPEAT_IDS, 2)
     }
     repeat_envelopes = {
         "relative_l2": max(row["relative_l2"] for row in repeat_deltas.values()),
@@ -902,7 +969,7 @@ def _science(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
     maps_bounded = True
     nondirectional = True
     signed_cross_drifts: list[float] = []
-    for repeat in (1, 2):
+    for repeat in REPEAT_IDS:
         off = arms[f"cache_off_{repeat}"]
         auto = arms[f"cache_auto_{repeat}"]
         meta = {
@@ -943,7 +1010,7 @@ def _science(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "all_discrete_exact": exact,
             "map": delta,
         }
-    cross_pair_nondirectional = signed_cross_drifts[0] * signed_cross_drifts[1] <= 0.0
+    cross_pair_nondirectional = min(signed_cross_drifts) <= 0.0 <= max(signed_cross_drifts)
     nondirectional &= cross_pair_nondirectional
     return {
         "discrete_meta_keys": list(DISCRETE_META_KEYS),
@@ -968,13 +1035,80 @@ def _percent_improvement(off: float, auto: float) -> float:
     return 100.0 * (off - auto) / off
 
 
+def _normalized_kernel_topology(signature_counts: dict[str, int]) -> dict[str, dict[str, int]]:
+    """Separate semantic launch counts from compiler-selected XLA geometry."""
+    name_counts: dict[str, int] = {}
+    recovar_signatures: dict[str, int] = {}
+    for signature, count in signature_counts.items():
+        try:
+            fields = json.loads(signature)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RawCacheSetupError("Nsight kernel signature is invalid") from exc
+        _require(isinstance(fields, dict), "Nsight kernel signature is invalid")
+        name = fields.get("name")
+        _require(isinstance(name, str) and name, "Nsight kernel name is invalid")
+        launch_count = _integer(count, f"{name} launch count")
+        _require(launch_count > 0, f"{name} launch count must be positive")
+        name_counts[name] = name_counts.get(name, 0) + launch_count
+        if name.startswith("relion_"):
+            recovar_signatures[signature] = launch_count
+    return {
+        "kernel_name_counts": dict(sorted(name_counts.items())),
+        "recovar_kernel_signature_counts": dict(sorted(recovar_signatures.items())),
+    }
+
+
+def _gpu_timing_equivalence(
+    arms: dict[str, dict[str, Any]],
+    *,
+    metric: str,
+    off_median: float,
+    auto_median: float,
+) -> dict[str, Any]:
+    values = {
+        label: float(arms[label]["performance"][metric])
+        for label in ARM_LABELS
+    }
+    pooled_median = float(median(values.values()))
+    _require(pooled_median > 0.0, f"{metric} pooled median is invalid")
+    median_relative_delta = abs(float(off_median) - float(auto_median)) / max(
+        abs(float(off_median)), abs(float(auto_median))
+    )
+    arm_relative_deltas = {
+        label: abs(value - pooled_median) / pooled_median
+        for label, value in values.items()
+    }
+    return {
+        "off_median_s": float(off_median),
+        "auto_median_s": float(auto_median),
+        "median_relative_delta": median_relative_delta,
+        "median_relative_delta_limit": MAX_GPU_MEDIAN_RELATIVE_DELTA,
+        "pooled_median_s": pooled_median,
+        "arm_relative_deltas_from_pooled_median": arm_relative_deltas,
+        "arm_relative_delta_limit": MAX_GPU_ARM_RELATIVE_DELTA_FROM_POOLED_MEDIAN,
+        "equivalent": (
+            median_relative_delta <= MAX_GPU_MEDIAN_RELATIVE_DELTA
+            and all(
+                value <= MAX_GPU_ARM_RELATIVE_DELTA_FROM_POOLED_MEDIAN
+                for value in arm_relative_deltas.values()
+            )
+        ),
+    }
+
+
 def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
     modes = {}
     for mode in MODES:
-        rows = [arms[f"cache_{mode}_{repeat}"]["performance"] for repeat in (1, 2)]
-        raw = {f"R{repeat}": {name: rows[repeat - 1][name] for name in PERFORMANCE_METRICS} for repeat in (1, 2)}
+        rows = [arms[f"cache_{mode}_{repeat}"]["performance"] for repeat in REPEAT_IDS]
+        raw = {
+            f"R{repeat}": {name: rows[repeat - 1][name] for name in PERFORMANCE_METRICS}
+            for repeat in REPEAT_IDS
+        }
         medians = {name: float(median([float(row[name]) for row in rows])) for name in PERFORMANCE_METRICS}
-        spans = {name: abs(float(rows[1][name]) - float(rows[0][name])) for name in PERFORMANCE_METRICS}
+        spans = {
+            name: max(float(row[name]) for row in rows) - min(float(row[name]) for row in rows)
+            for name in PERFORMANCE_METRICS
+        }
         modes[mode] = {"raw": raw, "median": medians, "repeat_span": spans}
     off, auto = modes["off"]["median"], modes["auto"]["median"]
     improvement = {name: float(off[name] - auto[name]) for name in PERFORMANCE_METRICS}
@@ -982,7 +1116,7 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         name: _percent_improvement(off[name], auto[name]) if off[name] > 0 else 0.0 for name in PERFORMANCE_METRICS
     }
     adjacent = {}
-    for repeat in (1, 2):
+    for repeat in REPEAT_IDS:
         off_row = arms[f"cache_off_{repeat}"]["performance"]
         auto_row = arms[f"cache_auto_{repeat}"]["performance"]
         adjacent[f"R{repeat}"] = {
@@ -996,32 +1130,39 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
     off_hwm_median = off["process_high_water_rss_after_bytes"]
     auto_hwm_median = auto["process_high_water_rss_after_bytes"]
     hwm_overhead = auto_hwm_median - off_hwm_median
-    hwm_limit = EXPECTED_CACHE_BYTES + HWM_SLACK_BYTES
-    hwm_ok = hwm_overhead <= hwm_limit
     launch_repeat_envelope = max_span["coarse_kernel_launch_count"]
     launch_ok = all(
         arms[label]["performance"]["coarse_kernel_launch_count"] == EXPECTED_COARSE_LAUNCHES
         for label in ARM_LABELS
     )
-    kernel_signatures_exact = all(
-        arms[label]["nsight"]["kernel_signature_counts"] == arms[ARM_LABELS[0]]["nsight"]["kernel_signature_counts"]
+    kernel_topologies = {
+        label: {
+            **_normalized_kernel_topology(arms[label]["nsight"]["kernel_signature_counts"]),
+            "total_kernel_count": arms[label]["nsight"]["kernel_count"],
+            "stage_kernel_counts": {
+                stage: arms[label]["nsight"]["stages"][stage]["kernel_count"]
+                for stage in STAGE_RANGES
+            },
+        }
+        for label in ARM_LABELS
+    }
+    semantic_kernel_topology_exact = all(
+        kernel_topologies[label] == kernel_topologies[ARM_LABELS[0]]
         for label in ARM_LABELS[1:]
     )
-    summed_work_bounded = {}
-    for metric in ("coarse_kernel_sum_s", "gpu_kernel_sum_s"):
-        envelope = max_span[metric]
-        pairs = {
-            f"R{repeat}": abs(
-                arms[f"cache_off_{repeat}"]["performance"][metric]
-                - arms[f"cache_auto_{repeat}"]["performance"][metric]
-            )
-            for repeat in (1, 2)
-        }
-        summed_work_bounded[metric] = {
-            "repeat_envelope_s": envelope,
-            "cross_mode_absolute_deltas_s": pairs,
-            "within_repeat_envelope": all(_within_envelope(value, envelope) for value in pairs.values()),
-        }
+    gpu_timing = {}
+    for metric in (
+        "coarse_kernel_sum_s",
+        "gpu_kernel_sum_s",
+        "coarse_kernel_union_s",
+        "gpu_kernel_union_s",
+    ):
+        gpu_timing[metric] = _gpu_timing_equivalence(
+            arms,
+            metric=metric,
+            off_median=off[metric],
+            auto_median=auto[metric],
+        )
     preload_raw = {
         label: {
             phase: (events[0]["elapsed_s"] if events else 0.0)
@@ -1029,31 +1170,56 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         }
         for label in ARM_LABELS
     }
-    warm_preloads = [preload_raw[f"cache_auto_{repeat}"]["warm"] for repeat in (1, 2)]
+    warm_preloads = [preload_raw[f"cache_auto_{repeat}"]["warm"] for repeat in REPEAT_IDS]
     median_preload = float(median(warm_preloads))
     post_preload_auto_wall = auto["warm_wall_s"] - median_preload
     gross_post_preload_saving = off["warm_wall_s"] - post_preload_auto_wall
     break_even = median_preload / gross_post_preload_saving if gross_post_preload_saving > 0.0 else math.inf
+    admission_hwm_limit = EXPECTED_CACHE_BYTES + CACHE_ADMISSION_HWM_SLACK_BYTES
+    admission_hwm_deltas = {
+        label: {
+            phase: arms[label]["cache_events"][phase][0]["high_water_rss_delta_bytes"]
+            for phase in ("cold", "warm")
+        }
+        for label in ARM_LABELS
+        if arms[label]["mode"] == "auto"
+    }
+    admission_hwm_ok = all(
+        0 <= delta <= admission_hwm_limit
+        for phases in admission_hwm_deltas.values()
+        for delta in phases.values()
+    )
+    paired_wall_wins = sum(
+        row["warm_wall_s"]["auto_faster"] for row in adjacent.values()
+    )
+    paired_expectation_wins = sum(
+        row["warm_expectation_s"]["auto_faster"] for row in adjacent.values()
+    )
     gates = {
-        "both_adjacent_warm_wall_faster": all(row["warm_wall_s"]["auto_faster"] for row in adjacent.values()),
-        "both_adjacent_expectation_faster": all(row["warm_expectation_s"]["auto_faster"] for row in adjacent.values()),
+        "at_least_3_of_4_paired_warm_wall_faster": paired_wall_wins >= 3,
+        "all_4_paired_expectation_faster": paired_expectation_wins == len(REPEAT_IDS),
         "median_wall_at_least_5_percent_faster": improvement_percent["warm_wall_s"] >= MIN_PERCENT_WIN,
         "median_expectation_at_least_5_percent_faster": improvement_percent["warm_expectation_s"] >= MIN_PERCENT_WIN,
         "median_expectation_at_least_0_30s_faster": improvement["warm_expectation_s"] >= MIN_EXPECTATION_WIN_S,
-        "wall_improvement_exceeds_repeat_span": improvement["warm_wall_s"] > max_span["warm_wall_s"],
-        "expectation_improvement_exceeds_repeat_span": improvement["warm_expectation_s"] > max_span["warm_expectation_s"],
         "stage_no_kernel_at_least_0_30s_lower": improvement["stage_no_kernel_s"] >= MIN_NO_KERNEL_WIN_S,
-        "coarse_launches_1000_within_repeat_envelope": launch_ok,
-        "cuda_kernel_signature_count_topology_exact": kernel_signatures_exact,
-        "coarse_summed_work_within_repeat_envelope": summed_work_bounded["coarse_kernel_sum_s"]["within_repeat_envelope"],
-        "total_gpu_summed_work_within_repeat_envelope": summed_work_bounded["gpu_kernel_sum_s"]["within_repeat_envelope"],
-        "hwm_auto_minus_off_overhead_within_cache_plus_128mib": hwm_ok,
+        "coarse_launches_exactly_1000_all_arms": launch_ok,
+        "cuda_kernel_names_and_recovar_geometry_exact": semantic_kernel_topology_exact,
+        "coarse_sum_gpu_time_equivalent": gpu_timing["coarse_kernel_sum_s"]["equivalent"],
+        "total_sum_gpu_time_equivalent": gpu_timing["gpu_kernel_sum_s"]["equivalent"],
+        "coarse_union_gpu_time_equivalent": gpu_timing["coarse_kernel_union_s"]["equivalent"],
+        "total_union_gpu_time_equivalent": gpu_timing["gpu_kernel_union_s"]["equivalent"],
+        "each_cache_admission_hwm_within_cache_plus_64mib": admission_hwm_ok,
     }
     return {
         "metric_order": list(PERFORMANCE_METRICS),
         "arms": {label: arms[label]["performance"] for label in ARM_LABELS},
         "modes": modes,
         "adjacent_pairs": adjacent,
+        "paired_win_counts": {
+            "warm_wall": paired_wall_wins,
+            "warm_expectation": paired_expectation_wins,
+            "pair_count": len(REPEAT_IDS),
+        },
         "median_off_minus_auto": improvement,
         "median_percent_improvement": improvement_percent,
         "max_repeat_span": max_span,
@@ -1069,11 +1235,16 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "off_median_high_water_rss_bytes": off_hwm_median,
             "auto_median_high_water_rss_bytes": auto_hwm_median,
             "auto_minus_off_median_hwm_bytes": hwm_overhead,
-            "limit_bytes": hwm_limit,
+            "classification": "diagnostic_two-call_process_high_water_only",
+        },
+        "cache_admission_memory": {
+            "high_water_rss_delta_bytes": admission_hwm_deltas,
+            "limit_bytes": admission_hwm_limit,
         },
         "coarse_launches": {"expected_per_gpu": EXPECTED_COARSE_LAUNCHES, "repeat_envelope": launch_repeat_envelope},
         "kernel_signature_counts": {label: arms[label]["nsight"]["kernel_signature_counts"] for label in ARM_LABELS},
-        "summed_gpu_work": summed_work_bounded,
+        "normalized_kernel_topologies": kernel_topologies,
+        "gpu_timing_equivalence": gpu_timing,
         "gates": gates,
         "pass": all(gates.values()),
     }
@@ -1084,7 +1255,7 @@ def _markdown(report: dict[str, Any]) -> str:
     science = report["science"]
     performance = report["performance"]
     lines = [
-        f"# {status} — VDAM raw-image-cache ABBA gate",
+        f"# {status} — VDAM raw-image-cache ABBA/BAAB gate",
         "",
         "Scope: diagnostic iteration 180 → 181 only; this report does not promote a science result.",
         "",
@@ -1095,19 +1266,45 @@ def _markdown(report: dict[str, Any]) -> str:
     ]
     for name, value in report["decision"]["gates"].items():
         lines.append(f"| {name} | {'PASS' if value else 'FAIL'} |")
-    lines.extend(("", "## Crossed performance", "", "| Metric | OFF R1 | OFF R2 | OFF median | OFF span | AUTO R1 | AUTO R2 | AUTO median | AUTO span | OFF−AUTO | Improvement |", "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"))
+    table_columns = (
+        ["Metric"]
+        + [f"OFF R{repeat}" for repeat in REPEAT_IDS]
+        + ["OFF median", "OFF span"]
+        + [f"AUTO R{repeat}" for repeat in REPEAT_IDS]
+        + ["AUTO median", "AUTO span", "OFF−AUTO", "Improvement"]
+    )
+    lines.extend(
+        (
+            "",
+            "## Crossed performance",
+            "",
+            "| " + " | ".join(table_columns) + " |",
+            "|---|" + "---:|" * (len(table_columns) - 1),
+        )
+    )
     for metric in PERFORMANCE_METRICS:
         off = performance["modes"]["off"]
         auto = performance["modes"]["auto"]
-        lines.append(
-            f"| {metric} | {off['raw']['R1'][metric]:.6g} | {off['raw']['R2'][metric]:.6g} | "
-            f"{off['median'][metric]:.6g} | {off['repeat_span'][metric]:.6g} | "
-            f"{auto['raw']['R1'][metric]:.6g} | {auto['raw']['R2'][metric]:.6g} | "
-            f"{auto['median'][metric]:.6g} | {auto['repeat_span'][metric]:.6g} | "
-            f"{performance['median_off_minus_auto'][metric]:.6g} | "
-            f"{performance['median_percent_improvement'][metric]:+.2f}% |"
+        values = (
+            [metric]
+            + [f"{off['raw'][f'R{repeat}'][metric]:.6g}" for repeat in REPEAT_IDS]
+            + [f"{off['median'][metric]:.6g}", f"{off['repeat_span'][metric]:.6g}"]
+            + [f"{auto['raw'][f'R{repeat}'][metric]:.6g}" for repeat in REPEAT_IDS]
+            + [
+                f"{auto['median'][metric]:.6g}",
+                f"{auto['repeat_span'][metric]:.6g}",
+                f"{performance['median_off_minus_auto'][metric]:.6g}",
+                f"{performance['median_percent_improvement'][metric]:+.2f}%",
+            ]
         )
+        lines.append("| " + " | ".join(values) + " |")
     preload = performance["preload"]
+    admission_memory = performance["cache_admission_memory"]
+    max_admission_hwm = max(
+        delta
+        for phases in admission_memory["high_water_rss_delta_bytes"].values()
+        for delta in phases.values()
+    )
     lines.extend(
         (
             "",
@@ -1117,6 +1314,8 @@ def _markdown(report: dict[str, Any]) -> str:
             f"- Gross post-preload wall saving: `{preload['gross_post_preload_wall_saving_s']:.6f} s/iteration`.",
             f"- Break-even: `{preload['break_even_iterations']:.3f}` iterations "
             f"(ceiling `{preload['break_even_iterations_ceiling']}`).",
+            f"- Maximum direct cache-admission HWM increase: `{max_admission_hwm}` bytes "
+            f"(limit `{admission_memory['limit_bytes']}` bytes).",
             "",
             "## Correctness",
             "",

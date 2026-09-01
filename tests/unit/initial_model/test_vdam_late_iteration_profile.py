@@ -32,7 +32,20 @@ def test_late_profile_cache_audit_records_load_all_and_restores_method():
 
     assert ImageLoader.load_all is original
     assert events is not None and len(events) == 1
-    assert events[0] == {
+    event = events[0]
+    assert {
+        key: event[key]
+        for key in (
+            "loader_type",
+            "num_images",
+            "image_size",
+            "dtype",
+            "estimated_bytes",
+            "cached_before",
+            "cached_after",
+            "cached_nbytes",
+        )
+    } == {
         "loader_type": f"{_AuditLoader.__module__}.{_AuditLoader.__qualname__}",
         "num_images": 3,
         "image_size": 2,
@@ -41,9 +54,15 @@ def test_late_profile_cache_audit_records_load_all_and_restores_method():
         "cached_before": False,
         "cached_after": True,
         "cached_nbytes": 48,
-        "elapsed_s": events[0]["elapsed_s"],
     }
-    assert events[0]["elapsed_s"] >= 0.0
+    assert event["elapsed_s"] >= 0.0
+    assert event["current_rss_after_bytes"] - event["current_rss_before_bytes"] == event[
+        "current_rss_delta_bytes"
+    ]
+    assert event["high_water_rss_after_bytes"] - event["high_water_rss_before_bytes"] == event[
+        "high_water_rss_delta_bytes"
+    ]
+    assert event["high_water_rss_delta_bytes"] >= 0
 
 
 def test_late_profile_cache_audit_can_be_disabled():
@@ -65,6 +84,7 @@ def test_late_profile_metadata_requires_exactly_one_diagnostic_iteration(tmp_pat
                 "n_rotations": 294912,
                 "n_translations": 116,
                 "subset_size": 1000,
+                "selected_particle_ids": list(range(1000)),
                 "random_perturbation": 0.1,
                 "vdam_iteration_profile_summary": {"expectation_time_s": 1.25},
             }
@@ -82,7 +102,27 @@ def test_late_profile_metadata_requires_exactly_one_diagnostic_iteration(tmp_pat
     report = _profile_metadata(prefix, 181)
 
     assert report["schedule"]["n_rotations"] == 294912
+    assert report["schedule"]["subset_size"] == 1000
     assert report["iteration_profile"]["expectation_time_s"] == 1.25
+
+    metadata = json.loads(meta_path.read_text())
+    del metadata["subset_size"]
+    meta_path.write_text(json.dumps(metadata))
+    with pytest.raises(RuntimeError, match="lacks required schedule fields"):
+        _profile_metadata(prefix, 181)
+
+    metadata["subset_size"] = None
+    meta_path.write_text(json.dumps(metadata))
+    with pytest.raises(RuntimeError, match="subset_size is invalid"):
+        _profile_metadata(prefix, 181)
+
+    metadata["subset_size"] = 999
+    meta_path.write_text(json.dumps(metadata))
+    with pytest.raises(RuntimeError, match="does not match selected_particle_ids"):
+        _profile_metadata(prefix, 181)
+
+    metadata["subset_size"] = 1000
+    meta_path.write_text(json.dumps(metadata))
     Path(f"{prefix}_it182_recovar_meta.json").write_text("{}")
     with pytest.raises(RuntimeError, match="exactly one iteration"):
         _profile_metadata(prefix, 181)
