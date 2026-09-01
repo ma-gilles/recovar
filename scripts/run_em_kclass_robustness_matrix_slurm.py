@@ -30,6 +30,7 @@ DEFAULT_TOMOTWIN_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/Tomotwin-100/
 DEFAULT_IGG_RL_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/IgG-RL/pdbs")
 DEFAULT_RUNTIME_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime")
 RELION_DISPATCH_LOG_SCHEMA_MARKER = b"RELION_DISPATCH_LOG_SCHEMA_V2"
+KCLASS_INITIAL_RESOLUTION_ANG = 60.0
 
 
 @dataclass(frozen=True)
@@ -993,6 +994,7 @@ cat > "${{CASE_ROOT}}/case_config.json" <<JSON
   "image_offset_n_std": {case.image_offset_n_std},
   "percent_outliers": {case.percent_outliers},
   "max_iter": {case.max_iter},
+  "initial_resolution_ang": {KCLASS_INITIAL_RESOLUTION_ANG},
   "particle_diameter_ang": {particle_diameter}
 }}
 JSON
@@ -1116,6 +1118,7 @@ set +e
       --flatten_solvent \\
       --zero_mask \\
       --firstiter_cc \\
+      --ini_high {KCLASS_INITIAL_RESOLUTION_ANG:g} \\
       "${{RELION_CTF_ARGS[@]}}" \\
       --norm \\
       --scale \\
@@ -1187,7 +1190,8 @@ set +e
   --offset_range 6 \\
   --offset_step 2 \\
   --adaptive_oversampling 1 \\
-  --init_resolution 30.0 \\
+  --init_resolution {KCLASS_INITIAL_RESOLUTION_ANG:g} \\
+  --apply-initial-lowpass \\
   --firstiter_cc \\
   --image-fourier-backend relion_cuda \\
   --image_batch_size {image_batch_size} \\

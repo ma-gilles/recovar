@@ -166,6 +166,11 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert 'str(relion_bind_file).startswith(str(external_bind_root) + "/")' in text
     assert "      --firstiter_cc \\\n" in text
     assert "  --firstiter_cc \\\n" in text
+    assert f'"initial_resolution_ang": {launcher.KCLASS_INITIAL_RESOLUTION_ANG}' in text
+    assert f"      --ini_high {launcher.KCLASS_INITIAL_RESOLUTION_ANG:g} \\\n" in text
+    assert f"  --init_resolution {launcher.KCLASS_INITIAL_RESOLUTION_ANG:g} \\\n" in text
+    assert "  --apply-initial-lowpass \\\n" in text
+    assert "  --init_resolution 30" not in text
     assert "  --image-fourier-backend relion_cuda \\\n" in text
     assert 'RECOVAR_INTERMEDIATES_DIR="${RECOVAR_DIR}/intermediates"' in text
     assert '--save_intermediates_dir "${RECOVAR_INTERMEDIATES_DIR}"' in text
