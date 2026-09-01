@@ -1876,9 +1876,9 @@ def relion_fused_x_half_backproject_indexed(
     """Fused RELION x-half data/weight backprojection diagnostic.
 
     This target is intentionally narrower than :func:`backproject_indexed`:
-    it accepts pre-reduced complex64 data rows and float32 weight rows, expands
-    both to RELION's native current-size FFTW square, and updates the complex64
-    data and float32 weight accumulators in one 128-thread CUDA grid.  The two
+    it accepts matching complex64/float32 or complex128/float64 rows, expands
+    both to RELION's native current-size FFTW square, and updates the matching
+    data and weight accumulators in one 128-thread CUDA grid.  The two
     output buffers alias their corresponding input accumulators.
     """
 
@@ -1889,14 +1889,15 @@ def relion_fused_x_half_backproject_indexed(
     if int(volume_shape[2]) % 2 == 0:
         raise ValueError(f"RELION fused x-half backprojection requires an odd BPref grid, got {volume_shape}")
 
-    if data_volume.dtype != jnp.dtype(jnp.complex64):
-        raise TypeError(f"RELION fused x-half data volume must be complex64, got {data_volume.dtype}")
-    if weight_volume.dtype != jnp.dtype(jnp.float32):
-        raise TypeError(f"RELION fused x-half weight volume must be float32, got {weight_volume.dtype}")
-    if data_rows.dtype != jnp.dtype(jnp.complex64):
-        raise TypeError(f"RELION fused x-half data rows must be complex64, got {data_rows.dtype}")
-    if weight_rows.dtype != jnp.dtype(jnp.float32):
-        raise TypeError(f"RELION fused x-half weight rows must be float32, got {weight_rows.dtype}")
+    if data_volume.dtype not in {jnp.dtype(jnp.complex64), jnp.dtype(jnp.complex128)}:
+        raise TypeError(f"RELION fused x-half data volume must be complex64 or complex128, got {data_volume.dtype}")
+    real_dtype = jnp.dtype(jnp.float64 if data_volume.dtype == jnp.dtype(jnp.complex128) else jnp.float32)
+    if weight_volume.dtype != real_dtype:
+        raise TypeError(f"RELION fused x-half weight volume must be {real_dtype}, got {weight_volume.dtype}")
+    if data_rows.dtype != data_volume.dtype:
+        raise TypeError(f"RELION fused x-half data rows must match the volume dtype, got {data_rows.dtype}")
+    if weight_rows.dtype != real_dtype:
+        raise TypeError(f"RELION fused x-half weight rows must be {real_dtype}, got {weight_rows.dtype}")
     if pixel_indices.dtype != jnp.dtype(jnp.int32):
         raise TypeError(f"RELION fused x-half pixel indices must be int32, got {pixel_indices.dtype}")
     if not jnp.issubdtype(rotation_matrices.dtype, jnp.floating):
@@ -1951,8 +1952,13 @@ def relion_fused_x_half_backproject_indexed(
     kw["image_h"] = np.int64(current_height)
     kw["image_w"] = np.int64(current_half_width)
     kw["full_image_w"] = np.int64(current_height)
-    rotation_matrices = _relion_x_half_backproject_rotation_to_kernel(rotation_matrices, jnp.float32)
-    rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
+    # Sparse pass-2 supplies the dedicated M-step matrices generated through
+    # RELION's host ``generateEulerMatrices(..., inverse=true)`` emulation.
+    # They are already in RECOVAR's transposed convention; applying the
+    # generic scorer-to-backprojector numerical inverse here would invert them
+    # a second time.  The packed half-axis permutation is still required.
+    rotation_matrices = rotation_matrices.astype(real_dtype)[..., [2, 1, 0]]
+    rot6 = _rot_to_compact(rotation_matrices, real_dtype)
 
     out_types = (
         jax.ShapeDtypeStruct(data_volume.shape, data_volume.dtype),

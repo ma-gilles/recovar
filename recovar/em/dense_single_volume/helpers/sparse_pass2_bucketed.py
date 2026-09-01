@@ -10993,7 +10993,7 @@ def compute_pass2_stats_sparse_bucketed(
     )
     if use_relion_x_half_mstep and diagnostic_sequential_translation_reduction:
         logger.info(
-            "Sparse pass-2 RELION x-half M-step diagnostic: sequential float32 "
+            "Sparse pass-2 RELION x-half M-step diagnostic: sequential XFLOAT-precision "
             "translation reduction runs as %s",
             "a checked shadow" if shadow_only_mode_requested else "the standalone diagnostic path",
         )

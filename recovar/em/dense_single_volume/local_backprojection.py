@@ -87,6 +87,36 @@ def compute_relion_f32_sequential_mstep_sums(probs, shifted, ctf2_over_nv):
     return jax.lax.fori_loop(0, n_trans, add_translation, (numerator0, denominator0))
 
 
+@jax.jit
+def compute_relion_sequential_mstep_sums(probs, shifted, ctf2_over_nv):
+    """Reduce translations in RELION order without changing precision.
+
+    RELION accumulates this loop in ``XFLOAT``.  That is float32 in its normal
+    GPU build and float64 in a double-precision build, so the RECOVAR parity
+    path must follow the operand precision rather than unconditionally model
+    the former.
+    """
+
+    real_dtype = jnp.result_type(probs, ctf2_over_nv, jnp.real(shifted))
+    complex_dtype = jnp.complex128 if real_dtype == jnp.dtype(jnp.float64) else jnp.complex64
+    probs = jnp.asarray(probs, dtype=real_dtype)
+    shifted = jnp.asarray(shifted, dtype=complex_dtype)
+    ctf2_over_nv = jnp.asarray(ctf2_over_nv, dtype=real_dtype)
+    batch, n_rot, n_trans = probs.shape
+    n_pixels = shifted.shape[-1]
+    numerator0 = jnp.zeros((batch, n_rot, n_pixels), dtype=complex_dtype)
+    denominator0 = jnp.zeros((batch, n_rot, n_pixels), dtype=real_dtype)
+
+    def add_translation(trans_idx, carry):
+        numerator, denominator = carry
+        weight = probs[:, :, trans_idx, None]
+        numerator = numerator + weight * shifted[:, None, trans_idx, :]
+        denominator = denominator + weight * ctf2_over_nv[:, None, :]
+        return numerator, denominator
+
+    return jax.lax.fori_loop(0, n_trans, add_translation, (numerator0, denominator0))
+
+
 def compute_local_mstep_sums(
     probs,
     shifted,
@@ -104,7 +134,7 @@ def compute_local_mstep_sums(
         else bool(sequential_translation_reduction)
     )
     if relion_x_half and use_sequential_reduction:
-        return compute_relion_f32_sequential_mstep_sums(probs, shifted, ctf2_over_nv)
+        return compute_relion_sequential_mstep_sums(probs, shifted, ctf2_over_nv)
     denominator = (
         compute_local_ctf_sums(probs, ctf2_over_nv)
         if default_probs_sum_t is None

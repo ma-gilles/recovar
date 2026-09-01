@@ -14247,3 +14247,35 @@ iteration-1 Pmax and significant-support arrays are exactly equal for all
 degrees and `2.42e-6` angstrom. The next oracle should therefore capture one
 matched hypothesis's projected reference, CTF product, posterior-weighted
 numerator, and denominator immediately before scatter in both engines.
+
+### Double-XFLOAT fused backprojection localization
+
+The strict fused RELION x-half diagnostic previously accepted only
+complex64/float32 rows and accumulators. Its CUDA scatter and FFI dispatch now
+also instantiate and route complex128/float64, and the sequential translation
+reduction now follows the incoming RELION `XFLOAT` precision instead of always
+narrowing to complex64/float32. Explicit live-noise replay also takes
+precedence over the six-decimal iteration-0 model-STAR spectrum; this removes a
+known input-rounding confound, although it changes aggregate BPref errors only
+slightly.
+
+GPU job `60382755` demonstrated that the double fused path closes the interior
+scatter arithmetic: per-shell numerator/denominator relative L2 is about
+`3e-7/1e-7` at shell 15 and rises smoothly to `9e-7/3e-7` at shell 21. Nearly
+the entire aggregate residual is confined to shells 22 and 23. An audit then
+found one remaining `const float` radius-squared temporary inside the templated
+fused kernel and changed it to the template type, matching RELION's `XFLOAT`
+cutoff. Job `60382765` confirmed that the outer-shell residual is not explained
+by that cast alone.
+
+Sparse pass-2 supplies matrices already generated through the RELION host
+`generateEulerMatrices(..., inverse=true)` emulation. The fused wrapper no
+longer numerically inverts these a second time in float64; it only performs the
+required packed-axis permutation. Job `60382778` gives aggregate
+numerator/denominator relative L2 `9.21e-3/2.53e-3` (half 1) and
+`6.55e-3/2.25e-3` (half 2). Shells 15--21 remain at the `1e-7`--`1e-6` level,
+while shell 23 remains `5.58e-2/1.54e-2` and `3.95e-2/1.40e-2`, respectively.
+The next oracle should capture RELION's exact per-winner `g_eulers` matrix at
+the backprojector launch: exact-radius source pixels are hypersensitive to even
+ulp-scale matrix differences, whereas the interior result strongly rejects a
+general interpolation or atomic-accumulation mismatch.

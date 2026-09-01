@@ -4009,7 +4009,21 @@ def main():
         ]
         if any(sigma2 is None for sigma2 in _relion_sigma2_per_model):
             raise ValueError("RELION iteration-0 model is missing rlnSigma2Noise")
-        if relion_live_initial_sigma2 is not None:
+        if args.init_noise_from_npz is not None:
+            # An explicit diagnostic noise replay must take precedence over the
+            # rounded rlnSigma2Noise values in the iteration-0 STAR.  RELION's
+            # continuous double-precision run retains more digits in memory
+            # than are serialized there, so overwriting this input defeats the
+            # purpose of --init-noise-from-npz.
+            _explicit_sigma2 = np.asarray(initial_noise_radial, dtype=np.float64) / float(_n4)
+            _relion_sigma2_per_model = [
+                _explicit_sigma2.copy() for _model in _relion_sigma2_per_model
+            ]
+            logger.info(
+                "STRICT-PARITY: explicit --init-noise-from-npz overrides rounded "
+                "RELION iteration-0 rlnSigma2Noise values",
+            )
+        elif relion_live_initial_sigma2 is not None:
             _relion_sigma2_per_model = [
                 np.asarray(relion_live_initial_sigma2, dtype=np.float64).copy()
                 for _model in _relion_sigma2_per_model
@@ -4291,7 +4305,22 @@ def main():
             strict=True,
         )
         if initial_overrides[0] is not None:
-            if relion_live_initial_noise_variance is not None:
+            if args.init_noise_from_npz is not None:
+                initial_overrides[0] = dict(initial_overrides[0])
+                explicit_noise = (
+                    list(noise_variance)
+                    if isinstance(noise_variance, (list, tuple))
+                    else [noise_variance, noise_variance]
+                )
+                initial_overrides[0]["noise_variance"] = [
+                    np.asarray(value, dtype=np.float64).copy()
+                    for value in explicit_noise
+                ]
+                logger.info(
+                    "STRICT-PARITY: first expectation preserves explicit "
+                    "--init-noise-from-npz instead of rounded model-STAR noise",
+                )
+            elif relion_live_initial_noise_variance is not None:
                 initial_overrides[0] = dict(initial_overrides[0])
                 initial_noise_dtype = (
                     np.float64

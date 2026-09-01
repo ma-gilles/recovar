@@ -765,10 +765,52 @@ def test_relion_fused_x_half_wrapper_uses_mixed_aliases_and_native_square(monkey
     assert result[0] is data_volume and result[1] is weight_volume
 
 
+def test_relion_fused_x_half_wrapper_preserves_double_precision(monkeypatch):
+    observed = {}
+
+    def fake_ffi_call(_target, result_types, **_options):
+        observed["result_types"] = result_types
+
+        def call(*args, **_attrs):
+            observed["args"] = args
+            return args[4], args[5]
+
+        return call
+
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+
+    volume_size = 7 * 7 * 4
+    data_volume = jnp.zeros(volume_size, dtype=jnp.complex128)
+    weight_volume = jnp.zeros(volume_size, dtype=jnp.float64)
+    rotation = jnp.asarray(
+        [[[1.0, 0.1, 0.2], [0.3, 1.0, 0.4], [0.5, 0.6, 1.0]]],
+        dtype=jnp.float64,
+    )
+    cuda_backproject.relion_fused_x_half_backproject_indexed.__wrapped__(
+        data_volume,
+        weight_volume,
+        jnp.ones((1, 1), dtype=jnp.complex128),
+        jnp.ones((1, 1), dtype=jnp.float64),
+        jnp.asarray([0], dtype=jnp.int32),
+        rotation,
+        (8, 8),
+        (7, 7, 7),
+        2.0,
+    )
+
+    assert [item.dtype for item in observed["result_types"]] == [jnp.complex128, jnp.float64]
+    assert observed["args"][0].dtype == jnp.complex128
+    assert observed["args"][1].dtype == jnp.float64
+    assert observed["args"][3].dtype == jnp.float64
+    expected_rot6 = np.asarray(rotation)[..., [2, 1, 0]][:, [1, 0], :].reshape(1, 6)
+    np.testing.assert_array_equal(np.asarray(observed["args"][3]), expected_rot6)
+
+
 @pytest.mark.parametrize(
     "data_dtype,weight_dtype,index_dtype,error_match",
     [
-        (jnp.complex128, jnp.float32, jnp.int32, "data volume must be complex64"),
+        (jnp.complex128, jnp.float32, jnp.int32, "weight volume must be float64"),
         (jnp.complex64, jnp.float64, jnp.int32, "weight volume must be float32"),
         (jnp.complex64, jnp.float32, jnp.int64, "pixel indices must be int32"),
     ],
@@ -812,6 +854,12 @@ def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
         r"atomicAdd\(&weight_volume\[off\], w \* Fweight\);"
     )
     assert atomic_sequence.search(text)
+    fused_kernel = text[
+        text.index("relion_fused_x_half_backproject_kernel(") :
+        text.index("/* ================================================================== */", text.index("relion_fused_x_half_backproject_kernel("))
+    ]
+    assert "const T r2_3d = relion_radius_squared" in fused_kernel
+    assert "const float r2_3d = relion_radius_squared" not in fused_kernel
     handler = text[
         text.index("RelionFusedXHalfBackproject, RelionFusedXHalfBackprojectImpl") :
         text.index(
@@ -1018,9 +1066,9 @@ def test_relion_fused_x_half_signature_cuda_source_copies_before_read_only_kerne
 
     ordinary = launch.index("launch_relion_fused_x_half_backproject(")
     shadow = launch.index("cudaMemcpyAsync(accumulator_shadow_data")
-    signature = launch.index("relion_fused_x_half_backproject_kernel<true, false>")
+    signature = launch.index("relion_fused_x_half_backproject_kernel<float, float2, true, false>")
     assert ordinary < shadow < signature
-    assert "relion_fused_x_half_backproject_kernel<true, true>" not in launch
+    assert "relion_fused_x_half_backproject_kernel<float, float2, true, true>" not in launch
     for name in (
         "accumulator_shadow_weight",
         "operand_shadow_data_rows",

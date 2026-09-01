@@ -79,19 +79,27 @@ def test_local_weighted_sums_match_explicit_highest_precision_matmul():
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
-def test_local_mstep_sums_env_gate_only_changes_relion_x_half(monkeypatch):
+@pytest.mark.parametrize(
+    "real_dtype,complex_dtype",
+    [(np.float32, np.complex64), (np.float64, np.complex128)],
+)
+def test_local_mstep_sums_env_gate_preserves_xfloat_precision(
+    monkeypatch, real_dtype, complex_dtype
+):
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", "1")
-    probs = np.array([[[1.0, 1.0, 1.0]]], dtype=np.float64)
-    shifted = np.array([[[1.0e8 + 0j], [1.0 + 0j], [-1.0e8 + 0j]]], dtype=np.complex64)
-    ctf2_over_nv = np.array([[2.0]], dtype=np.float64)
+    probs = np.array([[[1.0, 1.0, 1.0]]], dtype=real_dtype)
+    shifted = np.array(
+        [[[1.0e8 + 0j], [1.0 + 0j], [-1.0e8 + 0j]]], dtype=complex_dtype
+    )
+    ctf2_over_nv = np.array([[2.0]], dtype=real_dtype)
 
     xhalf_y, xhalf_ctf = compute_local_mstep_sums(probs, shifted, ctf2_over_nv, relion_x_half=True)
     normal_y, normal_ctf = compute_local_mstep_sums(probs, shifted, ctf2_over_nv, relion_x_half=False)
 
-    assert xhalf_y.dtype == np.dtype(np.complex64)
-    assert xhalf_ctf.dtype == np.dtype(np.float32)
-    assert normal_y.dtype == np.dtype(np.complex128)
-    assert normal_ctf.dtype == np.dtype(np.float64)
-    assert np.asarray(xhalf_y)[0, 0, 0] == 0.0
-    assert np.asarray(normal_y)[0, 0, 0] == 1.0
-    np.testing.assert_array_equal(np.asarray(normal_ctf), np.array([[[6.0]]], dtype=np.float64))
+    assert xhalf_y.dtype == np.dtype(complex_dtype)
+    assert xhalf_ctf.dtype == np.dtype(real_dtype)
+    assert normal_y.dtype == np.dtype(complex_dtype)
+    assert normal_ctf.dtype == np.dtype(real_dtype)
+    expected_value = 0.0 if real_dtype == np.float32 else 1.0
+    assert np.asarray(xhalf_y)[0, 0, 0] == expected_value
+    np.testing.assert_array_equal(np.asarray(normal_ctf), np.array([[[6.0]]], dtype=real_dtype))

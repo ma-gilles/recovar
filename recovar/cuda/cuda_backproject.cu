@@ -390,32 +390,32 @@ static __device__ __forceinline__ void scatter_trilinear(
  * model imaginary, and model weight consecutively for each neighbor; keeping
  * those atomics together is the sole semantic difference from invoking the
  * generic complex and real scatter paths separately. */
-template <bool CAPTURE_SIGNATURE, bool ACCUMULATE>
+template <typename T, typename ComplexT, bool CAPTURE_SIGNATURE, bool ACCUMULATE>
 static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
-    float2* __restrict__ data_volume,
-    float* __restrict__ weight_volume,
-    float rk0, float rk1, float rk2,
-    float data_re, float data_im, float Fweight,
-    float c0, float c1, float c2,
+    ComplexT* __restrict__ data_volume,
+    T* __restrict__ weight_volume,
+    T rk0, T rk1, T rk2,
+    T data_re, T data_im, T Fweight,
+    T c0, T c1, T c2,
     int N0, int N1, int N2_eff, int stride0, int stride1,
     int signature_base,
     int32_t* __restrict__ signature_neighbor_indices,
     float* __restrict__ signature_neighbor_coefficients,
     int32_t* __restrict__ signature_neighbor_flags)
 {
-    const float g0 = rk0 + c0;
-    const float g1 = rk1 + c1;
+    const T g0 = rk0 + c0;
+    const T g1 = rk1 + c1;
     const int ic0 = (int)c0;
     const int ic1 = (int)c1;
     const int ic2 = (int)c2;
     const int N2_full = full_z_size_from_half(N0, N1, N2_eff);
-    const float g2_full = rk2 + c2;
+    const T g2_full = rk2 + c2;
 
     /* The caller's compact all-neighbor gate already proves these bounds for
      * RELION BPref shapes; retain this as a defensive array-safety check. */
-    if (g0 < -1.0f || g0 >= (float)N0 ||
-        g1 < -1.0f || g1 >= (float)N1 ||
-        g2_full < -1.0f || g2_full >= (float)N2_full) return;
+    if (g0 < T(-1) || g0 >= T(N0) ||
+        g1 < T(-1) || g1 >= T(N1) ||
+        g2_full < T(-1) || g2_full >= T(N2_full)) return;
 
     /* RELION forms each interpolation fraction from the rotated coordinate
      * before applying the integer model origin.  Adding the origin first is
@@ -427,12 +427,12 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
     const int b0 = r0 + ic0;
     const int b1 = r1 + ic1;
     const int b2 = r2 + ic2;
-    const float f0 = rk0 - (float)r0;
-    const float f1 = rk1 - (float)r1;
-    const float f2 = rk2 - (float)r2;
-    const float w0[2] = {1.0f - f0, f0};
-    const float w1[2] = {1.0f - f1, f1};
-    const float w2[2] = {1.0f - f2, f2};
+    const T f0 = rk0 - T(r0);
+    const T f1 = rk1 - T(r1);
+    const T f2 = rk2 - T(r2);
+    const T w0[2] = {T(1) - f0, f0};
+    const T w1[2] = {T(1) - f1, f1};
+    const T w2[2] = {T(1) - f2, f2};
 
     #pragma unroll
     for (int d0 = 0; d0 < 2; d0++) {
@@ -442,7 +442,7 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
         for (int d1 = 0; d1 < 2; d1++) {
             int j1 = b1 + d1;
             if ((unsigned)j1 >= (unsigned)N1) continue;
-            const float ww = w0[d0] * w1[d1];
+            const T ww = w0[d0] * w1[d1];
             #pragma unroll
             for (int d2 = 0; d2 < 2; d2++) {
                 const int signature_slot = d0 * 4 + d1 * 2 + d2;
@@ -457,13 +457,13 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
                     continue;
                 }
                 const int kz = j2 - ic2;
-                const float w = ww * w2[d2];
+                const T w = ww * w2[d2];
                 int sj0 = j0;
                 int sj1 = j1;
                 int hkz;
                 int32_t neighbor_flags = 1;
-                float sre = w * data_re;
-                float sim = w * data_im;
+                T sre = w * data_re;
+                T sim = w * data_im;
                 if (kz >= 0) {
                     hkz = kz;
                 } else if ((N2_full & 1) == 0 && -kz == ic2) {
@@ -485,7 +485,7 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
                 const int off = sj0 * stride0 + sj1 * stride1 + hkz;
                 if constexpr (CAPTURE_SIGNATURE) {
                     signature_neighbor_indices[signature_index] = off;
-                    signature_neighbor_coefficients[signature_index] = w;
+                    signature_neighbor_coefficients[signature_index] = (float)w;
                     signature_neighbor_flags[signature_index] = neighbor_flags;
                 }
                 if constexpr (ACCUMULATE) {
@@ -1323,15 +1323,15 @@ batch_backproject_indexed_kernel(
 /* One invocation corresponds to one RELION particle. blockIdx.x retains the
  * particle-local orientation-row order, while each 128-thread block walks the
  * native current-size FFTW square in serial pixel passes. */
-template <bool CAPTURE_SIGNATURE, bool ACCUMULATE>
+template <typename T, typename ComplexT, bool CAPTURE_SIGNATURE, bool ACCUMULATE>
 __global__ void __launch_bounds__(128)
 relion_fused_x_half_backproject_kernel(
-    float2* __restrict__ data_volume,
-    float* __restrict__ weight_volume,
-    const float2* __restrict__ data_rows,
-    const float* __restrict__ weight_rows,
+    ComplexT* __restrict__ data_volume,
+    T* __restrict__ weight_volume,
+    const ComplexT* __restrict__ data_rows,
+    const T* __restrict__ weight_rows,
     const int32_t* __restrict__ pixel_indices,
-    const float* __restrict__ rot,
+    const T* __restrict__ rot,
     const int32_t* __restrict__ canonical_rotation_keys,
     const int32_t* __restrict__ signature_row_indices,
     int32_t* __restrict__ signature_rotation_keys,
@@ -1343,10 +1343,10 @@ relion_fused_x_half_backproject_kernel(
     int32_t* __restrict__ signature_neighbor_flags,
     int n_pixels, int image_h, int image_w,
     int N0, int N1, int N2_eff,
-    float c0, float c1, float c2,
-    int upsampling, float max_r2, int n_source_rows)
+    T c0, T c1, T c2,
+    int upsampling, T max_r2, int n_source_rows)
 {
-    __shared__ float R[6];
+    __shared__ T R[6];
     const int output_row = (int)blockIdx.x;
     int source_row;
     if constexpr (CAPTURE_SIGNATURE) {
@@ -1382,12 +1382,12 @@ relion_fused_x_half_backproject_kernel(
         const int k0_idx = orig_pix / image_w;
         const int k1_idx = orig_pix % image_w;
 
-        const float k0_unscaled = (k0_idx < image_w)
-            ? (float)k0_idx
-            : (float)(k0_idx - image_h);
-        const float k1_unscaled = (float)k1_idx;
-        const float k0 = k0_unscaled * upsampling;
-        const float k1 = k1_unscaled * upsampling;
+        const T k0_unscaled = (k0_idx < image_w)
+            ? T(k0_idx)
+            : T(k0_idx - image_h);
+        const T k1_unscaled = T(k1_idx);
+        const T k0 = k0_unscaled * T(upsampling);
+        const T k1 = k1_unscaled * T(upsampling);
 
         /* RELION omits the redundant negative-y x=0 FFTW row. */
         if (k1_idx == 0 && k0_idx >= image_w) {
@@ -1399,8 +1399,8 @@ relion_fused_x_half_backproject_kernel(
             continue;
         }
 
-        const float Fweight = weight_rows[source_row_pixel];
-        const float2 value = data_rows[source_row_pixel];
+        const T Fweight = weight_rows[source_row_pixel];
+        const ComplexT value = data_rows[source_row_pixel];
         if constexpr (CAPTURE_SIGNATURE) {
             signature_source_values[row_pixel * 6 + 0] = value.x;
             signature_source_values[row_pixel * 6 + 1] = value.y;
@@ -1412,38 +1412,38 @@ relion_fused_x_half_backproject_kernel(
             continue;
         }
 
-        float data_re = value.x;
-        float data_im = value.y;
+        T data_re = value.x;
+        T data_im = value.y;
         /* Match RELION cuda_kernel_backproject3D: form matrix-x*source-x
          * before matrix-y*source-y, then apply padding_factor. Both the
          * addend order and delayed scaling are observable at interpolation
          * boundaries. */
-        float rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * (float)upsampling;
-        float rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * (float)upsampling;
-        float rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * (float)upsampling;
+        T rk0 = (R[3] * k1_unscaled + R[0] * k0_unscaled) * T(upsampling);
+        T rk1 = (R[4] * k1_unscaled + R[1] * k0_unscaled) * T(upsampling);
+        T rk2 = (R[5] * k1_unscaled + R[2] * k0_unscaled) * T(upsampling);
         if constexpr (CAPTURE_SIGNATURE) {
             signature_source_values[row_pixel * 6 + 3] = rk0;
             signature_source_values[row_pixel * 6 + 4] = rk1;
             signature_source_values[row_pixel * 6 + 5] = rk2;
         }
 
-        if (max_r2 >= 0.0f) {
-            const float r2_3d = relion_radius_squared(rk0, rk1, rk2);
+        if (max_r2 >= T(0)) {
+            const T r2_3d = relion_radius_squared(rk0, rk1, rk2);
             if (r2_3d > max_r2) {
                 if constexpr (CAPTURE_SIGNATURE) signature_row_flags[row_pixel] = row_flags | 8;
                 continue;
             }
         }
-        if (rk2 < 0.0f) {
+        if (rk2 < T(0)) {
             row_flags |= 16;
             rk0 = -rk0;
             rk1 = -rk1;
             rk2 = -rk2;
             data_im = -data_im;
         }
-        if (max_r2 >= 0.0f) {
-            const int maxR = (int)floorf(sqrtf(max_r2) + 0.5f);
-            if (relion_compact_trilinear_oob<float>(rk2, rk1, rk0, maxR)) {
+        if (max_r2 >= T(0)) {
+            const int maxR = (int)floor(sqrt(max_r2) + T(0.5));
+            if (relion_compact_trilinear_oob<T>(rk2, rk1, rk0, maxR)) {
                 if constexpr (CAPTURE_SIGNATURE) signature_row_flags[row_pixel] = row_flags | 32;
                 continue;
             }
@@ -1453,7 +1453,7 @@ relion_fused_x_half_backproject_kernel(
 
         const int stride1 = N2_eff;
         const int stride0 = N1 * N2_eff;
-        scatter_trilinear_relion_fused_x_half<CAPTURE_SIGNATURE, ACCUMULATE>(
+        scatter_trilinear_relion_fused_x_half<T, ComplexT, CAPTURE_SIGNATURE, ACCUMULATE>(
             data_volume, weight_volume,
             rk0, rk1, rk2, data_re, data_im, Fweight,
             c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
@@ -2422,7 +2422,41 @@ cudaError_t launch_relion_fused_x_half_backproject(
     const float max_r2 = (float)max_r2_x4 / 4.0f;
     dim3 grid((unsigned)n_rows, 1);
     dim3 block(128);
-    relion_fused_x_half_backproject_kernel<false, true><<<grid, block, 0, stream>>>(
+    relion_fused_x_half_backproject_kernel<float, float2, false, true><<<grid, block, 0, stream>>>(
+        data_volume, weight_volume, data_rows, weight_rows, pixel_indices, rot,
+        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        (int)n_pixels, (int)image_h, (int)image_w,
+        (int)N0, (int)N1, N2_eff, c0, c1, c2,
+        (int)upsampling, max_r2, (int)n_rows);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_fused_x_half_backproject_f64(
+    cudaStream_t stream,
+    double2* data_volume,
+    double* weight_volume,
+    const double2* data_rows,
+    const double* weight_rows,
+    const int32_t* pixel_indices,
+    const double* rot,
+    int64_t n_rows,
+    int64_t n_pixels,
+    int64_t image_h,
+    int64_t image_w,
+    int64_t N0,
+    int64_t N1,
+    int64_t N2,
+    int64_t upsampling,
+    int64_t max_r2_x4)
+{
+    const int N2_eff = (int)(N2 / 2 + 1);
+    const double c0 = double(N0 / 2);
+    const double c1 = double(N1 / 2);
+    const double c2 = double(N2 / 2);
+    const double max_r2 = double(max_r2_x4) / 4.0;
+    dim3 grid((unsigned)n_rows, 1);
+    dim3 block(128);
+    relion_fused_x_half_backproject_kernel<double, double2, false, true><<<grid, block, 0, stream>>>(
         data_volume, weight_volume, data_rows, weight_rows, pixel_indices, rot,
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         (int)n_pixels, (int)image_h, (int)image_w,
@@ -2507,7 +2541,7 @@ cudaError_t launch_relion_fused_x_half_backproject_with_signature(
                           (size_t)n_signature_rows * sizeof(int32_t),
                           cudaMemcpyDeviceToDevice, stream);
     if (err != cudaSuccess) return err;
-    relion_fused_x_half_backproject_kernel<true, false><<<signature_grid, block, 0, stream>>>(
+    relion_fused_x_half_backproject_kernel<float, float2, true, false><<<signature_grid, block, 0, stream>>>(
         data_volume, weight_volume, data_rows, weight_rows, pixel_indices, rot,
         canonical_rotation_keys, signature_row_indices,
         signature_rotation_keys, signature_pixel_indices, signature_row_flags,
@@ -5732,22 +5766,25 @@ ffi::Error RelionFusedXHalfBackprojectImpl(
     ffi::Result<ffi::AnyBuffer> data_volume_out,
     ffi::Result<ffi::AnyBuffer> weight_volume_out)
 {
-    if (data_rows.element_type() != ffi::DataType::C64 ||
-        data_volume_in.element_type() != ffi::DataType::C64 ||
-        data_volume_out->element_type() != ffi::DataType::C64)
+    const bool use_f64 = data_rows.element_type() == ffi::DataType::C128;
+    const ffi::DataType complex_type = use_f64 ? ffi::DataType::C128 : ffi::DataType::C64;
+    const ffi::DataType real_type = use_f64 ? ffi::DataType::F64 : ffi::DataType::F32;
+    if (data_rows.element_type() != complex_type ||
+        data_volume_in.element_type() != complex_type ||
+        data_volume_out->element_type() != complex_type)
         return ffi::Error::InvalidArgument(
-            "RelionFusedXHalfBackproject: data rows and volumes must be complex64");
-    if (weight_rows.element_type() != ffi::DataType::F32 ||
-        weight_volume_in.element_type() != ffi::DataType::F32 ||
-        weight_volume_out->element_type() != ffi::DataType::F32)
+            "RelionFusedXHalfBackproject: data rows and volumes must share complex64 or complex128 dtype");
+    if (weight_rows.element_type() != real_type ||
+        weight_volume_in.element_type() != real_type ||
+        weight_volume_out->element_type() != real_type)
         return ffi::Error::InvalidArgument(
-            "RelionFusedXHalfBackproject: weight rows and volumes must be float32");
+            "RelionFusedXHalfBackproject: weight dtype must match the complex precision");
     if (pixel_indices.element_type() != ffi::DataType::S32)
         return ffi::Error::InvalidArgument(
             "RelionFusedXHalfBackproject: pixel indices must be int32");
-    if (rot.element_type() != ffi::DataType::F32)
+    if (rot.element_type() != real_type)
         return ffi::Error::InvalidArgument(
-            "RelionFusedXHalfBackproject: rotations must be float32");
+            "RelionFusedXHalfBackproject: rotation dtype must match the accumulator precision");
     if (order != 1 || half_volume != 1 || half_image != 1)
         return ffi::Error::InvalidArgument(
             "RelionFusedXHalfBackproject: requires order=1 and half image/volume");
@@ -5795,16 +5832,30 @@ ffi::Error RelionFusedXHalfBackprojectImpl(
         return ffi::Error::InvalidArgument(
             "RelionFusedXHalfBackproject: accumulator sizes do not match the half volume");
 
-    cudaError_t err = launch_relion_fused_x_half_backproject(
-        stream,
-        reinterpret_cast<float2*>(data_volume_out->untyped_data()),
-        static_cast<float*>(weight_volume_out->untyped_data()),
-        reinterpret_cast<const float2*>(data_rows.untyped_data()),
-        static_cast<const float*>(weight_rows.untyped_data()),
-        static_cast<const int32_t*>(pixel_indices.untyped_data()),
-        static_cast<const float*>(rot.untyped_data()),
-        data_row_dims[0], data_row_dims[1], image_h, image_w,
-        N0, N1, N2, upsampling, max_r2_x4);
+    cudaError_t err;
+    if (use_f64) {
+        err = launch_relion_fused_x_half_backproject_f64(
+            stream,
+            reinterpret_cast<double2*>(data_volume_out->untyped_data()),
+            static_cast<double*>(weight_volume_out->untyped_data()),
+            reinterpret_cast<const double2*>(data_rows.untyped_data()),
+            static_cast<const double*>(weight_rows.untyped_data()),
+            static_cast<const int32_t*>(pixel_indices.untyped_data()),
+            static_cast<const double*>(rot.untyped_data()),
+            data_row_dims[0], data_row_dims[1], image_h, image_w,
+            N0, N1, N2, upsampling, max_r2_x4);
+    } else {
+        err = launch_relion_fused_x_half_backproject(
+            stream,
+            reinterpret_cast<float2*>(data_volume_out->untyped_data()),
+            static_cast<float*>(weight_volume_out->untyped_data()),
+            reinterpret_cast<const float2*>(data_rows.untyped_data()),
+            static_cast<const float*>(weight_rows.untyped_data()),
+            static_cast<const int32_t*>(pixel_indices.untyped_data()),
+            static_cast<const float*>(rot.untyped_data()),
+            data_row_dims[0], data_row_dims[1], image_h, image_w,
+            N0, N1, N2, upsampling, max_r2_x4);
+    }
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();

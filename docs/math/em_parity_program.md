@@ -16153,3 +16153,24 @@ exact Pmax and significant-support arrays, with maximum pose error
 the remaining pre-join residual is no longer attributable to discrete pose,
 translation, posterior-support, or particle/pixel membership differences; it
 is inside the per-hypothesis projection/CTF/weighted-backprojection arithmetic.
+
+### Double fused-scatter boundary result
+
+The RELION fused x-half CUDA target now has separate compiled
+complex64/float32 and complex128/float64 specializations selected by the FFI
+handler from the operand dtype. Its upstream sequential translation reduction
+likewise carries in RELION `XFLOAT` precision rather than forcing float32. With
+the double specialization active, shells 15--21 of the raw iteration-1 BPref
+match native RELION at roughly `1e-7`--`1e-6` relative L2. The residual is
+concentrated at shells 22--23, especially the exact outer cutoff.
+
+Two correctness issues in that path were also removed: the templated radius
+predicate retained a float temporary, and already-host-inverted M-step matrices
+were numerically inverted again by the generic scorer transform. After both
+fixes, job `60382778` measures numerator/denominator relative L2
+`9.21e-3/2.53e-3` (half 1) and `6.55e-3/2.25e-3` (half 2); shell 23 alone is
+`5.58e-2/1.54e-2` and `3.95e-2/1.40e-2`. This does not yet improve the full
+numerator metric, but it sharply localizes the next implementation check to the
+exact device Euler matrix and spherical-cutoff membership. It argues against a
+broad scatter/interpolation mismatch because the interior is already nearly
+closed.
