@@ -431,7 +431,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "121def2587a0a933d89eb0d76a19a78e9329e3f9342bbb82ee9a0bfea2dc6119"
+PERFORMANCE_GATE_UPDATES_SHA256 = "e18f73c8445902aa1225c063b74941b4f3277fb6188df017688c32c3c2c89b6e"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -804,6 +804,18 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and gate_updates.get("shared_posterior_executor", {}).get("crossed_live_job") == "13281970"
         and gate_updates.get("shared_posterior_executor", {}).get("decision")
         == "REJECT_NO_MATERIAL_WARM_RUNTIME_WIN"
+        and gate_updates.get("remaining_profile_decomposition", {}).get("status")
+        == "SEALED_READ_ONLY_SCHEDULING_TARGET"
+        and gate_updates.get("remaining_profile_decomposition", {}).get("report_sha256")
+        == "079f52c02b20128902e99461770092fbadd6aa35f30b7c0b1ad209b53ff3658b"
+        and gate_updates.get("remaining_profile_decomposition", {}).get("kernel_work", {}).get(
+            "recovar_overhead_percent"
+        )
+        == 3.051596
+        and gate_updates.get("remaining_profile_decomposition", {}).get("measured_headroom", {}).get(
+            "excess_idle_seconds"
+        )
+        == 3.343912411
         and _sha256_json(gate_updates) == PERFORMANCE_GATE_UPDATES_SHA256,
         "current performance gate updates changed without an evidence update",
     )
@@ -884,6 +896,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     atomic_gate = gate_updates["atomic_t29_reduction"]
     direct_xhalf_gate = gate_updates["direct_relion_xhalf"]
     posterior_executor_gate = gate_updates["shared_posterior_executor"]
+    remaining_profile = gate_updates["remaining_profile_decomposition"]
+    remaining_kernel = remaining_profile["kernel_work"]
+    remaining_headroom = remaining_profile["measured_headroom"]
+    remaining_coarse = remaining_profile["coarse_topology"]
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
@@ -1092,6 +1108,14 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{abs(posterior_executor_gate['crossed_medians']['warm_wall_change_percent']):.2f}% while posterior-kernel "
         f"time regresses {posterior_executor_gate['crossed_medians']['posterior_kernel_time_change_percent']:.2f}%. | "
         f"{posterior_executor_gate['next_gate']} |",
+        f"| **SEALED PROFILE / LARGE LEVER IDENTIFIED** | Native-vs-RECOVAR decomposition | RECOVAR summed GPU "
+        f"kernel work is only {remaining_kernel['recovar_overhead_percent']:.2f}% above native, but overlap is "
+        f"{remaining_kernel['recovar_baseline_overlap_ratio']:.3f} versus {remaining_kernel['native_overlap_ratio']:.3f}; "
+        f"measured excess idle is {remaining_headroom['excess_idle_seconds']:.3f} s "
+        f"({remaining_headroom['excess_idle_percent_warm_wall']:.2f}% of warm wall). Six serial coarse kernels "
+        f"underlap, while {remaining_coarse['recovar_per_image_kernel_count']} per-image launches inflate coarse "
+        f"work {remaining_coarse['per_image_work_inflation_vs_serial_percent']:.2f}%. | "
+        f"{remaining_profile['next_candidate']} Report SHA-256 `{remaining_profile['report_sha256']}`. |",
         "",
         "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All listed "
         "lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness "
@@ -1358,25 +1382,27 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "but finalization is too small and warm wall improves only 2.12%. Preserve the primitive for a future "
             "larger fused finalization redesign; do not spend a trajectory on it alone.",
             "3. Keep the shared posterior executor rejected: it is mathematically qualified but saves only 3.37% "
-            "warm wall while its posterior kernels regress 36.86%. Decompose the sealed native/RECOVAR profiles to "
-            "select a larger execution-topology boundary instead of spending a trajectory on this implementation.",
-            "4. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
+            "warm wall while its posterior kernels regress 36.86%.",
+            "4. Implement the sealed profile's large shared lever: approximately eight coarse-grained batched lanes "
+            "plus pipelined data/layout and coarse-to-fine preparation. Target the measured 3.344 s excess idle while "
+            "avoiding both six serial monolithic kernels and 1000 work-inflating per-image launches.",
+            "5. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
             "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
             "and the combined B arm out of the production default.",
-            "5. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
+            "6. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
             "control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, "
             "dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.",
-            "6. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
+            "7. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
             "as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact "
             "compile-amortized trajectory measurement; the isolated runtime-bound BPref primitive is numerically "
             "qualified but 14.8--17.7% slower per steady call, so it cannot stand alone.",
-            "7. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is "
+            "8. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is "
             "numerically equivalent, but the same-binary 1.0091x warm result is immaterial and the isolated primitive "
             "speedup cannot authorize promotion.",
-            "8. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
+            "9. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
             f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
             "the explicitly requested performance-first phase is active.",
-            "9. Do not revive the rejected 128-tail palette, float32 scorer, eager whole-stack raw cache, shared "
+            "10. Do not revive the rejected 128-tail palette, float32 scorer, eager whole-stack raw cache, shared "
             "coarse-projection cache, literal pool-per-call layout, physical-order chunking, or dynamic tail mask "
             "without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix "
             "before K>1 or real-data promotion.",

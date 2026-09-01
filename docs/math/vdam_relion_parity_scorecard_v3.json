@@ -1803,7 +1803,10 @@
         "warm_cross_fsc_deficit_max": 5.551115123125783e-16,
         "bpref_cross_relative_l2_max": 5.249860676475626e-08,
         "bpref_repeat_envelope_floor": 2e-07,
-        "classification": "cross_process_atomic_repeat_noise_no_discrete_or_basin_effect"
+        "numeric_metadata_fields_compared": 60,
+        "metadata_floor_exception": "warm cross_1 wsum_sigma2_noise relative-L2 2.1706e-7 versus the 2e-7 floor; cross_2 is 1.7760e-7",
+        "metadata_exception_repeat_context": "direct repeat 1.8804e-7; legacy repeat 1.6456e-7; signed mean/RMS reverses sign across crossed repeats",
+        "classification": "map_bpref_repeat_bounded_one_nondirectional_metadata_floor_excursion_no_discrete_or_basin_effect"
       },
       "decision": "REJECT_NO_MATERIAL_WARM_RUNTIME_WIN",
       "reason": "Returning x-half accumulators directly removes 85.40% of finalization time, but finalization is too small a fraction of the iteration and warm whole-wall improves only 2.12%, below the 5% material gate.",
@@ -1863,6 +1866,58 @@
       "decision": "REJECT_NO_MATERIAL_WARM_RUNTIME_WIN",
       "reason": "The executor removes 90% of allocations and 10% of total kernel launches, but its posterior kernels are 36.86% slower and warm wall improves only 3.37%, below the material runtime gate.",
       "next_gate": "Keep default-off and do not spend a trajectory on this implementation. Use the sealed native/RECOVAR profiles to identify a larger remaining execution-topology boundary."
+    },
+    "remaining_profile_decomposition": {
+      "status": "SEALED_READ_ONLY_SCHEDULING_TARGET",
+      "role": "diagnostic_performance",
+      "score_impact": "none",
+      "production_change_authorized": false,
+      "case_id": "vdam-gf46",
+      "transition": "iteration_180_to_181",
+      "hardware": {
+        "node": "della-h21g4",
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+      },
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shared_posterior_ab_c0ab36af7_h21g4_20260831_r2/provenance/native_vs_recovar_remaining_profile_decomposition.md",
+      "report_sha256": "079f52c02b20128902e99461770092fbadd6aa35f30b7c0b1ad209b53ff3658b",
+      "baseline_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_late_it181_profile_baseline_ead78d32e_h21g4_20260831",
+      "current_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shared_posterior_ab_c0ab36af7_h21g4_20260831_r2",
+      "kernel_work": {
+        "native_sum_seconds": 5.246627035,
+        "recovar_baseline_sum_seconds": 5.406732902,
+        "recovar_overhead_percent": 3.051596,
+        "native_busy_union_seconds": 3.177322341,
+        "recovar_baseline_busy_union_seconds": 4.880800478,
+        "native_overlap_ratio": 1.651273139,
+        "recovar_baseline_overlap_ratio": 1.107755362
+      },
+      "measured_headroom": {
+        "current_warm_wall_median_seconds": 14.838143529,
+        "current_iteration_median_seconds": 10.360589579,
+        "current_total_activity_idle_median_seconds": 5.844433339,
+        "native_total_activity_idle_seconds": 2.500520928,
+        "excess_idle_seconds": 3.343912411,
+        "excess_idle_percent_warm_wall": 22.535922,
+        "excess_idle_percent_iteration": 32.275310,
+        "native_gt100ms_gap_count": 3,
+        "native_gt100ms_gap_sum_seconds": 0.388087748,
+        "current_gt100ms_gap_count": 9,
+        "current_gt100ms_gap_median_seconds": 3.586027985,
+        "current_sync_union_overlapping_gpu_percent": 99.858116
+      },
+      "coarse_topology": {
+        "native_kernel_count": 1000,
+        "native_duration_sum_seconds": 3.924992689,
+        "recovar_serial_kernel_count": 6,
+        "recovar_serial_duration_sum_seconds": 4.354550932,
+        "recovar_per_image_kernel_count": 1000,
+        "recovar_per_image_duration_sum_seconds": 5.881064156,
+        "per_image_work_inflation_vs_serial_percent": 35.055583
+      },
+      "conclusion": "The arithmetic gap is small; RECOVAR loses primarily through low overlap and long host/stage gaps. Neither one monolithic serial batch nor one kernel per particle is the target.",
+      "next_candidate": "Extend the mature shared EM planner/executor with approximately eight persistent coarse-grained batched lanes and pipeline data/layout preparation through coarse, fine, and finalization stages. Preserve shared math and avoid a VDAM-only executor.",
+      "acceptance_rule": "Promote only mathematically equivalent work whose differences are stable, repeat-bounded, non-directional, non-growing, preserve discrete choices and the optimization basin, and accompany a material end-to-end runtime gain."
     }
   },
   "shared_em_reuse": [
@@ -1897,10 +1952,10 @@
     "late_factorial_jobs": ["13276891", "13276923", "13277456", "13277457"],
     "current_blocker": "serial_padded_coarse_scheduling_vs_native_eight_stream_overlap",
     "runtime_status": "cache_only_retained_for_repeat_scale_gate_chunking_rejected",
-    "current_action": "Implement and microgate a default-off K=1 multistream scheduler around the accepted shared production coarse kernel. Preserve its texture math and canonical reduction; measure discrete changes against control/native repeat variability and require stable, unbiased, non-growing numerical noise, the same basin, no material final-quality loss, and a meaningful end-to-end gain before promotion.",
-    "hypothesis": "RECOVAR's production coarse kernel is already slightly faster per executed slot than native RELION, but six serial padded batches produce a 4.355 s coarse union versus RELION's 2.752 s union from 1000 per-particle launches over eight streams. Scheduling overlap, not different projector arithmetic, is the dominant measured gap.",
+    "current_action": "Complete the atomic-by-eight-stream crossed gate, then qualify a default-off shared coarse-grained batched-lane executor that retains batched kernel efficiency while overlapping approximately eight lanes and host/layout preparation. Require stable repeat-bounded non-directional noise, preserved discrete choices and basin, and a material end-to-end gain before promotion.",
+    "hypothesis": "RECOVAR's sealed baseline performs only 3.052% more summed GPU kernel work than native RELION, but its overlap factor is 1.108 versus 1.651 and the current controls expose 3.344 s excess GPU idle. Six serial batches underlap; 1000 per-image launches inflate coarse work by 35.056%. A small persistent set of batched shared-EM lanes plus coarse-to-fine preparation overlap is the measured large lever.",
     "evidence_pattern": "The same-H100 A/B/C/D factorial keeps all tracked discrete decisions exact. Cache-only improves cold wall 1.24% and warm wall 5.27% with a 0.365 GiB HWM cost, so it is retained for repeat and scale gates. Physical-order chunking is rejected after a 14.09% cold regression and flat warm wall; the combined arm is not a default after a 15.05% cold regression and 11.35% HWM increase.",
-    "narrowed_boundary": "Persistent raw caching is a modest retained candidate, physical-order chunking is rejected, and the large remaining opportunity is shared coarse execution topology. Stable-window and flat-row work remain default-off supporting lanes; no frozen score changes until a full release gate passes.",
+    "narrowed_boundary": "Persistent raw caching is a modest retained candidate and outer physical-order chunking is rejected. The large remaining opportunity is a scientifically distinct shared coarse-grained batched-lane topology plus host/stage pipelining, targeting 3.344 s measured excess idle without duplicating VDAM math. Stable-window and flat-row work remain default-off supporting lanes; no frozen score changes until a full release gate passes.",
     "production_change_authorized": false
   },
   "history": [

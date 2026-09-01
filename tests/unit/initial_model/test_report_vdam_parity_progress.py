@@ -37,6 +37,22 @@ def test_checked_v3_scorecard_replays_frozen_panels() -> None:
     }
 
 
+def test_remaining_profile_targets_shared_scheduling_not_new_math(scorecard: dict) -> None:
+    profile = scorecard["performance_gate_updates"]["remaining_profile_decomposition"]
+    assert profile["status"] == "SEALED_READ_ONLY_SCHEDULING_TARGET"
+    assert profile["kernel_work"]["recovar_overhead_percent"] == pytest.approx(3.051596)
+    assert profile["measured_headroom"]["excess_idle_seconds"] == pytest.approx(3.343912411)
+    assert profile["measured_headroom"]["excess_idle_percent_warm_wall"] > 20.0
+    assert profile["coarse_topology"]["recovar_per_image_kernel_count"] == 1000
+    assert "shared EM planner/executor" in profile["next_candidate"]
+    assert "material end-to-end runtime gain" in profile["acceptance_rule"]
+
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert "SEALED PROFILE / LARGE LEVER IDENTIFIED" in rendered
+    assert "3.344 s" in rendered
+    assert profile["report_sha256"] in rendered
+
+
 def test_suite_definition_identity_and_bytes_are_frozen() -> None:
     assert progress_mod.sha256_file(progress_mod.REPO_ROOT / progress_mod.SUITE_DEFINITION_PATH) == (
         progress_mod.SUITE_DEFINITION_SHA256
