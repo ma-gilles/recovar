@@ -72,10 +72,13 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
         "b73f3ecb660d59484b280e2b0021763c5583c01106ed839efef71f5d50a55845"
     )
     implementation = profile["implementation_progress"]
-    assert implementation["commit"] == "41c1cdbd104cd85cf8f433080889ac6be3a5ef21"
-    assert implementation["focused_tests"] == "109 passed"
-    assert implementation["planner_guards"] == "10 passed, 17 deselected"
+    assert implementation["commit"] == "793e3bb12a2e9e367ed7d1a302db95575b1ebb63"
+    assert implementation["phase_1d_commit"] == "41c1cdbd104cd85cf8f433080889ac6be3a5ef21"
+    assert implementation["focused_tests"] == "146 passed"
+    assert implementation["independent_cpu_review"] == "GO"
     assert implementation["shared_em_vdam_path"] is True
+    assert implementation["single_shared_numeric_wrapper"] is True
+    assert implementation["authoritative_dataset_operand_check"] is True
     assert implementation["production_invoked"] is False
     assert implementation["gpu_evaluated"] is False
 
@@ -84,8 +87,8 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
     assert "53.547 of 57.833 s" in rendered
     assert profile["runtime_profile_report_sha256"] in rendered
     assert profile["sealed_analysis_report_sha256"] in rendered
-    assert "Phase 1d `41c1cdbd10`" in rendered
-    assert "109 passed" in rendered
+    assert "Phase 1e `793e3bb12a`" in rendered
+    assert "146 passed" in rendered
 
 
 def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(scorecard: dict) -> None:
@@ -107,7 +110,7 @@ def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(score
     assert gate["numerical_result"]["strict_two_repeat_result"] == "fail"
     assert gate["numerical_result"]["nondirectional_noise_gate_result"] == "pass"
     repeat_panel = gate["replicated_roundoff_equivalence_gate"]
-    assert repeat_panel["status"] == "RUNNING"
+    assert repeat_panel["status"] == "RECOVERED_PASS_INDEPENDENT_REVIEW_GO"
     assert repeat_panel["qualification_overlay_commit"] == (
         "fb9aaf2717c17e67c94a0ea5f54cb6e2cfc9f8cf"
     )
@@ -117,7 +120,24 @@ def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(score
     assert repeat_panel["total_fresh_process_runs"] == 16
     assert repeat_panel["blocked_exact_label_permutations"] == 1296
     assert repeat_panel["job_id"] == "13286397"
-    assert repeat_panel["result"] == "pending"
+    assert repeat_panel["all_runs_completed"] is True
+    assert repeat_panel["original_completed_marker_present"] is False
+    assert repeat_panel["recovery_completed"] is True
+    assert repeat_panel["result"] == (
+        "all_predeclared_repeat_panel_gates_pass_after_independent_serializer_recovery_review"
+    )
+    assert repeat_panel["independent_recovery_review"] == "GO"
+    assert repeat_panel["report_json_sha256"] == (
+        "66d52235cf429f952b5db5bf087fdd72f51cc82210abbd8dcd494eaedf12aaf1"
+    )
+    assert repeat_panel["science"]["all_star_rows_and_discrete_metadata_exact"] is True
+    assert repeat_panel["science"]["warm"]["maximum_pairwise_relative_l2"] < 1e-8
+    assert repeat_panel["science"]["warm"]["configuration_effect_joint_permutation_p"] >= 0.05
+    assert repeat_panel["science"]["cache_state_amplification_pass"] is True
+    assert repeat_panel["performance"]["replicated_warm_wall_change_percent"] == pytest.approx(
+        -9.316965
+    )
+    assert repeat_panel["performance"]["material_runtime_gate_pass"] is True
     assert repeat_panel["long_trajectory_authorized"] is False
     incremental = gate["incremental_atomic_serial_gate"]
     assert gate["incremental_atomic_baseline_evaluated"] is True
@@ -137,9 +157,11 @@ def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(score
 
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
     assert "MATERIAL RUNTIME PASS; FROZEN TWO-REPEAT NUMERIC GATE FAIL" in rendered
-    assert "CLEAN PORT: RUNTIME PASS / STRICT N=2 FAIL / REPLICATED GATE RUNNING" in rendered
+    assert "ALL PREDECLARED NUMERICAL AND RUNTIME GATES PASS AFTER INDEPENDENTLY REVIEWED" in rendered
     assert gate["report_json_sha256"] in rendered
     assert repeat_panel["acceptance_config_sha256"] in rendered
+    assert repeat_panel["analyzer_source_sha256"] in rendered
+    assert "The frozen n=2 rejection is not overwritten" in rendered
 
 
 def test_suite_definition_identity_and_bytes_are_frozen() -> None:
@@ -569,7 +591,7 @@ def test_runtime_workboard_is_easy_to_scan() -> None:
     assert "Invalid jobs `13270868`, `13270984`, `13285416`, and `13285596`" in rendered
     assert "**REJECTED FOR GF46 / RETAINED PRIMITIVE** | Single-lane coarse" in rendered
     assert "13280613/13280655" in rendered
-    assert "**CLEAN PORT: RUNTIME PASS / STRICT N=2 FAIL / REPLICATED GATE RUNNING**" in rendered
+    assert "ALL PREDECLARED NUMERICAL AND RUNTIME GATES PASS AFTER INDEPENDENTLY REVIEWED" in rendered
     assert "`13285438/13285647/13286397`" in rendered
     assert "improves warm wall 9.03%, expectation 10.26%, GPU union 10.45%, and coarse union 10.83%" in rendered
     assert "frozen two-repeat max-envelope rule fails narrowly" in rendered
@@ -588,7 +610,7 @@ def test_runtime_workboard_is_easy_to_scan() -> None:
 
 def test_dashboard_is_compact_and_exposes_shared_em_reuse() -> None:
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
-    assert len(rendered.splitlines()) < 255
+    assert len(rendered.splitlines()) < 260
     assert "Authoritative v3 status — NOT READY" in rendered
     assert "Strict K=1 correctness is **2 / 20**" in rendered
     assert "runtime parity is **0 / 20**" in rendered
