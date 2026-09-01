@@ -53,6 +53,23 @@ def test_remaining_profile_targets_shared_scheduling_not_new_math(scorecard: dic
     assert profile["report_sha256"] in rendered
 
 
+def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: dict) -> None:
+    profile = scorecard["performance_gate_updates"]["local_compile_shape_decomposition"]
+    assert profile["status"] == "SEALED_READ_ONLY_SHARED_FIXED_EXECUTOR_TARGET"
+    assert profile["local_executor_compile_seconds"] == pytest.approx(53.547)
+    assert profile["local_share_of_compile_percent"] == pytest.approx(92.6)
+    assert profile["compile_iterations"] == [62, 63, 67, 72, 73]
+    assert profile["forecast"]["compile_only_saving_percent_full_run"] > 10.0
+    assert profile["forecast"]["packed_static_row_reduction_percent_range"] == [38, 79]
+    assert "fixed-capacity packed whole-local executor" in profile["next_candidate"]
+    assert "repeat-bounded" in profile["acceptance_rule"]
+
+    rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
+    assert "SEALED COMPILE PROFILE / SHARED FIXED EXECUTOR TARGET" in rendered
+    assert "53.547 of 57.833 s" in rendered
+    assert profile["runtime_profile_report_sha256"] in rendered
+
+
 def test_suite_definition_identity_and_bytes_are_frozen() -> None:
     assert progress_mod.sha256_file(progress_mod.REPO_ROOT / progress_mod.SUITE_DEFINITION_PATH) == (
         progress_mod.SUITE_DEFINITION_SHA256
@@ -480,8 +497,10 @@ def test_runtime_workboard_is_easy_to_scan() -> None:
     assert "Invalid jobs `13270868` and `13270984` stopped in preflight before science" in rendered
     assert "**REJECTED FOR GF46 / RETAINED PRIMITIVE** | Single-lane coarse" in rendered
     assert "13280613/13280655" in rendered
-    assert "**MATH ACCEPTED / MATERIAL SINGLE-STREAM** | Native-atomic T=29 `13281836`" in rendered
-    assert "Hot coarse is 8.00% faster" in rendered
+    assert "**ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF** | Native-atomic x eight streams" in rendered
+    assert "`13281836/13283759`" in rendered
+    assert "Warm wall improves 6.93%, expectation 11.03%, and coarse union 17.94%" in rendered
+    assert "Long-run growth remains untested" in rendered
     assert "**MATH ACCEPTED / PERFORMANCE REJECTED** | Direct RELION x-half BPref" in rendered
     assert "`13281684/13282815`" in rendered
     assert "Finalize improves 85.40%, but warm wall improves only 2.12%" in rendered

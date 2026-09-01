@@ -1666,7 +1666,7 @@
       "next_gate": "Benchmark the already-existing shared native-RELION atomic lane admission at T=29: 48 registers and 7040 B shared versus canonical's 56 registers and 15232 B. If materially faster, qualify atomic plus eight streams against native/control repeat envelopes before considering a T=29 four-lane canonical shuffle."
     },
     "atomic_t29_reduction": {
-      "status": "MATH_ACCEPTED_MATERIAL_SINGLE_STREAM_MULTISTREAM_PAIR_PENDING",
+      "status": "MATH_ACCEPTED_MATERIAL_COMBINED_DEFAULT_OFF_LONG_GATE_PENDING",
       "promotion_authorized": false,
       "job_id": "13281836",
       "result": "COMPLETED 0:0",
@@ -1733,8 +1733,73 @@
         "cross_signed_mean_abs_max": 2.61e-13,
         "classification": "inside_control_repeat_envelope_unbiased_non_growing_no_discrete_or_basin_effect"
       },
-      "decision": "ACCEPT_DEFAULT_OFF_FOR_SHARED_MULTISTREAM_QUALIFICATION",
-      "next_gate": "Cross canonical and atomic reduction with the accepted shared eight-stream EM/VDAM scheduler; require the same stable numerical envelope and a material combined end-to-end gain before any default change."
+      "multistream_crossed_gate": {
+        "focused_job": "13283608",
+        "focused_result": "3/3 passed",
+        "focused_run_json_sha256": "443aa90673e9b7f7fc3b296cd04a4ca575799b898f716c3d8927e55ff74093cb",
+        "crossed_job": "13283759",
+        "crossed_result": "COMPLETED 0:0",
+        "elapsed": "00:06:07",
+        "source_head": "b261d16cfaadaaeb95b8f5c356d43630e05dc895",
+        "source_manifest_sha256": "c26dc37a8fc2330d7917c7e255ecbb75ec5a14e92363a62d47a3ebdfeb34beb9",
+        "input_manifest_sha256": "5c27ea1363592adcd88f36d78b3d70d6dc586b53729a06dca7a3264ef9b630bc",
+        "cuda_sha256": "fcd9f03383ec42483016cf2b686adc998e61f1cc6fdf338b3a6713bbc3554d56",
+        "run_json_sha256": "c7fabc266c58463db0f363adffba08d43d0e6bc7592a3b652f45bbb0756c1f0d",
+        "analyzer_commit": "ae095da43",
+        "analyzer_source_sha256": "c9c6b2dca369e220598c1fadd7cd4ed5c1c19f69547b71058a261411a580938e",
+        "report_json": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_multistream_crossed_b261d16cf_h21g4_20260831/analysis/report.json",
+        "report_json_sha256": "c843158cfc6bdbd1a7e5d0c59325c98a0f0f5ec647d1bd458911b9d991a55a79",
+        "report_markdown_sha256": "6c9862c2837ab1ea8fcc88e0c35a7c0c3adefca1b827c6e860b383abbc413634",
+        "execution_order": "canonical_serial_1,atomic_serial_1,atomic_multistream_1,canonical_multistream_1,canonical_multistream_2,atomic_multistream_2,atomic_serial_2,canonical_serial_2",
+        "canonical_serial_medians": {
+          "cold_wall_seconds": 27.414010,
+          "warm_wall_seconds": 13.581139,
+          "expectation_seconds": 8.794288,
+          "pass1_seconds": 6.024396,
+          "pass2_seconds": 2.018402,
+          "nsight_capture_seconds": 9.207431,
+          "gpu_kernel_union_seconds": 4.879164,
+          "coarse_union_seconds": 4.351954
+        },
+        "atomic_multistream_medians": {
+          "cold_wall_seconds": 26.041752,
+          "warm_wall_seconds": 12.640287,
+          "expectation_seconds": 7.823940,
+          "pass1_seconds": 5.188841,
+          "pass2_seconds": 1.876484,
+          "nsight_capture_seconds": 8.241308,
+          "gpu_kernel_union_seconds": 4.098825,
+          "coarse_union_seconds": 3.571017
+        },
+        "atomic_multistream_change_percent": {
+          "cold_wall": -5.005681,
+          "warm_wall": -6.927635,
+          "expectation": -11.033844,
+          "pass1": -13.869523,
+          "pass2": -7.031207,
+          "nsight_capture": -10.492861,
+          "gpu_kernel_union": -15.993288,
+          "coarse_union": -17.944519,
+          "coarse_kernel_sum": 28.905655
+        },
+        "numerical_result": {
+          "star_rows_and_all_columns_exact": "3000/3000",
+          "selected_ids_euler_translation_pmax_discrete_meta_exact": true,
+          "cold_cross_map_relative_l2_max": 2.4595366583051454e-09,
+          "cold_repeat_envelope": 2.5895620561641195e-09,
+          "warm_cross_map_relative_l2_max": 2.331887324787395e-09,
+          "warm_repeat_envelope": 2.519077656736647e-09,
+          "map_max_abs_max": 1.9073486328125e-06,
+          "absolute_relative_scale_drift_max": 4.558400727395791e-11,
+          "signed_mean_over_delta_rms_max": 0.0027020497405207985,
+          "classification": "all_discrete_exact_cross_maps_inside_repeat_envelope_nondirectional_one_iteration_only"
+        },
+        "long_trajectory_no_growth_evaluated": false,
+        "default_enablement_allowed": false,
+        "classification": "accept_default_off_trajectory_candidate"
+      },
+      "decision": "ACCEPT_DEFAULT_OFF_TRAJECTORY_CANDIDATE_NOT_DEFAULT",
+      "next_gate": "Do not enable by default. First qualify the scientifically distinct coarse-grained batched-lane scheduler, which removes the current 1000-launch 28.91% coarse-work inflation; then run the larger winner through a repeat/no-growth representative trajectory and multi-dataset basin gates."
     },
     "direct_relion_xhalf": {
       "status": "MATH_ACCEPTED_PERFORMANCE_REJECTED",
@@ -1918,6 +1983,50 @@
       "conclusion": "The arithmetic gap is small; RECOVAR loses primarily through low overlap and long host/stage gaps. Neither one monolithic serial batch nor one kernel per particle is the target.",
       "next_candidate": "Extend the mature shared EM planner/executor with approximately eight persistent coarse-grained batched lanes and pipeline data/layout preparation through coarse, fine, and finalization stages. Preserve shared math and avoid a VDAM-only executor.",
       "acceptance_rule": "Promote only mathematically equivalent work whose differences are stable, repeat-bounded, non-directional, non-growing, preserve discrete choices and the optimization basin, and accompany a material end-to-end runtime gain."
+    },
+    "local_compile_shape_decomposition": {
+      "status": "SEALED_READ_ONLY_SHARED_FIXED_EXECUTOR_TARGET",
+      "role": "diagnostic_performance",
+      "score_impact": "none",
+      "production_change_authorized": false,
+      "profile_window": "iterations_47_to_80",
+      "profile_wall_seconds": 240.36,
+      "xla_compile_seconds": 57.833,
+      "local_executor_compile_seconds": 53.547,
+      "local_share_of_compile_percent": 92.6,
+      "compile_iterations": [62, 63, 67, 72, 73],
+      "dominant_identities": {
+        "jit_run_local_bucket_big_jit": {"seconds": 29.331, "instances": 10},
+        "jit_relion_vdam_mstep_fused_projector_x_half": {"seconds": 8.073, "instances": 10},
+        "jit_dynamic_slice": {"seconds": 5.156, "instances": 75},
+        "jit_broadcast_in_dim": {"seconds": 2.082, "instances": 74},
+        "other_helper_jits_seconds_approx": 12.9
+      },
+      "paired_full_tail_shapes": [
+        {"iteration": 62, "current_size": 86, "translations": 100, "full_images": 51, "tail_images": 12, "rotations": 256},
+        {"iteration": 63, "current_size": 88, "translations": 100, "full_images": 201, "tail_images": 23, "rotations": 64},
+        {"iteration": 67, "current_size": 98, "translations": 100, "full_images": 39, "tail_images": 22, "rotations": 256},
+        {"iteration": 72, "current_size": 110, "translations": 84, "full_images": 129, "tail_images": 38, "rotations": 64},
+        {"iteration": 73, "current_size": 114, "translations": 84, "full_images": 120, "tail_images": 64, "rotations": 64}
+      ],
+      "forecast": {
+        "avoidable_local_compile_percent_profile_window": 22.3,
+        "all_compile_percent_profile_window": 24.1,
+        "one_cold_compile_seconds": 10.8,
+        "compile_only_saving_seconds": 42.7,
+        "full_run_seconds": 423.0,
+        "compile_only_saving_percent_full_run": 10.1,
+        "prewarmed_local_compile_removal_percent_full_run": 12.7,
+        "packed_static_row_reduction_percent_range": [38, 79]
+      },
+      "ruled_out": "Fine-window stabilization, runtime-cutoff BPref, dynamic tail masking, 128-tail palettes, smaller outer chunks, and literal pool-per-call layouts cannot remove the whole-program big-JIT/M-step/helper compile cascade and were already immaterial or slower.",
+      "next_candidate": "Add a default-off fixed-capacity packed whole-local executor to the mature shared EM path. Preserve outer-call chronology, candidate sets, physical particle order, and radix buckets; pass valid images, row offsets/counts, and logical cutoff dynamically; keep preprocessing, fine posterior, noise, and x-half M-step physical shapes stable.",
+      "runtime_profile_report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_typed_runtime_warm80_6f39ad52e_20260831/repeat-01/analysis/typed_runtime_gate/runtime_profile_comparison.json",
+      "runtime_profile_report_sha256": "5ffa9ae565466aa924eccd1a836a3a5af1613df40cf4c584b344ec3dd4494165",
+      "nsight_sqlite": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_warm_nsys_v3_6b5e6568a_20260831/repeat-02/nsight/vdam_warm.sqlite",
+      "pool_layout_report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_pool_layout_capture_it80_104dac4ef_20260831/analysis/pool_layout.json",
+      "pool_layout_report_sha256": "aaa931b08e0decbbda8c91004fb7a6dde5e3e65d9d647466bb43247fb4a2946e",
+      "acceptance_rule": "Mathematical equivalence is mandatory. Prefer bitwise identity; if reduction grouping changes, accept only repeat-bounded, non-directional, non-growing noise with preserved discrete choices and basin, no meaningful final-quality loss, and a material end-to-end gain."
     }
   },
   "shared_em_reuse": [

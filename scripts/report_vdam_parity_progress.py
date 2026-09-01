@@ -431,7 +431,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "e18f73c8445902aa1225c063b74941b4f3277fb6188df017688c32c3c2c89b6e"
+PERFORMANCE_GATE_UPDATES_SHA256 = "0ee14daa8a31dd07deaa2f0313391aa1ba247a5929369daf9b03fde491c814d8"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -795,6 +795,20 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
             "winner_euler_translation_pmax_exact"
         )
         == "3000/3000"
+        and gate_updates.get("atomic_t29_reduction", {}).get("multistream_crossed_gate", {}).get(
+            "crossed_job"
+        )
+        == "13283759"
+        and gate_updates.get("atomic_t29_reduction", {}).get("multistream_crossed_gate", {}).get(
+            "report_json_sha256"
+        )
+        == "c843158cfc6bdbd1a7e5d0c59325c98a0f0f5ec647d1bd458911b9d991a55a79"
+        and gate_updates.get("atomic_t29_reduction", {}).get("multistream_crossed_gate", {}).get(
+            "default_enablement_allowed"
+        )
+        is False
+        and gate_updates.get("atomic_t29_reduction", {}).get("decision")
+        == "ACCEPT_DEFAULT_OFF_TRAJECTORY_CANDIDATE_NOT_DEFAULT"
         and gate_updates.get("direct_relion_xhalf", {}).get("qualified_job") == "13281684"
         and gate_updates.get("direct_relion_xhalf", {}).get("direct_vs_legacy_bpref_bitwise") is True
         and gate_updates.get("direct_relion_xhalf", {}).get("crossed_live_job") == "13282815"
@@ -816,6 +830,14 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
             "excess_idle_seconds"
         )
         == 3.343912411
+        and gate_updates.get("local_compile_shape_decomposition", {}).get("status")
+        == "SEALED_READ_ONLY_SHARED_FIXED_EXECUTOR_TARGET"
+        and gate_updates.get("local_compile_shape_decomposition", {}).get("local_executor_compile_seconds")
+        == 53.547
+        and gate_updates.get("local_compile_shape_decomposition", {}).get("runtime_profile_report_sha256")
+        == "5ffa9ae565466aa924eccd1a836a3a5af1613df40cf4c584b344ec3dd4494165"
+        and gate_updates.get("local_compile_shape_decomposition", {}).get("pool_layout_report_sha256")
+        == "aaa931b08e0decbbda8c91004fb7a6dde5e3e65d9d647466bb43247fb4a2946e"
         and _sha256_json(gate_updates) == PERFORMANCE_GATE_UPDATES_SHA256,
         "current performance gate updates changed without an evidence update",
     )
@@ -894,12 +916,24 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     gate_updates = scorecard["performance_gate_updates"]
     single_lane_gate = gate_updates["single_lane_applicability"]
     atomic_gate = gate_updates["atomic_t29_reduction"]
+    atomic_cross = atomic_gate["multistream_crossed_gate"]
+    atomic_cross_change = atomic_cross["atomic_multistream_change_percent"]
+    atomic_cross_numerical = atomic_cross["numerical_result"]
     direct_xhalf_gate = gate_updates["direct_relion_xhalf"]
     posterior_executor_gate = gate_updates["shared_posterior_executor"]
     remaining_profile = gate_updates["remaining_profile_decomposition"]
     remaining_kernel = remaining_profile["kernel_work"]
     remaining_headroom = remaining_profile["measured_headroom"]
     remaining_coarse = remaining_profile["coarse_topology"]
+    compile_profile = gate_updates["local_compile_shape_decomposition"]
+    compile_forecast = compile_profile["forecast"]
+    compile_big_jit_xhalf_seconds = sum(
+        compile_profile["dominant_identities"][name]["seconds"]
+        for name in (
+            "jit_run_local_bucket_big_jit",
+            "jit_relion_vdam_mstep_fused_projector_x_half",
+        )
+    )
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
@@ -924,8 +958,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "| Performance lanes | non-scoring | Cache-only is retained for repeat/scale; chunking is rejected. The "
         "shared eight-stream coarse scheduler is mathematically accepted and measurably faster, but held below the "
         "runtime target. The 65--128 single-lane specialization is inapplicable to GF46's actual T=29 coarse call; "
-        "native-atomic T=29 is mathematically accepted with an 8.00% hot-kernel gain, and its shared multistream "
-        "cross is active. |",
+        "native-atomic T=29 plus eight per-particle streams passes its one-iteration math/runtime gate, but remains "
+        "default-off while long-run no-growth and the coarse-grained batched-lane gate are active. |",
         "| Numerical policy | non-scoring | Require mathematical equivalence plus stable, unbiased, non-growing "
         "repeat-bounded noise. Bitwise identity is not required. Measure discrete changes; rare marginal changes may "
         "be accepted only within control/native repeat variability, with the same basin and no material final-quality "
@@ -970,15 +1004,16 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"ran the generic kernel because the live coarse operand has {single_lane_gate['actual_coarse_translation_count']} "
         "translations. | The earlier 116 count was oversampled/fine, not coarse; active-lanes=1 cannot accelerate "
         f"GF46. | {single_lane_gate['next_gate']} |",
-        f"| Native-atomic T=29 ABBA `{atomic_gate['job_id']}` | **MATH ACCEPTED; MATERIAL SINGLE-STREAM GAIN.** "
-        f"Hot coarse union {atomic_gate['nsight']['canonical_coarse_union_seconds']:.3f}->"
-        f"{atomic_gate['nsight']['atomic_coarse_union_seconds']:.3f} s "
-        f"({atomic_gate['nsight']['hot_coarse_change_percent']:.2f}%); warm expectation "
-        f"{atomic_gate['abba_means']['expectation_change_percent']:.2f}% and pass 1 "
-        f"{atomic_gate['abba_means']['pass1_change_percent']:.2f}%. | All "
-        f"{atomic_gate['numerical_result']['winner_euler_translation_pmax_exact']} winners are exact; cross-map "
-        f"rel-L2 is at most `{atomic_gate['numerical_result']['cross_map_relative_l2_max']:.3e}` and lies inside "
-        f"canonical repeat noise with negligible signed bias. | {atomic_gate['next_gate']} |",
+        f"| Native-atomic T=29 x eight streams `{atomic_gate['job_id']}/{atomic_cross['crossed_job']}` | "
+        f"**ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF.** Warm wall "
+        f"{atomic_cross_change['warm_wall']:.2f}%, expectation {atomic_cross_change['expectation']:.2f}%, pass 1 "
+        f"{atomic_cross_change['pass1']:.2f}%, GPU union {atomic_cross_change['gpu_kernel_union']:.2f}%, and coarse "
+        f"union {atomic_cross_change['coarse_union']:.2f}%. | All {atomic_cross_numerical['star_rows_and_all_columns_exact']} "
+        f"STAR rows/columns and discrete metadata are exact; warm cross-map rel-L2 "
+        f"`{atomic_cross_numerical['warm_cross_map_relative_l2_max']:.3e}` is below repeat envelope "
+        f"`{atomic_cross_numerical['warm_repeat_envelope']:.3e}`. Long-run no-growth is untested and per-image "
+        f"launches still inflate coarse work {atomic_cross_change['coarse_kernel_sum']:.2f}%. | "
+        f"{atomic_gate['next_gate']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
         f"speedup is `{same_binary_lane['runtime_result']['warm_speedup']:.4f}x` | All four arms loaded CUDA SHA "
@@ -1088,10 +1123,11 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"2/2 passes, but GF46 is T={single_lane_gate['actual_coarse_translation_count']}; requested-vs-generic "
         f"coarse union changed only {single_lane_gate['nsight']['single_lane_coarse_union_effect_percent_multistream']:.4f}%. "
         f"No discrete/basin effect. | {single_lane_gate['next_gate']} |",
-        f"| **MATH ACCEPTED / MATERIAL SINGLE-STREAM** | Native-atomic T=29 `{atomic_gate['job_id']}` | "
-        f"Hot coarse is {abs(atomic_gate['nsight']['hot_coarse_change_percent']):.2f}% faster and warm wall is "
-        f"{abs(atomic_gate['abba_means']['warm_wall_change_percent']):.2f}% faster; all 3,000 winners are exact and "
-        "map differences remain inside unbiased control-repeat noise. Default-off. | "
+        f"| **ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF** | Native-atomic x eight streams "
+        f"`{atomic_gate['job_id']}/{atomic_cross['crossed_job']}` | Warm wall improves "
+        f"{abs(atomic_cross_change['warm_wall']):.2f}%, expectation {abs(atomic_cross_change['expectation']):.2f}%, "
+        f"and coarse union {abs(atomic_cross_change['coarse_union']):.2f}%; all 3,000 rows/decisions are exact and "
+        "maps remain inside non-directional repeat noise. Long-run growth remains untested. | "
         f"{atomic_gate['next_gate']} |",
         f"| **MATH ACCEPTED / PERFORMANCE REJECTED** | Direct RELION x-half BPref "
         f"`{direct_xhalf_gate['qualified_job']}/{direct_xhalf_gate['crossed_live_job']}` | Actual CUDA K=1/K=3 "
@@ -1116,11 +1152,19 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"underlap, while {remaining_coarse['recovar_per_image_kernel_count']} per-image launches inflate coarse "
         f"work {remaining_coarse['per_image_work_inflation_vs_serial_percent']:.2f}%. | "
         f"{remaining_profile['next_candidate']} Report SHA-256 `{remaining_profile['report_sha256']}`. |",
+        f"| **SEALED COMPILE PROFILE / SHARED FIXED EXECUTOR TARGET** | Iterations 47--80 | "
+        f"`local.run_local_em_exact` accounts for {compile_profile['local_executor_compile_seconds']:.3f} of "
+        f"{compile_profile['xla_compile_seconds']:.3f} s XLA compile "
+        f"({compile_profile['local_share_of_compile_percent']:.1f}%). Big-JIT plus fused x-half alone consume "
+        f"{compile_big_jit_xhalf_seconds:.3f} s. "
+        f"The compile-only forecast is {compile_forecast['compile_only_saving_percent_full_run']:.1f}% of the "
+        f"423 s run, before packed-work savings. | {compile_profile['next_candidate']} Runtime report SHA-256 "
+        f"`{compile_profile['runtime_profile_report_sha256']}`. |",
         "",
         "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All listed "
         "lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness "
-        f"{strict['passed']}/{strict['denominator']} or runtime {runtime['passed']}/{runtime['denominator']}.",
-        "Historical tail-mask gate: Forced nondefault native-texture path; 120/120 strict artifacts differ.",
+        f"{strict['passed']}/{strict['denominator']} or runtime {runtime['passed']}/{runtime['denominator']}. "
+        "Forced nondefault native-texture path remains rejected after 120/120 strict artifacts differed.",
         "",
         "### Gate progression",
         "",
