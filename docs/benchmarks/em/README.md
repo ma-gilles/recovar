@@ -123,6 +123,20 @@ record. Shared paths are hashed once even when multiple records use them:
 pixi run python scripts/validate_em_benchmark_registry.py --verify-files
 ```
 
+Failed or harness-limited real-data InitialModel pairs are kept outside the
+accepted schema-v1 registry. Validate their dedicated fail-closed ledger with:
+
+```bash
+pixi run python scripts/validate_em_real_kclass_diagnostics.py
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_diagnostics.py
+```
+
+The validator requires full source/input/artifact hashes, exact matching Slurm
+ReqTRES/AllocTRES, completed native engines, a retained failing scientific
+audit, no half-map claim, and a null formal performance ratio. The checked
+records and their exact rerun commands are in
+`diagnostics/real-kclass-initialmodel-20260901.json`.
+
 ## Sealing a new record
 
 1. Create an isolated run root with `SAFE_TO_DELETE`; record the clean source

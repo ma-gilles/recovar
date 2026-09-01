@@ -1,0 +1,635 @@
+{
+  "schema": "recovar.em_real_kclass_initialmodel_diagnostics.v1",
+  "recorded_at": "2026-09-01T12:00:00-04:00",
+  "admission_policy": "These are sealed rejected diagnostics, not benchmark records. They cannot establish trajectory equivalence, final resolution, half-map quality, or a formal performance ratio.",
+  "runs": [
+    {
+      "diagnostic_id": "empiar-10076-k4-initialmodel-9681a1727-b50-h100",
+      "admission_status": "REJECTED_DIAGNOSTIC",
+      "dataset": "EMPIAR-10076",
+      "scope": {
+        "kind": "matched fresh RELION/RECOVAR InitialModel trajectory diagnostic",
+        "K": 4,
+        "particles": 10000,
+        "checkpoints": [1, 2, 3, 4, 5, 6, 7, 8],
+        "symmetry": "C1",
+        "random_seed": 0,
+        "image_batch_size": 50,
+        "image_fourier_backend": "implicit host_numpy source default; source predates the explicit selector",
+        "same_gpu_serial": true,
+        "gold_standard_halfmaps_available": false
+      },
+      "source": {
+        "commit": "9681a1727fa8aa43244e7ec699af04ec71ca7861",
+        "tree": "fc1df60177d47c5030971c279074b319ee7fa926",
+        "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_real_k4_gate_9681a1727_20260901",
+        "clean": true
+      },
+      "relion_source": {
+        "commit": "f2c1a384400aec37dc6805856a5ba645650a44f1",
+        "tree": "1aa4902144f521ae29834e5acf382ff41cf302d0",
+        "source_dir": "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src",
+        "executable": "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine",
+        "executable_sha256": "08d9151c976ec51e664060992db62d929e47282e0d8481d977f64e32f07fca39"
+      },
+      "inputs": [
+        {
+          "role": "particles_star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.star",
+          "size_bytes": 1267736,
+          "sha256": "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f"
+        },
+        {
+          "role": "particles_stack",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.256.mrcs",
+          "resolved_path": "/projects/CRYOEM/singerlab/mg6942/10076/test_new/downsampled/particles.256.mrcs",
+          "size_bytes": 34576532480,
+          "sha256": "70d0c19995221491d27c9323f21c40df27e153bdf1e783bc78c4d38fe41a9c09"
+        },
+        {
+          "role": "source_indices",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/source_indices.npy",
+          "size_bytes": 80128,
+          "sha256": "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d"
+        },
+        {
+          "role": "fixture_manifest",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/fixture_manifest.json",
+          "size_bytes": 585,
+          "sha256": "762645e0d77c53bb9ce61701e1fd0d03868021c494f84b73a281b39d753d9750"
+        }
+      ],
+      "command": {
+        "shell": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_realdata_science_equiv_20260830/.pixi/envs/default/bin/python3.11 -m scripts.run_em_real_kclass_initialmodel_pair --dataset EMPIAR-10076 --fixture-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/pair --relion-refine /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine --relion-source-dir /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src --K 4 --nr-iter 8 --random-seed 0 --tau2-fudge 4.0 --symmetry C1 --particle-diameter 200.0 --healpix-order 1 --oversampling 1 --offset-range 6.0 --offset-step 2.0 --padding-factor 1 --image-batch-size 50 --rotation-block-size 5000 --threads 8 --minimum-fsc-auc 0.999 --minimum-assignment-accuracy 0.995 --minimum-class-fraction 0.01 --checkpoint 0 --checkpoint 1 --checkpoint 2 --checkpoint 3 --checkpoint 4 --checkpoint 5 --checkpoint 6 --checkpoint 7 --checkpoint 8",
+        "manifest": {
+          "role": "submission_manifest",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/submission_manifest.json",
+          "sha256": "d60f83246fa0d0af0684287c19a2049c712f702a4ca4f6ad6ab26bf3de266ff9"
+        }
+      },
+      "execution": {
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50",
+        "pair_job": {
+          "job_id": "13301932",
+          "state": "FAILED",
+          "exit_code": "1:0",
+          "elapsed_s": 2395,
+          "node": "della-h19g2",
+          "req_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1",
+          "alloc_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1"
+        },
+        "posthoc_audit_job": {
+          "job_id": "13303753",
+          "state": "FAILED",
+          "exit_code": "1:0",
+          "elapsed_s": 360,
+          "node": "della-h19g1",
+          "req_tres": "billing=5,cpu=4,mem=64G,node=1",
+          "alloc_tres": "billing=5,cpu=4,mem=64G,node=1"
+        }
+      },
+      "outcome": {
+        "relion_native_completed": true,
+        "recovar_native_completed": true,
+        "native_iterations_per_engine": 8,
+        "wrapper_failure": "After both native engines completed iteration 8, the old pair wrapper requested a RECOVAR iteration-0 checkpoint that this source did not emit. The independent post-hoc audit therefore evaluated the sealed iteration-1--8 artifacts and exited nonzero because the scientific gates failed."
+      },
+      "quality": {
+        "audit_result": "fail",
+        "trajectory_parity_result": "fail",
+        "minimum_matched_fsc_auc": 0.027169398693955443,
+        "minimum_assignment_accuracy": 0.12884615384615383,
+        "class_stability_result": "fail",
+        "final_iteration": 8,
+        "final_permutation_candidate_to_reference": [1, 2, 0, 3],
+        "final_matched_fsc_auc": [
+          0.2649291620692408,
+          0.23100460653350574,
+          0.06122442786969635,
+          0.12402935307087112
+        ],
+        "final_assignment_accuracy": 0.3372,
+        "final_candidate_counts": [1085, 5, 6992, 1918],
+        "final_reference_counts": [4099, 10, 3990, 1901],
+        "final_class_collapse": true,
+        "collapsed_candidate_classes_one_based": [2],
+        "collapsed_reference_classes_one_based": [2],
+        "thresholds": {
+          "minimum_per_class_fsc_auc": 0.999,
+          "minimum_class_assignment_accuracy": 0.995,
+          "minimum_class_fraction": 0.01
+        },
+        "metric_policy": "signed shellwise FSC and normalized non-DC FSC-AUC; no map correlation",
+        "gold_standard_halfmaps_available": false,
+        "gold_standard_halfmaps_missing_reason": "RELION and RECOVAR InitialModel emit one map per class, not independent half maps"
+      },
+      "performance": {
+        "recovar": {
+          "wall_s": 2235.444,
+          "wall_s_source": "first-to-last one-second GPU-monitor timestamp",
+          "peak_hbm_mib": 17765,
+          "max_rss_kib": 15583768,
+          "measurement_limitations": [
+            "wall_s is a monitor-span approximation rather than the native process timer",
+            "peak HBM is a one-second sampled lower bound",
+            "the wrapper failed before pair_report.json was written"
+          ]
+        },
+        "relion": {
+          "wall_s": 71.013,
+          "wall_s_source": "first-to-last one-second GPU-monitor timestamp",
+          "peak_hbm_mib": 79561,
+          "max_rss_kib": 2857780,
+          "measurement_limitations": [
+            "wall_s is a monitor-span approximation rather than the native process timer",
+            "peak HBM is a one-second sampled lower bound",
+            "the wrapper failed before pair_report.json was written"
+          ]
+        },
+        "formal_ratio": null
+      },
+      "artifacts": [
+        {
+          "role": "pair_sbatch",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/scripts/run_pair.sbatch",
+          "sha256": "60a19b6cab3f565c005239f93ec6f6eaab258ace3c309bb5b4e97f499b6d5d48"
+        },
+        {
+          "role": "relion_command",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/pair/relion/command.json",
+          "sha256": "cb551703bc2988b53a92b0863723334f1a4cd1580373b999810927fde65a7f66"
+        },
+        {
+          "role": "recovar_command",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/pair/recovar/command.json",
+          "sha256": "3e694c1b72bdd40639521fba14c58b1533f53b195c4019f5df7a4440278350a6"
+        },
+        {
+          "role": "relion_process_resources",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/pair/relion/process_resources.txt",
+          "sha256": "a250875be0c01748ad4b7439c9f9656214cd44bd709024aa34b92db0ef49f8d8"
+        },
+        {
+          "role": "recovar_process_resources",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/pair/recovar/process_resources.txt",
+          "sha256": "89488c8f34567f1193727301331cbcd53d5f19f7b6a9d2f0a77b353c6d98c27f"
+        },
+        {
+          "role": "relion_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/pair/relion/gpu_monitor.csv",
+          "sha256": "1495a8533d889546e08753e397210dc5f4486bacbae0156798c536cade9c07e3"
+        },
+        {
+          "role": "recovar_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/pair/recovar/gpu_monitor.csv",
+          "sha256": "66d7c08ba43372f9c9a2b0c74eb3039549e964899682dc52ecca20d1ab7026d3"
+        },
+        {
+          "role": "pair_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/logs/pair-13301932.out",
+          "sha256": "dbdc51573d9ded7e7df7d0c559a70db4df79298aebf58b172ba3b6ebf9478ba9"
+        },
+        {
+          "role": "pair_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50/logs/pair-13301932.err",
+          "sha256": "99f8da752843c9194a26a476b15183dc5f45641a5f4799c62dc080f53e559eeb"
+        },
+        {
+          "role": "audit_json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_b50_posthoc_audit_9681a1727_20260901/outputs/trajectory_audit_it001_it008.json",
+          "sha256": "cb31d8507b99a12e95aa5a39e8f6e34264f3d347649f78fc57d1ef4ba6483c6c"
+        },
+        {
+          "role": "shellwise_fsc_npz",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_b50_posthoc_audit_9681a1727_20260901/outputs/trajectory_shellwise_it001_it008.npz",
+          "sha256": "4e6cbc0546e9c1882613e24ddb033897500510b1723a3d09a8504bca5b7c33f7"
+        },
+        {
+          "role": "posthoc_audit_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_b50_posthoc_audit_9681a1727_20260901/logs/audit-13303753.out",
+          "sha256": "92df4be0c7582ad428b0ba378102dec9fd981c41361ef19b09a46d3b2639707b"
+        },
+        {
+          "role": "posthoc_audit_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_b50_posthoc_audit_9681a1727_20260901/logs/audit-13303753.err",
+          "sha256": "30097dfdd5bc312fab0de3506f6dfea800dec76957cffe31bb530e21b3dedcb1"
+        }
+      ],
+      "rejection_reasons": [
+        "The frozen trajectory gate failed: minimum matched FSC-AUC was 0.0271694 and minimum assignment agreement was 0.128846.",
+        "Both engines ended with class 2 below the frozen 1% minimum, so class stability failed independently of trajectory parity.",
+        "This source predates the exact image-preprocessing and pre-E-step operand restorations; it is retained as causal pre-fix evidence, not current-code evidence.",
+        "InitialModel has no independently refined half maps and therefore cannot support a final-resolution claim.",
+        "The old wrapper failed after native completion, so the monitor-derived timings cannot be published as a formal performance ratio."
+      ]
+    },
+    {
+      "diagnostic_id": "empiar-10345-k4-initialmodel-9681a1727-b500-h100",
+      "admission_status": "REJECTED_DIAGNOSTIC",
+      "dataset": "EMPIAR-10345",
+      "scope": {
+        "kind": "matched fresh RELION/RECOVAR InitialModel trajectory diagnostic",
+        "K": 4,
+        "particles": 10000,
+        "checkpoints": [1, 2, 3, 4, 5, 6, 7, 8],
+        "symmetry": "C1",
+        "random_seed": 0,
+        "image_batch_size": 500,
+        "image_fourier_backend": "implicit host_numpy source default; source predates the explicit selector",
+        "same_gpu_serial": true,
+        "gold_standard_halfmaps_available": false
+      },
+      "source": {
+        "commit": "9681a1727fa8aa43244e7ec699af04ec71ca7861",
+        "tree": "fc1df60177d47c5030971c279074b319ee7fa926",
+        "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_real_k4_gate_9681a1727_20260901",
+        "clean": true
+      },
+      "relion_source": {
+        "commit": "f2c1a384400aec37dc6805856a5ba645650a44f1",
+        "tree": "1aa4902144f521ae29834e5acf382ff41cf302d0",
+        "source_dir": "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src",
+        "executable": "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine",
+        "executable_sha256": "08d9151c976ec51e664060992db62d929e47282e0d8481d977f64e32f07fca39"
+      },
+      "inputs": [
+        {
+          "role": "particles_star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/particles.star",
+          "size_bytes": 1451626,
+          "sha256": "e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5"
+        },
+        {
+          "role": "particles_stack",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/particles.256.mrcs",
+          "resolved_path": "/projects/CRYOEM/singerlab/mg6942/10345/recovar_data/particles.256.mrcs",
+          "size_bytes": 22089827328,
+          "sha256": "7909a695db68b65bfe6d0391054a1b19ae37fc4cd8da5cc4eb9595d76e4116e4"
+        },
+        {
+          "role": "source_indices",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/source_indices.npy",
+          "size_bytes": 80128,
+          "sha256": "9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3"
+        },
+        {
+          "role": "fixture_manifest",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/fixture_manifest.json",
+          "size_bytes": 1452,
+          "sha256": "175972d7911dc512ceca2668c0f9b9372d76a3828ee4e9217c9870f55cec4683"
+        }
+      ],
+      "command": {
+        "shell": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_realdata_science_equiv_20260830/.pixi/envs/default/bin/python3.11 -m scripts.run_em_real_kclass_initialmodel_pair --dataset EMPIAR-10345 --fixture-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/pair --relion-refine /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine --relion-source-dir /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src --K 4 --nr-iter 8 --random-seed 0 --tau2-fudge 4.0 --symmetry C1 --particle-diameter 200.0 --healpix-order 1 --oversampling 1 --offset-range 6.0 --offset-step 2.0 --padding-factor 1 --image-batch-size 500 --rotation-block-size 5000 --threads 8 --minimum-fsc-auc 0.999 --minimum-assignment-accuracy 0.995 --minimum-class-fraction 0.01 --checkpoint 0 --checkpoint 1 --checkpoint 2 --checkpoint 3 --checkpoint 4 --checkpoint 5 --checkpoint 6 --checkpoint 7 --checkpoint 8",
+        "manifest": {
+          "role": "submission_manifest",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/submission_manifest.json",
+          "sha256": "bdfdd6eb621b7ade9c4a31bab4d7991c48871ad980d2bb0bf67aa9653a412c1f"
+        }
+      },
+      "execution": {
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2",
+        "pair_job": {
+          "job_id": "13300874",
+          "state": "FAILED",
+          "exit_code": "1:0",
+          "elapsed_s": 1757,
+          "node": "della-h19g1",
+          "req_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1",
+          "alloc_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1"
+        },
+        "posthoc_audit_job": {
+          "job_id": "13302406",
+          "state": "FAILED",
+          "exit_code": "1:0",
+          "elapsed_s": 473,
+          "node": "della-i13n2",
+          "req_tres": "billing=16,cpu=4,mem=64G,node=1",
+          "alloc_tres": "billing=16,cpu=4,mem=64G,node=1"
+        }
+      },
+      "outcome": {
+        "relion_native_completed": true,
+        "recovar_native_completed": true,
+        "native_iterations_per_engine": 8,
+        "wrapper_failure": "After both native engines completed iteration 8, the old pair wrapper requested a RECOVAR iteration-0 checkpoint that this source did not emit. The independent post-hoc audit therefore evaluated the sealed iteration-1--8 artifacts and exited nonzero because the scientific gates failed."
+      },
+      "quality": {
+        "audit_result": "fail",
+        "trajectory_parity_result": "fail",
+        "minimum_matched_fsc_auc": 0.03231597706027383,
+        "minimum_assignment_accuracy": 0.1411764705882353,
+        "class_stability_result": "pass",
+        "final_iteration": 8,
+        "final_permutation_candidate_to_reference": [1, 2, 3, 0],
+        "final_matched_fsc_auc": [
+          0.04951169840466533,
+          0.17793526599056497,
+          0.10876131592262478,
+          0.04202547746158835
+        ],
+        "final_assignment_accuracy": 0.1692,
+        "final_candidate_counts": [1929, 1848, 3149, 3074],
+        "final_reference_counts": [2669, 1007, 3264, 3060],
+        "final_class_collapse": false,
+        "collapsed_candidate_classes_one_based": [],
+        "collapsed_reference_classes_one_based": [],
+        "thresholds": {
+          "minimum_per_class_fsc_auc": 0.999,
+          "minimum_class_assignment_accuracy": 0.995,
+          "minimum_class_fraction": 0.01
+        },
+        "metric_policy": "signed shellwise FSC and normalized non-DC FSC-AUC; no map correlation",
+        "gold_standard_halfmaps_available": false,
+        "gold_standard_halfmaps_missing_reason": "RELION and RECOVAR InitialModel emit one map per class, not independent half maps"
+      },
+      "performance": {
+        "recovar": {
+          "wall_s": 1605.251,
+          "wall_s_source": "first-to-last one-second GPU-monitor timestamp",
+          "peak_hbm_mib": 66771,
+          "max_rss_kib": 17569148,
+          "measurement_limitations": [
+            "wall_s is a monitor-span approximation rather than the native process timer",
+            "peak HBM is a one-second sampled lower bound",
+            "the wrapper failed before pair_report.json was written"
+          ]
+        },
+        "relion": {
+          "wall_s": 71.014,
+          "wall_s_source": "first-to-last one-second GPU-monitor timestamp",
+          "peak_hbm_mib": 79561,
+          "max_rss_kib": 2850728,
+          "measurement_limitations": [
+            "wall_s is a monitor-span approximation rather than the native process timer",
+            "peak HBM is a one-second sampled lower bound",
+            "the wrapper failed before pair_report.json was written"
+          ]
+        },
+        "formal_ratio": null
+      },
+      "artifacts": [
+        {
+          "role": "pair_sbatch",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/scripts/run_pair.sbatch",
+          "sha256": "3de7212a8b636e7f9567917d88fe5bc961556296a3333f43057c02d0e2d1a638"
+        },
+        {
+          "role": "relion_command",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/pair/relion/command.json",
+          "sha256": "c950f9158e1939242c913d3b620ed59d0973f76082c9ce7e60483f0d438e27d6"
+        },
+        {
+          "role": "recovar_command",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/pair/recovar/command.json",
+          "sha256": "d4e93ab667945e2f4f01eff4e2adf428f16af4d7b8fe4dc4d9303f1c9dea264d"
+        },
+        {
+          "role": "relion_process_resources",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/pair/relion/process_resources.txt",
+          "sha256": "bd04ee2b45d98238002b07bed92ec4bff9ef666202290c0c97534bde0379146d"
+        },
+        {
+          "role": "recovar_process_resources",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/pair/recovar/process_resources.txt",
+          "sha256": "7e6526a3ca03a746b1e7018be47bf49a5fae71b91ec8f6c0c27a5d19b2167a89"
+        },
+        {
+          "role": "relion_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/pair/relion/gpu_monitor.csv",
+          "sha256": "0079ac30482b5dcf698c86b03901dfa132689fd711b5c5ef0a2de3d0b244bb6d"
+        },
+        {
+          "role": "recovar_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/pair/recovar/gpu_monitor.csv",
+          "sha256": "4bc3ca35751b3cd4fb839c008f2c001743d6fa6c5d816b0bd52b0b97b1ff0535"
+        },
+        {
+          "role": "pair_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/logs/pair-13300874.out",
+          "sha256": "3dc381cf1197bcb5f1f5ffe9fac07fcb9a33c369af0d02af09a8f8d37826900f"
+        },
+        {
+          "role": "pair_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2/logs/pair-13300874.err",
+          "sha256": "fdf62e86ca029535eb7321cc42acd252851a7e8ee93ba312164f5fdba350bb4c"
+        },
+        {
+          "role": "audit_json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_posthoc_audit_9681a1727_20260901/outputs/trajectory_audit_it001_it008.json",
+          "sha256": "04c417c749c188ed4a878bb3536d668df61534cecb2128eca4a7f16d5b5a7c41"
+        },
+        {
+          "role": "shellwise_fsc_npz",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_posthoc_audit_9681a1727_20260901/outputs/trajectory_shellwise_it001_it008.npz",
+          "sha256": "d7beceaf266d47d47ca307cb96ea602f6ff8fee07fd89da1609c88ced718a3c3"
+        },
+        {
+          "role": "posthoc_audit_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_posthoc_audit_9681a1727_20260901/logs/audit-13302406.out",
+          "sha256": "e06944a1b20c4b06d6c7ad65c74b74d2b24caf930523dd8b3e99de105f5be84b"
+        },
+        {
+          "role": "posthoc_audit_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_posthoc_audit_9681a1727_20260901/logs/audit-13302406.err",
+          "sha256": "3b59d4a1a7bdae29a9f78bcf8d5bfe9a52df9bffdd4e104a119f34975416daa1"
+        }
+      ],
+      "rejection_reasons": [
+        "The frozen trajectory gate failed: minimum matched FSC-AUC was 0.0323160 and minimum assignment agreement was 0.141176.",
+        "This source predates the exact image-preprocessing and pre-E-step operand restorations; it is retained as causal pre-fix evidence, not current-code evidence.",
+        "InitialModel has no independently refined half maps and therefore cannot support a final-resolution claim.",
+        "The old wrapper failed after native completion, so the monitor-derived timings cannot be published as a formal performance ratio."
+      ]
+    }
+  ],
+  "causal_diagnostics": [
+    {
+      "diagnostic_id": "empiar-10076-k4-it1-a868f50ea-unmatched-coverage",
+      "admission_status": "FORMAL_NEGATIVE",
+      "kind": "one-iteration operand-restoration replay with unmatched particle coverage",
+      "dataset": "EMPIAR-10076",
+      "source": {
+        "commit": "a868f50ea716ac459b16873c82d7f91e5d7ed019",
+        "tree": "4cfc27ef1974a0f7a4354b51e4899735ce630bb4",
+        "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_real_k4_pair_evidence_20260901",
+        "clean": true
+      },
+      "command": {
+        "shell": "sbatch --parsable /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/operand_restore.sbatch",
+        "script": {
+          "role": "sbatch_script",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/operand_restore.sbatch",
+          "sha256": "09d5364e21429ad73b9f3931c471be01a1366a138cbded6335e19d1adeafab6e"
+        }
+      },
+      "execution": {
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901",
+        "job": {
+          "job_id": "13303818",
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed_s": 1688,
+          "node": "della-h19g1",
+          "req_tres": "billing=10,cpu=8,gres/gpu=1,mem=128G,node=1",
+          "alloc_tres": "billing=10,cpu=8,gres/gpu=1,mem=128G,node=1"
+        },
+        "audit_exit_code": 1
+      },
+      "coverage": {
+        "relion_assigned_particles": 200,
+        "recovar_assigned_particles": 10000,
+        "shared_assigned_particles": 200,
+        "same_visited_particle_ids": false,
+        "map_comparison_valid": false,
+        "reason": "--nr_iter 1 activated RECOVAR's final K>1 all-particle schedule, while the frozen RELION iteration-1 map used the scheduled 200-particle subset"
+      },
+      "audit": {
+        "result": "fail",
+        "minimum_matched_fsc_auc": 0.14393428048094323,
+        "matched_fsc_auc": [
+          0.14393428048094323,
+          0.5300111944017161,
+          0.1964018249441898,
+          0.22838996447906357
+        ],
+        "minimum_assignment_accuracy": 0.875,
+        "assignment_status_match": false,
+        "interpretation": "Formal harness negative only. The FSC values compare maps reconstructed from different particle coverage and are superseded by the shared-200 diagnostic."
+      },
+      "performance": {
+        "recovar_wall_s": 1637.14,
+        "recovar_peak_hbm_mib": 17165,
+        "recovar_max_rss_kib": 10667200,
+        "formal_performance_eligible": false
+      },
+      "formal_ratio": null,
+      "artifacts": [
+        {
+          "role": "audit_json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/outputs/trajectory_audit_it001.json",
+          "sha256": "4f0df5e36ad706e703222e9be09fa48561e84b64d796ea980cf5a7200930bcf0"
+        },
+        {
+          "role": "shellwise_fsc_npz",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/outputs/trajectory_shellwise_it001.npz",
+          "sha256": "fe2538ddedf48448f482b13542508dcad944fecb64ecedc9e7f562264162d899"
+        },
+        {
+          "role": "process_resources",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/outputs/process_resources.txt",
+          "sha256": "5e1bf5deb8efab68f1f15f52792108eee8b89062b0136e0725fc240536e369b9"
+        },
+        {
+          "role": "gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/outputs/gpu_monitor.csv",
+          "sha256": "06322135131ce47392dbae81c629c9b180e5bd10aa717eafee5f8cb647eaf638"
+        },
+        {
+          "role": "stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/logs/gate-13303818.out",
+          "sha256": "36a7406fcf0d13f97faffe5cb22daee7105a9d1d1f9d3603505a0ca7358a01f8"
+        },
+        {
+          "role": "stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_operand_restore_a868f50ea_20260901/logs/gate-13303818.err",
+          "sha256": "f8cc9ca68c122fd88bcd4735b566e68429ed1b3cec280093eed8a60366af9edd"
+        }
+      ],
+      "limitations": [
+        "The map comparison is invalidated by 10,000-versus-200 reconstruction coverage.",
+        "The 0.875 assignment accuracy applies only to the 200 jointly assigned particles and is separate from map FSC.",
+        "The run used a frozen RELION iteration-1 reference rather than a fresh same-job RELION process.",
+        "InitialModel emits no independent half maps."
+      ]
+    },
+    {
+      "diagnostic_id": "empiar-10076-k4-it1-3942224f5-shared200",
+      "admission_status": "DIAGNOSTIC_ONLY",
+      "kind": "one-checkpoint shared-visited-particle discriminator from the full eight-iteration pair",
+      "dataset": "EMPIAR-10076",
+      "source": {
+        "commit": "3942224f57c11a7f4ab82f9f4447d811f8fa346b",
+        "tree": "0aa7f34e91bc78f25f1c61974a0d235dfafc021e",
+        "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_realgate_3942224f5_20260901",
+        "clean": true
+      },
+      "command": {
+        "shell": "sbatch --parsable /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901/shared200.sbatch",
+        "script": {
+          "role": "sbatch_script",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901/shared200.sbatch",
+          "sha256": "5da97ae008e5f080c1035256b20d271de9e61d1d684161c3d19f1c2378b60497"
+        }
+      },
+      "execution": {
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901",
+        "job": {
+          "job_id": "13305983",
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed_s": 153,
+          "node": "della-r3c1n9",
+          "req_tres": "billing=16,cpu=4,mem=64G,node=1",
+          "alloc_tres": "billing=16,cpu=4,mem=64G,node=1"
+        },
+        "audit_exit_code": 1
+      },
+      "coverage": {
+        "relion_assigned_particles": 200,
+        "recovar_assigned_particles": 200,
+        "shared_assigned_particles": 200,
+        "same_visited_particle_ids": true,
+        "map_comparison_valid": true,
+        "reason": "The job asserted exact equality of all 200 assigned image identities before computing FSC and assignment agreement."
+      },
+      "audit": {
+        "result": "fail",
+        "minimum_matched_fsc_auc": 0.02707739460004996,
+        "matched_fsc_auc": [
+          0.18363590827434004,
+          0.4364543455419215,
+          0.02707739460004996,
+          0.2957085359210463
+        ],
+        "minimum_assignment_accuracy": 0.875,
+        "assignment_status_match": true,
+        "interpretation": "The shared-particle hard assignments agree at 0.875, but the class maps remain far below the 0.999 FSC-AUC trajectory threshold. Assignment agreement and map agreement are distinct gates."
+      },
+      "formal_ratio": null,
+      "artifacts": [
+        {
+          "role": "shared_visited_particle_ids",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901/outputs/shared_visited_particles_it001.json",
+          "sha256": "581157ff693aac6f5853d335d9cd0c59aa3fc11e60f54b325feb692ff05a9bd7"
+        },
+        {
+          "role": "audit_json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901/outputs/trajectory_audit_it001_shared200.json",
+          "sha256": "f4704752780dee4b6e27540a7c374d18990a4d431a30efde88f0e8d0130dfa88"
+        },
+        {
+          "role": "shellwise_fsc_npz",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901/outputs/trajectory_shellwise_it001_shared200.npz",
+          "sha256": "7dcc111c84bd7c12d9a5721b634d51fc8e5b19e52d4f603682cc99b60fc3a71e"
+        },
+        {
+          "role": "stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901/logs/audit-13305983.out",
+          "sha256": "5273ff9042efc90a4a0c247340a796bc42e585e6dd6456ecb0b5f545cbbf9b44"
+        },
+        {
+          "role": "stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901/logs/audit-13305983.err",
+          "sha256": "c9380c7288fa62d3dc2bbcc006ee9c515ce72b130fac77a1df45ec0b9e79e420"
+        }
+      ],
+      "limitations": [
+        "This is one checkpoint from one dataset and seed, not a full trajectory.",
+        "The CPU audit reuses immutable iteration-1 artifacts from full pair job 13304163; it does not rerun either engine.",
+        "The result is diagnostic-only even if a future one-checkpoint rerun passes.",
+        "InitialModel emits no independent half maps or final-resolution evidence."
+      ]
+    }
+  ]
+}

@@ -113,6 +113,79 @@ partition. It predates separate HBM/RSS capture and does not record a
 cryptographic RELION binary-to-source build attestation, so it is not a
 registry-ready performance result.
 
+## Sealed rejected pairs from 2026-09-01
+
+Two fresh, same-H100, 10,000-particle K=4 pairs completed all eight native
+iterations at RECOVAR commit `9681a1727`, before the exact image-preprocessing
+and pre-E-step operand restorations. The old wrapper then failed because it
+requested a RECOVAR iteration-0 artifact that this source did not emit. An
+independent post-hoc audit of the sealed iteration-1--8 outputs also failed the
+scientific gates, so these runs are deliberately **not** benchmark-registry
+entries.
+
+| Dataset / batch | Pair job; audit job | Min FSC-AUC / assignment | Final matched FSC-AUC | Final RECOVAR / RELION counts | RECOVAR wall / HBM / RSS | RELION wall / HBM / RSS |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10076 / 50 | 13301932; 13303753 | 0.02717 / 12.88% | 0.26493, 0.23100, 0.06122, 0.12403 | 1085, 5, 6992, 1918 / 4099, 10, 3990, 1901 | 2235.4 s / 17765 MiB / 15583768 KiB | 71.0 s / 79561 MiB / 2857780 KiB |
+| 10345 / 500 | 13300874; 13302406 | 0.03232 / 14.12% | 0.04951, 0.17794, 0.10876, 0.04203 | 1929, 1848, 3149, 3074 / 2669, 1007, 3264, 3060 | 1605.3 s / 66771 MiB / 17569148 KiB | 71.0 s / 79561 MiB / 2850728 KiB |
+
+The wall values above are first-to-last one-second monitor spans, and HBM is a
+sampled lower bound. No formal RECOVAR/RELION ratio is reported. The 10076
+batch-50 run demonstrates that bounded image batching reduced RECOVAR's peak
+HBM from the roughly 66.8 GiB seen in the incomplete batch-500 attempt (job
+13300875, which reached iteration 8 and then ran out of memory) to 17.8 GiB,
+but its approximately 37-minute RECOVAR span also exposes a throughput cost.
+The matched workload and a native timer still have to pass before performance
+can be admitted.
+
+The complete machine-readable rejected-run ledger is
+`docs/benchmarks/em/diagnostics/real-kclass-initialmodel-20260901.json`. It
+retains exact source trees, resolved input sizes and SHA-256 hashes, commands,
+run roots, requested/allocated Slurm resources, quality, performance
+limitations, and artifact hashes. Its validator fails if a rejected run tries
+to claim benchmark admission, half maps, a formal ratio, mismatched resources,
+or a passing scientific audit:
+
+```bash
+pixi run python scripts/validate_em_real_kclass_diagnostics.py
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_diagnostics.py
+```
+
+### Causal follow-ups
+
+These failures are not explained by a harmless global rotational drift. A
+proper-rotation search on the 10076 iteration-1 maps (job 13302694) raised the
+mean matched FSC-AUC only to 0.22804, with the weakest matched class at 0.11008,
+and selected different rotations for different classes. The sealed result is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_rigid_alignment_9681a1727_20260901/outputs/it001_proper_rotation_alignment.json`
+(SHA-256
+`93eaa693af1a7244b79574c0c33aeecb05ee0beeb503c35b86a865e9a291f1fa`).
+
+The first exact-image/pre-E-step operand replay (job 13303818) is a formal
+negative, but its map scores are not a valid matched-workload trajectory
+measurement. Running RECOVAR with `--nr_iter 1` activated the final K>1
+all-particle schedule, so RECOVAR reconstructed from all 10,000 particles while
+the frozen RELION iteration-1 artifact reconstructed from exactly 200. The
+resulting matched FSC-AUC was `[0.14393, 0.53001, 0.19640, 0.22839]`, and the
+STAR coverage mismatch was 10,000 assigned versus 200 assigned and 9,800
+unassigned. It proves that the one-iteration harness does not reproduce the
+iteration-1 controller state; it cannot be used to infer that the operand
+restoration improved or worsened a matched map trajectory.
+
+The replacement shared-coverage diagnostic is taken from a full eight-
+iteration run, whose iteration-1 metadata select 200 particles in each engine.
+The diagnostic asserts exact equality of the 200 image identities before
+computing map FSC or assignment agreement. Job 13305983 completed with exact
+ReqTRES/AllocTRES
+`billing=16,cpu=4,mem=64G,node=1`. The shared-particle assignment agreement was
+0.875, but the matched class-map FSC-AUC values were only
+`[0.18364, 0.43645, 0.02708, 0.29571]`, so map trajectory parity still fails
+decisively. Assignment agreement and map agreement are separate gates. Its
+run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_it1_shared200_3942224f5_20260901`.
+Even a passing result remains diagnostic-only because it covers one checkpoint
+from one dataset and seed, not a complete trajectory or gold-standard
+refinement.
+
 ## Outputs and admission
 
 Every disposable outer run root and pair root contains `SAFE_TO_DELETE`.
@@ -129,9 +202,11 @@ The principal outputs under `<run-root>/pair/` are:
 A completed run is not checked into the benchmark registry automatically.
 After the Slurm job finishes, copy only compact JSON/NPZ evidence into a schema
 record, preserve the absolute run root and hashes, and run
-`scripts/validate_em_benchmark_registry.py`. Do not admit an InitialModel-only
-record as evidence of final real-data resolution; retain that limitation and
-schedule the matched multi-seed half-map refinement described above.
+`scripts/validate_em_benchmark_registry.py`. A failed or harness-limited run
+belongs in the dedicated rejected diagnostics ledger, not in `entries/`. Do
+not admit an InitialModel-only record as evidence of final real-data
+resolution; retain that limitation and schedule the matched multi-seed
+half-map refinement described above.
 
 ## Code and focused tests
 
