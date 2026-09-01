@@ -119,6 +119,45 @@ def _make_relion_solvent_mask(volume_shape, *, radius, radius_p, offset):
     return solvent_mask
 
 
+def _apply_relion_solvent_flatten_k1(
+    volume_ft_flat,
+    solvent_mask,
+    volume_shape,
+    *,
+    half_index,
+):
+    """Apply the K=1 solvent mask and release box-scale FFT inputs promptly."""
+
+    vol_real = fourier_transform_utils.get_idft3(volume_ft_flat.reshape(volume_shape))
+    flattened = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
+    if not _large_relion_solvent_mask_uses_compiled_builder(volume_shape):
+        return flattened
+
+    # JAX dispatch is asynchronous.  At box 800, retaining the first half's
+    # real-space volume and float64 mask into the second half keeps about
+    # 11.44 GiB live and prevents the second complex128 FFT result from being
+    # allocated.  Wait for the exact existing FFT to finish, then delete only
+    # those dead inputs; the Fourier result and its arithmetic are unchanged.
+    flattened.block_until_ready()
+    _delete_device_array(vol_real)
+    _delete_device_array(solvent_mask)
+    vol_real_deleted = _device_array_is_deleted(vol_real)
+    solvent_mask_deleted = _device_array_is_deleted(solvent_mask)
+    del vol_real, solvent_mask
+    gc.collect()
+    logger.info(
+        "RELION box-scale solvent flatten lifecycle: half=%d shape=%s "
+        "output_ready=True vol_real_deleted=%s solvent_mask_deleted=%s "
+        "output_dtype=%s",
+        int(half_index) + 1,
+        tuple(int(size) for size in volume_shape),
+        vol_real_deleted,
+        solvent_mask_deleted,
+        flattened.dtype,
+    )
+    return flattened
+
+
 def _relion_host_fft_workers() -> int:
     configured = os.environ.get("RECOVAR_RELION_HOST_FFT_WORKERS")
     if configured is None:
@@ -1212,8 +1251,14 @@ def _reconstruct_and_postprocess_means(
                     )
                 means[k] = jnp.stack(flattened_classes, axis=0)
             else:
-                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
-                means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
+                means[k] = _apply_relion_solvent_flatten_k1(
+                    means[k],
+                    solvent_mask,
+                    volume_shape,
+                    half_index=k,
+                )
+                if _large_relion_solvent_mask_uses_compiled_builder(volume_shape):
+                    solvent_mask = None
     if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
         logger.info(
             "RELION iter-1 CC emulation: reapplying ini_high low-pass filter at %.2f A",
