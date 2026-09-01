@@ -99,6 +99,78 @@ def test_mrc_loader_reads_real_file_sequential_and_random(tmp_path):
     np.testing.assert_allclose(rnd, data[[4, 2, 0]])
 
 
+def test_mrc_loader_load_all_fast_path_returns_fromfile_buffer_without_workspace(monkeypatch, tmp_path):
+    data = np.arange(6 * 4 * 4, dtype=np.float32).reshape(6, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    fromfile_results = []
+    original_fromfile = image_loader.np.fromfile
+
+    def _tracking_fromfile(*args, **kwargs):
+        result = original_fromfile(*args, **kwargs)
+        fromfile_results.append(result)
+        return result
+
+    def _unexpected_workspace(*args, **kwargs):
+        raise AssertionError("contiguous fast path allocated a separate output workspace")
+
+    def _unexpected_unique(*args, **kwargs):
+        raise AssertionError("contiguous fast path unnecessarily de-duplicated indices")
+
+    monkeypatch.setattr(image_loader.np, "fromfile", _tracking_fromfile)
+    monkeypatch.setattr(image_loader.np, "empty", _unexpected_workspace)
+    monkeypatch.setattr(image_loader.np, "unique", _unexpected_unique)
+    loader.load_all()
+    out = loader._cached
+    monkeypatch.undo()
+
+    np.testing.assert_array_equal(out, data)
+    assert len(fromfile_results) == 1
+    assert out.base is fromfile_results[0]
+    assert np.shares_memory(out, fromfile_results[0])
+    assert out.flags.c_contiguous
+    assert out.flags.writeable
+    np.testing.assert_array_equal(loader.get(np.array([4, 1], dtype=np.int32)), data[[4, 1]])
+
+
+def test_mrc_loader_contiguous_fast_path_uses_physical_subset_order(monkeypatch, tmp_path):
+    data = np.arange(7 * 4 * 4, dtype=np.float32).reshape(7, 4, 4)
+    mrc_path = tmp_path / "particles.mrcs"
+    utils.write_mrc(str(mrc_path), data)
+
+    loader = image_loader.MRCLoader(
+        str(mrc_path), indices=np.array([0, 3, 4, 5, 6], dtype=np.int32), lazy=True
+    )
+    original_unique = image_loader.np.unique
+
+    def _unexpected_unique(*args, **kwargs):
+        raise AssertionError("physically contiguous subset unnecessarily de-duplicated indices")
+
+    monkeypatch.setattr(image_loader.np, "unique", _unexpected_unique)
+    out = loader.get(np.array([1, 2, 3], dtype=np.int32))
+    monkeypatch.setattr(image_loader.np, "unique", original_unique)
+
+    np.testing.assert_array_equal(out, data[3:6])
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int16, np.uint16, np.float32])
+def test_mrc_loader_contiguous_fast_path_preserves_file_dtype(dtype, tmp_path):
+    import mrcfile
+
+    data = np.arange(5 * 4 * 4).reshape(5, 4, 4).astype(dtype)
+    mrc_path = tmp_path / f"particles_{np.dtype(dtype).name}.mrcs"
+    with mrcfile.new(str(mrc_path), overwrite=True) as mrc:
+        mrc.set_data(data)
+
+    loader = image_loader.MRCLoader(str(mrc_path), lazy=True)
+    out = loader.get(np.array([1, 2, 3], dtype=np.int32))
+
+    assert out.dtype == data.dtype
+    np.testing.assert_array_equal(out, data[1:4])
+
+
 def test_mrc_loader_duplicate_indices_preserve_order_and_duplicates(tmp_path):
     data = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
     mrc_path = tmp_path / "particles.mrcs"

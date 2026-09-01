@@ -468,12 +468,33 @@ class MRCLoader(ImageLoader):
 
     # -- Loading -------------------------------------------------------------
 
+    def _read_contiguous(self, first_index: int, count: int) -> np.ndarray:
+        """Read adjacent physical rows into one allocation and reshape it without copying."""
+        offset = self._data_start + first_index * self._bytes_per_image
+        with open(self._filepath, "rb") as f:
+            f.seek(offset)
+            data = np.fromfile(
+                f,
+                dtype=self._file_dtype,
+                count=self._pixels_per_image * count,
+            )
+        return data.reshape(count, self._image_size, self._image_size)
+
     @nvtx.annotate("MRCLoader._load", color="blue", domain=NVTX_DOMAIN_DATA_IO)
     def _load(self, indices: np.ndarray) -> np.ndarray:
         """Load images from MRC file."""
         file_idx = self._file_indices[indices]
         if len(file_idx) == 0:
             return np.empty((0, self._image_size, self._image_size), dtype=self._file_dtype)
+
+        # The common batch/cache path requests physical rows in their on-disk
+        # order.  Return the reshaped fromfile allocation directly so a second
+        # full-size output buffer and copy are unnecessary.
+        is_contiguous_ascending = len(file_idx) == 1 or np.all(np.diff(file_idx) == 1)
+        if is_contiguous_ascending:
+            with nvtx.annotate(f"disk_read_{len(file_idx)}_images", color="cyan", domain=NVTX_DOMAIN_DATA_IO):
+                with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
+                    return self._read_contiguous(int(file_idx[0]), len(file_idx))
 
         # De-duplicate to avoid redundant disk reads.
         unique_idx, inverse = np.unique(file_idx, return_inverse=True)
@@ -489,15 +510,7 @@ class MRCLoader(ImageLoader):
 
             if is_sequential:
                 with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
-                    offset = self._data_start + int(sorted_idx[0]) * self._bytes_per_image
-                    with open(self._filepath, "rb") as f:
-                        f.seek(offset)
-                        data = np.fromfile(
-                            f,
-                            dtype=self._file_dtype,
-                            count=self._pixels_per_image * len(sorted_idx),
-                        )
-                    data = data.reshape(len(sorted_idx), self._image_size, self._image_size)
+                    data = self._read_contiguous(int(sorted_idx[0]), len(sorted_idx))
                     read_output[sorted_order] = data
             else:
                 with nvtx.annotate("random_access_read", color="red", domain=NVTX_DOMAIN_DATA_IO):
