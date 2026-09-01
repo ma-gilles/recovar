@@ -1,4 +1,5 @@
 include recovar/trajectory/_fast_marching_native.cpp
 include recovar/cuda/Makefile
 include recovar/cuda/cuda_backproject.cu
+include recovar/cuda/relion_coarse_diff2_projector_body.inc
 include setup_helpers.py

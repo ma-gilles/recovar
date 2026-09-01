@@ -52,6 +52,11 @@ logger = logging.getLogger(__name__)
 
 _LIB_DIR = pathlib.Path(__file__).resolve().parent / "cuda"
 _PACKAGE_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
+_CUDA_BUILD_SOURCE_NAMES = (
+    "cuda_backproject.cu",
+    "relion_coarse_diff2_projector_body.inc",
+    "Makefile",
+)
 _lib_handle = None  # ctypes CDLL
 _loaded_lib_path = None
 
@@ -277,7 +282,7 @@ def _lib_is_stale(lib_path: pathlib.Path) -> bool:
         lib_mtime = lib_path.stat().st_mtime
     except OSError:
         return False
-    for src_name in ("cuda_backproject.cu", "Makefile"):
+    for src_name in _CUDA_BUILD_SOURCE_NAMES:
         src = _LIB_DIR / src_name
         try:
             if src.stat().st_mtime > lib_mtime:
@@ -2681,6 +2686,20 @@ def _validate_relion_coarse_single_lane_canonical(
         )
 
 
+def _validate_relion_coarse_prehalf_weight(
+    *,
+    canonical_reduction: bool,
+    single_lane_canonical: bool,
+    prehalf_weight: bool,
+) -> None:
+    """Restrict the prehalved-weight experiment to native atomics."""
+
+    if prehalf_weight and (canonical_reduction or single_lane_canonical):
+        raise ValueError(
+            "prehalf_weight=True requires canonical_reduction=False and single_lane_canonical=False",
+        )
+
+
 @functools.partial(
     jax.jit,
     static_argnames=(
@@ -2689,6 +2708,7 @@ def _validate_relion_coarse_single_lane_canonical(
         "model_max_r",
         "canonical_reduction",
         "single_lane_canonical",
+        "prehalf_weight",
     ),
 )
 def relion_coarse_diff2_projector_f32(
@@ -2705,6 +2725,7 @@ def relion_coarse_diff2_projector_f32(
     model_max_r: int,
     canonical_reduction: bool = False,
     single_lane_canonical: bool = False,
+    prehalf_weight: bool = False,
 ) -> jax.Array:
     """Run the parity-locked shared RELION fused coarse projector.
 
@@ -2717,12 +2738,22 @@ def relion_coarse_diff2_projector_f32(
     65--128 translations, where one CUDA thread is the sole contributor to
     each translation.  It preserves the canonical initial-plus-lane addition
     while omitting the generic lane staging buffer.
+
+    ``prehalf_weight`` is a default-off native-atomic experiment that matches
+    RELION's coarse source order by staging ``weight * 0.5`` once per pixel
+    instead of multiplying every orientation's square sum by ``0.5``.  It is
+    not supported by either canonical-reduction specialization.
     """
 
     _validate_relion_coarse_single_lane_canonical(
         translation_angles.shape[0],
         canonical_reduction=canonical_reduction,
         single_lane_canonical=single_lane_canonical,
+    )
+    _validate_relion_coarse_prehalf_weight(
+        canonical_reduction=canonical_reduction,
+        single_lane_canonical=single_lane_canonical,
+        prehalf_weight=prehalf_weight,
     )
 
     compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
@@ -2754,6 +2785,7 @@ def relion_coarse_diff2_projector_f32(
         model_max_r=np.int64(model_max_r),
         canonical_reduction=np.int64(bool(canonical_reduction)),
         single_lane_canonical=np.int64(bool(single_lane_canonical)),
+        prehalf_weight=np.int64(bool(prehalf_weight)),
     )
 
 
@@ -2765,6 +2797,7 @@ def relion_coarse_diff2_projector_f32(
         "model_max_r",
         "canonical_reduction",
         "single_lane_canonical",
+        "prehalf_weight",
     ),
 )
 def relion_coarse_diff2_projector_multistream_f32(
@@ -2782,6 +2815,7 @@ def relion_coarse_diff2_projector_multistream_f32(
     actual_batch_size: jax.Array,
     canonical_reduction: bool = True,
     single_lane_canonical: bool = False,
+    prehalf_weight: bool = False,
 ) -> jax.Array:
     """Score physical particle rows over RELION's eight worker streams.
 
@@ -2799,6 +2833,11 @@ def relion_coarse_diff2_projector_multistream_f32(
         translation_angles.shape[0],
         canonical_reduction=canonical_reduction,
         single_lane_canonical=single_lane_canonical,
+    )
+    _validate_relion_coarse_prehalf_weight(
+        canonical_reduction=canonical_reduction,
+        single_lane_canonical=single_lane_canonical,
+        prehalf_weight=prehalf_weight,
     )
     compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
         projector_full,
@@ -2836,12 +2875,18 @@ def relion_coarse_diff2_projector_multistream_f32(
         model_max_r=np.int64(model_max_r),
         canonical_reduction=np.int64(bool(canonical_reduction)),
         single_lane_canonical=np.int64(bool(single_lane_canonical)),
+        prehalf_weight=np.int64(bool(prehalf_weight)),
     )
 
 
 @functools.partial(
     jax.jit,
-    static_argnames=("current_size", "physical_image_size", "model_max_r"),
+    static_argnames=(
+        "current_size",
+        "physical_image_size",
+        "model_max_r",
+        "prehalf_weight",
+    ),
 )
 def relion_coarse_diff2_projector_lanes_f32(
     projector_full: jax.Array,
@@ -2855,6 +2900,7 @@ def relion_coarse_diff2_projector_lanes_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    prehalf_weight: bool = False,
 ) -> tuple[jax.Array, jax.Array]:
     """Expose pre-atomic lanes from the shared fused coarse projector.
 
@@ -2863,6 +2909,9 @@ def relion_coarse_diff2_projector_lanes_f32(
     returns ``(diff2, lanes)`` with lanes shaped ``(B, R, 128)``.  For a
     translation ``t``, its active partials are lanes ``t + q*T`` for
     ``q < 128 // T``; the remaining lanes are positive zero.
+
+    ``prehalf_weight=True`` captures the explicit native-atomic prehalved
+    specialization; the default captures the unchanged production arithmetic.
     """
 
     compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
@@ -2896,6 +2945,7 @@ def relion_coarse_diff2_projector_lanes_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        prehalf_weight=np.int64(bool(prehalf_weight)),
     )
 
 

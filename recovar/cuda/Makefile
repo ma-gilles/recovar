@@ -89,7 +89,7 @@ check-nvcc:
 		exit 1; \
 	fi
 
-$(LIB): cuda_backproject.cu | check-nvcc
+$(LIB): cuda_backproject.cu relion_coarse_diff2_projector_body.inc | check-nvcc
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<
 

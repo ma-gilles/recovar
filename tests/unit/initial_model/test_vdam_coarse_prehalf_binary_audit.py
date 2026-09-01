@@ -25,9 +25,9 @@ def _resource(header: str, *, registers: int = 48, shared: int = 7040) -> str:
 
 
 def _fixtures(*, mutate_default_encoding: bool = False, prehalf_registers: int = 48):
-    baseline_header = f"prefix_{audit.KERNEL}{audit.BASELINE_TOKEN}_suffix"
-    default_header = f"prefix_{audit.KERNEL}{audit.DEFAULT_TOKEN}_suffix"
-    prehalf_header = f"prefix_{audit.KERNEL}{audit.PREHALF_TOKEN}_suffix"
+    baseline_header = f"prefix_{audit.DEFAULT_KERNEL}{audit.BASELINE_TOKEN}_suffix"
+    default_header = f"prefix_{audit.DEFAULT_KERNEL}{audit.DEFAULT_TOKEN}_suffix"
+    prehalf_header = f"prefix_{audit.PREHALF_KERNEL}{audit.PREHALF_TOKEN}_suffix"
     baseline_sass = _sass(baseline_header, 16)
     candidate_sass = _sass(
         default_header,
@@ -88,7 +88,7 @@ def test_binary_audit_rejects_prehalf_register_growth() -> None:
 @pytest.mark.unit
 def test_binary_audit_rejects_missing_prehalf_specialization() -> None:
     fixtures = _fixtures()
-    prehalf_header = f"Function : prefix_{audit.KERNEL}{audit.PREHALF_TOKEN}_suffix"
+    prehalf_header = f"Function : prefix_{audit.PREHALF_KERNEL}{audit.PREHALF_TOKEN}_suffix"
     fixtures["candidate_sass"] = fixtures["candidate_sass"].split(prehalf_header, 1)[0]
 
     with pytest.raises(

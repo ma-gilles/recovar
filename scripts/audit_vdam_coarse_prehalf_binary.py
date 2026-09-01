@@ -13,13 +13,14 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "recovar.vdam_coarse_prehalf_binary_audit.v1"
-KERNEL = "relion_coarse_diff2_projector_f32_kernel"
+DEFAULT_KERNEL = "relion_coarse_diff2_projector_f32_kernel"
+PREHALF_KERNEL = "relion_coarse_diff2_projector_prehalf_f32_kernel"
 BASELINE_TOKEN = "ILi16ELb0ELb0ELb0EE"
-DEFAULT_TOKEN = "ILi16ELb0ELb0ELb0ELb0EE"
-PREHALF_TOKEN = "ILi16ELb0ELb0ELb0ELb1EE"
+DEFAULT_TOKEN = BASELINE_TOKEN
+PREHALF_TOKEN = "ILi16ELb0EE"
 BASELINE_DEMANGLED = "<16,false,false,false>("
-DEFAULT_DEMANGLED = "<16,false,false,false,false>("
-PREHALF_DEMANGLED = "<16,false,false,false,true>("
+DEFAULT_DEMANGLED = BASELINE_DEMANGLED
+PREHALF_DEMANGLED = "<16,false>("
 
 
 class BinaryAuditError(ValueError):
@@ -46,6 +47,7 @@ def _normalized(value: str) -> str:
 def _matching_block(
     text: str,
     *,
+    kernel: str,
     token: str,
     demangled_token: str,
     header_pattern: re.Pattern[str],
@@ -56,7 +58,7 @@ def _matching_block(
     for index, match in enumerate(matches):
         header = match.group("header")
         normalized = _normalized(header)
-        if KERNEL not in header:
+        if kernel not in header:
             continue
         if token not in header and demangled_token not in normalized:
             continue
@@ -79,9 +81,17 @@ _RESOURCE_VALUES = re.compile(
 )
 
 
-def _sass_signature(text: str, *, token: str, demangled_token: str, label: str) -> dict[str, Any]:
+def _sass_signature(
+    text: str,
+    *,
+    kernel: str,
+    token: str,
+    demangled_token: str,
+    label: str,
+) -> dict[str, Any]:
     header, block = _matching_block(
         text,
+        kernel=kernel,
         token=token,
         demangled_token=demangled_token,
         header_pattern=_SASS_HEADER,
@@ -145,9 +155,17 @@ def _sass_comparison(reference: dict[str, Any], candidate: dict[str, Any]) -> di
     }
 
 
-def _resources(text: str, *, token: str, demangled_token: str, label: str) -> dict[str, int | str]:
+def _resources(
+    text: str,
+    *,
+    kernel: str,
+    token: str,
+    demangled_token: str,
+    label: str,
+) -> dict[str, int | str]:
     header, block = _matching_block(
         text,
+        kernel=kernel,
         token=token,
         demangled_token=demangled_token,
         header_pattern=_RESOURCE_HEADER,
@@ -173,36 +191,42 @@ def _analyze_dumps(
 ) -> dict[str, Any]:
     baseline = _sass_signature(
         baseline_sass,
+        kernel=DEFAULT_KERNEL,
         token=BASELINE_TOKEN,
         demangled_token=BASELINE_DEMANGLED,
         label="baseline atomic kernel",
     )
     default = _sass_signature(
         candidate_sass,
+        kernel=DEFAULT_KERNEL,
         token=DEFAULT_TOKEN,
         demangled_token=DEFAULT_DEMANGLED,
         label="candidate default atomic kernel",
     )
     prehalf = _sass_signature(
         candidate_sass,
+        kernel=PREHALF_KERNEL,
         token=PREHALF_TOKEN,
         demangled_token=PREHALF_DEMANGLED,
         label="candidate pre-half atomic kernel",
     )
     baseline_resource = _resources(
         baseline_resources,
+        kernel=DEFAULT_KERNEL,
         token=BASELINE_TOKEN,
         demangled_token=BASELINE_DEMANGLED,
         label="baseline atomic resources",
     )
     default_resource = _resources(
         candidate_resources,
+        kernel=DEFAULT_KERNEL,
         token=DEFAULT_TOKEN,
         demangled_token=DEFAULT_DEMANGLED,
         label="candidate default atomic resources",
     )
     prehalf_resource = _resources(
         candidate_resources,
+        kernel=PREHALF_KERNEL,
         token=PREHALF_TOKEN,
         demangled_token=PREHALF_DEMANGLED,
         label="candidate pre-half atomic resources",
