@@ -1998,7 +1998,46 @@
           },
           "repair_scope": "Replace the underpowered 4+4 design with a crossed 6+6 three-block panel, separately reject directional centroid drift and nondirectional variance growth, aggregate continuous-state squared-distance Grams as a direct sum, use label-invariant map scaling, make resume evidence append-only, and seal every launch input before fresh independent review."
         },
-        "long_trajectory_blocker": "The first sealed true-200 harness at 09d11dba7979 received independent NO-GO and was not submitted: its 4+4 complement-symmetric no-growth statistic cannot reject at alpha 0.05, a final-only lane shift 10x control noise passed, continuous-state feature aggregation distorted direct-sum geometry, resume evidence was not append-only, and launch inputs were not fully resolved. Repair and independently review the crossed 6+6 gate before any long submission."
+        "true_200_repaired_harness_review": {
+          "repair_commit": "c355334d67bcb574bb82cdb9d2b055d7c0dab836",
+          "sealed_commit": "af9f91743b3e84c33a83df4501d4ce41726c20dd",
+          "review_result": "NO_GO_NOT_SUBMITTED",
+          "slurm_job_submitted": false,
+          "frozen_scores_changed": false,
+          "launch_manifest_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_batched_lanes_true200_gate_af9f91743_20260901/launch/launch_manifest.json",
+          "launch_manifest_sha256": "c58bd0fff5d6fd26ccf10674020b19ecef26a222db1a85214ca584b04f48c077",
+          "source_manifest_sha256": "b7bc014b0122a01233d80ac3c37ee954b61e12647ef4aa174ce59118cf3b23cb",
+          "native_map_aggregate_sha256": "b33b1e959fd625e3ddb29caf88f75694c5c78b728689ed3d404f06d1c811ac16",
+          "design": {
+            "arms": "6+6",
+            "balanced_blocks": 3,
+            "blocked_assignments": 216,
+            "complement_pair_minimum_exact_p": 0.009259259259259259
+          },
+          "cleared_findings": [
+            "append-only per-job resume provenance and incomplete-arm quarantine",
+            "direct-sum squared-Euclidean continuous-state geometry with RELION Euler matrices and no PSD clipping",
+            "all-arm pooled label-invariant map scaling",
+            "exact discrete-state gates",
+            "fully resolved and independently rehashed launch inputs",
+            "truthful 14-GPU-hour resource estimate"
+          ],
+          "blocking_finding": {
+            "classification": "no_growth_joint_test_underpowered_on_valid_higher_dimensional_alternatives",
+            "final_only_centroid_shift_multiplier": 10.0,
+            "final_only_endpoint_p": 0.009259259259259259,
+            "final_only_joint_p": 0.13425925925925927,
+            "smooth_ramp_joint_p": 0.13425925925925927,
+            "variance_growth_multiplier": 10.0,
+            "variance_endpoint_p": 0.004629629629629629,
+            "variance_joint_p": 0.06481481481481481,
+            "exchangeable_null_panels": 48,
+            "exchangeable_null_false_rejections": 0,
+            "interpretation": "The max over 14 heterogeneous endpoints is too conservative: authored rank-one adversaries fail, but valid three-dimensional terminal shift, ramp, and variance-growth panels can pass the separate no-growth gate."
+          },
+          "repair_scope": "Keep the 14 endpoints as diagnostics, replace their underpowered omnibus acceptance role with predeclared powered centroid-drift and complement-symmetric absolute variance-gap families under explicit familywise error control, add higher-dimensional alternatives and exchangeable-null tests, then obtain another independent review before Slurm."
+        },
+        "long_trajectory_blocker": "The first 4+4 seal and the repaired 6+6 seal both received independent NO-GO and neither was submitted. The 6+6 repair clears provenance, direct-sum geometry, label invariance, launch resolution, discrete gates, and exact-p resolution, but its max-over-14 no-growth statistic remains underpowered on valid higher-dimensional 10x terminal-shift, ramp, and variance-growth alternatives. Replace that omnibus acceptance role with powered predeclared drift and complement-symmetric absolute variance-gap families under familywise error control and independently re-review before spending the 14 GPU-hours."
       },
       "prior_experimental_combined_gate": {
         "job_id": "13284729",
@@ -2047,7 +2086,7 @@
       },
       "integration_caveat": "The clean tracking-derived port preserves shared EM/VDAM atomic math and improves warm wall 9.03%, but its frozen n=2 maximum-cross-versus-maximum-within smoke gate failed by 16.30% cold and 7.66% warm. The immutable report remains a strict FAIL even though discrete outputs are exact and bias, scale, and cross/within relative-L2 interleaving support a bounded roundoff hypothesis.",
       "decision": "REPLICATED_ROUNDOFF_AND_RUNTIME_PASS_AFTER_INDEPENDENT_SERIALIZER_RECOVERY_REVIEW",
-      "next_gate": "Keep the frozen n=2 strict result visibly failed. The first true-200 seal 09d11dba7979 received independent NO-GO and was not submitted. Repair it as a same-binary crossed 6+6 directional-drift, variance-growth, basin, final-quality, append-only provenance, launch-input, and end-to-end runtime gate; obtain a fresh independent review before Slurm and do not enable the default."
+      "next_gate": "Keep the frozen n=2 strict result visibly failed. The repaired crossed 6+6 seal af9f91743 received independent NO-GO and was not submitted because its max-over-14 no-growth acceptance statistic is underpowered on valid higher-dimensional 10x drift/variance alternatives. Replace that omnibus acceptance role with powered predeclared drift and complement-symmetric absolute variance-gap families under familywise error control, add the counterexamples and exchangeable nulls, obtain another independent review, and only then submit Slurm. Do not enable the default."
     },
     "direct_relion_xhalf": {
       "status": "MATH_ACCEPTED_PERFORMANCE_REJECTED",

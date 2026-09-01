@@ -438,7 +438,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "79dc4298da92b90f88137595634b8ac69e76c9f2d04f381567a2d6d7ec29d199"
+PERFORMANCE_GATE_UPDATES_SHA256 = "8d075291dcf0c500f6bb25755ed00026e2b9ebdf7969581bb5e7a0004028aa10"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -792,6 +792,13 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
     fixed_executor = gate_updates.get("local_compile_shape_decomposition", {}) if isinstance(gate_updates, dict) else {}
     fixed_progress = fixed_executor.get("implementation_progress", {})
     fixed_score_gate = fixed_progress.get("h100_score_correctness_gate", {})
+    repaired_true200 = (
+        gate_updates.get("coarse_atomic_batched_lanes", {})
+        .get("replicated_roundoff_equivalence_gate", {})
+        .get("true_200_repaired_harness_review", {})
+        if isinstance(gate_updates, dict)
+        else {}
+    )
     _require(
         isinstance(gate_updates, dict)
         and gate_updates.get("role") == "diagnostic_performance"
@@ -910,6 +917,20 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         .get("blocking_findings", {})
         .get("synthetic_final_lane_shift_map_gate_passed_incorrectly")
         is True
+        and repaired_true200.get("sealed_commit")
+        == "af9f91743b3e84c33a83df4501d4ce41726c20dd"
+        and repaired_true200.get("review_result") == "NO_GO_NOT_SUBMITTED"
+        and repaired_true200.get("slurm_job_submitted") is False
+        and repaired_true200.get("launch_manifest_sha256")
+        == "c58bd0fff5d6fd26ccf10674020b19ecef26a222db1a85214ca584b04f48c077"
+        and repaired_true200.get("source_manifest_sha256")
+        == "b7bc014b0122a01233d80ac3c37ee954b61e12647ef4aa174ce59118cf3b23cb"
+        and repaired_true200.get("design", {}).get("blocked_assignments") == 216
+        and repaired_true200.get("blocking_finding", {}).get("final_only_endpoint_p") == 2 / 216
+        and repaired_true200.get("blocking_finding", {}).get("final_only_joint_p") == 29 / 216
+        and repaired_true200.get("blocking_finding", {}).get("variance_endpoint_p") == 1 / 216
+        and repaired_true200.get("blocking_finding", {}).get("variance_joint_p") == 14 / 216
+        and repaired_true200.get("blocking_finding", {}).get("exchangeable_null_false_rejections") == 0
         and gate_updates.get("coarse_atomic_batched_lanes", {}).get(
             "replicated_roundoff_equivalence_gate", {}
         ).get("job_id")
@@ -1099,6 +1120,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     batched_repeat_science = batched_repeat_panel["science"]
     batched_repeat_performance = batched_repeat_panel["performance"]
     true200_review = batched_repeat_panel["true_200_harness_review"]
+    true200_repaired_review = batched_repeat_panel["true_200_repaired_harness_review"]
     direct_xhalf_gate = gate_updates["direct_relion_xhalf"]
     posterior_executor_gate = gate_updates["shared_posterior_executor"]
     remaining_profile = gate_updates["remaining_profile_decomposition"]
@@ -1143,8 +1165,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "the clean tracking-derived native-atomic T=29 batched-lane port cuts warm wall about 9%, but its frozen "
         "two-repeat maximum-envelope smoke gate fails narrowly. The separate 8+8 panel passes its numerical and "
         "material-runtime gates after an independently reviewed serializer-only recovery. The path remains "
-        "default-off. The first sealed true-200 harness received independent NO-GO and was not submitted; its "
-        "underpowered statistics and provenance defects are being repaired as a crossed 6+6 gate. |",
+        "default-off. The first 4+4 true-200 seal and its crossed 6+6 repair both received independent NO-GO and "
+        "neither was submitted. The 6+6 seal clears provenance, geometry, and launch resolution, but its "
+        "max-over-14 no-growth acceptance statistic is underpowered on valid higher-dimensional drift/variance "
+        "alternatives. |",
         "| Numerical policy | non-scoring | Mathematical equivalence is required; bitwise identity is not a universal "
         "requirement. Tiny differences are acceptable only as stable, unbiased, non-growing, repeat-bounded noise "
         "that preserves discrete choices, basin, and final quality, and only with a material, large, reproducible "
@@ -1221,8 +1245,13 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "COMPLETED marker remain preserved. Recovered JSON SHA-256 "
         f"`{batched_repeat_panel['report_json_sha256']}`; recovery provenance SHA-256 "
         f"`{batched_repeat_panel['recovery_provenance_sha256']}`. The frozen n=2 rejection is not overwritten. "
-        f"The first true-200 seal `{true200_review['sealed_commit'][:12]}` was independently "
-        f"**{true200_review['review_result'].replace('_', ' ')}** and no Slurm job was submitted. | "
+        f"The first true-200 seal `{true200_review['sealed_commit'][:12]}` and repaired 6+6 seal "
+        f"`{true200_repaired_review['sealed_commit'][:12]}` were independently "
+        f"**{true200_repaired_review['review_result'].replace('_', ' ')}**; no Slurm job was submitted. The "
+        f"repaired seal's manifest is `{true200_repaired_review['launch_manifest_sha256']}`, while its valid 10x "
+        f"terminal-shift counterexample has endpoint p="
+        f"`{true200_repaired_review['blocking_finding']['final_only_endpoint_p']:.6f}` but underpowered joint p="
+        f"`{true200_repaired_review['blocking_finding']['final_only_joint_p']:.6f}`. | "
         f"{batched_repeat_panel['long_trajectory_blocker']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
@@ -1655,9 +1684,12 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "but immutable job 13285647 remains a frozen two-repeat strict FAIL. The separately predeclared 8+8 "
             f"panel `{batched_repeat_panel['job_id']}` passes after independently reviewed serializer-only recovery "
             f"at `{batched_repeat_panel['serializer_recovery_commit'][:10]}`. The first true-200 seal "
-            f"`{true200_review['sealed_commit'][:12]}` received independent NO-GO and was not submitted. Repair it "
-            "as a crossed 6+6 no-growth, variance-growth, basin, final-quality, provenance, and end-to-end runtime "
-            "gate, then obtain a fresh independent review before Slurm.",
+            f"`{true200_review['sealed_commit'][:12]}` and repaired 6+6 seal "
+            f"`{true200_repaired_review['sealed_commit'][:12]}` both received independent NO-GO and neither was "
+            "submitted. Replace the repaired seal's underpowered max-over-14 acceptance statistic with powered "
+            "predeclared terminal-drift and complement-symmetric absolute variance-gap families under familywise "
+            "error control, add the independent higher-dimensional counterexamples/null panels, and obtain another "
+            "independent review before Slurm.",
             "2. Keep direct x-half default-off: it is mathematically qualified and makes finalization 85.40% faster, "
             "but finalization is too small and warm wall improves only 2.12%. Preserve the primitive for a future "
             "larger fused finalization redesign; do not spend a trajectory on it alone.",

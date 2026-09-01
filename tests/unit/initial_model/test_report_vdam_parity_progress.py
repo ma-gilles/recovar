@@ -227,6 +227,22 @@ def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(score
     )
     assert true200_review["blocking_findings"]["synthetic_final_lane_shift_map_gate_passed_incorrectly"] is True
     assert "crossed 6+6" in true200_review["repair_scope"]
+    repaired_review = repeat_panel["true_200_repaired_harness_review"]
+    assert repaired_review["sealed_commit"] == "af9f91743b3e84c33a83df4501d4ce41726c20dd"
+    assert repaired_review["review_result"] == "NO_GO_NOT_SUBMITTED"
+    assert repaired_review["slurm_job_submitted"] is False
+    assert repaired_review["launch_manifest_sha256"] == (
+        "c58bd0fff5d6fd26ccf10674020b19ecef26a222db1a85214ca584b04f48c077"
+    )
+    assert repaired_review["design"]["blocked_assignments"] == 216
+    assert repaired_review["design"]["complement_pair_minimum_exact_p"] == pytest.approx(2 / 216)
+    blocker = repaired_review["blocking_finding"]
+    assert blocker["final_only_endpoint_p"] == pytest.approx(2 / 216)
+    assert blocker["final_only_joint_p"] == pytest.approx(29 / 216)
+    assert blocker["variance_endpoint_p"] == pytest.approx(1 / 216)
+    assert blocker["variance_joint_p"] == pytest.approx(14 / 216)
+    assert blocker["exchangeable_null_false_rejections"] == 0
+    assert "familywise error control" in repaired_review["repair_scope"]
     incremental = gate["incremental_atomic_serial_gate"]
     assert gate["incremental_atomic_baseline_evaluated"] is True
     assert gate["tracking_derived_port_evaluated"] is True
@@ -252,7 +268,8 @@ def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(score
     assert "The frozen n=2 rejection is not overwritten" in rendered
     assert "09d11dba7979" in rendered
     assert "NO GO NOT SUBMITTED" in rendered
-    assert "crossed 6+6" in rendered
+    assert "repaired 6+6 seal `af9f91743b3e`" in rendered
+    assert "endpoint p=`0.009259` but underpowered joint p=`0.134259`" in rendered
 
 
 def test_suite_definition_identity_and_bytes_are_frozen() -> None:
