@@ -139,6 +139,78 @@ def test_subset_star_is_deterministic_and_uses_absolute_stack(tmp_path):
     assert particles["_rlnImageName"].tolist() == [f"1@{stack}", f"2@{stack}"]
 
 
+def test_iteration0_continuation_bundle_restores_preinitialisation_offsets(tmp_path):
+    pair = tmp_path / "pair"
+    output = tmp_path / "output"
+    pair.mkdir()
+    model = pair / "run_it000_model.star"
+    data = pair / "run_it000_data.star"
+    model.write_text("model\n")
+    data.write_text("data\n")
+    missing_sampling = pair / "run_it000_sampling.star"
+    optimiser = pair / "run_it000_optimiser.star"
+    optimiser.write_text(
+        "data_optimiser_general\n\n"
+        f"_rlnModelStarFile {model}\n"
+        f"_rlnExperimentalDataStarFile {data}\n"
+        f"_rlnOrientSamplingStarFile {missing_sampling}\n"
+    )
+    sampling = pair / "run_it001_sampling.star"
+    sampling.write_text(
+        "data_sampling_general\n\n"
+        "_rlnHealpixOrder 1\n"
+        "_rlnSymmetryGroup C1\n"
+        "_rlnPsiStep 30.000000\n"
+        "_rlnOffsetRange 9.825000\n"
+        "_rlnOffsetStep 3.275000\n"
+        "_rlnSamplingPerturbInstance -0.07991\n"
+        "_rlnSamplingPerturbFactor 0.500000\n"
+        "_rlnOffsetRangeOriginal 9.825000\n"
+        "_rlnOffsetStepOriginal 3.275000\n"
+    )
+
+    replay_optimiser, replay_sampling, provenance = launcher.materialize_iteration0_continuation_bundle(
+        source_optimiser=optimiser,
+        source_sampling=sampling,
+        output_dir=output,
+    )
+
+    metadata = launcher.read_relion_sampling_metadata(replay_sampling)
+    assert metadata["offset_range"] == 6.0
+    assert metadata["offset_step"] == 2.0
+    assert metadata["random_perturbation"] == 0.0
+    replay_text = replay_optimiser.read_text()
+    assert launcher._star_scalar(replay_text, "_rlnOrientSamplingStarFile") == str(replay_sampling.resolve())
+    assert launcher._star_scalar(replay_text, "_rlnModelStarFile") == str(model)
+    assert provenance["method"].startswith("iteration-1 topology")
+
+
+def test_iteration0_continuation_bundle_rejects_angstrom_geometry_drift(tmp_path):
+    model = tmp_path / "run_it000_model.star"
+    data = tmp_path / "run_it000_data.star"
+    model.touch()
+    data.touch()
+    optimiser = tmp_path / "run_it000_optimiser.star"
+    optimiser.write_text(
+        f"_rlnModelStarFile {model}\n"
+        f"_rlnExperimentalDataStarFile {data}\n"
+        f"_rlnOrientSamplingStarFile {tmp_path / 'run_it000_sampling.star'}\n"
+    )
+    sampling = tmp_path / "run_it001_sampling.star"
+    sampling.write_text(
+        "_rlnHealpixOrder 1\n_rlnSymmetryGroup C1\n_rlnPsiStep 30\n"
+        "_rlnOffsetRange 9.9\n_rlnOffsetStep 3.275\n"
+        "_rlnSamplingPerturbInstance 0\n_rlnSamplingPerturbFactor 0.5\n"
+        "_rlnOffsetRangeOriginal 9.9\n_rlnOffsetStepOriginal 3.275\n"
+    )
+    with pytest.raises(launcher.PreflightError, match="offset range drift"):
+        launcher.materialize_iteration0_continuation_bundle(
+            source_optimiser=optimiser,
+            source_sampling=sampling,
+            output_dir=tmp_path / "output",
+        )
+
+
 def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     args = argparse.Namespace(
         output_root=tmp_path / "run",
@@ -154,6 +226,7 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
         mem="192G",
         time_limit="02:00:00",
         cuda_module="cudatoolkit/12.8",
+        native_smoke_only=False,
     )
     script = launcher.render_sbatch(
         args, expected_head="a" * 40, manifest_path=args.output_root / "launch_manifest.json"
@@ -165,6 +238,8 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "run_native_arm control_a 0" in script
     assert "run_native_arm control_b 0" in script
     assert "srun --mpi=pmix --ntasks=3" in script
+    assert "inputs/continuation/run_it000_optimiser_replay.star" in script
+    assert "pair/relion/run_it000_optimiser.star" not in script
     assert 'for class_id in 1 2 3 4; do run_native_arm "class${class_id}"' in script
     assert "--data-star" in script and "particles_shared200.star" in script
     assert "-eq 800" in script
@@ -183,6 +258,35 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert 'export CMAKE_LIBRARY_PATH="${PIXI_ENV_ROOT}/lib:' in script
 
 
+def test_rendered_native_smoke_exits_after_one_continuation_arm(tmp_path):
+    args = argparse.Namespace(
+        output_root=tmp_path / "run",
+        runtime_root=tmp_path / "runtime",
+        control_pair_root=tmp_path / "pair",
+        fixture_dir=tmp_path / "fixture",
+        pixi_python=tmp_path / "python",
+        relion_bind_source=tmp_path / "relion-src",
+        relion_capture_binary=tmp_path / "relion_refine_mpi",
+        partition="cryoem",
+        account="gilles",
+        constraint="h100",
+        mem="192G",
+        time_limit="02:00:00",
+        cuda_module="cudatoolkit/12.8",
+        native_smoke_only=True,
+    )
+    script = launcher.render_sbatch(
+        args, expected_head="a" * 40, manifest_path=args.output_root / "launch_manifest.json"
+    )
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+    first_arm = script.index("run_native_arm control_a 0")
+    smoke_exit = script.index("exit 0", first_arm)
+    second_arm = script.index("run_native_arm control_b 0")
+    assert first_arm < smoke_exit < second_arm
+    assert "run_it001_sampling.star" in script
+    assert "RELION_SAMPLING_PERTURBATION_OVERRIDE" in script
+
+
 def test_manifest_record_rejects_checksum_drift(tmp_path):
     path = tmp_path / "input"
     path.write_text("sealed")
@@ -196,3 +300,19 @@ def test_manifest_record_rejects_checksum_drift(tmp_path):
 def test_cli_is_dry_run_by_default(tmp_path):
     args = launcher.parse_args(["--output-root", str(tmp_path / "run")])
     assert args.submit is False
+    assert args.native_smoke_only is False
+
+
+def test_input_closure_includes_gradient_moment_maps(tmp_path):
+    args = argparse.Namespace(
+        fixture_dir=tmp_path / "fixture",
+        shared_set=tmp_path / "shared.json",
+        control_pair_root=tmp_path / "pair",
+        relion_capture_binary=tmp_path / "relion_refine_mpi",
+        relion_bind_source=tmp_path / "relion-src",
+        pixi_python=tmp_path / "python",
+    )
+    roles = {role for role, _ in launcher._input_paths(args)}
+    for class_id in range(1, 5):
+        assert f"RELION initial first moment {class_id}" in roles
+        assert f"RELION initial second moment {class_id}" in roles

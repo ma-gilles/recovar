@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -25,9 +26,10 @@ from typing import Any, Iterable
 import numpy as np
 
 from recovar.data_io.starfile import read_star
+from recovar.em.sampling import read_relion_sampling_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v1"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v2"
 TARGET_SCHEMA = "recovar.em_real_k4_shared200_targets.v1"
 SHARED_SET_SCHEMA = "recovar.em_real_kclass_shared_visited_subset.v1"
 
@@ -75,6 +77,9 @@ class FrozenCase:
     healpix_order: int = 1
     random_seed: int = 0
     random_perturbation: float = -0.07990610599517822
+    pixel_size_angstrom: float = 1.6375
+    offset_range_pixels: float = 6.0
+    offset_step_pixels: float = 2.0
     image_batch_size: int = 50
     rotation_block_size: int = 5000
 
@@ -178,6 +183,115 @@ def _validate_record(record: dict[str, Any]) -> None:
     _require(path.stat().st_size == int(record.get("size_bytes", -1)), f"input size drift: {path}")
     observed = _sha256(path)
     _require(observed == record.get("sha256"), f"input checksum drift: {path}: {observed}")
+
+
+def _star_scalar(text: str, label: str) -> str:
+    match = re.search(rf"(?m)^{re.escape(label)}\s+(\S+)\s*$", text)
+    _require(match is not None, f"STAR scalar is missing: {label}")
+    return match.group(1)
+
+
+def _replace_star_scalar(text: str, label: str, value: object) -> str:
+    pattern = re.compile(rf"(?m)^({re.escape(label)}\s+)\S+(\s*)$")
+    updated, count = pattern.subn(rf"\g<1>{value}\g<2>", text)
+    _require(count == 1, f"expected exactly one {label}, observed {count}")
+    return updated
+
+
+def materialize_iteration0_continuation_bundle(
+    *,
+    source_optimiser: Path,
+    source_sampling: Path,
+    output_dir: Path,
+) -> tuple[Path, Path, dict[str, Any]]:
+    """Create the missing, pre-initialisation RELION iteration-0 sampling state.
+
+    RELION deliberately writes the iteration-0 optimiser without its referenced
+    sampling STAR.  Continuing from that optimiser is therefore unsupported
+    unless the pre-initialisation sampling state is reconstructed.  The saved
+    iteration-1 sampling file proves the exact topology and Angstrom-valued
+    geometry.  For an iteration-0 continuation, however, ``initialiseGeneral``
+    multiplies the current offset range and step by the model pixel size.  We
+    therefore seal the corresponding command-line pixel values here.  RELION's
+    ``HealpixSampling::read`` does not restore ``random_perturbation``; the live
+    iteration-1 value is independently forced and checked by the capture binary.
+    """
+
+    source_metadata = read_relion_sampling_metadata(source_sampling)
+    expected_range_angstrom = CASE.offset_range_pixels * CASE.pixel_size_angstrom
+    expected_step_angstrom = CASE.offset_step_pixels * CASE.pixel_size_angstrom
+    _require(source_metadata["healpix_order"] == CASE.healpix_order, "source sampling order drift")
+    _require(
+        np.isclose(source_metadata["offset_range"], expected_range_angstrom, rtol=0.0, atol=1.0e-7),
+        "source sampling offset range drift",
+    )
+    _require(
+        np.isclose(source_metadata["offset_step"], expected_step_angstrom, rtol=0.0, atol=1.0e-7),
+        "source sampling offset step drift",
+    )
+    _require(
+        np.isclose(source_metadata["perturbation_factor"], 0.5, rtol=0.0, atol=1.0e-12),
+        "source sampling perturbation factor drift",
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    derived_sampling = output_dir / "run_it000_sampling_replay.star"
+    sampling_text = source_sampling.read_text()
+    _require(_star_scalar(sampling_text, "_rlnSymmetryGroup").upper() == CASE.symmetry, "sampling symmetry drift")
+    replacements = {
+        "_rlnOffsetRange": f"{CASE.offset_range_pixels:.6f}",
+        "_rlnOffsetStep": f"{CASE.offset_step_pixels:.6f}",
+        "_rlnOffsetRangeOriginal": f"{CASE.offset_range_pixels:.6f}",
+        "_rlnOffsetStepOriginal": f"{CASE.offset_step_pixels:.6f}",
+        "_rlnSamplingPerturbInstance": "0.000000",
+    }
+    for label, value in replacements.items():
+        sampling_text = _replace_star_scalar(sampling_text, label, value)
+    derived_sampling.write_text(sampling_text)
+    derived_metadata = read_relion_sampling_metadata(derived_sampling)
+    _require(derived_metadata["offset_range"] == CASE.offset_range_pixels, "derived offset range drift")
+    _require(derived_metadata["offset_step"] == CASE.offset_step_pixels, "derived offset step drift")
+    _require(derived_metadata["random_perturbation"] == 0.0, "derived perturbation must be clear")
+
+    optimiser_text = source_optimiser.read_text()
+    source_sampling_reference = Path(_star_scalar(optimiser_text, "_rlnOrientSamplingStarFile"))
+    _require(
+        source_sampling_reference.name == "run_it000_sampling.star" and not source_sampling_reference.exists(),
+        "iteration-0 optimiser no longer has the expected missing sampling boundary",
+    )
+    expected_pair_dir = source_optimiser.parent.resolve()
+    for label, filename in (
+        ("_rlnModelStarFile", "run_it000_model.star"),
+        ("_rlnExperimentalDataStarFile", "run_it000_data.star"),
+    ):
+        dependency = Path(_star_scalar(optimiser_text, label))
+        _require(dependency.resolve() == expected_pair_dir / filename, f"iteration-0 dependency drift: {label}")
+        _require(dependency.is_file(), f"iteration-0 dependency is missing: {dependency}")
+    derived_optimiser = output_dir / "run_it000_optimiser_replay.star"
+    optimiser_text = _replace_star_scalar(
+        optimiser_text,
+        "_rlnOrientSamplingStarFile",
+        derived_sampling.resolve(),
+    )
+    derived_optimiser.write_text(optimiser_text)
+    _require(
+        Path(_star_scalar(derived_optimiser.read_text(), "_rlnOrientSamplingStarFile")).resolve()
+        == derived_sampling.resolve(),
+        "derived optimiser sampling reference drift",
+    )
+    provenance = {
+        "method": "iteration-1 topology with iteration-0 pre-initialisation pixel offsets",
+        "source_sampling": _file_record(source_sampling, role="RELION iteration-1 sampling topology source"),
+        "source_optimiser": _file_record(source_optimiser, role="RELION iteration-0 optimiser source"),
+        "derived_sampling": _file_record(derived_sampling, role="sealed RELION iteration-0 replay sampling"),
+        "derived_optimiser": _file_record(derived_optimiser, role="sealed RELION iteration-0 replay optimiser"),
+        "source_offset_range_angstrom": source_metadata["offset_range"],
+        "source_offset_step_angstrom": source_metadata["offset_step"],
+        "derived_offset_range_pixels": derived_metadata["offset_range"],
+        "derived_offset_step_pixels": derived_metadata["offset_step"],
+        "live_iteration_1_perturbation_override": CASE.random_perturbation,
+    }
+    return derived_optimiser, derived_sampling, provenance
 
 
 def _assigned_stack_indices(path: Path) -> set[int]:
@@ -302,6 +416,9 @@ def _fixed_case_record() -> dict[str, Any]:
         "healpix_order": CASE.healpix_order,
         "random_seed": CASE.random_seed,
         "random_perturbation": CASE.random_perturbation,
+        "pixel_size_angstrom": CASE.pixel_size_angstrom,
+        "offset_range_pixels": CASE.offset_range_pixels,
+        "offset_step_pixels": CASE.offset_step_pixels,
         "image_batch_size": CASE.image_batch_size,
         "rotation_block_size": CASE.rotation_block_size,
     }
@@ -396,9 +513,41 @@ def _input_paths(args: argparse.Namespace) -> list[tuple[str, Path]]:
                     f"RELION target class {class_one_based}",
                     pair / f"relion/run_it001_class{class_one_based:03d}.mrc",
                 ),
+                (
+                    f"RELION initial first moment {class_one_based}",
+                    pair / f"relion/run_it000_1moment{class_one_based:03d}.mrc",
+                ),
+                (
+                    f"RELION initial second moment {class_one_based}",
+                    pair / f"relion/run_it000_2moment{class_one_based:03d}.mrc",
+                ),
             )
         )
     return paths
+
+
+def _validate_iteration0_dependency_closure(args: argparse.Namespace) -> None:
+    pair = args.control_pair_root / "relion"
+    model_text = (pair / "run_it000_model.star").read_text()
+    observed_model_files = {
+        Path(token).resolve()
+        for token in re.findall(r"(?<!@)(/\S+\.mrc)(?=\s|$)", model_text)
+    }
+    expected_model_files = {
+        (pair / f"run_it000_{kind}{class_id:03d}.mrc").resolve()
+        for class_id in range(1, CASE.K + 1)
+        for kind in ("class", "1moment", "2moment")
+    }
+    _require(
+        observed_model_files == expected_model_files,
+        "RELION iteration-0 model dependency closure drift",
+    )
+    _require(all(path.is_file() for path in observed_model_files), "RELION iteration-0 model dependency is missing")
+
+    data_text = (pair / "run_it000_data.star").read_text()
+    stack_references = set(re.findall(r"\d+@(\S+\.mrcs)(?=\s|$)", data_text))
+    _require(stack_references == {"particles.256.mrcs"}, "RELION iteration-0 particle-stack closure drift")
+    _require((args.fixture_dir / "particles.256.mrcs").is_file(), "RELION iteration-0 particle stack is missing")
 
 
 def preflight(args: argparse.Namespace) -> dict[str, Any]:
@@ -424,6 +573,7 @@ def preflight(args: argparse.Namespace) -> dict[str, Any]:
         _sha256(args.relion_capture_binary) == EXPECTED_CAPTURE_RELION_BINARY_SHA256,
         "capture RELION binary drift",
     )
+    _validate_iteration0_dependency_closure(args)
 
     selected, optics, target_record = _shared_target_rows(
         fixture_star=args.fixture_dir / "particles.star",
@@ -462,6 +612,7 @@ def render_sbatch(args: argparse.Namespace, *, expected_head: str, manifest_path
     cuda_lib = run_root / "build/cuda/libcuda_backproject.so"
     subset_star = run_root / "inputs/particles_shared200.star"
     targets = run_root / "inputs/frozen_targets.json"
+    replay_optimiser = run_root / "inputs/continuation/run_it000_optimiser_replay.star"
     target_loader = (
         "import json,pathlib; p=json.loads(pathlib.Path(" + repr(str(targets)) + ").read_text()); "
         "print(','.join(map(str,p['stack_indices_one_based'])))"
@@ -500,6 +651,13 @@ def render_sbatch(args: argparse.Namespace, *, expected_head: str, manifest_path
     ]
     continuation = " \\\n  "
     recovar_text = continuation.join(_quote(value) for value in recovar_command)
+    native_smoke_exit = ""
+    if args.native_smoke_only:
+        native_smoke_exit = """test -s "${ROOT}/native/control_a/output/run_it001_sampling.star"
+find "${ROOT}/native/control_a" -type f -print0 \\
+  | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
+exit 0
+"""
     return f"""#!/usr/bin/env bash
 #SBATCH --job-name=real-k4-shared200
 #SBATCH --output={_quote(run_root / "logs/replay-%j.out")}
@@ -613,7 +771,7 @@ run_native_arm() {{
   fi
   local command=(
     srun --mpi=pmix --ntasks=3 --cpus-per-task=2 --cpu-bind=none {_quote(args.relion_capture_binary)}
-    --continue {_quote(pair / "relion/run_it000_optimiser.star")}
+    --continue {_quote(replay_optimiser)}
     --o "${{arm_root}}/output/run" --iter 1 --auto_iter_max 1 --pool 3 --gpu 0:0:0 --j 2
   )
   printf '%q ' "${{command[@]}}" > "${{ROOT}}/provenance/command_${{arm}}_${{SLURM_JOB_ID}}.sh"
@@ -622,6 +780,9 @@ run_native_arm() {{
     > "${{arm_root}}/output/runner.stdout" 2> "${{arm_root}}/output/runner.stderr"
   for class_id in 001 002 003 004; do test -s "${{arm_root}}/output/run_it001_class${{class_id}}.mrc"; done
   test -s "${{arm_root}}/output/run_it001_data.star"
+  test -s "${{arm_root}}/output/run_it001_sampling.star"
+  grep -Fq '[RELION_SAMPLING_PERTURBATION_OVERRIDE] iter 1 requested' "${{arm_root}}/output/runner.stdout"
+  {_quote(python)} -c "from recovar.em.sampling import read_relion_sampling_metadata as r; m=r('${{arm_root}}/output/run_it001_sampling.star'); assert m['healpix_order']=={CASE.healpix_order}; assert abs(m['offset_range']-{CASE.offset_range_pixels * CASE.pixel_size_angstrom})<1e-7; assert abs(m['offset_step']-{CASE.offset_step_pixels * CASE.pixel_size_angstrom})<1e-7; assert abs(m['random_perturbation']-({CASE.random_perturbation}))<1e-5"
   if [[ "${{capture_class}}" = 0 ]]; then
     test -z "$(find "${{arm_root}}/factors" -mindepth 1 -print -quit)"
   else
@@ -631,6 +792,7 @@ run_native_arm() {{
 }}
 
 run_native_arm control_a 0
+{native_smoke_exit}
 run_native_arm control_b 0
 for class_id in 1 2 3 4; do run_native_arm "class${{class_id}}" "${{class_id}}"; done
 
@@ -662,8 +824,16 @@ exit "${{audit_status}}"
 """
 
 
-def _expected_outputs(run_root: Path) -> dict[str, Any]:
+def _expected_outputs(run_root: Path, *, native_smoke_only: bool) -> dict[str, Any]:
+    if native_smoke_only:
+        return {
+            "mode": "native-smoke",
+            "native_control": str(run_root / "native/control_a/output"),
+            "native_iteration_1_class_maps": CASE.K,
+            "native_iteration_1_sampling": str(run_root / "native/control_a/output/run_it001_sampling.star"),
+        }
     return {
+        "mode": "full",
         "native_controls": [str(run_root / f"native/control_{label}/output") for label in ("a", "b")],
         "native_capture_arms": {
             str(class_id): str(run_root / f"native/class{class_id}/factors") for class_id in range(1, CASE.K + 1)
@@ -690,6 +860,20 @@ def validate_manifest(path: Path) -> dict[str, Any]:
     _require(manifest.get("input_records"), "launch manifest has no input records")
     for key in ("targets", "subset_star", "sbatch_script"):
         _validate_record(manifest[key])
+    continuation = manifest.get("continuation_bundle", {})
+    for key in ("source_sampling", "source_optimiser", "derived_sampling", "derived_optimiser"):
+        _validate_record(continuation[key])
+    derived_optimiser = Path(continuation["derived_optimiser"]["path"])
+    derived_sampling = Path(continuation["derived_sampling"]["path"])
+    _require(
+        Path(_star_scalar(derived_optimiser.read_text(), "_rlnOrientSamplingStarFile")).resolve()
+        == derived_sampling.resolve(),
+        "sealed continuation sampling reference drift",
+    )
+    derived_metadata = read_relion_sampling_metadata(derived_sampling)
+    _require(derived_metadata["offset_range"] == CASE.offset_range_pixels, "sealed continuation range drift")
+    _require(derived_metadata["offset_step"] == CASE.offset_step_pixels, "sealed continuation step drift")
+    _require(derived_metadata["random_perturbation"] == 0.0, "sealed continuation perturbation drift")
     source_root = Path(manifest["source"]["root"])
     _require(_git_text(source_root, "rev-parse", "HEAD") == manifest["source"]["git_head"], "RECOVAR head drift")
     _require(_git_text(source_root, "rev-parse", "HEAD^{tree}") == manifest["source"]["git_tree"], "RECOVAR tree drift")
@@ -764,6 +948,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mem", default="192G")
     parser.add_argument("--time-limit", default="02:00:00")
     parser.add_argument("--cuda-module", default="cudatoolkit/12.8")
+    parser.add_argument("--native-smoke-only", action="store_true")
     parser.add_argument("--submit", action="store_true")
     args = parser.parse_args(argv)
     for name in (
@@ -823,6 +1008,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     reread, _ = read_star(str(subset_path))
     _require(len(reread) == CASE.particle_count, "materialized subset count drift")
+    _, _, continuation_bundle = materialize_iteration0_continuation_bundle(
+        source_optimiser=args.control_pair_root / "relion/run_it000_optimiser.star",
+        source_sampling=args.control_pair_root / "relion/run_it001_sampling.star",
+        output_dir=args.output_root / "inputs/continuation",
+    )
 
     script_path = args.output_root / "scripts/run_shared200_causal_replay.sbatch"
     script_path.write_text(
@@ -853,11 +1043,12 @@ def main(argv: list[str] | None = None) -> int:
         "fixed_case": _fixed_case_record(),
         "thresholds": THRESHOLDS,
         "controller_state": state["controller"],
+        "continuation_bundle": continuation_bundle,
         "input_records": input_records,
         "targets": _file_record(targets_path, role="frozen shared-200 target manifest"),
         "subset_star": _file_record(subset_path, role="deterministic shared-200 STAR"),
         "sbatch_script": _file_record(script_path, role="sealed Slurm launcher"),
-        "expected_outputs": _expected_outputs(args.output_root),
+        "expected_outputs": _expected_outputs(args.output_root, native_smoke_only=args.native_smoke_only),
         "requested_resources": {
             "partition": args.partition,
             "account": args.account,
@@ -873,6 +1064,7 @@ def main(argv: list[str] | None = None) -> int:
             "exclusive": False,
         },
         "capture_policy": {
+            "mode": "native-smoke" if args.native_smoke_only else "full",
             "native_repeat_controls": 2,
             "native_class_capture_arms": 4,
             "native_capture_geometry_only": True,
