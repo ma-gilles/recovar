@@ -11,12 +11,15 @@ import pytest
 from scripts import launch_em_real_k4_shared200_causal_replay_slurm as launcher
 
 
-def _particles(*, assigned: bool = False, bad_half: bool = False) -> pd.DataFrame:
+def _particles(*, assigned: bool = False, bad_half: bool = False, first_stack: int = 1) -> pd.DataFrame:
     halves = [1] * 93 + [2] * 107
     if bad_half:
         halves[-1] = 1
     values: dict[str, object] = {
-        "_rlnImageName": [f"{index}@particles.256.mrcs" for index in range(1, 201)],
+        "_rlnImageName": [
+            f"{index}@particles.256.mrcs"
+            for index in range(first_stack, first_stack + 200)
+        ],
         "_rlnRandomSubset": halves,
     }
     if assigned:
@@ -24,7 +27,7 @@ def _particles(*, assigned: bool = False, bad_half: bool = False) -> pd.DataFram
     return pd.DataFrame(values)
 
 
-def _shared(path: Path) -> None:
+def _shared(path: Path, *, first_stack: int = 1) -> None:
     path.write_text(
         json.dumps(
             {
@@ -33,7 +36,10 @@ def _shared(path: Path) -> None:
                 "same_visited_particle_ids": True,
                 "relion_assigned_count": 200,
                 "recovar_assigned_count": 200,
-                "visited_particle_ids": [f"{index}@particles.256.mrcs" for index in range(1, 201)],
+                "visited_particle_ids": [
+                    f"{index}@particles.256.mrcs"
+                    for index in range(first_stack, first_stack + 200)
+                ],
             }
         )
     )
@@ -46,11 +52,11 @@ def test_shared_target_rows_enforces_exact_set_and_half_split(monkeypatch, tmp_p
     shared = tmp_path / "shared.json"
     for path in (fixture, relion, recovar):
         path.touch()
-    _shared(shared)
+    _shared(shared, first_stack=1001)
     tables = {
-        fixture: (_particles(), pd.DataFrame({"_rlnOpticsGroup": [1]})),
-        relion: (_particles(assigned=True), None),
-        recovar: (_particles(assigned=True), None),
+        fixture: (_particles(first_stack=1001), pd.DataFrame({"_rlnOpticsGroup": [1]})),
+        relion: (_particles(assigned=True, first_stack=1001), None),
+        recovar: (_particles(assigned=True, first_stack=1001), None),
     }
     monkeypatch.setattr(launcher, "read_star", lambda value: tables[Path(value)])
 
@@ -64,7 +70,8 @@ def test_shared_target_rows_enforces_exact_set_and_half_split(monkeypatch, tmp_p
     assert len(selected) == 200
     assert optics is not None
     assert targets["half_counts"] == {"1": 93, "2": 107}
-    assert targets["original_indices_zero_based"] == list(range(200))
+    assert targets["original_indices_zero_based"] == list(range(1000, 1200))
+    assert targets["subset_local_indices_zero_based"] == list(range(200))
 
 
 @pytest.mark.parametrize("failure", ["half", "assigned"])
@@ -178,6 +185,24 @@ def test_image_identity_mapping_indexes_sparse_physical_stack_ids(tmp_path):
 
     identities = launcher.np.load(output, allow_pickle=False).astype(str)
     assert identities.tolist() == ["", f"2@{stack}", "", "", f"5@{stack}"]
+
+
+def test_subset_local_image_identity_mapping_preserves_selected_row_order(tmp_path):
+    stack = tmp_path / "particles.256.mrcs"
+    stack.touch()
+    selected = _particles().iloc[:2].copy()
+    selected["_rlnImageName"] = [f"5@{stack}", f"2@{stack}"]
+    output = tmp_path / "subset.npy"
+
+    launcher.write_subset_local_image_identity_mapping(
+        output=output,
+        selected=selected,
+        particle_stack=stack,
+    )
+
+    identities = launcher.np.load(output, allow_pickle=False)
+    assert identities.dtype.kind == "S"
+    assert identities.astype(str).tolist() == [f"5@{stack}", f"2@{stack}"]
 
 
 def test_iteration0_continuation_bundle_restores_preinitialisation_offsets(tmp_path):
@@ -294,6 +319,12 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1" in script
     assert "RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY" in script
     assert f"RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256={launcher.EXPECTED_PARTICLE_STACK_SHA256}" in script
+    assert "RECOVAR_LOCAL_ORIGINALS=" in script
+    assert "subset_local_indices_zero_based" in script
+    assert 'RECOVAR_PASS2_DUMP_ORIGINAL_INDICES="${RECOVAR_LOCAL_ORIGINALS}"' in script
+    assert 'RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES="${RECOVAR_LOCAL_ORIGINALS}"' in script
+    assert "TARGET_ORIGINALS=" not in script
+    assert "inputs/image_names_subset_local.npy" in script
     assert "unset RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF" in script
     assert "unset RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET" in script
     assert "inputs/continuation/run_it000_optimiser_replay.star" in script
@@ -415,7 +446,7 @@ def test_cli_is_dry_run_by_default(tmp_path):
     assert args.native_smoke_only is False
     assert args.relion_capture_source == launcher.DEFAULT_RELION_CAPTURE_SOURCE.resolve()
     assert args.relion_capture_binary == launcher.DEFAULT_RELION_CAPTURE_BINARY.resolve()
-    assert launcher.SCHEMA == "recovar.em_real_k4_shared200_causal_replay_launch.v4"
+    assert launcher.SCHEMA == "recovar.em_real_k4_shared200_causal_replay_launch.v5"
     assert str(launcher.DEFAULT_RELION_CAPTURE_ROOT).endswith(
         "/relion_empty_support_capture_20260901"
     )

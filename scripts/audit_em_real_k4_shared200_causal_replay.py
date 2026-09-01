@@ -36,7 +36,7 @@ from scripts.summarize_em_completion_bench import (
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v2"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v3"
 PASS2_NAME = re.compile(r"pass2_orig(?P<original>[0-9]{6})_class(?P<class_>[0-9]{3})_cs(?P<size>[0-9]{3})[.]npz")
 FACTOR_NAME = re.compile(
     r"part(?P<part>[0-9]+)_stack(?P<stack>[0-9]+)_img(?P<img>[0-9]+)_class(?P<class_>[0-9]+)[.]bpre-v2[.]bin"
@@ -129,11 +129,16 @@ def _score_key(path: Path) -> tuple[int, int]:
     return int(match["stack"]), int(match["class_"])
 
 
-def _pass2_key(path: Path) -> tuple[int, int]:
+def _pass2_key(path: Path, *, subset_local_to_stack: list[int]) -> tuple[int, int]:
     match = PASS2_NAME.fullmatch(path.name)
     _require(match is not None, f"unexpected RECOVAR pass-2 filename: {path.name}")
     _require(int(match["size"]) == CASE.current_size, f"RECOVAR current-size filename drift: {path}")
-    return int(match["original"]) + 1, int(match["class_"])
+    subset_local_index = int(match["original"])
+    _require(
+        0 <= subset_local_index < len(subset_local_to_stack),
+        f"RECOVAR subset-local index is out of range: {path}",
+    )
+    return subset_local_to_stack[subset_local_index], int(match["class_"])
 
 
 def _column(table, name: str) -> str:
@@ -221,7 +226,12 @@ def discover_inventory(
     return {
         "factors": _exact_keyed_paths(factors, key=_factor_key, expected=expected, label="factor"),
         "scores": _exact_keyed_paths(scores, key=_score_key, expected=expected, label="fine-score"),
-        "pass2": _exact_keyed_paths(pass2_paths, key=_pass2_key, expected=expected, label="pass-2"),
+        "pass2": _exact_keyed_paths(
+            pass2_paths,
+            key=lambda path: _pass2_key(path, subset_local_to_stack=stacks),
+            expected=expected,
+            label="pass-2",
+        ),
         "counts": {
             "native_factors": len(factors),
             "native_fine_scores": len(scores),
@@ -234,7 +244,12 @@ def discover_inventory(
     }
 
 
-def _load_recovar(path: Path, *, stack: int, class_id: int) -> dict[str, np.ndarray]:
+def _load_recovar(
+    path: Path,
+    *,
+    subset_local_index: int,
+    class_id: int,
+) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=False) as archive:
         values = {name: np.asarray(archive[name]) for name in archive.files}
     required = {
@@ -252,7 +267,10 @@ def _load_recovar(path: Path, *, stack: int, class_id: int) -> dict[str, np.ndar
         "relion_raw_diff2",
     }
     _require(required <= set(values), f"RECOVAR pass-2 capture lacks {sorted(required - set(values))}: {path}")
-    _require(int(values["original_index"]) == stack - 1, f"RECOVAR stack identity drift: {path}")
+    _require(
+        int(values["original_index"]) == subset_local_index,
+        f"RECOVAR subset-local identity drift: {path}",
+    )
     _require(int(values["class_index"]) == class_id - 1, f"RECOVAR class identity drift: {path}")
     _require(int(values["current_size"]) == CASE.current_size, f"RECOVAR current size drift: {path}")
     return values
@@ -261,6 +279,7 @@ def _load_recovar(path: Path, *, stack: int, class_id: int) -> dict[str, np.ndar
 def _join_class(
     *,
     stack: int,
+    subset_local_index: int,
     class_id: int,
     factor_path: Path,
     score_path: Path,
@@ -268,7 +287,11 @@ def _join_class(
 ) -> dict[str, Any]:
     factor = load_factor_capture(factor_path)
     score = load_fine_score_capture(score_path)
-    recovar = _load_recovar(pass2_path, stack=stack, class_id=class_id)
+    recovar = _load_recovar(
+        pass2_path,
+        subset_local_index=subset_local_index,
+        class_id=class_id,
+    )
     _require(factor.geometry_only, f"factor capture is not geometry-only: {factor_path}")
     _require(
         (score.header[4], score.header[5], score.header[7]) == (CASE.iteration, class_id, stack),
@@ -747,12 +770,13 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
     row_sum_errors: list[float] = []
     particle_rows = []
     particle_mass_rows = []
-    for stack in stacks:
+    for subset_local_index, stack in enumerate(stacks):
         joined = []
         for class_id in range(1, CASE.K + 1):
             key = (stack, class_id)
             item = _join_class(
                 stack=stack,
+                subset_local_index=subset_local_index,
                 class_id=class_id,
                 factor_path=inventory["factors"][key],
                 score_path=inventory["scores"][key],

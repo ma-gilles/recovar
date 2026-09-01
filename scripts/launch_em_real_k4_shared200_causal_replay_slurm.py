@@ -29,8 +29,8 @@ from recovar.data_io.starfile import read_star
 from recovar.em.sampling import read_relion_sampling_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v4"
-TARGET_SCHEMA = "recovar.em_real_k4_shared200_targets.v1"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v5"
+TARGET_SCHEMA = "recovar.em_real_k4_shared200_targets.v2"
 SHARED_SET_SCHEMA = "recovar.em_real_kclass_shared_visited_subset.v1"
 
 DEFAULT_RUNTIME_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime")
@@ -387,6 +387,7 @@ def _shared_target_rows(
         "image_identities": [str(value) for value in identities],
         "stack_indices_one_based": target_stack_indices,
         "original_indices_zero_based": [value - 1 for value in target_stack_indices],
+        "subset_local_indices_zero_based": list(range(CASE.particle_count)),
         "ordered_image_identity_sha256": _ordered_text_sha256(str(value) for value in identities),
         "ordered_identity_half_sha256": _ordered_text_sha256(
             f"{identity}\t{half}" for identity, half in zip(identities, halves.tolist(), strict=True)
@@ -460,6 +461,23 @@ def write_fixed_image_identity_mapping(
     identities = np.full(stack_image_count, b"", dtype=f"S{width}")
     identities[stack_indices - 1] = np.asarray(selected_identities, dtype=f"S{width}")
     np.save(output, identities, allow_pickle=False)
+
+
+def write_subset_local_image_identity_mapping(
+    *,
+    output: Path,
+    selected,
+    particle_stack: Path,
+) -> None:
+    """Seal ordered subset-local rows to immutable physical-stack identities."""
+
+    image_column = _column(selected, "rlnImageName")
+    stack_indices = [_stack_index(value) for value in selected[image_column]]
+    _require(len(stack_indices) == len(set(stack_indices)), "subset image identities must be unique")
+    absolute_stack = particle_stack.resolve()
+    identities = [f"{index}@{absolute_stack}" for index in stack_indices]
+    width = max(map(len, identities), default=1)
+    np.save(output, np.asarray(identities, dtype=f"S{width}"), allow_pickle=False)
 
 
 def _fixed_case_record() -> dict[str, Any]:
@@ -685,14 +703,14 @@ def render_sbatch(args: argparse.Namespace, *, expected_head: str, manifest_path
     subset_star = run_root / "inputs/particles_shared200.star"
     targets = run_root / "inputs/frozen_targets.json"
     replay_optimiser = run_root / "inputs/continuation/run_it000_optimiser_replay.star"
-    image_names_mapping = run_root / "inputs/image_names_full.npy"
+    image_names_mapping = run_root / "inputs/image_names_subset_local.npy"
     target_loader = (
         "import json,pathlib; p=json.loads(pathlib.Path(" + repr(str(targets)) + ").read_text()); "
         "print(','.join(map(str,p['stack_indices_one_based'])))"
     )
-    original_loader = (
+    recovar_local_loader = (
         "import json,pathlib; p=json.loads(pathlib.Path(" + repr(str(targets)) + ").read_text()); "
-        "print(','.join(map(str,p['original_indices_zero_based'])))"
+        "print(','.join(map(str,p['subset_local_indices_zero_based'])))"
     )
     recovar_command = [
         str(python),
@@ -825,7 +843,7 @@ env PYTHON={_quote(python)} make -C recovar/cuda LIB={_quote(cuda_lib)} \
 {_quote(python)} -c "import pathlib,recovar,jax; r=pathlib.Path.cwd().resolve(); assert pathlib.Path(recovar.__file__).resolve().is_relative_to(r); assert len(jax.devices('gpu')) == 1; assert 'H100' in jax.devices('gpu')[0].device_kind"
 
 TARGET_STACKS="$({_quote(python)} -c {_quote(target_loader)})"
-TARGET_ORIGINALS="$({_quote(python)} -c {_quote(original_loader)})"
+RECOVAR_LOCAL_ORIGINALS="$({_quote(python)} -c {_quote(recovar_local_loader)})"
 
 run_native_arm() {{
   local arm="$1"
@@ -887,7 +905,7 @@ mkdir -p "${{ROOT}}/recovar/output" "${{ROOT}}/recovar/pass2" \
 export RECOVAR_EXPECTED_REPO_ROOT={_quote(REPO_ROOT)}
 export RECOVAR_SPARSE_KCLASS_FUSED=1
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
-export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES="${{TARGET_ORIGINALS}}"
+export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES="${{RECOVAR_LOCAL_ORIGINALS}}"
 export RECOVAR_PASS2_DUMP_CURRENT_SIZE={CASE.current_size}
 export RECOVAR_PASS2_DUMP_ITERATION=1
 export RECOVAR_PASS2_DUMP_DIR="${{ROOT}}/recovar/pass2"
@@ -895,7 +913,7 @@ export RECOVAR_INITIAL_MODEL_ACCUM_DUMP_DIR="${{ROOT}}/recovar/accum"
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR="${{ROOT}}/recovar/contributions"
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE={CASE.current_size}
-export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES="${{TARGET_ORIGINALS}}"
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES="${{RECOVAR_LOCAL_ORIGINALS}}"
 export RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1
 export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY={_quote(image_names_mapping)}
 export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256={EXPECTED_PARTICLE_STACK_SHA256}
@@ -1015,8 +1033,13 @@ def validate_manifest(path: Path) -> dict[str, Any]:
     )
     identities = targets.get("image_identities")
     stacks = targets.get("stack_indices_one_based")
+    subset_local_indices = targets.get("subset_local_indices_zero_based")
     _require(isinstance(identities, list) and len(identities) == CASE.particle_count, "target identity count drift")
     _require(isinstance(stacks, list) and len(stacks) == CASE.particle_count, "target stack count drift")
+    _require(
+        subset_local_indices == list(range(CASE.particle_count)),
+        "target subset-local row topology drift",
+    )
     _require([_stack_index(value) for value in identities] == stacks, "target identity order drift")
     _require(
         targets.get("ordered_image_identity_sha256") == _ordered_text_sha256(str(value) for value in identities),
@@ -1041,10 +1064,10 @@ def validate_manifest(path: Path) -> dict[str, Any]:
         "sealed image identity mapping must be a fixed-width rank-1 string array",
     )
     _require(
-        len(identity_mapping) == EXPECTED_PARTICLE_STACK_IMAGES,
+        len(identity_mapping) == CASE.particle_count,
         "sealed image identity mapping count drift",
     )
-    selected_mapping = identity_mapping[np.asarray(stacks, dtype=np.int64) - 1].astype(str).tolist()
+    selected_mapping = identity_mapping.astype(str).tolist()
     stack_records = [
         record for record in manifest["input_records"] if record.get("role") == "fixture particle stack"
     ]
@@ -1133,11 +1156,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     reread, _ = read_star(str(subset_path))
     _require(len(reread) == CASE.particle_count, "materialized subset count drift")
-    fixture_particles, _ = read_star(str(args.fixture_dir / "particles.star"))
-    image_names_mapping_path = args.output_root / "inputs/image_names_full.npy"
-    write_fixed_image_identity_mapping(
+    image_names_mapping_path = args.output_root / "inputs/image_names_subset_local.npy"
+    write_subset_local_image_identity_mapping(
         output=image_names_mapping_path,
-        particles=fixture_particles,
+        selected=state["selected"],
         particle_stack=args.fixture_dir / "particles.256.mrcs",
     )
     _, _, continuation_bundle = materialize_iteration0_continuation_bundle(
@@ -1181,7 +1203,7 @@ def main(argv: list[str] | None = None) -> int:
         "subset_star": _file_record(subset_path, role="deterministic shared-200 STAR"),
         "image_names_mapping": _file_record(
             image_names_mapping_path,
-            role="fixed-width full-fixture rlnImageName mapping",
+            role="fixed-width subset-local rlnImageName mapping",
         ),
         "sbatch_script": _file_record(script_path, role="sealed Slurm launcher"),
         "expected_outputs": _expected_outputs(args.output_root, native_smoke_only=args.native_smoke_only),

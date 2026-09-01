@@ -168,6 +168,7 @@ def test_empty_sparse_support_join_requires_matching_explicit_sentinels(monkeypa
 
     joined = auditor._join_class(
         stack=17,
+        subset_local_index=0,
         class_id=2,
         factor_path=tmp_path / "factor.bin",
         score_path=tmp_path / "score.bin",
@@ -184,6 +185,7 @@ def test_empty_sparse_support_join_requires_matching_explicit_sentinels(monkeypa
     with pytest.raises(auditor.AuditError, match="sentinels disagree"):
         auditor._join_class(
             stack=17,
+            subset_local_index=0,
             class_id=2,
             factor_path=tmp_path / "factor.bin",
             score_path=tmp_path / "score.bin",
@@ -230,6 +232,7 @@ def test_empty_sparse_support_join_rejects_nonzero_recovar_mass(monkeypatch, tmp
     with pytest.raises(auditor.AuditError, match="posterior is nonzero"):
         auditor._join_class(
             stack=17,
+            subset_local_index=0,
             class_id=2,
             factor_path=tmp_path / "factor.bin",
             score_path=tmp_path / "score.bin",
@@ -284,9 +287,9 @@ def test_inventory_is_exact_across_every_stack_and_class(monkeypatch, tmp_path):
             (output / f"run_it001_class{class_id:03d}.mrc").touch()
     pass2 = tmp_path / "recovar/pass2"
     pass2.mkdir(parents=True)
-    for stack in (3, 7):
+    for subset_local_index, stack in enumerate((3, 7)):
         for class_id in (1, 2):
-            (pass2 / f"pass2_orig{stack - 1:06d}_class{class_id:03d}_cs056.npz").touch()
+            (pass2 / f"pass2_orig{subset_local_index:06d}_class{class_id:03d}_cs056.npz").touch()
 
     assignments = {3: 1, 7: 2}
     frozen_assignments = {3: 2, 7: 2}
@@ -304,8 +307,10 @@ def test_inventory_is_exact_across_every_stack_and_class(monkeypatch, tmp_path):
     }
     assert inventory["native_assignment_inertness"] == 1.0
     assert inventory["frozen_target_assignment_accuracy"] == 0.5
+    assert inventory["pass2"][(3, 1)].name == "pass2_orig000000_class001_cs056.npz"
+    assert inventory["pass2"][(7, 1)].name == "pass2_orig000001_class001_cs056.npz"
 
-    (pass2 / "pass2_orig000002_class002_cs056.npz").unlink()
+    (pass2 / "pass2_orig000000_class002_cs056.npz").unlink()
     with pytest.raises(auditor.AuditError):
         auditor.discover_inventory(
             tmp_path,
