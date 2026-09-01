@@ -299,6 +299,9 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "inputs/continuation/run_it000_optimiser_replay.star" in script
     assert "pair/relion/run_it000_optimiser.star" not in script
     assert launcher.EXPECTED_CONTINUED_ITER0_MARKER in script
+    assert launcher.EXPECTED_STOP_AFTER_LIVE_ITER_MARKER in script
+    assert "RELION_STOP_AFTER_LIVE_ITER=1" in script
+    assert 'test ! -e "${arm_root}/output/run_it002_optimiser.star"' in script
     assert "grep -Fxc" in script
     assert 'for class_id in 1 2 3 4; do run_native_arm "class${class_id}"' in script
     assert "--data-star" in script and "particles_shared200.star" in script
@@ -373,10 +376,10 @@ def test_cli_is_dry_run_by_default(tmp_path):
     assert args.native_smoke_only is False
     assert args.relion_capture_source == launcher.DEFAULT_RELION_CAPTURE_SOURCE.resolve()
     assert args.relion_capture_binary == launcher.DEFAULT_RELION_CAPTURE_BINARY.resolve()
-    assert launcher.EXPECTED_CAPTURE_RELION_HEAD == "8680e84c906a5eeedad7eeda2703d617b1f9e9e5"
-    assert launcher.EXPECTED_CAPTURE_RELION_TREE == "0ed8161a7dd10ddcb01ff4bb10d41ddd25e9fd69"
+    assert launcher.EXPECTED_CAPTURE_RELION_HEAD == "9a90f5f18a8a0781d18a30fd5bd30f719d73e72e"
+    assert launcher.EXPECTED_CAPTURE_RELION_TREE == "8cf5543fa3e2976770db4938842172e31e866971"
     assert launcher.EXPECTED_CAPTURE_RELION_BINARY_SHA256 == (
-        "882a37de3449ede0132f3bed29638603b880ee3abf46d753b5f6a28ef9f90afd"
+        "c912b09593bfbeec35c3bf08399d8624adaacf87082444f5b2a706ceefda207f"
     )
 
 

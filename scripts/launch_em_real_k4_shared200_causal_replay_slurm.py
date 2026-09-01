@@ -45,7 +45,7 @@ DEFAULT_SHARED_SET = Path(
 )
 DEFAULT_RELION_CAPTURE_ROOT = Path(
     "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
-    "relion_iter0_continue_preserve_f34f9dc_20260901"
+    "relion_stop_after_live_iter_20260901"
 )
 DEFAULT_RELION_CAPTURE_SOURCE = DEFAULT_RELION_CAPTURE_ROOT / "source"
 DEFAULT_RELION_CAPTURE_BINARY = DEFAULT_RELION_CAPTURE_ROOT / "build/bin/relion_refine"
@@ -58,14 +58,17 @@ EXPECTED_PARTICLE_STACK_SIZE = 34_576_532_480
 EXPECTED_PARTICLE_STACK_IMAGES = 131_879
 EXPECTED_SHARED_SET_SHA256 = "581157ff693aac6f5853d335d9cd0c59aa3fc11e60f54b325feb692ff05a9bd7"
 EXPECTED_PAIR_REPORT_SHA256 = "af22573582ea68dc07099686ebb09a282ad3ed82b2998c5bc962454baefdc31d"
-EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "882a37de3449ede0132f3bed29638603b880ee3abf46d753b5f6a28ef9f90afd"
-EXPECTED_CAPTURE_RELION_HEAD = "8680e84c906a5eeedad7eeda2703d617b1f9e9e5"
-EXPECTED_CAPTURE_RELION_TREE = "0ed8161a7dd10ddcb01ff4bb10d41ddd25e9fd69"
+EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "c912b09593bfbeec35c3bf08399d8624adaacf87082444f5b2a706ceefda207f"
+EXPECTED_CAPTURE_RELION_HEAD = "9a90f5f18a8a0781d18a30fd5bd30f719d73e72e"
+EXPECTED_CAPTURE_RELION_TREE = "8cf5543fa3e2976770db4938842172e31e866971"
 EXPECTED_BIND_RELION_HEAD = "f2c1a384400aec37dc6805856a5ba645650a44f1"
 EXPECTED_BIND_RELION_TREE = "1aa4902144f521ae29834e5acf382ff41cf302d0"
 EXPECTED_CONTINUED_ITER0_MARKER = (
     "[RELION_CONTINUE_ITER0_PRESERVE_STATE] iter=0 skipping fresh initialiseFromImages "
     "maps=4 first_moments=8 second_moments=4 pseudo_halfsets=1"
+)
+EXPECTED_STOP_AFTER_LIVE_ITER_MARKER = (
+    "[RELION_STOP_AFTER_LIVE_ITER] iter=1 outputs_written=1"
 )
 
 
@@ -817,10 +820,11 @@ run_native_arm() {{
   mkdir -p "${{arm_root}}/output" "${{arm_root}}/factors"
   test -z "$(find "${{arm_root}}/output" "${{arm_root}}/factors" -mindepth 1 -print -quit)"
   while IFS='=' read -r variable_name _; do
-    case "${{variable_name}}" in RELION_BPRE_*|RELION_FINE_*|RELION_SAMPLING_PERTURBATION_OVERRIDE*) unset "${{variable_name}}" ;; esac
+    case "${{variable_name}}" in RELION_BPRE_*|RELION_FINE_*|RELION_SAMPLING_PERTURBATION_OVERRIDE*|RELION_STOP_AFTER_LIVE_ITER*) unset "${{variable_name}}" ;; esac
   done < <(env)
   export RELION_SAMPLING_PERTURBATION_OVERRIDE={CASE.random_perturbation}
   export RELION_SAMPLING_PERTURBATION_OVERRIDE_ITER=1
+  export RELION_STOP_AFTER_LIVE_ITER=1
   if [[ "${{capture_class}}" != 0 ]]; then
     export RELION_BPRE_CAPTURE_DIR="${{arm_root}}/factors"
     export RELION_BPRE_CAPTURE_SCHEMA=2
@@ -846,7 +850,9 @@ run_native_arm() {{
   for class_id in 001 002 003 004; do test -s "${{arm_root}}/output/run_it001_class${{class_id}}.mrc"; done
   test -s "${{arm_root}}/output/run_it001_data.star"
   test -s "${{arm_root}}/output/run_it001_sampling.star"
+  test ! -e "${{arm_root}}/output/run_it002_optimiser.star"
   test "$(grep -Fxc {_quote(EXPECTED_CONTINUED_ITER0_MARKER)} "${{arm_root}}/output/runner.stdout")" -eq 1
+  test "$(grep -Fxc {_quote(EXPECTED_STOP_AFTER_LIVE_ITER_MARKER)} "${{arm_root}}/output/runner.stdout")" -eq 1
   grep -Fq '[RELION_SAMPLING_PERTURBATION_OVERRIDE] iter 1 requested' "${{arm_root}}/output/runner.stdout"
   {_quote(python)} -c "from recovar.em.sampling import read_relion_sampling_metadata as r; m=r('${{arm_root}}/output/run_it001_sampling.star'); assert m['healpix_order']=={CASE.healpix_order}; assert abs(m['offset_range']-{CASE.offset_range_pixels * CASE.pixel_size_angstrom})<1e-7; assert abs(m['offset_step']-{CASE.offset_step_pixels * CASE.pixel_size_angstrom})<1e-7; assert abs(m['random_perturbation']-({CASE.random_perturbation}))<1e-5"
   if [[ "${{capture_class}}" = 0 ]]; then
