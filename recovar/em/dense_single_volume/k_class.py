@@ -2694,6 +2694,15 @@ def run_local_k_class_em(
                 n_classes,
             )
             class_engine_kwargs = _local_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
+            # The normalization probe evaluates scores only.  Do not inherit
+            # M-step controls from the production class pass: real
+            # InitialModel K-class runs request residual subtraction and
+            # half-volume accumulators, neither of which is meaningful for a
+            # score-only call.
+            probe_engine_kwargs = dict(class_engine_kwargs)
+            probe_engine_kwargs["mstep_subtract_ctf_projection"] = False
+            probe_engine_kwargs["mstep_relion_x_half"] = False
+            probe_engine_kwargs["return_half_volume_accumulators"] = False
             with _LocalDebugDumpPhaseLabel(f"probe_class{class_index:03d}"):
                 probe = run_local_em_exact(
                     experiment_dataset,
@@ -2714,7 +2723,7 @@ def run_local_k_class_em(
                     stats_use_reconstruction_probs=stats_use_reconstruction_probs,
                     return_profile=return_profile or collect_global_reconstruction_threshold,
                     return_reconstruction_probability_values=collect_global_reconstruction_threshold,
-                    **class_engine_kwargs,
+                    **probe_engine_kwargs,
                 )
             class_log_evidence.append(np.asarray(probe[3].log_evidence_per_image, dtype=np.float64))
             if support_values_by_class is not None:

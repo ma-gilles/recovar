@@ -6190,12 +6190,22 @@ def test_local_k4_probe_is_score_only_and_preserves_all_class_pose_winners(monke
         image_batch_size=n_images,
         rotation_block_size=1,
         current_size=None,
+        mstep_subtract_ctf_projection=True,
+        mstep_relion_x_half=True,
+        return_half_volume_accumulators=True,
     )
 
     assert len(calls) == 2 * n_classes
     assert [bool(call.get("score_only", False)) for call in calls] == [True] * n_classes + [False] * n_classes
     assert all(call["disable_adjoint_y"] and call["disable_adjoint_ctf"] for call in calls[:n_classes])
     assert all("disable_adjoint_y" not in call and "disable_adjoint_ctf" not in call for call in calls[n_classes:])
+    for option in (
+        "mstep_subtract_ctf_projection",
+        "mstep_relion_x_half",
+        "return_half_volume_accumulators",
+    ):
+        assert all(call[option] is False for call in calls[:n_classes])
+        assert all(call[option] is True for call in calls[n_classes:])
     np.testing.assert_allclose(
         np.sum(np.asarray(result.class_responsibilities), axis=0),
         np.ones(n_images),
@@ -11719,6 +11729,7 @@ class TestRelionModeSmokeTest:
         """Exercise the opt-in K=1 coarse scorer through significance."""
 
         import jax
+
         from recovar import cuda_backproject
 
         monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
