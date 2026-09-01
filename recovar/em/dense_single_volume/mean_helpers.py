@@ -28,6 +28,7 @@ from recovar.em.dense_single_volume.helpers.types import make_noise_stats
 logger = logging.getLogger(__name__)
 
 _LARGE_IRFFT_TRANSFORM_SIZE_LIMIT = np.iinfo(np.int32).max
+_LARGE_RELION_SOLVENT_MASK_COORDINATE_BYTES_LIMIT = 2 * 1024**3
 
 
 def _large_irfft_requires_explicit_normalization(volume_shape) -> bool:
@@ -50,6 +51,72 @@ def _large_relion_host_irfft_enabled(volume_shape) -> bool:
             mode,
         )
     return _large_irfft_requires_explicit_normalization(volume_shape)
+
+
+def _relion_solvent_mask_unfused_coordinate_bytes(volume_shape) -> int:
+    """Estimate the promoted coordinate stack used by ``raised_cosine_mask``."""
+
+    return math.prod(int(size) for size in volume_shape) * 3 * np.dtype(np.float64).itemsize
+
+
+def _large_relion_solvent_mask_uses_compiled_builder(volume_shape) -> bool:
+    """Return whether the unfused solvent-mask coordinate stack is too large."""
+
+    return (
+        _relion_solvent_mask_unfused_coordinate_bytes(volume_shape)
+        > _LARGE_RELION_SOLVENT_MASK_COORDINATE_BYTES_LIMIT
+    )
+
+
+@functools.cache
+def _compiled_relion_solvent_mask(volume_shape):
+    """Cache a shape-specialized builder, without retaining a mask array."""
+
+    volume_shape = tuple(int(size) for size in volume_shape)
+
+    @jax.jit
+    def build(radius, radius_p, offset):
+        return mask.raised_cosine_mask(
+            volume_shape,
+            radius=radius,
+            radius_p=radius_p,
+            offset=offset,
+        )
+
+    return build
+
+
+def _make_relion_solvent_mask(volume_shape, *, radius, radius_p, offset):
+    """Build a RELION solvent mask without materializing a giant coordinate stack."""
+
+    volume_shape = tuple(int(size) for size in volume_shape)
+    if not _large_relion_solvent_mask_uses_compiled_builder(volume_shape):
+        return mask.raised_cosine_mask(
+            volume_shape,
+            radius=radius,
+            radius_p=radius_p,
+            offset=offset,
+        )
+
+    estimated_bytes = _relion_solvent_mask_unfused_coordinate_bytes(volume_shape)
+    logger.info(
+        "RELION box-scale solvent mask fused construction: shape=%s "
+        "estimated_unfused_coordinate_bytes=%d",
+        volume_shape,
+        estimated_bytes,
+    )
+    solvent_mask = _compiled_relion_solvent_mask(volume_shape)(
+        radius,
+        radius_p,
+        offset,
+    )
+    solvent_mask.block_until_ready()
+    logger.info(
+        "RELION box-scale solvent mask ready: shape=%s dtype=%s",
+        volume_shape,
+        solvent_mask.dtype,
+    )
+    return solvent_mask
 
 
 def _relion_host_fft_workers() -> int:
@@ -1130,7 +1197,7 @@ def _reconstruct_and_postprocess_means(
                 if not k_class_enabled
                 else particle_diameter_ang / (2.0 * cryo.voxel_size)
             )
-            solvent_mask = mask.raised_cosine_mask(
+            solvent_mask = _make_relion_solvent_mask(
                 volume_shape,
                 radius=flatten_radius,
                 radius_p=flatten_radius + relion_width_mask_edge,
