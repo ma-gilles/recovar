@@ -1,0 +1,416 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ma-gilles/recovar/docs/benchmarks/em/campaign_schema_v1.json",
+  "title": "RECOVAR EM benchmark campaign scorecard v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "recorded_at",
+    "record_type",
+    "run_root",
+    "subject",
+    "source",
+    "reproduction",
+    "shared_jobs",
+    "shared_artifacts",
+    "cases",
+    "limitations",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "campaign_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "record_type": {"const": "synthetic_kclass_campaign"},
+    "run_root": {"$ref": "#/$defs/absolutePath"},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "molecular_family", "k", "iterations", "symmetry", "trajectory_scope"],
+      "properties": {
+        "kind": {"const": "synthetic"},
+        "molecular_family": {"type": "string", "minLength": 1},
+        "k": {"type": "integer", "minimum": 2},
+        "iterations": {"type": "integer", "minimum": 1},
+        "symmetry": {"type": "string", "minLength": 1},
+        "trajectory_scope": {"type": "string", "minLength": 1}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recovar", "relion", "custom_cuda"],
+      "properties": {
+        "recovar": {"$ref": "#/$defs/sourceRef"},
+        "relion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["commit", "tree", "checkout", "source_diff_sha256", "executable"],
+          "properties": {
+            "commit": {"$ref": "#/$defs/gitSha"},
+            "tree": {"$ref": "#/$defs/gitSha"},
+            "checkout": {"$ref": "#/$defs/absolutePath"},
+            "source_diff_sha256": {"$ref": "#/$defs/sha256"},
+            "executable": {"$ref": "#/$defs/fileRef"}
+          }
+        },
+        "custom_cuda": {"$ref": "#/$defs/fileRef"}
+      }
+    },
+    "reproduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["setup_command", "case_command_template", "summary_command", "trajectory_audit_command", "environment"],
+      "properties": {
+        "setup_command": {"type": "string", "minLength": 1},
+        "case_command_template": {"type": "string", "minLength": 1},
+        "summary_command": {"type": "string", "minLength": 1},
+        "trajectory_audit_command": {"type": "string", "minLength": 1},
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["set", "confirmed_unset"],
+          "properties": {
+            "set": {"type": "object", "additionalProperties": {"type": "string"}},
+            "confirmed_unset": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "shared_jobs": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"$ref": "#/$defs/jobRef"}
+    },
+    "shared_artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/roleFileRef"}
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/case"}
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_checked_at", "commands"],
+      "properties": {
+        "evidence_checked_at": {"type": "string", "format": "date-time"},
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {"type": "string", "pattern": "^/"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "roleFileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256", "size_bytes"],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree", "checkout", "clean"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/gitSha"},
+        "tree": {"$ref": "#/$defs/gitSha"},
+        "checkout": {"$ref": "#/$defs/absolutePath"},
+        "clean": {"const": true}
+      }
+    },
+    "jobRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "job_id",
+        "status",
+        "exit_code",
+        "elapsed_s",
+        "node",
+        "gpu_model",
+        "gpu_uuid",
+        "req_tres",
+        "alloc_tres",
+        "max_rss_kib",
+        "logs"
+      ],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "job_id": {"type": "string", "pattern": "^[0-9]+$"},
+        "status": {"enum": ["COMPLETED", "FAILED"]},
+        "exit_code": {"type": "string", "pattern": "^[0-9]+:[0-9]+$"},
+        "elapsed_s": {"type": "integer", "minimum": 0},
+        "node": {"type": "string", "minLength": 1},
+        "gpu_model": {"type": ["string", "null"]},
+        "gpu_uuid": {"type": ["string", "null"]},
+        "req_tres": {"type": "string", "minLength": 1},
+        "alloc_tres": {"type": "string", "minLength": 1},
+        "max_rss_kib": {"type": ["integer", "null"], "minimum": 0},
+        "logs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/absolutePath"}
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "name",
+        "particles",
+        "box_size",
+        "configuration",
+        "case_config",
+        "launcher",
+        "reproduction_command",
+        "inputs",
+        "input_equivalence",
+        "execution",
+        "artifacts",
+        "quality",
+        "performance",
+        "outcome"
+      ],
+      "properties": {
+        "case_id": {"type": "integer", "minimum": 0},
+        "name": {"type": "string", "minLength": 1},
+        "particles": {"type": "integer", "minimum": 1},
+        "box_size": {"type": "integer", "minimum": 2},
+        "configuration": {
+          "type": "object",
+          "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]}
+        },
+        "case_config": {"$ref": "#/$defs/fileRef"},
+        "launcher": {"$ref": "#/$defs/fileRef"},
+        "reproduction_command": {"type": "string", "minLength": 1},
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/roleFileRef"}
+        },
+        "input_equivalence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["group", "admissible_for_execution_invariance", "reason"],
+          "properties": {
+            "group": {"type": ["string", "null"]},
+            "admissible_for_execution_invariance": {"type": "boolean"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        },
+        "execution": {"$ref": "#/$defs/jobRef"},
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/roleFileRef"}
+        },
+        "quality": {"$ref": "#/$defs/quality"},
+        "performance": {"$ref": "#/$defs/performance"},
+        "outcome": {"$ref": "#/$defs/outcome"}
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matching_method",
+        "final_classes",
+        "mean_recovar_gt_fsc_auc",
+        "mean_relion_gt_fsc_auc",
+        "mean_gt_fsc_auc_delta",
+        "class_assignment_agreement",
+        "occupancy",
+        "trajectory"
+      ],
+      "properties": {
+        "matching_method": {"enum": ["hungarian_max_fsc_auc", "not_evaluable"]},
+        "final_classes": {
+          "anyOf": [
+            {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/finalClass"}},
+            {"type": "null"}
+          ]
+        },
+        "mean_recovar_gt_fsc_auc": {"type": ["number", "null"], "minimum": -1, "maximum": 1},
+        "mean_relion_gt_fsc_auc": {"type": ["number", "null"], "minimum": -1, "maximum": 1},
+        "mean_gt_fsc_auc_delta": {"type": ["number", "null"], "minimum": -2, "maximum": 2},
+        "class_assignment_agreement": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "occupancy": {"$ref": "#/$defs/occupancy"},
+        "trajectory": {"$ref": "#/$defs/trajectory"}
+      }
+    },
+    "finalClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recovar_class",
+        "relion_class",
+        "gt_class",
+        "cross_engine_fsc_auc",
+        "recovar_gt_fsc_auc",
+        "relion_gt_fsc_auc",
+        "gt_fsc_auc_delta"
+      ],
+      "properties": {
+        "recovar_class": {"type": "integer", "minimum": 1},
+        "relion_class": {"type": "integer", "minimum": 1},
+        "gt_class": {"type": "integer", "minimum": 1},
+        "cross_engine_fsc_auc": {"type": "number", "minimum": -1, "maximum": 1},
+        "recovar_gt_fsc_auc": {"type": "number", "minimum": -1, "maximum": 1},
+        "relion_gt_fsc_auc": {"type": "number", "minimum": -1, "maximum": 1},
+        "gt_fsc_auc_delta": {"type": "number", "minimum": -2, "maximum": 2}
+      }
+    },
+    "occupancy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_iteration",
+        "recovar_metric",
+        "recovar_counts",
+        "recovar_fractions",
+        "relion_counts",
+        "collapse_threshold_fraction",
+        "recovar_flagged_classes",
+        "relion_flagged_classes",
+        "status",
+        "note"
+      ],
+      "properties": {
+        "source_iteration": {
+          "anyOf": [
+            {"type": "integer", "minimum": 1},
+            {"type": "null"}
+          ]
+        },
+        "recovar_metric": {"enum": ["hard_assignments", "posterior_fraction", "not_evaluated"]},
+        "recovar_counts": {
+          "anyOf": [
+            {"type": "array", "items": {"type": "integer", "minimum": 0}},
+            {"type": "null"}
+          ]
+        },
+        "recovar_fractions": {
+          "anyOf": [
+            {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}},
+            {"type": "null"}
+          ]
+        },
+        "relion_counts": {
+          "anyOf": [
+            {"type": "array", "items": {"type": "integer", "minimum": 0}},
+            {"type": "null"}
+          ]
+        },
+        "collapse_threshold_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "recovar_flagged_classes": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "relion_flagged_classes": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "status": {"enum": ["CLEAR", "NEAR_COLLAPSE", "ZERO_CLASS", "NOT_EVALUATED"]},
+        "note": {"type": "string", "minLength": 1}
+      }
+    },
+    "trajectory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report",
+        "formal_thresholds",
+        "status",
+        "evaluated_iterations",
+        "evaluated_class_cells",
+        "passing_class_cells",
+        "earliest_failure"
+      ],
+      "properties": {
+        "report": {"anyOf": [{"$ref": "#/$defs/fileRef"}, {"type": "null"}]},
+        "formal_thresholds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["direct_fsc_auc_min", "gt_fsc_auc_delta_min", "class_assignment_agreement_min"],
+          "properties": {
+            "direct_fsc_auc_min": {"type": "number", "minimum": -1, "maximum": 1},
+            "gt_fsc_auc_delta_min": {"type": "number", "minimum": -2, "maximum": 2},
+            "class_assignment_agreement_min": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "status": {"enum": ["PASS", "FAIL", "NOT_EVALUABLE"]},
+        "evaluated_iterations": {"type": "integer", "minimum": 0},
+        "evaluated_class_cells": {"type": "integer", "minimum": 0},
+        "passing_class_cells": {"type": "integer", "minimum": 0},
+        "earliest_failure": {"type": ["string", "null"]}
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recovar_wall_s", "relion_wall_s", "recovar_peak_hbm_mib", "relion_peak_hbm_mib", "hardware_comparable", "recovar_over_relion_wall_ratio"],
+      "properties": {
+        "recovar_wall_s": {"type": "number", "minimum": 0},
+        "relion_wall_s": {"type": "number", "minimum": 0},
+        "recovar_peak_hbm_mib": {"type": "number", "minimum": 0},
+        "relion_peak_hbm_mib": {"type": "number", "minimum": 0},
+        "hardware_comparable": {"type": "boolean"},
+        "recovar_over_relion_wall_ratio": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint_status", "formal_status", "science_status", "classification", "reason"],
+      "properties": {
+        "endpoint_status": {"enum": ["COMPLETE", "NOT_EVALUABLE"]},
+        "formal_status": {"enum": ["PASS", "FAIL", "NOT_EVALUABLE"]},
+        "science_status": {"enum": ["PASS", "BOUNDARY", "UNRESOLVED"]},
+        "classification": {
+          "enum": [
+            "TRAJECTORY_EXACT",
+            "SCIENCE_EQUIVALENT",
+            "TRAJECTORY_EXACT_NEAR_COLLAPSE",
+            "NEGATIVE_ZERO_CLASS_BOUNDARY",
+            "NEGATIVE_RELION_CLASS_COLLAPSE",
+            "RECOVAR_IMPLEMENTATION_FAILURE",
+            "UNRESOLVED_TRAJECTORY_FAILURE"
+          ]
+        },
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -7,6 +7,22 @@ board. A record may be added only after its run has completed and its evidence
 has been sealed. Planned runs belong in `k4_validation_matrix.md`, not in
 `entries/`.
 
+Single-run evidence lives in `entries/` and validates against
+`schema_v1.json`. Multi-case campaign scorecards live in `campaigns/` and
+validate against `campaign_schema_v1.json`. Campaign scorecards retain one
+row per case, the per-class signed quality result, hard/posterior occupancies,
+wall time and HBM, exact launch/config/input hashes, Slurm accounting, and a
+classification for successful, boundary, and unresolved outcomes. They point
+to sealed external products instead of checking particle stacks or maps into
+Git.
+
+Campaign failure labels are deliberately causal. A RELION class-collapse
+negative is distinct from a RECOVAR implementation failure, and both are
+distinct from a completed trajectory whose endpoint remains scientifically
+unresolved. Runs stopped before comparable populations exist use
+`occupancy.status=NOT_EVALUATED`; class-collapse labels require measured
+populations that mechanically support `NEAR_COLLAPSE` or `ZERO_CLASS`.
+
 ## Status is two-dimensional
 
 `formal_status` reports the unmodified frozen gate. It must never be changed to
@@ -78,6 +94,13 @@ Schema v1 requires:
   explicitly explained; and
 - the frozen formal result, independent science result, comparator, concise
   interpretation, and known limitations.
+
+Campaign schema v1 additionally requires every case to retain its exact
+configuration and launcher, primary generated-data and reference hashes,
+per-class signed RECOVAR-minus-RELION GT FSC-AUC deltas, class populations,
+numbered-trajectory result, matched-H100 wall/HBM measurements, and Slurm
+ReqTRES/AllocTRES. Intended execution-invariance groups are admissible only
+when their particle hashes match; a shared seed is not sufficient evidence.
 
 Performance ratios are formal only when the engines use the same GPU model
 under a matched workload. Cross-model ratios may be stored only as diagnostic
@@ -182,3 +205,7 @@ RECOVAR's batching boundary. Selecting either consumer without its producer,
 or changing any generator field within the group, fails closed. Cases 31--34
 generate symmetric GT volumes and pass one identical canonical label (C4, D4,
 O, or I1) to the generator, RELION, and RECOVAR.
+
+The completed 14-case synthetic K=4 campaign is summarized in
+`k4_expanded14_20260901.md` and sealed machine-readably in
+`campaigns/k4-expanded14-3466e7a32-h100.json`.

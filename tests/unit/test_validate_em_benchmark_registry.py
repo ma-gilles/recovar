@@ -3,26 +3,38 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
+import scripts.validate_em_benchmark_registry as registry_validator
 from scripts.validate_em_benchmark_registry import (
     RegistryValidationError,
+    validate_campaign,
     validate_record,
     validate_registry,
+    verify_campaign_files,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_ROOT = REPO_ROOT / "docs" / "benchmarks" / "em"
 SCHEMA = json.loads((REGISTRY_ROOT / "schema_v1.json").read_text())
+CAMPAIGN_SCHEMA = json.loads((REGISTRY_ROOT / "campaign_schema_v1.json").read_text())
 CANDIDATE = json.loads(
     (
         REGISTRY_ROOT
         / "entries"
         / "k4-ribosembly-100k256-1b9209cd8-h100.json"
     ).read_text()
+)
+CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k4-expanded14-3466e7a32-h100"
+    ).with_suffix(".json").read_text()
 )
 
 
@@ -35,7 +47,13 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-ribosembly-10k128-radial3-nonuniform-linear-0050dc54f-h100",
         "k4-ribosembly-10k128-radial3-nonuniform-outliers20-0050dc54f-h100",
         "k4-ribosembly-10k128-white1-uniform-0050dc54f-h100",
+        "k4-expanded14-3466e7a32-h100",
     ]
+    assert [case["case_id"] for case in CAMPAIGN["cases"]] == list(range(16, 30))
+    classifications = {case["case_id"]: case["outcome"]["classification"] for case in CAMPAIGN["cases"]}
+    assert classifications[17] == "NEGATIVE_ZERO_CLASS_BOUNDARY"
+    assert classifications[20] == "TRAJECTORY_EXACT_NEAR_COLLAPSE"
+    assert classifications[27] == "UNRESOLVED_TRAJECTORY_FAILURE"
 
 
 def test_completed_job_requires_identical_requested_and_allocated_tres():
@@ -99,3 +117,91 @@ def test_missing_performance_values_require_a_reason():
 
     with pytest.raises(RegistryValidationError, match="missing values require missing_reason"):
         validate_record(record, SCHEMA)
+
+
+def test_campaign_signed_gt_delta_must_match_per_engine_values():
+    campaign = copy.deepcopy(CAMPAIGN)
+    campaign["cases"][0]["quality"]["final_classes"][0]["gt_fsc_auc_delta"] += 1e-6
+
+    with pytest.raises(RegistryValidationError, match="signed GT FSC-AUC delta is inconsistent"):
+        validate_campaign(campaign, CAMPAIGN_SCHEMA)
+
+
+def test_campaign_occupancies_must_sum_and_flags_are_mechanical():
+    campaign = copy.deepcopy(CAMPAIGN)
+    case20 = next(case for case in campaign["cases"] if case["case_id"] == 20)
+    case20["quality"]["occupancy"]["relion_counts"][0] -= 1
+    case20["quality"]["occupancy"]["relion_flagged_classes"] = []
+
+    with pytest.raises(RegistryValidationError, match="RELION occupancy must contain K counts"):
+        validate_campaign(campaign, CAMPAIGN_SCHEMA)
+
+
+def test_campaign_failure_modes_remain_distinct():
+    campaign = copy.deepcopy(CAMPAIGN)
+    case17 = next(case for case in campaign["cases"] if case["case_id"] == 17)
+    case17["outcome"]["classification"] = "NEGATIVE_RELION_CLASS_COLLAPSE"
+    validate_campaign(campaign, CAMPAIGN_SCHEMA)
+
+    case17["outcome"]["classification"] = "RECOVAR_IMPLEMENTATION_FAILURE"
+    case17["outcome"]["science_status"] = "UNRESOLVED"
+    case17["quality"]["occupancy"] = {
+        "source_iteration": None,
+        "recovar_metric": "not_evaluated",
+        "recovar_counts": None,
+        "recovar_fractions": None,
+        "relion_counts": None,
+        "collapse_threshold_fraction": 0.01,
+        "recovar_flagged_classes": [],
+        "relion_flagged_classes": [],
+        "status": "NOT_EVALUATED",
+        "note": "Run stopped before either engine produced comparable occupancy.",
+    }
+    validate_campaign(campaign, CAMPAIGN_SCHEMA)
+
+    case17["quality"]["occupancy"]["status"] = "ZERO_CLASS"
+    with pytest.raises(RegistryValidationError, match="unevaluated occupancy requires"):
+        validate_campaign(campaign, CAMPAIGN_SCHEMA)
+
+
+def test_differing_particle_hashes_cannot_support_execution_invariance():
+    campaign = copy.deepcopy(CAMPAIGN)
+    case25 = next(case for case in campaign["cases"] if case["case_id"] == 25)
+    case25["input_equivalence"]["admissible_for_execution_invariance"] = True
+
+    with pytest.raises(RegistryValidationError, match="differing particle hashes"):
+        validate_campaign(campaign, CAMPAIGN_SCHEMA)
+
+
+def test_campaign_external_paths_must_be_absolute():
+    campaign = copy.deepcopy(CAMPAIGN)
+    campaign["cases"][0]["inputs"][0]["path"] = "relative/input.mrcs"
+
+    with pytest.raises(RegistryValidationError, match="does not match"):
+        validate_campaign(campaign, CAMPAIGN_SCHEMA)
+
+
+def test_campaign_external_verification_fails_closed(tmp_path, monkeypatch):
+    existing = tmp_path / "evidence.json"
+    existing.write_text("sealed evidence\n")
+    digest = hashlib.sha256(existing.read_bytes()).hexdigest()
+    reference = {
+        "path": str(existing),
+        "sha256": digest,
+        "size_bytes": existing.stat().st_size,
+    }
+    monkeypatch.setattr(registry_validator, "_campaign_file_references", lambda _: [reference])
+    verify_campaign_files(CAMPAIGN, {})
+
+    reference["size_bytes"] += 1
+    with pytest.raises(RegistryValidationError, match="size mismatch"):
+        verify_campaign_files(CAMPAIGN, {})
+
+    reference["size_bytes"] = existing.stat().st_size
+    reference["sha256"] = "0" * 64
+    with pytest.raises(RegistryValidationError, match="checksum mismatch"):
+        verify_campaign_files(CAMPAIGN, {})
+
+    reference["path"] = str(tmp_path / "missing.json")
+    with pytest.raises(RegistryValidationError, match="missing file"):
+        verify_campaign_files(CAMPAIGN, {})
