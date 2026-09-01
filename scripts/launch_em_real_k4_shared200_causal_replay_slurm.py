@@ -3,7 +3,7 @@
 
 The launcher is deliberately fail-closed.  Before writing a launch bundle it
 verifies the frozen 10k fixture, the exact 200 particles visited by both
-engines at iteration 1, their 100/100 half split, the RELION iteration-0
+engines at iteration 1, their frozen 93/107 half split, the RELION iteration-0
 state, the iteration-1 controller state, and the capture-capable RELION
 binary/source.  The default action is a dry run that writes a reviewable
 manifest and sbatch script but does not submit anything.
