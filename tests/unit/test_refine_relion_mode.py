@@ -13032,6 +13032,85 @@ class TestRelionModeSmokeTest:
             "reconstruction_shape=(4, 4, 4) packed_half_bytes=384"
         ) in caplog.text
 
+    def test_large_host_reconstruction_padding_retains_device_window(self, monkeypatch):
+        """The donating host gather is crop-only; Fourier padding stays on device."""
+        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.reconstruction import relion_functions
+
+        events = []
+        host_boundary = np.ones((4, 4, 3), dtype=np.complex64)
+
+        class DeviceBoundary:
+            def block_until_ready(self):
+                events.append("block")
+
+            def __del__(self):
+                events.append("release")
+
+        def fake_stage(*_args, **kwargs):
+            events.append("stage")
+            assert kwargs["input_half_volume"] is True
+            assert kwargs["return_fftw_half_before_ifft"] is True
+            assert "return_wiener_half_before_window" not in kwargs
+            return DeviceBoundary()
+
+        def fake_device_get(_value):
+            events.append("device_get")
+            return host_boundary
+
+        def fake_finish(value, *_args, **_kwargs):
+            events.append("finish")
+            assert events == ["stage", "block", "device_get", "release", "collect", "finish"]
+            assert value is host_boundary
+            return value
+
+        def reject_crop(*_args, **_kwargs):
+            raise AssertionError("Fourier padding must not use the host crop helper")
+
+        def reject_donating_stage(*_args, **_kwargs):
+            raise AssertionError("Fourier padding must not use the crop-only donating stage")
+
+        monkeypatch.setattr(
+            relion_functions,
+            "_large_grid_postprocess_single_precision_enabled",
+            lambda _voxels: True,
+        )
+        monkeypatch.setattr(relion_functions, "post_process_from_filter_v2", fake_stage)
+        monkeypatch.setattr(
+            relion_functions,
+            "_post_process_from_filter_v2_donate_numerator",
+            reject_donating_stage,
+        )
+        monkeypatch.setattr(
+            relion_functions,
+            "_finish_large_relion_postprocess_from_fftw_half",
+            fake_finish,
+        )
+        monkeypatch.setattr(
+            mean_helpers_module,
+            "_crop_relion_wiener_half_to_fftw_host",
+            reject_crop,
+        )
+        monkeypatch.setattr(mean_helpers_module.jax, "device_get", fake_device_get)
+        monkeypatch.setattr(mean_helpers_module.gc, "collect", lambda: events.append("collect"))
+
+        volume_shape = (2, 2, 2)
+        accumulator_shape = (3, 3, 3)
+        half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+        returned = mean_helpers_module._reconstruct_volume_eager(
+            np.ones(half_shape, dtype=np.float32),
+            np.ones(half_shape, dtype=np.complex64),
+            volume_shape,
+            2,
+            tau=np.ones(np.prod(volume_shape), dtype=np.float32),
+            tau2_fudge=1.0,
+            projection_padding_factor=1,
+            accumulator_volume_shape=accumulator_shape,
+        )
+
+        assert returned is host_boundary
+        assert events == ["stage", "block", "device_get", "release", "collect", "finish"]
+
     def test_k1_save_intermediates_reconstructs_unregularized_half_maps(
         self,
         half_datasets,
