@@ -292,11 +292,28 @@ def _candidate_table_from_recovar(
         ).reshape(-1)
         current_size = np.asarray(zget("current_size", np.array([-1], dtype=np.int64))).reshape(-1)
         class_index = np.asarray(zget("class_index", np.array([-1], dtype=np.int64))).reshape(-1)
+        resolved_class_index = (
+            int(class_index_override)
+            if class_index_override is not None
+            else (int(class_index[0]) if int(class_index[0]) >= 0 else None)
+        )
+        translation_grid = np.asarray(
+            zget("translations", np.empty((0, 2), dtype=np.float32)),
+            dtype=np.float64,
+        )
+        if translation_grid.shape != (n_trans, 2):
+            translation_grid = None
+        image_pre_shift = np.asarray(
+            zget("image_pre_shift", np.empty((0,), dtype=np.float32)),
+            dtype=np.float64,
+        ).reshape(-1)
+        if image_pre_shift.size != 2:
+            image_pre_shift = None
         return {
             "source": str(path),
             "original_index": int(original_index[0]),
             "local_index": int(local_index[0]),
-            "class_index": int(class_index[0]) if int(class_index[0]) >= 0 else None,
+            "class_index": resolved_class_index,
             "current_size": int(current_size[0]),
             "selected_field": selected_field,
             "reconstruction_n_significant": int(np.asarray(z["n_significant_samples"]).reshape(-1)[0])
@@ -313,6 +330,8 @@ def _candidate_table_from_recovar(
             "keys_parent": keys_parent,
             "parent_mapping_details": parent_mapping_details,
             "rotations": rotations,
+            "translation_grid": translation_grid,
+            "image_pre_shift": image_pre_shift,
             "prob": probs.reshape(-1)[flat_selected],
             "score_pre_prior": scores_pre.reshape(-1)[flat_selected],
             "score_with_prior": scores_with.reshape(-1)[flat_selected],
@@ -856,6 +875,9 @@ def _candidate_table_from_relion(
                 return _get_by_suffix_from_prefix(payload, name, generic_candidate_prefix)
             return _get_by_suffix(payload, name)
 
+        candidate_translation_x = generic_candidate_field("candidate_translation_x")
+        candidate_translation_y = generic_candidate_field("candidate_translation_y")
+
         if firstiter_pass == "pass0" and all(
             name in payload
             for name in (
@@ -1015,6 +1037,8 @@ def _candidate_table_from_relion(
         prefixed_selected_mask = prefixed_table.get("selected_mask")
         compact_rot_idx = prefixed_table.get("local_rot_idx", rot_idx)
         coarse_trans_idx = trans_idx
+        candidate_translation_x = None
+        candidate_translation_y = None
 
     missing = [
         name
@@ -1058,6 +1082,7 @@ def _candidate_table_from_relion(
                 "keys_parent": None,
                 "parent_mapping_details": {},
                 "rot_matrices": rot_matrices,
+                "translation_coordinates": None,
                 "rotation_count": rotation_count,
                 "selected_field": selected_field,
                 "prob": empty_f,
@@ -1082,6 +1107,19 @@ def _candidate_table_from_relion(
             min_rows=min_rows,
             class_index=class_index,
         )
+
+    translation_coordinates = None
+    if candidate_translation_x is not None or candidate_translation_y is not None:
+        if candidate_translation_x is None or candidate_translation_y is None:
+            raise ValueError("RELION candidate translation dump must contain both x and y coordinates")
+        translation_x = np.asarray(candidate_translation_x, dtype=np.float64).reshape(-1)
+        translation_y = np.asarray(candidate_translation_y, dtype=np.float64).reshape(-1)
+        if translation_x.size < n or translation_y.size < n:
+            raise ValueError(
+                "RELION candidate translation coordinates are shorter than the candidate table: "
+                f"x={translation_x.size} y={translation_y.size} candidates={n}"
+            )
+        translation_coordinates = np.column_stack((translation_x[:n], translation_y[:n]))
 
     def trim_or_nan(arr: np.ndarray | None) -> np.ndarray:
         if arr is None:
@@ -1160,6 +1198,9 @@ def _candidate_table_from_relion(
         "keys_parent": keys_parent[selected] if keys_parent is not None else None,
         "parent_mapping_details": parent_mapping_details,
         "rot_matrices": rot_matrices,
+        "translation_coordinates": (
+            translation_coordinates[selected] if translation_coordinates is not None else None
+        ),
         "rotation_count": rotation_count,
         "relion_rotation_key_mode": prefixed_table.get("rotation_key_mode") if prefixed_table is not None else None,
         "generic_candidate_prefix": generic_candidate_prefix,
@@ -1231,6 +1272,7 @@ def _nearest_rotation_rows_by_matrix(
     rec_rots: np.ndarray,
     *,
     chunk_size: int = 64,
+    match_tolerance: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, str]:
     """Map RELION rotation matrices to nearest RECOVAR local rotation rows."""
 
@@ -1257,12 +1299,29 @@ def _nearest_rotation_rows_by_matrix(
 
     direct_nearest, direct_min = match_against(rec_direct, rec_direct_norm)
     transposed_nearest, transposed_min = match_against(rec_transposed, rec_transposed_norm)
-    if float(np.median(transposed_min)) < float(np.median(direct_min)):
+    if match_tolerance is not None:
+        tolerance = float(match_tolerance)
+        direct_count = int(np.sum(direct_min <= tolerance))
+        transposed_count = int(np.sum(transposed_min <= tolerance))
+        choose_transpose = transposed_count > direct_count or (
+            transposed_count == direct_count
+            and float(np.median(transposed_min)) < float(np.median(direct_min))
+        )
+    else:
+        choose_transpose = float(np.median(transposed_min)) < float(np.median(direct_min))
+    if choose_transpose:
         return transposed_nearest, transposed_min, "transpose"
     return direct_nearest, direct_min, "direct"
 
 
-def _matrix_mapped_relion_keys(relion: dict[str, Any], recovar: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]] | None:
+def _matrix_mapped_relion_keys(
+    relion: dict[str, Any],
+    recovar: dict[str, Any],
+    *,
+    physical: bool = False,
+    rotation_tolerance: float = 1.0e-5,
+    translation_tolerance: float = 1.0e-5,
+) -> tuple[np.ndarray, dict[str, Any]] | None:
     rel_rots = relion.get("rot_matrices")
     if rel_rots is None:
         return None
@@ -1280,18 +1339,122 @@ def _matrix_mapped_relion_keys(relion: dict[str, Any], recovar: dict[str, Any]) 
     nearest_unique, min_dist_unique, orientation = _nearest_rotation_rows_by_matrix(
         rel_rots[unique_relion_rows],
         rec_rots,
+        match_tolerance=rotation_tolerance if physical else None,
     )
 
     mapped = rel_keys.copy()
-    mapped[:, 0] = nearest_unique[inverse]
-    return mapped, {
+    rotation_matched = min_dist_unique <= float(rotation_tolerance)
+    if physical:
+        # Preserve every native RELION hypothesis, but assign unmatched
+        # rotation rows keys outside the RECOVAR local-row range.  Folding a
+        # distant RELION row onto its nearest RECOVAR row creates false common
+        # candidates and can make unrelated arithmetic appear comparable.
+        mapped_unique = np.where(
+            rotation_matched,
+            nearest_unique,
+            int(rec_rots.shape[0]) + unique_relion_rows,
+        )
+        mapped[:, 0] = mapped_unique[inverse]
+    else:
+        mapped[:, 0] = nearest_unique[inverse]
+
+    matched_distances = min_dist_unique[rotation_matched] if physical else min_dist_unique
+    details: dict[str, Any] = {
         "rotation_matrix_orientation": orientation,
-        "rotation_matrix_match_median_frobenius": float(np.median(min_dist_unique)),
-        "rotation_matrix_match_max_frobenius": float(np.max(min_dist_unique)),
+        "rotation_matrix_match_median_frobenius": (
+            float(np.median(matched_distances)) if matched_distances.size else None
+        ),
+        "rotation_matrix_match_max_frobenius": (
+            float(np.max(matched_distances)) if matched_distances.size else None
+        ),
+        "rotation_matrix_nearest_all_median_frobenius": float(np.median(min_dist_unique)),
+        "rotation_matrix_nearest_all_max_frobenius": float(np.max(min_dist_unique)),
         "rotation_matrix_unique_relion_rows": int(unique_relion_rows.size),
         "rotation_matrix_recovar_rows": int(rec_rots.shape[0]),
         "rotation_matrix_matcher": "chunked_unique_relion_rows",
+        "rotation_matrix_tolerance_frobenius": float(rotation_tolerance),
+        "rotation_matrix_matched_relion_rows": int(np.sum(rotation_matched)),
+        "rotation_matrix_unmatched_relion_rows": int(np.sum(~rotation_matched)),
     }
+    if not physical:
+        return mapped, details
+
+    relion_coordinates = relion.get("translation_coordinates")
+    recovar_grid = recovar.get("translation_grid")
+    if relion_coordinates is None or recovar_grid is None:
+        return None
+    relion_coordinates = np.asarray(relion_coordinates, dtype=np.float64)
+    recovar_grid = np.asarray(recovar_grid, dtype=np.float64)
+    if relion_coordinates.shape != (rel_keys.shape[0], 2):
+        raise ValueError(
+            "RELION physical translation coordinates must have one x/y pair per candidate; "
+            f"got {relion_coordinates.shape} for {rel_keys.shape[0]} candidates"
+        )
+    if recovar_grid.ndim != 2 or recovar_grid.shape[1] != 2 or recovar_grid.shape[0] == 0:
+        raise ValueError(f"RECOVAR physical translation grid must have shape (T, 2), got {recovar_grid.shape}")
+
+    recovar_separation = np.max(
+        np.abs(recovar_grid[:, None, :] - recovar_grid[None, :, :]),
+        axis=2,
+    )
+    np.fill_diagonal(recovar_separation, np.inf)
+    if float(np.min(recovar_separation)) <= float(translation_tolerance):
+        raise ValueError("RECOVAR physical translation grid is not unique at the requested tolerance")
+
+    unique_relion_translations = np.unique(rel_keys[:, 1])
+    mapped_translation_rows: dict[int, int] = {}
+    translation_distances: list[float] = []
+    translation_matched: list[bool] = []
+    for relion_translation in unique_relion_translations:
+        candidate_rows = np.flatnonzero(rel_keys[:, 1] == relion_translation)
+        coordinates = relion_coordinates[candidate_rows]
+        coordinate = coordinates[0]
+        if np.max(np.abs(coordinates - coordinate)) > float(translation_tolerance):
+            raise ValueError(
+                "RELION translation id maps to inconsistent physical coordinates: "
+                f"translation={int(relion_translation)}"
+            )
+        distances = np.max(np.abs(recovar_grid - coordinate), axis=1)
+        nearest = int(np.argmin(distances))
+        distance = float(distances[nearest])
+        matched = distance <= float(translation_tolerance)
+        mapped_translation_rows[int(relion_translation)] = (
+            nearest if matched else int(recovar_grid.shape[0]) + int(relion_translation)
+        )
+        translation_distances.append(distance)
+        translation_matched.append(matched)
+    mapped[:, 1] = np.asarray(
+        [mapped_translation_rows[int(value)] for value in rel_keys[:, 1]],
+        dtype=np.int64,
+    )
+
+    translation_distances_array = np.asarray(translation_distances, dtype=np.float64)
+    translation_matched_array = np.asarray(translation_matched, dtype=bool)
+    matched_translation_distances = translation_distances_array[translation_matched_array]
+    details.update(
+        {
+            "physical_common_geometry_qualified": True,
+            "translation_coordinate_mapping": "direct_xy_pixel_coordinates_after_precentering",
+            "translation_coordinate_tolerance_pixels": float(translation_tolerance),
+            "translation_coordinate_unique_relion_rows": int(unique_relion_translations.size),
+            "translation_coordinate_recovar_rows": int(recovar_grid.shape[0]),
+            "translation_coordinate_matched_relion_rows": int(np.sum(translation_matched_array)),
+            "translation_coordinate_unmatched_relion_rows": int(np.sum(~translation_matched_array)),
+            "translation_coordinate_match_max_abs_pixels": (
+                float(np.max(matched_translation_distances)) if matched_translation_distances.size else None
+            ),
+            "translation_coordinate_nearest_all_max_abs_pixels": float(np.max(translation_distances_array)),
+            "recovar_image_pre_shift_pixels": (
+                np.asarray(recovar["image_pre_shift"], dtype=np.float64).tolist()
+                if recovar.get("image_pre_shift") is not None
+                else None
+            ),
+            "image_pre_shift_application": (
+                "already applied during preprocessing; not added to the residual search-offset coordinates"
+            ),
+        }
+    )
+    return mapped, details
 
 
 def _relion_grid_mapped_keys(relion: dict[str, Any], recovar: dict[str, Any], n_psi: int | None) -> tuple[np.ndarray, dict[str, Any]] | None:
@@ -1332,9 +1495,17 @@ def _choose_match_keys(
     match_mode: str,
     relion_n_psi: int | None = None,
 ) -> tuple[str, np.ndarray, np.ndarray, dict[str, Any]]:
-    if match_mode not in {"auto", "global", "local", "matrix", "relion_grid", "relion_grid_parent"}:
+    if match_mode not in {
+        "auto",
+        "global",
+        "local",
+        "matrix",
+        "physical",
+        "relion_grid",
+        "relion_grid_parent",
+    }:
         raise ValueError(
-            "match_mode must be auto, global, local, matrix, relion_grid, or "
+            "match_mode must be auto, global, local, matrix, physical, relion_grid, or "
             f"relion_grid_parent; got {match_mode!r}"
         )
 
@@ -1394,6 +1565,11 @@ def _choose_match_keys(
             if matrix is not None:
                 mapped_keys, details = matrix
                 return ("matrix", mapped_keys, recovar["keys_local"], details)
+        if match_mode == "physical":
+            physical = _matrix_mapped_relion_keys(relion, recovar, physical=True)
+            if physical is not None:
+                mapped_keys, details = physical
+                return ("physical", mapped_keys, recovar["keys_local"], details)
         raise ValueError(f"match_mode={match_mode!r} is unavailable or too large for these dumps")
 
     matrix = _matrix_mapped_relion_keys(relion, recovar)
@@ -1620,6 +1796,8 @@ def compare_dumps(
         "recovar_candidate_count": int(len(rec_idx)),
         "relion_duplicate_keys_collapsed": int(relion_duplicate_keys_collapsed),
         "recovar_duplicate_keys_collapsed": int(recovar_duplicate_keys_collapsed),
+        "relion_probability_mass": float(np.sum(np.asarray(relion_matched["prob"], dtype=np.float64))),
+        "recovar_probability_mass": float(np.sum(np.asarray(recovar_matched["prob"], dtype=np.float64))),
         "common_candidate_count": int(len(common_keys)),
         "relion_only_count": int(len(rel_only)),
         "recovar_only_count": int(len(rec_only)),
@@ -1635,7 +1813,16 @@ def compare_dumps(
     }
 
     if common_keys:
+        common_relion_top_key = max(common_keys, key=lambda key: relion_matched["prob"][rel_idx[key]])
+        common_recovar_top_key = max(common_keys, key=lambda key: recovar_matched["prob"][rec_idx[key]])
+        result["common_relion_top_key"] = list(common_relion_top_key)
+        result["common_recovar_top_key"] = list(common_recovar_top_key)
         top_keys = list(dict.fromkeys(key for key in (relion_top_key, recovar_top_key) if key in rel_idx and key in rec_idx))
+        top_keys.extend(
+            key
+            for key in (common_relion_top_key, common_recovar_top_key)
+            if key not in top_keys
+        )
         result["cross_top_candidate_details"] = [
             {
                 "key": list(key),
@@ -1736,11 +1923,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--match-mode",
-        choices=("auto", "global", "local", "matrix", "relion_grid", "relion_grid_parent"),
+        choices=("auto", "global", "local", "matrix", "physical", "relion_grid", "relion_grid_parent"),
         default="auto",
         help=(
             "Match rotations by RECOVAR global oversampled index, local pass-2 row index, "
-            "RELION-to-RECOVAR nearest rotation matrix, RELION pixel-major firstiter grid, "
+            "RELION-to-RECOVAR nearest rotation matrix, strict physical rotation/translation geometry, "
+            "RELION pixel-major firstiter grid, "
             "RELION pixel-major grid collapsed to RECOVAR pass-2 coarse parents, "
             "or whichever overlaps more."
         ),

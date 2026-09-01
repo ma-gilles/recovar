@@ -1,0 +1,123 @@
+{
+  "schema": "recovar.em.real_kclass_selected_fine_diagnostic.v1",
+  "recorded_at": "2026-09-01T14:20:00-04:00",
+  "admission_status": "DIAGNOSTIC_ONLY",
+  "dataset": "EMPIAR-10076 frozen 10000-particle InitialModel fixture",
+  "scope": {
+    "K": 4,
+    "iteration": 1,
+    "selected_recovar_source_rows_zero_based": [114, 132],
+    "selected_stack_indices_one_based": [1598, 1839],
+    "current_size": 56,
+    "match_policy": "physical rotation matrices and residual x/y translation coordinates only",
+    "rotation_frobenius_tolerance": 1e-05,
+    "translation_max_abs_tolerance_pixels": 1e-05,
+    "unmatched_policy": "retain as engine-only support; never map to the nearest row"
+  },
+  "source": {
+    "commit": "e05c63a33b588c6bf965634b4c063d2ecde53f72",
+    "immutable_checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_selected_fine_e05c63a33_20260901",
+    "analysis_checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_real_k4_pair_evidence_20260901"
+  },
+  "capture": {
+    "job_id": "13310825",
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed_s": 95,
+    "node_observed_live": "della-h19g1",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "gpu_uuid": "GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a",
+    "live_scontrol_req_tres": "billing=8,cpu=8,gres/gpu=1,mem=64G,node=1",
+    "live_scontrol_alloc_tres": "billing=8,cpu=8,gres/gpu=1,mem=64G,node=1",
+    "accounting_warning": "A later sacct query resolved job 13310825 to an unrelated CPU job. The live scontrol allocation, H100 UUID, immutable sbatch script, and run provenance are retained; elapsed time is diagnostic and no HBM/RSS or formal performance ratio is claimed.",
+    "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901",
+    "peak_hbm_mib": null,
+    "max_rss_kib": null,
+    "formal_performance_result": false
+  },
+  "artifacts": {
+    "selection": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/selection.json",
+      "sha256": "8e97fcca1d9130d16527806d899627ad5d0408839e6958a26b3be267a4974e7c"
+    },
+    "coarse_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_coarse_919119f82_20260901/audit/selected_coarse_report.json",
+      "sha256": "f03f2385c01a1b8f67e67215909a72db69dca95b95f468766f940861553a5722"
+    },
+    "fine_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/selected_fine_physical_report_v1.json",
+      "sha256": "ae4ce194e1913aff0ce96751a26b2cde2ca8c56f9adb0d0e627575db462c8cae"
+    },
+    "capture_manifest": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/provenance/RECOVAR_FINE_LOCAL_CAPTURE_MANIFEST.sha256",
+      "sha256": "869d5cce3927136595b867c231828944ff3c0407d4dd0f361ce836fc396ff651"
+    },
+    "sbatch": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/scripts/run_recovar_selected_fine_local.sbatch",
+      "sha256": "d85cbed938c643719d76dd4da321989df33c02746010252c4adf12914933577c"
+    },
+    "stdout": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/logs/recovar-13310825.out",
+      "sha256": "c6526c8cdfabd1b4ad37c0eb3d101295e5d3bc3f0452f92ecd1d566595973a05"
+    },
+    "stderr": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/logs/recovar-13310825.err",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "particles": [
+    {
+      "recovar_source_row_zero_based": 114,
+      "stack_index_one_based": 1598,
+      "classification": "fine_class_winner_exact_with_support_and_prior_differences",
+      "first_observed_nonidentical_boundary": "coarse_significance_support",
+      "coarse_significance_support_mismatch_count": 53,
+      "fine_support_symmetric_difference_count": 1696,
+      "relion_class_probability_mass": [1.2762162836378114e-08, 0.9992966464351358, 0.0007031592731697437, 1.0909008267667858e-07],
+      "recovar_captured_class_probability_mass": [2.9308420402015882e-09, 0.9973433656096836, 0.0005197095391267212, 7.757439872914751e-11],
+      "relion_class_winner_zero_based": 1,
+      "recovar_class_winner_zero_based": 1,
+      "common_centered_raw_score_max_abs": 0.017709732055664062,
+      "common_centered_rotation_log_prior_max_abs": 0.0,
+      "common_centered_translation_log_prior_max_abs": 6.921405498578679,
+      "class_candidate_counts_relion_recovar_common": [[128, 96, 64], [1248, 608, 576], [832, 480, 480], [640, 96, 96]],
+      "interpretation": "The common class-1 top candidate is identical, but 672 native class-1 candidates are outside RECOVAR support and carry most native class-1 mass. This explains the fine pose split without implicating the common raw projector scores."
+    },
+    {
+      "recovar_source_row_zero_based": 132,
+      "stack_index_one_based": 1839,
+      "classification": "fine_class_winner_mismatch_with_support_and_prior_differences",
+      "first_observed_nonidentical_boundary": "coarse_significance_support",
+      "coarse_significance_support_mismatch_count": 70,
+      "fine_support_symmetric_difference_count": 2240,
+      "relion_class_probability_mass": [0.0, 0.9855206551909284, 0.014479350203498782, 0.0],
+      "recovar_captured_class_probability_mass": [0.0, 0.010006587835529521, 0.9786593825274735, 3.6663409643985736e-05],
+      "relion_class_winner_zero_based": 1,
+      "recovar_class_winner_zero_based": 2,
+      "common_centered_raw_score_max_abs": 0.014505386352539062,
+      "common_centered_rotation_log_prior_max_abs": 0.0,
+      "common_centered_translation_log_prior_max_abs": 2.7875735126435757,
+      "class_candidate_counts_relion_recovar_common": [[0, 0, 0], [512, 1344, 512], [128, 1504, 128], [0, 32, 0]],
+      "interpretation": "All native class-1 and class-2 candidates have exact geometric counterparts, while RECOVAR admits 832 and 1376 additional candidates respectively. The common raw scores remain close, but class-specific support and translation priors differ enough to flip the captured class mass."
+    }
+  ],
+  "excluded_outputs": {
+    "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/class_compare_r1",
+    "reason": "The earlier nearest-matrix join folded geometrically unmatched native rotations onto RECOVAR rows. Those provisional JSON files are invalid and are not evidence."
+  },
+  "failed_or_cancelled_capture_attempts": [
+    {
+      "job_id": "13309898",
+      "reason": "The diagnostic was wired to an inactive sparse writer rather than the InitialModel exact-local path; cancelled and excluded."
+    },
+    {
+      "job_id": "13308306",
+      "reason": "Incorrect selected source identities; excluded."
+    },
+    {
+      "job_id": "13308620",
+      "reason": "Missing debug-iteration wiring; excluded."
+    }
+  ],
+  "strict_claim_boundary": "This two-particle, iteration-1 InitialModel discriminator proves an observed coarse-significance/fine-support and translation-prior mismatch on EMPIAR-10076. It does not establish production K-class map quality, half-map resolution, or a formal speed ratio."
+}

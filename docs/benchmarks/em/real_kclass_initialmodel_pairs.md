@@ -199,6 +199,52 @@ trajectory gap. The next causal discriminator must capture the shared
 200-particle iteration-1 boundary before reconstruction, beginning with the
 initial model/tau2/noise state and then coarse/fine scores and winners.
 
+That selected boundary is now sealed for two deterministic 10076 particles.
+The coarse audit first found exact joint winners but nonidentical significance
+support: 53 tuples for source row 114 (stack 1598) and 70 for source row 132
+(stack 1839). Exact-local GPU capture job 13310825 then wrote every requested
+particle-by-class fine table from immutable commit `e05c63a33`. The corrected
+analyzer joins translations by their captured residual `(x,y)` coordinates and
+joins only rotation matrices within Frobenius distance `1e-5`; unmatched native
+rotations remain native-only support. This replaces and explicitly invalidates
+the earlier nearest-row analysis, which folded unrelated rotations together.
+
+| Source row / stack | Fine class winner RELION / RECOVAR | Candidate counts RELION / RECOVAR / common by class 0--3 | Max centered common raw-score delta | Max centered rotation / translation-prior delta |
+| --- | --- | --- | ---: | ---: |
+| 114 / 1598 | 1 / 1 | 128/96/64; 1248/608/576; 832/480/480; 640/96/96 | 0.01771 | 0 / 6.92141 |
+| 132 / 1839 | 1 / 2 | 0/0/0; 512/1344/512; 128/1504/128; 0/32/0 | 0.01451 | 0 / 2.78757 |
+
+For row 114, both engines choose the same class and the top candidate on the
+physical intersection is identical, but 672 native class-1 candidates are
+outside RECOVAR support and carry most of the native class-1 probability. For
+row 132, all native class-1 and class-2 candidates are in the physical
+intersection, while RECOVAR adds 832 and 1376 candidates; the captured class
+mass flips from RELION `[0, 0.98552, 0.01448, 0]` to RECOVAR
+`[0, 0.01001, 0.97866, 0.00004]`. The common raw-score residuals are small and
+the centered rotation priors are exact. The first observed nonidentity is the
+coarse significance support, and the fine boundary adds large
+translation-prior differences. This rules out common-candidate projector/raw
+score arithmetic as the explanation for these two final fine splits, but does
+not yet assign the support/prior difference to one source expression.
+
+The compact checked-in record is
+`docs/benchmarks/em/diagnostics/real-kclass-selected-fine-10076-20260901.json`.
+The full report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/selected_fine_physical_report_v1.json`
+(SHA-256
+`ae4ce194e1913aff0ce96751a26b2cde2ca8c56f9adb0d0e627575db462c8cae`).
+Reproduce the post-hoc audit without a GPU using:
+
+```bash
+pixi run python scripts/audit_em_real_kclass_selected_fine.py \
+  --selection-json /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/selection.json \
+  --coarse-report-json /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_coarse_919119f82_20260901/audit/selected_coarse_report.json \
+  --relion-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_coarse_919119f82_20260901/relion \
+  --recovar-score-directory /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/recovar_scores \
+  --iteration 1 \
+  --output-json /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/selected_fine_physical_report_replay.json
+```
+
 ## Outputs and admission
 
 Every disposable outer run root and pair root contains `SAFE_TO_DELETE`.

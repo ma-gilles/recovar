@@ -193,6 +193,67 @@ def test_compare_relion_matrix_match_selects_requested_kclass_fine_eulers(tmp_pa
     assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
 
 
+def test_compare_relion_physical_match_retains_unmatched_rotations_and_maps_translation_coordinates(tmp_path):
+    relion_dir = tmp_path / "relion"
+    relion_dir.mkdir()
+    _write_flat_int(relion_dir / "pass1_acc_rot_id.bin", [100, 100, 200])
+    _write_flat_int(relion_dir / "pass1_acc_rot_idx.bin", [0, 0, 1])
+    _write_flat_int(relion_dir / "pass1_acc_trans_idx.bin", [9, 3, 9])
+    _write_flat_int(relion_dir / "pass1_candidate_class_idx.bin", [0, 0, 0])
+    _write_flat_real(relion_dir / "pass1_candidate_translation_x.bin", [-2.5, 1.5, -2.5])
+    _write_flat_real(relion_dir / "pass1_candidate_translation_y.bin", [4.5, -3.5, 4.5])
+    _write_flat_real(relion_dir / "pass1_candidate_weight_normalized.bin", [0.4, 0.5, 0.1])
+    _write_flat_real(relion_dir / "pass1_exp_Mweight_raw_preprior.bin", [-4.0, -5.0, -1.0])
+
+    recovar_rotation = np.array(
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    unmatched_relion_rotation = np.diag([-1.0, -1.0, 1.0])
+    # RELION's captured fine matrices use the transpose convention.
+    relion_rotations = np.stack([recovar_rotation.T, unmatched_relion_rotation])
+    _write_flat_real(relion_dir / "pass1_class0_fine_eulers.bin", relion_rotations.reshape(-1))
+
+    recovar_npz = tmp_path / "local_score.npz"
+    scores = np.array([[5.0, 4.0]], dtype=np.float64)
+    np.savez_compressed(
+        recovar_npz,
+        selected_global_image_indices=np.array([7], dtype=np.int64),
+        selected_local_image_indices=np.array([7], dtype=np.int64),
+        class_index=np.array([0], dtype=np.int32),
+        current_size=np.array([56], dtype=np.int32),
+        posterior=np.array([[[0.5, 0.4]]], dtype=np.float64),
+        pass2_scores_raw=scores[None, :, :],
+        pass2_scores_total=scores[None, :, :],
+        rotation_log_prior=np.zeros((1, 1), dtype=np.float64),
+        translation_log_prior=np.zeros((1, 2), dtype=np.float64),
+        local_rotation_indices=np.array([777], dtype=np.int64),
+        local_rotation_matrices=recovar_rotation[None].astype(np.float32),
+        # The integer row order is deliberately the reverse of RELION's ids.
+        translations=np.array([[1.5, -3.5], [-2.5, 4.5]], dtype=np.float32),
+        image_pre_shift=np.array([4.0, -14.0], dtype=np.float32),
+    )
+
+    result = compare_dumps(relion_dir, recovar_npz, match_mode="physical")
+
+    assert result["match_mode"] == "physical"
+    assert result["common_candidate_count"] == 2
+    assert result["relion_only_count"] == 1
+    assert result["recovar_only_count"] == 0
+    assert result["relion_duplicate_keys_collapsed"] == 0
+    assert result["match_details"]["rotation_matrix_orientation"] == "transpose"
+    assert result["match_details"]["rotation_matrix_matched_relion_rows"] == 1
+    assert result["match_details"]["rotation_matrix_unmatched_relion_rows"] == 1
+    assert result["match_details"]["rotation_matrix_match_max_frobenius"] == 0.0
+    assert result["match_details"]["translation_coordinate_matched_relion_rows"] == 2
+    assert result["match_details"]["translation_coordinate_unmatched_relion_rows"] == 0
+    assert result["match_details"]["translation_coordinate_match_max_abs_pixels"] == 0.0
+    assert result["match_details"]["recovar_image_pre_shift_pixels"] == [4.0, -14.0]
+    assert result["relion_top_key"] == [0, 0]
+    assert result["recovar_top_key"] == [0, 0]
+    assert result["common_score_pre_prior_centered_diff"]["max_abs"] == 0.0
+
+
 def test_compare_relion_recovar_estep_dump_matches_candidate_keys(tmp_path):
     relion_dir = tmp_path / "relion"
     relion_dir.mkdir()
@@ -462,6 +523,7 @@ def test_compare_relion_recovar_estep_dump_reads_local_score_schema(tmp_path):
     _write_flat_real(relion_dir / "pass1_candidate_weight_normalized.bin", [0.2, 0.7, 0.1])
     _write_flat_real(relion_dir / "pass1_exp_Mweight_raw_preprior.bin", [-10.0, -12.0, -8.0])
     _write_flat_int(relion_dir / "pass1_candidate_in_reconstruction_set.bin", [0, 1, 0])
+    _write_flat_int(relion_dir / "pass1_candidate_class_idx.bin", [0, 1, 1])
 
     recovar_npz = tmp_path / "local_score_it011_image_000007_final.npz"
     scores = np.array([[10.0, -np.inf, -np.inf], [-np.inf, 12.0, 8.0]], dtype=np.float64)
@@ -500,6 +562,12 @@ def test_compare_relion_recovar_estep_dump_reads_local_score_schema(tmp_path):
     assert reconstruction_result["common_candidate_count"] == 1
     assert reconstruction_result["relion_top_key"] == [7, 1]
     assert reconstruction_result["recovar_top_key"] == [7, 1]
+
+    class_result = compare_dumps(relion_dir, recovar_npz, recovar_class_index=1)
+
+    assert class_result["recovar_class_index"] == 1
+    assert class_result["relion_candidate_count"] == 2
+    assert class_result["common_candidate_count"] == 2
 
 
 def test_compare_relion_recovar_estep_dump_prefers_global_acc_rot_id(tmp_path):
