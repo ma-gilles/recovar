@@ -25,6 +25,10 @@ vdam_assert_target_gpu_allocated() {
     echo "VDAM cannot prove the target GPU belongs to the Slurm allocation: no allocation spec" >&2
     return 76
   fi
+  if [[ "${allocation_spec}" == ,* || "${allocation_spec}" == *, || "${allocation_spec}" == *,,* ]]; then
+    echo "VDAM allocation spec contains an empty GPU selector: ${allocation_spec}" >&2
+    return 76
+  fi
 
   IFS=',' read -r -a allocation_tokens <<< "${allocation_spec}"
   for token in "${allocation_tokens[@]}"; do

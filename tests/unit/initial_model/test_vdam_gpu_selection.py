@@ -156,6 +156,19 @@ def test_target_gpu_allocation_rejects_empty_or_unresolvable_allocation(tmp_path
     assert "cannot resolve allocated GPU selector 3" in unresolved.stderr
 
 
+def test_target_gpu_allocation_rejects_empty_selectors(tmp_path):
+    for index, allocation_spec in enumerate((",3", "3,", "3,,4")):
+        result = _run_allocation_assertion(
+            tmp_path / str(index),
+            target="GPU-target",
+            allocation_spec=allocation_spec,
+            mapping={"3": "GPU-target", "4": "GPU-other"},
+        )
+
+        assert result.returncode == 76
+        assert "contains an empty GPU selector" in result.stderr
+
+
 def test_target_gpu_allocation_rejects_selector_with_multiple_or_malformed_uuids(tmp_path):
     multiple = _run_allocation_assertion(
         tmp_path / "multiple",

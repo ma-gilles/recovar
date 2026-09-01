@@ -44,6 +44,7 @@ SOURCE_FILES=(
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
   recovar/em/dense_single_volume/helpers/significance.py
+  scripts/vdam_gpu_selection.sh
   tests/conftest.py
   tests/unit/test_cuda_relion_fine_diff2.py
   scripts/run_vdam_coarse_multistream_gpu_gate.sbatch
@@ -73,12 +74,15 @@ test -s "${PRECOMPUTED_RESOURCE_DEMANGLED}"
 test "${SLURMD_NODENAME:-$(hostname -s)}" = "${EXPECTED_NODE_NAME}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
+repo_tree=$(git -C "${REPO_ROOT}" rev-parse 'HEAD^{tree}')
 
+initial_allocation_spec=${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}}
 source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
+vdam_assert_target_gpu_allocated "${TARGET_GPU_UUID}" "${initial_allocation_spec}"
 vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
 selected_gpu_uuid=${VDAM_SELECTED_GPU_UUID}
 test "${selected_gpu_uuid}" = "${TARGET_GPU_UUID}"
-gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader | sed -n '1p' | sed 's/[[:space:]]*$//')
+gpu_name=$(nvidia-smi -i "${selected_gpu_uuid}" --query-gpu=name --format=csv,noheader | sed -n '1p' | sed 's/[[:space:]]*$//')
 [[ "${gpu_name}" == *H100* ]]
 
 mkdir -p "${PROVENANCE}" "${RUNTIME}/cuda"
@@ -90,6 +94,7 @@ touch "${ROOT}/SAFE_TO_DELETE"
 source_manifest_sha256=$(sha256sum "${PROVENANCE}/source_manifest.sha256" | awk '{print $1}')
 test "${source_manifest_sha256}" = "${EXPECTED_SOURCE_MANIFEST_SHA256}"
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE}/repo_head.txt"
+printf '%s\n' "${repo_tree}" > "${PROVENANCE}/repo_tree.txt"
 git -C "${REPO_ROOT}" symbolic-ref --short HEAD > "${PROVENANCE}/repo_branch.txt"
 git -C "${REPO_ROOT}" status --porcelain=v1 > "${PROVENANCE}/repo_status.txt"
 git -C "${REPO_ROOT}" diff HEAD | sha256sum > "${PROVENANCE}/repo_diff.sha256"
@@ -97,8 +102,9 @@ printf '%s\n' "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job_id.txt"
 printf '%s\n' "${SLURMD_NODENAME:-$(hostname -s)}" > "${PROVENANCE}/node.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${PROVENANCE}/selected_gpu_uuid.txt"
 printf '%s\n' "${gpu_name}" > "${PROVENANCE}/gpu_name.txt"
-printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/allocated_gpu_uuids.csv"
-nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
+printf '%s\n' "${VDAM_ALLOCATED_GPU_UUIDS_CSV}" > "${PROVENANCE}/allocated_gpu_uuids.csv"
+printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/visible_gpu_uuids.csv"
+nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 "${CUDA_BUILD_TOOLKIT}/bin/nvcc" --version > "${PROVENANCE}/nvcc_version.txt"
 printf '%s\n' "${CUDA_RUNTIME_TOOLKIT}" \
@@ -217,6 +223,7 @@ PY
 
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${cuda_sha256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
+test "$(git -C "${REPO_ROOT}" rev-parse 'HEAD^{tree}')" = "${repo_tree}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
 (
   cd "${REPO_ROOT}"
@@ -229,7 +236,8 @@ vdam_verify_selected_gpu "${selected_gpu_uuid}"
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${selected_gpu_uuid}" \
   "${SLURMD_NODENAME:-$(hostname -s)}" "${gpu_name}" "${cuda_sha256}" \
   "${source_manifest_sha256}" "${build_started}" "${build_finished}" \
-  "${test_started}" "${test_finished}" "${TEST_NODES[*]}" <<'PY'
+  "${test_started}" "${test_finished}" "${TEST_NODES[*]}" \
+  "${repo_tree}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -239,11 +247,13 @@ payload = {
     "classification": "performance_only_qualification",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],
+    "git_tree": sys.argv[14],
     "gpu_uuid": sys.argv[4],
     "node": sys.argv[5],
     "gpu_name": sys.argv[6],
     "cuda_sha256": sys.argv[7],
     "source_manifest_sha256": sys.argv[8],
+    "source_manifest_scope": "selected_high_risk_files",
     "cuda_stage_wall_s": float(sys.argv[10]) - float(sys.argv[9]),
     "test_wall_s": float(sys.argv[12]) - float(sys.argv[11]),
     "pytest_node": sys.argv[13],
