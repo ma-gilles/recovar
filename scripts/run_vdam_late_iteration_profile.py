@@ -17,8 +17,9 @@ import json
 import os
 import resource
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -37,6 +38,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cuda-profiler-range",
         action="store_true",
         help="Call cudaProfilerStart/Stop around only the warm execution.",
+    )
+    parser.add_argument(
+        "--audit-raw-image-cache",
+        action="store_true",
+        help="Record every ImageLoader.load_all call without changing cache policy.",
     )
     return parser.parse_args(argv)
 
@@ -122,9 +128,7 @@ def _recovar_argv(
     # qualified defaults, and pass only non-default candidate values once the
     # integrated source provides the corresponding CLI options.
     if int(args.exact_local_bucket_radix) != 4:
-        command.extend(
-            ("--exact-local-bucket-radix", str(args.exact_local_bucket_radix))
-        )
+        command.extend(("--exact-local-bucket-radix", str(args.exact_local_bucket_radix)))
     if int(args.exact_local_physical_order_chunk_size) > 0:
         command.extend(
             (
@@ -180,15 +184,11 @@ def _process_resource_delta(
         "voluntary_context_switches",
         "involuntary_context_switches",
     )
-    delta: dict[str, object] = {
-        key: float(after[key]) - float(before[key]) for key in monotonic
-    }
+    delta: dict[str, object] = {key: float(after[key]) - float(before[key]) for key in monotonic}
     before_io = before["proc_io"]
     after_io = after["proc_io"]
     assert isinstance(before_io, dict) and isinstance(after_io, dict)
-    delta["proc_io"] = {
-        key: int(after_io[key]) - int(before_io[key]) for key in sorted(after_io)
-    }
+    delta["proc_io"] = {key: int(after_io[key]) - int(before_io[key]) for key in sorted(after_io)}
     return delta
 
 
@@ -242,6 +242,54 @@ def _effects_barrier() -> None:
         barrier()
 
 
+@contextmanager
+def _capture_raw_image_cache_loads(
+    enabled: bool,
+) -> Iterator[list[dict[str, object]] | None]:
+    """Observe diagnostic ``load_all`` calls without changing cache policy."""
+
+    if not enabled:
+        yield None
+        return
+
+    import numpy as np
+
+    from recovar.data_io.image_loader import ImageLoader
+
+    events: list[dict[str, object]] = []
+    original = ImageLoader.load_all
+
+    def audited_load_all(loader):
+        cached_before = getattr(loader, "_cached", None)
+        num_images = int(getattr(loader, "num_images"))
+        image_size = int(getattr(loader, "image_size"))
+        dtype = np.dtype(getattr(loader, "_dtype", np.float32))
+        started = time.perf_counter()
+        result = original(loader)
+        elapsed_s = float(time.perf_counter() - started)
+        cached_after = getattr(loader, "_cached", None)
+        events.append(
+            {
+                "loader_type": f"{type(loader).__module__}.{type(loader).__qualname__}",
+                "num_images": num_images,
+                "image_size": image_size,
+                "dtype": dtype.str,
+                "estimated_bytes": int(num_images * image_size * image_size * dtype.itemsize),
+                "cached_before": cached_before is not None,
+                "cached_after": cached_after is not None,
+                "cached_nbytes": int(getattr(cached_after, "nbytes", 0)),
+                "elapsed_s": elapsed_s,
+            }
+        )
+        return result
+
+    ImageLoader.load_all = audited_load_all
+    try:
+        yield events
+    finally:
+        ImageLoader.load_all = original
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     checkpoint = args.checkpoint_optimiser.resolve(strict=True)
@@ -277,36 +325,44 @@ def main(argv: list[str] | None = None) -> int:
 
     reports: dict[str, dict[str, object]] = {}
     target_iteration = int(args.checkpoint_iteration) + 1
-    for label in ("cold", "warm"):
-        prefix = output_root / label / "run"
-        prefix.parent.mkdir(parents=True, exist_ok=False)
-        command = _recovar_argv(args=args, output_prefix=prefix)
-        capture = label == "warm" and profiler_start is not None
-        resources_before = _process_resource_snapshot()
-        started = time.perf_counter()
-        if capture:
-            profiler_start()
-        try:
-            status = int(run_ab_initio(command))
-            _effects_barrier()
-        finally:
+    with _capture_raw_image_cache_loads(bool(args.audit_raw_image_cache)) as cache_events:
+        for label in ("cold", "warm"):
+            prefix = output_root / label / "run"
+            prefix.parent.mkdir(parents=True, exist_ok=False)
+            command = _recovar_argv(args=args, output_prefix=prefix)
+            capture = label == "warm" and profiler_start is not None
+            event_start = len(cache_events) if cache_events is not None else 0
+            resources_before = _process_resource_snapshot()
+            started = time.perf_counter()
             if capture:
-                assert profiler_stop is not None
-                profiler_stop()
-        wall_s = float(time.perf_counter() - started)
-        resources_after = _process_resource_snapshot()
-        if status != 0:
-            raise RuntimeError(f"{label} continuation exited with status {status}")
-        reports[label] = {
-            "wall_s": wall_s,
-            "argv": command,
-            "process_resources": {
-                "before": resources_before,
-                "after": resources_after,
-                "delta": _process_resource_delta(resources_before, resources_after),
-            },
-            **_profile_metadata(prefix, target_iteration),
-        }
+                profiler_start()
+            try:
+                status = int(run_ab_initio(command))
+                _effects_barrier()
+            finally:
+                if capture:
+                    assert profiler_stop is not None
+                    profiler_stop()
+            wall_s = float(time.perf_counter() - started)
+            resources_after = _process_resource_snapshot()
+            if status != 0:
+                raise RuntimeError(f"{label} continuation exited with status {status}")
+            reports[label] = {
+                "wall_s": wall_s,
+                "argv": command,
+                "process_resources": {
+                    "before": resources_before,
+                    "after": resources_after,
+                    "delta": _process_resource_delta(resources_before, resources_after),
+                },
+                **_profile_metadata(prefix, target_iteration),
+            }
+            if cache_events is not None:
+                reports[label]["raw_image_cache_audit"] = {
+                    "mode": os.environ.get("RECOVAR_EM_RAW_IMAGE_CACHE", "auto"),
+                    "max_gb": float(os.environ.get("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "16")),
+                    "load_all_events": [dict(event) for event in cache_events[event_start:]],
+                }
 
     report = {
         "schema": "recovar.vdam_late_iteration_profile.v1",
@@ -320,10 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         "input_star_sha256": _sha256(input_star),
         "data_dir": str(data_dir),
         "cuda_profiler_range": bool(args.cuda_profiler_range),
+        "raw_image_cache_audit_enabled": bool(args.audit_raw_image_cache),
         "exact_local_bucket_radix": int(args.exact_local_bucket_radix),
-        "exact_local_physical_order_chunk_size": int(
-            args.exact_local_physical_order_chunk_size
-        ),
+        "exact_local_physical_order_chunk_size": int(args.exact_local_physical_order_chunk_size),
         "cold": reports["cold"],
         "warm": reports["warm"],
         "cold_minus_warm_wall_s": float(reports["cold"]["wall_s"]) - float(reports["warm"]["wall_s"]),

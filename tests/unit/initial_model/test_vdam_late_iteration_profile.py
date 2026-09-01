@@ -3,9 +3,12 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
+from recovar.data_io.image_loader import ImageLoader
 from scripts.run_vdam_late_iteration_profile import (
+    _capture_raw_image_cache_loads,
     _process_resource_delta,
     _profile_metadata,
     _recovar_argv,
@@ -13,6 +16,41 @@ from scripts.run_vdam_late_iteration_profile import (
 from scripts.summarize_vdam_nsys_sqlite import summarize
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+class _AuditLoader(ImageLoader):
+    def _load(self, indices):
+        return np.ones((len(indices), self.image_size, self.image_size), dtype=self._dtype)
+
+
+def test_late_profile_cache_audit_records_load_all_and_restores_method():
+    loader = _AuditLoader(num_images=3, image_size=2, dtype=np.float32)
+    original = ImageLoader.load_all
+
+    with _capture_raw_image_cache_loads(True) as events:
+        loader.load_all()
+
+    assert ImageLoader.load_all is original
+    assert events is not None and len(events) == 1
+    assert events[0] == {
+        "loader_type": f"{_AuditLoader.__module__}.{_AuditLoader.__qualname__}",
+        "num_images": 3,
+        "image_size": 2,
+        "dtype": "<f4",
+        "estimated_bytes": 48,
+        "cached_before": False,
+        "cached_after": True,
+        "cached_nbytes": 48,
+        "elapsed_s": events[0]["elapsed_s"],
+    }
+    assert events[0]["elapsed_s"] >= 0.0
+
+
+def test_late_profile_cache_audit_can_be_disabled():
+    original = ImageLoader.load_all
+    with _capture_raw_image_cache_loads(False) as events:
+        assert events is None
+    assert ImageLoader.load_all is original
 
 
 def test_late_profile_metadata_requires_exactly_one_diagnostic_iteration(tmp_path):
