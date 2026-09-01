@@ -458,7 +458,11 @@ def _pack_compact_full_accumulators_for_large_relion_ifft(
 
     accumulator_voxels = int(np.prod(accumulator_shape))
     reconstruction_voxels = int(np.prod(reconstruction_shape))
-    if relion_functions._large_grid_postprocess_single_precision_enabled(
+    # The accumulator decision is physical: forcing single precision on a
+    # compact grid must not misclassify it as too large to repack.  The
+    # reconstruction still needs the single-precision large-grid path because
+    # this boundary stages a complex64 packed half-volume.
+    if relion_functions._large_grid_postprocess_is_physically_large(
         accumulator_voxels,
     ) or not relion_functions._large_grid_postprocess_single_precision_enabled(
         reconstruction_voxels,

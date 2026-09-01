@@ -1575,7 +1575,7 @@ def test_compact_full_device_accumulator_runs_giant_split_and_normalization(monk
     import recovar.core.fourier_transform_utils as ftu
     from recovar.em.dense_single_volume import mean_helpers
 
-    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", raising=False)
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
     monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", raising=False)
     volume_shape = (2, 2, 2)
     accumulator_shape = (3, 3, 3)
@@ -1586,6 +1586,13 @@ def test_compact_full_device_accumulator_runs_giant_split_and_normalization(monk
     ft_ctf_full = ftu.half_volume_to_full_volume(ft_ctf_half, accumulator_shape).reshape(-1)
     ft_y_full = ftu.half_volume_to_full_volume(ft_y_half, accumulator_shape).reshape(-1)
     events = []
+
+    assert rf._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+    assert not rf._large_grid_postprocess_is_physically_large(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
 
     def fake_stage(ft_ctf, ft_y, *_args, **kwargs):
         events.append("stage")
@@ -1604,6 +1611,11 @@ def test_compact_full_device_accumulator_runs_giant_split_and_normalization(monk
         rf,
         "_relion_reconstruction_padded_shape",
         lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_host_irfft_enabled",
+        lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
     monkeypatch.setattr(
