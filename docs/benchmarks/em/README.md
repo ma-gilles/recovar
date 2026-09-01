@@ -223,3 +223,17 @@ The records include three seeds per symmetry, generated-input hashes,
 per-class signed GT FSC-AUC, hard populations, matched-H100 wall/HBM, Slurm
 accounting, source/executable provenance, independent trajectory-audit jobs,
 and copy-safe rerun instructions.
+
+## Sealed O/I1 three-seed symmetry results
+
+The completed fixed-state O and I1 campaigns are documented in
+`k4_symmetry_o_i1_multiseed_20260901.md` and sealed in
+`campaigns/k4-o-three-seed-22efd8065-h100.json` and
+`campaigns/k4-i1-three-seed-22efd8065-h100.json`. All six 5,000-particle,
+box-128 trajectories pass all 20 numbered iteration/class cells, minimum
+assignment agreement is 99.76%, no class is below 1%, and all 24 matched
+per-class GT FSC=0.143 resolutions agree exactly between RECOVAR and RELION.
+The runs exercise the post-`c75cbfffc` fixed non-C1 local-search path through
+iteration 5 and retain generated-input hashes, per-class signed GT FSC-AUC,
+hard populations, matched-H100 wall/HBM, Slurm accounting, and independent
+trajectory-audit jobs.

@@ -50,6 +50,20 @@ D4_SYMMETRY_CAMPAIGN = json.loads(
         / "k4-d4-three-seed-c75cbfffc-h100"
     ).with_suffix(".json").read_text()
 )
+O_SYMMETRY_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k4-o-three-seed-22efd8065-h100"
+    ).with_suffix(".json").read_text()
+)
+I1_SYMMETRY_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k4-i1-three-seed-22efd8065-h100"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -64,6 +78,8 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-c4-three-seed-c75cbfffc-h100",
         "k4-d4-three-seed-c75cbfffc-h100",
         "k4-expanded14-3466e7a32-h100",
+        "k4-i1-three-seed-22efd8065-h100",
+        "k4-o-three-seed-22efd8065-h100",
     ]
     assert [case["case_id"] for case in CAMPAIGN["cases"]] == list(range(16, 30))
     classifications = {case["case_id"]: case["outcome"]["classification"] for case in CAMPAIGN["cases"]}
@@ -77,6 +93,8 @@ def test_checked_in_em_benchmark_registry_is_valid():
     [
         (C4_SYMMETRY_CAMPAIGN, "C4"),
         (D4_SYMMETRY_CAMPAIGN, "D4"),
+        (O_SYMMETRY_CAMPAIGN, "O"),
+        (I1_SYMMETRY_CAMPAIGN, "I1"),
     ],
 )
 def test_three_seed_symmetry_campaigns_retain_complete_trajectory_evidence(campaign, symmetry):
@@ -90,6 +108,10 @@ def test_three_seed_symmetry_campaigns_retain_complete_trajectory_evidence(campa
         for class_result in case["quality"]["final_classes"]:
             assert class_result["recovar_gt_resolution_0_143_angstrom"] > 0
             assert class_result["relion_gt_resolution_0_143_angstrom"] > 0
+            assert (
+                class_result["recovar_gt_resolution_0_143_angstrom"]
+                == class_result["relion_gt_resolution_0_143_angstrom"]
+            )
 
 
 def test_campaign_per_class_resolution_requires_both_engines():
