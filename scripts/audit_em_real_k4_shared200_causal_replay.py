@@ -36,7 +36,7 @@ from scripts.summarize_em_completion_bench import (
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v1"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v2"
 PASS2_NAME = re.compile(r"pass2_orig(?P<original>[0-9]{6})_class(?P<class_>[0-9]{3})_cs(?P<size>[0-9]{3})[.]npz")
 FACTOR_NAME = re.compile(
     r"part(?P<part>[0-9]+)_stack(?P<stack>[0-9]+)_img(?P<img>[0-9]+)_class(?P<class_>[0-9]+)[.]bpre-v2[.]bin"
@@ -237,6 +237,7 @@ def _load_recovar(path: Path, *, stack: int, class_id: int) -> dict[str, np.ndar
         "candidate_mask",
         "scores_with_prior",
         "probs",
+        "reconstruction_probs",
         "rotation_log_prior",
         "translation_log_prior",
         "reconstruction_mask",
@@ -322,12 +323,40 @@ def _join_class(
         "native support does not replay the BPref header",
     )
     recovar_posterior = np.asarray(recovar["probs"], dtype=np.float64)
+    recovar_reconstruction_posterior = np.asarray(
+        recovar["reconstruction_probs"],
+        dtype=np.float64,
+    )
     recovar_support = np.asarray(recovar["reconstruction_mask"], dtype=bool)
     _require(
-        recovar_posterior.shape == candidate_mask.shape == recovar_support.shape,
+        recovar_posterior.shape
+        == recovar_reconstruction_posterior.shape
+        == candidate_mask.shape
+        == recovar_support.shape,
         "RECOVAR posterior/support geometry drift",
     )
     _require(np.all(recovar_support <= candidate_mask), "RECOVAR support is outside candidates")
+    _require(
+        np.isfinite(recovar_posterior).all()
+        and np.isfinite(recovar_reconstruction_posterior).all(),
+        "RECOVAR posterior is non-finite",
+    )
+    _require(
+        np.all(recovar_posterior >= 0.0)
+        and np.all(recovar_reconstruction_posterior >= 0.0),
+        "RECOVAR posterior is negative",
+    )
+    _require(
+        np.array_equal(recovar_support, recovar_reconstruction_posterior > 0.0),
+        "RECOVAR reconstruction mask does not equal its positive posterior support",
+    )
+    _require(
+        np.array_equal(
+            recovar_reconstruction_posterior,
+            np.where(recovar_support, recovar_posterior, 0.0),
+        ),
+        "RECOVAR retained posterior does not equal the full posterior on support",
+    )
     return {
         "stack": stack,
         "class_id": class_id,
@@ -345,6 +374,12 @@ def _join_class(
         ),
         "native_posterior": native_posterior,
         "recovar_posterior": recovar_posterior,
+        "native_reconstruction_posterior": np.where(
+            native_support,
+            native_posterior,
+            np.float32(0.0),
+        ),
+        "recovar_reconstruction_posterior": recovar_reconstruction_posterior,
         "native_support": native_support,
         "recovar_support": recovar_support,
         "significant_weight_bits": int(factor.header[25]),
@@ -357,6 +392,130 @@ def _fsc_metric(left: np.ndarray, right: np.ndarray) -> tuple[float, list[float 
     _require(curve.size > 1 and np.isfinite(curve[1:]).any(), "map comparison has no finite non-DC FSC shells")
     auc = _finite(normalized_fsc_auc(curve), label="FSC-AUC")
     return auc, [float(value) if np.isfinite(value) else None for value in curve]
+
+
+def _particle_mass_diagnostics(joined: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare full and BPref-retained mass with one joint K-class normalization.
+
+    The counterfactual denominator is deliberately computed once after
+    concatenating every class and every retained pose/translation hypothesis
+    for the particle.  Normalizing one class at a time would erase the class
+    posterior and is not a valid K-class causal arm.
+    """
+
+    _require(bool(joined), "particle mass diagnostics require at least one class")
+    _require(
+        [int(item["class_id"]) for item in joined] == list(range(1, len(joined) + 1)),
+        "particle classes must be complete and ordered",
+    )
+    native_full = np.concatenate(
+        [np.asarray(item["native_posterior"], dtype=np.float64).reshape(-1) for item in joined]
+    )
+    recovar_full = np.concatenate(
+        [np.asarray(item["recovar_posterior"], dtype=np.float64).reshape(-1) for item in joined]
+    )
+    native_retained = np.concatenate(
+        [
+            np.asarray(item["native_reconstruction_posterior"], dtype=np.float64).reshape(-1)
+            for item in joined
+        ]
+    )
+    recovar_retained = np.concatenate(
+        [
+            np.asarray(item["recovar_reconstruction_posterior"], dtype=np.float64).reshape(-1)
+            for item in joined
+        ]
+    )
+    for label, values in (
+        ("native full posterior", native_full),
+        ("RECOVAR full posterior", recovar_full),
+        ("native retained posterior", native_retained),
+        ("RECOVAR retained posterior", recovar_retained),
+    ):
+        _require(values.size > 0 and np.isfinite(values).all(), f"{label} is empty or non-finite")
+        _require(np.all(values >= 0.0), f"{label} is negative")
+
+    native_full_mass = float(np.sum(native_full, dtype=np.float64))
+    recovar_full_mass = float(np.sum(recovar_full, dtype=np.float64))
+    native_retained_mass = float(np.sum(native_retained, dtype=np.float64))
+    recovar_retained_mass = float(np.sum(recovar_retained, dtype=np.float64))
+    _require(native_retained_mass > 0.0, "native retained posterior mass is zero")
+    _require(recovar_retained_mass > 0.0, "RECOVAR retained posterior mass is zero")
+
+    normalized_native_retained = native_retained / native_retained_mass
+    normalized_recovar_retained = recovar_retained / recovar_retained_mass
+    native_norm = max(float(np.linalg.norm(native_retained)), np.finfo(np.float64).tiny)
+    normalized_native_norm = max(
+        float(np.linalg.norm(normalized_native_retained)),
+        np.finfo(np.float64).tiny,
+    )
+
+    class_rows = []
+    normalized_offset = 0
+    for item in joined:
+        native_class_full = np.asarray(item["native_posterior"], dtype=np.float64).reshape(-1)
+        recovar_class_full = np.asarray(item["recovar_posterior"], dtype=np.float64).reshape(-1)
+        native_class_retained = np.asarray(
+            item["native_reconstruction_posterior"], dtype=np.float64
+        ).reshape(-1)
+        recovar_class_retained = np.asarray(
+            item["recovar_reconstruction_posterior"], dtype=np.float64
+        ).reshape(-1)
+        normalized_stop = normalized_offset + recovar_class_retained.size
+        native_support = np.asarray(item["native_support"], dtype=bool)
+        recovar_support = np.asarray(item["recovar_support"], dtype=bool)
+        intersection = int(np.count_nonzero(native_support & recovar_support))
+        union = int(np.count_nonzero(native_support | recovar_support))
+        native_class_full_mass = float(np.sum(native_class_full, dtype=np.float64))
+        recovar_class_full_mass = float(np.sum(recovar_class_full, dtype=np.float64))
+        native_class_retained_mass = float(np.sum(native_class_retained, dtype=np.float64))
+        recovar_class_retained_mass = float(np.sum(recovar_class_retained, dtype=np.float64))
+        class_rows.append(
+            {
+                "class_id_one_based": int(item["class_id"]),
+                "native_full_mass": native_class_full_mass,
+                "recovar_full_mass": recovar_class_full_mass,
+                "native_retained_mass": native_class_retained_mass,
+                "recovar_retained_mass": recovar_class_retained_mass,
+                "native_discarded_mass": native_class_full_mass - native_class_retained_mass,
+                "recovar_discarded_mass": recovar_class_full_mass - recovar_class_retained_mass,
+                "recovar_jointly_normalized_retained_mass": float(
+                    np.sum(
+                        normalized_recovar_retained[normalized_offset:normalized_stop],
+                        dtype=np.float64,
+                    )
+                ),
+                "native_support_count": int(np.count_nonzero(native_support)),
+                "recovar_support_count": int(np.count_nonzero(recovar_support)),
+                "support_intersection": intersection,
+                "support_union": union,
+                "support_jaccard": intersection / float(max(union, 1)),
+            }
+        )
+        normalized_offset = normalized_stop
+    _require(normalized_offset == normalized_recovar_retained.size, "class mass slices are incomplete")
+
+    live_delta = recovar_retained - native_retained
+    shape_delta = normalized_recovar_retained - normalized_native_retained
+    causal_delta = normalized_recovar_retained - native_retained
+    return {
+        "native_full_mass": native_full_mass,
+        "recovar_full_mass": recovar_full_mass,
+        "native_retained_mass": native_retained_mass,
+        "recovar_retained_mass": recovar_retained_mass,
+        "native_discarded_mass": native_full_mass - native_retained_mass,
+        "recovar_discarded_mass": recovar_full_mass - recovar_retained_mass,
+        "recovar_joint_retained_normalization_factor": 1.0 / recovar_retained_mass,
+        "live_retained_relative_l2": float(np.linalg.norm(live_delta)) / native_norm,
+        "jointly_normalized_retained_shape_relative_l2": (
+            float(np.linalg.norm(shape_delta)) / normalized_native_norm
+        ),
+        "recovar_normalized_only_vs_native_live_relative_l2": (
+            float(np.linalg.norm(causal_delta)) / native_norm
+        ),
+        "class_rows": class_rows,
+        "normalization_scope": "one denominator over all retained classes, rotations, and translations",
+    }
 
 
 def _map_metrics(
@@ -522,6 +681,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
     recovar_pmax: list[float] = []
     row_sum_errors: list[float] = []
     particle_rows = []
+    particle_mass_rows = []
     for stack in stacks:
         joined = []
         for class_id in range(1, CASE.K + 1):
@@ -559,9 +719,17 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         recovar_max = float(recovar_flat[recovar_winner])
         native_pmax.append(native_max)
         recovar_pmax.append(recovar_max)
-        native_mass = float(np.sum(native_flat, dtype=np.float64))
-        recovar_mass = float(np.sum(recovar_flat, dtype=np.float64))
+        mass_diagnostics = _particle_mass_diagnostics(joined)
+        native_mass = mass_diagnostics["native_full_mass"]
+        recovar_mass = mass_diagnostics["recovar_full_mass"]
         row_sum_errors.extend((abs(native_mass - 1.0), abs(recovar_mass - 1.0)))
+        particle_mass_rows.append(
+            {
+                "stack_index_one_based": stack,
+                "native_particle_id_zero_based": joined[0]["particle_id"],
+                **mass_diagnostics,
+            }
+        )
         particle_rows.append(
             {
                 "stack_index_one_based": stack,
@@ -581,6 +749,59 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
     native_pmax_values = np.asarray(native_pmax, dtype=np.float64)
     recovar_pmax_values = np.asarray(recovar_pmax, dtype=np.float64)
     pmax_delta = recovar_pmax_values - native_pmax_values
+    retained_live_errors = np.asarray(
+        [row["live_retained_relative_l2"] for row in particle_mass_rows],
+        dtype=np.float64,
+    )
+    retained_shape_errors = np.asarray(
+        [row["jointly_normalized_retained_shape_relative_l2"] for row in particle_mass_rows],
+        dtype=np.float64,
+    )
+    retained_causal_errors = np.asarray(
+        [row["recovar_normalized_only_vs_native_live_relative_l2"] for row in particle_mass_rows],
+        dtype=np.float64,
+    )
+    full_mass_delta = np.asarray(
+        [row["recovar_full_mass"] - row["native_full_mass"] for row in particle_mass_rows],
+        dtype=np.float64,
+    )
+    retained_mass_delta = np.asarray(
+        [row["recovar_retained_mass"] - row["native_retained_mass"] for row in particle_mass_rows],
+        dtype=np.float64,
+    )
+    mass_diagnostic_summary = {
+        "particle_count": len(particle_mass_rows),
+        "maximum_full_mass_abs_delta": float(np.max(np.abs(full_mass_delta), initial=0.0)),
+        "maximum_retained_mass_abs_delta": float(
+            np.max(np.abs(retained_mass_delta), initial=0.0)
+        ),
+        "mean_live_retained_relative_l2": float(np.mean(retained_live_errors)),
+        "maximum_live_retained_relative_l2": float(
+            np.max(retained_live_errors, initial=0.0)
+        ),
+        "mean_jointly_normalized_retained_shape_relative_l2": float(
+            np.mean(retained_shape_errors)
+        ),
+        "maximum_jointly_normalized_retained_shape_relative_l2": float(
+            np.max(retained_shape_errors, initial=0.0)
+        ),
+        "mean_recovar_normalized_only_vs_native_live_relative_l2": float(
+            np.mean(retained_causal_errors)
+        ),
+        "maximum_recovar_normalized_only_vs_native_live_relative_l2": float(
+            np.max(retained_causal_errors, initial=0.0)
+        ),
+        "minimum_recovar_joint_retained_normalization_factor": min(
+            row["recovar_joint_retained_normalization_factor"] for row in particle_mass_rows
+        ),
+        "maximum_recovar_joint_retained_normalization_factor": max(
+            row["recovar_joint_retained_normalization_factor"] for row in particle_mass_rows
+        ),
+        "normalization_scope": (
+            "one denominator per particle over all retained classes, rotations, and translations"
+        ),
+        "correlation_used": False,
+    }
     causal_metrics = {
         "candidate_tuple_exact_fraction": exact_count / float(CASE.particle_count * CASE.K),
         "centered_raw_score_relative_l2": raw_report["relative_l2"],
@@ -630,6 +851,8 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             "support_intersection": support_intersection,
             "support_union": support_union,
             "particle_rows": particle_rows,
+            "retained_mass_diagnostics": mass_diagnostic_summary,
+            "retained_mass_particle_rows": particle_mass_rows,
         },
         "parity_output": parity,
         "maps": maps,

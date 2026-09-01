@@ -64,6 +64,68 @@ def test_centered_error_accumulator_removes_only_scalar_offset():
     assert changed.report()["relative_l2"] > 0.0
 
 
+def test_particle_mass_diagnostics_normalizes_once_across_every_class():
+    joined = []
+    for class_id, native, recovar, native_support, recovar_support in (
+        (
+            1,
+            [[0.4, 0.1]],
+            [[0.3, 0.2]],
+            [[True, False]],
+            [[True, False]],
+        ),
+        (
+            2,
+            [[0.2, 0.3]],
+            [[0.1, 0.4]],
+            [[True, True]],
+            [[True, True]],
+        ),
+    ):
+        native_array = np.asarray(native, dtype=np.float64)
+        recovar_array = np.asarray(recovar, dtype=np.float64)
+        native_mask = np.asarray(native_support, dtype=bool)
+        recovar_mask = np.asarray(recovar_support, dtype=bool)
+        joined.append(
+            {
+                "class_id": class_id,
+                "native_posterior": native_array,
+                "recovar_posterior": recovar_array,
+                "native_reconstruction_posterior": np.where(native_mask, native_array, 0.0),
+                "recovar_reconstruction_posterior": np.where(recovar_mask, recovar_array, 0.0),
+                "native_support": native_mask,
+                "recovar_support": recovar_mask,
+            }
+        )
+
+    report = auditor._particle_mass_diagnostics(joined)
+
+    assert report["native_full_mass"] == pytest.approx(1.0)
+    assert report["recovar_full_mass"] == pytest.approx(1.0)
+    assert report["native_retained_mass"] == pytest.approx(0.9)
+    assert report["recovar_retained_mass"] == pytest.approx(0.8)
+    assert report["recovar_joint_retained_normalization_factor"] == pytest.approx(1.25)
+    assert [row["recovar_jointly_normalized_retained_mass"] for row in report["class_rows"]] == pytest.approx(
+        [0.375, 0.625]
+    )
+    assert sum(row["recovar_jointly_normalized_retained_mass"] for row in report["class_rows"]) == pytest.approx(
+        1.0
+    )
+
+
+def test_particle_mass_diagnostics_rejects_per_class_or_incomplete_topology():
+    base = {
+        "native_posterior": np.asarray([[1.0]]),
+        "recovar_posterior": np.asarray([[1.0]]),
+        "native_reconstruction_posterior": np.asarray([[1.0]]),
+        "recovar_reconstruction_posterior": np.asarray([[1.0]]),
+        "native_support": np.asarray([[True]]),
+        "recovar_support": np.asarray([[True]]),
+    }
+    with pytest.raises(auditor.AuditError, match="complete and ordered"):
+        auditor._particle_mass_diagnostics([{**base, "class_id": 2}])
+
+
 def test_exact_keyed_paths_rejects_duplicate_and_missing(tmp_path):
     paths = [tmp_path / "1-1", tmp_path / "1-2"]
     expected = {(1, 1), (1, 2)}
