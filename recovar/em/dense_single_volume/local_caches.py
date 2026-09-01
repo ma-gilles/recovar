@@ -9,11 +9,17 @@ only resorts cached arrays. Extracted from ``local_em_engine.py``.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
+from types import MappingProxyType
 
 import numpy as np
 
+from recovar.em.dense_single_volume.batch_planning import (
+    _FixedCapacityPhysicalOrder,
+    _FixedCapacityWholeLocalPlan,
+)
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.image_shifts import apply_relion_integer_pre_shifts
 from recovar.em.dense_single_volume.helpers.preprocessing import process_half_image
@@ -67,6 +73,20 @@ class _LocalProcessedHalfCache:
     score_half: np.ndarray
     recon_half: np.ndarray | None
     integer_pre_shifts_applied: bool
+
+
+@dataclass(frozen=True)
+class _FixedCapacityLocalOperands:
+    """Cache-once host operands in one sealed fixed-capacity physical order."""
+
+    physical_image_capacity: int
+    valid_image_count: int
+    image_indices: np.ndarray
+    valid_image_mask: np.ndarray
+    raw_images: np.ndarray
+    ctf_params: np.ndarray
+    metadata_by_name: Mapping[str, np.ndarray]
+    physical_position_by_image_id: Mapping[int, int]
 
 
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
@@ -136,6 +156,11 @@ def _validate_native_half_batch(batch, image_shape):
         raise ValueError("Exact local big-JIT does not support pre-Fourier complex image batches")
 
 
+def _fetch_local_raw_rows_once(experiment_dataset, image_indices):
+    batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
+    return np.asarray(batch_data), np.asarray(ctf_params), np.asarray(fetched_indices)
+
+
 def _build_local_raw_cache(experiment_dataset, n_images: int):
     """Fetch all local images/CTF rows once for exact local search.
 
@@ -145,10 +170,8 @@ def _build_local_raw_cache(experiment_dataset, n_images: int):
     """
 
     indices = np.arange(int(n_images), dtype=np.int32)
-    batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, indices)
+    batch_np, ctf_np, fetched_indices = _fetch_local_raw_rows_once(experiment_dataset, indices)
     fetched_indices = np.asarray(fetched_indices, dtype=np.int32)
-    batch_np = np.asarray(batch_data)
-    ctf_np = np.asarray(ctf_params)
     if np.array_equal(fetched_indices, indices):
         return batch_np, ctf_np
 
@@ -157,6 +180,115 @@ def _build_local_raw_cache(experiment_dataset, n_images: int):
     batch_cache[fetched_indices] = batch_np
     ctf_cache[fetched_indices] = ctf_np
     return batch_cache, ctf_cache
+
+
+def _assemble_fixed_capacity_local_operands_once(
+    experiment_dataset,
+    plan: _FixedCapacityWholeLocalPlan,
+    expected_order: _FixedCapacityPhysicalOrder,
+    *,
+    metadata_by_image: Mapping[str, np.ndarray] | None = None,
+    tail_fill_value=0,
+    enabled: bool = False,
+) -> _FixedCapacityLocalOperands | None:
+    """Fetch and snapshot raw/CTF/metadata rows in a sealed physical order."""
+
+    if not enabled:
+        return None
+    if not isinstance(expected_order, _FixedCapacityPhysicalOrder):
+        raise ValueError("fixed-capacity operand assembly requires an independently sealed physical order")
+
+    requested_indices = expected_order.image_indices
+    valid_image_count = int(plan.valid_image_count)
+    physical_image_capacity = int(plan.physical_image_capacity)
+    if valid_image_count <= 0 or valid_image_count > physical_image_capacity:
+        raise ValueError("fixed-capacity operand plan has an invalid real image count")
+    if valid_image_count != requested_indices.size:
+        raise ValueError(
+            "fixed-capacity operand plan image count does not match the sealed physical order",
+        )
+    if plan.image_indices.shape != (physical_image_capacity,):
+        raise ValueError("fixed-capacity operand plan image axis has an invalid shape")
+    if not np.array_equal(plan.image_indices[:valid_image_count], requested_indices):
+        raise ValueError("fixed-capacity operand plan chronology does not match the sealed physical order")
+    if np.any(plan.image_indices[valid_image_count:] != -1):
+        raise ValueError("fixed-capacity operand plan inactive image IDs must be -1")
+
+    raw_rows, ctf_rows, fetched_indices = _fetch_local_raw_rows_once(
+        experiment_dataset,
+        requested_indices,
+    )
+    if fetched_indices.ndim != 1 or not np.issubdtype(fetched_indices.dtype, np.integer):
+        raise ValueError("fixed-capacity operand fetch returned invalid image IDs")
+    fetched_indices = fetched_indices.astype(np.int64, copy=False)
+    if np.unique(fetched_indices).size != fetched_indices.size:
+        raise ValueError("fixed-capacity operand fetch returned duplicate image IDs")
+    if fetched_indices.shape != requested_indices.shape or not np.array_equal(
+        np.sort(fetched_indices),
+        np.sort(requested_indices),
+    ):
+        raise ValueError("fixed-capacity operand fetch has missing or unexpected image IDs")
+    if not np.array_equal(fetched_indices, requested_indices):
+        raise ValueError("fixed-capacity operand fetch returned image IDs out of order")
+    if raw_rows.ndim < 1 or raw_rows.shape[0] != valid_image_count:
+        raise ValueError("fixed-capacity raw image rows do not match the sealed physical order")
+    if ctf_rows.ndim < 1 or ctf_rows.shape[0] != valid_image_count:
+        raise ValueError("fixed-capacity CTF rows do not match the sealed physical order")
+
+    raw_images = np.full(
+        (physical_image_capacity,) + raw_rows.shape[1:],
+        tail_fill_value,
+        dtype=raw_rows.dtype,
+    )
+    ctf_params = np.full(
+        (physical_image_capacity,) + ctf_rows.shape[1:],
+        tail_fill_value,
+        dtype=ctf_rows.dtype,
+    )
+    raw_images[:valid_image_count] = raw_rows
+    ctf_params[:valid_image_count] = ctf_rows
+
+    if metadata_by_image is None:
+        metadata_items = ()
+    elif isinstance(metadata_by_image, Mapping):
+        metadata_items = metadata_by_image.items()
+    else:
+        raise ValueError("fixed-capacity metadata must be a mapping from names to image-indexed arrays")
+    packed_metadata = {}
+    max_image_id = int(np.max(requested_indices))
+    for name, values in metadata_items:
+        if not isinstance(name, str) or not name:
+            raise ValueError("fixed-capacity metadata names must be non-empty strings")
+        source = np.asarray(values)
+        if source.ndim < 1 or source.shape[0] <= max_image_id:
+            raise ValueError(f"fixed-capacity metadata {name!r} does not cover every sealed image ID")
+        selected = source[requested_indices]
+        packed = np.full(
+            (physical_image_capacity,) + selected.shape[1:],
+            tail_fill_value,
+            dtype=selected.dtype,
+        )
+        packed[:valid_image_count] = selected
+        packed.setflags(write=False)
+        packed_metadata[name] = packed
+
+    image_indices = np.asarray(plan.image_indices, dtype=np.int64).copy()
+    valid_image_mask = np.arange(physical_image_capacity, dtype=np.int64) < valid_image_count
+    for values in (image_indices, valid_image_mask, raw_images, ctf_params):
+        values.setflags(write=False)
+    physical_positions = MappingProxyType(
+        {int(image_id): position for position, image_id in enumerate(requested_indices.tolist())}
+    )
+    return _FixedCapacityLocalOperands(
+        physical_image_capacity=physical_image_capacity,
+        valid_image_count=valid_image_count,
+        image_indices=image_indices,
+        valid_image_mask=valid_image_mask,
+        raw_images=raw_images,
+        ctf_params=ctf_params,
+        metadata_by_name=MappingProxyType(packed_metadata),
+        physical_position_by_image_id=physical_positions,
+    )
 
 
 def _all_integer_pre_shifts_or_none(image_pre_shifts, n_images: int):

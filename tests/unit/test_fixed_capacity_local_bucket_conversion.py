@@ -10,6 +10,7 @@ import pytest
 from recovar.em.dense_single_volume.batch_planning import (
     _pack_fixed_capacity_local_candidate_rows,
     _plan_fixed_capacity_whole_local,
+    _seal_fixed_capacity_physical_order,
 )
 from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
@@ -55,12 +56,18 @@ def _authoritative_buckets():
     )
 
 
-def _plan_converted(calls, *, expected_image_order=(9, 3, 7, 8, 1, 5), palette=None):
+def _sealed_order(image_indices=(9, 3, 7, 8, 1, 5)):
+    return _seal_fixed_capacity_physical_order(np.asarray(image_indices, dtype=np.int32))
+
+
+def _plan_converted(calls, *, expected_order=None, palette=None):
+    if expected_order is None:
+        expected_order = _sealed_order()
     if palette is None:
         palette = {4: (3,), 8: (2,)}
     return _plan_fixed_capacity_whole_local(
         calls,
-        expected_image_order=np.asarray(expected_image_order, dtype=np.int32),
+        expected_image_order=expected_order,
         physical_image_capacity=8,
         physical_row_capacity=32,
         physical_call_capacity=5,
@@ -73,7 +80,11 @@ def _plan_converted(calls, *, expected_image_order=(9, 3, 7, 8, 1, 5), palette=N
 
 def test_local_bucket_conversion_preserves_full_tail_chronology_radix_and_rows():
     buckets = _authoritative_buckets()
-    calls = _fixed_capacity_calls_from_local_buckets(buckets)
+    expected_order = _sealed_order()
+    calls = _fixed_capacity_calls_from_local_buckets(
+        buckets,
+        expected_order=expected_order,
+    )
 
     assert len(calls) == 3
     np.testing.assert_array_equal(calls[0].image_indices, [9, 3, 7])
@@ -85,7 +96,7 @@ def test_local_bucket_conversion_preserves_full_tail_chronology_radix_and_rows()
     assert [call.radix_bucket for call in calls] == [4, 4, 8]
     assert [call.image_capacity for call in calls] == [3, 3, 2]
 
-    plan = _plan_converted(calls)
+    plan = _plan_converted(calls, expected_order=expected_order)
     np.testing.assert_array_equal(plan.image_indices, [9, 3, 7, 8, 1, 5, -1, -1])
     np.testing.assert_array_equal(plan.row_offsets, [0, 2, 6, 9, 10, 18, 23, 23, 23])
     np.testing.assert_array_equal(plan.call_image_offsets, [0, 3, 4, 6, 6])
@@ -112,7 +123,10 @@ def test_local_bucket_conversion_preserves_full_tail_chronology_radix_and_rows()
 
 def test_local_bucket_conversion_snapshots_mutable_bucket_arrays():
     bucket = _bucket([9, 3], [2, 3], radix=4, image_capacity=3)
-    calls = _fixed_capacity_calls_from_local_buckets((bucket,))
+    calls = _fixed_capacity_calls_from_local_buckets(
+        (bucket,),
+        expected_order=_sealed_order((9, 3)),
+    )
 
     bucket.image_indices[:] = -1
     bucket.actual_rotation_counts[:] = 1
@@ -123,10 +137,14 @@ def test_local_bucket_conversion_snapshots_mutable_bucket_arrays():
 
 def test_converted_tail_keeps_authoritative_capacity_instead_of_smallest_palette_entry():
     tail = (_bucket([8], [1], radix=4, image_capacity=3),)
-    calls = _fixed_capacity_calls_from_local_buckets(tail)
+    expected_order = _sealed_order((8,))
+    calls = _fixed_capacity_calls_from_local_buckets(
+        tail,
+        expected_order=expected_order,
+    )
     plan = _plan_fixed_capacity_whole_local(
         calls,
-        expected_image_order=np.asarray([8], dtype=np.int32),
+        expected_image_order=expected_order,
         physical_image_capacity=1,
         physical_row_capacity=4,
         physical_call_capacity=1,
@@ -141,28 +159,48 @@ def test_converted_tail_keeps_authoritative_capacity_instead_of_smallest_palette
 
 def test_converted_plan_rejects_chronology_or_capacity_palette_changes():
     buckets = _authoritative_buckets()
-    calls = _fixed_capacity_calls_from_local_buckets(tuple(reversed(buckets)))
+    expected_order = _sealed_order()
 
-    with pytest.raises(ValueError, match="expected physical image order"):
-        _plan_converted(calls)
+    for invalid_buckets in (tuple(reversed(buckets)), buckets[:-1]):
+        with pytest.raises(ValueError, match="chronology does not match the sealed physical order"):
+            _fixed_capacity_calls_from_local_buckets(
+                invalid_buckets,
+                expected_order=expected_order,
+            )
 
-    calls = _fixed_capacity_calls_from_local_buckets(buckets)
+    calls = _fixed_capacity_calls_from_local_buckets(
+        buckets,
+        expected_order=expected_order,
+    )
     with pytest.raises(ValueError, match="preserved image capacity"):
-        _plan_converted(calls, palette={4: (1,), 8: (2,)})
+        _plan_converted(
+            calls,
+            expected_order=expected_order,
+            palette={4: (1,), 8: (2,)},
+        )
 
 
 def test_converted_plan_rejects_duplicate_physical_images():
-    buckets = list(_authoritative_buckets())
-    buckets[1] = replace(buckets[1], image_indices=np.asarray([7], dtype=np.int32))
-    calls = _fixed_capacity_calls_from_local_buckets(buckets)
+    with pytest.raises(ValueError, match="must not contain duplicate image IDs"):
+        _sealed_order((9, 3, 7, 7, 1, 5))
 
-    with pytest.raises(ValueError, match="must not contain duplicates"):
-        _plan_converted(calls, expected_image_order=(9, 3, 7, 7, 1, 5))
+
+def test_physical_order_seal_is_an_independent_immutable_snapshot():
+    source = np.asarray([9, 3, 7], dtype=np.int32)
+    expected_order = _seal_fixed_capacity_physical_order(source)
+
+    source[:] = -1
+
+    np.testing.assert_array_equal(expected_order.image_indices, [9, 3, 7])
+    assert expected_order.image_indices.flags.writeable is False
 
 
 def test_local_bucket_conversion_rejects_an_empty_sequence():
     with pytest.raises(ValueError, match="bucket sequence cannot be empty"):
-        _fixed_capacity_calls_from_local_buckets(())
+        _fixed_capacity_calls_from_local_buckets(
+            (),
+            expected_order=_sealed_order((9,)),
+        )
 
 
 @pytest.mark.parametrize(
@@ -206,4 +244,7 @@ def test_local_bucket_conversion_fails_closed_on_unsupported_topology(change, me
         bucket = replace(bucket, bucket_rotation_count=4.0)
 
     with pytest.raises(ValueError, match=message):
-        _fixed_capacity_calls_from_local_buckets((bucket,))
+        _fixed_capacity_calls_from_local_buckets(
+            (bucket,),
+            expected_order=_sealed_order((9, 3)),
+        )

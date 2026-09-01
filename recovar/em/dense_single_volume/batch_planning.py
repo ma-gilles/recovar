@@ -98,6 +98,27 @@ class _FixedCapacityLocalCall:
 
 
 @dataclass(frozen=True)
+class _FixedCapacityPhysicalOrder:
+    """Independent immutable seal for one authoritative physical image order."""
+
+    image_indices: np.ndarray
+
+    def __post_init__(self):
+        raw_indices = np.asarray(self.image_indices)
+        if raw_indices.ndim != 1 or not np.issubdtype(raw_indices.dtype, np.integer):
+            raise ValueError("fixed-capacity physical order must be a one-dimensional integer array")
+        if raw_indices.size == 0:
+            raise ValueError("fixed-capacity physical order cannot be empty")
+        sealed_indices = raw_indices.astype(np.int64, copy=True)
+        if np.any(sealed_indices < 0):
+            raise ValueError("fixed-capacity physical order must contain non-negative image IDs")
+        if np.unique(sealed_indices).size != sealed_indices.size:
+            raise ValueError("fixed-capacity physical order must not contain duplicate image IDs")
+        sealed_indices.setflags(write=False)
+        object.__setattr__(self, "image_indices", sealed_indices)
+
+
+@dataclass(frozen=True)
 class _FixedCapacityWholeLocalPlan:
     """Fixed-shape host descriptors for a future whole-local executor.
 
@@ -125,6 +146,12 @@ class _FixedCapacityWholeLocalPlan:
     call_image_capacities: np.ndarray
     call_radix_buckets: np.ndarray
     logical_cutoff: np.ndarray
+
+
+def _seal_fixed_capacity_physical_order(image_indices) -> _FixedCapacityPhysicalOrder:
+    """Snapshot and validate physical image IDs before bucket conversion."""
+
+    return _FixedCapacityPhysicalOrder(image_indices=image_indices)
 
 
 def _normalized_fixed_capacity_palette(
@@ -197,6 +224,15 @@ def _plan_fixed_capacity_whole_local(
     calls = tuple(calls)
     if not calls:
         raise ValueError("fixed-capacity call program cannot be empty")
+    authoritative_calls = any(call.image_capacity is not None for call in calls)
+    if isinstance(expected_image_order, _FixedCapacityPhysicalOrder):
+        expected_image_order_array = expected_image_order.image_indices
+    else:
+        if authoritative_calls:
+            raise ValueError(
+                "fixed-capacity authoritative calls require an independently sealed expected physical order",
+            )
+        expected_image_order_array = expected_image_order
     if len(calls) > physical_call_capacity:
         raise ValueError(
             f"fixed-capacity call program overflow: valid={len(calls)}, capacity={physical_call_capacity}",
@@ -281,8 +317,8 @@ def _plan_fixed_capacity_whole_local(
 
     chronological_image_indices = np.concatenate(image_parts) if image_parts else np.zeros(0, dtype=np.int64)
     chronological_row_counts = np.concatenate(row_count_parts) if row_count_parts else np.zeros(0, dtype=np.int64)
-    expected_image_order = np.asarray(expected_image_order, dtype=np.int64).reshape(-1)
-    if not np.array_equal(chronological_image_indices, expected_image_order):
+    expected_image_order_array = np.asarray(expected_image_order_array, dtype=np.int64).reshape(-1)
+    if not np.array_equal(chronological_image_indices, expected_image_order_array):
         raise ValueError(
             "fixed-capacity call chronology does not match expected physical image order",
         )

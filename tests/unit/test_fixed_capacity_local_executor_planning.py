@@ -76,6 +76,28 @@ def test_fixed_capacity_plan_rejects_an_empty_call_program():
         )
 
 
+def test_authoritative_fixed_capacity_calls_require_an_independent_order_seal():
+    call = _FixedCapacityLocalCall(
+        image_indices=np.asarray([4], dtype=np.int32),
+        row_counts=np.asarray([2], dtype=np.int32),
+        radix_bucket=2,
+        image_capacity=1,
+    )
+
+    with pytest.raises(ValueError, match="independently sealed expected physical order"):
+        _plan_fixed_capacity_whole_local(
+            (call,),
+            expected_image_order=np.asarray([4], dtype=np.int32),
+            physical_image_capacity=1,
+            physical_row_capacity=2,
+            physical_call_capacity=1,
+            image_capacity_palette={2: (1,)},
+            logical_cutoff=1,
+            logical_cutoff_capacity=1,
+            enabled=True,
+        )
+
+
 def test_fixed_capacity_plan_preserves_call_particle_and_radix_chronology():
     plan = _plan()
 

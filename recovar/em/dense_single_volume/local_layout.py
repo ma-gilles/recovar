@@ -12,6 +12,7 @@ import numpy as np
 from recovar import utils
 from recovar.em.dense_single_volume.batch_planning import (
     _FixedCapacityLocalCall,
+    _FixedCapacityPhysicalOrder,
     _plan_consecutive_padded_batches,
 )
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
@@ -172,9 +173,13 @@ class LocalBucketSpec:
 
 def _fixed_capacity_calls_from_local_buckets(
     bucket_specs: Sequence[LocalBucketSpec],
+    *,
+    expected_order: _FixedCapacityPhysicalOrder,
 ) -> tuple[_FixedCapacityLocalCall, ...]:
     """Convert authoritative local buckets without changing their topology."""
 
+    if not isinstance(expected_order, _FixedCapacityPhysicalOrder):
+        raise ValueError("fixed-capacity local bucket conversion requires an independently sealed physical order")
     bucket_specs = tuple(bucket_specs)
     if not bucket_specs:
         raise ValueError("fixed-capacity local bucket sequence cannot be empty")
@@ -241,6 +246,9 @@ def _fixed_capacity_calls_from_local_buckets(
                 image_capacity=image_capacity,
             )
         )
+    chronological_indices = np.concatenate([call.image_indices for call in calls])
+    if not np.array_equal(chronological_indices, expected_order.image_indices):
+        raise ValueError("fixed-capacity local bucket chronology does not match the sealed physical order")
     return tuple(calls)
 
 
