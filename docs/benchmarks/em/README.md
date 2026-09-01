@@ -125,3 +125,60 @@ The proposed expansion from the current single-fixture K=4 evidence is in
 gaps are in `audit_inventory_20260901.md`. The runnable 10k real-data K=4
 InitialModel diagnostic and its explicit half-map limitations are documented
 in `real_kclass_initialmodel_pairs.md`.
+
+## Repeating the K-class robustness panel
+
+`scripts/run_em_kclass_robustness_matrix_slurm.py` contains the frozen
+synthetic case definitions. A three-seed launch expands each selected case over
+seeds 41001, 41002, and 41003 while retaining the base case name and seed as
+metadata. For example, first inspect the generated Slurm scripts without
+submitting them:
+
+```bash
+export RELION_SRC_DIR=/absolute/path/to/relion/src
+export EM_KCLASS_MATRIX_RELION_REFINE_MPI=/absolute/path/to/dispatch-instrumented/relion_refine_mpi
+export EM_KCLASS_MATRIX_PIXI_PY="$(pixi run which python)"
+pixi run python scripts/run_em_kclass_robustness_matrix_slurm.py \
+  --dry-run \
+  --scratch-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_three_seed_preview \
+  --three-seed-suite \
+  --case 30 --case 31 --case 32 --case 33 --case 34
+```
+
+Remove `--dry-run` only after reviewing the source and executable provenance,
+requested resources, case table, and generated scripts. The launcher refuses a
+stock RELION executable because strict trajectory parity requires the sealed
+dynamic-dispatch capture build. It also refuses exclusive allocations and any
+pre-existing case/data/oracle root: reruns use a new scratch root rather than
+mixing or resealing partial evidence.
+
+The run root contains:
+
+- `case_table.tsv`, the pipe-delimited immutable case/seed index;
+- `submission.env`, the resolved launcher environment and job IDs;
+- `em_kclass_robustness_summary.json`, the ordinary per-trajectory matrix
+  summary;
+- `em_kclass_multiseed_summary.json` and
+  `em_kclass_multiseed_summary.md`, the validated three-seed aggregate; and
+- each case's class-population audit, commands, provenance, FSC metrics, and
+  performance artifacts under its case directory.
+
+The multi-seed aggregate is intentionally not a schema-v1 registry record and
+does not make a formal gate claim. It proves that exactly three frozen seeds
+were indexed without scientific-axis drift, preserves every per-seed failure
+(including class collapse), and provides cross-seed quality/runtime/memory
+reductions. Seal each accepted trajectory separately in `entries/`; then use
+the aggregate as a compact suite-level index. Each aggregate row is bound back
+to the runtime-written `case_config.json` (including source PDB directory,
+seed, symmetry, case name/index, and Slurm job), and that config is hashed in
+the aggregate so a swapped or mislabeled case root fails validation.
+
+Cases 25--27 are stricter than ordinary repeated simulations. Per seed, case
+25 generates and hashes one shared dataset; cases 26 and 27 depend on that job
+and verify the same manifest. Case 25 also runs and seals the one RELION model,
+initialization, perturbation oracle, and dynamic dispatch schedule used by all
+three RECOVAR runs. Cases 26 and 27 do not rerun RELION before changing only
+RECOVAR's batching boundary. Selecting either consumer without its producer,
+or changing any generator field within the group, fails closed. Cases 31--34
+generate symmetric GT volumes and pass one identical canonical label (C4, D4,
+O, or I1) to the generator, RELION, and RECOVAR.

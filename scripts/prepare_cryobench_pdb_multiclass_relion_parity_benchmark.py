@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -17,13 +18,14 @@ from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.output.output import mkdir_safe, save_volume
-from recovar.simulation import simulator, synthetic_dataset
 from recovar.simulation import simulate_scattering_potential as ssp
+from recovar.simulation import simulator, synthetic_dataset
 from recovar.simulation.trajectory_generation import compute_bfactor_scaling
 from recovar.utils.helpers import write_relion_mrc
 
-
 logger = logging.getLogger(__name__)
+
+SYMMETRY_INTERPOLATION_ORDER = 1
 
 
 def _pdb_files(pdb_dir: Path) -> list[Path]:
@@ -37,6 +39,90 @@ def _volume_prefix(output_dir: Path) -> Path:
     return output_dir / "pdb_volumes" / "vol"
 
 
+def _symmetrize_real_volume(
+    volume: np.ndarray,
+    symmetry: str,
+    *,
+    operators: np.ndarray | None = None,
+    interpolation_order: int = SYMMETRY_INTERPOLATION_ORDER,
+) -> np.ndarray:
+    """Average a real map over RELION's ordered proper-rotation operators.
+
+    This mirrors RELION's ``symmetriseMap`` convention: identity contributes
+    the unresampled source map, then every remaining right operator is applied
+    with inverse-coordinate interpolation before division by the group order.
+    ``operators`` exists only to make the interpolation contract independently
+    unit-testable; production generation always loads the sealed RELION set.
+    """
+
+    from recovar.em.initial_model.gt_metrics import rotate_volume_about_center
+    from recovar.em.symmetry import canonicalize_rotational_symmetry, parse_rotational_symmetry
+    from recovar.em.symmetry import rotational_operators as load_rotational_operators
+
+    canonical = canonicalize_rotational_symmetry(symmetry)
+    parsed = parse_rotational_symmetry(canonical)
+    source = np.asarray(volume, dtype=np.float32)
+    if source.ndim != 3 or len(set(source.shape)) != 1:
+        raise ValueError(f"symmetry requires a cubic 3-D volume, got {source.shape}")
+    if canonical == "C1":
+        return source.copy()
+
+    right_operators = (
+        load_rotational_operators(canonical, dtype=np.float64)
+        if operators is None
+        else np.asarray(operators, dtype=np.float64)
+    )
+    expected_shape = (parsed.operator_count, 3, 3)
+    if right_operators.shape != expected_shape:
+        raise ValueError(
+            f"RELION {canonical} requires operators with shape {expected_shape}, got {right_operators.shape}"
+        )
+    if not np.array_equal(right_operators[0], np.eye(3, dtype=np.float64)):
+        raise ValueError(f"RELION {canonical} operators must contain exact identity first")
+
+    accumulated = np.asarray(source, dtype=np.float64).copy()
+    for operator in right_operators[1:]:
+        accumulated += rotate_volume_about_center(
+            source,
+            operator,
+            order=int(interpolation_order),
+        )
+    result = (accumulated / float(right_operators.shape[0])).astype(np.float32)
+    if not np.all(np.isfinite(result)):
+        raise ValueError(f"RELION {canonical} symmetrization produced non-finite values")
+    return result
+
+
+def _symmetry_contract(symmetry: str) -> dict[str, object]:
+    """Return the immutable RELION operator identity used by the generator."""
+
+    from recovar.em.symmetry import canonicalize_rotational_symmetry, parse_rotational_symmetry
+
+    requested = symmetry.strip().upper()
+    canonical = canonicalize_rotational_symmetry(requested)
+    parsed = parse_rotational_symmetry(canonical)
+    if canonical == "C1":
+        identity = np.eye(3, dtype="<f8")[None, :, :]
+        operator_digest = hashlib.sha256(
+            np.ascontiguousarray(np.stack([identity, identity], axis=0)).tobytes(order="C")
+        ).hexdigest()
+        operator_source = "analytic identity (RELION C1 convention)"
+    else:
+        from recovar.em.symmetry import symmetry_operator_sha256
+
+        operator_digest = symmetry_operator_sha256(canonical)
+        operator_source = "recovar.em.symmetry.rotational_operators (RELION SymList source order)"
+    return {
+        "requested_label": requested,
+        "canonical_label": canonical,
+        "family": parsed.family,
+        "operator_count": parsed.operator_count,
+        "operators_sha256": operator_digest,
+        "interpolation_order": SYMMETRY_INTERPOLATION_ORDER,
+        "operator_source": operator_source,
+    }
+
+
 def _generate_outlier_volume_from_pdb(
     pdb_path: Path,
     output_dir: Path,
@@ -44,6 +130,7 @@ def _generate_outlier_volume_from_pdb(
     grid_size: int,
     voxel_size: float,
     pdb_bfactor: float,
+    symmetry: str,
     force: bool,
 ) -> Path:
     outlier_dir = output_dir / "pdb_outlier_state"
@@ -63,6 +150,7 @@ def _generate_outlier_volume_from_pdb(
     )
     ft_mol = ft_mol.reshape((grid_size, grid_size, grid_size)) * scaling
     vol = np.real(ftu.get_idft3(jnp.asarray(ft_mol))).astype(np.float32)
+    vol = _symmetrize_real_volume(vol, symmetry)
     utils.write_mrc(str(outlier_path), vol, voxel_size=voxel_size)
     return outlier_path
 
@@ -74,6 +162,7 @@ def _generate_volumes_from_pdbs(
     grid_size: int,
     voxel_size: float,
     pdb_bfactor: float,
+    symmetry: str,
     force: bool,
 ) -> tuple[Path, list[dict]]:
     pdbs = _pdb_files(pdb_dir)
@@ -97,6 +186,7 @@ def _generate_volumes_from_pdbs(
             )
             ft_mol = ft_mol.reshape((grid_size, grid_size, grid_size)) * scaling
             vol = np.real(ftu.get_idft3(jnp.asarray(ft_mol))).astype(np.float32)
+            vol = _symmetrize_real_volume(vol, symmetry)
             utils.write_mrc(str(out_path), vol, voxel_size=voxel_size)
 
     manifest = [
@@ -142,8 +232,7 @@ def _class_distribution(option: str, n_classes: int) -> np.ndarray:
             raise ValueError(f"custom class distribution has {weights.size} entries, expected {n_classes}")
     else:
         raise ValueError(
-            "--class-distribution must be one of uniform, linear, head-heavy, "
-            "or custom:<comma-separated weights>",
+            "--class-distribution must be one of uniform, linear, head-heavy, or custom:<comma-separated weights>",
         )
     if weights.size != n_classes:
         raise ValueError(f"class distribution has {weights.size} entries, expected {n_classes}")
@@ -237,6 +326,7 @@ def prepare_benchmark(
     noise_rng_batch_size: int | None,
     disc_type: str,
     seed: int,
+    symmetry: str,
     force_volumes: bool,
 ) -> None:
     if n_images <= 0:
@@ -263,6 +353,8 @@ def prepare_benchmark(
         raise ValueError(f"outlier_pdb_path does not exist: {outlier_pdb_path}")
     if voxel_size is None:
         voxel_size = 4.25 * 128 / grid_size
+    symmetry_contract = _symmetry_contract(symmetry)
+    symmetry = str(symmetry_contract["canonical_label"])
 
     mkdir_safe(str(output_dir))
     np.random.seed(seed)
@@ -272,6 +364,7 @@ def prepare_benchmark(
         grid_size=grid_size,
         voxel_size=voxel_size,
         pdb_bfactor=pdb_bfactor,
+        symmetry=symmetry,
         force=force_volumes,
     )
     n_classes = len(manifest)
@@ -286,6 +379,7 @@ def prepare_benchmark(
                 grid_size=grid_size,
                 voxel_size=voxel_size,
                 pdb_bfactor=pdb_bfactor,
+                symmetry=symmetry,
                 force=force_volumes,
             ),
         )
@@ -361,6 +455,7 @@ def prepare_benchmark(
         "streaming_chunk_size": streaming_chunk_size,
         "noise_rng_batch_size": noise_rng_batch_size,
         "disc_type": disc_type,
+        "symmetry": symmetry_contract,
         "class_manifest": manifest,
     }
     utils.pickle_dump(sim_info, sim_info_path)
@@ -405,6 +500,11 @@ def main() -> None:
         help="Class weights: uniform, linear, head-heavy, or custom:w1,w2,...",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--symmetry",
+        default="C1",
+        help="RELION proper rotational point group imposed on every generated class map.",
+    )
     parser.add_argument("--relion-normalize", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--streaming-mmap", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--streaming-chunk-size", type=int, default=1000)
@@ -443,6 +543,7 @@ def main() -> None:
         noise_rng_batch_size=args.noise_rng_batch_size,
         disc_type=args.disc_type,
         seed=args.seed,
+        symmetry=args.symmetry,
         force_volumes=args.force_volumes,
     )
 

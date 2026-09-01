@@ -18,6 +18,52 @@ def test_class_distribution_parser_supports_matrix_options():
         prep._class_distribution("custom:1,-1,1", 3)
 
 
+def test_real_volume_symmetry_preserves_c1_and_averages_ordered_c4():
+    from scripts import prepare_cryobench_pdb_multiclass_relion_parity_benchmark as prep
+
+    volume = np.zeros((5, 5, 5), dtype=np.float32)
+    volume[1, 2, 3] = 4.0
+    c4 = np.asarray(
+        [
+            [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+            [[-1, 0, 0], [0, -1, 0], [0, 0, 1]],
+            [[0, 1, 0], [-1, 0, 0], [0, 0, 1]],
+        ],
+        dtype=np.float64,
+    )
+
+    c1_result = prep._symmetrize_real_volume(volume, "C1")
+    c4_result = prep._symmetrize_real_volume(volume, "C4", operators=c4)
+
+    np.testing.assert_array_equal(c1_result, volume)
+    np.testing.assert_array_equal(c4_result, np.rot90(c4_result, axes=(0, 1)))
+    assert c4_result.dtype == np.float32
+    assert float(c4_result.sum()) == pytest.approx(float(volume.sum()))
+
+
+def test_real_volume_symmetry_rejects_wrong_operator_count():
+    from scripts import prepare_cryobench_pdb_multiclass_relion_parity_benchmark as prep
+
+    with pytest.raises(ValueError, match="requires operators with shape"):
+        prep._symmetrize_real_volume(
+            np.ones((3, 3, 3), dtype=np.float32),
+            "C4",
+            operators=np.eye(3, dtype=np.float64)[None, :, :],
+        )
+
+
+def test_c1_symmetry_contract_does_not_require_optional_relion_binding():
+    from scripts import prepare_cryobench_pdb_multiclass_relion_parity_benchmark as prep
+
+    contract = prep._symmetry_contract("c1")
+
+    assert contract["canonical_label"] == "C1"
+    assert contract["operator_count"] == 1
+    assert len(contract["operators_sha256"]) == 64
+    assert contract["operator_source"] == "analytic identity (RELION C1 convention)"
+
+
 def test_multiclass_pdb_cli_forwards_robustness_matrix_options(monkeypatch, tmp_path):
     from scripts import prepare_cryobench_pdb_multiclass_relion_parity_benchmark as prep
 
@@ -67,6 +113,8 @@ def test_multiclass_pdb_cli_forwards_robustness_matrix_options(monkeypatch, tmp_
             str(tmp_path / "outlier.pdb"),
             "--noise-rng-batch-size",
             "256",
+            "--symmetry",
+            "I1",
             "--no-streaming-mmap",
         ],
     )
@@ -90,4 +138,5 @@ def test_multiclass_pdb_cli_forwards_robustness_matrix_options(monkeypatch, tmp_
     assert captured["percent_outliers"] == 0.25
     assert captured["outlier_pdb_path"] == tmp_path / "outlier.pdb"
     assert captured["noise_rng_batch_size"] == 256
+    assert captured["symmetry"] == "I1"
     assert captured["streaming_mmap"] is False

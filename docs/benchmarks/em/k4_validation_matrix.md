@@ -22,7 +22,11 @@ may classify a completed run as scientifically equivalent when controller
 topology matches, each final Hungarian-matched cross-engine FSC-AUC is at
 least 0.99, every GT delta is at least -0.002, assignment agreement is at
 least 0.99, and no class collapses. This classification never changes the
-formal result.
+formal result. Every numbered RELION model STAR is audited before RECOVAR is
+started: each class must have finite, strictly positive class-distribution and
+orientation-distribution mass. The audit is written even on failure, and a
+collapsed class stops that trajectory rather than being averaged away by a
+multi-seed summary.
 
 For real data, where GT is unavailable, freeze the following before launching:
 the same particles/order, half split, poses/CTFs, initial maps, symmetry,
@@ -94,11 +98,12 @@ each uses seeds 41001, 41002, and 41003. The four K-scaling sentinels use seeds
 | K scaling, Ribosembly | 2, 8, 16 | white 1 or 3 | uniform plus one head-heavy case | same grid/particles |
 | Family/K interaction | 2, 8 | radial1 3 | nonuniform/linear | IgG and Tomotwin |
 
-The runnable launcher now contains 29 cases. The original 15 medium/scale
-cases remain mandatory, and 14 bounded 3k-particle cases add the K=1 stress
-axes, exact batching controls, and independent seeds. This is substantially
-broader executable coverage, but a single completed seed is still not
-sufficient evidence and only two rows exercise 50k/256.
+The runnable launcher now contains 34 cases. The original 15 medium/scale
+cases remain mandatory. Fourteen bounded 3k-particle cases add the K=1 stress
+axes, exact batching controls, and independent seeds; case 30 is a higher-SNR
+no-CTF positive control; and cases 31--34 exercise C4, D4, O, and I1. This is
+substantially broader executable coverage, but a single completed seed is
+still not sufficient evidence and only two rows exercise 50k/256.
 
 ### Runnable base panel
 
@@ -137,17 +142,42 @@ replaced by the broader table above:
 | 27 | `ribo_k4_3k_g128_white_noise1_rotation_block257` | 2825 |
 | 28 | `ribo_k4_3k_g128_white_noise1_seed3802` | 3802 |
 | 29 | `ribo_k4_3k_g128_white_noise1_seed4802` | 4802 |
+| 30 | `ribo_k4_3k_g128_white_noise1_noctf_positive_control` | 2830 |
+| 31 | `ribo_k4_5k_g128_white_noise1_c4_uniform` | 41001 |
+| 32 | `ribo_k4_5k_g128_white_noise1_d4_uniform` | 41001 |
+| 33 | `ribo_k4_5k_g128_white_noise1_o_uniform` | 41001 |
+| 34 | `ribo_k4_5k_g128_white_noise1_i1_uniform` | 41001 |
 
-Run the entire panel with seed offsets 0, 10000, and 20000, using a distinct
-scratch root for each offset. The launcher already accepts `--seed-offset`, so
-these 87 executions are runnable without changing the scientific case
-definitions. What is not yet implemented is a checked-in wrapper that submits
-and aggregates all three repetitions as one registry-ready suite.
+Case 17 is deliberately retained as the low-SNR no-CTF collapse boundary. A
+collapse is a fail-closed result, not a successful parity row. Case 30 asks the
+separate positive-control question at white-noise level 1; it is prospective
+until executed and must not be inferred to pass from the case definition.
+
+Run any selected panel over the frozen seed set 41001, 41002, and 41003 with
+`--three-seed-suite`. The launcher expands every selected base case inside one
+shared setup/run root and the dependent summary job emits
+`em_kclass_multiseed_summary.json` and
+`em_kclass_multiseed_summary.md`. The aggregate requires exactly those three
+seeds, verifies that the scientific axes did not drift, retains per-seed
+failure and class-collapse outcomes, and reports worst quality and median/max
+resource summaries. Every completed row is cross-checked against and bound to
+a hashed runtime `case_config.json`, including its source PDB directory, seed,
+symmetry, name/index, and Slurm job. It is a suite index, not a replacement for
+the individual schema-v1 trajectory records required for a formal benchmark
+claim.
 
 Cases 25--27 deliberately share every simulator/refinement seed and scientific
 parameter. Only RECOVAR's image-batch or rotation-block boundary changes; the
-generated input hashes must therefore match before their output comparison is
-admitted as an invariance result.
+launcher therefore generates each seed's dataset exactly once in case 25,
+seals every generated file with SHA-256, makes cases 26 and 27 depend on that
+producer job, and verifies the same manifest in all three jobs. Case 25 also
+runs and seals one RELION initialization/model, perturbation oracle, and exact
+dynamic dispatch schedule; cases 26 and 27 reuse that oracle instead of
+rerunning RELION. Independently regenerating either the particles or the
+RELION oracle is not an exact-input test: poses and CTFs can match while
+volume, GT, particle, model, or schedule bytes differ. A consumer selected
+without its producer, multiple producers, a changed generator axis, a reused
+scratch root, or a hash mismatch fails before refinement.
 
 ## Tier 3: grid and particle scaling
 
@@ -173,9 +203,13 @@ determinant +1, closure, identity ordering, stable hash, and a matrix-by-matrix
 RELION oracle comparison. Bare `I` is rejected because RELION canonicalizes it
 to I2 and silently using the wrong icosahedral convention is unsafe.
 
-Then run K=4 5k/128 five-iteration paired trajectories for C4, D4, O, and I1
-with seeds 41001 and 41002. The generator must symmetrize each GT state with
-the exact sealed operator set. Finally, the EMPIAR-10202 set-6 I1 K=1
+The runnable cases 31--34 are K=4 5k/128 five-iteration paired trajectories
+for C4, D4, O, and I1. The generator symmetrizes every class and outlier GT
+volume with the ordered RELION right-operator set, records the canonical
+symmetry label, operator count and operator SHA-256, and passes that same label
+to RELION and RECOVAR. C1 remains a bitwise-preserving no-op. Run these rows
+over all three frozen seeds before accepting them as evidence; their presence
+in the launcher is not a result. Finally, the EMPIAR-10202 set-6 I1 K=1
 high-resolution matched refinement remains the production symmetry gate for
 the shared K=1/K-class machinery; it is not replaced by an artificial K=4
 split of a homogeneous capsid.
@@ -233,15 +267,16 @@ admission rule above.
 
 ## Runnable now versus planned-only
 
-The current launcher can run the exact 29-case panel, including the three
-batch/rotation-block invariance rows, and can repeat the full default panel
-with `--seed-offset`. The following matrix pieces still need bounded launch/test
-implementation before they are executable as a single suite:
+The current launcher can run the exact 34-case panel, including the positive
+no-CTF control, shared-input batch/rotation-block invariance rows, and
+C4/D4/O/I1 trajectories. It can expand any selected subset over exactly three
+frozen seeds and emit a validated multi-seed suite summary. These are runnable
+definitions only; this document does not assert that the new trajectories have
+completed or passed. The following matrix pieces still need bounded
+launch/test implementation:
 
-- an aggregator that binds the three seed-offset panels into registry records;
 - the fixed-state 32--256-particle image-batch/rotation-block discriminator grid;
 - the added 5k/64, 50k/128, and 10k/256 scaling rows;
-- C4/D4/O/I1 K=4 symmetry trajectories and their generated symmetric GT;
 - fail-closed permutation/duplicate-map/controller-corruption fixtures beyond
   the existing evaluator unit tests;
 - the independent exactly generated 100k/256 release fixture; and

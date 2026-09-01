@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -31,6 +32,7 @@ DEFAULT_IGG_RL_PDB_DIR = Path("/home/mg6942/mytigress/cryobench2/IgG-RL/pdbs")
 DEFAULT_RUNTIME_ROOT = Path("/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime")
 RELION_DISPATCH_LOG_SCHEMA_MARKER = b"RELION_DISPATCH_LOG_SCHEMA_V2"
 KCLASS_INITIAL_RESOLUTION_ANG = 60.0
+THREE_SEED_VALUES = (41001, 41002, 41003)
 
 
 def base_pixi_python() -> Path:
@@ -70,6 +72,20 @@ class Case:
     streaming_mmap: bool
     image_batch_size: int | None = None
     rotation_block_size: int | None = None
+    symmetry: str = "C1"
+    base_name: str | None = None
+    base_seed: int | None = None
+    seed_replicate: int | None = None
+    shared_input_group: str | None = None
+    shared_input_producer: bool = False
+
+    @property
+    def seed_suite_base_name(self) -> str:
+        return self.base_name or self.name
+
+    @property
+    def seed_suite_base_seed(self) -> int:
+        return self.seed if self.base_seed is None else self.base_seed
 
     @property
     def row_fields(self) -> list[str]:
@@ -96,6 +112,13 @@ class Case:
             self.mem,
             "" if self.image_batch_size is None else str(self.image_batch_size),
             "" if self.rotation_block_size is None else str(self.rotation_block_size),
+            self.symmetry,
+            self.seed_suite_base_name,
+            str(self.seed_suite_base_seed),
+            "" if self.seed_replicate is None else str(self.seed_replicate),
+            "" if self.shared_input_group is None else self.shared_input_group,
+            "producer" if self.shared_input_producer else ("consumer" if self.shared_input_group else ""),
+            str(self.pdb_dir),
         ]
 
 
@@ -726,6 +749,8 @@ DEFAULT_CASES: tuple[Case, ...] = (
         False,
         50,
         8192,
+        shared_input_group="ribo_k4_3k_g128_white_noise1_invariance",
+        shared_input_producer=True,
     ),
     Case(
         26,
@@ -753,6 +778,7 @@ DEFAULT_CASES: tuple[Case, ...] = (
         False,
         17,
         8192,
+        shared_input_group="ribo_k4_3k_g128_white_noise1_invariance",
     ),
     Case(
         27,
@@ -780,6 +806,7 @@ DEFAULT_CASES: tuple[Case, ...] = (
         False,
         50,
         257,
+        shared_input_group="ribo_k4_3k_g128_white_noise1_invariance",
     ),
     Case(
         28,
@@ -830,6 +857,135 @@ DEFAULT_CASES: tuple[Case, ...] = (
         "192G",
         500,
         False,
+    ),
+    Case(
+        index=30,
+        name="ribo_k4_3k_g128_white_noise1_noctf_positive_control",
+        pdb_dir=DEFAULT_RIBO_PDB_DIR,
+        n_classes=4,
+        n_images=3_000,
+        grid_size=128,
+        noise_level=1.0,
+        noise_model="white",
+        dataset_params_option="noctf",
+        class_distribution="uniform",
+        seed=2830,
+        pdb_bfactor=80.0,
+        init_radius=10,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        volume_radius=0.7,
+        image_offset_n_std=0.0,
+        percent_outliers=0.0,
+        max_iter=5,
+        time_limit="04:00:00",
+        mem="192G",
+        streaming_chunk_size=500,
+        streaming_mmap=False,
+    ),
+    Case(
+        index=31,
+        name="ribo_k4_5k_g128_white_noise1_c4_uniform",
+        pdb_dir=DEFAULT_RIBO_PDB_DIR,
+        n_classes=4,
+        n_images=5_000,
+        grid_size=128,
+        noise_level=1.0,
+        noise_model="white",
+        dataset_params_option="uniform",
+        class_distribution="uniform",
+        seed=41001,
+        pdb_bfactor=80.0,
+        init_radius=10,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        volume_radius=0.7,
+        image_offset_n_std=0.0,
+        percent_outliers=0.0,
+        max_iter=5,
+        time_limit="06:00:00",
+        mem="256G",
+        streaming_chunk_size=500,
+        streaming_mmap=False,
+        symmetry="C4",
+    ),
+    Case(
+        index=32,
+        name="ribo_k4_5k_g128_white_noise1_d4_uniform",
+        pdb_dir=DEFAULT_RIBO_PDB_DIR,
+        n_classes=4,
+        n_images=5_000,
+        grid_size=128,
+        noise_level=1.0,
+        noise_model="white",
+        dataset_params_option="uniform",
+        class_distribution="uniform",
+        seed=41001,
+        pdb_bfactor=80.0,
+        init_radius=10,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        volume_radius=0.7,
+        image_offset_n_std=0.0,
+        percent_outliers=0.0,
+        max_iter=5,
+        time_limit="06:00:00",
+        mem="256G",
+        streaming_chunk_size=500,
+        streaming_mmap=False,
+        symmetry="D4",
+    ),
+    Case(
+        index=33,
+        name="ribo_k4_5k_g128_white_noise1_o_uniform",
+        pdb_dir=DEFAULT_RIBO_PDB_DIR,
+        n_classes=4,
+        n_images=5_000,
+        grid_size=128,
+        noise_level=1.0,
+        noise_model="white",
+        dataset_params_option="uniform",
+        class_distribution="uniform",
+        seed=41001,
+        pdb_bfactor=80.0,
+        init_radius=10,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        volume_radius=0.7,
+        image_offset_n_std=0.0,
+        percent_outliers=0.0,
+        max_iter=5,
+        time_limit="06:00:00",
+        mem="256G",
+        streaming_chunk_size=500,
+        streaming_mmap=False,
+        symmetry="O",
+    ),
+    Case(
+        index=34,
+        name="ribo_k4_5k_g128_white_noise1_i1_uniform",
+        pdb_dir=DEFAULT_RIBO_PDB_DIR,
+        n_classes=4,
+        n_images=5_000,
+        grid_size=128,
+        noise_level=1.0,
+        noise_model="white",
+        dataset_params_option="uniform",
+        class_distribution="uniform",
+        seed=41001,
+        pdb_bfactor=80.0,
+        init_radius=10,
+        noise_scale_std=0.0,
+        contrast_std=0.0,
+        volume_radius=0.7,
+        image_offset_n_std=0.0,
+        percent_outliers=0.0,
+        max_iter=5,
+        time_limit="08:00:00",
+        mem="320G",
+        streaming_chunk_size=500,
+        streaming_mmap=False,
+        symmetry="I1",
     ),
 )
 
@@ -965,6 +1121,148 @@ def audit_numbered_class_maps(
     return report
 
 
+def audit_relion_class_populations(*, relion_dir: Path, n_classes: int) -> dict[str, object]:
+    """Fail closed if any numbered RELION iteration contains a collapsed class."""
+
+    import starfile
+
+    if n_classes <= 0:
+        raise ValueError("n_classes must be positive")
+    model_pattern = re.compile(r"run_it(\d{3})_model\.star")
+    model_paths = sorted(
+        path
+        for path in relion_dir.glob("run_it*_model.star")
+        if (match := model_pattern.fullmatch(path.name)) is not None and int(match.group(1)) > 0
+    )
+    if not model_paths:
+        raise ValueError(f"No numbered RELION model STARs found in {relion_dir}")
+
+    rows: list[dict[str, object]] = []
+    collapsed: list[dict[str, object]] = []
+    for path in model_paths:
+        iteration = int(model_pattern.fullmatch(path.name).group(1))  # type: ignore[union-attr]
+        data = starfile.read(path, always_dict=True)
+        classes = data.get("model_classes")
+        if classes is None or not hasattr(classes, "columns"):
+            raise ValueError(f"RELION model STAR lacks model_classes table: {path}")
+        if len(classes) != n_classes or "rlnClassDistribution" not in classes.columns:
+            raise ValueError(
+                f"RELION model STAR has invalid class table at iteration {iteration}: "
+                f"rows={len(classes)}, expected={n_classes}, columns={list(classes.columns)}"
+            )
+        for class_number in range(1, n_classes + 1):
+            distribution = float(classes.iloc[class_number - 1]["rlnClassDistribution"])
+            orient_key = f"model_pdf_orient_class_{class_number}"
+            orientations = data.get(orient_key)
+            if (
+                orientations is None
+                or not hasattr(orientations, "columns")
+                or "rlnOrientationDistribution" not in orientations.columns
+            ):
+                raise ValueError(f"RELION model STAR lacks {orient_key} distribution: {path}")
+            orientation_mass = float(orientations["rlnOrientationDistribution"].sum())
+            row = {
+                "iteration": iteration,
+                "class": class_number,
+                "class_distribution": distribution,
+                "orientation_mass": orientation_mass,
+            }
+            rows.append(row)
+            if (
+                not math.isfinite(distribution)
+                or distribution <= 0.0
+                or not math.isfinite(orientation_mass)
+                or orientation_mass <= 0.0
+            ):
+                collapsed.append(row)
+
+    report: dict[str, object] = {
+        "schema": "recovar.em.relion_class_population_audit.v1",
+        "n_classes": n_classes,
+        "numbered_iterations": sorted({int(row["iteration"]) for row in rows}),
+        "rows": rows,
+        "collapsed": collapsed,
+        "passed": not collapsed,
+    }
+    output = relion_dir / "class_population_audit.json"
+    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if collapsed:
+        identities = ", ".join(f"it{int(row['iteration']):03d}/class{int(row['class']):03d}" for row in collapsed)
+        raise ValueError(
+            "RELION class-collapse gate failed: every numbered class must retain "
+            f"positive class and orientation mass; collapsed={identities}; audit={output}"
+        )
+    return report
+
+
+SHARED_INPUT_SIGNATURE_FIELDS = (
+    "pdb_dir",
+    "n_classes",
+    "n_images",
+    "grid_size",
+    "noise_level",
+    "noise_model",
+    "dataset_params_option",
+    "class_distribution",
+    "seed",
+    "pdb_bfactor",
+    "init_radius",
+    "noise_scale_std",
+    "contrast_std",
+    "volume_radius",
+    "image_offset_n_std",
+    "percent_outliers",
+    "streaming_chunk_size",
+    "streaming_mmap",
+    "symmetry",
+)
+
+
+def shared_input_key(case: Case) -> str | None:
+    """Return the seed-qualified shared-input identity for one case."""
+
+    if case.shared_input_group is None:
+        return None
+    return f"{case.shared_input_group}_seed{case.seed}"
+
+
+def validate_shared_input_groups(cases: list[Case]) -> dict[str, Case]:
+    """Validate one producer and one immutable generator contract per group."""
+
+    grouped: dict[str, list[Case]] = {}
+    for case in cases:
+        key = shared_input_key(case)
+        if key is not None:
+            grouped.setdefault(key, []).append(case)
+
+    producers: dict[str, Case] = {}
+    for key, members in grouped.items():
+        group_producers = [case for case in members if case.shared_input_producer]
+        if len(group_producers) != 1:
+            raise SystemExit(
+                f"shared input group {key} requires exactly one selected producer, "
+                f"found {[case.name for case in group_producers]}; include the producer case"
+            )
+        producer = group_producers[0]
+        expected = tuple(getattr(producer, field) for field in SHARED_INPUT_SIGNATURE_FIELDS)
+        for case in members:
+            observed = tuple(getattr(case, field) for field in SHARED_INPUT_SIGNATURE_FIELDS)
+            if observed != expected:
+                changed = [
+                    field
+                    for field, left, right in zip(
+                        SHARED_INPUT_SIGNATURE_FIELDS,
+                        expected,
+                        observed,
+                        strict=True,
+                    )
+                    if left != right
+                ]
+                raise SystemExit(f"shared input group {key} changes generator fields for {case.name}: {changed}")
+        producers[key] = producer
+    return producers
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watch", action="store_true", help="Poll squeue until the summary job leaves the queue.")
@@ -1000,6 +1298,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=("Add an offset to each selected case seed. Also available as EM_KCLASS_MATRIX_SEED_OFFSET."),
     )
+    parser.add_argument(
+        "--three-seed-suite",
+        action="store_true",
+        help=(
+            "Expand every selected scientific case over frozen seeds "
+            f"{','.join(str(seed) for seed in THREE_SEED_VALUES)} and emit a multi-seed aggregate. "
+            "Also available as EM_KCLASS_MATRIX_THREE_SEED_SUITE=1."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1014,9 +1321,7 @@ def selected_cases(args: argparse.Namespace) -> list[Case]:
         for case in DEFAULT_CASES:
             if str(case.index) in requested or case.name in requested:
                 out.append(case)
-        missing = sorted(
-            set(requested) - {str(case.index) for case in out} - {case.name for case in out}
-        )
+        missing = sorted(set(requested) - {str(case.index) for case in out} - {case.name for case in out})
         if missing:
             raise SystemExit(f"Unknown case(s): {', '.join(missing)}")
     out = apply_case_overrides(out, args)
@@ -1040,15 +1345,33 @@ def apply_case_overrides(cases: list[Case], args: argparse.Namespace) -> list[Ca
     if seed_offset is None:
         raw_seed_offset = os.environ.get("EM_KCLASS_MATRIX_SEED_OFFSET")
         seed_offset = int(raw_seed_offset) if raw_seed_offset else None
+    three_seed_raw = os.environ.get("EM_KCLASS_MATRIX_THREE_SEED_SUITE", "")
+    three_seed_suite = bool(getattr(args, "three_seed_suite", False)) or three_seed_raw.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     if seed_override is not None and seed_offset is not None:
         raise SystemExit(
             "Use either EM_KCLASS_MATRIX_SEED / --seed-override or EM_KCLASS_MATRIX_SEED_OFFSET / --seed-offset, not both"
         )
+    if three_seed_suite and (seed_override is not None or seed_offset is not None):
+        raise SystemExit(
+            "EM_KCLASS_MATRIX_THREE_SEED_SUITE / --three-seed-suite cannot be combined "
+            "with a seed override or seed offset"
+        )
 
-    if not max_iter_override and not time_limit_override and seed_override is None and seed_offset is None:
+    if (
+        not max_iter_override
+        and not time_limit_override
+        and seed_override is None
+        and seed_offset is None
+        and not three_seed_suite
+    ):
         return cases
 
-    out = []
+    configured_cases = []
     for case in cases:
         updated = case
         if max_iter_override:
@@ -1057,9 +1380,32 @@ def apply_case_overrides(cases: list[Case], args: argparse.Namespace) -> list[Ca
             updated = replace(updated, time_limit=time_limit_override)
         if seed_override is not None or seed_offset is not None:
             new_seed = seed_override if seed_override is not None else case.seed + int(seed_offset or 0)
-            updated = replace(updated, seed=new_seed, name=f"{updated.name}_seed{new_seed}")
-        out.append(updated)
-    return out
+            updated = replace(
+                updated,
+                seed=new_seed,
+                name=f"{updated.name}_seed{new_seed}",
+                base_name=case.seed_suite_base_name,
+                base_seed=case.seed_suite_base_seed,
+            )
+        configured_cases.append(updated)
+
+    if not three_seed_suite:
+        return configured_cases
+
+    expanded = []
+    for case in configured_cases:
+        for replicate, seed in enumerate(THREE_SEED_VALUES, start=1):
+            expanded.append(
+                replace(
+                    case,
+                    name=f"{case.name}_seed{seed}",
+                    seed=seed,
+                    base_name=case.seed_suite_base_name,
+                    base_seed=case.seed_suite_base_seed,
+                    seed_replicate=replicate,
+                )
+            )
+    return expanded
 
 
 def sbatch_directive(flag: str, value: str | None) -> str:
@@ -1308,15 +1654,31 @@ def write_case_script(
     expected_commit: str | None = None,
 ) -> Path:
     expected_commit = expected_commit or git_text("rev-parse", "HEAD")
-    effective_image_batch_size = (
-        case.image_batch_size if case.image_batch_size is not None else image_batch_size
-    )
+    effective_image_batch_size = case.image_batch_size if case.image_batch_size is not None else image_batch_size
     effective_rotation_block_size = (
         case.rotation_block_size if case.rotation_block_size is not None else rotation_block_size
     )
     if effective_image_batch_size <= 0 or effective_rotation_block_size <= 0:
         raise ValueError("K-class image and rotation batch sizes must be positive")
     case_root = scratch_dir / "cases" / f"{case.index}_{case.name}"
+    input_group_key = shared_input_key(case)
+    if input_group_key is None:
+        data_dir = case_root / "data"
+        sub_pdb_dir = case_root / f"pdbs_k{case.n_classes}"
+        shared_input_manifest = None
+        relion_dir = case_root / "relion_ref"
+        shared_relion_manifest = None
+        generate_input = True
+        run_relion = True
+    else:
+        shared_input_root = scratch_dir / "shared_inputs" / input_group_key
+        data_dir = shared_input_root / "data"
+        sub_pdb_dir = shared_input_root / f"pdbs_k{case.n_classes}"
+        shared_input_manifest = shared_input_root / "sealed_inputs.sha256"
+        relion_dir = shared_input_root / "relion_ref"
+        shared_relion_manifest = shared_input_root / "sealed_relion_oracle.sha256"
+        generate_input = case.shared_input_producer
+        run_relion = case.shared_input_producer
     script = jobs_dir / f"em_kclass_matrix_{case.index}_{case.name}.sh"
     exclusive_directive = "#SBATCH --exclusive" if exclusive else ""
     streaming_flag = "--streaming-mmap" if case.streaming_mmap else "--no-streaming-mmap"
@@ -1354,14 +1716,44 @@ echo "Using holdout outlier PDB: ${{OUTLIER_PDB}}"
 {job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, relion_src_dir=relion_src_dir, job_name=f"em_kclass_matrix_{case.index}_{case.name}", expected_commit=expected_commit)}
 
 CASE_ROOT={q(case_root)}
-DATA_DIR="${{CASE_ROOT}}/data"
+DATA_DIR={q(data_dir)}
 RECOVAR_DIR="${{CASE_ROOT}}/recovar"
 RECOVAR_INTERMEDIATES_DIR="${{RECOVAR_DIR}}/intermediates"
-RELION_DIR="${{CASE_ROOT}}/relion_ref"
+RELION_DIR={q(relion_dir)}
 RELION_DISPATCH_LOG="${{RELION_DIR}}/dispatch.tsv"
 RELION_DISPATCH_SCHEDULE="${{RELION_DIR}}/dispatch_schedule.npz"
-SUB_PDB_DIR="${{CASE_ROOT}}/pdbs_k{case.n_classes}"
-mkdir -p "${{CASE_ROOT}}" "${{DATA_DIR}}" "${{RECOVAR_DIR}}" "${{RECOVAR_INTERMEDIATES_DIR}}" "${{RELION_DIR}}" "${{SUB_PDB_DIR}}"
+SUB_PDB_DIR={q(sub_pdb_dir)}
+SHARED_INPUT_GROUP={q(input_group_key or "")}
+SHARED_INPUT_MANIFEST={q(shared_input_manifest or "")}
+SHARED_RELION_MANIFEST={q(shared_relion_manifest or "")}
+GENERATE_INPUT={1 if generate_input else 0}
+RUN_RELION={1 if run_relion else 0}
+if [[ -e "${{CASE_ROOT}}" || -L "${{CASE_ROOT}}" ]]; then
+  echo "ERROR: refusing to reuse an existing case root: ${{CASE_ROOT}}" >&2
+  echo "Use a fresh immutable scratch root; a retry must not mix old and new evidence." >&2
+  exit 2
+fi
+if [[ "${{GENERATE_INPUT}}" == "1" ]]; then
+  if [[ -e "${{DATA_DIR}}" || -L "${{DATA_DIR}}" || ( -n "${{SHARED_INPUT_MANIFEST}}" && -e "${{SHARED_INPUT_MANIFEST}}" ) ]]; then
+    echo "ERROR: refusing to regenerate or reseal an existing dataset: ${{DATA_DIR}}" >&2
+    echo "Use a fresh immutable scratch root; stale partial outputs are not reusable evidence." >&2
+    exit 2
+  fi
+fi
+if [[ "${{RUN_RELION}}" == "1" && -n "${{SHARED_RELION_MANIFEST}}" ]]; then
+  if [[ -e "${{RELION_DIR}}" || -L "${{RELION_DIR}}" || -e "${{SHARED_RELION_MANIFEST}}" ]]; then
+    echo "ERROR: refusing to regenerate or reseal an existing shared RELION oracle: ${{RELION_DIR}}" >&2
+    echo "Use a fresh immutable scratch root." >&2
+    exit 2
+  fi
+fi
+mkdir -p "${{CASE_ROOT}}" "${{RECOVAR_DIR}}" "${{RECOVAR_INTERMEDIATES_DIR}}"
+if [[ "${{GENERATE_INPUT}}" == "1" ]]; then
+  mkdir -p "${{DATA_DIR}}" "${{SUB_PDB_DIR}}"
+fi
+if [[ "${{RUN_RELION}}" == "1" ]]; then
+  mkdir -p "${{RELION_DIR}}"
+fi
 
 RELION_DISPATCH_SCHEMA_MARKER={q(RELION_DISPATCH_LOG_SCHEMA_MARKER.decode("ascii"))}
 if ! LC_ALL=C grep -aFq -- "${{RELION_DISPATCH_SCHEMA_MARKER}}" {q(relion_refine_mpi)}; then
@@ -1419,7 +1811,20 @@ cat > "${{CASE_ROOT}}/case_config.json" <<JSON
   "initial_resolution_ang": {KCLASS_INITIAL_RESOLUTION_ANG},
   "particle_diameter_ang": {particle_diameter},
   "image_batch_size": {effective_image_batch_size},
-  "rotation_block_size": {effective_rotation_block_size}
+  "rotation_block_size": {effective_rotation_block_size},
+  "symmetry": "{case.symmetry}",
+  "base_name": "{case.seed_suite_base_name}",
+  "base_seed": {case.seed_suite_base_seed},
+  "seed_replicate": {"null" if case.seed_replicate is None else case.seed_replicate},
+  "case_root": "{case_root}",
+  "slurm_job_id": "${{SLURM_JOB_ID}}",
+  "data_dir": "{data_dir}",
+  "shared_input_group": {json.dumps(case.shared_input_group)},
+  "shared_input_key": {json.dumps(input_group_key)},
+  "shared_input_role": {json.dumps("producer" if case.shared_input_producer else ("consumer" if input_group_key else None))},
+  "shared_input_manifest": {json.dumps(str(shared_input_manifest) if shared_input_manifest else None)},
+  "shared_relion_dir": {json.dumps(str(relion_dir) if input_group_key else None)},
+  "shared_relion_manifest": {json.dumps(str(shared_relion_manifest) if shared_relion_manifest else None)}
 }}
 JSON
 
@@ -1457,6 +1862,7 @@ nvidia-smi --query-gpu="${{GPU_MONITOR_QUERY}}" --format=csv -l 60 > "${{CASE_RO
 COMBINED_MONITOR_PID="$!"
 trap cleanup_gpu_monitors EXIT
 
+if [[ "${{GENERATE_INPUT}}" == "1" ]]; then
 mapfile -t PDBS < <(find {q(case.pdb_dir)} -maxdepth 1 -type f -name '*.pdb' | sort)
 if [[ "${{#PDBS[@]}}" -lt {required_pdb_count} ]]; then
   echo "Need {required_pdb_count} PDB files under {case.pdb_dir}, found ${{#PDBS[@]}}" >&2
@@ -1468,6 +1874,7 @@ for ((i=0; i<{case.n_classes}; i++)); do
   ln -sf "${{src}}" "${{SUB_PDB_DIR}}/$(printf '%03d_%s' "$i" "$(basename "${{src}}")")"
 done
 {outlier_pdb_setup}
+fi
 
 sha256sum --check {q(scratch_dir / "relion_bind_build" / "shared.sha256")}
 {build_cuda_lib_command()}
@@ -1495,6 +1902,7 @@ assert cb.cuda_available(), cb.cuda_unavailable_error()
 print("case provenance/cuda gate ok")
 PY
 
+if [[ "${{GENERATE_INPUT}}" == "1" ]]; then
 echo "=== Prepare K-class dataset: {case.name} ==="
 "${{PIXI_PY}}" -m scripts.prepare_cryobench_pdb_multiclass_relion_parity_benchmark \\
   --pdb-dir "${{SUB_PDB_DIR}}" \\
@@ -1516,9 +1924,27 @@ echo "=== Prepare K-class dataset: {case.name} ==="
   {streaming_flag} \\
   --streaming-chunk-size {case.streaming_chunk_size} \\
   --disc-type cubic \\
+  --symmetry {q(case.symmetry)} \\
   --seed {case.seed} \\
   2>&1 | tee "${{CASE_ROOT}}/prepare.log"
+fi
 
+if [[ -n "${{SHARED_INPUT_GROUP}}" ]]; then
+  if [[ "${{GENERATE_INPUT}}" == "1" ]]; then
+    MANIFEST_TMP="${{SHARED_INPUT_MANIFEST}}.${{SLURM_JOB_ID:-$$}}.tmp"
+    find "${{DATA_DIR}}" -type f -print0 | sort -z | xargs -0 sha256sum > "${{MANIFEST_TMP}}"
+    mv -f "${{MANIFEST_TMP}}" "${{SHARED_INPUT_MANIFEST}}"
+  fi
+  if [[ ! -s "${{SHARED_INPUT_MANIFEST}}" ]]; then
+    echo "ERROR: shared input manifest is missing: ${{SHARED_INPUT_MANIFEST}}" >&2
+    exit 2
+  fi
+  sha256sum --check "${{SHARED_INPUT_MANIFEST}}" \
+    | tee -a "${{CASE_ROOT}}/prepare.log"
+  ln -sfn "${{DATA_DIR}}" "${{CASE_ROOT}}/shared_data"
+fi
+
+if [[ "${{RUN_RELION}}" == "1" ]]; then
 echo "=== Run RELION Class3D: {case.name} ==="
 RELION_GPU_UUID="$(capture_physical_gpu_uuid)"
 if [[ "${{RELION_GPU_UUID}}" != "${{CASE_GPU_UUID}}" ]]; then
@@ -1575,7 +2001,7 @@ set +e
       "${{RELION_CTF_ARGS[@]}}" \\
       --norm \\
       --scale \\
-      --sym C1 \\
+      --sym {q(case.symmetry)} \\
       --oversampling 1 \\
       --healpix_order 1 \\
       --offset_range 6 \\
@@ -1621,15 +2047,68 @@ if [[ ! -s "${{RELION_DISPATCH_SCHEDULE}}" ]]; then
     --oracle-dir "${{RELION_DIR}}"
 fi
 
+"${{PIXI_PY}}" - "${{RELION_DIR}}" {case.n_classes} <<'PY'
+import pathlib
+import sys
+
+from scripts.run_em_kclass_robustness_matrix_slurm import audit_relion_class_populations
+
+report = audit_relion_class_populations(
+    relion_dir=pathlib.Path(sys.argv[1]),
+    n_classes=int(sys.argv[2]),
+)
+print(
+    "RELION class-population audit ok: "
+    f"iterations={{report['numbered_iterations']}} rows={{len(report['rows'])}}"
+)
+PY
+if [[ -n "${{SHARED_RELION_MANIFEST}}" ]]; then
+  RELION_MANIFEST_TMP="${{SHARED_RELION_MANIFEST}}.${{SLURM_JOB_ID:-$$}}.tmp"
+  find "${{RELION_DIR}}" -type f -print0 | sort -z | xargs -0 sha256sum > "${{RELION_MANIFEST_TMP}}"
+  mv -f "${{RELION_MANIFEST_TMP}}" "${{SHARED_RELION_MANIFEST}}"
+  sha256sum --check "${{SHARED_RELION_MANIFEST}}"
+fi
+else
+  echo "=== Reuse sealed RELION oracle: {case.name} ==="
+  if [[ ! -s "${{SHARED_RELION_MANIFEST}}" ]]; then
+    echo "ERROR: shared RELION oracle manifest is missing: ${{SHARED_RELION_MANIFEST}}" >&2
+    exit 2
+  fi
+  sha256sum --check "${{SHARED_RELION_MANIFEST}}" \
+    | tee "${{CASE_ROOT}}/relion_oracle_verify.log"
+  for REQUIRED_RELION_PATH in \
+    "${{RELION_DISPATCH_SCHEDULE}}" \
+    "${{RELION_DIR}}/run_it000_optimiser.star" \
+    "${{RELION_DIR}}/class_population_audit.json" \
+    "${{RELION_DIR}}/physical_gpu_uuid.txt"; do
+    if [[ ! -s "${{REQUIRED_RELION_PATH}}" ]]; then
+      echo "ERROR: sealed shared RELION oracle lacks ${{REQUIRED_RELION_PATH}}" >&2
+      exit 2
+    fi
+  done
+  RELION_GPU_UUID="$(<"${{RELION_DIR}}/physical_gpu_uuid.txt")"
+fi
+if [[ -n "${{SHARED_INPUT_GROUP}}" ]]; then
+  # Keep one stable per-case oracle path for producers and consumers alike.
+  # The summary and multiseed aggregation tools deliberately resolve the
+  # class-population audit through this path, while RELION_DIR may point at a
+  # producer-owned shared oracle outside CASE_ROOT.
+  ln -sfn "${{RELION_DIR}}" "${{CASE_ROOT}}/relion_ref"
+fi
+
 echo "=== Run RECOVAR K-class refinement: {case.name} ==="
 RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"
-if [[ "${{RECOVAR_GPU_UUID}}" != "${{CASE_GPU_UUID}}" || "${{RECOVAR_GPU_UUID}}" != "${{RELION_GPU_UUID}}" ]]; then
+if [[ "${{RECOVAR_GPU_UUID}}" != "${{CASE_GPU_UUID}}" ]]; then
+  echo "ERROR: RECOVAR physical GPU changed: expected ${{CASE_GPU_UUID}}, got ${{RECOVAR_GPU_UUID}}" >&2
+  exit 2
+fi
+if [[ "${{RUN_RELION}}" == "1" && "${{RECOVAR_GPU_UUID}}" != "${{RELION_GPU_UUID}}" ]]; then
   echo "ERROR: RECOVAR and RELION did not use the same physical GPU: RELION=${{RELION_GPU_UUID}} RECOVAR=${{RECOVAR_GPU_UUID}}" >&2
   exit 2
 fi
 printf '%s\\n' "${{RECOVAR_GPU_UUID}}" > "${{RECOVAR_DIR}}/physical_gpu_uuid.txt"
 cat > "${{CASE_ROOT}}/paired_gpu_uuid.json" <<JSON
-{{"physical_gpu_uuid":"${{CASE_GPU_UUID}}","relion_gpu_uuid":"${{RELION_GPU_UUID}}","recovar_gpu_uuid":"${{RECOVAR_GPU_UUID}}"}}
+{{"physical_gpu_uuid":"${{CASE_GPU_UUID}}","relion_gpu_uuid":"${{RELION_GPU_UUID}}","recovar_gpu_uuid":"${{RECOVAR_GPU_UUID}}","relion_ran_in_case":$([[ "${{RUN_RELION}}" == "1" ]] && echo true || echo false),"hardware_comparable":$([[ "${{RUN_RELION}}" == "1" ]] && echo true || echo false)}}
 JSON
 rm -rf "${{RECOVAR_INTERMEDIATES_DIR}}"
 mkdir -p "${{RECOVAR_INTERMEDIATES_DIR}}"
@@ -1645,6 +2124,7 @@ set +e
   --offset_range 6 \\
   --offset_step 2 \\
   --adaptive_oversampling 1 \\
+  --sym {q(case.symmetry)} \\
   --init_resolution {KCLASS_INITIAL_RESOLUTION_ANG:g} \\
   --apply-initial-lowpass \\
   --firstiter_cc \\
@@ -1673,8 +2153,8 @@ if [[ "${{STATUS}}" -ne 0 ]]; then
   exit "${{STATUS}}"
 fi
 RECOVAR_POST_GPU_UUID="$(capture_physical_gpu_uuid)"
-if [[ "${{RECOVAR_POST_GPU_UUID}}" != "${{RELION_GPU_UUID}}" ]]; then
-  echo "ERROR: RECOVAR runtime physical GPU changed: expected ${{RELION_GPU_UUID}}, got ${{RECOVAR_POST_GPU_UUID}}" >&2
+if [[ "${{RECOVAR_POST_GPU_UUID}}" != "${{CASE_GPU_UUID}}" ]]; then
+  echo "ERROR: RECOVAR runtime physical GPU changed: expected ${{CASE_GPU_UUID}}, got ${{RECOVAR_POST_GPU_UUID}}" >&2
   exit 2
 fi
 printf '%s\\n' "${{RECOVAR_POST_GPU_UUID}}" > "${{RECOVAR_DIR}}/runtime_physical_gpu_uuid.txt"
@@ -1743,12 +2223,26 @@ def write_summary_script(
     constraint: str,
     dependency: str,
     tracked_jobs: list[str],
+    three_seed_suite: bool = False,
     expected_commit: str | None = None,
 ) -> Path:
     expected_commit = expected_commit or git_text("rev-parse", "HEAD")
     matrix_python = scratch_dir / "venv" / "bin" / "python"
     fallback_python = base_pixi_python()
     script = jobs_dir / "em_kclass_matrix_summary.sh"
+    multiseed_command = ""
+    if three_seed_suite:
+        expected_seeds = ",".join(str(seed) for seed in THREE_SEED_VALUES)
+        multiseed_command = f"""
+"${{PIXI_PY}}" -m scripts.aggregate_em_kclass_multiseed \\
+  {q(scratch_dir)} \\
+  --matrix-summary {q(scratch_dir / "em_kclass_robustness_summary.json")} \\
+  --case-table {q(scratch_dir / "case_table.tsv")} \\
+  --expected-seeds {q(expected_seeds)} \\
+  --output-markdown {q(scratch_dir / "em_kclass_multiseed_summary.md")} \\
+  --output-json {q(scratch_dir / "em_kclass_multiseed_summary.json")}
+tail -200 {q(scratch_dir / "em_kclass_multiseed_summary.md")} || true
+"""
     text = f"""#!/usr/bin/env bash
 #SBATCH --job-name=em_kclass_summary
 #SBATCH --output={q(scratch_dir / "em_kclass_matrix_summary.out")}
@@ -1813,6 +2307,7 @@ echo
   --slurm-accounting-json-out {q(scratch_dir / "slurm_case_accounting.json")} \\
   --dedupe-case-reruns
 tail -200 {q(scratch_dir / "em_kclass_robustness_summary.md")} || true
+{multiseed_command}
 """
     script.write_text(text)
     script.chmod(0o755)
@@ -1854,12 +2349,23 @@ def main() -> int:
         raise SystemExit("Cannot resolve the repository commit for queued-job provenance")
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_id = f"em_kclass_robustness_{timestamp}_{os.getpid()}"
-    scratch_dir = args.scratch_dir or Path(
-        os.environ.get(
-            "EM_KCLASS_MATRIX_SCRATCH_DIR",
-            f"/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/{run_id}",
+    scratch_dir = (
+        (
+            args.scratch_dir
+            or Path(
+                os.environ.get(
+                    "EM_KCLASS_MATRIX_SCRATCH_DIR",
+                    f"/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/{run_id}",
+                )
+            )
         )
+        .expanduser()
+        .resolve()
     )
+    if scratch_dir.exists() and (not scratch_dir.is_dir() or any(scratch_dir.iterdir())):
+        raise SystemExit(
+            f"K-class matrix scratch root must be new or empty; refusing to mix or reseal evidence: {scratch_dir}"
+        )
     scratch_dir.mkdir(parents=True, exist_ok=True)
     (scratch_dir / "SAFE_TO_DELETE").touch()
     jobs_dir = scratch_dir / "jobs"
@@ -1867,6 +2373,10 @@ def main() -> int:
     (scratch_dir / "tmp").mkdir(exist_ok=True)
 
     cases = selected_cases(args)
+    three_seed_suite = bool(cases) and all(case.seed_replicate is not None for case in cases)
+    if any(case.seed_replicate is not None for case in cases) and not three_seed_suite:
+        raise SystemExit("Three-seed suite expansion produced a mixture of replicated and base cases")
+    shared_input_producers = validate_shared_input_groups(cases)
     account = os.environ.get("SBATCH_ACCOUNT", "gilles")
     partition = os.environ.get("SBATCH_PARTITION", "cryoem")
     summary_partition = args.summary_partition or "cpu"
@@ -1930,6 +2440,13 @@ def main() -> int:
     print(f"Branch: {git_text('symbolic-ref', '--short', 'HEAD', default='<detached>')}")
     print(f"Scratch: {scratch_dir}")
     print(f"Cases: {', '.join(str(case.index) for case in cases)}")
+    if three_seed_suite:
+        print(f"Three-seed suite: {','.join(str(seed) for seed in THREE_SEED_VALUES)}")
+    if shared_input_producers:
+        print(
+            "Shared input producers: "
+            + ", ".join(f"{key}={producer.name}" for key, producer in sorted(shared_input_producers.items()))
+        )
     print(f"Partition/account: {partition}/{account}")
     print(f"Setup partition: {setup_partition}")
     print(f"Setup constraint: {setup_constraint or '<none>'}")
@@ -1973,6 +2490,13 @@ def main() -> int:
         "mem",
         "image_batch_size_override",
         "rotation_block_size_override",
+        "symmetry",
+        "base_name",
+        "base_seed",
+        "seed_replicate",
+        "shared_input_group",
+        "shared_input_role",
+        "pdb_dir",
         "case_root",
         "script",
         "job_id",
@@ -1994,6 +2518,7 @@ def main() -> int:
     setup_job = submit(setup_script, dry_run=args.dry_run)
     tracked_jobs = [setup_job]
     case_jobs: list[str] = []
+    shared_input_producer_jobs: dict[str, str] = {}
 
     for case in cases:
         if not case.pdb_dir.exists():
@@ -2020,9 +2545,23 @@ def main() -> int:
             noise_rng_batch_size=noise_rng_batch_size,
             expected_commit=expected_commit,
         )
+        dependencies = [setup_job]
+        input_group_key = shared_input_key(case)
+        if input_group_key is not None and not case.shared_input_producer:
+            producer_job = shared_input_producer_jobs.get(input_group_key)
+            if producer_job is None:
+                raise SystemExit(
+                    f"shared input consumer {case.name} was reached before its producer job for group {input_group_key}"
+                )
+            dependencies.append(producer_job)
+        dependency_arg = f"--dependency=afterok:{':'.join(dependencies)}"
         job_id = submit(
-            script, dry_run=args.dry_run, extra_args=[f"--dependency=afterok:{setup_job}"] if not args.dry_run else None
+            script,
+            dry_run=args.dry_run,
+            extra_args=[dependency_arg] if not args.dry_run else None,
         )
+        if input_group_key is not None and case.shared_input_producer:
+            shared_input_producer_jobs[input_group_key] = job_id
         tracked_jobs.append(job_id)
         case_jobs.append(job_id)
         case_root = scratch_dir / "cases" / f"{case.index}_{case.name}"
@@ -2039,6 +2578,7 @@ def main() -> int:
         constraint=summary_constraint,
         dependency=dependency,
         tracked_jobs=tracked_jobs,
+        three_seed_suite=three_seed_suite,
         expected_commit=expected_commit,
     )
     summary_job = submit(summary_script, dry_run=args.dry_run)
@@ -2081,6 +2621,8 @@ def main() -> int:
                 f"EM_KCLASS_MATRIX_TIME_LIMIT={time_limit_override_for_env}",
                 f"EM_KCLASS_MATRIX_SEED={seed_override_for_env}",
                 f"EM_KCLASS_MATRIX_SEED_OFFSET={seed_offset_for_env}",
+                f"EM_KCLASS_MATRIX_THREE_SEED_SUITE={int(three_seed_suite)}",
+                f"EM_KCLASS_MATRIX_THREE_SEED_VALUES={','.join(str(seed) for seed in THREE_SEED_VALUES)}",
             ]
         )
         + "\n",

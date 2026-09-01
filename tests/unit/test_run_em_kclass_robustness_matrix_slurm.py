@@ -24,9 +24,9 @@ def _set_dispatch_capture_executable(tmp_path, monkeypatch):
 def test_default_cases_cover_all_available_cryobench_pdb_families():
     pdb_dirs = {case.pdb_dir for case in launcher.DEFAULT_CASES}
 
-    assert len(launcher.DEFAULT_CASES) == 29
-    assert len({case.index for case in launcher.DEFAULT_CASES}) == 29
-    assert len({case.name for case in launcher.DEFAULT_CASES}) == 29
+    assert len(launcher.DEFAULT_CASES) == 34
+    assert len({case.index for case in launcher.DEFAULT_CASES}) == 34
+    assert len({case.name for case in launcher.DEFAULT_CASES}) == 34
     assert launcher.DEFAULT_RIBO_PDB_DIR in pdb_dirs
     assert launcher.DEFAULT_IGG_PDB_DIR in pdb_dirs
     assert launcher.DEFAULT_TOMOTWIN_PDB_DIR in pdb_dirs
@@ -72,9 +72,31 @@ def test_default_cases_cover_k1_stress_axes_and_k4_invariance_controls():
         == tuple(getattr(invariance_cases[0], field) for field in scientific_fields)
         for case in invariance_cases[1:]
     )
-    assert [
-        (case.image_batch_size, case.rotation_block_size) for case in invariance_cases
-    ] == [(50, 8192), (17, 8192), (50, 257)]
+    assert [(case.image_batch_size, case.rotation_block_size) for case in invariance_cases] == [
+        (50, 8192),
+        (17, 8192),
+        (50, 257),
+    ]
+    assert len({case.shared_input_group for case in invariance_cases}) == 1
+    assert invariance_cases[0].shared_input_producer is True
+    assert [case.shared_input_producer for case in invariance_cases[1:]] == [False, False]
+
+
+def test_default_cases_add_positive_noctf_and_k4_symmetry_trajectories():
+    cases = {case.index: case for case in launcher.DEFAULT_CASES}
+
+    assert cases[17].dataset_params_option == "noctf"
+    assert cases[17].noise_level == 3.0
+    assert cases[30].dataset_params_option == "noctf"
+    assert (cases[30].noise_model, cases[30].noise_level) == ("white", 1.0)
+    assert cases[30].n_classes == 4
+
+    symmetry_cases = [cases[index] for index in (31, 32, 33, 34)]
+    assert [case.symmetry for case in symmetry_cases] == ["C4", "D4", "O", "I1"]
+    assert all(
+        (case.n_classes, case.n_images, case.grid_size, case.max_iter) == (4, 5_000, 128, 5) for case in symmetry_cases
+    )
+    assert {case.seed for case in symmetry_cases} == {41001}
 
 
 def test_extra_pdb_family_case_can_be_selected_by_name(monkeypatch):
@@ -157,6 +179,60 @@ def test_numbered_class_map_audit_rejects_iteration_gaps_and_map_mismatches(tmp_
         )
 
 
+def _write_relion_population_star(path, distributions, orientation_masses):
+    import pandas as pd
+    import starfile
+
+    payload = {
+        "model_classes": pd.DataFrame({"rlnClassDistribution": distributions}),
+    }
+    for class_number, mass in enumerate(orientation_masses, start=1):
+        payload[f"model_pdf_orient_class_{class_number}"] = pd.DataFrame({"rlnOrientationDistribution": [mass]})
+    starfile.write(payload, path, overwrite=True)
+
+
+def test_relion_class_population_audit_passes_only_positive_classes(tmp_path):
+    relion = tmp_path / "relion"
+    relion.mkdir()
+    _write_relion_population_star(
+        relion / "run_it001_model.star",
+        [0.25, 0.25, 0.25, 0.25],
+        [0.25, 0.25, 0.25, 0.25],
+    )
+    _write_relion_population_star(
+        relion / "run_it002_model.star",
+        [0.2, 0.3, 0.1, 0.4],
+        [0.2, 0.3, 0.1, 0.4],
+    )
+
+    report = launcher.audit_relion_class_populations(relion_dir=relion, n_classes=4)
+
+    assert report["passed"] is True
+    assert report["collapsed"] == []
+    assert len(report["rows"]) == 8
+    assert (relion / "class_population_audit.json").is_file()
+
+
+def test_relion_class_population_audit_records_then_fails_on_collapse(tmp_path):
+    relion = tmp_path / "relion"
+    relion.mkdir()
+    _write_relion_population_star(
+        relion / "run_it001_model.star",
+        [0.25, 0.75, 0.0, 0.0],
+        [0.25, 0.75, 0.0, 0.0],
+    )
+
+    with pytest.raises(ValueError, match="class-collapse gate failed"):
+        launcher.audit_relion_class_populations(relion_dir=relion, n_classes=4)
+
+    payload = __import__("json").loads((relion / "class_population_audit.json").read_text())
+    assert payload["passed"] is False
+    assert [(row["iteration"], row["class"]) for row in payload["collapsed"]] == [
+        (1, 3),
+        (1, 4),
+    ]
+
+
 def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypatch):
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
@@ -217,6 +293,9 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert f"      --ini_high {launcher.KCLASS_INITIAL_RESOLUTION_ANG:g} \\\n" in text
     assert f"  --init_resolution {launcher.KCLASS_INITIAL_RESOLUTION_ANG:g} \\\n" in text
     assert "  --apply-initial-lowpass \\\n" in text
+    assert "  --symmetry C1 \\\n" in text
+    assert "      --sym C1 \\\n" in text
+    assert "  --sym C1 \\\n" in text
     assert "  --init_resolution 30" not in text
     assert "  --image-fourier-backend relion_cuda \\\n" in text
     assert 'RECOVAR_INTERMEDIATES_DIR="${RECOVAR_DIR}/intermediates"' in text
@@ -234,7 +313,7 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert '"gpu_monitor_interval_s": 5' in text
     assert "COMBINED_MONITOR_PID" in text
     assert "trap cleanup_gpu_monitors EXIT" in text
-    assert 'mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid' in text
+    assert "mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid" in text
     assert 'nvidia-smi --id="${gpu_token}"' not in text
     assert 'nvidia-smi --id="${slurm_gpu_token}"' not in text
     assert 'if [[ "${slurm_gpu_token}" == GPU-* && "${slurm_gpu_token}" != "${gpu_uuid}" ]]' in text
@@ -246,6 +325,9 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "legacy four-column range capture is rejected" in text
     assert "-m scripts.build_relion_dispatch_schedule" in text
     assert '--relion-dispatch-schedule "${RELION_DISPATCH_SCHEDULE}"' in text
+    assert "from scripts.run_em_kclass_robustness_matrix_slurm import audit_relion_class_populations" in text
+    assert '"${RELION_DIR}" 2' in text
+    assert "RELION class-population audit ok" in text
 
 
 def test_case_jobs_build_or_reuse_one_sealed_cuda_lib_under_lock(tmp_path):
@@ -319,6 +401,127 @@ def test_case_job_uses_case_specific_batch_invariance_overrides(tmp_path):
     assert '"rotation_block_size": 8192' in text
     assert "--image_batch_size 17" in text
     assert "--rotation_block_size 8192" in text
+    assert f"DATA_DIR={tmp_path}/shared_inputs/" in text
+    assert "GENERATE_INPUT=0" in text
+    assert "RUN_RELION=0" in text
+    assert 'sha256sum --check "${SHARED_INPUT_MANIFEST}"' in text
+    assert 'sha256sum --check "${SHARED_RELION_MANIFEST}"' in text
+
+
+def test_shared_input_group_rejects_consumer_without_selected_producer():
+    cases = {case.index: case for case in launcher.DEFAULT_CASES}
+
+    with pytest.raises(SystemExit, match="requires exactly one selected producer"):
+        launcher.validate_shared_input_groups([cases[26], cases[27]])
+
+
+def test_shared_input_group_rejects_generator_axis_drift():
+    cases = {case.index: case for case in launcher.DEFAULT_CASES}
+    changed_consumer = launcher.replace(cases[26], noise_level=2.0)
+
+    with pytest.raises(SystemExit, match="changes generator fields.*noise_level"):
+        launcher.validate_shared_input_groups([cases[25], changed_consumer])
+
+
+def test_shared_input_group_dependencies_follow_one_sealed_producer(tmp_path, monkeypatch):
+    _set_relion_src(tmp_path, monkeypatch)
+    _set_dispatch_capture_executable(tmp_path, monkeypatch)
+    pdb_dir = tmp_path / "pdbs"
+    pdb_dir.mkdir()
+    cases_by_index = {case.index: case for case in launcher.DEFAULT_CASES}
+    selected = tuple(launcher.replace(cases_by_index[index], pdb_dir=pdb_dir) for index in (25, 26, 27))
+    monkeypatch.setattr(launcher, "DEFAULT_CASES", selected)
+    scratch = tmp_path / "scratch"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--scratch-dir",
+            str(scratch),
+        ],
+    )
+    submissions = []
+
+    def fake_submit(script, *, dry_run, extra_args=None):
+        job_id = str(80000 + len(submissions))
+        submissions.append((script.name, list(extra_args or []), job_id))
+        return job_id
+
+    monkeypatch.setattr(launcher, "submit", fake_submit)
+
+    launcher.main()
+
+    assert submissions[1][0].startswith("em_kclass_matrix_25_")
+    assert submissions[1][1] == ["--dependency=afterok:80000"]
+    assert submissions[2][0].startswith("em_kclass_matrix_26_")
+    assert submissions[2][1] == ["--dependency=afterok:80000:80001"]
+    assert submissions[3][0].startswith("em_kclass_matrix_27_")
+    assert submissions[3][1] == ["--dependency=afterok:80000:80001"]
+    scripts = [
+        (scratch / "jobs" / f"em_kclass_matrix_{index}_{selected[offset].name}.sh").read_text()
+        for offset, index in enumerate((25, 26, 27))
+    ]
+    data_lines = [next(line for line in text.splitlines() if line.startswith("DATA_DIR=")) for text in scripts]
+    relion_lines = [next(line for line in text.splitlines() if line.startswith("RELION_DIR=")) for text in scripts]
+    relion_manifest_lines = [
+        next(line for line in text.splitlines() if line.startswith("SHARED_RELION_MANIFEST=")) for text in scripts
+    ]
+    assert len(set(data_lines)) == 1
+    assert len(set(relion_lines)) == 1
+    assert len(set(relion_manifest_lines)) == 1
+    assert "GENERATE_INPUT=1" in scripts[0]
+    assert all("GENERATE_INPUT=0" in text for text in scripts[1:])
+    assert "RUN_RELION=1" in scripts[0]
+    assert all("RUN_RELION=0" in text for text in scripts[1:])
+    assert 'xargs -0 sha256sum > "${MANIFEST_TMP}"' in scripts[0]
+    assert 'xargs -0 sha256sum > "${RELION_MANIFEST_TMP}"' in scripts[0]
+    assert all('sha256sum --check "${SHARED_INPUT_MANIFEST}"' in text for text in scripts)
+    assert all('sha256sum --check "${SHARED_RELION_MANIFEST}"' in text for text in scripts)
+    assert all('ln -sfn "${RELION_DIR}" "${CASE_ROOT}/relion_ref"' in text for text in scripts)
+    assert all("shared_relion_ref" not in text for text in scripts)
+    assert "refusing to reuse an existing case root" in scripts[0]
+    assert "refusing to regenerate or reseal an existing dataset" in scripts[0]
+    assert "refusing to regenerate or reseal an existing shared RELION oracle" in scripts[0]
+
+
+@pytest.mark.parametrize("case_index,symmetry", [(31, "C4"), (32, "D4"), (33, "O"), (34, "I1")])
+def test_symmetry_case_wires_identical_label_to_generator_relion_and_recovar(
+    tmp_path,
+    case_index,
+    symmetry,
+):
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    case = {case.index: case for case in launcher.DEFAULT_CASES}[case_index]
+
+    script = launcher.write_case_script(
+        case=case,
+        scratch_dir=tmp_path,
+        jobs_dir=jobs_dir,
+        cuda_lib=tmp_path / "librecovar_cuda.so",
+        account="gilles",
+        partition="cryoem",
+        constraint="h100",
+        exclusive=False,
+        cuda_module="cudatoolkit/12.8",
+        relion_src_dir=tmp_path / "relion_src",
+        relion_module="relion/5.0.1/gcc-11.5.0-gpu",
+        relion_refine_mpi="/instrumented/relion_refine_mpi",
+        relion_mpi_ranks=3,
+        relion_pool=3,
+        particle_diameter=380.0,
+        image_batch_size=50,
+        rotation_block_size=2000,
+        gt_align_refine_orders="",
+        noise_rng_batch_size="",
+    )
+
+    text = script.read_text()
+    assert f'"symmetry": "{symmetry}"' in text
+    assert f"  --symmetry {symmetry} \\\n" in text
+    assert f"      --sym {symmetry} \\\n" in text
+    assert f"  --sym {symmetry} \\\n" in text
 
 
 def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
@@ -369,6 +572,27 @@ def test_main_rejects_exclusive_kclass_jobs(tmp_path, monkeypatch):
     _set_dispatch_capture_executable(tmp_path, monkeypatch)
 
     with pytest.raises(SystemExit, match="must be non-exclusive"):
+        launcher.main()
+
+
+def test_main_rejects_nonempty_reused_scratch_root(tmp_path, monkeypatch):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "stale_evidence.json").write_text("{}\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--dry-run",
+            "--scratch-dir",
+            str(scratch),
+            "--case",
+            "1",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="must be new or empty"):
         launcher.main()
 
 
@@ -587,10 +811,69 @@ def test_seed_offset_applies_when_all_default_cases_are_selected(monkeypatch):
 
     assert len(cases) == len(launcher.DEFAULT_CASES)
     assert all(
-        updated.seed == original.seed + 10_000
-        for updated, original in zip(cases, launcher.DEFAULT_CASES, strict=True)
+        updated.seed == original.seed + 10_000 for updated, original in zip(cases, launcher.DEFAULT_CASES, strict=True)
     )
     assert all(updated.name.endswith(f"_seed{updated.seed}") for updated in cases)
+
+
+def test_three_seed_suite_expands_each_case_over_frozen_seed_set(monkeypatch):
+    monkeypatch.delenv("EM_KCLASS_MATRIX_CASES", raising=False)
+    args = type(
+        "Args",
+        (),
+        {
+            "case": ["31"],
+            "max_iter_override": None,
+            "time_limit_override": None,
+            "seed_override": None,
+            "seed_offset": None,
+            "three_seed_suite": True,
+        },
+    )()
+
+    cases = launcher.selected_cases(args)
+
+    assert [case.seed for case in cases] == list(launcher.THREE_SEED_VALUES)
+    assert [case.seed_replicate for case in cases] == [1, 2, 3]
+    assert {case.base_name for case in cases} == {"ribo_k4_5k_g128_white_noise1_c4_uniform"}
+    assert {case.base_seed for case in cases} == {41001}
+    assert all(case.symmetry == "C4" for case in cases)
+
+
+def test_three_seed_suite_dry_run_writes_one_shared_setup_and_aggregate(tmp_path, monkeypatch):
+    _set_relion_src(tmp_path, monkeypatch)
+    pdb_dir = tmp_path / "pdbs"
+    pdb_dir.mkdir()
+    case = launcher.replace(launcher.DEFAULT_CASES[30], pdb_dir=pdb_dir)
+    scratch = tmp_path / "scratch"
+    monkeypatch.setattr(launcher, "DEFAULT_CASES", (case,))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--dry-run",
+            "--scratch-dir",
+            str(scratch),
+            "--three-seed-suite",
+        ],
+    )
+    _set_dispatch_capture_executable(tmp_path, monkeypatch)
+
+    launcher.main()
+
+    rows = (scratch / "case_table.tsv").read_text().splitlines()
+    assert len(rows) == 4
+    assert all(f"|{seed}|" in rows[index] for index, seed in enumerate(launcher.THREE_SEED_VALUES, 1))
+    assert len(list((scratch / "jobs").glob("em_kclass_matrix_31_*_seed*.sh"))) == 3
+    summary = (scratch / "jobs" / "em_kclass_matrix_summary.sh").read_text()
+    assert "-m scripts.aggregate_em_kclass_multiseed" in summary
+    assert "--expected-seeds 41001,41002,41003" in summary
+    assert f"--case-table {scratch / 'case_table.tsv'}" in summary
+    submission = (scratch / "submission.env").read_text()
+    assert "EM_KCLASS_MATRIX_THREE_SEED_SUITE=1" in submission
+    assert "EM_KCLASS_MATRIX_THREE_SEED_VALUES=41001,41002,41003" in submission
+    assert "CASE_JOB_IDS='DRYRUN DRYRUN DRYRUN'" in submission
 
 
 def test_seed_override_and_seed_offset_are_mutually_exclusive(monkeypatch):
@@ -615,6 +898,26 @@ def test_seed_override_and_seed_offset_are_mutually_exclusive(monkeypatch):
         assert "Use either EM_KCLASS_MATRIX_SEED" in str(exc)
     else:
         raise AssertionError("selected_cases should reject simultaneous seed override and offset")
+
+
+def test_three_seed_suite_rejects_single_seed_override(monkeypatch):
+    monkeypatch.setenv("EM_KCLASS_MATRIX_CASES", "1")
+    monkeypatch.setenv("EM_KCLASS_MATRIX_SEED", "9")
+    args = type(
+        "Args",
+        (),
+        {
+            "case": [],
+            "max_iter_override": None,
+            "time_limit_override": None,
+            "seed_override": None,
+            "seed_offset": None,
+            "three_seed_suite": True,
+        },
+    )()
+
+    with pytest.raises(SystemExit, match="cannot be combined"):
+        launcher.selected_cases(args)
 
 
 def test_outlier_kclass_case_uses_holdout_pdb_and_disables_streaming_mmap(tmp_path):
