@@ -71,32 +71,57 @@ def test_compile_profile_targets_shared_fixed_whole_local_executor(scorecard: di
     assert profile["nsight_sqlite_sha256"] == (
         "b73f3ecb660d59484b280e2b0021763c5583c01106ed839efef71f5d50a55845"
     )
+    implementation = profile["implementation_progress"]
+    assert implementation["commit"] == "41c1cdbd104cd85cf8f433080889ac6be3a5ef21"
+    assert implementation["focused_tests"] == "109 passed"
+    assert implementation["planner_guards"] == "10 passed, 17 deselected"
+    assert implementation["shared_em_vdam_path"] is True
+    assert implementation["production_invoked"] is False
+    assert implementation["gpu_evaluated"] is False
 
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
     assert "SEALED COMPILE PROFILE / SHARED FIXED EXECUTOR TARGET" in rendered
     assert "53.547 of 57.833 s" in rendered
     assert profile["runtime_profile_report_sha256"] in rendered
     assert profile["sealed_analysis_report_sha256"] in rendered
+    assert "Phase 1d `41c1cdbd10`" in rendered
+    assert "109 passed" in rendered
 
 
-def test_batched_lane_gate_separates_combined_from_incremental_gain(scorecard: dict) -> None:
+def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(scorecard: dict) -> None:
     gate = scorecard["performance_gate_updates"]["coarse_atomic_batched_lanes"]
-    assert gate["focused_gpu_job"] == "13284195"
-    assert gate["crossed_job"] == "13284729"
+    assert gate["implementation_commit"] == "6f10c2d3f075654a94caa6e44249a5b1275b48f6"
+    assert gate["focused_gpu_job"] == "13285438"
+    assert gate["crossed_job"] == "13285647"
     assert gate["crossed_result"] == "COMPLETED 0:0"
-    assert gate["performance"]["change_percent"]["warm_wall"] == pytest.approx(-6.992939)
-    assert gate["performance"]["change_percent"]["coarse_kernel_sum"] == pytest.approx(-16.074674)
+    assert gate["performance"]["change_percent"]["warm_wall"] == pytest.approx(-9.031075)
+    assert gate["performance"]["change_percent"]["coarse_kernel_sum"] == pytest.approx(-10.137424)
     assert gate["performance"]["atomic_batched_lanes_median"]["coarse_kernel_launches_per_repeat"] == 48
     assert gate["numerical_result"]["all_discrete_metadata_exact"] is True
-    assert gate["numerical_result"]["cold_cross_map_relative_l2_max"] <= gate["numerical_result"][
+    assert gate["numerical_result"]["cold_cross_map_relative_l2_max"] > gate["numerical_result"][
         "cold_repeat_envelope"
     ]
-    assert gate["numerical_result"]["warm_cross_map_relative_l2_max"] <= gate["numerical_result"][
+    assert gate["numerical_result"]["warm_cross_map_relative_l2_max"] > gate["numerical_result"][
         "warm_repeat_envelope"
     ]
+    assert gate["numerical_result"]["strict_two_repeat_result"] == "fail"
+    assert gate["numerical_result"]["nondirectional_noise_gate_result"] == "pass"
+    repeat_panel = gate["replicated_roundoff_equivalence_gate"]
+    assert repeat_panel["status"] == "RUNNING"
+    assert repeat_panel["qualification_overlay_commit"] == (
+        "fb9aaf2717c17e67c94a0ea5f54cb6e2cfc9f8cf"
+    )
+    assert repeat_panel["acceptance_config_sha256"] == (
+        "4f266733a4a7ffbc79c06d340918a4389c79d7c5cf34401031d07a64c38f258d"
+    )
+    assert repeat_panel["total_fresh_process_runs"] == 16
+    assert repeat_panel["blocked_exact_label_permutations"] == 1296
+    assert repeat_panel["job_id"] == "13286397"
+    assert repeat_panel["result"] == "pending"
+    assert repeat_panel["long_trajectory_authorized"] is False
     incremental = gate["incremental_atomic_serial_gate"]
     assert gate["incremental_atomic_baseline_evaluated"] is True
-    assert gate["tracking_derived_port_evaluated"] is False
+    assert gate["tracking_derived_port_evaluated"] is True
     assert incremental["job_id"] == "13284897"
     assert incremental["result"] == "COMPLETED 0:0"
     assert incremental["performance"]["warm_wall_change_percent"] == pytest.approx(-8.890551)
@@ -108,12 +133,13 @@ def test_batched_lane_gate_separates_combined_from_incremental_gain(scorecard: d
     assert incremental["numerical"]["warm_cross_map_relative_l2_max"] <= incremental["numerical"][
         "warm_repeat_envelope"
     ]
-    assert "Manually port only contiguous batched lanes" in gate["integration_caveat"]
+    assert "immutable report remains a strict FAIL" in gate["integration_caveat"]
 
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
-    assert "LANE-ONLY ONE-ITERATION MATH/RUNTIME PASS; DEFAULT OFF" in rendered
-    assert "LANE-ONLY ONE-ITERATION PASS / TRACKING PORT OPEN" in rendered
-    assert incremental["report_json_sha256"] in rendered
+    assert "MATERIAL RUNTIME PASS; FROZEN TWO-REPEAT NUMERIC GATE FAIL" in rendered
+    assert "CLEAN PORT: RUNTIME PASS / STRICT N=2 FAIL / REPLICATED GATE RUNNING" in rendered
+    assert gate["report_json_sha256"] in rendered
+    assert repeat_panel["acceptance_config_sha256"] in rendered
 
 
 def test_suite_definition_identity_and_bytes_are_frozen() -> None:
@@ -540,13 +566,13 @@ def test_runtime_workboard_is_easy_to_scan() -> None:
     assert "strict two-control map-diameter flag alone is not a scientific rejection" in rendered
     assert "**NUMERICALLY EQUIVALENT / E2E IMMATERIAL** | Same-binary causal `13271166`" in rendered
     assert "ccb9d9cc4f4ee949aabbfa2c6045aea5b6c2007bcdbcd871e0e1df246d0c3db0" in rendered
-    assert "Invalid jobs `13270868` and `13270984` stopped in preflight before science" in rendered
+    assert "Invalid jobs `13270868`, `13270984`, `13285416`, and `13285596`" in rendered
     assert "**REJECTED FOR GF46 / RETAINED PRIMITIVE** | Single-lane coarse" in rendered
     assert "13280613/13280655" in rendered
-    assert "**LANE-ONLY ONE-ITERATION PASS / TRACKING PORT OPEN** | Native atomic + coarse batched lanes" in rendered
-    assert "`13284729/13284897`" in rendered
-    assert "holding atomic math fixed still improves warm wall 8.89%, expectation 11.45%, and coarse union 10.87%" in rendered
-    assert "maps are repeat-bounded" in rendered
+    assert "**CLEAN PORT: RUNTIME PASS / STRICT N=2 FAIL / REPLICATED GATE RUNNING**" in rendered
+    assert "`13285438/13285647/13286397`" in rendered
+    assert "improves warm wall 9.03%, expectation 10.26%, GPU union 10.45%, and coarse union 10.83%" in rendered
+    assert "frozen two-repeat max-envelope rule fails narrowly" in rendered
     assert "**MATH ACCEPTED / PERFORMANCE REJECTED** | Direct RELION x-half BPref" in rendered
     assert "`13281684/13282815`" in rendered
     assert "Finalize improves 85.40%, but warm wall improves only 2.12%" in rendered
