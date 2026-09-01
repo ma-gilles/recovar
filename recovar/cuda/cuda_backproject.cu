@@ -135,6 +135,20 @@ static __device__ __forceinline__ double relion_radius_squared(
     return __fma_rn(rk0, rk0, xy2);
 }
 
+/* Form flattened volume addresses in 64 bits.  A box-800 RELION x-half
+ * accumulator has 1603*1603*802 = 2,060,826,418 complex voxels, which fits
+ * in a signed 32-bit spatial index.  Its interleaved scalar offset does not:
+ * the imaginary component can reach 4,121,652,835.  Keep this address-only
+ * arithmetic separate from the interpolation arithmetic so float operation
+ * order and atomic accumulation topology remain unchanged. */
+static __device__ __forceinline__ int64_t volume_spatial_offset(
+    int i0, int i1, int i2, int stride0, int stride1)
+{
+    return static_cast<int64_t>(i0) * stride0
+         + static_cast<int64_t>(i1) * stride1
+         + static_cast<int64_t>(i2);
+}
+
 #define BLOCK_SIZE 256
 
 /* ================================================================== */
@@ -228,10 +242,11 @@ static __device__ __forceinline__ void scatter_nearest(
             if (!REAL_DATA) val_im *= (T)2;
         }
         if (REAL_DATA) {
-            const int off = i0 * stride0 + i1 * stride1 + hkz;
+            const int64_t off = volume_spatial_offset(i0, i1, hkz, stride0, stride1);
             atomicAdd(&vol[off], val_re);
         } else {
-            const int off = (i0 * stride0 + i1 * stride1 + hkz) * 2;
+            const int64_t off =
+                volume_spatial_offset(i0, i1, hkz, stride0, stride1) * 2;
             atomicAdd(&vol[off],     val_re);
             atomicAdd(&vol[off + 1], val_im);
         }
@@ -247,10 +262,11 @@ static __device__ __forceinline__ void scatter_nearest(
         (unsigned)i1 >= (unsigned)N1 ||
         (unsigned)i2 >= (unsigned)N2_eff) return;
     if (REAL_DATA) {
-        const int off = i0 * stride0 + i1 * stride1 + i2;
+        const int64_t off = volume_spatial_offset(i0, i1, i2, stride0, stride1);
         atomicAdd(&vol[off], val_re);
     } else {
-        const int off = (i0 * stride0 + i1 * stride1 + i2) * 2;
+        const int64_t off =
+            volume_spatial_offset(i0, i1, i2, stride0, stride1) * 2;
         atomicAdd(&vol[off],     val_re);
         atomicAdd(&vol[off + 1], val_im);
     }
@@ -337,10 +353,12 @@ static __device__ __forceinline__ void scatter_trilinear(
                         if (!REAL_DATA) sim *= (T)2;
                     }
                     if (REAL_DATA) {
-                        const int off = sj0 * stride0 + sj1 * stride1 + hkz;
+                        const int64_t off =
+                            volume_spatial_offset(sj0, sj1, hkz, stride0, stride1);
                         atomicAdd(&vol[off], sre);
                     } else {
-                        const int off = (sj0 * stride0 + sj1 * stride1 + hkz) * 2;
+                        const int64_t off =
+                            volume_spatial_offset(sj0, sj1, hkz, stride0, stride1) * 2;
                         atomicAdd(&vol[off],     sre);
                         atomicAdd(&vol[off + 1], sim);
                     }
@@ -380,10 +398,12 @@ static __device__ __forceinline__ void scatter_trilinear(
                 if ((unsigned)j2 >= (unsigned)N2_eff) continue;
                 const T w = ww * w2[d2];
                 if (REAL_DATA) {
-                    const int off = j0 * stride0 + j1 * stride1 + j2;
+                    const int64_t off =
+                        volume_spatial_offset(j0, j1, j2, stride0, stride1);
                     atomicAdd(&vol[off], w * val_re);
                 } else {
-                    const int off = (j0 * stride0 + j1 * stride1 + j2) * 2;
+                    const int64_t off =
+                        volume_spatial_offset(j0, j1, j2, stride0, stride1) * 2;
                     atomicAdd(&vol[off],     w * val_re);
                     atomicAdd(&vol[off + 1], w * val_im);
                 }
@@ -1213,7 +1233,9 @@ batch_backproject_indexed_kernel(
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
     const int img_stride = n_images * n_pixels;
-    const int vol_bytes_stride = REAL_DATA ? vol_stride : vol_stride * 2;
+    const int64_t vol_scalar_stride = REAL_DATA
+        ? static_cast<int64_t>(vol_stride)
+        : static_cast<int64_t>(vol_stride) * 2;
 
     bool conj_opt = HALF_IMG && HALF_VOL && !relion_half_backproject
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)
@@ -1245,7 +1267,7 @@ batch_backproject_indexed_kernel(
     }
 
     for (int b = 0; b < batch_size; b++) {
-        T* vol = vols + b * vol_bytes_stride;
+        T* vol = vols + b * vol_scalar_stride;
 
         T val_re, val_im;
         if (REAL_DATA) {
@@ -3752,11 +3774,13 @@ batch_backproject_kernel(
     }
 
     /* Volume stride: REAL_DATA uses 1 T per voxel, complex uses 2 */
-    const int vol_bytes_stride = REAL_DATA ? vol_stride : vol_stride * 2;
+    const int64_t vol_scalar_stride = REAL_DATA
+        ? static_cast<int64_t>(vol_stride)
+        : static_cast<int64_t>(vol_stride) * 2;
 
     /* Inner loop over batch — same coords, different volumes and images */
     for (int b = 0; b < batch_size; b++) {
-        T* vol = vols + b * vol_bytes_stride;
+        T* vol = vols + b * vol_scalar_stride;
 
         /* Load pixel — scalar for REAL_DATA, complex pair for complex */
         T val_re, val_im;
