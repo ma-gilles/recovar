@@ -130,7 +130,12 @@ def _plan_consecutive_padded_batches(
         return []
 
     item_limit = min(target_items_per_batch, max_items_per_batch)
-    effective_alignment = item_alignment if item_limit >= item_alignment else 1
+    if item_alignment > 1 and n_items > item_limit and item_limit < item_alignment:
+        raise ValueError(
+            "batch item limits are too small to preserve the requested item alignment: "
+            f"limit={item_limit}, alignment={item_alignment}",
+        )
+    effective_alignment = item_alignment
     plans: list[_ConsecutivePaddedBatch] = []
     start = 0
     while start < n_items:
@@ -144,6 +149,12 @@ def _plan_consecutive_padded_batches(
                 int(np.max(padded_sizes[processing_order[stop:next_stop]], initial=1)),
             )
             next_work = next_count * next_padded_size * values_per_padded_size
+            if stop == start and next_work > max_padded_values_per_batch and effective_alignment > 1:
+                raise ValueError(
+                    "padded-work cap is too small for one aligned item group: "
+                    f"required={next_work}, cap={max_padded_values_per_batch}, "
+                    f"alignment={effective_alignment}",
+                )
             if stop > start and (
                 next_count > item_limit
                 or next_work > max_padded_values_per_batch

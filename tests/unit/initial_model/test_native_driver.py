@@ -674,6 +674,19 @@ def test_native_driver_rejects_unimplemented_direct_symmetry_before_io():
         driver.run_native_initial_model(opts)
 
 
+@pytest.mark.parametrize("chunk_size", [-1, 1, 2])
+def test_native_driver_rejects_physical_order_chunks_that_cannot_hold_a_pool_before_io(
+    chunk_size,
+):
+    opts = driver.NativeInitialModelOptions(
+        fn_img="missing.star",
+        exact_local_physical_order_chunk_size=chunk_size,
+    )
+
+    with pytest.raises(ValueError, match="must be 0 .* or at least 3"):
+        driver.run_native_initial_model(opts)
+
+
 def test_native_driver_caches_dataset_immediately_after_loading(monkeypatch):
     events = []
     dataset = SimpleNamespace(tilt_series_flag=False)

@@ -178,6 +178,20 @@ def test_parser_rejects_unqualified_exact_local_bucket_radix():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("chunk_size", ["-1", "1", "2"])
+def test_parser_rejects_physical_order_chunks_that_cannot_hold_a_pool(chunk_size):
+    with pytest.raises(SystemExit):
+        initial_model.make_parser().parse_args(
+            [
+                "--i",
+                "particles.star",
+                "--exact-local-physical-order-chunk-size",
+                chunk_size,
+            ],
+        )
+
+
+@pytest.mark.unit
 def test_dry_run_prints_resolved_native_options(capsys, monkeypatch, tmp_path):
     monkeypatch.delenv("JAX_COMPILATION_CACHE_DIR", raising=False)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))

@@ -34,6 +34,13 @@ def _nonnegative_int(value: str) -> int:
     return parsed
 
 
+def _disabled_or_pool_aligned_chunk_size(value: str) -> int:
+    parsed = _nonnegative_int(value)
+    if parsed not in (0,) and parsed < 3:
+        raise argparse.ArgumentTypeError("must be 0 (disabled) or at least 3")
+    return parsed
+
+
 def _positive_float(value: str) -> float:
     parsed = float(value)
     if parsed <= 0.0:
@@ -226,7 +233,7 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--exact-local-physical-order-chunk-size",
-        type=_nonnegative_int,
+        type=_disabled_or_pool_aligned_chunk_size,
         default=DEFAULTS.exact_local_physical_order_chunk_size,
         help=(
             "Bound consecutive physical-order K=1 buckets; 0 keeps the "

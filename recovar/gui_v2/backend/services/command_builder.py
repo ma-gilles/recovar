@@ -94,9 +94,9 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
     exact_local_physical_order_chunk_size = int(
         value("exact_local_physical_order_chunk_size")
     )
-    if exact_local_physical_order_chunk_size < 0:
+    if exact_local_physical_order_chunk_size not in (0,) and exact_local_physical_order_chunk_size < 3:
         raise ValueError(
-            "InitialModel exact_local_physical_order_chunk_size must be non-negative"
+            "InitialModel exact_local_physical_order_chunk_size must be 0 (disabled) or at least 3"
         )
 
     cmd = [

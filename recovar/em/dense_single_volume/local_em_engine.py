@@ -4012,10 +4012,13 @@ def run_local_em_exact(
     seen_nonzero_global_rotations = np.zeros_like(seen_global_rotations)
     seen_reconstruction_global_rotations = np.zeros_like(seen_global_rotations)
     total_padded_rotations = 0
+    total_planned_padded_rotations = 0
     chunk_sizes = []
     chunk_padded_image_counts = []
+    chunk_planned_padded_image_counts = []
     chunk_local_rotations = []
     chunk_padded_rotations = []
+    chunk_planned_padded_rotations = []
     chunk_unique_rotations = []
     chunk_nonzero_posterior_rows = []
     chunk_reconstruction_rows = []
@@ -4562,21 +4565,21 @@ def run_local_em_exact(
         n_chunks += 1
         if collect_profile_stats:
             chunk_sizes.append(int(bucket.image_indices.shape[0]))
-            padded_image_count = max(
+            planned_padded_image_count = max(
                 int(bucket.image_indices.shape[0]),
                 int(getattr(bucket, "bucket_image_count", bucket.image_indices.shape[0])),
             )
-            chunk_padded_image_counts.append(padded_image_count)
+            chunk_planned_padded_image_counts.append(planned_padded_image_count)
             chunk_local_rotations.append(int(np.sum(bucket.actual_rotation_counts)))
-            chunk_padded_rotations.append(
-                int(padded_image_count * bucket.bucket_rotation_count)
+            chunk_planned_padded_rotations.append(
+                int(planned_padded_image_count * bucket.bucket_rotation_count)
             )
             bucket_valid_rotation_ids = np.asarray(bucket.local_rotation_ids, dtype=np.int64)[
                 np.asarray(bucket.local_rotation_mask, dtype=bool)
             ]
             chunk_unique_rotations.append(int(np.unique(bucket_valid_rotation_ids).shape[0]))
-            total_padded_rotations += int(
-                padded_image_count * bucket.bucket_rotation_count
+            total_planned_padded_rotations += int(
+                planned_padded_image_count * bucket.bucket_rotation_count
             )
             local_total_hypotheses += int(np.sum(bucket.actual_rotation_counts) * n_trans)
         fetch_t0 = time.time()
@@ -4692,12 +4695,32 @@ def run_local_em_exact(
             )
             logged_sparse_big_jit_deferred_fallback = True
 
-        if use_big_jit_buckets_for_bucket and (
-            not significant_backprojection_candidate
-            or sparse_big_jit_backprojection
-            or deferred_big_jit_backprojection
-            or score_only
-        ):
+        execute_big_jit_bucket = bool(
+            use_big_jit_buckets_for_bucket
+            and (
+                not significant_backprojection_candidate
+                or sparse_big_jit_backprojection
+                or deferred_big_jit_backprojection
+                or score_only
+            )
+        )
+        if collect_profile_stats:
+            executed_padded_image_count = (
+                max(
+                    batch_size,
+                    int(getattr(bucket, "bucket_image_count", batch_size)),
+                )
+                if execute_big_jit_bucket
+                else batch_size
+            )
+            executed_padded_rotations = int(
+                executed_padded_image_count * bucket.bucket_rotation_count
+            )
+            chunk_padded_image_counts.append(executed_padded_image_count)
+            chunk_padded_rotations.append(executed_padded_rotations)
+            total_padded_rotations += executed_padded_rotations
+
+        if execute_big_jit_bucket:
             if batch_data is None:
                 raise RuntimeError("exact local big-JIT requires fetched native image batches")
             big_jit_t0 = time.time()
@@ -7887,14 +7910,23 @@ def run_local_em_exact(
             chunk_padded_image_counts,
             dtype=np.int32,
         ),
+        "chunk_planned_padded_image_counts": np.asarray(
+            chunk_planned_padded_image_counts,
+            dtype=np.int32,
+        ),
         "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
         "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
+        "chunk_planned_padded_rotations": np.asarray(
+            chunk_planned_padded_rotations,
+            dtype=np.int32,
+        ),
         "chunk_unique_rotations": np.asarray(chunk_unique_rotations, dtype=np.int32),
         "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
         "chunk_reconstruction_rows": np.asarray(chunk_reconstruction_rows, dtype=np.int32),
         "chunk_significant_samples": np.asarray(chunk_significant_samples, dtype=np.int32),
         "sum_union_rows": np.int64(total_local_rotations),
         "sum_padded_rows": np.int64(total_padded_rotations),
+        "sum_planned_padded_rows": np.int64(total_planned_padded_rotations),
         "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
         "sum_reconstruction_rows": np.int64(total_reconstruction_rows),
         "sum_significant_samples": np.int64(total_significant_samples),

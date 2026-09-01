@@ -813,9 +813,11 @@ def _run_sparse_pass2_initial_model_estep(
     )
     if int(config.exact_local_bucket_radix) not in (2, 4):
         raise ValueError("InitialModel exact_local_bucket_radix must be 2 or 4")
-    if int(config.exact_local_physical_order_chunk_size) < 0:
+    if int(config.exact_local_physical_order_chunk_size) not in (0,) and int(
+        config.exact_local_physical_order_chunk_size
+    ) < 3:
         raise ValueError(
-            "InitialModel exact_local_physical_order_chunk_size must be non-negative"
+            "InitialModel exact_local_physical_order_chunk_size must be 0 (disabled) or at least 3"
         )
     pass1_time_s = 0.0
     pass2_time_s = 0.0
@@ -1332,7 +1334,7 @@ def _run_sparse_pass2_initial_model_estep(
     )
     meta["effective_exact_local_physical_order_chunk_size"] = (
         int(config.exact_local_physical_order_chunk_size)
-        if exact_local_runtime_policy_active
+        if exact_local_runtime_policy_active and joint_halfset_stream
         else None
     )
     out = DenseInitialModelEstepResult(

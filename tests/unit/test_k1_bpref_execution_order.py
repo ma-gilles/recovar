@@ -124,6 +124,65 @@ def test_shared_consecutive_padded_planner_validates_processing_order():
         )
 
 
+@pytest.mark.parametrize(
+    ("target_items", "max_items"),
+    [(2, 8), (8, 2)],
+)
+def test_shared_consecutive_padded_planner_rejects_limits_that_split_a_pool(
+    target_items,
+    max_items,
+):
+    with pytest.raises(ValueError, match="too small to preserve"):
+        _plan_consecutive_padded_batches(
+            [32, 32, 32],
+            target_items_per_batch=target_items,
+            max_items_per_batch=max_items,
+            max_padded_values_per_batch=512,
+            item_alignment=3,
+        )
+
+
+def test_shared_consecutive_padded_planner_rejects_an_oversize_aligned_pool():
+    with pytest.raises(ValueError, match="too small for one aligned item group"):
+        _plan_consecutive_padded_batches(
+            [32, 32, 32],
+            target_items_per_batch=3,
+            max_items_per_batch=3,
+            max_padded_values_per_batch=95,
+            item_alignment=3,
+        )
+
+
+@pytest.mark.parametrize("padded_sizes", [[32], [32, 32], [32, 32, 32, 32], [32, 32, 32, 32, 32]])
+def test_shared_consecutive_padded_planner_allows_a_fitting_final_incomplete_pool(padded_sizes):
+    plans = _plan_consecutive_padded_batches(
+        padded_sizes,
+        target_items_per_batch=3,
+        max_items_per_batch=3,
+        max_padded_values_per_batch=96,
+        item_alignment=3,
+    )
+
+    assert np.concatenate([plan.item_indices for plan in plans]).tolist() == list(
+        range(len(padded_sizes))
+    )
+    assert all(plan.item_indices.size <= 3 for plan in plans)
+
+
+def test_shared_consecutive_padded_planner_keeps_alignment_one_oversize_progress():
+    plans = _plan_consecutive_padded_batches(
+        [128],
+        target_items_per_batch=1,
+        max_items_per_batch=1,
+        max_padded_values_per_batch=64,
+        item_alignment=1,
+    )
+
+    assert len(plans) == 1
+    assert plans[0].item_indices.tolist() == [0]
+    assert plans[0].padded_size == 128
+
+
 def test_sparse_pass2_ordered_chunks_respect_hypothesis_and_image_caps():
     counts = [16, 16, 256, 16, 16, 16]
     per_image = {

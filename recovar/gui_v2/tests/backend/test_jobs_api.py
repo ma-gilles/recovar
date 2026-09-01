@@ -124,14 +124,15 @@ class TestCommandBuilders:
         )
         assert cmd[cmd.index("--exact-local-physical-order-chunk-size") + 1] == "220"
 
-        with pytest.raises(ValueError, match="must be non-negative"):
-            build_initial_model_command(
-                {
-                    "input_star": "/data/particles.star",
-                    "outdir": "/out/InitialModel/job_0001",
-                    "exact_local_physical_order_chunk_size": -1,
-                }
-            )
+        for invalid_chunk_size in (-1, 1, 2):
+            with pytest.raises(ValueError, match="must be 0 .* or at least 3"):
+                build_initial_model_command(
+                    {
+                        "input_star": "/data/particles.star",
+                        "outdir": "/out/InitialModel/job_0001",
+                        "exact_local_physical_order_chunk_size": invalid_chunk_size,
+                    }
+                )
 
     def test_pipeline_command_minimal(self):
         cmd = build_pipeline_command({

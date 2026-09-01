@@ -1153,7 +1153,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert result.meta["requested_exact_local_physical_order_chunk_size"] == 0
     assert result.meta["effective_relion_wavg_sequential_cuda"] is True
     assert result.meta["effective_exact_local_bucket_radix"] == 4
-    assert result.meta["effective_exact_local_physical_order_chunk_size"] == 0
+    assert result.meta["effective_exact_local_physical_order_chunk_size"] is None
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
     np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])

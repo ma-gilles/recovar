@@ -240,7 +240,10 @@ function InitialModelFormLoaded({
 
   const positive = [nrIter, gradWriteIter, nrClasses, particleDiameter, imageBatchSize, rotationBlockSize,
     bootstrapMin, sigma2Min, paddingFactor].every((value) => Number(value) > 0);
-  const canSubmit = inputStar.length > 0 && symName.length > 0 && positive;
+  const physicalOrderChunkSize = Number(exactLocalPhysicalOrderChunkSize);
+  const physicalOrderChunkSizeValid = Number.isInteger(physicalOrderChunkSize)
+    && (physicalOrderChunkSize === 0 || physicalOrderChunkSize >= 3);
+  const canSubmit = inputStar.length > 0 && symName.length > 0 && positive && physicalOrderChunkSizeValid;
 
   return (
     <div className="space-y-4">

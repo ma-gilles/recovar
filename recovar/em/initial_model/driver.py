@@ -2308,8 +2308,12 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise ValueError("grad_write_iter must be >= 1")
     if int(opts.exact_local_bucket_radix) not in (2, 4):
         raise ValueError("exact_local_bucket_radix must be 2 or 4")
-    if int(opts.exact_local_physical_order_chunk_size) < 0:
-        raise ValueError("exact_local_physical_order_chunk_size must be non-negative")
+    if int(opts.exact_local_physical_order_chunk_size) not in (0,) and int(
+        opts.exact_local_physical_order_chunk_size
+    ) < 3:
+        raise ValueError(
+            "exact_local_physical_order_chunk_size must be 0 (disabled) or at least 3"
+        )
     if opts.diagnostic_stop_after_iteration is not None and not (
         1 <= int(opts.diagnostic_stop_after_iteration) <= int(opts.nr_iter)
     ):
