@@ -6480,6 +6480,19 @@ def _release_deferred_firstiter_projection_buffers(
                 )
 
 
+def _close_relion_projector_texture_after_sparse_scoring(texture):
+    """Release the function-scoped projector before output finalization."""
+
+    if texture is None:
+        return None
+    logger.info(
+        "Sparse pass-2 score/adjoint phase complete: releasing persistent "
+        "RELION projector texture before output finalization"
+    )
+    texture.close()
+    return None
+
+
 def _accumulate_relion_x_half_per_particle_launches(
     values,
     ctf_values,
@@ -16672,6 +16685,18 @@ def compute_pass2_stats_sparse_bucketed(
             group_images / max(group_wall, 1e-9),
         )
 
+    if not return_score_log_z_only:
+        # Every projector consumer is inside the completed bucket loop.  The
+        # outer owner still closes this object in ``finally`` (idempotently),
+        # but retaining a box-scale CUDA texture until then overlaps it with
+        # the equally large BPref finalization outputs.  The pure score/logZ
+        # path allocates no such output and returns directly to that owner.
+        relion_projector_texture = (
+            _close_relion_projector_texture_after_sparse_scoring(
+                relion_projector_texture,
+            )
+        )
+
     if deferred_firstiter_bpref:
         staged_particle_count = sum(
             int(batch.actual_counts.size)
@@ -16696,12 +16721,6 @@ def compute_pass2_stats_sparse_bucketed(
         # touching the caller's host slab or changing the replay operands.
         projector_device_buffer = relion_projector_half
         relion_projector_half = None
-        if relion_projector_texture is not None:
-            # The score outputs above have crossed explicit NumPy/JAX readiness
-            # boundaries.  Release the persistent CUDA texture before deferred
-            # BPref replay allocates its full-box accumulators.
-            relion_projector_texture.close()
-            relion_projector_texture = None
         _release_deferred_firstiter_projection_buffers(
             projector_device_buffer,
             projection_cache,

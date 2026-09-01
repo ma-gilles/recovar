@@ -338,7 +338,7 @@ def test_sparse_pass2_routes_host_projector_and_always_closes(
     assert texture.close_count == 1
 
 
-def test_persistent_texture_source_pins_dynamic_token_and_deferred_lifetime():
+def test_persistent_texture_source_pins_dynamic_token_and_scoring_lifetime():
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 
@@ -375,9 +375,75 @@ def test_persistent_texture_source_pins_dynamic_token_and_deferred_lifetime():
         function_start,
     )
     function_block = sparse_source[function_start:function_end]
-    assert function_block.index("relion_projector_texture.close()") < (
-        function_block.index("_replay_deferred_firstiter_bpref_batches(")
+    release_index = function_block.index(
+        "_close_relion_projector_texture_after_sparse_scoring("
     )
+    assert function_block.rindex(
+        "relion_projector_texture=relion_projector_texture,",
+        0,
+        release_index,
+    ) < release_index
+    assert release_index < function_block.index(
+        "_replay_deferred_firstiter_bpref_batches("
+    )
+    assert release_index < function_block.index("finalize_half_volume_bpref(")
+
+
+@pytest.mark.parametrize("raise_from_finalize", [False, True])
+def test_sparse_pass2_early_texture_release_precedes_finalize_and_outer_cleanup(
+    caplog,
+    raise_from_finalize,
+):
+    from recovar.em.dense_single_volume.helpers import (
+        oversampling,
+        sparse_pass2_bucketed,
+    )
+
+    events = []
+
+    class FakeTexture:
+        def __init__(self):
+            self.closed = False
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+            if self.closed:
+                return
+            self.closed = True
+            events.append("destroy")
+
+    texture = FakeTexture()
+
+    def finalize_after_early_release():
+        released = (
+            sparse_pass2_bucketed._close_relion_projector_texture_after_sparse_scoring(
+                texture,
+            )
+        )
+        assert released is None
+        events.append("finalize")
+        if raise_from_finalize:
+            raise RuntimeError("synthetic finalization failure")
+        return "result"
+
+    with caplog.at_level("INFO"):
+        if raise_from_finalize:
+            with pytest.raises(RuntimeError, match="synthetic finalization failure"):
+                oversampling._call_with_persistent_texture_cleanup(
+                    texture,
+                    finalize_after_early_release,
+                )
+        else:
+            result = oversampling._call_with_persistent_texture_cleanup(
+                texture,
+                finalize_after_early_release,
+            )
+            assert result == "result"
+
+    assert events == ["destroy", "finalize"]
+    assert texture.close_calls == 2
+    assert "releasing persistent RELION projector texture before output finalization" in caplog.text
 
 
 @pytest.mark.gpu
