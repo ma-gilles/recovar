@@ -1076,6 +1076,78 @@ def test_large_odd_accumulator_crop_routes_directly_to_fftw(monkeypatch):
         clear_cache()
 
 
+def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    for compiled in (
+        rf.post_process_from_filter_v2,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260831)
+    ft_ctf = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    f_ty = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, np.prod(volume_shape)).astype(np.float64)
+    common = dict(
+        tau=tau,
+        tau2_fudge=1.0,
+        minres_map=0,
+        current_size=4,
+        accumulator_volume_shape=accumulator_shape,
+        tau_is_1d=False,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    monolithic = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            gridding_padding_factor=1,
+            input_half_volume=True,
+            **common,
+        )
+    )
+    staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            **common,
+        )
+    )
+
+    assert staged.dtype == np.complex64
+    np.testing.assert_array_equal(staged, monolithic)
+
+    for compiled in (
+        rf.post_process_from_filter_v2,
+        rf._finish_large_relion_postprocess_from_fftw_half,
+    ):
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
 def test_relion_odd_accumulator_postprocess_windows_to_even_padded_grid():
     import recovar.core.fourier_transform_utils as ftu
 

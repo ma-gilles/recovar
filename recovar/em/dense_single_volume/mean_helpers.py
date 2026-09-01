@@ -12,6 +12,7 @@ import logging
 import os
 import time
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -265,6 +266,43 @@ def _merged_mean_from_halves(means, class_weights=None):
     return jnp.sum(class_weights_jax[:, None] * merged, axis=0), merged
 
 
+def _should_host_stage_large_relion_ifft(
+    Ft_ctf,
+    Ft_y,
+    vol_shape,
+    padding_factor,
+    accumulator_volume_shape,
+    relion_functions,
+):
+    """Return whether host inputs should cross the large padded-IFFT boundary."""
+
+    if not isinstance(Ft_ctf, np.ndarray) or not isinstance(Ft_y, np.ndarray):
+        return False
+    accumulator_shape = (
+        tuple(3 * [int(vol_shape[0]) * int(padding_factor)])
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
+    reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
+        vol_shape,
+        padding_factor,
+    )
+    if accumulator_shape == reconstruction_shape:
+        return False
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(accumulator_shape)
+    half_size = int(np.prod(half_shape))
+
+    def _is_packed_half(array):
+        return tuple(array.shape) == half_shape or (array.ndim == 1 and int(array.size) == half_size)
+
+    return (
+        _is_packed_half(Ft_ctf)
+        and _is_packed_half(Ft_y)
+        and relion_functions._large_grid_postprocess_single_precision_enabled(int(np.prod(accumulator_shape)))
+        and relion_functions._large_grid_postprocess_single_precision_enabled(int(np.prod(reconstruction_shape)))
+    )
+
+
 def _reconstruct_volume_eager(
     Ft_ctf,
     Ft_y,
@@ -291,11 +329,8 @@ def _reconstruct_volume_eager(
     """
     from recovar.reconstruction import relion_functions
 
-    return relion_functions.post_process_from_filter_v2(
-        Ft_ctf,
-        Ft_y,
-        vol_shape,
-        padding_factor,
+    postprocess_args = (Ft_ctf, Ft_y, vol_shape, padding_factor)
+    postprocess_kwargs = dict(
         tau=tau,
         kernel="triangular",
         use_spherical_mask=use_spherical_mask,
@@ -311,6 +346,62 @@ def _reconstruct_volume_eager(
         tau_is_1d=tau_is_1d,
         preserve_output_precision=preserve_output_precision,
         relion_filter_scale=relion_filter_scale,
+    )
+    if not _should_host_stage_large_relion_ifft(
+        Ft_ctf,
+        Ft_y,
+        vol_shape,
+        padding_factor,
+        accumulator_volume_shape,
+        relion_functions,
+    ):
+        return relion_functions.post_process_from_filter_v2(
+            *postprocess_args,
+            **postprocess_kwargs,
+        )
+
+    accumulator_shape = (
+        tuple(3 * [int(vol_shape[0]) * int(padding_factor)])
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
+    reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
+        vol_shape,
+        padding_factor,
+    )
+    packed_half_bytes = int(
+        np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(reconstruction_shape))
+        * np.dtype(np.complex64).itemsize
+    )
+    logger.info(
+        "RELION split pre-IFFT host boundary: accumulator_shape=%s "
+        "reconstruction_shape=%s packed_half_bytes=%d",
+        accumulator_shape,
+        reconstruction_shape,
+        packed_half_bytes,
+    )
+    fftw_half_device = relion_functions.post_process_from_filter_v2(
+        *postprocess_args,
+        **postprocess_kwargs,
+        input_half_volume=True,
+        return_fftw_half_before_ifft=True,
+    )
+    fftw_half_device.block_until_ready()
+    fftw_half_host = np.asarray(jax.device_get(fftw_half_device))
+    del fftw_half_device
+    gc.collect()
+
+    return relion_functions._finish_large_relion_postprocess_from_fftw_half(
+        fftw_half_host,
+        vol_shape,
+        padding_factor,
+        kernel="triangular",
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct="radial",
+        kernel_width=1,
+        return_real_space=return_real_space,
+        gridding_padding_factor=projection_padding_factor,
     )
 
 
