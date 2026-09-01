@@ -6,6 +6,63 @@ vdam_visible_gpu_uuids() {
     sed 's/[[:space:]]//g; /^$/d'
 }
 
+vdam_assert_target_gpu_allocated() {
+  local target_uuid=${1:?target GPU UUID is required}
+  local allocation_spec=${2:-}
+  local query_output
+  local token
+  local uuid
+  local found=0
+  local -a allocation_tokens=()
+  local -a resolved_uuids=()
+  local -a token_uuids=()
+
+  if [[ -z "${allocation_spec}" ]]; then
+    allocation_spec=${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}}
+  fi
+  allocation_spec=${allocation_spec//[[:space:]]/}
+  if [[ -z "${allocation_spec}" ]]; then
+    echo "VDAM cannot prove the target GPU belongs to the Slurm allocation: no allocation spec" >&2
+    return 76
+  fi
+
+  IFS=',' read -r -a allocation_tokens <<< "${allocation_spec}"
+  for token in "${allocation_tokens[@]}"; do
+    token=${token#gpu:}
+    if [[ -z "${token}" ]]; then
+      echo "VDAM allocation spec contains an empty GPU selector: ${allocation_spec}" >&2
+      return 76
+    fi
+    if ! query_output=$(nvidia-smi -i "${token}" --query-gpu=uuid --format=csv,noheader); then
+      echo "VDAM cannot resolve allocated GPU selector ${token}: ${allocation_spec}" >&2
+      return 76
+    fi
+    mapfile -t token_uuids < <(
+      printf '%s\n' "${query_output}" | sed 's/[[:space:]]//g; /^$/d'
+    )
+    if [[ "${#token_uuids[@]}" -ne 1 ]]; then
+      echo "VDAM allocated GPU selector ${token} did not resolve to one UUID" >&2
+      return 76
+    fi
+    uuid=${token_uuids[0]}
+    case "${uuid}" in
+      GPU-*) ;;
+      *) echo "VDAM allocated GPU selector ${token} resolved to invalid UUID ${uuid}" >&2; return 76 ;;
+    esac
+    resolved_uuids+=("${uuid}")
+    if [[ "${uuid}" == "${target_uuid}" ]]; then
+      found=1
+    fi
+  done
+
+  VDAM_ALLOCATED_GPU_UUIDS_CSV=$(IFS=,; printf '%s' "${resolved_uuids[*]}")
+  export VDAM_ALLOCATED_GPU_UUIDS_CSV
+  if [[ "${found}" != 1 ]]; then
+    echo "VDAM_TARGET_GPU_NOT_ALLOCATED expected=${target_uuid} allocation_spec=${allocation_spec} resolved=${VDAM_ALLOCATED_GPU_UUIDS_CSV:-none}" >&2
+    return 76
+  fi
+}
+
 vdam_select_target_gpu() {
   local target_uuid=${1:-}
   local miss_hold_seconds=${2:-0}
