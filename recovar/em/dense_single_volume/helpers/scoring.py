@@ -443,12 +443,17 @@ def _relion_coarse_gaussian_gemm_scores(
 ):
     """Validate and score one projection-once coarse Gaussian macro batch.
 
-    The arithmetic is mathematically equivalent to RELION's
+    The arithmetic is mathematically equivalent in exact arithmetic to
+    RELION's direct-square
     ``0.5 * weight * |reference - shifted_image|**2 + initial_diff2``.
     It intentionally reuses :func:`_e_step_block_scores_windowed` so both EM
     and InitialModel exercise the mature half-spectrum GEMMs instead of a
-    second VDAM scoring implementation.  The different parallel reduction
-    order remains qualification-only and is not selected by default.
+    second VDAM scoring implementation.  This expands the square into model,
+    cross, and image terms and therefore changes both operation order and
+    cancellation behavior; it is not merely a parallel-reduction reorder.
+    Keep the path qualification-only until paired production operands show
+    repeat-bounded, non-directional, non-growing drift, unchanged discrete
+    choices/support and final quality, plus a material end-to-end speedup.
     """
 
     projected_reference = jnp.asarray(projected_reference)
@@ -518,6 +523,79 @@ def _relion_coarse_gaussian_gemm_scores(
         image_shape=tuple(int(value) for value in image_shape),
         volume_shape=tuple(int(value) for value in volume_shape),
     )
+
+
+def _coarse_gaussian_direct_macro_diagnostics(
+    direct_scores,
+    macro_scores,
+    *,
+    direct_support=None,
+    macro_support=None,
+):
+    """Summarize paired direct-square and expanded-GEMM score surfaces.
+
+    Inputs use the public coarse layout ``[image, class, rotation,
+    translation]``.  This helper deliberately reports raw deltas, signed bias,
+    winner margins, and exact discrete differences without defining a
+    promotion tolerance.  Repeated H100 artifacts can therefore establish a
+    native/repeat envelope without silently turning one observed delta into an
+    acceptance threshold.
+    """
+
+    direct = np.asarray(direct_scores)
+    macro = np.asarray(macro_scores)
+    if direct.shape != macro.shape or direct.ndim != 4:
+        raise ValueError(
+            "paired coarse score diagnostics require equal "
+            "[image, class, rotation, translation] arrays, got "
+            f"{direct.shape} and {macro.shape}",
+        )
+    direct_flat = direct.reshape(direct.shape[0], -1)
+    macro_flat = macro.reshape(macro.shape[0], -1)
+    delta = macro_flat.astype(np.float64) - direct_flat.astype(np.float64)
+
+    def winner_and_margin(values):
+        winner = np.argmax(values, axis=1).astype(np.int64)
+        if values.shape[1] == 1:
+            margin = np.full(values.shape[0], np.inf, dtype=np.float64)
+        else:
+            largest_two = np.partition(values.astype(np.float64), -2, axis=1)[:, -2:]
+            margin = largest_two[:, 1] - largest_two[:, 0]
+        return winner, margin
+
+    direct_winner, direct_margin = winner_and_margin(direct_flat)
+    macro_winner, macro_margin = winner_and_margin(macro_flat)
+    diagnostics = {
+        "score_delta": delta.reshape(direct.shape),
+        "signed_mean_delta_per_image": np.mean(delta, axis=1),
+        "rms_delta_per_image": np.sqrt(np.mean(delta * delta, axis=1)),
+        "max_abs_delta_per_image": np.max(np.abs(delta), axis=1),
+        "direct_argmax": direct_winner,
+        "macro_argmax": macro_winner,
+        "argmax_equal": direct_winner == macro_winner,
+        "direct_winner_margin": direct_margin,
+        "macro_winner_margin": macro_margin,
+    }
+    if (direct_support is None) != (macro_support is None):
+        raise ValueError("direct_support and macro_support must be supplied together")
+    if direct_support is not None:
+        direct_support = np.asarray(direct_support, dtype=bool)
+        macro_support = np.asarray(macro_support, dtype=bool)
+        if direct_support.shape != direct_flat.shape or macro_support.shape != direct_flat.shape:
+            raise ValueError(
+                "coarse support diagnostics must match flattened score surfaces, got "
+                f"{direct_support.shape}, {macro_support.shape}, and {direct_flat.shape}",
+            )
+        diagnostics.update(
+            direct_support=direct_support.reshape(direct.shape),
+            macro_support=macro_support.reshape(direct.shape),
+            support_equal=np.all(direct_support == macro_support, axis=1),
+            support_symmetric_difference_count=np.count_nonzero(
+                direct_support != macro_support,
+                axis=1,
+            ).astype(np.int64),
+        )
+    return diagnostics
 
 
 @partial(jax.jit, static_argnums=(5, 6, 7, 8))
