@@ -1171,6 +1171,30 @@ def classify_metadata_iteration(
 _HALFSET_PROFILE_RE = re.compile(r"^halfset_(?P<halfset>\d+)_profile_summary$")
 
 
+def _integer(value: Any, label: str) -> int:
+    _require(
+        isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)),
+        f"{label} must be an integer",
+    )
+    return int(value)
+
+
+def _coarse_translation_count(metadata: dict[str, Any], label: str) -> int:
+    """Recover the pass-1 grid size from the serialized fine sampling plan."""
+
+    fine_count = _integer(metadata.get("n_translations"), f"{label} n_translations")
+    oversampling = _integer(metadata.get("oversampling"), f"{label} oversampling")
+    _require(fine_count > 0, f"{label} n_translations must be positive")
+    _require(oversampling >= 0, f"{label} oversampling must be non-negative")
+    _require(oversampling <= 8, f"{label} oversampling is implausibly large")
+    children_per_parent = 4**oversampling
+    _require(
+        fine_count % children_per_parent == 0,
+        f"{label} fine translation count is not divisible by its oversampling factor",
+    )
+    return fine_count // children_per_parent
+
+
 def _validate_coarse_selector_profile_audits(
     metadata: dict[str, Any],
     *,
@@ -1185,6 +1209,7 @@ def _validate_coarse_selector_profile_audits(
         _validate_coarse_selector_audit,
     )
 
+    translations = _coarse_translation_count(metadata, f"{label} iteration {iteration}")
     _require(
         metadata.get("joint_halfset_particle_stream") is True,
         f"{label} iteration {iteration} is not a joint-halfset particle stream",
@@ -1242,7 +1267,7 @@ def _validate_coarse_selector_profile_audits(
             f"{label} iteration {iteration} {key} coarse selector differs: {mismatches}",
         )
         _require(
-            audit["translation_count"] == int(metadata["n_translations"]),
+            audit["translation_count"] == translations,
             f"{label} iteration {iteration} {key} selector translation count differs",
         )
         counts = audit["counts"]

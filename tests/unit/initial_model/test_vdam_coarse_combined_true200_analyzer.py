@@ -308,7 +308,8 @@ def _selector_audit(*, workers: int, atomic: bool) -> dict[str, object]:
 
 def _joint_stream_metadata(audit: dict[str, object]) -> dict[str, object]:
     return {
-        "n_translations": 29,
+        "n_translations": 116,
+        "oversampling": 1,
         "halfset_ids": [0, 1],
         "joint_halfset_particle_stream": True,
         "halfset_0_profile_summary": {"coarse_selector_audit": audit},
@@ -341,6 +342,62 @@ def test_selector_proof_accepts_serial_control_and_combined_candidate() -> None:
     assert control_rows[0]["audit"]["counts"]["fused_calls"] > 0
     assert control_rows[0]["audit"]["counts"]["multistream_calls"] == 0
     assert candidate_rows[0]["audit"]["counts"]["native_atomic_selected_calls"] > 0
+
+
+def test_selector_proof_rejects_coarse_translation_count_mismatch() -> None:
+    audit = _selector_audit(workers=8, atomic=True)
+    metadata = _joint_stream_metadata(audit)
+    metadata["n_translations"] = 120
+    with pytest.raises(analyzer.GateSetupError, match="selector translation count differs"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="combined_candidate_1",
+            iteration=181,
+            multistream_workers=8,
+            native_atomic_reduction=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("n_translations", 116.0, "n_translations must be an integer"),
+        ("n_translations", 0, "n_translations must be positive"),
+        ("n_translations", -116, "n_translations must be positive"),
+        ("n_translations", 117, "not divisible by its oversampling factor"),
+        ("oversampling", -1, "oversampling must be non-negative"),
+        ("oversampling", 9, "oversampling is implausibly large"),
+    ),
+)
+def test_selector_proof_rejects_invalid_sampling_plan(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    metadata = _joint_stream_metadata(_selector_audit(workers=0, atomic=False))
+    metadata[field] = value
+    with pytest.raises(analyzer.GateSetupError, match=message):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="control_serial_1",
+            iteration=181,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+        )
+
+
+@pytest.mark.parametrize("field", ("n_translations", "oversampling"))
+def test_selector_proof_rejects_missing_sampling_plan_field(field: str) -> None:
+    metadata = _joint_stream_metadata(_selector_audit(workers=0, atomic=False))
+    metadata.pop(field)
+    with pytest.raises(analyzer.GateSetupError, match=rf"{field} must be an integer"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="control_serial_1",
+            iteration=181,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+        )
 
 
 @pytest.mark.parametrize(
