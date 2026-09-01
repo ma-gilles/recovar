@@ -291,10 +291,8 @@ def _should_host_stage_large_relion_ifft(
     accumulator_volume_shape,
     relion_functions,
 ):
-    """Return whether host inputs should cross the large padded-IFFT boundary."""
+    """Return whether eager reconstruction should cross the padded-iFFT host boundary."""
 
-    if not isinstance(Ft_ctf, np.ndarray) or not isinstance(Ft_y, np.ndarray):
-        return False
     accumulator_shape = (
         tuple(3 * [int(vol_shape[0]) * int(padding_factor)])
         if accumulator_volume_shape is None
@@ -315,11 +313,20 @@ def _should_host_stage_large_relion_ifft(
     # The split is governed by the inverse-FFT grid, not the current-size
     # accumulator. Early box-scale iterations can have a compact accumulator
     # but still pad to a 1600^3 transform whose built-in normalization
-    # overflows XLA's signed-int32 transform-size product.
-    return (
-        _is_packed_half(Ft_ctf)
-        and _is_packed_half(Ft_y)
-        and relion_functions._large_grid_postprocess_single_precision_enabled(int(np.prod(reconstruction_shape)))
+    # overflows XLA's signed-int32 transform-size product. Compact device
+    # accumulators can safely form and host-stage that one padded boundary.
+    # Large accumulators still require the existing earlier host offload so
+    # their storage cannot overlap the padded inverse-FFT workspace.
+    accumulator_is_large = relion_functions._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(accumulator_shape)),
+    )
+    inputs_are_host = isinstance(Ft_ctf, np.ndarray) and isinstance(Ft_y, np.ndarray)
+    if not _is_packed_half(Ft_ctf) or not _is_packed_half(Ft_y):
+        return False
+    if accumulator_is_large and not inputs_are_host:
+        return False
+    return relion_functions._large_grid_postprocess_single_precision_enabled(
+        int(np.prod(reconstruction_shape)),
     )
 
 
