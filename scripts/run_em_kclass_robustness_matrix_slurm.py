@@ -1432,6 +1432,15 @@ sha256sum --check "${RECOVAR_CUDA_LIB}.sha256"
 """
 
 
+def verify_cuda_lib_command() -> str:
+    return """if [[ ! -s "${RECOVAR_CUDA_LIB}" || ! -s "${RECOVAR_CUDA_LIB}.sha256" ]]; then
+  echo "ERROR: setup did not seal the shared CUDA library: ${RECOVAR_CUDA_LIB}" >&2
+  exit 2
+fi
+sha256sum --check "${RECOVAR_CUDA_LIB}.sha256"
+"""
+
+
 def git_provenance_gate(*, expected_commit: str) -> str:
     return f"""EXPECTED_GIT_HEAD={q(expected_commit)}
 ACTUAL_GIT_HEAD="$(git rev-parse HEAD)"
@@ -1601,6 +1610,7 @@ if [[ "${{#RELION_BIND_LIBS[@]}}" -ne 1 ]]; then
 fi
 sha256sum "${{RELION_BIND_LIBS[0]}}" > {q(scratch_dir / "relion_bind_build" / "shared.sha256")}
 sha256sum --check {q(scratch_dir / "relion_bind_build" / "shared.sha256")}
+{build_cuda_lib_command()}
 export JAX_PLATFORMS=cpu
 export JAX_PLATFORM_NAME=cpu
 export RECOVAR_DISABLE_CUDA=1
@@ -1877,7 +1887,7 @@ done
 fi
 
 sha256sum --check {q(scratch_dir / "relion_bind_build" / "shared.sha256")}
-{build_cuda_lib_command()}
+{verify_cuda_lib_command()}
 "${{PIXI_PY}}" - <<'PY'
 import os
 import pathlib

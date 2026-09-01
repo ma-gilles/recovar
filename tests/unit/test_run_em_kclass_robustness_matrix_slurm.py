@@ -330,7 +330,7 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert "RELION class-population audit ok" in text
 
 
-def test_case_jobs_build_or_reuse_one_sealed_cuda_lib_under_lock(tmp_path):
+def test_case_jobs_only_verify_setup_sealed_cuda_lib(tmp_path):
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
     script = launcher.write_case_script(
@@ -356,17 +356,11 @@ def test_case_jobs_build_or_reuse_one_sealed_cuda_lib_under_lock(tmp_path):
     )
 
     text = script.read_text()
-    assert 'CUDA_LIB_TMP="${RECOVAR_CUDA_LIB}.${SLURM_JOB_ID:-$$}.tmp"' in text
-    assert "export CUDA_LIB_TMP PIXI_PY" in text
-    assert 'flock "$(dirname "${RECOVAR_CUDA_LIB}")/build.lock"' in text
     assert f"export RECOVAR_CUDA_LIB={tmp_path}/librecovar_cuda.so" in text
-    assert 'if [[ -s "${RECOVAR_CUDA_LIB}" && -s "${RECOVAR_CUDA_LIB}.sha256" ]]' in text
-    assert 'echo "Reusing sealed CUDA library ${RECOVAR_CUDA_LIB}"' in text
-    assert 'rm -f "${CUDA_LIB_TMP}"' in text
-    assert 'make -C recovar/cuda LIB="${CUDA_LIB_TMP}" all' in text
-    assert 'mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"' in text
-    assert 'sha256sum "${RECOVAR_CUDA_LIB}" > "${RECOVAR_CUDA_LIB}.sha256"' in text
+    assert 'setup did not seal the shared CUDA library' in text
     assert 'sha256sum --check "${RECOVAR_CUDA_LIB}.sha256"' in text
+    assert 'make -C recovar/cuda' not in text
+    assert 'flock "$(dirname "${RECOVAR_CUDA_LIB}")/build.lock"' not in text
 
 
 def test_case_job_uses_case_specific_batch_invariance_overrides(tmp_path):
@@ -547,6 +541,10 @@ def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
     assert '-m venv --system-site-packages "${EM_KCLASS_MATRIX_VENV}"' in text
     assert '"${PIXI_PY}" -m pip install -e . --no-deps --no-build-isolation --ignore-installed' in text
     assert '"${PIXI_PY}" recovar/relion_bind/build.py' in text
+    assert 'CUDA_LIB_TMP="${RECOVAR_CUDA_LIB}.${SLURM_JOB_ID:-$$}.tmp"' in text
+    assert 'flock "$(dirname "${RECOVAR_CUDA_LIB}")/build.lock"' in text
+    assert 'make -C recovar/cuda LIB="${CUDA_LIB_TMP}" all' in text
+    assert 'sha256sum "${RECOVAR_CUDA_LIB}" > "${RECOVAR_CUDA_LIB}.sha256"' in text
     assert "pixi run" not in text
     assert f"sha256sum --check {tmp_path}/relion_bind_build/shared.sha256" in text
     assert 'external_bind_dir = os.environ.get("RECOVAR_RELION_BIND_BUILD_DIR")' in text
