@@ -8448,7 +8448,7 @@ cudaError_t launch_relion_coarse_diff2_projector_f32(
         err = cudaStreamSynchronize(stream);
     } else {
         // This path changes only particle scheduling.  Texture ownership,
-        // projection, translation, lane arithmetic, canonical reduction, and
+        // projection, translation, lane arithmetic, selected lane reduction,
         // class->rotation->translation output layout all remain in the shared
         // production kernel above.  Synthetic padded image rows are initialized
         // but are never scored.
@@ -11502,9 +11502,6 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
         full_to_compact,
         output);
     if (validation.failure()) return validation;
-    if (canonical_reduction != 1)
-        return ffi::Error::InvalidArgument(
-            "RelionCoarseDiff2ProjectorMultistreamF32 requires canonical reduction");
     if (actual_batch_size.element_type() != ffi::DataType::S32 ||
         actual_batch_size.dimensions().size() != 0)
         return ffi::Error::InvalidArgument(
@@ -11561,8 +11558,30 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
             -static_cast<float>(physical_image_size * physical_image_size),
             actual_batch_size_host,
             kRelionVdamWorkerStreams);
-    } else {
+    } else if (canonical_reduction) {
         err = launch_relion_coarse_diff2_projector_f32<false, true>(
+            stream,
+            static_cast<const float2*>(projector_full.untyped_data()),
+            static_cast<const float*>(rotations.untyped_data()),
+            static_cast<const float2*>(images.untyped_data()),
+            static_cast<const float*>(translation_angles.untyped_data()),
+            static_cast<const float*>(weight.untyped_data()),
+            static_cast<const float*>(initial_diff2.untyped_data()),
+            static_cast<const int32_t*>(full_to_compact.untyped_data()),
+            static_cast<float*>(output->untyped_data()),
+            nullptr,
+            image_dims[0],
+            rotation_dims[0],
+            angle_dims[0],
+            image_dims[1],
+            current_size,
+            projector_dims[0],
+            model_max_r,
+            -static_cast<float>(physical_image_size * physical_image_size),
+            actual_batch_size_host,
+            kRelionVdamWorkerStreams);
+    } else {
+        err = launch_relion_coarse_diff2_projector_f32<false, false>(
             stream,
             static_cast<const float2*>(projector_full.untyped_data()),
             static_cast<const float*>(rotations.untyped_data()),

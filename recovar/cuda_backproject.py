@@ -2786,17 +2786,15 @@ def relion_coarse_diff2_projector_multistream_f32(
     """Score physical particle rows over RELION's eight worker streams.
 
     This dispatcher calls the same production coarse projector kernel as
-    :func:`relion_coarse_diff2_projector_f32`.  Only particle launch scheduling
-    differs: one shared projector texture feeds eight independent blocking
-    streams, and rows at or beyond ``actual_batch_size`` are initialized but
-    never scored.  The actual row count is a runtime scalar operand so different
-    final-batch occupancies at one physical shape reuse the same compilation.
+    :func:`relion_coarse_diff2_projector_f32`, including either its fixed-order
+    canonical reduction or its native RELION atomic lane admission.  Only
+    particle launch scheduling differs: one shared projector texture feeds
+    eight independent blocking streams, and rows at or beyond
+    ``actual_batch_size`` are initialized but never scored.  The actual row
+    count is a runtime scalar operand so different final-batch occupancies at
+    one physical shape reuse the same compilation.
     """
 
-    if not canonical_reduction:
-        raise ValueError(
-            "RELION coarse multistream scoring requires canonical_reduction=True",
-        )
     _validate_relion_coarse_single_lane_canonical(
         translation_angles.shape[0],
         canonical_reduction=canonical_reduction,

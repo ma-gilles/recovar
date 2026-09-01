@@ -35,7 +35,10 @@ CUDA_RUNTIME_TOOLKIT=${CUDA_RUNTIME_TOOLKIT:-/usr/local/cuda-13.1}
 PROVENANCE=${ROOT}/provenance
 RUNTIME=${ROOT}/runtime
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
-TEST_NODE=tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise
+TEST_NODES=(
+  tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise
+  tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_multistream_atomic_stays_in_lane_envelope
+)
 SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
@@ -195,7 +198,7 @@ test_started=$(date +%s.%N)
   cd "${REPO_ROOT}"
   "${PIXI_PY}" -m pytest -v --run-gpu \
     --junitxml="${ROOT}/pytest.junit.xml" \
-    "${TEST_NODE}"
+    "${TEST_NODES[@]}"
 ) > "${ROOT}/pytest.stdout" 2> "${ROOT}/pytest.stderr"
 test_finished=$(date +%s.%N)
 
@@ -206,7 +209,7 @@ import xml.etree.ElementTree as ET
 root = ET.parse(sys.argv[1]).getroot()
 suite = root if root.tag == "testsuite" else root.find("testsuite")
 assert suite is not None
-assert int(suite.attrib["tests"]) == 2
+assert int(suite.attrib["tests"]) == 3
 assert int(suite.attrib.get("failures", 0)) == 0
 assert int(suite.attrib.get("errors", 0)) == 0
 assert int(suite.attrib.get("skipped", 0)) == 0
@@ -226,7 +229,7 @@ vdam_verify_selected_gpu "${selected_gpu_uuid}"
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${selected_gpu_uuid}" \
   "${SLURMD_NODENAME:-$(hostname -s)}" "${gpu_name}" "${cuda_sha256}" \
   "${source_manifest_sha256}" "${build_started}" "${build_finished}" \
-  "${test_started}" "${test_finished}" "${TEST_NODE}" <<'PY'
+  "${test_started}" "${test_finished}" "${TEST_NODES[*]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -244,8 +247,8 @@ payload = {
     "cuda_stage_wall_s": float(sys.argv[10]) - float(sys.argv[9]),
     "test_wall_s": float(sys.argv[12]) - float(sys.argv[11]),
     "pytest_node": sys.argv[13],
-    "tests": 2,
-    "passed": 2,
+    "tests": 3,
+    "passed": 3,
     "science_promotion_allowed": False,
 }
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

@@ -40,6 +40,9 @@ _RELION_COARSE_CANONICAL_REDUCTION_ENV = (
 _K1_COARSE_SINGLE_LANE_CANONICAL_ENV = (
     "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL"
 )
+_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV = (
+    "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION"
+)
 _K1_COARSE_MULTISTREAM_WORKERS_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
@@ -278,6 +281,37 @@ def _k1_coarse_single_lane_canonical_selected(
         requested
         and score_mode == "gaussian"
         and 65 <= int(translation_count) <= 128
+    )
+
+
+def _k1_coarse_native_atomic_reduction_enabled(*, default: bool = False) -> bool:
+    """Whether the fused coarse scorer uses RELION's native atomic lane adds."""
+
+    token = os.environ.get(
+        _K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV}={token!r}",
+    )
+
+
+def _k1_coarse_native_atomic_reduction_selected(
+    *,
+    requested: bool,
+    score_mode: str,
+    translation_count: int,
+) -> bool:
+    """Select only the T=29 Gaussian topology covered by the live H100 gate."""
+
+    return bool(
+        requested
+        and score_mode == "gaussian"
+        and int(translation_count) == 29
     )
 
 
@@ -2308,19 +2342,59 @@ def _compute_k_class_significance_batched(
         and score_mode == "gaussian"
         and _k1_coarse_fused_projector_supports_padding(projection_padding_factor)
     )
-    coarse_canonical_reduction_enabled = (
+    coarse_canonical_reduction_requested = (
         _relion_coarse_canonical_reduction_enabled(
             default=(
                 relion_coarse_gaussian_default
                 and coarse_fused_projector_enabled
             ),
         )
+    )
+    coarse_native_atomic_reduction_requested = (
+        _k1_coarse_native_atomic_reduction_enabled()
+    )
+    coarse_native_atomic_reduction_enabled = (
+        _k1_coarse_native_atomic_reduction_selected(
+            requested=coarse_native_atomic_reduction_requested,
+            score_mode=score_mode,
+            translation_count=n_trans,
+        )
+    )
+    if (
+        coarse_native_atomic_reduction_enabled
+        and _RELION_COARSE_CANONICAL_REDUCTION_ENV in os.environ
+        and coarse_canonical_reduction_requested
+    ):
+        raise ValueError(
+            f"{_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV}=1 conflicts with "
+            f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV}=1",
+        )
+    coarse_canonical_reduction_enabled = bool(
+        coarse_canonical_reduction_requested
         and score_mode == "gaussian"
+        and not coarse_native_atomic_reduction_enabled
     )
     if coarse_canonical_reduction_enabled and not coarse_fused_projector_enabled:
         raise ValueError(
             f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV} requires "
             f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1",
+        )
+    if coarse_native_atomic_reduction_enabled:
+        if n_classes != 1:
+            raise ValueError(
+                f"{_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV}=1 currently "
+                "supports K=1 only",
+            )
+        if not coarse_fused_projector_enabled:
+            raise ValueError(
+                f"{_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV}=1 requires "
+                f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1",
+            )
+    elif coarse_native_atomic_reduction_requested and score_mode == "gaussian":
+        logger.debug(
+            "RELION native atomic coarse reduction unavailable for %d "
+            "translations; retaining the configured canonical reduction",
+            n_trans,
         )
     coarse_single_lane_canonical_requested = (
         _k1_coarse_single_lane_canonical_enabled()
@@ -2362,11 +2436,6 @@ def _compute_k_class_significance_batched(
             raise ValueError(
                 f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV}=8 requires the accepted "
                 f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1 path",
-            )
-        if not coarse_canonical_reduction_enabled:
-            raise ValueError(
-                f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV}=8 requires "
-                f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV}=1",
             )
     if (
         coarse_fused_projector_requested
@@ -2596,6 +2665,12 @@ def _compute_k_class_significance_batched(
                         if _RELION_COARSE_CANONICAL_REDUCTION_ENV not in os.environ
                         else "environment override"
                     ),
+                )
+            if coarse_native_atomic_reduction_enabled:
+                logger.warning(
+                    "Opt-in native RELION atomic coarse lane reduction enabled: "
+                    "translations=%d",
+                    n_trans,
                 )
             if coarse_single_lane_canonical_enabled:
                 logger.warning(

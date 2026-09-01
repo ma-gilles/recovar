@@ -342,7 +342,8 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
     assert "actual_batch_size.untyped_data()" in handler
     assert "cudaMemcpyDeviceToHost" in handler
     assert "kRelionVdamWorkerStreams" in handler
-    assert "canonical_reduction != 1" in handler
+    assert "canonical_reduction != 1" not in handler
+    assert "launch_relion_coarse_diff2_projector_f32<false, false>" in handler
     assert "launch_relion_coarse_diff2_projector_f32<false, true>" in handler
     assert "launch_relion_coarse_diff2_projector_f32<false, true, true>" in handler
     assert "NativeTexture" not in handler
@@ -377,6 +378,7 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
     wrapper = wrapper_source[decorator_start:wrapper_end]
     decorator = wrapper_source[decorator_start:wrapper_start]
     assert '"actual_batch_size"' not in decorator
+    assert "if not canonical_reduction:" not in wrapper
     assert "actual_batch_size = jnp.asarray(actual_batch_size)" in wrapper
     assert "_TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32" in wrapper
     assert "native_texture" not in wrapper.lower()
@@ -410,6 +412,54 @@ def test_k1_coarse_multistream_workers_are_default_off_and_fail_closed(monkeypat
         monkeypatch.setenv("RECOVAR_K1_COARSE_MULTISTREAM_WORKERS", invalid)
         with pytest.raises(ValueError, match="must be 0 or 8"):
             significance._k1_coarse_multistream_worker_count()
+
+
+def test_k1_coarse_native_atomic_reduction_is_default_off_and_fail_closed(
+    monkeypatch,
+):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    variable = "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._k1_coarse_native_atomic_reduction_enabled()
+    assert significance._k1_coarse_native_atomic_reduction_enabled(default=True)
+    monkeypatch.setenv(variable, "1")
+    assert significance._k1_coarse_native_atomic_reduction_enabled()
+    monkeypatch.setenv(variable, "0")
+    assert not significance._k1_coarse_native_atomic_reduction_enabled(default=True)
+    monkeypatch.setenv(variable, "invalid")
+    with pytest.raises(ValueError, match=variable):
+        significance._k1_coarse_native_atomic_reduction_enabled()
+
+
+@pytest.mark.parametrize(
+    ("translation_count", "expected"),
+    [(28, False), (29, True), (30, False), (116, False)],
+)
+def test_k1_coarse_native_atomic_selection_is_scoped_to_live_t29_gate(
+    translation_count,
+    expected,
+):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    assert (
+        significance._k1_coarse_native_atomic_reduction_selected(
+            requested=True,
+            score_mode="gaussian",
+            translation_count=translation_count,
+        )
+        is expected
+    )
+    assert not significance._k1_coarse_native_atomic_reduction_selected(
+        requested=True,
+        score_mode="normalized_cc",
+        translation_count=translation_count,
+    )
+    assert not significance._k1_coarse_native_atomic_reduction_selected(
+        requested=False,
+        score_mode="gaussian",
+        translation_count=translation_count,
+    )
 
 
 def test_k1_coarse_single_lane_canonical_is_default_off_and_fail_closed(
@@ -503,27 +553,7 @@ def test_relion_coarse_single_lane_canonical_requires_canonical_reduction():
         )
 
 
-def test_relion_coarse_multistream_rejects_noncanonical_reduction():
-    import recovar.cuda_backproject as cuda_backproject
-
-    with pytest.raises(ValueError, match="requires canonical_reduction=True"):
-        cuda_backproject.relion_coarse_diff2_projector_multistream_f32.__wrapped__(
-            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
-            jnp.eye(3, dtype=jnp.float32)[None, :, :],
-            jnp.zeros((1, 1), dtype=jnp.complex64),
-            jnp.zeros((1, 2), dtype=jnp.float32),
-            jnp.ones((1, 1), dtype=jnp.float32),
-            jnp.zeros((1,), dtype=jnp.float32),
-            jnp.asarray([0], dtype=jnp.int32),
-            current_size=1,
-            physical_image_size=1,
-            model_max_r=1,
-            actual_batch_size=jnp.asarray(1, dtype=jnp.int32),
-            canonical_reduction=False,
-        )
-
-
-def test_relion_coarse_multistream_actual_batch_is_one_runtime_trace(monkeypatch):
+def test_relion_coarse_multistream_reduction_mode_is_one_static_trace(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
 
     trace_count = 0
@@ -555,6 +585,8 @@ def test_relion_coarse_multistream_actual_batch_is_one_runtime_trace(monkeypatch
         )
         return compact_rotations, out_type
 
+    seen_canonical_reduction = set()
+
     def fake_ffi_call(target, out_type, **kwargs):
         del kwargs
         assert target == (
@@ -562,7 +594,7 @@ def test_relion_coarse_multistream_actual_batch_is_one_runtime_trace(monkeypatch
         )
 
         def invoke(*operands, **attrs):
-            del attrs
+            seen_canonical_reduction.add(int(attrs["canonical_reduction"]))
             actual_batch_size = operands[-1]
             return jnp.zeros(out_type.shape, dtype=out_type.dtype) + (
                 actual_batch_size.astype(out_type.dtype) * 0
@@ -588,21 +620,23 @@ def test_relion_coarse_multistream_actual_batch_is_one_runtime_trace(monkeypatch
         jnp.asarray([0], dtype=jnp.int32),
     )
     try:
-        for actual_batch_size in (3, 4, 1):
-            result = function(
-                *operands,
-                current_size=1,
-                physical_image_size=1,
-                model_max_r=1,
-                actual_batch_size=jnp.asarray(
-                    actual_batch_size,
-                    dtype=jnp.int32,
-                ),
-                canonical_reduction=True,
-            )
-            assert result.shape == (4, 1, 1)
-        assert trace_count == 1
-        assert function._cache_size() == 1
+        for canonical_reduction in (True, False):
+            for actual_batch_size in (3, 4, 1):
+                result = function(
+                    *operands,
+                    current_size=1,
+                    physical_image_size=1,
+                    model_max_r=1,
+                    actual_batch_size=jnp.asarray(
+                        actual_batch_size,
+                        dtype=jnp.int32,
+                    ),
+                    canonical_reduction=canonical_reduction,
+                )
+                assert result.shape == (4, 1, 1)
+        assert trace_count == 2
+        assert function._cache_size() == 2
+        assert seen_canonical_reduction == {0, 1}
     finally:
         function.clear_cache()
 
@@ -1077,6 +1111,162 @@ def test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope(
                     dtype=np.float32,
                 )
             assert canonical_np[0, rotation, translation] == canonical_total
+
+
+@pytest.mark.gpu
+def test_relion_coarse_vdam_multistream_atomic_stays_in_lane_envelope(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(53)
+    current_size = 8
+    model_max_r = 1
+    projector_size = 2 * model_max_r + 3
+    actual_batch_size = 2
+    physical_batch_size = 4
+    rotation_count = 129
+    translation_count = 29
+    compact_pixel_count = current_size * (current_size // 2 + 1)
+    projector = (
+        rng.normal(0.0, 0.02, (projector_size,) * 3)
+        + 1j * rng.normal(0.0, 0.02, (projector_size,) * 3)
+    ).astype(np.complex64)
+    angles = np.linspace(-np.pi, np.pi, rotation_count, endpoint=False)
+    rotations = np.zeros((rotation_count, 3, 3), dtype=np.float32)
+    rotations[:, 0, 0] = np.cos(angles)
+    rotations[:, 0, 1] = -np.sin(angles)
+    rotations[:, 1, 0] = np.sin(angles)
+    rotations[:, 1, 1] = np.cos(angles)
+    rotations[:, 2, 2] = 1.0
+    active_images = (
+        rng.normal(0.0, 0.02, (actual_batch_size, compact_pixel_count))
+        + 1j * rng.normal(0.0, 0.02, (actual_batch_size, compact_pixel_count))
+    ).astype(np.complex64)
+    active_weight = rng.uniform(
+        0.1,
+        3.0,
+        (actual_batch_size, compact_pixel_count),
+    ).astype(np.float32)
+    active_initial = rng.uniform(5.0, 15.0, actual_batch_size).astype(np.float32)
+    padding_initial = np.asarray([-12345.75, -0.0], dtype=np.float32)
+    padding_count = physical_batch_size - actual_batch_size
+    images = np.concatenate(
+        [
+            active_images,
+            np.full(
+                (padding_count, compact_pixel_count),
+                np.complex64(np.nan + 1j * np.nan),
+            ),
+        ],
+        axis=0,
+    )
+    weight = np.concatenate(
+        [
+            active_weight,
+            np.full(
+                (padding_count, compact_pixel_count),
+                np.nan,
+                dtype=np.float32,
+            ),
+        ],
+        axis=0,
+    )
+    initial_diff2 = np.concatenate([active_initial, padding_initial])
+    translation_angles = rng.uniform(
+        -0.2,
+        0.2,
+        (translation_count, 2),
+    ).astype(np.float32)
+    lookup = np.arange(compact_pixel_count, dtype=np.int32)
+
+    def multistream():
+        return cuda_backproject.relion_coarse_diff2_projector_multistream_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            jnp.asarray(images),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(initial_diff2),
+            jnp.asarray(lookup),
+            current_size=current_size,
+            physical_image_size=current_size,
+            model_max_r=model_max_r,
+            actual_batch_size=jnp.asarray(actual_batch_size, dtype=jnp.int32),
+            canonical_reduction=False,
+        )
+
+    with jax.default_device(gpu_device):
+        serial, lanes = cuda_backproject.relion_coarse_diff2_projector_lanes_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            jnp.asarray(active_images),
+            jnp.asarray(translation_angles),
+            jnp.asarray(active_weight),
+            jnp.asarray(active_initial),
+            jnp.asarray(lookup),
+            current_size=current_size,
+            physical_image_size=current_size,
+            model_max_r=model_max_r,
+        )
+        dispatched = multistream()
+        repeated = multistream()
+
+        serial_np = np.asarray(serial)
+        lanes_np = np.asarray(lanes)
+        dispatched_np = np.asarray(dispatched)
+        repeated_np = np.asarray(repeated)
+
+    assert lanes_np.shape == (actual_batch_size, rotation_count, 128)
+    np.testing.assert_array_equal(
+        lanes_np[:, :, 116:].view(np.uint32),
+        np.zeros(
+            (actual_batch_size, rotation_count, 12),
+            dtype=np.uint32,
+        ),
+    )
+    for batch in range(actual_batch_size):
+        for rotation in (0, 100, 127, 128):
+            for translation in range(translation_count):
+                thread_ids = translation + np.arange(4) * translation_count
+                partials = lanes_np[batch, rotation, thread_ids]
+                possible = set()
+                for order in permutations(range(4)):
+                    total = active_initial[batch]
+                    for lane in order:
+                        total = np.add(total, partials[lane], dtype=np.float32)
+                    possible.add(int(total.view(np.uint32)))
+                for output in (serial_np, dispatched_np, repeated_np):
+                    output_bits = int(
+                        output[batch, rotation, translation].view(np.uint32)
+                    )
+                    assert output_bits in possible
+
+    expected_padding = np.broadcast_to(
+        padding_initial[:, None, None],
+        (padding_count, rotation_count, translation_count),
+    )
+    for output in (dispatched_np, repeated_np):
+        np.testing.assert_array_equal(
+            output[actual_batch_size:].view(np.uint32),
+            expected_padding.view(np.uint32),
+        )
+        serial_flat = serial_np.reshape(actual_batch_size, -1)
+        output_flat = output[:actual_batch_size].reshape(actual_batch_size, -1)
+        np.testing.assert_array_equal(
+            np.argmin(output_flat, axis=1),
+            np.argmin(serial_flat, axis=1),
+        )
+        support_cutoff = np.partition(serial_flat, 31, axis=1)[:, 31:32]
+        np.testing.assert_array_equal(
+            output_flat <= support_cutoff,
+            serial_flat <= support_cutoff,
+        )
 
 
 @pytest.mark.gpu
