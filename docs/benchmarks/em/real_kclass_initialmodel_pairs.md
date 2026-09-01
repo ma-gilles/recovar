@@ -115,27 +115,29 @@ registry-ready performance result.
 
 ## Sealed rejected pairs from 2026-09-01
 
-Two fresh, same-H100, 10,000-particle K=4 pairs completed all eight native
-iterations at RECOVAR commit `9681a1727`, before the exact image-preprocessing
-and pre-E-step operand restorations. The old wrapper then failed because it
-requested a RECOVAR iteration-0 artifact that this source did not emit. An
-independent post-hoc audit of the sealed iteration-1--8 outputs also failed the
-scientific gates, so these runs are deliberately **not** benchmark-registry
-entries.
+Three fresh, same-H100, 10,000-particle K=4 pairs completed all eight native
+iterations. Two used RECOVAR commit `9681a1727`, before the exact
+image-preprocessing and pre-E-step operand restorations; their old wrapper
+failed on a nonexistent iteration-0 checkpoint and their sealed outputs were
+audited independently. The current-code 10076 pair used commit `3942224f5`,
+the exact `relion_cuda` backend, and the fixed iteration-1--8 wrapper. It wrote
+its complete embedded audit before exiting nonzero on the scientific gate.
+None is a benchmark-registry entry.
 
 | Dataset / batch | Pair job; audit job | Min FSC-AUC / assignment | Final matched FSC-AUC | Final RECOVAR / RELION counts | RECOVAR wall / HBM / RSS | RELION wall / HBM / RSS |
 | --- | --- | --- | --- | --- | --- | --- |
 | 10076 / 50 | 13301932; 13303753 | 0.02717 / 12.88% | 0.26493, 0.23100, 0.06122, 0.12403 | 1085, 5, 6992, 1918 / 4099, 10, 3990, 1901 | 2235.4 s / 17765 MiB / 15583768 KiB | 71.0 s / 79561 MiB / 2857780 KiB |
 | 10345 / 500 | 13300874; 13302406 | 0.03232 / 14.12% | 0.04951, 0.17794, 0.10876, 0.04203 | 1929, 1848, 3149, 3074 / 2669, 1007, 3264, 3060 | 1605.3 s / 66771 MiB / 17569148 KiB | 71.0 s / 79561 MiB / 2850728 KiB |
+| 10076 / 500, current code | 13304163; embedded | 0.02708 / 12.88% | 0.26279, 0.23099, 0.05964, 0.12461 | 1091, 5, 6963, 1941 / 4101, 10, 3985, 1904 | 2143.5 s / 66793 MiB / 17677612 KiB | 71.1 s / 79561 MiB / 2855152 KiB |
 
-The wall values above are first-to-last one-second monitor spans, and HBM is a
-sampled lower bound. No formal RECOVAR/RELION ratio is reported. The 10076
-batch-50 run demonstrates that bounded image batching reduced RECOVAR's peak
-HBM from the roughly 66.8 GiB seen in the incomplete batch-500 attempt (job
-13300875, which reached iteration 8 and then ran out of memory) to 17.8 GiB,
-but its approximately 37-minute RECOVAR span also exposes a throughput cost.
-The matched workload and a native timer still have to pass before performance
-can be admitted.
+The first two wall values are monitor-span approximations; the current-code
+pair uses the native process timers written into `pair_report.json`. HBM is a
+one-second sampled lower bound in every row. The current batch-500 run proves
+that all eight iterations now complete without OOM at 66,793 MiB peak HBM,
+independently of its failed science gate. The batch-50 run used only 17,765 MiB
+but did not improve wall time. The current same-GPU raw timing ratio was
+30.156, but it remains diagnostic: no formal RECOVAR/RELION ratio is admitted
+until the scientific gate passes.
 
 The complete machine-readable rejected-run ledger is
 `docs/benchmarks/em/diagnostics/real-kclass-initialmodel-20260901.json`. It
@@ -185,6 +187,17 @@ run root is
 Even a passing result remains diagnostic-only because it covers one checkpoint
 from one dataset and seed, not a complete trajectory or gold-standard
 refinement.
+
+The parent current-code run is job 13304163. Both native engines completed all
+eight iterations, and exact visited-particle identity matched at every audited
+checkpoint. Nevertheless, its full trajectory retained the same decisive
+failure: minimum FSC-AUC 0.02708, minimum assignment agreement 0.12885, and
+class 2 below 1% in both engines from iteration 5 onward. Thus the exact image
+preprocessing, restored pre-E-step operands, and corrected checkpoint contract
+fix harness and operand discrepancies but do not close the real K=4 map
+trajectory gap. The next causal discriminator must capture the shared
+200-particle iteration-1 boundary before reconstruction, beginning with the
+initial model/tau2/noise state and then coarse/fine scores and winners.
 
 ## Outputs and admission
 

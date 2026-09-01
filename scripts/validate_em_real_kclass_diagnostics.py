@@ -208,7 +208,7 @@ def validate_diagnostics(data: dict[str, Any]) -> None:
             {
                 "run_root",
                 "pair_job",
-                "posthoc_audit_job",
+                "audit_mode",
             },
             f"{identifier}.execution",
         )
@@ -218,11 +218,19 @@ def validate_diagnostics(data: dict[str, Any]) -> None:
             f"{identifier}.execution.pair_job",
             require_rejected_outcome=True,
         )
-        _validate_slurm_execution(
-            execution["posthoc_audit_job"],
-            f"{identifier}.execution.posthoc_audit_job",
-            require_rejected_outcome=True,
-        )
+        audit_mode = execution["audit_mode"]
+        if audit_mode == "independent_posthoc":
+            if "posthoc_audit_job" not in execution:
+                raise DiagnosticsValidationError(
+                    f"{identifier} independent audit requires posthoc_audit_job"
+                )
+            _validate_slurm_execution(
+                execution["posthoc_audit_job"],
+                f"{identifier}.execution.posthoc_audit_job",
+                require_rejected_outcome=True,
+            )
+        elif audit_mode != "embedded_pair_wrapper":
+            raise DiagnosticsValidationError(f"{identifier} has unsupported audit_mode")
 
         outcome = run["outcome"]
         _require_keys(
@@ -300,9 +308,11 @@ def validate_diagnostics(data: dict[str, Any]) -> None:
             "recovar_process_resources",
             "pair_stdout",
             "pair_stderr",
-            "posthoc_audit_stdout",
-            "posthoc_audit_stderr",
         }
+        if audit_mode == "independent_posthoc":
+            required_artifact_roles.update({"posthoc_audit_stdout", "posthoc_audit_stderr"})
+        else:
+            required_artifact_roles.add("pair_report")
         missing_artifact_roles = sorted(required_artifact_roles - set(artifact_roles))
         if missing_artifact_roles:
             raise DiagnosticsValidationError(

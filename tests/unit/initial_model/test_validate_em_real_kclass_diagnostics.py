@@ -66,6 +66,24 @@ def test_rejected_diagnostic_keeps_all_four_class_counts():
         validate_diagnostics(data)
 
 
+def test_embedded_rejected_diagnostic_requires_pair_report():
+    data = copy.deepcopy(_ledger())
+    run = data["runs"][-1]
+    assert run["execution"]["audit_mode"] == "embedded_pair_wrapper"
+    run["artifacts"] = [item for item in run["artifacts"] if item["role"] != "pair_report"]
+
+    with pytest.raises(DiagnosticsValidationError, match="pair_report"):
+        validate_diagnostics(data)
+
+
+def test_rejected_diagnostic_rejects_unknown_audit_mode():
+    data = copy.deepcopy(_ledger())
+    data["runs"][0]["execution"]["audit_mode"] = "unsealed"
+
+    with pytest.raises(DiagnosticsValidationError, match="unsupported audit_mode"):
+        validate_diagnostics(data)
+
+
 def test_causal_diagnostic_cannot_claim_benchmark_admission():
     data = copy.deepcopy(_ledger())
     data["causal_diagnostics"][0]["admission_status"] = "QUALIFIED"

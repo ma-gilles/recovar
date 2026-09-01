@@ -69,6 +69,7 @@
       },
       "execution": {
         "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_9681a1727_20260901_r3_b50",
+        "audit_mode": "independent_posthoc",
         "pair_job": {
           "job_id": "13301932",
           "state": "FAILED",
@@ -289,6 +290,7 @@
       },
       "execution": {
         "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_initialmodel_9681a1727_20260901_r2",
+        "audit_mode": "independent_posthoc",
         "pair_job": {
           "job_id": "13300874",
           "state": "FAILED",
@@ -440,6 +442,211 @@
         "This source predates the exact image-preprocessing and pre-E-step operand restorations; it is retained as causal pre-fix evidence, not current-code evidence.",
         "InitialModel has no independently refined half maps and therefore cannot support a final-resolution claim.",
         "The old wrapper failed after native completion, so the monitor-derived timings cannot be published as a formal performance ratio."
+      ]
+    },
+    {
+      "diagnostic_id": "empiar-10076-k4-initialmodel-3942224f5-b500-h100",
+      "admission_status": "REJECTED_DIAGNOSTIC",
+      "dataset": "EMPIAR-10076",
+      "scope": {
+        "kind": "matched fresh RELION/RECOVAR InitialModel trajectory diagnostic",
+        "K": 4,
+        "particles": 10000,
+        "checkpoints": [1, 2, 3, 4, 5, 6, 7, 8],
+        "symmetry": "C1",
+        "random_seed": 0,
+        "image_batch_size": 500,
+        "image_fourier_backend": "relion_cuda",
+        "same_gpu_serial": true,
+        "gold_standard_halfmaps_available": false
+      },
+      "source": {
+        "commit": "3942224f57c11a7f4ab82f9f4447d811f8fa346b",
+        "tree": "0aa7f34e91bc78f25f1c61974a0d235dfafc021e",
+        "checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_realgate_3942224f5_20260901",
+        "clean": true
+      },
+      "relion_source": {
+        "commit": "f2c1a384400aec37dc6805856a5ba645650a44f1",
+        "tree": "1aa4902144f521ae29834e5acf382ff41cf302d0",
+        "source_dir": "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src",
+        "executable": "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine",
+        "executable_sha256": "08d9151c976ec51e664060992db62d929e47282e0d8481d977f64e32f07fca39"
+      },
+      "inputs": [
+        {
+          "role": "particles_star",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.star",
+          "size_bytes": 1267736,
+          "sha256": "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f"
+        },
+        {
+          "role": "particles_stack",
+          "path": "/projects/CRYOEM/singerlab/mg6942/10076/test_new/downsampled/particles.256.mrcs",
+          "size_bytes": 34576532480,
+          "sha256": "70d0c19995221491d27c9323f21c40df27e153bdf1e783bc78c4d38fe41a9c09"
+        },
+        {
+          "role": "source_indices",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/source_indices.npy",
+          "size_bytes": 80128,
+          "sha256": "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d"
+        },
+        {
+          "role": "fixture_manifest",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/fixture_manifest.json",
+          "size_bytes": 585,
+          "sha256": "762645e0d77c53bb9ce61701e1fd0d03868021c494f84b73a281b39d753d9750"
+        }
+      ],
+      "command": {
+        "shell": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_realdata_science_equiv_20260830/.pixi/envs/default/bin/python3.11 -m scripts.run_em_real_kclass_initialmodel_pair --dataset EMPIAR-10076 --fixture-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair --relion-refine /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine --relion-source-dir /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src --K 4 --nr-iter 8 --random-seed 0 --tau2-fudge 4.0 --symmetry C1 --particle-diameter 200.0 --healpix-order 1 --oversampling 1 --offset-range 6.0 --offset-step 2.0 --padding-factor 1 --image-batch-size 500 --rotation-block-size 5000 --threads 8 --minimum-fsc-auc 0.999 --minimum-assignment-accuracy 0.995 --minimum-class-fraction 0.01 --checkpoint 1 --checkpoint 2 --checkpoint 3 --checkpoint 4 --checkpoint 5 --checkpoint 6 --checkpoint 7 --checkpoint 8",
+        "manifest": {
+          "role": "submission_manifest",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/submission_manifest.json",
+          "sha256": "f5560fd15ddbc0770bad8d9334ed4197470c36d8150664ab5cdd073676d4bd33"
+        }
+      },
+      "execution": {
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901",
+        "audit_mode": "embedded_pair_wrapper",
+        "pair_job": {
+          "job_id": "13304163",
+          "state": "FAILED",
+          "exit_code": "1:0",
+          "elapsed_s": 2638,
+          "node": "della-h19g2",
+          "req_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1",
+          "alloc_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1"
+        }
+      },
+      "outcome": {
+        "relion_native_completed": true,
+        "recovar_native_completed": true,
+        "native_iterations_per_engine": 8,
+        "wrapper_failure": "The current wrapper wrote its complete embedded trajectory audit and pair report, then exited 1 because the scientific FSC, assignment, and class-stability gates failed. Both native engines completed; this was not an OOM or harness failure."
+      },
+      "quality": {
+        "audit_result": "fail",
+        "trajectory_parity_result": "fail",
+        "minimum_matched_fsc_auc": 0.02707739460004996,
+        "minimum_assignment_accuracy": 0.12884615384615383,
+        "class_stability_result": "fail",
+        "final_iteration": 8,
+        "final_permutation_candidate_to_reference": [1, 2, 0, 3],
+        "final_matched_fsc_auc": [
+          0.2627901838308455,
+          0.23098966893486736,
+          0.059637208015744916,
+          0.12461133206048147
+        ],
+        "final_assignment_accuracy": 0.3359,
+        "final_candidate_counts": [1091, 5, 6963, 1941],
+        "final_reference_counts": [4101, 10, 3985, 1904],
+        "final_class_collapse": true,
+        "collapsed_candidate_classes_one_based": [2],
+        "collapsed_reference_classes_one_based": [2],
+        "thresholds": {
+          "minimum_per_class_fsc_auc": 0.999,
+          "minimum_class_assignment_accuracy": 0.995,
+          "minimum_class_fraction": 0.01
+        },
+        "metric_policy": "signed shellwise FSC and normalized non-DC FSC-AUC; no map correlation",
+        "gold_standard_halfmaps_available": false,
+        "gold_standard_halfmaps_missing_reason": "RELION and RECOVAR InitialModel emit one map per class, not independent half maps"
+      },
+      "performance": {
+        "recovar": {
+          "wall_s": 2143.4946254799142,
+          "wall_s_source": "GNU-measured native process wall time in pair_report.json",
+          "peak_hbm_mib": 66793,
+          "max_rss_kib": 17677612,
+          "measurement_limitations": [
+            "peak HBM is a one-second sampled lower bound",
+            "the run failed scientific admission, so these values are diagnostic and not a benchmark ratio"
+          ]
+        },
+        "relion": {
+          "wall_s": 71.07914258679375,
+          "wall_s_source": "GNU-measured native process wall time in pair_report.json",
+          "peak_hbm_mib": 79561,
+          "max_rss_kib": 2855152,
+          "measurement_limitations": [
+            "peak HBM is a one-second sampled lower bound",
+            "the run failed scientific admission, so these values are diagnostic and not a benchmark ratio"
+          ]
+        },
+        "observed_same_gpu_ratio": 30.156450225360032,
+        "formal_ratio": null
+      },
+      "artifacts": [
+        {
+          "role": "pair_sbatch",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/scripts/run_pair.sbatch",
+          "sha256": "38b7f99575c2ec1eadff514a7ac4decf022d5095933c070c11dbb5deda9632a0"
+        },
+        {
+          "role": "pair_report",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/pair_report.json",
+          "sha256": "af22573582ea68dc07099686ebb09a282ad3ed82b2998c5bc962454baefdc31d"
+        },
+        {
+          "role": "relion_command",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/relion/command.json",
+          "sha256": "0299d433ab027e39e38d6ef52e3cd86e96d017c5339b550221810566f2dea332"
+        },
+        {
+          "role": "recovar_command",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/recovar/command.json",
+          "sha256": "2a43a2f0beb985f24ae2d5c0d55fb25d0ce98138e423032bcb182e1c33869a0c"
+        },
+        {
+          "role": "relion_process_resources",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/relion/process_resources.txt",
+          "sha256": "b392af61890f12f6fb134d89c580095e1ecb9b34b11c3f5448990588f416f1b7"
+        },
+        {
+          "role": "recovar_process_resources",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/recovar/process_resources.txt",
+          "sha256": "d8102d2a24423676635bd587bee484e18088e16bdef5528d8eb1b6d0ff2ccd43"
+        },
+        {
+          "role": "relion_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/relion/gpu_monitor.csv",
+          "sha256": "47b6dc1925690236c4bdf09d574ef4d4ba07e8a32beb7e113fa87b9121dfb838"
+        },
+        {
+          "role": "recovar_gpu_monitor",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/recovar/gpu_monitor.csv",
+          "sha256": "afa181fdf5f3b2cfd299779a50c65af93c9f3ec7c165c2e7f900060a372a1a7f"
+        },
+        {
+          "role": "pair_stdout",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/logs/pair-13304163.out",
+          "sha256": "ec31aea2c45e77015cdbe7dd44fc23a58c99ad0535530824a981c8c7a0afcf88"
+        },
+        {
+          "role": "pair_stderr",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/logs/pair-13304163.err",
+          "sha256": "f9e0e7134ca782b6ff3c72da5225a3f6cf5f8beb9bbdb31d420ca0c561e13bf4"
+        },
+        {
+          "role": "audit_json",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/trajectory_audit.json",
+          "sha256": "855d2103fecb669926f44f8224afbb312ec1ce4aa5570660d3385b8be636a762"
+        },
+        {
+          "role": "shellwise_fsc_npz",
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_initialmodel_realgate_3942224f5_20260901/pair/trajectory_shellwise_fsc.npz",
+          "sha256": "89c0d485969e1b32358e97a89e03c9265996b2623667227c7f10f7a6887c7ead"
+        }
+      ],
+      "rejection_reasons": [
+        "The current-code trajectory gate failed: minimum matched FSC-AUC was 0.0270774 and minimum assignment agreement was 0.128846.",
+        "Both engines collapsed class 2 below the frozen 1% minimum from iteration 5 onward.",
+        "Both engines completed all eight iterations at batch 500 with RECOVAR peak HBM 66,793 MiB; memory passed independently of the science failure.",
+        "InitialModel has no independently refined half maps and therefore cannot support a final-resolution claim.",
+        "The measured same-GPU timings are retained as diagnostic evidence, but no formal ratio is admitted because the scientific gate failed."
       ]
     }
   ],
