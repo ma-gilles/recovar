@@ -831,7 +831,7 @@ run_native_arm() {{
   local command=(
     srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none {_quote(args.relion_capture_binary)}
     --continue {_quote(replay_optimiser)}
-    --o "${{arm_root}}/output/run" --iter 1 --auto_iter_max 1 --pool 3 --gpu 0 --j 8
+    --o "${{arm_root}}/output/run" --auto_iter_max 1 --pool 3 --gpu 0 --j 8
   )
   printf '%q ' "${{command[@]}}" > "${{ROOT}}/provenance/command_${{arm}}_${{SLURM_JOB_ID}}.sh"
   printf '\n' >> "${{ROOT}}/provenance/command_${{arm}}_${{SLURM_JOB_ID}}.sh"

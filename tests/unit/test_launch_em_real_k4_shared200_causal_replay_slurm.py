@@ -286,6 +286,8 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "srun --ntasks=1 --cpus-per-task=8" in script
     assert "--mpi=pmix" not in script
     assert "--gpu 0 --j 8" in script
+    assert "--auto_iter_max 1" in script
+    assert "--iter 1" not in script
     assert "RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=200" in script
     assert "RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=1" in script
     assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR" in script
