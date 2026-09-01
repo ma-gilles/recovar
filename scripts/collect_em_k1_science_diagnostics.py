@@ -341,8 +341,14 @@ def _load_volume(path: Path, frame: str) -> tuple[np.ndarray, float]:
     else:
         raise ValueError(f"unknown frame {frame!r}")
     array = np.asarray(volume, dtype=np.float32)
-    voxel = np.asarray(voxel_size, dtype=np.float64).reshape(-1)
+    voxel_array = np.asarray(voxel_size)
+    if voxel_array.dtype.names:
+        names = voxel_array.dtype.names
+        voxel = np.asarray([voxel_array[name].item() for name in ("x", "y", "z") if name in names], dtype=np.float64)
+    else:
+        voxel = np.asarray(voxel_size, dtype=np.float64).reshape(-1)
     _require(voxel.size >= 1 and np.all(np.isfinite(voxel)), f"invalid voxel size in {path}")
+    _require(float(np.max(voxel) - np.min(voxel)) <= 1.0e-5, f"anisotropic voxel size in {path}: {voxel}")
     return array, float(voxel[0])
 
 

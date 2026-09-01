@@ -82,3 +82,27 @@ def test_shell_fsc_identical_inputs_is_one() -> None:
     curve = calculator.curve_from_fourier(transform, transform)
 
     np.testing.assert_allclose(curve[np.isfinite(curve)], 1.0, rtol=0.0, atol=2.0e-7)
+
+
+def test_load_volume_accepts_structured_mrc_voxel_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "volume.mrc"
+    path.touch()
+    volume = np.zeros((8, 8, 8), dtype=np.float32)
+    voxel = np.array((1.31, 1.31, 1.31), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4")])[()]
+    monkeypatch.setattr(MODULE.helpers, "load_mrc", lambda *_args, **_kwargs: (volume, voxel))
+
+    observed_volume, observed_voxel = MODULE._load_volume(path, "recovar")
+
+    np.testing.assert_array_equal(observed_volume, volume)
+    assert observed_voxel == pytest.approx(1.31)
+
+
+def test_load_volume_rejects_anisotropic_voxel_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "volume.mrc"
+    path.touch()
+    volume = np.zeros((8, 8, 8), dtype=np.float32)
+    voxel = np.array((1.0, 1.0, 1.1), dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4")])[()]
+    monkeypatch.setattr(MODULE.helpers, "load_mrc", lambda *_args, **_kwargs: (volume, voxel))
+
+    with pytest.raises(ValueError, match="anisotropic voxel size"):
+        MODULE._load_volume(path, "recovar")
