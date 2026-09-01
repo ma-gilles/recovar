@@ -21,9 +21,12 @@ from scipy.optimize import linear_sum_assignment
 from recovar.data_io.starfile import read_star
 
 if __package__:
-    from scripts.summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
+    from scripts.summarize_em_completion_bench import (
+        _load_relion_volume,
+        normalized_fsc_auc,
+    )
 else:
-    from summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc, shell_fsc
+    from summarize_em_completion_bench import _load_relion_volume, normalized_fsc_auc
 
 
 class AuditError(RuntimeError):
@@ -34,16 +37,56 @@ def _pairwise_fsc_auc(
     candidate_maps: list[np.ndarray],
     reference_maps: list[np.ndarray],
 ) -> tuple[np.ndarray, dict[tuple[int, int], np.ndarray]]:
+    """Compute the full class matrix while transforming each map only once.
+
+    The per-pair product and ``bincount`` calls intentionally retain
+    :func:`shell_fsc`'s order so caching does not change any shell values.
+    """
     if not candidate_maps or len(candidate_maps) != len(reference_maps):
         raise ValueError("candidate and reference map lists must have the same non-zero length")
     shape = candidate_maps[0].shape
     if any(volume.shape != shape for volume in (*candidate_maps, *reference_maps)):
         raise ValueError("all class maps must have the same shape")
+
+    if len(shape) != 3 or len(set(shape)) != 1:
+        empty_curve = np.asarray([], dtype=np.float64)
+        scores = np.full(
+            (len(candidate_maps), len(reference_maps)),
+            normalized_fsc_auc(empty_curve),
+            dtype=np.float64,
+        )
+        curves = {
+            (candidate_class, reference_class): empty_curve.copy()
+            for candidate_class in range(len(candidate_maps))
+            for reference_class in range(len(reference_maps))
+        }
+        return scores, curves
+
+    n = int(shape[0])
+    freqs = np.fft.fftfreq(n) * n
+    z, y, x = np.meshgrid(freqs, freqs, freqs, indexing="ij")
+    shells = np.rint(np.sqrt(x * x + y * y + z * z)).astype(np.int32).ravel()
+
+    def prepare(volumes: list[np.ndarray]) -> list[tuple[np.ndarray, np.ndarray]]:
+        prepared = []
+        for volume in volumes:
+            transformed = np.fft.fftn(np.asarray(volume, dtype=np.float64))
+            shell_power = np.bincount(shells, weights=(np.abs(transformed) ** 2).ravel())
+            prepared.append((transformed, shell_power))
+        return prepared
+
+    candidate_prepared = prepare(candidate_maps)
+    reference_prepared = prepare(reference_maps)
     scores = np.empty((len(candidate_maps), len(reference_maps)), dtype=np.float64)
     curves: dict[tuple[int, int], np.ndarray] = {}
-    for candidate_class, candidate in enumerate(candidate_maps):
-        for reference_class, reference in enumerate(reference_maps):
-            curve = np.asarray(shell_fsc(candidate, reference), dtype=np.float64)
+    for candidate_class, (candidate_ft, candidate_power) in enumerate(candidate_prepared):
+        for reference_class, (reference_ft, reference_power) in enumerate(reference_prepared):
+            product = (candidate_ft * np.conj(reference_ft)).ravel()
+            numerator = np.bincount(shells, weights=np.real(product))
+            denom = np.sqrt(candidate_power * reference_power)
+            curve = np.full(numerator.shape, np.nan, dtype=np.float64)
+            np.divide(numerator, denom, out=curve, where=denom > 0.0)
+            curve = curve[: n // 2 - 1]
             curves[(candidate_class, reference_class)] = curve
             scores[candidate_class, reference_class] = normalized_fsc_auc(curve)
     return scores, curves

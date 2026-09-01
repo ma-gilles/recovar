@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from scripts import audit_em_real_kclass_initialmodel as audit
+from scripts.summarize_em_completion_bench import shell_fsc
 
 pytestmark = pytest.mark.unit
 
@@ -23,6 +24,54 @@ def test_fsc_assignment_recovers_swapped_classes_without_correlation():
 
     assert permutation == (1, 0)
     np.testing.assert_allclose(scores[np.arange(2), permutation], 1.0, atol=1e-12)
+
+
+def test_pairwise_fsc_cache_is_exact_and_transforms_each_k4_map_once(monkeypatch):
+    candidate = [_volume(seed) for seed in range(10, 14)]
+    reference = [_volume(seed) for seed in range(20, 24)]
+    expected_curves = {
+        (candidate_class, reference_class): np.asarray(
+            shell_fsc(candidate_map, reference_map),
+            dtype=np.float64,
+        )
+        for candidate_class, candidate_map in enumerate(candidate)
+        for reference_class, reference_map in enumerate(reference)
+    }
+    expected_scores = np.asarray(
+        [
+            [
+                audit.normalized_fsc_auc(expected_curves[(candidate_class, reference_class)])
+                for reference_class in range(4)
+            ]
+            for candidate_class in range(4)
+        ],
+        dtype=np.float64,
+    )
+    original_fftn = np.fft.fftn
+    original_meshgrid = np.meshgrid
+    fft_shapes: list[tuple[int, ...]] = []
+    meshgrid_calls = 0
+
+    def counted_fftn(array):
+        fft_shapes.append(np.asarray(array).shape)
+        return original_fftn(array)
+
+    def counted_meshgrid(*args, **kwargs):
+        nonlocal meshgrid_calls
+        meshgrid_calls += 1
+        return original_meshgrid(*args, **kwargs)
+
+    monkeypatch.setattr(audit.np.fft, "fftn", counted_fftn)
+    monkeypatch.setattr(audit.np, "meshgrid", counted_meshgrid)
+
+    actual_scores, actual_curves = audit._pairwise_fsc_auc(candidate, reference)
+
+    assert fft_shapes == [(16, 16, 16)] * 8
+    assert meshgrid_calls == 1
+    np.testing.assert_array_equal(actual_scores, expected_scores)
+    assert actual_curves.keys() == expected_curves.keys()
+    for pair, expected in expected_curves.items():
+        np.testing.assert_array_equal(actual_curves[pair], expected)
 
 
 def test_assignment_accuracy_applies_map_permutation():
