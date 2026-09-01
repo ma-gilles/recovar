@@ -35,7 +35,11 @@ readonly CUDA_BUILD_TOOLKIT=/usr/local/cuda-12.6
 readonly CUDA_RUNTIME_TOOLKIT=/usr/local/cuda-13.1
 readonly RELION_RUNTIME=/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717
 readonly MPI_ROOT=/usr/local/openmpi/cuda-12.6/4.1.6/gcc
-readonly CUSPARSE_LIBRARY=${CUDA_BUILD_TOOLKIT}/lib64/libcusparse.so.12
+# The ELF loader canonicalizes LD_PRELOAD before Python observes the
+# environment.  Seal the canonical file here so the launch contract compares
+# the same value that the arm process will actually receive.
+readonly CUSPARSE_LIBRARY=$(/usr/bin/readlink -f -- \
+  "${CUDA_BUILD_TOOLKIT}/lib64/libcusparse.so.12")
 readonly CHECKPOINT_ITERATION=180
 readonly PROFILED_ITERATION=181
 readonly NR_ITER_SCHEDULE=200

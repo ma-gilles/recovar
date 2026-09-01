@@ -1101,6 +1101,7 @@ def test_slurm_runner_rejects_pre_arm_loader_and_toolchain_overrides():
     assert '${RELION_RUNTIME:-' not in source
     assert '${MPI_ROOT:-' not in source
     assert '${CUSPARSE_LIBRARY:-' not in source
+    assert 'readonly CUSPARSE_LIBRARY=$(/usr/bin/readlink -f --' in source
     assert "MAKEFILES=" not in source
     assert "NVCC_CCBIN=" not in source
     assert "/usr/bin/env -i HOME=\"${SEALED_BUILD_HOME}\" PATH=/usr/bin:/bin" in source
