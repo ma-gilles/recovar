@@ -24,10 +24,57 @@ def _set_dispatch_capture_executable(tmp_path, monkeypatch):
 def test_default_cases_cover_all_available_cryobench_pdb_families():
     pdb_dirs = {case.pdb_dir for case in launcher.DEFAULT_CASES}
 
+    assert len(launcher.DEFAULT_CASES) == 29
+    assert len({case.index for case in launcher.DEFAULT_CASES}) == 29
+    assert len({case.name for case in launcher.DEFAULT_CASES}) == 29
     assert launcher.DEFAULT_RIBO_PDB_DIR in pdb_dirs
     assert launcher.DEFAULT_IGG_PDB_DIR in pdb_dirs
     assert launcher.DEFAULT_TOMOTWIN_PDB_DIR in pdb_dirs
     assert launcher.DEFAULT_IGG_RL_PDB_DIR in pdb_dirs
+
+
+def test_default_cases_cover_k1_stress_axes_and_k4_invariance_controls():
+    cases = {case.index: case for case in launcher.DEFAULT_CASES}
+
+    assert cases[16].noise_level == 10.0
+    assert cases[17].dataset_params_option == "noctf"
+    assert (cases[18].noise_scale_std, cases[18].contrast_std) == (0.5, 0.5)
+    assert cases[19].image_offset_n_std == 1.0
+    assert cases[20].percent_outliers == 0.5
+    assert cases[21].noise_level == 0.2
+    assert cases[22].dataset_params_option == "kent"
+    assert cases[23].class_distribution == "custom:0.80,0.10,0.07,0.03"
+    assert (cases[24].grid_size, cases[24].pdb_bfactor) == (256, 0.0)
+    assert {cases[28].seed, cases[29].seed} == {3802, 4802}
+
+    invariance_cases = [cases[index] for index in (25, 26, 27)]
+    scientific_fields = (
+        "pdb_dir",
+        "n_classes",
+        "n_images",
+        "grid_size",
+        "noise_level",
+        "noise_model",
+        "dataset_params_option",
+        "class_distribution",
+        "seed",
+        "pdb_bfactor",
+        "init_radius",
+        "noise_scale_std",
+        "contrast_std",
+        "volume_radius",
+        "image_offset_n_std",
+        "percent_outliers",
+        "max_iter",
+    )
+    assert all(
+        tuple(getattr(case, field) for field in scientific_fields)
+        == tuple(getattr(invariance_cases[0], field) for field in scientific_fields)
+        for case in invariance_cases[1:]
+    )
+    assert [
+        (case.image_batch_size, case.rotation_block_size) for case in invariance_cases
+    ] == [(50, 8192), (17, 8192), (50, 257)]
 
 
 def test_extra_pdb_family_case_can_be_selected_by_name(monkeypatch):
@@ -232,6 +279,40 @@ def test_case_jobs_build_or_reuse_one_sealed_cuda_lib_under_lock(tmp_path):
     assert 'mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"' in text
     assert 'sha256sum "${RECOVAR_CUDA_LIB}" > "${RECOVAR_CUDA_LIB}.sha256"' in text
     assert 'sha256sum --check "${RECOVAR_CUDA_LIB}.sha256"' in text
+
+
+def test_case_job_uses_case_specific_batch_invariance_overrides(tmp_path):
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    case = launcher.DEFAULT_CASES[25]
+
+    script = launcher.write_case_script(
+        case=case,
+        scratch_dir=tmp_path,
+        jobs_dir=jobs_dir,
+        cuda_lib=tmp_path / "librecovar_cuda.so",
+        account="gilles",
+        partition="cryoem",
+        constraint="h100",
+        exclusive=False,
+        cuda_module="cudatoolkit/12.8",
+        relion_src_dir=tmp_path / "relion_src",
+        relion_module="relion/5.0.1/gcc-11.5.0-gpu",
+        relion_refine_mpi="/instrumented/relion_refine_mpi",
+        relion_mpi_ranks=3,
+        relion_pool=3,
+        particle_diameter=380.0,
+        image_batch_size=50,
+        rotation_block_size=2000,
+        gt_align_refine_orders="",
+        noise_rng_batch_size="",
+    )
+
+    text = script.read_text()
+    assert '"image_batch_size": 17' in text
+    assert '"rotation_block_size": 8192' in text
+    assert "--image_batch_size 17" in text
+    assert "--rotation_block_size 8192" in text
 
 
 def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
@@ -478,6 +559,30 @@ def test_seed_offset_renames_case_and_updates_generated_commands(tmp_path, monke
     assert "      --random_seed 2902 \\" in script
     assert "EM_KCLASS_MATRIX_SEED_OFFSET=100" in submission
     assert "EM_KCLASS_MATRIX_SEED=" in submission
+
+
+def test_seed_offset_applies_when_all_default_cases_are_selected(monkeypatch):
+    monkeypatch.delenv("EM_KCLASS_MATRIX_CASES", raising=False)
+    args = type(
+        "Args",
+        (),
+        {
+            "case": [],
+            "max_iter_override": None,
+            "time_limit_override": None,
+            "seed_override": None,
+            "seed_offset": 10_000,
+        },
+    )()
+
+    cases = launcher.selected_cases(args)
+
+    assert len(cases) == len(launcher.DEFAULT_CASES)
+    assert all(
+        updated.seed == original.seed + 10_000
+        for updated, original in zip(cases, launcher.DEFAULT_CASES, strict=True)
+    )
+    assert all(updated.name.endswith(f"_seed{updated.seed}") for updated in cases)
 
 
 def test_seed_override_and_seed_offset_are_mutually_exclusive(monkeypatch):
