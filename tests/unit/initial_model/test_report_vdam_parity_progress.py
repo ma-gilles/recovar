@@ -217,6 +217,16 @@ def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(score
     )
     assert repeat_panel["performance"]["material_runtime_gate_pass"] is True
     assert repeat_panel["long_trajectory_authorized"] is False
+    true200_review = repeat_panel["true_200_harness_review"]
+    assert true200_review["sealed_commit"] == "09d11dba797910bbdc067e1b3b52c709085bbc26"
+    assert true200_review["review_result"] == "NO_GO_NOT_SUBMITTED"
+    assert true200_review["slurm_job_submitted"] is False
+    assert true200_review["frozen_scores_changed"] is False
+    assert true200_review["blocking_findings"]["complement_pair_minimum_exact_p"] == pytest.approx(
+        2 / 36
+    )
+    assert true200_review["blocking_findings"]["synthetic_final_lane_shift_map_gate_passed_incorrectly"] is True
+    assert "crossed 6+6" in true200_review["repair_scope"]
     incremental = gate["incremental_atomic_serial_gate"]
     assert gate["incremental_atomic_baseline_evaluated"] is True
     assert gate["tracking_derived_port_evaluated"] is True
@@ -240,6 +250,9 @@ def test_clean_batched_lane_gate_preserves_strict_failure_and_runtime_gain(score
     assert repeat_panel["acceptance_config_sha256"] in rendered
     assert repeat_panel["analyzer_source_sha256"] in rendered
     assert "The frozen n=2 rejection is not overwritten" in rendered
+    assert "09d11dba7979" in rendered
+    assert "NO GO NOT SUBMITTED" in rendered
+    assert "crossed 6+6" in rendered
 
 
 def test_suite_definition_identity_and_bytes_are_frozen() -> None:

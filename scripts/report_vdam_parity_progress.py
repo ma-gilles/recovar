@@ -438,7 +438,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "71b43dea15931d928516b5bd23f6998acb7be341c56986a41e1e621df257d8b7"
+PERFORMANCE_GATE_UPDATES_SHA256 = "79dc4298da92b90f88137595634b8ac69e76c9f2d04f381567a2d6d7ec29d199"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -889,6 +889,27 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
             "replicated_roundoff_equivalence_gate", {}
         ).get("long_trajectory_authorized")
         is False
+        and gate_updates.get("coarse_atomic_batched_lanes", {})
+        .get("replicated_roundoff_equivalence_gate", {})
+        .get("true_200_harness_review", {})
+        .get("sealed_commit")
+        == "09d11dba797910bbdc067e1b3b52c709085bbc26"
+        and gate_updates.get("coarse_atomic_batched_lanes", {})
+        .get("replicated_roundoff_equivalence_gate", {})
+        .get("true_200_harness_review", {})
+        .get("review_result")
+        == "NO_GO_NOT_SUBMITTED"
+        and gate_updates.get("coarse_atomic_batched_lanes", {})
+        .get("replicated_roundoff_equivalence_gate", {})
+        .get("true_200_harness_review", {})
+        .get("slurm_job_submitted")
+        is False
+        and gate_updates.get("coarse_atomic_batched_lanes", {})
+        .get("replicated_roundoff_equivalence_gate", {})
+        .get("true_200_harness_review", {})
+        .get("blocking_findings", {})
+        .get("synthetic_final_lane_shift_map_gate_passed_incorrectly")
+        is True
         and gate_updates.get("coarse_atomic_batched_lanes", {}).get(
             "replicated_roundoff_equivalence_gate", {}
         ).get("job_id")
@@ -1077,6 +1098,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     batched_repeat_panel = batched_lane_gate["replicated_roundoff_equivalence_gate"]
     batched_repeat_science = batched_repeat_panel["science"]
     batched_repeat_performance = batched_repeat_panel["performance"]
+    true200_review = batched_repeat_panel["true_200_harness_review"]
     direct_xhalf_gate = gate_updates["direct_relion_xhalf"]
     posterior_executor_gate = gate_updates["shared_posterior_executor"]
     remaining_profile = gate_updates["remaining_profile_decomposition"]
@@ -1121,7 +1143,8 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "the clean tracking-derived native-atomic T=29 batched-lane port cuts warm wall about 9%, but its frozen "
         "two-repeat maximum-envelope smoke gate fails narrowly. The separate 8+8 panel passes its numerical and "
         "material-runtime gates after an independently reviewed serializer-only recovery. The path remains "
-        "default-off and no long trajectory is authorized until a new sealed true-200 harness exists. |",
+        "default-off. The first sealed true-200 harness received independent NO-GO and was not submitted; its "
+        "underpowered statistics and provenance defects are being repaired as a crossed 6+6 gate. |",
         "| Numerical policy | non-scoring | Mathematical equivalence is required; bitwise identity is not a universal "
         "requirement. Tiny differences are acceptable only as stable, unbiased, non-growing, repeat-bounded noise "
         "that preserves discrete choices, basin, and final quality, and only with a material, large, reproducible "
@@ -1197,7 +1220,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"acceptance contract is `{batched_repeat_panel['acceptance_config_sha256']}`. The original failure/absent "
         "COMPLETED marker remain preserved. Recovered JSON SHA-256 "
         f"`{batched_repeat_panel['report_json_sha256']}`; recovery provenance SHA-256 "
-        f"`{batched_repeat_panel['recovery_provenance_sha256']}`. The frozen n=2 rejection is not overwritten. | "
+        f"`{batched_repeat_panel['recovery_provenance_sha256']}`. The frozen n=2 rejection is not overwritten. "
+        f"The first true-200 seal `{true200_review['sealed_commit'][:12]}` was independently "
+        f"**{true200_review['review_result'].replace('_', ' ')}** and no Slurm job was submitted. | "
         f"{batched_repeat_panel['long_trajectory_blocker']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
@@ -1629,9 +1654,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "1. Keep the clean tracking-derived batched-lane port default-off. Its 9.03% warm-wall gain is material, "
             "but immutable job 13285647 remains a frozen two-repeat strict FAIL. The separately predeclared 8+8 "
             f"panel `{batched_repeat_panel['job_id']}` passes after independently reviewed serializer-only recovery "
-            f"at `{batched_repeat_panel['serializer_recovery_commit'][:10]}`. Build and seal a same-binary 4+4 "
-            "true-200 no-growth, basin, final-quality, and "
-            "end-to-end runtime harness; do not submit the inadequate old 20-iteration ABBA scaffold.",
+            f"at `{batched_repeat_panel['serializer_recovery_commit'][:10]}`. The first true-200 seal "
+            f"`{true200_review['sealed_commit'][:12]}` received independent NO-GO and was not submitted. Repair it "
+            "as a crossed 6+6 no-growth, variance-growth, basin, final-quality, provenance, and end-to-end runtime "
+            "gate, then obtain a fresh independent review before Slurm.",
             "2. Keep direct x-half default-off: it is mathematically qualified and makes finalization 85.40% faster, "
             "but finalization is too small and warm wall improves only 2.12%. Preserve the primitive for a future "
             "larger fused finalization redesign; do not spend a trajectory on it alone.",

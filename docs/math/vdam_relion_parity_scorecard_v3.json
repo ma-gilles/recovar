@@ -1980,7 +1980,25 @@
         "default_enablement_allowed": false,
         "true_200_harness_construction_authorized_after_review": true,
         "long_trajectory_authorized": false,
-        "long_trajectory_blocker": "The reusable trajectory scaffold is only 2+2 through iteration 20 and its analyzer is unsealed; build and review a same-binary 4+4 true-200 drift, basin, quality, and runtime gate before submission."
+        "true_200_harness_review": {
+          "sealed_commit": "09d11dba797910bbdc067e1b3b52c709085bbc26",
+          "review_result": "NO_GO_NOT_SUBMITTED",
+          "slurm_job_submitted": false,
+          "frozen_scores_changed": false,
+          "blocking_findings": {
+            "resume_provenance_append_only": false,
+            "declared_no_growth_test_has_rejection_power": false,
+            "blocked_assignments": 36,
+            "complement_pair_minimum_exact_p": 0.05555555555555555,
+            "synthetic_final_lane_shift_over_control_noise": 10.0,
+            "synthetic_final_lane_shift_map_gate_passed_incorrectly": true,
+            "continuous_state_direct_sum_geometry_preserved": false,
+            "map_permutation_preprocessing_label_invariant": false,
+            "all_launch_inputs_reproducibly_resolved": false
+          },
+          "repair_scope": "Replace the underpowered 4+4 design with a crossed 6+6 three-block panel, separately reject directional centroid drift and nondirectional variance growth, aggregate continuous-state squared-distance Grams as a direct sum, use label-invariant map scaling, make resume evidence append-only, and seal every launch input before fresh independent review."
+        },
+        "long_trajectory_blocker": "The first sealed true-200 harness at 09d11dba7979 received independent NO-GO and was not submitted: its 4+4 complement-symmetric no-growth statistic cannot reject at alpha 0.05, a final-only lane shift 10x control noise passed, continuous-state feature aggregation distorted direct-sum geometry, resume evidence was not append-only, and launch inputs were not fully resolved. Repair and independently review the crossed 6+6 gate before any long submission."
       },
       "prior_experimental_combined_gate": {
         "job_id": "13284729",
@@ -2029,7 +2047,7 @@
       },
       "integration_caveat": "The clean tracking-derived port preserves shared EM/VDAM atomic math and improves warm wall 9.03%, but its frozen n=2 maximum-cross-versus-maximum-within smoke gate failed by 16.30% cold and 7.66% warm. The immutable report remains a strict FAIL even though discrete outputs are exact and bias, scale, and cross/within relative-L2 interleaving support a bounded roundoff hypothesis.",
       "decision": "REPLICATED_ROUNDOFF_AND_RUNTIME_PASS_AFTER_INDEPENDENT_SERIALIZER_RECOVERY_REVIEW",
-      "next_gate": "Keep the frozen n=2 strict result visibly failed. Build and independently review a same-binary 4+4 true-200 no-growth, basin, final-quality, and end-to-end runtime harness. Do not submit the old 20-iteration ABBA scaffold and do not enable the default."
+      "next_gate": "Keep the frozen n=2 strict result visibly failed. The first true-200 seal 09d11dba7979 received independent NO-GO and was not submitted. Repair it as a same-binary crossed 6+6 directional-drift, variance-growth, basin, final-quality, append-only provenance, launch-input, and end-to-end runtime gate; obtain a fresh independent review before Slurm and do not enable the default."
     },
     "direct_relion_xhalf": {
       "status": "MATH_ACCEPTED_PERFORMANCE_REJECTED",
