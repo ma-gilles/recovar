@@ -284,9 +284,10 @@ def _write_particle_inputs(
     _require(source_grid == 256, "source fixture image grid changed")
     optics.loc[:, "rlnImageSize"] = profile.grid_size
     optics.loc[:, "rlnImagePixelSize"] = source_apix * source_grid / profile.grid_size
-    stack_name = f"particles.{profile.grid_size}.mrcs"
+    stack_path = STACKS[profile.grid_size].resolve()
+    _require(stack_path.is_file(), f"runtime particle stack is unavailable: {stack_path}")
     selected.loc[:, "rlnImageName"] = [
-        f"{str(value).split('@', 1)[0]}@{stack_name}" for value in selected["rlnImageName"]
+        f"{str(value).split('@', 1)[0]}@{stack_path}" for value in selected["rlnImageName"]
     ]
     selected_names = selected["rlnImageName"].astype(str).tolist()
     selected_source_indices = [
@@ -308,8 +309,6 @@ def _write_particle_inputs(
         _require(len(half_particles) > 0, f"frozen half {half_id} is empty")
         half_star = data_dir / "particles.star"
         starfile.write({"optics": optics, "particles": half_particles}, half_star, overwrite=True)
-        stack_link = data_dir / stack_name
-        stack_link.symlink_to(STACKS[profile.grid_size].resolve())
         names = half_particles["rlnImageName"].astype(str).tolist()
         halves.append(
             {
@@ -999,6 +998,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "ordered_image_names_sha256": sha256_strings(selected_names),
             "selected_source_indices": selected_source_indices,
             "ordered_source_indices_sha256": sha256_ints(selected_source_indices),
+            "particle_stack_path": str(STACKS[profile.grid_size].resolve()),
+            "particle_stack_sha256": stack_hash,
         },
         "halves": halves,
         "input_artifacts": input_artifacts,

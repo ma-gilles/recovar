@@ -24,7 +24,9 @@ def _write_particles(path: Path, names: list[str], subsets: list[int], classes=N
 
 
 def _split_manifest(tmp_path: Path) -> dict:
-    selected = [f"{index}@particles.mrcs" for index in range(1, 7)]
+    stack = tmp_path / "particles.mrcs"
+    stack.write_bytes(b"sealed-particle-stack")
+    selected = [f"{index}@{stack.resolve()}" for index in range(1, 7)]
     origin_names = [f"{index}@origin.mrcs" for index in range(1, 7)]
     origin = tmp_path / "origin.star"
     source_indices = tmp_path / "source_indices.npy"
@@ -48,9 +50,19 @@ def _split_manifest(tmp_path: Path) -> dict:
             "source_indices_sha256": audit.sha256_file(source_indices),
             "selected_source_indices": list(range(6)),
             "ordered_source_indices_sha256": audit.sha256_ints(list(range(6))),
+            "particle_stack_path": str(stack.resolve()),
+            "particle_stack_sha256": audit.sha256_file(stack),
             "selection_source_json": None,
             "selection_source_sha256": None,
         },
+        "input_artifacts": [
+            {
+                "role": "particle_stack_grid128",
+                "path": str(stack.resolve()),
+                "size_bytes": stack.stat().st_size,
+                "sha256": audit.sha256_file(stack),
+            }
+        ],
         "halves": [
             {
                 "half": 1,
@@ -97,6 +109,26 @@ def test_particle_split_rejects_self_consistent_generated_relabel(tmp_path: Path
     )
 
     with pytest.raises(audit.AuditError, match="immutable random-subset labels"):
+        audit.validate_particle_split(manifest)
+
+
+def test_particle_split_rejects_self_consistent_runtime_stack_redirection(tmp_path: Path) -> None:
+    manifest = _split_manifest(tmp_path)
+    replacement = tmp_path / "replacement.mrcs"
+    replacement.write_bytes(b"different-particle-stack")
+    selected = [f"{index}@{replacement.resolve()}" for index in range(1, 7)]
+    selection = manifest["particle_selection"]
+    selection["selected_image_names"] = selected
+    selection["ordered_image_names_sha256"] = audit.sha256_strings(selected)
+    _write_particles(Path(selection["source_particles_star"]), selected, [1, 2, 1, 2, 1, 2])
+    for row, names, subsets in (
+        (manifest["halves"][0], selected[0::2], [1, 1, 1]),
+        (manifest["halves"][1], selected[1::2], [2, 2, 2]),
+    ):
+        _write_particles(Path(row["particles_star"]), names, subsets)
+        row["ordered_image_names_sha256"] = audit.sha256_strings(names)
+
+    with pytest.raises(audit.AuditError, match="sealed absolute particle stack"):
         audit.validate_particle_split(manifest)
 
 
@@ -231,15 +263,51 @@ def test_class_matching_requires_unique_exact_optimum_and_records_margin() -> No
         ]
     )
 
-    permutation, metadata = audit._hungarian_to_anchor(scores, label="known")
+    permutation, metadata = audit._hungarian_to_anchor(
+        scores,
+        label="known",
+        min_absolute_margin=audit.EXPECTED_THRESHOLDS[
+            "permutation_objective_margin_abs_min"
+        ],
+        min_relative_margin=audit.EXPECTED_THRESHOLDS[
+            "permutation_objective_margin_rel_min"
+        ],
+    )
 
     assert permutation == [1, 3, 0, 2]
     assert metadata["exact_optimum_count"] == 1
     assert metadata["objective_margin"] > 0.0
+    assert metadata["relative_objective_margin"] > 0.0
     assert metadata["permutations_exhaustively_checked"] == 24
 
     with pytest.raises(audit.AuditError, match="optimum is not unique"):
-        audit._hungarian_to_anchor(np.ones((4, 4)), label="tied")
+        audit._hungarian_to_anchor(
+            np.ones((4, 4)),
+            label="tied",
+            min_absolute_margin=0.01,
+            min_relative_margin=0.0025,
+        )
+
+    near_tie = np.eye(4, dtype=np.float64)
+    near_tie[0, 0] += 1.0e-14
+    near_tie[1, 1] += 1.0e-14
+    near_tie[0, 1] = 1.0
+    near_tie[1, 0] = 1.0
+    with pytest.raises(audit.AuditError, match="absolute objective margin"):
+        audit._hungarian_to_anchor(
+            near_tie,
+            label="near-tied",
+            min_absolute_margin=0.01,
+            min_relative_margin=0.0025,
+        )
+
+    with pytest.raises(audit.AuditError, match="relative objective margin"):
+        audit._hungarian_to_anchor(
+            scores,
+            label="relative-margin",
+            min_absolute_margin=0.0,
+            min_relative_margin=0.99,
+        )
 
 
 def _analysis_args(tmp_path: Path, *extra: str):
@@ -335,6 +403,39 @@ def test_prospective_class_gate_accepts_identity_and_rejects_halfmap_loss() -> N
         voxel_size=3.0,
         thresholds=audit.EXPECTED_THRESHOLDS,
     )
+    assert "class001:unmasked:half_band_auc_drop" in failures
+
+
+def test_unmasked_relion_resolved_band_cannot_be_rescued_by_masked_fsc() -> None:
+    curves = _identity_curves(1)
+    relion_unmasked = np.full(65, 0.8, dtype=np.float64)
+    relion_unmasked[40:] = 0.0
+    recovar_unmasked = relion_unmasked.copy()
+    recovar_unmasked[10:] = 0.0
+    masked = np.full(65, 0.8, dtype=np.float64)
+    masked[55:] = 0.0
+    prefix = "class001_"
+    curves[prefix + "relion_halfmap_unmasked"] = relion_unmasked
+    curves[prefix + "recovar_halfmap_unmasked"] = recovar_unmasked
+    curves[prefix + "relion_halfmap_common_masked"] = masked
+    curves[prefix + "recovar_halfmap_common_masked"] = masked.copy()
+    for route in ("unmasked", "common_masked"):
+        for name in ("cross_merged", "cross_half1", "cross_half2"):
+            curves[prefix + f"{name}_{route}"] = np.ones(65, dtype=np.float64)
+
+    metrics, failures = audit._science_metrics_for_class(
+        1,
+        curves,
+        box_size=128,
+        voxel_size=3.0,
+        thresholds=audit.EXPECTED_THRESHOLDS,
+    )
+
+    assert metrics["unmasked"]["relion_crossing_shell"] == 40
+    assert metrics["unmasked"]["recovar_crossing_shell"] == 10
+    assert metrics["unmasked"]["relion_unmasked_resolved_last_shell"] == 39
+    assert metrics["common_masked"]["relion_crossing_shell"] == 55
+    assert metrics["common_masked"]["relion_unmasked_resolved_last_shell"] == 39
     assert "class001:unmasked:half_band_auc_drop" in failures
 
 
@@ -498,3 +599,20 @@ def test_setup_and_qualification_allocations_are_both_required(tmp_path: Path) -
     _write_slurm_record(setup, allocated_gpus=2)
     with pytest.raises(audit.AuditError, match="setup job did not allocate exactly one GPU"):
         audit.validate_slurm_allocation(manifest)
+
+
+def test_engine_wall_records_must_match_qualification_job() -> None:
+    performance = {
+        engine: [{"slurm_job_id": "1234"}, {"slurm_job_id": "1234"}]
+        for engine in ("relion", "recovar")
+    }
+
+    result = audit.validate_engine_job_binding(
+        performance,
+        qualification_job_id="1234",
+    )
+
+    assert result["all_bound"] is True
+    performance["recovar"][1]["slurm_job_id"] = "9999"
+    with pytest.raises(audit.AuditError, match="not bound to qualification job 1234"):
+        audit.validate_engine_job_binding(performance, qualification_job_id="1234")

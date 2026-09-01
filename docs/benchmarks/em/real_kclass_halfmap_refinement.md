@@ -48,6 +48,9 @@ Three profiles are frozen:
 
 The particle stacks, source STAR, source indices, selection, initial maps, and
 instrumented RELION executable have frozen SHA-256 values in the launcher.
+Every generated `rlnImageName` contains the sealed particle stack's absolute
+path; the engines therefore cannot follow an unsealed run-local symlink while
+the launcher verifies a different canonical file.
 The executable, RELION base commit/tree, and exact tracked instrumentation
 diff are sealed separately; no build-system attestation cryptographically
 binds that executable to that source, and the report states this limitation.
@@ -101,6 +104,9 @@ only after those are stable, run seeds 42001 and 42002 at 256.
   and source-index array, disjointness, complete union, input hashes, commands,
   clean source commit, exact setup and qualification nonexclusive one-GPU
   allocations, and a single physical GPU UUID;
+- absolute runtime particle-stack paths in every selected and half STAR, bound
+  to the one sealed stack artifact, plus all four engine wall records bound to
+  the qualification allocation's Slurm job ID;
 - exactly four numbered classes from the last expected iteration in each
   independent process;
 - byte-identical RECOVAR same-process replicas, which are explicitly discarded
@@ -109,7 +115,8 @@ only after those are stable, run seeds 42001 and 42002 at 256.
   processes;
 - one proper rigid transform per four-class map set, fitted to a label-invariant
   equal-weight ensemble, followed by a uniquely optimal Hungarian class match
-  to RELION half 1 with the exact best-to-second-best objective margin recorded;
+  to RELION half 1 with best-to-second-best objective margin at least `0.01`
+  absolutely and `0.0025` relatively (both values are frozen in the manifest);
 - one equal-weight, engine/half/class-symmetric common soft mask made from the
   nonnegative voxelwise RMS envelope of all 16 aligned unit-RMS maps, stored
   and hashed; and
@@ -130,6 +137,11 @@ Raw frozen-frame curves are retained as unmasked diagnostics and cannot rescue
 an acceptance failure. A 0.143 crossing beyond the measured band is represented
 explicitly rather than converted into an apparent finite resolution; when only
 RELION remains beyond the band, the resolution comparison fails closed.
+All masked and unmasked RECOVAR and cross-engine FSC-AUC comparisons are
+integrated over one band frozen from the corresponding RELION unmasked
+half-map's resolved non-DC shells. The comparison band is never shortened at
+an earlier RECOVAR crossing or changed by masking, so a masked curve cannot
+hide an unmasked resolution loss.
 
 The common-mask curves are ordinary, uncorrected masked FSC: the harness does
 not perform high-resolution noise substitution or phase-randomization
@@ -139,10 +151,12 @@ must not be cited as absolute-resolution claims.
 The prospective real-data gate is the policy already frozen in
 `k4_validation_matrix.md`: RECOVAR common-mask 0.143 resolution may not trail
 RELION by more than one Fourier shell or 5% (whichever is larger), masked and
-unmasked half-map band FSC-AUC may not drop by more than 0.01, registered
-merged cross-engine band FSC-AUC must be at least 0.99, same-half cross-engine
-band FSC-AUC at least 0.90, hard-assignment agreement at least 0.99, and no
-class may collapse.
+unmasked half-map FSC-AUC over the frozen RELION unmasked-resolved band may not
+drop by more than 0.01, registered merged cross-engine band FSC-AUC must be at
+least 0.99, same-half cross-engine band FSC-AUC at least 0.90, hard-assignment
+agreement at least 0.99, and no
+class may collapse. Every accepted class permutation must also satisfy both
+frozen objective-margin thresholds above.
 
 An audit failure remains a result to diagnose, but it is not admitted as an
 accepted registry entry. Masked FSC cannot rescue an unmasked failure.

@@ -37,7 +37,10 @@ common mask derived from the nonnegative RMS envelope of all aligned maps;
 common-mask 0.143 resolution; registered cross-engine FSC; class populations;
 and seed-to-seed stability. RECOVAR's masked 0.143 resolution must not be worse
 than RELION by more than one Fourier shell or 5%, whichever is larger, and
-masked/unmasked half-map FSC-AUC must not drop by more than 0.01. A missing
+masked/unmasked half-map FSC-AUC, integrated over a band frozen from RELION's
+unmasked resolved non-DC shells, must not drop by more than 0.01. Class
+matching must have a unique exact K=4 permutation with best-to-second-best
+objective margin at least `0.01` absolutely and `0.0025` relatively. A missing
 0.143 crossing is recorded as beyond the measured range, never as a finite
 resolution; if only RELION remains beyond range, the comparison fails closed.
 These real-data thresholds are prospective and must not be retrofitted to

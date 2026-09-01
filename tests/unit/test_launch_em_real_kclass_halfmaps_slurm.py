@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import starfile
 
 from scripts import launch_em_real_kclass_halfmaps_slurm as launcher
 
@@ -164,9 +165,14 @@ def test_particle_input_generation_carries_immutable_source_indices(tmp_path: Pa
 
     halves, names, source_indices = launcher._write_particle_inputs(tmp_path / "run", profile)
 
-    assert names == [f"{index}@particles.128.mrcs" for index in range(1, 5)]
+    assert names == [f"{index}@{stack.resolve()}" for index in range(1, 5)]
     assert source_indices == [0, 1, 2, 3]
     assert [row["particle_count"] for row in halves] == [2, 2]
+    assert all(
+        Path(name.split("@", 1)[1]).is_absolute()
+        for row in halves
+        for name in starfile.read(row["particles_star"])["particles"]["rlnImageName"]
+    )
 
 
 def test_cli_is_dry_run_unless_submit_is_explicit(tmp_path: Path) -> None:

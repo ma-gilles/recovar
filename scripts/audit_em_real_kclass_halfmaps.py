@@ -46,6 +46,11 @@ EXPECTED_THRESHOLDS = {
     "cross_each_half_band_auc_min": 0.90,
     "assignment_agreement_min": 0.99,
     "minimum_class_count": 1,
+    # The assignment objective is the sum of four normalized FSC-AUC values.
+    # Requiring both margins rejects numerical tie-breaking and map sets whose
+    # class identities are not scientifically distinguishable.
+    "permutation_objective_margin_abs_min": 0.01,
+    "permutation_objective_margin_rel_min": 0.0025,
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -180,12 +185,19 @@ def _column(table, name: str) -> np.ndarray:
     raise AuditError(f"particle table is missing {name}")
 
 
-def _image_stack_index(value: str) -> int:
+def _image_stack_identity(value: str) -> tuple[int, Path]:
     fields = str(value).split("@", 1)
-    _require(len(fields) == 2 and fields[0].isdigit(), f"invalid RELION image identity: {value}")
+    _require(
+        len(fields) == 2 and fields[0].isdigit() and fields[1],
+        f"invalid RELION image identity: {value}",
+    )
     one_based = int(fields[0])
     _require(one_based >= 1, f"RELION image identity is not one-based: {value}")
-    return one_based - 1
+    return one_based - 1, Path(fields[1])
+
+
+def _image_stack_index(value: str) -> int:
+    return _image_stack_identity(value)[0]
 
 
 def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -197,6 +209,34 @@ def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
     _require(
         sha256_strings(selected) == selection["ordered_image_names_sha256"],
         "selected particle-order hash mismatch",
+    )
+    particle_stack_path = Path(selection["particle_stack_path"])
+    _require(particle_stack_path.is_absolute(), "runtime particle-stack path is not absolute")
+    particle_stack_path = particle_stack_path.resolve()
+    _require(particle_stack_path.is_file(), f"missing runtime particle stack: {particle_stack_path}")
+    _require(
+        SHA256_RE.fullmatch(str(selection["particle_stack_sha256"])) is not None,
+        "runtime particle-stack SHA-256 is invalid",
+    )
+    stack_records = [
+        row
+        for row in manifest.get("input_artifacts", [])
+        if str(row.get("role", "")).startswith("particle_stack_grid")
+    ]
+    _require(len(stack_records) == 1, "manifest must seal exactly one runtime particle stack")
+    stack_record = stack_records[0]
+    _require(
+        Path(stack_record["path"]).resolve() == particle_stack_path,
+        "runtime particle-stack path differs from the sealed input artifact",
+    )
+    _require(
+        str(stack_record["sha256"]) == str(selection["particle_stack_sha256"]),
+        "runtime particle-stack SHA-256 differs from the sealed input artifact",
+    )
+    selected_stack_paths = [path for _index, path in map(_image_stack_identity, selected)]
+    _require(
+        all(path.is_absolute() and path.resolve() == particle_stack_path for path in selected_stack_paths),
+        "selected identities do not reference the sealed absolute particle stack",
     )
 
     origin_star = Path(selection["origin_particles_star"])
@@ -313,6 +353,13 @@ def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
             f"half-{expected_half} particle-order hash mismatch",
         )
         _require(
+            all(
+                stack_path.is_absolute() and stack_path.resolve() == particle_stack_path
+                for _index, stack_path in map(_image_stack_identity, names)
+            ),
+            f"half-{expected_half} identities do not reference the sealed absolute particle stack",
+        )
+        _require(
             np.array_equal(subsets, np.full(len(names), expected_half, dtype=np.int64)),
             f"half-{expected_half} STAR has wrong rlnRandomSubset labels",
         )
@@ -343,6 +390,9 @@ def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "source_indices_npy": str(source_indices_path.resolve()),
         "source_indices_sha256": sha256_file(source_indices_path),
         "selected_source_indices_sha256": sha256_ints(declared_selected_source_indices),
+        "particle_stack_path": str(particle_stack_path),
+        "particle_stack_sha256": str(selection["particle_stack_sha256"]),
+        "particle_stack_binding": "absolute rlnImageName path in every selected and half STAR",
         "selection_mode": selection_mode,
         "random_subset_label_source": "immutable origin particle STAR",
     }
@@ -631,7 +681,13 @@ def _pairwise_auc(calculator: ShellFscCalculator, lhs: Sequence[np.ndarray], rhs
     return scores
 
 
-def _hungarian_to_anchor(scores: np.ndarray, *, label: str) -> tuple[list[int], dict[str, Any]]:
+def _hungarian_to_anchor(
+    scores: np.ndarray,
+    *,
+    label: str,
+    min_absolute_margin: float,
+    min_relative_margin: float,
+) -> tuple[list[int], dict[str, Any]]:
     values = np.asarray(scores, dtype=np.float64)
     _require(values.shape == (N_CLASSES, N_CLASSES) and np.all(np.isfinite(values)), f"invalid {label} matrix")
     source_rows, anchor_cols = linear_sum_assignment(-values)
@@ -660,11 +716,25 @@ def _hungarian_to_anchor(scores: np.ndarray, *, label: str) -> tuple[list[int], 
         objective for objective, permutation in candidates if permutation != winner
     )
     margin = best_objective - second_objective
-    _require(margin > 0.0, f"{label} class assignment has no positive optimum margin")
+    objective_scale = max(abs(best_objective), abs(second_objective), np.finfo(np.float64).eps)
+    relative_margin = margin / objective_scale
+    _require(
+        margin >= float(min_absolute_margin),
+        f"{label} class assignment absolute objective margin {margin:.9g} is below "
+        f"the frozen minimum {float(min_absolute_margin):.9g}",
+    )
+    _require(
+        relative_margin >= float(min_relative_margin),
+        f"{label} class assignment relative objective margin {relative_margin:.9g} is below "
+        f"the frozen minimum {float(min_relative_margin):.9g}",
+    )
     return list(winner), {
         "objective": best_objective,
         "second_best_objective": second_objective,
         "objective_margin": margin,
+        "relative_objective_margin": relative_margin,
+        "minimum_absolute_objective_margin": float(min_absolute_margin),
+        "minimum_relative_objective_margin": float(min_relative_margin),
         "exact_optimum_count": 1,
         "permutations_exhaustively_checked": math.factorial(N_CLASSES),
     }
@@ -775,7 +845,7 @@ def _first_sustained_crossing(curve: np.ndarray, threshold: float, consecutive: 
 
 def _band_auc(curve: np.ndarray, last_shell: int) -> float:
     values = np.asarray(curve, dtype=np.float64).reshape(-1)
-    _require(2 <= last_shell < values.size, "jointly resolved FSC band is too short")
+    _require(2 <= last_shell < values.size, "FSC comparison band is too short")
     band = values[1 : last_shell + 1]
     _require(np.all(np.isfinite(band)), "FSC band contains non-finite values")
     integrate = getattr(np, "trapezoid", np.trapz)
@@ -795,21 +865,38 @@ def _science_metrics_for_class(
     threshold = float(thresholds["fsc_threshold"])
     consecutive = int(thresholds["crossing_consecutive_shells"])
     prefix = f"class{class_id:03d}_"
+    unmasked_relion_curve = curves[prefix + "relion_halfmap_unmasked"]
+    unmasked_relion_crossing = _first_sustained_crossing(
+        unmasked_relion_curve,
+        threshold,
+        consecutive,
+    )
+    unmasked_relion_effective_crossing = (
+        len(unmasked_relion_curve)
+        if unmasked_relion_crossing is None
+        else unmasked_relion_crossing
+    )
+    comparison_last_shell = unmasked_relion_effective_crossing - 1
+    _require(
+        comparison_last_shell >= 2,
+        f"class {class_id} frozen RELION unmasked comparison band is too short",
+    )
     for route in ("unmasked", "common_masked"):
         relion_curve = curves[prefix + f"relion_halfmap_{route}"]
         recovar_curve = curves[prefix + f"recovar_halfmap_{route}"]
         relion_crossing = _first_sustained_crossing(relion_curve, threshold, consecutive)
         recovar_crossing = _first_sustained_crossing(recovar_curve, threshold, consecutive)
-        relion_effective_crossing = len(relion_curve) if relion_crossing is None else relion_crossing
-        recovar_effective_crossing = len(recovar_curve) if recovar_crossing is None else recovar_crossing
-        last_shell = min(relion_effective_crossing, recovar_effective_crossing) - 1
-        _require(last_shell >= 2, f"class {class_id} {route} jointly resolved band is too short")
+        # The unmasked RELION half map freezes one comparison band for both
+        # routes.  Neither RECOVAR's earlier crossing nor masking may shorten
+        # or extend the range over which an acceptance AUC is integrated.
+        last_shell = comparison_last_shell
         relion_auc = _band_auc(relion_curve, last_shell)
         recovar_auc = _band_auc(recovar_curve, last_shell)
         selection = slice(1, last_shell + 1)
         delta = np.asarray(recovar_curve[selection] - relion_curve[selection], dtype=np.float64)
         route_metrics = {
-            "jointly_resolved_last_shell": int(last_shell),
+            "comparison_band_policy": "frozen RELION unmasked-resolved non-DC shells",
+            "relion_unmasked_resolved_last_shell": int(last_shell),
             "relion_crossing_shell": None if relion_crossing is None else int(relion_crossing),
             "recovar_crossing_shell": None if recovar_crossing is None else int(recovar_crossing),
             "relion_crossing_beyond_measured_range": relion_crossing is None,
@@ -974,15 +1061,43 @@ def _resource_row(directory: Path) -> dict[str, Any]:
     _require(wall_path.is_file(), f"missing wall-time record: {wall_path}")
     wall = json.loads(wall_path.read_text())
     _require(int(wall.get("exit_status", -1)) == 0, f"engine did not exit successfully: {directory}")
+    slurm_job_id = str(wall.get("slurm_job_id", ""))
+    _require(slurm_job_id, f"engine wall-time record has no Slurm job ID: {directory}")
     peak_hbm, gpu_uuid = _parse_peak_hbm(monitor_path)
     return {
         "wall_s": float(wall["external_wall_s"]),
+        "slurm_job_id": slurm_job_id,
         "peak_hbm_mib": peak_hbm,
         "physical_gpu_uuid": gpu_uuid,
         "max_rss_kib": _parse_max_rss(time_path),
         "wall_record": str(wall_path.resolve()),
         "gpu_monitor": str(monitor_path.resolve()),
         "time_report": str(time_path.resolve()),
+    }
+
+
+def validate_engine_job_binding(
+    performance: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    qualification_job_id: str,
+) -> dict[str, Any]:
+    """Bind all four serial engine measurements to the audited Slurm job."""
+
+    _require(bool(qualification_job_id), "qualification Slurm job ID is missing")
+    observed: dict[str, list[str]] = {}
+    for engine in ("relion", "recovar"):
+        rows = list(performance.get(engine, []))
+        _require(len(rows) == 2, f"expected two {engine} engine wall records")
+        observed[engine] = [str(row.get("slurm_job_id", "")) for row in rows]
+        _require(
+            observed[engine] == [qualification_job_id, qualification_job_id],
+            f"{engine} engine wall records are not bound to qualification job {qualification_job_id}",
+        )
+    return {
+        "qualification_job_id": qualification_job_id,
+        "engine_wall_job_ids": observed,
+        "record_count": 4,
+        "all_bound": True,
     }
 
 
@@ -1030,6 +1145,10 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         )
         performance["relion"].append(_resource_row(relion_dir))
         performance["recovar"].append(_resource_row(recovar_dir))
+    engine_job_binding = validate_engine_job_binding(
+        performance,
+        qualification_job_id=str(slurm_audit["qualification"]["job_id"]),
+    )
     _reject_cross_process_duplicates(relion_paths, engine="RELION")
     _reject_cross_process_duplicates(recovar_paths, engine="RECOVAR")
     physical_gpu_path = Path(manifest_path.parent / "provenance" / "physical_gpu_uuid.txt")
@@ -1101,7 +1220,16 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             [volume * mask for volume in anchor],
         )
         pairwise[label + "_to_relion_half1"] = matrix.tolist()
-        permutations[label], permutation_optima[label] = _hungarian_to_anchor(matrix, label=label)
+        permutations[label], permutation_optima[label] = _hungarian_to_anchor(
+            matrix,
+            label=label,
+            min_absolute_margin=float(
+                manifest["thresholds"]["permutation_objective_margin_abs_min"]
+            ),
+            min_relative_margin=float(
+                manifest["thresholds"]["permutation_objective_margin_rel_min"]
+            ),
+        )
 
     canonical: dict[str, list[np.ndarray]] = {}
     raw_canonical: dict[str, list[np.ndarray]] = {}
@@ -1272,6 +1400,12 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "source_class_for_anchor": {label: [value + 1 for value in values] for label, values in permutations.items()},
             "pairwise_fsc_auc": pairwise,
             "unique_exact_permutation_required": True,
+            "minimum_absolute_objective_margin": manifest["thresholds"][
+                "permutation_objective_margin_abs_min"
+            ],
+            "minimum_relative_objective_margin": manifest["thresholds"][
+                "permutation_objective_margin_rel_min"
+            ],
             "permutation_optima": permutation_optima,
         },
         "common_mask": {
@@ -1293,6 +1427,10 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "cross_engine_primary": "proper-rigid registered curves after shared-set alignment",
             "diagnostics": "raw frozen-frame halfmap/cross-engine routes are retained unmasked and cannot rescue",
             "masked_can_rescue_unmasked": False,
+            "comparison_band": (
+                "every masked and unmasked RECOVAR and cross-engine curve is integrated over one "
+                "band frozen from the corresponding RELION unmasked half-map's resolved non-DC shells"
+            ),
             "common_masked_fsc": "uncorrected relative diagnostic; no phase-randomization correction",
             "absolute_resolution_claim": False,
         },
@@ -1301,6 +1439,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         "performance": {
             **performance,
             "same_job_serial": True,
+            "job_binding": engine_job_binding,
             "hbm_sampling": "one-second nvidia-smi lower bound",
         },
         "prospective_science_gate": {
@@ -1309,8 +1448,10 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "policy": (
                 "frozen before launch: per-class masked resolution no worse than RELION by more than "
                 "one Fourier shell or 5%, whichever is larger; masked and unmasked half-map band "
-                "FSC-AUC drop <=0.01; registered unmasked merged cross-engine band FSC-AUC >=0.99; "
+                "FSC-AUC drop <=0.01 over the frozen RELION unmasked-resolved band; registered "
+                "unmasked merged cross-engine band FSC-AUC >=0.99; "
                 "each-half cross-engine band FSC-AUC >=0.90; assignment agreement >=0.99; no class collapse"
+                "; every class permutation has frozen absolute and relative objective margins"
             ),
         },
         "limitations": [
