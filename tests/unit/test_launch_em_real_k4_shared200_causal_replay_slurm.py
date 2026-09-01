@@ -146,17 +146,38 @@ def test_image_identity_mapping_is_fixed_width_absolute_and_deterministic(tmp_pa
     first = tmp_path / "first.npy"
     second = tmp_path / "second.npy"
 
-    launcher.write_fixed_image_identity_mapping(output=first, particles=particles, particle_stack=stack)
-    launcher.write_fixed_image_identity_mapping(output=second, particles=particles, particle_stack=stack)
+    launcher.write_fixed_image_identity_mapping(
+        output=first, particles=particles, particle_stack=stack, stack_image_count=2
+    )
+    launcher.write_fixed_image_identity_mapping(
+        output=second, particles=particles, particle_stack=stack, stack_image_count=2
+    )
 
     assert first.read_bytes() == second.read_bytes()
     identities = launcher.np.load(first, allow_pickle=False)
-    assert identities.dtype.kind == "U"
-    assert identities.tolist() == [f"1@{stack}", f"2@{stack}"]
+    assert identities.dtype.kind == "S"
+    assert identities.astype(str).tolist() == [f"1@{stack}", f"2@{stack}"]
 
     shuffled = particles.iloc[::-1].reset_index(drop=True)
-    launcher.write_fixed_image_identity_mapping(output=second, particles=shuffled, particle_stack=stack)
-    assert launcher.np.load(second, allow_pickle=False).tolist() == identities.tolist()
+    launcher.write_fixed_image_identity_mapping(
+        output=second, particles=shuffled, particle_stack=stack, stack_image_count=2
+    )
+    assert launcher.np.array_equal(launcher.np.load(second, allow_pickle=False), identities)
+
+
+def test_image_identity_mapping_indexes_sparse_physical_stack_ids(tmp_path):
+    stack = tmp_path / "particles.256.mrcs"
+    stack.touch()
+    particles = _particles().iloc[:2].copy()
+    particles["_rlnImageName"] = [f"2@{stack}", f"5@{stack}"]
+    output = tmp_path / "mapping.npy"
+
+    launcher.write_fixed_image_identity_mapping(
+        output=output, particles=particles, particle_stack=stack, stack_image_count=5
+    )
+
+    identities = launcher.np.load(output, allow_pickle=False).astype(str)
+    assert identities.tolist() == ["", f"2@{stack}", "", "", f"5@{stack}"]
 
 
 def test_iteration0_continuation_bundle_restores_preinitialisation_offsets(tmp_path):

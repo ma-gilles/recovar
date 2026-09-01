@@ -54,6 +54,7 @@ EXPECTED_FIXTURE_STAR_SHA256 = "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1
 EXPECTED_SOURCE_INDICES_SHA256 = "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d"
 EXPECTED_PARTICLE_STACK_SHA256 = "70d0c19995221491d27c9323f21c40df27e153bdf1e783bc78c4d38fe41a9c09"
 EXPECTED_PARTICLE_STACK_SIZE = 34_576_532_480
+EXPECTED_PARTICLE_STACK_IMAGES = 131_879
 EXPECTED_SHARED_SET_SHA256 = "581157ff693aac6f5853d335d9cd0c59aa3fc11e60f54b325feb692ff05a9bd7"
 EXPECTED_PAIR_REPORT_SHA256 = "af22573582ea68dc07099686ebb09a282ad3ed82b2998c5bc962454baefdc31d"
 EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "3e8c501c387fa22d4e0b01da2dbf93d3a5c7c8444b605ae77e810bffd93f8615"
@@ -418,20 +419,27 @@ def write_fixed_image_identity_mapping(
     output: Path,
     particles,
     particle_stack: Path,
+    stack_image_count: int = EXPECTED_PARTICLE_STACK_IMAGES,
 ) -> None:
     """Seal the full fixture's stack identities without object arrays/pickle."""
 
     image_column = _column(particles, "rlnImageName")
     stack_indices = np.asarray([_stack_index(value) for value in particles[image_column]], dtype=np.int64)
-    expected = np.arange(1, len(particles) + 1, dtype=np.int64)
     _require(
-        np.array_equal(np.sort(stack_indices), expected),
-        "fixture image identities must be a permutation of the contiguous one-based stack indices",
+        len(np.unique(stack_indices)) == len(stack_indices),
+        "fixture image identities must have unique physical-stack indices",
+    )
+    _require(
+        stack_image_count > 0
+        and (stack_indices.size == 0 or (int(stack_indices.min()) > 0 and int(stack_indices.max()) <= stack_image_count)),
+        "fixture image identity lies outside the frozen physical-stack extent",
     )
     absolute_stack = particle_stack.resolve()
-    identities = [f"{index}@{absolute_stack}" for index in expected.tolist()]
-    width = max(map(len, identities), default=1)
-    np.save(output, np.asarray(identities, dtype=f"<U{width}"), allow_pickle=False)
+    selected_identities = [f"{index}@{absolute_stack}" for index in stack_indices.tolist()]
+    width = max(map(len, selected_identities), default=1)
+    identities = np.full(stack_image_count, b"", dtype=f"S{width}")
+    identities[stack_indices - 1] = np.asarray(selected_identities, dtype=f"S{width}")
+    np.save(output, identities, allow_pickle=False)
 
 
 def _fixed_case_record() -> dict[str, Any]:
@@ -987,7 +995,10 @@ def validate_manifest(path: Path) -> dict[str, Any]:
         identity_mapping.ndim == 1 and identity_mapping.dtype.kind in {"U", "S"},
         "sealed image identity mapping must be a fixed-width rank-1 string array",
     )
-    _require(len(identity_mapping) == 10_000, "sealed image identity mapping count drift")
+    _require(
+        len(identity_mapping) == EXPECTED_PARTICLE_STACK_IMAGES,
+        "sealed image identity mapping count drift",
+    )
     selected_mapping = identity_mapping[np.asarray(stacks, dtype=np.int64) - 1].astype(str).tolist()
     stack_records = [
         record for record in manifest["input_records"] if record.get("role") == "fixture particle stack"
