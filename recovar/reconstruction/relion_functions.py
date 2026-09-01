@@ -1298,6 +1298,110 @@ def post_process_from_filter(
 _POSTPROCESS_STATIC_ARGNUMS = (2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17, 18, 19, 20, 21, 22, 23, 24)
 
 
+def _regularize_large_relion_half_filter_impl(
+    Ft_ctf,
+    tau,
+    og_volume_shape,
+    volume_upsampling_factor,
+    tau2_fudge,
+    minres_map,
+    current_size,
+    accumulator_volume_shape,
+    tau_is_1d,
+    relion_filter_scale,
+):
+    """Build the large packed-half Wiener denominator without its numerator.
+
+    Keeping this operation separate from the complex division is a memory
+    boundary, not a different reconstruction formula.  In particular, the
+    casts and arguments below mirror the large-grid branch in
+    :func:`post_process_from_filter_v2` exactly.  Its donating executable can
+    reuse the float32 CTF input while its regularization temporaries are live;
+    the twice-as-large complex numerator may therefore remain on the host.
+    """
+
+    og_volume_shape = tuple(int(s) for s in og_volume_shape)
+    volume_upsampling_factor = int(volume_upsampling_factor)
+    upsampled_volume_shape = (
+        tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
+    packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
+    Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
+    Ft_ctf_flat = Ft_ctf_flat.real.astype(jnp.float32)
+    tau_for_filter = None if tau is None else jnp.asarray(tau, dtype=jnp.float32)
+    current_size_limited = current_size is not None and current_size > 0
+    native_r_max = int(current_size) // 2 if current_size_limited else None
+    regularized_filter = adjust_regularization_relion_style(
+        Ft_ctf_flat,
+        upsampled_volume_shape,
+        tau=tau_for_filter,
+        padding_factor=volume_upsampling_factor,
+        half_volume=True,
+        tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
+        max_res_shell=native_r_max,
+        relion_native_shell_floor=current_size_limited,
+        native_volume_shape=og_volume_shape,
+        tau_is_1d=tau_is_1d,
+        relion_filter_scale=relion_filter_scale,
+        large_grid_single_precision=True,
+    )
+    return regularized_filter.reshape(Ft_ctf.shape)
+
+
+_regularize_large_relion_half_filter_donate_ctf = jax.jit(
+    _regularize_large_relion_half_filter_impl,
+    static_argnums=(2, 3, 5, 6, 7, 8, 9),
+    donate_argnums=(0,),
+)
+
+
+def _divide_large_relion_half_numerator_impl(
+    F_ty,
+    regularized_filter,
+    volume_upsampling_factor,
+    current_size,
+    accumulator_volume_shape,
+):
+    """Apply the exact packed-half support mask and Wiener division.
+
+    XLA fuses this elementwise stage into the donated complex64 numerator, so
+    it needs no box-scale temporary in addition to the numerator and the
+    already-regularized float32 denominator.
+    """
+
+    upsampled_volume_shape = tuple(int(s) for s in accumulator_volume_shape)
+    packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
+    F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
+    F_ty_flat = F_ty_flat.astype(jnp.complex64)
+    current_size_limited = current_size is not None and current_size > 0
+    if current_size_limited:
+        wiener_radius = int(volume_upsampling_factor) * (int(current_size) // 2)
+        valid_mask = _relion_current_size_decenter_mask(
+            upsampled_volume_shape,
+            wiener_radius,
+            half_volume=True,
+        )
+    else:
+        wiener_radius = upsampled_volume_shape[0] // 2 - 1
+        valid_mask = fourier_transform_utils.full_volume_to_half_volume(
+            mask.get_radial_mask(upsampled_volume_shape, radius=wiener_radius),
+            upsampled_volume_shape,
+        )
+    valid_indices = valid_mask.reshape(-1).astype(F_ty_flat.real.dtype)
+    divided = (F_ty_flat * valid_indices) / jnp.asarray(regularized_filter).reshape(-1)
+    return divided.astype(jnp.complex64).reshape(F_ty.shape)
+
+
+_divide_large_relion_half_numerator_donate_numerator = jax.jit(
+    _divide_large_relion_half_numerator_impl,
+    static_argnums=(2, 3, 4),
+    donate_argnums=(0,),
+)
+
+
 @functools.partial(jax.jit, static_argnums=_POSTPROCESS_STATIC_ARGNUMS)
 def post_process_from_filter_v2(
     Ft_ctf,

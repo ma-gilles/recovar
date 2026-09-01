@@ -13076,12 +13076,17 @@ class TestRelionModeSmokeTest:
         host_numerator = np.ones((5, 5, 3), dtype=np.complex64)
         retained_numerator = jnp.ones((5, 5, 3), dtype=jnp.complex64)
 
-        def fake_stage(*args, **kwargs):
-            events.append("stage")
-            assert args[0] is host_ctf
-            assert args[1] is retained_numerator
-            assert kwargs["input_half_volume"] is True
-            assert kwargs["return_wiener_half_before_window"] is True
+        regularized_filter = jnp.ones(host_ctf.shape, dtype=jnp.float32)
+
+        def fake_regularize(stage_filter, *_args):
+            events.append("regularize")
+            stage_filter.delete()
+            return regularized_filter
+
+        def fake_divide(stage_numerator, stage_filter, *_args):
+            events.append("divide")
+            assert stage_numerator is retained_numerator
+            assert stage_filter is regularized_filter
             return DeviceBoundary()
 
         def fake_device_get(_value):
@@ -13091,7 +13096,8 @@ class TestRelionModeSmokeTest:
         def fake_finish(value, *_args, **kwargs):
             events.append("finish")
             assert events == [
-                "stage",
+                "regularize",
+                "divide",
                 "block",
                 "device_get",
                 "release",
@@ -13111,8 +13117,13 @@ class TestRelionModeSmokeTest:
         )
         monkeypatch.setattr(
             relion_functions,
-            "_post_process_from_filter_v2_donate_numerator",
-            fake_stage,
+            "_regularize_large_relion_half_filter_donate_ctf",
+            fake_regularize,
+        )
+        monkeypatch.setattr(
+            relion_functions,
+            "_divide_large_relion_half_numerator_donate_numerator",
+            fake_divide,
         )
         monkeypatch.setattr(
             relion_functions,
@@ -13141,7 +13152,8 @@ class TestRelionModeSmokeTest:
 
         assert returned is host_boundary
         assert events == [
-            "stage",
+            "regularize",
+            "divide",
             "block",
             "device_get",
             "release",
@@ -13171,21 +13183,27 @@ class TestRelionModeSmokeTest:
         retained_numerator = jnp.ones(half_shape, dtype=jnp.complex64)
         stage_inputs = []
         stage_outputs = []
+        regularized_filters = []
         sentinel = jnp.asarray([7.0 + 0.0j], dtype=jnp.complex64)
 
-        def fake_stage(*args, **kwargs):
-            assert args[0] is host_ctf
+        def fake_regularize(stage_filter, *_args):
+            assert isinstance(stage_filter, mean_helpers_module.jax.Array)
+            stage_filter.delete()
+            regularized = jnp.ones(half_shape, dtype=jnp.float32)
+            regularized_filters.append(regularized)
+            return regularized
+
+        def fake_divide(stage_numerator, regularized_filter, *_args):
+            assert regularized_filter is regularized_filters[-1]
             if not stage_inputs:
-                assert args[1] is retained_numerator
+                assert stage_numerator is retained_numerator
             else:
                 assert retained_numerator.is_deleted()
                 assert stage_outputs[0].is_deleted()
-                assert isinstance(args[1], mean_helpers_module.jax.Array)
-                assert not isinstance(args[1], np.ndarray)
-            assert not args[1].is_deleted()
-            assert kwargs["input_half_volume"] is True
-            assert kwargs["return_wiener_half_before_window"] is True
-            stage_inputs.append(args[1])
+                assert isinstance(stage_numerator, mean_helpers_module.jax.Array)
+                assert not isinstance(stage_numerator, np.ndarray)
+            assert not stage_numerator.is_deleted()
+            stage_inputs.append(stage_numerator)
             stage_outputs.append(jnp.ones(half_shape, dtype=jnp.complex64))
             return stage_outputs[-1]
 
@@ -13201,8 +13219,13 @@ class TestRelionModeSmokeTest:
         )
         monkeypatch.setattr(
             relion_functions,
-            "_post_process_from_filter_v2_donate_numerator",
-            fake_stage,
+            "_regularize_large_relion_half_filter_donate_ctf",
+            fake_regularize,
+        )
+        monkeypatch.setattr(
+            relion_functions,
+            "_divide_large_relion_half_numerator_donate_numerator",
+            fake_divide,
         )
         monkeypatch.setattr(
             relion_functions,
@@ -13236,11 +13259,13 @@ class TestRelionModeSmokeTest:
         assert half0 is sentinel
         assert half1 is sentinel
         assert len(stage_inputs) == len(stage_outputs) == 2
+        assert len(regularized_filters) == 2
         assert all(value.is_deleted() for value in stage_inputs)
         assert all(value.is_deleted() for value in stage_outputs)
+        assert all(value.is_deleted() for value in regularized_filters)
         assert "RELION Stage A staging host numerator for donation" in caplog.text
         assert (
-            "source=staged_numpy output_deleted=True numerator_deleted=True"
+            "source=staged_numpy output_deleted=True numerator_deleted=True filter_deleted=True"
             in caplog.text
         )
 
@@ -13291,6 +13316,16 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(
             relion_functions,
             "_post_process_from_filter_v2_donate_numerator",
+            reject_donating_stage,
+        )
+        monkeypatch.setattr(
+            relion_functions,
+            "_regularize_large_relion_half_filter_donate_ctf",
+            reject_donating_stage,
+        )
+        monkeypatch.setattr(
+            relion_functions,
+            "_divide_large_relion_half_numerator_donate_numerator",
             reject_donating_stage,
         )
         monkeypatch.setattr(

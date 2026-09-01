@@ -611,6 +611,58 @@ def _reconstruct_volume_eager(
         packed_half_bytes,
     )
     if accumulator_shape[0] > reconstruction_shape[0]:
+        # The original Stage-A executable combined denominator
+        # regularization and complex division.  Although donation aliases its
+        # numerator to the output, the regularization needs several
+        # box-scale float32 temporaries.  Keep the complex64 numerator on the
+        # host while those temporaries are live, then stage it only for the
+        # zero-temporary donating divide.
+        stage_a_filter = jnp.asarray(Ft_ctf)
+        stage_a_filter.block_until_ready()
+        if np.dtype(stage_a_filter.dtype) != np.dtype(np.float32):
+            raise TypeError(
+                "Large RELION Stage A requires a float32 filter for exact "
+                f"donation, got {stage_a_filter.dtype}"
+            )
+        logger.info(
+            "RELION Stage A staging host filter for donating regularization: "
+            "shape=%s dtype=%s",
+            tuple(stage_a_filter.shape),
+            stage_a_filter.dtype,
+        )
+        regularized_filter_device = (
+            relion_functions._regularize_large_relion_half_filter_donate_ctf(
+                stage_a_filter,
+                tau,
+                vol_shape,
+                padding_factor,
+                tau2_fudge,
+                minres_map,
+                current_size,
+                accumulator_shape,
+                tau_is_1d,
+                relion_filter_scale,
+            )
+        )
+        regularized_filter_device.block_until_ready()
+        filter_input_donated = _device_array_is_deleted(stage_a_filter)
+        if filter_input_donated is not True:
+            _delete_device_array(regularized_filter_device)
+            _delete_device_array(stage_a_filter)
+            raise RuntimeError(
+                "Large RELION Stage-A regularization did not donate its float32 filter input"
+            )
+        if np.dtype(regularized_filter_device.dtype) != np.dtype(np.float32):
+            _delete_device_array(regularized_filter_device)
+            raise TypeError(
+                "Large RELION Stage-A regularization must return float32, got "
+                f"{regularized_filter_device.dtype}"
+            )
+        logger.info(
+            "RELION Stage A regularization complete: filter_input_donated=%s",
+            filter_input_donated,
+        )
+
         stage_a_numerator = None
         stage_a_numerator_source = "device"
         if retained_device_numerator is not None:
@@ -646,14 +698,12 @@ def _reconstruct_volume_eager(
                     tuple(stage_a_numerator.shape),
                     stage_a_numerator.dtype,
                 )
-        wiener_half_device = relion_functions._post_process_from_filter_v2_donate_numerator(
-            Ft_ctf,
+        wiener_half_device = relion_functions._divide_large_relion_half_numerator_donate_numerator(
             stage_a_numerator,
-            vol_shape,
+            regularized_filter_device,
             padding_factor,
-            **postprocess_kwargs,
-            input_half_volume=True,
-            return_wiener_half_before_window=True,
+            current_size,
+            accumulator_shape,
         )
         wiener_half_device.block_until_ready()
         wiener_half_host = np.asarray(jax.device_get(wiener_half_device)).reshape(
@@ -661,15 +711,20 @@ def _reconstruct_volume_eager(
         )
         _delete_device_array(wiener_half_device)
         _delete_device_array(stage_a_numerator)
+        _delete_device_array(regularized_filter_device)
+        _delete_device_array(stage_a_filter)
         logger.info(
             "RELION Stage A released donated device numerator after host transfer: "
-            "source=%s output_deleted=%s numerator_deleted=%s",
+            "source=%s output_deleted=%s numerator_deleted=%s filter_deleted=%s",
             stage_a_numerator_source,
             _device_array_is_deleted(wiener_half_device),
             _device_array_is_deleted(stage_a_numerator),
+            _device_array_is_deleted(regularized_filter_device),
         )
         del wiener_half_device
         del stage_a_numerator
+        del regularized_filter_device
+        del stage_a_filter
         gc.collect()
 
         fftw_half_host = _crop_relion_wiener_half_to_fftw_host(

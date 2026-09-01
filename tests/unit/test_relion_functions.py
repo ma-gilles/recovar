@@ -1114,6 +1114,8 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     for compiled in (
         rf.post_process_from_filter_v2,
         rf._post_process_from_filter_v2_donate_numerator,
+        rf._regularize_large_relion_half_filter_donate_ctf,
+        rf._divide_large_relion_half_numerator_donate_numerator,
         rf._finish_large_relion_postprocess_from_unpadded_real,
         rf._finish_large_relion_postprocess_from_fftw_half,
     ):
@@ -1191,6 +1193,8 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
     for compiled in (
         rf.post_process_from_filter_v2,
         rf._post_process_from_filter_v2_donate_numerator,
+        rf._regularize_large_relion_half_filter_donate_ctf,
+        rf._divide_large_relion_half_numerator_donate_numerator,
         rf._finish_large_relion_postprocess_from_unpadded_real,
         rf._finish_large_relion_postprocess_from_fftw_half,
     ):
@@ -2853,6 +2857,134 @@ def test_large_wiener_host_boundary_donates_numerator_buffer(monkeypatch, gpu_de
 
     if callable(clear_cache):
         clear_cache()
+
+
+@pytest.mark.parametrize("current_size", [4, None])
+def test_large_wiener_split_stage_matches_monolith_bitwise(monkeypatch, current_size):
+    import recovar.core.fourier_transform_utils as ftu
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    compiled_functions = (
+        rf.post_process_from_filter_v2,
+        rf._regularize_large_relion_half_filter_donate_ctf,
+        rf._divide_large_relion_half_numerator_donate_numerator,
+    )
+    for compiled in compiled_functions:
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260901)
+    ft_ctf = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    f_ty = (rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)).astype(np.complex64)
+    tau = rng.uniform(0.5, 1.5, volume_shape[0] // 2 + 1).astype(np.float64)
+
+    expected = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf,
+            f_ty,
+            volume_shape,
+            2,
+            tau=tau,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            tau2_fudge=1.0,
+            gridding_padding_factor=1,
+            minres_map=0,
+            current_size=current_size,
+            accumulator_volume_shape=accumulator_shape,
+            tau_is_1d=True,
+            preserve_output_precision=True,
+            relion_filter_scale=float(volume_shape[0] ** 4),
+            input_half_volume=True,
+            return_wiener_half_before_window=True,
+        )
+    )
+    ctf_device = jnp.asarray(ft_ctf.copy())
+    regularized = rf._regularize_large_relion_half_filter_donate_ctf(
+        ctf_device,
+        jnp.asarray(tau),
+        volume_shape,
+        2,
+        1.0,
+        0,
+        current_size,
+        accumulator_shape,
+        True,
+        float(volume_shape[0] ** 4),
+    )
+    regularized.block_until_ready()
+    numerator_device = jnp.asarray(f_ty.copy())
+    actual = rf._divide_large_relion_half_numerator_donate_numerator(
+        numerator_device,
+        regularized,
+        2,
+        current_size,
+        accumulator_shape,
+    )
+
+    np.testing.assert_array_equal(np.asarray(actual), expected)
+    assert ctf_device.is_deleted()
+    assert numerator_device.is_deleted()
+
+    for compiled in compiled_functions:
+        clear_cache = getattr(compiled, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()
+
+
+@pytest.mark.gpu
+def test_large_wiener_split_stage_aliases_inputs_without_divide_temporary(monkeypatch, gpu_device):
+    import recovar.core.fourier_transform_utils as ftu
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (11, 11, 11)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    half_size = int(np.prod(half_shape))
+    numerator_bytes = half_size * np.dtype(np.complex64).itemsize
+    filter_bytes = half_size * np.dtype(np.float32).itemsize
+
+    with jax.default_device(gpu_device):
+        regularize_memory = (
+            rf._regularize_large_relion_half_filter_donate_ctf.lower(
+                jax.ShapeDtypeStruct((half_size,), jnp.float32),
+                jax.ShapeDtypeStruct((volume_shape[0] // 2 + 1,), jnp.float64),
+                volume_shape,
+                2,
+                1.0,
+                0,
+                4,
+                accumulator_shape,
+                True,
+                float(volume_shape[0] ** 4),
+            )
+            .compile()
+            .memory_analysis()
+        )
+        divide_memory = (
+            rf._divide_large_relion_half_numerator_donate_numerator.lower(
+                jax.ShapeDtypeStruct((half_size,), jnp.complex64),
+                jax.ShapeDtypeStruct((half_size,), jnp.float32),
+                2,
+                4,
+                accumulator_shape,
+            )
+            .compile()
+            .memory_analysis()
+        )
+
+    assert regularize_memory.output_size_in_bytes == filter_bytes
+    assert regularize_memory.alias_size_in_bytes == filter_bytes
+    assert divide_memory.output_size_in_bytes == numerator_bytes
+    assert divide_memory.alias_size_in_bytes == numerator_bytes
+    assert divide_memory.temp_size_in_bytes == 0
 
 
 @pytest.mark.gpu
