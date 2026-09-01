@@ -161,6 +161,15 @@ _DEFAULT_MAX_TRANSLATION_TILE_BYTES = 384 * 1024**2
 # larger chunks; these fractions still scale down on smaller GPUs.
 _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION = 0.640
 _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.305
+# The exact K=1 CUDA FFI scorer reduces Fourier pixels inside the kernel and
+# returns float32 values with shape ``(image, rotation, translation)``.  It
+# therefore does not have the candidate-by-pixel live allocation assumed by
+# ``_AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION``.  Budget a conservative four live
+# float32 candidate arrays, while retaining the established one-million
+# hypothesis ceiling; translation, projection-gather, noise, and adjoint
+# planners independently bound their corresponding pixel-sized operands.
+_AUTO_K1_FFI_HYPOTHESIS_DEVICE_FRACTION = 0.004
+_AUTO_K1_FFI_LIVE_FLOATS_PER_HYPOTHESIS = 4
 # Compact K-class scoring materializes two complex candidate-by-pixel gathers
 # for one class at a time while projections and M-step operands remain live.
 # Keep those two gathers within 10% of physical memory.  A K=4 cap that allowed
@@ -3881,6 +3890,7 @@ def _complex_counterpart_real_dtype(complex_dtype):
 def _auto_hypotheses_per_microbatch(
     *,
     score_only: bool,
+    exact_k1_fine_diff2_ffi: bool = False,
     fused_k_class: bool = False,
     fused_k_class_count: int | None = None,
     n_score_pixels: int | None,
@@ -3891,6 +3901,23 @@ def _auto_hypotheses_per_microbatch(
         return None
     if score_only:
         fraction = _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION
+    elif exact_k1_fine_diff2_ffi:
+        # ``relion_fine_diff2_rectangular_f32`` launches one CUDA block per
+        # hypothesis and reduces the active Fourier pixels within that block.
+        # Only candidate-shaped float32 results survive the kernel boundary.
+        bytes_per_hypothesis = (
+            np.dtype(np.float32).itemsize
+            * _AUTO_K1_FFI_LIVE_FLOATS_PER_HYPOTHESIS
+        )
+        output_limited_cap = max(
+            1,
+            int(
+                float(device_memory_bytes)
+                * _AUTO_K1_FFI_HYPOTHESIS_DEVICE_FRACTION
+                / bytes_per_hypothesis
+            ),
+        )
+        return min(_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH, output_limited_cap)
     elif fused_k_class:
         if fused_k_class_count is None or int(fused_k_class_count) <= 0:
             raise ValueError("fused_k_class_count must be positive for fused K-class planning")
@@ -3923,6 +3950,7 @@ def _max_hypotheses_per_microbatch_for_pass(
     use_window: bool,
     has_external_normalization: bool,
     conservative_dump_execution: bool,
+    exact_k1_fine_diff2_ffi: bool = False,
     fused_k_class: bool = False,
     fused_k_class_count: int | None = None,
     n_score_pixels: int | None = None,
@@ -3952,6 +3980,7 @@ def _max_hypotheses_per_microbatch_for_pass(
     override = _optional_positive_int_env(_MAX_HYPOTHESES_ENV)
     auto = _auto_hypotheses_per_microbatch(
         score_only=False,
+        exact_k1_fine_diff2_ffi=exact_k1_fine_diff2_ffi,
         fused_k_class=fused_k_class,
         fused_k_class_count=fused_k_class_count,
         n_score_pixels=n_score_pixels,
@@ -12902,6 +12931,11 @@ def compute_pass2_stats_sparse_bucketed(
         use_window=budget_window_spec.use_window,
         has_external_normalization=normalization_log_z is not None or normalization_other_score_log_z is not None,
         conservative_dump_execution=_pass2_conservative_dump_execution_enabled(),
+        exact_k1_fine_diff2_ffi=bool(
+            use_exact_relion_gaussian
+            and use_relion_fine_diff2_fused_ffi
+            and not score_only
+        ),
         n_score_pixels=budget_window_spec.n_score,
         device_memory_bytes=device_memory_bytes,
         score_complex_dtype=precision_policy.score_complex_dtype,

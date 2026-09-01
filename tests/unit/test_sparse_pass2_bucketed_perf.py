@@ -1487,6 +1487,67 @@ def test_sparse_pass2_auto_hypothesis_cap_matches_80gb_probe_scale(monkeypatch):
     assert 9_500_000 <= cap <= 10_900_000
 
 
+def test_exact_k1_ffi_hypothesis_cap_uses_candidate_outputs_not_score_pixels(
+    monkeypatch,
+):
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)
+    monkeypatch.delenv(
+        "RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES",
+        raising=False,
+    )
+
+    device_memory = 80 * 1024**3
+    n_score_pixels = 34_166
+    legacy_cap = _max_hypotheses_per_microbatch_for_pass(
+        score_only=False,
+        use_window=True,
+        has_external_normalization=False,
+        conservative_dump_execution=False,
+        n_score_pixels=n_score_pixels,
+        device_memory_bytes=device_memory,
+    )
+    ffi_cap = _max_hypotheses_per_microbatch_for_pass(
+        score_only=False,
+        use_window=True,
+        has_external_normalization=False,
+        conservative_dump_execution=False,
+        exact_k1_fine_diff2_ffi=True,
+        n_score_pixels=n_score_pixels,
+        device_memory_bytes=device_memory,
+    )
+    ffi_cap_twice_the_pixels = _max_hypotheses_per_microbatch_for_pass(
+        score_only=False,
+        use_window=True,
+        has_external_normalization=False,
+        conservative_dump_execution=False,
+        exact_k1_fine_diff2_ffi=True,
+        n_score_pixels=2 * n_score_pixels,
+        device_memory_bytes=device_memory,
+    )
+
+    assert 90_000 <= legacy_cap <= 110_000
+    assert ffi_cap == 1_000_000
+    assert ffi_cap_twice_the_pixels == ffi_cap
+    # The observed EMPIAR-10202 iteration-5 geometry is 512 rotations by 84
+    # translations.  The exact FFI cap admits the existing translation-tile
+    # ceiling of 20 particles instead of the stale two-particle score cap.
+    assert ffi_cap // (512 * 84) >= 20
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "95430")
+    assert (
+        _max_hypotheses_per_microbatch_for_pass(
+            score_only=False,
+            use_window=True,
+            has_external_normalization=False,
+            conservative_dump_execution=False,
+            exact_k1_fine_diff2_ffi=True,
+            n_score_pixels=n_score_pixels,
+            device_memory_bytes=device_memory,
+        )
+        == 95_430
+    )
+
+
 def test_sparse_pass2_hypothesis_cap_accounts_for_score_dtype(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES", raising=False)
