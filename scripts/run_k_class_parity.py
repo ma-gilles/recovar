@@ -1580,6 +1580,7 @@ def main() -> None:
         adaptive_em_kwargs["relion_fine_mstep_prune"] = bool(args.sparse_pass2)
         if args.relion_kclass_firstiter_native_bpref_replay:
             adaptive_em_kwargs["relion_kclass_firstiter_native_bpref_replay"] = True
+            adaptive_em_kwargs["debug_iteration"] = int(args.target_iter)
         result = run_dense_k_class_em_adaptive(
             ds,
             means,

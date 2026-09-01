@@ -393,7 +393,9 @@ def test_k_class_replay_native_bpref_replay_is_forwarded_only_to_adaptive_engine
         'adaptive_em_kwargs["relion_kclass_firstiter_native_bpref_replay"] = True'
         in adaptive_block
     )
+    assert 'adaptive_em_kwargs["debug_iteration"] = int(args.target_iter)' in adaptive_block
     assert 'common_em_kwargs["relion_kclass_firstiter_native_bpref_replay"]' not in source
+    assert 'common_em_kwargs["debug_iteration"]' not in source
     assert "**common_em_kwargs" in source[source.index("result = run_dense_k_class_em(") :]
 
 
