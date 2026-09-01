@@ -228,6 +228,12 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert 'RELION_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
     assert 'RECOVAR_GPU_UUID="$(capture_physical_gpu_uuid)"' in text
     assert "paired_gpu_uuid.json" in text
+    assert 'start_engine_gpu_monitor "${CASE_ROOT}/relion_gpu_monitor.csv"' in text
+    assert 'start_engine_gpu_monitor "${CASE_ROOT}/recovar_gpu_monitor.csv"' in text
+    assert 'nvidia-smi --query-gpu="${GPU_MONITOR_QUERY}" --format=csv -l 5' in text
+    assert '"gpu_monitor_interval_s": 5' in text
+    assert "COMBINED_MONITOR_PID" in text
+    assert "trap cleanup_gpu_monitors EXIT" in text
     assert 'mapfile -t visible_uuids < <(nvidia-smi --query-gpu=uuid' in text
     assert 'nvidia-smi --id="${gpu_token}"' not in text
     assert 'nvidia-smi --id="${slurm_gpu_token}"' not in text
@@ -426,6 +432,7 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert 'touch "${RUNTIME_ROOT}/SAFE_TO_DELETE"' in setup_text
     assert 'touch "${RUNTIME_ROOT}/SAFE_TO_DELETE"' in summary_text
     assert "pixi run" not in summary_text
+    assert f"--slurm-accounting-json-out {scratch / 'slurm_case_accounting.json'}" in summary_text
     assert f"EXPECTED_GIT_HEAD={expected_head}" in submission
     assert "CASE_JOB_IDS='DRYRUN DRYRUN'" in submission
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}" in submission

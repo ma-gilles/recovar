@@ -9,6 +9,7 @@ whose Slurm jobs have only created job scripts so far.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -35,6 +36,9 @@ TARGET_FILENAMES = {
     "relion_kclass_gt_fsc.json",
     "slurm_walltime.json",
     "prepare_walltime.json",
+    "gpu_monitor.csv",
+    "relion_gpu_monitor.csv",
+    "recovar_gpu_monitor.csv",
     "run_full_refinement.log",
     "prepare.log",
     "relion_autorefine.log",
@@ -91,6 +95,37 @@ RECOVAR_SPARSE_DONE_RE = re.compile(
 )
 RECOVAR_COMPLETE_RE = re.compile(r"Refinement complete in\s+([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE)
 SLURM_JOB_HEADER_RE = re.compile(r"^Slurm job:\s*([0-9]+)\b", re.IGNORECASE)
+SLURM_MEMORY_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)([KMGTP]?)(?:i?[bB])?$", re.IGNORECASE)
+NVIDIA_SMI_NUMBER_RE = re.compile(r"[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)")
+
+
+@dataclass
+class SlurmAccounting:
+    job_id: str
+    state: str | None = None
+    exit_code: str | None = None
+    elapsed_s: float | None = None
+    max_rss_bytes: int | None = None
+    max_rss_raw: str | None = None
+    max_rss_job_id: str | None = None
+    node_list: str | None = None
+    alloc_tres: str | None = None
+    missing_reasons: list[str] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "state": self.state,
+            "exit_code": self.exit_code,
+            "elapsed_s": self.elapsed_s,
+            "max_rss_bytes": self.max_rss_bytes,
+            "max_rss_mib": self.max_rss_bytes / (1024**2) if self.max_rss_bytes is not None else None,
+            "max_rss_raw": self.max_rss_raw,
+            "max_rss_job_id": self.max_rss_job_id,
+            "node_list": self.node_list,
+            "alloc_tres": self.alloc_tres,
+            "missing_reasons": list(self.missing_reasons),
+        }
 
 
 @dataclass
@@ -111,6 +146,28 @@ class CaseSummary:
     poses: str | None = None
     wall_s: float | None = None
     relion_wall_s: float | None = None
+    recovar_start_epoch: float | None = None
+    recovar_end_epoch: float | None = None
+    relion_start_epoch: float | None = None
+    relion_end_epoch: float | None = None
+    slurm_elapsed_s: float | None = None
+    slurm_max_rss_bytes: int | None = None
+    slurm_max_rss_raw: str | None = None
+    slurm_max_rss_job_id: str | None = None
+    slurm_node_list: str | None = None
+    slurm_alloc_tres: str | None = None
+    legacy_combined_peak_gpu_memory_mib: float | None = None
+    legacy_combined_gpu_memory_total_mib: float | None = None
+    legacy_combined_gpu_monitor_samples: int | None = None
+    relion_peak_gpu_memory_mib: float | None = None
+    relion_gpu_memory_total_mib: float | None = None
+    relion_gpu_monitor_samples: int | None = None
+    relion_gpu_memory_source: str | None = None
+    recovar_peak_gpu_memory_mib: float | None = None
+    recovar_gpu_memory_total_mib: float | None = None
+    recovar_gpu_monitor_samples: int | None = None
+    recovar_gpu_memory_source: str | None = None
+    performance_missing_reasons: list[str] = field(default_factory=list)
     exit_status: int | None = None
     relion_iteration: int | None = None
     relion_resolution_A: float | None = None
@@ -155,6 +212,31 @@ class CaseSummary:
             "poses": self.poses,
             "wall_s": self.wall_s,
             "relion_wall_s": self.relion_wall_s,
+            "recovar_start_epoch": self.recovar_start_epoch,
+            "recovar_end_epoch": self.recovar_end_epoch,
+            "relion_start_epoch": self.relion_start_epoch,
+            "relion_end_epoch": self.relion_end_epoch,
+            "slurm_elapsed_s": self.slurm_elapsed_s,
+            "slurm_max_rss_bytes": self.slurm_max_rss_bytes,
+            "slurm_max_rss_mib": (
+                self.slurm_max_rss_bytes / (1024**2) if self.slurm_max_rss_bytes is not None else None
+            ),
+            "slurm_max_rss_raw": self.slurm_max_rss_raw,
+            "slurm_max_rss_job_id": self.slurm_max_rss_job_id,
+            "slurm_node_list": self.slurm_node_list,
+            "slurm_alloc_tres": self.slurm_alloc_tres,
+            "legacy_combined_peak_gpu_memory_mib": self.legacy_combined_peak_gpu_memory_mib,
+            "legacy_combined_gpu_memory_total_mib": self.legacy_combined_gpu_memory_total_mib,
+            "legacy_combined_gpu_monitor_samples": self.legacy_combined_gpu_monitor_samples,
+            "relion_peak_gpu_memory_mib": self.relion_peak_gpu_memory_mib,
+            "relion_gpu_memory_total_mib": self.relion_gpu_memory_total_mib,
+            "relion_gpu_monitor_samples": self.relion_gpu_monitor_samples,
+            "relion_gpu_memory_source": self.relion_gpu_memory_source,
+            "recovar_peak_gpu_memory_mib": self.recovar_peak_gpu_memory_mib,
+            "recovar_gpu_memory_total_mib": self.recovar_gpu_memory_total_mib,
+            "recovar_gpu_monitor_samples": self.recovar_gpu_monitor_samples,
+            "recovar_gpu_memory_source": self.recovar_gpu_memory_source,
+            "performance_missing_reasons": list(self.performance_missing_reasons),
             "exit_status": self.exit_status,
             "relion_iteration": self.relion_iteration,
             "relion_resolution_A": self.relion_resolution_A,
@@ -196,6 +278,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dedupe-case-reruns",
         action="store_true",
         help="For duplicate case id/name rows, keep one active row, preferring completed rows and later roots.",
+    )
+    parser.add_argument(
+        "--slurm-accounting-json-out",
+        type=Path,
+        help="Optional durable JSON capture of the sacct rows used for per-case elapsed time and MaxRSS.",
     )
     return parser.parse_args(argv)
 
@@ -346,6 +433,9 @@ def artifact_case_root(path: Path) -> Path | None:
         "kclass_gt_fsc.json",
         "relion_kclass_gt_fsc_auc.json",
         "relion_kclass_gt_fsc.json",
+        "gpu_monitor.csv",
+        "relion_gpu_monitor.csv",
+        "recovar_gpu_monitor.csv",
     }:
         return path.parent
     if name in {
@@ -483,11 +573,207 @@ def merge_walltime(case: CaseSummary, path: Path) -> None:
         case.artifacts[label] = str(path)
     if path.parent.name == "recovar":
         case.wall_s = choose_number(data.get("external_wall_s"), data.get("wall_s"), case.wall_s)
+        case.recovar_start_epoch = choose_number(data.get("start_epoch"), case.recovar_start_epoch)
+        case.recovar_end_epoch = choose_number(data.get("end_epoch"), case.recovar_end_epoch)
         case.exit_status = as_int(data.get("exit_status")) if data.get("exit_status") is not None else case.exit_status
         case.job_id = str(data.get("slurm_job_id") or case.job_id or "").strip() or case.job_id
     elif path.parent.name in {"relion_ref", "relion_class3d"}:
         case.artifacts["relion_slurm_walltime"] = str(path)
         case.relion_wall_s = choose_number(data.get("external_wall_s"), data.get("wall_s"), case.relion_wall_s)
+        case.relion_start_epoch = choose_number(data.get("start_epoch"), case.relion_start_epoch)
+        case.relion_end_epoch = choose_number(data.get("end_epoch"), case.relion_end_epoch)
+
+
+def add_performance_missing_reason(case: CaseSummary, reason: str) -> None:
+    if reason not in case.performance_missing_reasons:
+        case.performance_missing_reasons.append(reason)
+
+
+def nvidia_smi_number(value: Any) -> float | None:
+    match = NVIDIA_SMI_NUMBER_RE.search(str(value or ""))
+    return as_float(match.group(0)) if match else None
+
+
+def nvidia_smi_timestamp_epoch(value: Any) -> float | None:
+    text = str(value or "").strip()
+    for fmt in ("%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S"):
+        try:
+            # nvidia-smi and date(1) run on the same Slurm node.  Let Python
+            # attach that node's local timezone before comparing to epoch
+            # timestamps captured by date +%s.
+            return datetime.strptime(text, fmt).astimezone().timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _gpu_csv_column(row: dict[str, str], prefix: str) -> str | None:
+    prefix = prefix.lower()
+    for key, value in row.items():
+        if str(key or "").strip().lower().startswith(prefix):
+            return value
+    return None
+
+
+def read_gpu_monitor(
+    path: Path,
+    *,
+    start_epoch: float | None = None,
+    end_epoch: float | None = None,
+) -> dict[str, Any]:
+    """Read one nvidia-smi CSV, optionally restricted to an engine window."""
+
+    if not path.is_file():
+        return {
+            "peak_used_mib": None,
+            "total_mib": None,
+            "sample_count": 0,
+            "missing_reason": f"{path.name} is missing",
+        }
+    if (start_epoch is None) != (end_epoch is None):
+        return {
+            "peak_used_mib": None,
+            "total_mib": None,
+            "sample_count": 0,
+            "missing_reason": "GPU monitor time-window filter requires both start_epoch and end_epoch",
+        }
+
+    used_values: list[float] = []
+    total_values: list[float] = []
+    timestamped_rows = 0
+    try:
+        with path.open(newline="", encoding="utf-8", errors="replace") as stream:
+            for row in csv.DictReader(stream):
+                if start_epoch is not None and end_epoch is not None:
+                    timestamp = nvidia_smi_timestamp_epoch(_gpu_csv_column(row, "timestamp"))
+                    if timestamp is None:
+                        continue
+                    timestamped_rows += 1
+                    if timestamp < start_epoch or timestamp > end_epoch:
+                        continue
+                used = nvidia_smi_number(_gpu_csv_column(row, "memory.used"))
+                total = nvidia_smi_number(_gpu_csv_column(row, "memory.total"))
+                if used is None:
+                    continue
+                used_values.append(used)
+                if total is not None:
+                    total_values.append(total)
+    except OSError as exc:
+        return {
+            "peak_used_mib": None,
+            "total_mib": None,
+            "sample_count": 0,
+            "missing_reason": f"failed to read {path.name}: {exc}",
+        }
+
+    if not used_values:
+        if start_epoch is not None and timestamped_rows == 0:
+            reason = f"{path.name} has no parseable timestamped samples"
+        elif start_epoch is not None:
+            reason = f"{path.name} has no samples inside [{start_epoch:g}, {end_epoch:g}]"
+        else:
+            reason = f"{path.name} has no parseable memory.used samples"
+        return {
+            "peak_used_mib": None,
+            "total_mib": None,
+            "sample_count": 0,
+            "missing_reason": reason,
+        }
+    return {
+        "peak_used_mib": max(used_values),
+        "total_mib": max(total_values) if total_values else None,
+        "sample_count": len(used_values),
+        "missing_reason": None if total_values else f"{path.name} has no parseable memory.total samples",
+    }
+
+
+def merge_gpu_monitor(case: CaseSummary, path: Path) -> None:
+    labels = {
+        "gpu_monitor.csv": "gpu_monitor",
+        "relion_gpu_monitor.csv": "relion_gpu_monitor",
+        "recovar_gpu_monitor.csv": "recovar_gpu_monitor",
+    }
+    case.artifacts[labels[path.name]] = str(path)
+    summary = read_gpu_monitor(path)
+    if path.name == "gpu_monitor.csv":
+        case.legacy_combined_peak_gpu_memory_mib = summary["peak_used_mib"]
+        case.legacy_combined_gpu_memory_total_mib = summary["total_mib"]
+        case.legacy_combined_gpu_monitor_samples = summary["sample_count"]
+    elif path.name == "relion_gpu_monitor.csv":
+        case.relion_peak_gpu_memory_mib = summary["peak_used_mib"]
+        case.relion_gpu_memory_total_mib = summary["total_mib"]
+        case.relion_gpu_monitor_samples = summary["sample_count"]
+        if summary["peak_used_mib"] is not None:
+            case.relion_gpu_memory_source = path.name
+    else:
+        case.recovar_peak_gpu_memory_mib = summary["peak_used_mib"]
+        case.recovar_gpu_memory_total_mib = summary["total_mib"]
+        case.recovar_gpu_monitor_samples = summary["sample_count"]
+        if summary["peak_used_mib"] is not None:
+            case.recovar_gpu_memory_source = path.name
+    if summary["missing_reason"]:
+        add_performance_missing_reason(case, summary["missing_reason"])
+
+
+def derive_engine_gpu_metrics_from_legacy_monitor(case: CaseSummary) -> None:
+    """Recover engine-specific peaks from old whole-case monitors when possible."""
+
+    combined_raw = case.artifacts.get("gpu_monitor")
+    if combined_raw is None:
+        add_performance_missing_reason(case, "legacy combined HBM unavailable: gpu_monitor.csv is missing")
+
+    engines = (
+        (
+            "RELION",
+            "relion_gpu_monitor",
+            case.relion_start_epoch,
+            case.relion_end_epoch,
+            case.relion_peak_gpu_memory_mib,
+        ),
+        (
+            "RECOVAR",
+            "recovar_gpu_monitor",
+            case.recovar_start_epoch,
+            case.recovar_end_epoch,
+            case.recovar_peak_gpu_memory_mib,
+        ),
+    )
+    for engine, artifact_label, start_epoch, end_epoch, dedicated_peak in engines:
+        if dedicated_peak is not None:
+            continue
+        dedicated_path = case.case_root / f"{engine.lower()}_gpu_monitor.csv"
+        if artifact_label in case.artifacts:
+            add_performance_missing_reason(
+                case,
+                f"{engine} dedicated HBM monitor was unusable; attempting legacy time-window fallback",
+            )
+        if combined_raw is None:
+            add_performance_missing_reason(
+                case,
+                f"{engine} HBM unavailable: {dedicated_path.name} and gpu_monitor.csv are missing",
+            )
+            continue
+        if start_epoch is None or end_epoch is None:
+            add_performance_missing_reason(
+                case,
+                f"{engine} HBM unavailable: {dedicated_path.name} is missing or unusable and engine timestamps are missing",
+            )
+            continue
+        summary = read_gpu_monitor(Path(combined_raw), start_epoch=start_epoch, end_epoch=end_epoch)
+        if summary["peak_used_mib"] is None:
+            add_performance_missing_reason(case, f"{engine} HBM unavailable: {summary['missing_reason']}")
+            continue
+        source = "gpu_monitor.csv filtered by engine slurm_walltime.json"
+        if engine == "RELION":
+            case.relion_peak_gpu_memory_mib = summary["peak_used_mib"]
+            case.relion_gpu_memory_total_mib = summary["total_mib"]
+            case.relion_gpu_monitor_samples = summary["sample_count"]
+            case.relion_gpu_memory_source = source
+        else:
+            case.recovar_peak_gpu_memory_mib = summary["peak_used_mib"]
+            case.recovar_gpu_memory_total_mib = summary["total_mib"]
+            case.recovar_gpu_monitor_samples = summary["sample_count"]
+            case.recovar_gpu_memory_source = source
 
 
 def metric_fsc_auc(values: dict[str, Any], *, sign_invariant: bool = False) -> float | None:
@@ -938,7 +1224,25 @@ def merge_recovar_convergence(case: CaseSummary) -> None:
         case.notes.append(f"failed to read RECOVAR convergence metadata: {exc}")
 
 
-def collect_slurm_accounting(cases: list[CaseSummary]) -> dict[str, tuple[str, str | None]]:
+def parse_slurm_memory_bytes(value: Any) -> int | None:
+    text = str(value or "").strip()
+    match = SLURM_MEMORY_RE.fullmatch(text)
+    if not match:
+        return None
+    magnitude = float(match.group(1))
+    suffix = match.group(2).upper()
+    exponent = {"": 0, "K": 1, "M": 2, "G": 3, "T": 4, "P": 5}[suffix]
+    return int(round(magnitude * (1024**exponent)))
+
+
+def _slurm_query_failure(job_ids: list[str], reason: str) -> dict[str, SlurmAccounting]:
+    return {
+        job_id: SlurmAccounting(job_id=job_id, missing_reasons=[reason])
+        for job_id in job_ids
+    }
+
+
+def collect_slurm_accounting(cases: list[CaseSummary]) -> dict[str, SlurmAccounting]:
     job_ids = sorted({str(case.job_id).strip() for case in cases if str(case.job_id or "").strip().isdigit()})
     if not job_ids:
         return {}
@@ -948,40 +1252,140 @@ def collect_slurm_accounting(cases: list[CaseSummary]) -> dict[str, tuple[str, s
                 "sacct",
                 "-j",
                 ",".join(job_ids),
-                "-X",
                 "-P",
                 "-n",
                 "-o",
-                "JobIDRaw,State,ExitCode",
+                "JobIDRaw,State,ExitCode,ElapsedRaw,MaxRSS,NodeList,AllocTRES",
             ],
             text=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             check=False,
             timeout=10,
         )
-    except Exception:
-        return {}
+    except Exception as exc:
+        return _slurm_query_failure(job_ids, f"sacct query failed: {exc}")
     if proc.returncode != 0:
-        return {}
+        detail = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else f"exit {proc.returncode}"
+        return _slurm_query_failure(job_ids, f"sacct query failed: {detail}")
 
-    states: dict[str, tuple[str, str | None]] = {}
+    records = {job_id: SlurmAccounting(job_id=job_id) for job_id in job_ids}
+    top_level_seen: set[str] = set()
+    max_rss_values_seen: dict[str, list[str]] = {job_id: [] for job_id in job_ids}
     for raw in proc.stdout.splitlines():
         parts = raw.split("|")
-        if len(parts) < 2:
+        if len(parts) < 7:
             continue
-        job_id = parts[0].strip()
-        state = parts[1].strip()
-        exit_code = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None
-        if job_id and state:
-            states[job_id] = (state, exit_code)
-    return states
+        row_job_id = parts[0].strip()
+        base_job_id = next(
+            (job_id for job_id in job_ids if row_job_id == job_id or row_job_id.startswith(f"{job_id}.")),
+            None,
+        )
+        if base_job_id is None:
+            continue
+        record = records[base_job_id]
+        state = parts[1].strip() or None
+        exit_code = parts[2].strip() or None
+        elapsed_s = as_float(parts[3].strip())
+        max_rss_raw = parts[4].strip()
+        max_rss_bytes = parse_slurm_memory_bytes(max_rss_raw)
+        node_list = parts[5].strip() or None
+        alloc_tres = parts[6].strip() or None
+        if row_job_id == base_job_id:
+            top_level_seen.add(base_job_id)
+            record.state = state
+            record.exit_code = exit_code
+            record.elapsed_s = elapsed_s
+            record.node_list = node_list
+            record.alloc_tres = alloc_tres
+        if max_rss_raw:
+            max_rss_values_seen[base_job_id].append(max_rss_raw)
+        if max_rss_bytes is not None and (
+            record.max_rss_bytes is None or max_rss_bytes > record.max_rss_bytes
+        ):
+            record.max_rss_bytes = max_rss_bytes
+            record.max_rss_raw = max_rss_raw
+            record.max_rss_job_id = row_job_id
+
+    for job_id, record in records.items():
+        if job_id not in top_level_seen:
+            record.missing_reasons.append(f"sacct returned no top-level row for job {job_id}")
+        elif record.elapsed_s is None:
+            record.missing_reasons.append(f"sacct top-level row for job {job_id} has no ElapsedRaw")
+        if record.max_rss_bytes is None:
+            raw_values = max_rss_values_seen[job_id]
+            if raw_values:
+                record.missing_reasons.append(
+                    f"sacct MaxRSS values for job {job_id} were unparseable: {', '.join(raw_values[:3])}"
+                )
+            else:
+                record.missing_reasons.append(f"sacct returned no MaxRSS for job {job_id} or its steps")
+    return records
 
 
-def apply_slurm_accounting(case: CaseSummary, state_info: tuple[str, str | None] | None) -> None:
+def normalize_slurm_accounting(
+    job_id: str,
+    value: SlurmAccounting | tuple[str, str | None] | None,
+) -> SlurmAccounting | None:
+    if value is None or isinstance(value, SlurmAccounting):
+        return value
+    if isinstance(value, tuple) and len(value) == 2:
+        return SlurmAccounting(
+            job_id=job_id,
+            state=value[0],
+            exit_code=value[1],
+            missing_reasons=[
+                "Slurm elapsed unavailable in legacy accounting result",
+                "Slurm MaxRSS unavailable in legacy accounting result",
+            ],
+        )
+    return SlurmAccounting(job_id=job_id, missing_reasons=["unrecognized Slurm accounting result"])
+
+
+def write_slurm_accounting_json(
+    path: Path,
+    accounting: dict[str, SlurmAccounting | tuple[str, str | None]],
+) -> None:
+    jobs: dict[str, Any] = {}
+    for job_id, raw in sorted(accounting.items()):
+        record = normalize_slurm_accounting(job_id, raw)
+        if record is not None:
+            jobs[job_id] = record.to_json()
+    payload = {
+        "schema": "recovar.em.slurm_case_accounting.v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "jobs": jobs,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def apply_slurm_accounting(
+    case: CaseSummary,
+    raw_state_info: SlurmAccounting | tuple[str, str | None] | None,
+) -> None:
+    job_id = str(case.job_id or "").strip()
+    state_info = normalize_slurm_accounting(job_id, raw_state_info)
     if state_info is None:
+        reason = (
+            f"Slurm elapsed/MaxRSS unavailable: no sacct record for job {job_id}"
+            if job_id.isdigit()
+            else "Slurm elapsed/MaxRSS unavailable: case has no numeric Slurm job ID"
+        )
+        add_performance_missing_reason(case, reason)
         return
-    state, exit_code = state_info
+    state = state_info.state or ""
+    exit_code = state_info.exit_code
+    case.slurm_elapsed_s = state_info.elapsed_s
+    case.slurm_max_rss_bytes = state_info.max_rss_bytes
+    case.slurm_max_rss_raw = state_info.max_rss_raw
+    case.slurm_max_rss_job_id = state_info.max_rss_job_id
+    case.slurm_node_list = state_info.node_list
+    case.slurm_alloc_tres = state_info.alloc_tres
+    for reason in state_info.missing_reasons:
+        add_performance_missing_reason(case, reason)
+    if not state:
+        return
     state_upper = state.strip().upper()
     state_word = state_upper.split()[0] if state_upper else ""
     case.slurm_state = state
@@ -1232,6 +1636,7 @@ def discover_cases(
     max_excerpt_lines: int,
     *,
     dedupe_case_reruns: bool = False,
+    slurm_accounting_json_out: Path | None = None,
 ) -> list[CaseSummary]:
     cases: dict[str, CaseSummary] = {}
     root_order: dict[str, int] = {}
@@ -1264,14 +1669,25 @@ def discover_cases(
                 merge_relion_kclass_auc(case, path)
             elif path.name == "relion_kclass_gt_fsc.json":
                 merge_relion_kclass_gt(case, path)
+            elif path.name in {"gpu_monitor.csv", "relion_gpu_monitor.csv", "recovar_gpu_monitor.csv"}:
+                merge_gpu_monitor(case, path)
             elif path.name == "summary.md":
                 case.artifacts["summary_markdown"] = str(path)
 
     case_list = list(cases.values())
-    slurm_accounting = collect_slurm_accounting(case_list)
     for case in case_list:
         merge_log_signals(case, max_excerpt_lines=max_excerpt_lines)
         merge_recovar_convergence(case)
+        derive_engine_gpu_metrics_from_legacy_monitor(case)
+
+    slurm_accounting = collect_slurm_accounting(case_list)
+    if slurm_accounting_json_out is not None:
+        write_slurm_accounting_json(slurm_accounting_json_out, slurm_accounting)
+        for case in case_list:
+            if str(case.job_id or "").strip() in slurm_accounting:
+                case.artifacts["slurm_accounting"] = str(slurm_accounting_json_out)
+
+    for case in case_list:
         apply_slurm_accounting(case, slurm_accounting.get(str(case.job_id or "").strip()))
         append_comparison_caveats(case)
         finalize_status(case)
@@ -1304,6 +1720,13 @@ def escape_notes(notes: list[str], *, limit: int = 3) -> str:
     return escape_md("; ".join(trimmed) + suffix)
 
 
+def format_hbm(peak_mib: float | None, total_mib: float | None, source: str | None = None) -> str:
+    if peak_mib is None:
+        return "-"
+    value = f"{fmt(peak_mib)}/{fmt(total_mib)}"
+    return f"{value} ({source})" if source else value
+
+
 def render_markdown(roots: list[Path], cases: list[CaseSummary], json_path: Path) -> str:
     counts: dict[str, int] = {}
     for case in cases:
@@ -1322,8 +1745,8 @@ def render_markdown(roots: list[Path], cases: list[CaseSummary], json_path: Path
     lines.extend(
         [
             "",
-            "| # | Case | K | N | Grid | Noise | Poses | Status | RECOVAR iter | RECOVAR converged | Final all-data ran | Final all-data FSC AUC | Final all-data poses | RECOVAR stage | RECOVAR wall s | RECOVAR FSC AUC vs GT | RELION wall s | RELION FSC AUC vs GT | Delta vs RELION | RELION iter | RELION res A | RELION progress | Final res A | Map corr | Notes | Job | Case root | Failure reason | Failure log |",
-            "|---:|---|---:|---:|---:|---|---|---|---:|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|---|---|---|",
+            "| # | Case | K | N | Grid | Noise | Poses | Status | RECOVAR iter | RECOVAR converged | Final all-data ran | Final all-data FSC AUC | Final all-data poses | RECOVAR stage | Case Slurm elapsed s | Slurm MaxRSS MiB | Legacy combined case HBM peak/total MiB | RECOVAR wall s | RECOVAR HBM peak/total MiB | RECOVAR FSC AUC vs GT | RELION wall s | RELION HBM peak/total MiB | RELION FSC AUC vs GT | Delta vs RELION | RELION iter | RELION res A | RELION progress | Final res A | Map corr | Performance evidence gaps | Notes | Job | Case root | Failure reason | Failure log |",
+            "|---:|---|---:|---:|---:|---|---|---|---:|---|---|---:|---|---|---:|---:|---|---:|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---|---|---|---|---|---|",
         ]
     )
     for case in cases:
@@ -1357,9 +1780,35 @@ def render_markdown(roots: list[Path], cases: list[CaseSummary], json_path: Path
                     escape_md(case.recovar_final_all_data_fsc_auc),
                     escape_md(case.recovar_has_final_all_data_poses),
                     escape_md(case.recovar_latest_stage),
+                    escape_md(case.slurm_elapsed_s),
+                    escape_md(
+                        case.slurm_max_rss_bytes / (1024**2)
+                        if case.slurm_max_rss_bytes is not None
+                        else None
+                    ),
+                    escape_md(
+                        format_hbm(
+                            case.legacy_combined_peak_gpu_memory_mib,
+                            case.legacy_combined_gpu_memory_total_mib,
+                        )
+                    ),
                     escape_md(case.wall_s),
+                    escape_md(
+                        format_hbm(
+                            case.recovar_peak_gpu_memory_mib,
+                            case.recovar_gpu_memory_total_mib,
+                            case.recovar_gpu_memory_source,
+                        )
+                    ),
                     escape_md(case.fsc_auc_vs_gt),
                     escape_md(case.relion_wall_s),
+                    escape_md(
+                        format_hbm(
+                            case.relion_peak_gpu_memory_mib,
+                            case.relion_gpu_memory_total_mib,
+                            case.relion_gpu_memory_source,
+                        )
+                    ),
                     escape_md(case.relion_fsc_auc_vs_gt),
                     escape_md(case.fsc_auc_delta_vs_relion),
                     escape_md(case.relion_iteration),
@@ -1367,6 +1816,7 @@ def render_markdown(roots: list[Path], cases: list[CaseSummary], json_path: Path
                     escape_md(case.relion_latest_progress),
                     escape_md(case.final_resolution_A),
                     escape_md(case.map_corr_vs_gt),
+                    escape_notes(case.performance_missing_reasons),
                     escape_notes(case.notes),
                     escape_md(case.job_id),
                     f"`{case.case_root}`",
@@ -1418,6 +1868,7 @@ def main(argv: list[str] | None = None) -> int:
         roots,
         max_excerpt_lines=max(1, int(args.log_lines)),
         dedupe_case_reruns=bool(args.dedupe_case_reruns),
+        slurm_accounting_json_out=args.slurm_accounting_json_out,
     )
     write_outputs(roots, cases, args.output_markdown, args.output_json)
     print(f"Markdown: {args.output_markdown}")

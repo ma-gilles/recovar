@@ -1413,6 +1413,8 @@ cat > "${{CASE_ROOT}}/case_config.json" <<JSON
   "image_offset_n_std": {case.image_offset_n_std},
   "percent_outliers": {case.percent_outliers},
   "max_iter": {case.max_iter},
+  "gpu_monitor_interval_s": 5,
+  "legacy_combined_gpu_monitor_interval_s": 60,
   "initial_resolution_ang": {KCLASS_INITIAL_RESOLUTION_ANG},
   "particle_diameter_ang": {particle_diameter},
   "image_batch_size": {effective_image_batch_size},
@@ -1420,9 +1422,39 @@ cat > "${{CASE_ROOT}}/case_config.json" <<JSON
 }}
 JSON
 
-nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.total,utilization.gpu --format=csv -l 60 > "${{CASE_ROOT}}/gpu_monitor.csv" &
-MONITOR_PID="$!"
-trap 'kill "${{MONITOR_PID}}" 2>/dev/null || true' EXIT
+GPU_MONITOR_QUERY="timestamp,index,name,memory.used,memory.total,utilization.gpu"
+COMBINED_MONITOR_PID=""
+ENGINE_MONITOR_PID=""
+
+stop_engine_gpu_monitor() {{
+  if [[ -n "${{ENGINE_MONITOR_PID}}" ]]; then
+    kill "${{ENGINE_MONITOR_PID}}" 2>/dev/null || true
+    wait "${{ENGINE_MONITOR_PID}}" 2>/dev/null || true
+    ENGINE_MONITOR_PID=""
+  fi
+}}
+
+start_engine_gpu_monitor() {{
+  local output_path="$1"
+  stop_engine_gpu_monitor
+  nvidia-smi --query-gpu="${{GPU_MONITOR_QUERY}}" --format=csv -l 5 > "${{output_path}}" &
+  ENGINE_MONITOR_PID="$!"
+}}
+
+cleanup_gpu_monitors() {{
+  stop_engine_gpu_monitor
+  if [[ -n "${{COMBINED_MONITOR_PID}}" ]]; then
+    kill "${{COMBINED_MONITOR_PID}}" 2>/dev/null || true
+    wait "${{COMBINED_MONITOR_PID}}" 2>/dev/null || true
+  fi
+}}
+
+# Keep the historical whole-case monitor for continuity, but never attribute
+# its peak to either engine. Dedicated monitors below delimit RELION and
+# RECOVAR independently.
+nvidia-smi --query-gpu="${{GPU_MONITOR_QUERY}}" --format=csv -l 60 > "${{CASE_ROOT}}/gpu_monitor.csv" &
+COMBINED_MONITOR_PID="$!"
+trap cleanup_gpu_monitors EXIT
 
 mapfile -t PDBS < <(find {q(case.pdb_dir)} -maxdepth 1 -type f -name '*.pdb' | sort)
 if [[ "${{#PDBS[@]}}" -lt {required_pdb_count} ]]; then
@@ -1494,6 +1526,7 @@ if [[ "${{RELION_GPU_UUID}}" != "${{CASE_GPU_UUID}}" ]]; then
 fi
 printf '%s\\n' "${{RELION_GPU_UUID}}" > "${{RELION_DIR}}/physical_gpu_uuid.txt"
 RELION_START="$(date +%s)"
+start_engine_gpu_monitor "${{CASE_ROOT}}/relion_gpu_monitor.csv"
 set +e
 (
   unset LD_LIBRARY_PATH
@@ -1564,6 +1597,7 @@ set +e
 RELION_STATUS="${{PIPESTATUS[0]}}"
 set -e
 RELION_END="$(date +%s)"
+stop_engine_gpu_monitor
 cat > "${{RELION_DIR}}/slurm_walltime.json" <<JSON
 {{"slurm_job_id":"${{SLURM_JOB_ID}}","start_epoch":${{RELION_START}},"end_epoch":${{RELION_END}},"external_wall_s":$((RELION_END - RELION_START)),"exit_status":${{RELION_STATUS}}}}
 JSON
@@ -1599,6 +1633,7 @@ JSON
 rm -rf "${{RECOVAR_INTERMEDIATES_DIR}}"
 mkdir -p "${{RECOVAR_INTERMEDIATES_DIR}}"
 START_EPOCH="$(date +%s)"
+start_engine_gpu_monitor "${{CASE_ROOT}}/recovar_gpu_monitor.csv"
 set +e
 "${{PIXI_PY}}" -m scripts.run_full_refinement \\
   --data_dir "${{DATA_DIR}}" \\
@@ -1629,6 +1664,7 @@ set +e
 STATUS="${{PIPESTATUS[0]}}"
 set -e
 END_EPOCH="$(date +%s)"
+stop_engine_gpu_monitor
 cat > "${{RECOVAR_DIR}}/slurm_walltime.json" <<JSON
 {{"slurm_job_id":"${{SLURM_JOB_ID}}","start_epoch":${{START_EPOCH}},"end_epoch":${{END_EPOCH}},"external_wall_s":$((END_EPOCH - START_EPOCH)),"exit_status":${{STATUS}}}}
 JSON
@@ -1766,13 +1802,14 @@ echo "Branch: $(git symbolic-ref --short HEAD || echo '<detached>')"
 echo "Scratch: {scratch_dir}"
 echo
 for job_id in {" ".join(tracked_jobs)}; do
-  sacct -j "${{job_id}}" -X -o JobID,JobName%40,State,Elapsed,MaxRSS,ReqMem,AllocTRES || true
+  sacct -j "${{job_id}}" -o JobID,JobName%40,State,Elapsed,MaxRSS,ReqMem,AllocTRES || true
 done
 echo
 "${{PIXI_PY}}" -m scripts.summarize_em_robustness_matrix \\
   {q(scratch_dir)} \\
   --output-markdown {q(scratch_dir / "em_kclass_robustness_summary.md")} \\
   --output-json {q(scratch_dir / "em_kclass_robustness_summary.json")} \\
+  --slurm-accounting-json-out {q(scratch_dir / "slurm_case_accounting.json")} \\
   --dedupe-case-reruns
 tail -200 {q(scratch_dir / "em_kclass_robustness_summary.md")} || true
 """
