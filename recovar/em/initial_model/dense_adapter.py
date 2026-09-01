@@ -21,7 +21,9 @@ from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_s
 from recovar.em.dense_single_volume.helpers.resolution import compute_coarse_image_size
 from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
 from recovar.em.dense_single_volume.k_class import (
+    _coarse_selector_audit_from_full_stats,
     _run_sparse_k_class_adaptive_pass2,
+    _with_coarse_selector_audit,
     run_dense_k_class_em,
     run_local_k_class_em,
 )
@@ -1008,6 +1010,7 @@ def _run_sparse_pass2_initial_model_estep(
             significant_sample_indices,
             _full_stats,
         ) = sig_result
+        coarse_selector_audit = _coarse_selector_audit_from_full_stats(_full_stats)
         zero_oversampling = oversampling_order == 0
         k1_zero_oversampling = state.K == 1 and zero_oversampling
         pass1_time_s += time.time() - t0
@@ -1280,6 +1283,7 @@ def _run_sparse_pass2_initial_model_estep(
                 coarse_rotations=coarse_metadata_rotations,
                 coarse_translations=coarse_translations,
             )
+        result = _with_coarse_selector_audit(result, coarse_selector_audit)
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(
             _arrays_to_accumulators(

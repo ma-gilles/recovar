@@ -117,13 +117,43 @@ class _Dataset:
         return SimpleNamespace(n_images=n_images, n_units=n_images)
 
 
+class _ReplaceableNamespace(SimpleNamespace):
+    """Small mutable result double with the NamedTuple ``_replace`` contract."""
+
+    def _replace(self, **updates):
+        values = vars(self).copy()
+        values.update(updates)
+        return type(self)(**values)
+
+
+def _control_coarse_selector_audit(translation_count: int) -> dict:
+    return {
+        "score_mode": "gaussian",
+        "translation_count": int(translation_count),
+        "requested_fused": False,
+        "effective_fused": False,
+        "requested_workers": 0,
+        "effective_workers": 0,
+        "requested_atomic": False,
+        "effective_atomic": False,
+        "wrapper": None,
+        "target": None,
+        "counts": {
+            "fused_calls": 0,
+            "actual_rows": 0,
+            "multistream_calls": 0,
+            "native_atomic_selected_calls": 0,
+        },
+    }
+
+
 def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2):
     Ft_y = [np.full(n**3, k + 1, dtype=np.complex64) for k in range(n_classes)]
     Ft_ctf = [np.full(n**3, (k + 1) * 2, dtype=np.float32) for k in range(n_classes)]
     per_class_stats = tuple(
         SimpleNamespace(rotation_posterior_sums=np.full(3, k + 1, dtype=np.float32)) for k in range(n_classes)
     )
-    return SimpleNamespace(
+    return _ReplaceableNamespace(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
         grouped_Ft_y=np.broadcast_to(np.asarray(Ft_y)[None, :, :], (n_groups, n_classes, n**3)).copy(),
@@ -137,6 +167,7 @@ def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2
         best_pose_rotation_ids=np.arange(n_images, dtype=np.int32),
         stats=SimpleNamespace(max_posterior_per_image=np.linspace(0.25, 0.75, n_images, dtype=np.float32)),
         per_class_stats=per_class_stats,
+        profile_summary=None,
     )
 
 
@@ -933,7 +964,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
             np.zeros(n_images, dtype=np.int32),
             np.zeros(n_images, dtype=np.int32),
             significant,
-            None,
+            {"coarse_selector_audit": _control_coarse_selector_audit(len(translations))},
         )
 
     def fake_build_layout(*args, **kwargs):
@@ -1288,6 +1319,7 @@ def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_suppo
                 "best_log_score_per_image": np.asarray([10.0, 11.5], dtype=np.float32),
                 "max_posterior_per_image": coarse_pmax,
                 "class_log_evidence_per_image": coarse_class_evidence,
+                "coarse_selector_audit": _control_coarse_selector_audit(len(coarse_translations)),
             },
         )
 
@@ -1415,6 +1447,7 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
             {
                 "normalization_log_evidence": coarse_log_evidence,
                 "relion_f32_sum_weight": coarse_sum_weight,
+                "coarse_selector_audit": _control_coarse_selector_audit(len(coarse_translations)),
             },
         )
 
@@ -1572,7 +1605,7 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
             np.zeros(n_images, dtype=np.int32),
             np.zeros(n_images, dtype=np.int32),
             significant,
-            None,
+            {"coarse_selector_audit": _control_coarse_selector_audit(1)},
         )
 
     def fake_build_layout(significant_samples, *args, **kwargs):
@@ -1714,7 +1747,7 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
             np.zeros(n_images, dtype=np.int32),
             np.zeros(n_images, dtype=np.int32),
             significant,
-            None,
+            {"coarse_selector_audit": _control_coarse_selector_audit(1)},
         )
 
     def fake_build_layout(significant_samples, *args, **kwargs):
@@ -1840,7 +1873,7 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
             np.zeros(n_images, dtype=np.int32),
             np.zeros(n_images, dtype=np.int32),
             [[np.asarray([0], dtype=np.int32) for _ in range(n_images)]],
-            None,
+            {"coarse_selector_audit": _control_coarse_selector_audit(1)},
         )
 
     def fake_build_layout(significant_samples, *args, **kwargs):
@@ -1979,6 +2012,8 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
     assert result.meta["effective_exact_local_physical_order_chunk_size"] == 220
     assert [accum.halfset_idx for accum in result.accumulators] == [0, 1]
     assert not np.array_equal(result.accumulators[0].data, result.accumulators[1].data)
+    assert result.meta["halfset_0_profile_summary"]["coarse_selector_audit"] == _control_coarse_selector_audit(1)
+    assert "halfset_1_profile_summary" not in result.meta
 
 
 def test_sparse_pass2_pass1_current_size_matches_relion_fixture_coarse_size():
