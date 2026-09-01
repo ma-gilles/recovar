@@ -260,6 +260,16 @@ chain, sealed binary and launcher hashes, exact Slurm accounting, and the
 one-iteration case-21 smoke result. It is infrastructure evidence, not a
 converged K=4 trajectory record.
 
+The box-800 K=1 sparse M-step memory boundary, accepted two-iteration I1
+gate, and accepted full-size finalizer gate are documented in
+`k1_box800_memory_qualification_20260901.md`. It records the rejected
+outer-planner controls, exact inner allocation failure, order-preserving
+M-step output cap, one-H100 resources, timings, HBM, hashes, and reproduction
+procedure. It also records the separately sealed CPU re-audit of the
+finalizer run's validator-only false negative. It is explicitly a 64-particle
+memory qualification, not a full-dataset resolution or cross-engine quality
+result.
+
 The three completed no-CTF fixture escalations (cases 30, 35, and 36; three
 seeds each) are documented in `k4_noctf_negative_boundaries_20260901.md` and
 sealed in
