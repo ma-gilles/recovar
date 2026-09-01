@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -116,6 +117,52 @@ def _write_junit(path: Path) -> None:
     path.write_text(
         '<testsuite name="focused" tests="1" failures="0" errors="0" skipped="0">'
         '<testcase classname="cuda" name="lane_envelope"/></testsuite>\n'
+    )
+
+
+def _write_nsight_fixture(sqlite_path: Path, summary_path: Path) -> None:
+    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("CREATE TABLE StringIds (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+        connection.executemany(
+            "INSERT INTO StringIds(id, value) VALUES (?, ?)",
+            ((1, analyzer.COARSE_KERNEL_NAME), (2, "other_kernel")),
+        )
+        connection.execute(
+            "CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL "
+            "(start INTEGER NOT NULL, end INTEGER NOT NULL, deviceId INTEGER NOT NULL, shortName INTEGER NOT NULL)"
+        )
+        connection.executemany(
+            "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL(start, end, deviceId, shortName) VALUES (?, ?, ?, ?)",
+            (
+                (100, 2_000_000_100, 0, 1),
+                (1_000_000_100, 3_000_000_100, 0, 1),
+                (3_000_000_100, 4_000_000_100, 0, 2),
+            ),
+        )
+    _write_json(
+        summary_path,
+        {
+            "schema": analyzer.NSIGHT_SCHEMA,
+            "sqlite": str(sqlite_path.resolve()),
+            "devices": {"0": {"gpu_busy_ns": 4_000_000_000, "kernel_count": 3}},
+            "kernels": [
+                {
+                    "name": analyzer.COARSE_KERNEL_NAME,
+                    "count": 2,
+                    "total_ns": 4_000_000_000,
+                    "max_ns": 2_000_000_000,
+                    "mean_ns": 2_000_000_000.0,
+                },
+                {
+                    "name": "other_kernel",
+                    "count": 1,
+                    "total_ns": 1_000_000_000,
+                    "max_ns": 1_000_000_000,
+                    "mean_ns": 1_000_000_000.0,
+                },
+            ],
+        },
     )
 
 
@@ -336,12 +383,9 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
         _write_json(profile_root / "profile_summary.json", summary)
         _write_star(warm_root / "run_it181_data.star")
         _write_map(warm_root / "run_it181_class001.mrc")
-        _write_json(
+        _write_nsight_fixture(
+            root / "nsight" / f"{label}.sqlite",
             root / "nsight" / f"{label}_summary.json",
-            {
-                "schema": analyzer.NSIGHT_SCHEMA,
-                "devices": {"0": {"gpu_busy_ns": int(wall * 0.4 * 1e9)}},
-            },
         )
     (provenance / "execution_order.tsv").write_text("".join(execution_rows))
     return root, repo
@@ -372,6 +416,9 @@ def test_complete_crossed_fixture_passes_and_renders_outputs(tmp_path):
         "exact_discrete_and_star_parity": True,
         "map_deltas_within_repeat_envelope": True,
         "material_warm_wall_win": True,
+        "one_transition_gate_pass": True,
+        "long_trajectory_no_growth_evaluated": False,
+        "default_enablement_allowed": False,
         "pass": True,
     }
     assert report["performance"]["percent_change_vs_canonical_serial"]["atomic_multistream"]["warm_wall_s"] < -10.0
@@ -379,8 +426,39 @@ def test_complete_crossed_fixture_passes_and_renders_outputs(tmp_path):
         report["provenance"]["source_manifest"]["sha256"]
         != report["provenance"]["qualified_gpu_gate"]["source_manifest"]["sha256"]
     )
+    arm_profile = report["performance"]["profiling"]["arms"]["atomic_multistream_1"]
+    assert arm_profile["gpu_kernel_union_s"] == 4.0
+    assert arm_profile["coarse_kernel_sum_s"] == 4.0
+    assert arm_profile["coarse_kernel_interval_union_s"] == 3.0
+    assert arm_profile["coarse_kernel_launch_count"] == 2
+    assert arm_profile["nsight_sqlite"]["sha256"] == _sha256(root / "nsight" / "atomic_multistream_1.sqlite")
+    stats = report["performance"]["profiling"]["configurations"]["canonical_serial"]
+    assert stats["raw"]["R1"]["warm_wall_s"] == 10.0
+    assert stats["raw"]["R2"]["warm_wall_s"] == 10.2
+    assert stats["median"]["warm_wall_s"] == 10.1
+    assert stats["repeat_span"]["warm_wall_s"] == pytest.approx(0.2)
+    assert stats["repeat_span_percent"]["warm_wall_s"] == pytest.approx(100.0 * 0.2 / 10.1)
+    assert report["dashboard"] == {
+        "overall_status": "PASS",
+        "scope": "diagnostic_performance_only",
+        "transition": "iteration_180_to_181",
+        "candidate": "atomic_multistream",
+        "candidate_default_state": "off",
+        "one_transition_gate_pass": True,
+        "long_trajectory_no_growth_evaluated": False,
+        "default_enablement_allowed": False,
+    }
     assert "| atomic_multistream |" in report["markdown"]
-    assert "canonical_serial_1__atomic_multistream_1" in report["markdown"]
+    assert report["markdown"].startswith("# OVERALL: PASS")
+    assert "## Gate dashboard" in report["markdown"]
+    assert "## Repeat stability (raw R1/R2)" in report["markdown"]
+    assert "## All six factorial numerical comparisons" in report["markdown"]
+    assert "## Compact provenance" in report["markdown"]
+    assert "long_trajectory_no_growth_evaluated=false" in report["markdown"]
+    assert "default_enablement_allowed=false" in report["markdown"]
+    for repeat in (1, 2):
+        for config in analyzer.CONFIGURATIONS[1:]:
+            assert f"canonical_serial_{repeat}__{config}_{repeat}" in report["markdown"]
 
     output_json = tmp_path / "analysis" / "report.json"
     output_markdown = tmp_path / "analysis" / "report.md"
@@ -400,7 +478,7 @@ def test_complete_crossed_fixture_passes_and_renders_outputs(tmp_path):
         == 0
     )
     assert json.loads(output_json.read_text())["acceptance"]["pass"] is True
-    assert output_markdown.read_text().startswith("# VDAM coarse multistream late-pair gate")
+    assert output_markdown.read_text().startswith("# OVERALL: PASS")
 
 
 @pytest.mark.unit
@@ -517,6 +595,9 @@ def test_discrete_mutation_is_reported_as_a_science_failure(tmp_path):
     assert pair["metadata_exact"]["pose_assignments"] is False
     assert report["acceptance"]["exact_discrete_and_star_parity"] is False
     assert report["acceptance"]["pass"] is False
+    assert report["acceptance"]["one_transition_gate_pass"] is False
+    assert report["markdown"].startswith("# OVERALL: FAIL")
+    assert "This frozen result does not pass even the one-transition gate." in report["markdown"]
 
 
 @pytest.mark.unit
@@ -617,6 +698,59 @@ def test_resource_report_mutation_fails_closed(tmp_path):
     (root / "provenance" / "coarse_atomic_resources.json").write_text("{}\n")
 
     with pytest.raises(analyzer.LatePairSetupError, match="resource report digest differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda summary, _root: summary["devices"]["0"].update(gpu_busy_ns=4_000_000_001),
+            "summary GPU union differs from raw SQLite",
+        ),
+        (
+            lambda summary, _root: next(
+                row for row in summary["kernels"] if row["name"] == analyzer.COARSE_KERNEL_NAME
+            ).update(total_ns=4_000_000_001),
+            "coarse kernel sum differs from raw SQLite",
+        ),
+        (
+            lambda summary, root: summary.update(sqlite=str((root / "nsight" / "atomic_serial_2.sqlite").resolve())),
+            "Nsight SQLite path differs",
+        ),
+    ],
+)
+def test_nsight_summary_mutations_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    path = root / "nsight" / "atomic_multistream_1_summary.json"
+    summary = json.loads(path.read_text())
+    mutate(summary, root)
+    _write_json(path, summary)
+
+    with pytest.raises(analyzer.LatePairSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_raw_nsight_coarse_row_removal_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "atomic_multistream_1.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("DELETE FROM CUPTI_ACTIVITY_KIND_KERNEL WHERE shortName = 1")
+
+    with pytest.raises(analyzer.LatePairSetupError, match="raw Nsight export has no relion_coarse"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_raw_nsight_interval_mutation_fails_summary_crosscheck(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "atomic_multistream_1.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET end = end + 1 WHERE start = 100 AND shortName = 1")
+
+    with pytest.raises(analyzer.LatePairSetupError, match="coarse kernel sum differs from raw SQLite"):
         analyzer.analyze(root, repo=repo)
 
 

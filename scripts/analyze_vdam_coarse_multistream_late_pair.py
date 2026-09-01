@@ -18,6 +18,7 @@ import json
 import math
 import re
 import shlex
+import sqlite3
 import subprocess
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
@@ -32,6 +33,7 @@ import starfile
 from recovar.em.dense_single_volume.helpers.significance import (
     _validate_coarse_selector_audit,
 )
+from scripts import summarize_vdam_nsys_sqlite as nsys_sqlite
 from scripts.analyze_vdam_coarse_combined_true200 import (
     _has_nonfinite_numeric,
     _values_equal,
@@ -44,6 +46,17 @@ PROFILE_SCHEMA = "recovar.vdam_late_iteration_profile.v1"
 NSIGHT_SCHEMA = "recovar.vdam_nsys_sqlite_summary.v1"
 PROFILED_ITERATION = 181
 MATERIAL_WALL_WIN_PERCENT = -5.0
+COARSE_KERNEL_NAME = "relion_coarse_diff2_projector_f32_kernel"
+PROFILE_METRICS = (
+    "warm_wall_s",
+    "warm_expectation_s",
+    "pass1_s",
+    "pass2_s",
+    "gpu_kernel_union_s",
+    "coarse_kernel_sum_s",
+    "coarse_kernel_interval_union_s",
+    "coarse_kernel_launch_count",
+)
 FOCUSED_TEST_NODE = (
     "tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_multistream_atomic_stays_in_lane_envelope"
 )
@@ -753,6 +766,108 @@ def _numeric_scalars(value: Any) -> dict[str, float]:
     return result
 
 
+def _load_nsight_profile(root: Path, label: str) -> dict[str, Any]:
+    """Verify a raw Nsight export against its summary and extract overlap-aware timings."""
+
+    nsight_root = root / "nsight"
+    summary_path = nsight_root / f"{label}_summary.json"
+    sqlite_path = nsight_root / f"{label}.sqlite"
+    _require(summary_path.is_file(), f"missing {label} Nsight summary: {summary_path}")
+    _require(sqlite_path.is_file(), f"missing {label} Nsight SQLite export: {sqlite_path}")
+    summary = _load_json(summary_path, f"{label} Nsight summary")
+    _require(summary.get("schema") == NSIGHT_SCHEMA, f"{label} Nsight schema differs")
+    recorded_sqlite = summary.get("sqlite")
+    _require(isinstance(recorded_sqlite, str) and recorded_sqlite, f"{label} Nsight SQLite path is missing")
+    resolved_sqlite = _resolved_inside(Path(recorded_sqlite), root, f"{label} Nsight SQLite path")
+    _require(resolved_sqlite == sqlite_path.resolve(), f"{label} Nsight SQLite path differs")
+
+    sqlite_sha256 = _sha256(sqlite_path)
+    try:
+        connection = sqlite3.connect(f"file:{sqlite_path.as_posix()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        try:
+            tables = nsys_sqlite._tables(connection)
+            kernel_table = "CUPTI_ACTIVITY_KIND_KERNEL"
+            _require(kernel_table in tables, f"{label} Nsight SQLite export has no kernel table")
+            columns = nsys_sqlite._columns(connection, kernel_table)
+            required_columns = {"start", "end", "deviceId"}
+            _require(
+                required_columns.issubset(columns),
+                f"{label} Nsight kernel table lacks columns {sorted(required_columns - columns)}",
+            )
+            strings = nsys_sqlite._string_ids(connection, tables)
+            rows = list(connection.execute(f'SELECT * FROM "{kernel_table}"'))
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise LatePairSetupError(f"cannot read {label} Nsight SQLite export: {exc}") from exc
+    _require(rows, f"{label} Nsight SQLite export has no CUDA kernels")
+    _require(_sha256(sqlite_path) == sqlite_sha256, f"{label} Nsight SQLite export changed during analysis")
+
+    intervals_by_device: dict[int, list[tuple[int, int]]] = {}
+    coarse_intervals: list[tuple[int, int]] = []
+    coarse_sum_ns = 0
+    for row in rows:
+        start, end = int(row["start"]), int(row["end"])
+        _require(end >= start, f"{label} Nsight kernel interval has negative duration")
+        device = int(row["deviceId"])
+        interval = (start, end)
+        intervals_by_device.setdefault(device, []).append(interval)
+        name = nsys_sqlite._name(
+            row,
+            candidates=("shortName", "demangledName", "mangledName", "name"),
+            strings=strings,
+        )
+        if name == COARSE_KERNEL_NAME:
+            coarse_intervals.append(interval)
+            coarse_sum_ns += end - start
+
+    _require(len(intervals_by_device) == 1, f"{label} raw Nsight device topology differs")
+    _require(coarse_intervals, f"{label} raw Nsight export has no {COARSE_KERNEL_NAME}")
+    device_id, all_intervals = next(iter(intervals_by_device.items()))
+    total_union_ns = nsys_sqlite._union_ns(all_intervals)
+    coarse_union_ns = nsys_sqlite._union_ns(coarse_intervals)
+    _require(total_union_ns > 0, f"{label} raw total GPU interval union is invalid")
+    _require(coarse_union_ns > 0, f"{label} raw coarse GPU interval union is invalid")
+
+    devices = summary.get("devices")
+    _require(isinstance(devices, dict) and set(devices) == {str(device_id)}, f"{label} Nsight device topology differs")
+    device = devices[str(device_id)]
+    _require(isinstance(device, dict), f"{label} Nsight device summary is invalid")
+    _require(
+        device.get("kernel_count") == len(all_intervals),
+        f"{label} Nsight summary kernel count differs from raw SQLite",
+    )
+    _require(
+        device.get("gpu_busy_ns") == total_union_ns,
+        f"{label} Nsight summary GPU union differs from raw SQLite",
+    )
+    kernels = summary.get("kernels")
+    _require(isinstance(kernels, list), f"{label} Nsight kernel summary is missing")
+    coarse_rows = [row for row in kernels if isinstance(row, dict) and row.get("name") == COARSE_KERNEL_NAME]
+    _require(len(coarse_rows) == 1, f"{label} Nsight coarse kernel summary row differs")
+    coarse_row = coarse_rows[0]
+    _require(
+        coarse_row.get("count") == len(coarse_intervals),
+        f"{label} Nsight coarse launch count differs from raw SQLite",
+    )
+    _require(
+        coarse_row.get("total_ns") == coarse_sum_ns,
+        f"{label} Nsight coarse kernel sum differs from raw SQLite",
+    )
+    return {
+        "summary_path": str(summary_path.resolve()),
+        "summary_sha256": _sha256(summary_path),
+        "sqlite_path": str(sqlite_path.resolve()),
+        "sqlite_sha256": sqlite_sha256,
+        "total_gpu_interval_union_s": total_union_ns / 1e9,
+        "coarse_kernel_sum_s": coarse_sum_ns / 1e9,
+        "coarse_kernel_interval_union_s": coarse_union_ns / 1e9,
+        "coarse_kernel_launch_count": len(coarse_intervals),
+        "summary_crosscheck_exact": True,
+    }
+
+
 def _load_arm(root: Path, spec: tuple[str, int, bool, int]) -> dict[str, Any]:
     label, workers, atomic, repeat = spec
     profile_root = root / "runs" / label / "profile"
@@ -824,22 +939,10 @@ def _load_arm(root: Path, spec: tuple[str, int, bool, int]) -> dict[str, Any]:
     iteration_stages = _numeric_scalars(warm.get("iteration_profile"))
     _require("expectation_time_s" in iteration_stages, f"{label} has no warm expectation timing")
     sparse_stages = _numeric_scalars(metadata.get("sparse_pass2_profile_summary"))
+    _require("pass1_time_s" in sparse_stages, f"{label} has no warm pass-1 timing")
+    _require("pass2_time_s" in sparse_stages, f"{label} has no warm pass-2 timing")
     halfset_stages = {key: _numeric_scalars(metadata[key]) for key in profile_keys}
-
-    nsight_path = root / "nsight" / f"{label}_summary.json"
-    gpu_union_s = None
-    nsight_sha = None
-    if nsight_path.exists():
-        nsight = _load_json(nsight_path, f"{label} Nsight summary")
-        _require(nsight.get("schema") == NSIGHT_SCHEMA, f"{label} Nsight schema differs")
-        devices = nsight.get("devices")
-        _require(isinstance(devices, dict) and len(devices) == 1, f"{label} Nsight device topology differs")
-        device = next(iter(devices.values()))
-        _require(isinstance(device, dict), f"{label} Nsight device summary is invalid")
-        busy_ns = device.get("gpu_busy_ns")
-        _require(isinstance(busy_ns, int) and busy_ns > 0, f"{label} GPU union is invalid")
-        gpu_union_s = busy_ns / 1e9
-        nsight_sha = _sha256(nsight_path)
+    nsight = _load_nsight_profile(root, label)
 
     star_path = warm_root / f"run_it{PROFILED_ITERATION:03d}_data.star"
     map_path = warm_root / f"run_it{PROFILED_ITERATION:03d}_class001.mrc"
@@ -860,11 +963,17 @@ def _load_arm(root: Path, spec: tuple[str, int, bool, int]) -> dict[str, Any]:
         "performance": {
             "warm_wall_s": wall_s,
             "warm_expectation_s": iteration_stages["expectation_time_s"],
+            "pass1_s": sparse_stages["pass1_time_s"],
+            "pass2_s": sparse_stages["pass2_time_s"],
             "iteration_stages_s": iteration_stages,
             "sparse_stages_s": sparse_stages,
             "halfset_stages_s": halfset_stages,
-            "gpu_kernel_union_s": gpu_union_s,
-            "nsight_summary_sha256": nsight_sha,
+            "gpu_kernel_union_s": nsight["total_gpu_interval_union_s"],
+            "coarse_kernel_sum_s": nsight["coarse_kernel_sum_s"],
+            "coarse_kernel_interval_union_s": nsight["coarse_kernel_interval_union_s"],
+            "coarse_kernel_launch_count": nsight["coarse_kernel_launch_count"],
+            "nsight_summary_sha256": nsight["summary_sha256"],
+            "nsight": nsight,
         },
     }
 
@@ -933,33 +1042,61 @@ def _percent_change(candidate: float, control: float) -> float:
 
 def _summarize_performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
     medians = {}
+    profiling_configurations = {}
     for config in CONFIGURATIONS:
         rows = [arms[f"{config}_{repeat}"]["performance"] for repeat in (1, 2)]
-        scalar_names = ("warm_wall_s", "warm_expectation_s", "gpu_kernel_union_s")
-        values = {}
-        for name in scalar_names:
-            observed = [row[name] for row in rows]
-            values[name] = float(median(observed)) if all(value is not None for value in observed) else None
+        raw = {f"R{repeat}": {name: rows[repeat - 1][name] for name in PROFILE_METRICS} for repeat in (1, 2)}
+        values = {name: float(median([row[name] for row in rows])) for name in PROFILE_METRICS}
         sparse_names = sorted(set(rows[0]["sparse_stages_s"]).intersection(rows[1]["sparse_stages_s"]))
         values["sparse_stages_s"] = {
             name: float(median([row["sparse_stages_s"][name] for row in rows])) for name in sparse_names
         }
         medians[config] = values
+        repeat_span = {name: abs(float(raw["R2"][name]) - float(raw["R1"][name])) for name in PROFILE_METRICS}
+        repeat_span_percent = {
+            name: 100.0 * repeat_span[name] / values[name] if values[name] else 0.0 for name in PROFILE_METRICS
+        }
+        profiling_configurations[config] = {
+            "raw": raw,
+            "median": {name: values[name] for name in PROFILE_METRICS},
+            "repeat_span": repeat_span,
+            "repeat_span_percent": repeat_span_percent,
+        }
     control = medians["canonical_serial"]
     changes = {}
     for config, values in medians.items():
         changes[config] = {}
-        for name in ("warm_wall_s", "warm_expectation_s", "gpu_kernel_union_s"):
-            if values[name] is not None and control[name] is not None:
-                changes[config][name] = _percent_change(values[name], control[name])
-            else:
-                changes[config][name] = None
+        for name in PROFILE_METRICS:
+            changes[config][name] = _percent_change(values[name], control[name])
+        profiling_configurations[config]["percent_change_vs_canonical_serial"] = dict(changes[config])
     candidate_wall_change = changes["atomic_multistream"]["warm_wall_s"]
     material_wall_win = bool(candidate_wall_change <= MATERIAL_WALL_WIN_PERCENT)
+    profiling_arms = {}
+    for label, arm in arms.items():
+        performance = arm["performance"]
+        nsight = performance["nsight"]
+        profiling_arms[label] = {
+            **{name: performance[name] for name in PROFILE_METRICS},
+            "nsight_sqlite": {
+                "path": nsight["sqlite_path"],
+                "sha256": nsight["sqlite_sha256"],
+                "summary_path": nsight["summary_path"],
+                "summary_sha256": nsight["summary_sha256"],
+                "total_gpu_union_crosscheck_exact": nsight["summary_crosscheck_exact"],
+            },
+        }
     return {
         "arms": {label: arm["performance"] for label, arm in arms.items()},
         "configuration_medians": medians,
         "percent_change_vs_canonical_serial": changes,
+        "profiling": {
+            "metric_order": list(PROFILE_METRICS),
+            "arms": profiling_arms,
+            "configurations": profiling_configurations,
+            "all_sqlite_summary_crosschecks_exact": all(
+                arm["nsight_sqlite"]["total_gpu_union_crosscheck_exact"] for arm in profiling_arms.values()
+            ),
+        },
         "material_warm_wall_threshold_percent": MATERIAL_WALL_WIN_PERCENT,
         "atomic_multistream_material_warm_wall_win": material_wall_win,
         "pass": material_wall_win,
@@ -969,55 +1106,186 @@ def _summarize_performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
 def _markdown(report: dict[str, Any]) -> str:
     performance = report["performance"]
     science = report["science"]
+    acceptance = report["acceptance"]
+    dashboard = report["dashboard"]
+    profiling = performance["profiling"]
+    overall = dashboard["overall_status"]
+
+    def mark(value: bool) -> str:
+        return "PASS" if value else "FAIL"
+
+    def metric_value(name: str, value: float) -> str:
+        return f"{value:.0f}" if name == "coarse_kernel_launch_count" else f"{value:.6f}"
+
+    metric_labels = {
+        "warm_wall_s": "warm wall (s)",
+        "warm_expectation_s": "expectation (s)",
+        "pass1_s": "pass 1 (s)",
+        "pass2_s": "pass 2 (s)",
+        "gpu_kernel_union_s": "total GPU union (s)",
+        "coarse_kernel_sum_s": "coarse kernel sum (s)",
+        "coarse_kernel_interval_union_s": "coarse interval union (s)",
+        "coarse_kernel_launch_count": "coarse launches",
+    }
+    candidate_wall_change = performance["percent_change_vs_canonical_serial"]["atomic_multistream"]["warm_wall_s"]
     rows = [
-        "# VDAM coarse multistream late-pair gate",
+        f"# OVERALL: {overall} — VDAM coarse multistream one-transition gate",
         "",
-        f"- Overall: `{'PASS' if report['acceptance']['pass'] else 'FAIL'}`",
-        f"- Slurm job: `{report['provenance']['job_id']}`",
-        f"- Git head: `{report['provenance']['git_head']}`",
-        f"- Effective selector audits: `{report['acceptance']['effective_selector_audits']}`",
-        f"- Exact discrete/STAR parity: `{science['all_factorial_discrete_and_star_exact']}`",
-        f"- Maps within repeat envelope: `{science['all_factorial_maps_within_repeat_envelope']}`",
+        f"> **One-transition gate: {overall}. The candidate remains default-off.**",
         "",
-        "| Configuration | Warm wall (s) | Expectation (s) | Pass 1 (s) | Pass 2 (s) | GPU union (s) | Wall vs serial |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "- Scope: `diagnostic_performance_only`, covering only the frozen iteration 180 → 181 transition.",
+        "- This report cannot promote scientific correctness or change a production default.",
+        f"- `one_transition_gate_pass={str(dashboard['one_transition_gate_pass']).lower()}`",
+        "- `long_trajectory_no_growth_evaluated=false`",
+        "- `default_enablement_allowed=false`",
+        "",
+        "## Gate dashboard",
+        "",
+        "| Gate | Requirement | Result | Status |",
+        "|---|---|---|---:|",
+        "| Topology and sealed provenance | Exact | Verified | PASS |",
+        f"| Effective selector audits | 8/8 exact | {acceptance['selector_audit_count']}/8 | "
+        f"{mark(acceptance['effective_selector_audits'])} |",
+        f"| Raw SQLite ↔ Nsight summary GPU union | 8/8 exact | "
+        f"{sum(arm['nsight_sqlite']['total_gpu_union_crosscheck_exact'] for arm in profiling['arms'].values())}/8 | "
+        f"{mark(profiling['all_sqlite_summary_crosschecks_exact'])} |",
+        f"| Discrete state and particle STAR | All six pairs exact | "
+        f"{science['all_factorial_discrete_and_star_exact']} | "
+        f"{mark(acceptance['exact_discrete_and_star_parity'])} |",
+        f"| Map arithmetic | All six pairs ≤ repeat envelope | "
+        f"{science['all_factorial_maps_within_repeat_envelope']} | "
+        f"{mark(acceptance['map_deltas_within_repeat_envelope'])} |",
+        f"| Atomic + 8-stream warm wall | ≤ {MATERIAL_WALL_WIN_PERCENT:+.1f}% vs canonical serial | "
+        f"{candidate_wall_change:+.2f}% | {mark(acceptance['material_warm_wall_win'])} |",
+        f"| One-transition gate | Every gate above passes | {acceptance['one_transition_gate_pass']} | "
+        f"{mark(acceptance['one_transition_gate_pass'])} |",
+        "| Long-trajectory no-growth | Required before enablement | Not evaluated | OPEN |",
+        "| Default enablement | Requires long-trajectory qualification | `false` | BLOCKED |",
+        "",
+        "## Median performance",
+        "",
+        "| Configuration | Warm wall (s) | Δ wall | Expectation (s) | Pass 1 (s) | Pass 2 (s) | "
+        "Total GPU union (s) | Coarse sum (s) | Coarse union (s) | Coarse launches |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     medians = performance["configuration_medians"]
     changes = performance["percent_change_vs_canonical_serial"]
     for config in CONFIGURATIONS:
         values = medians[config]
-        sparse = values["sparse_stages_s"]
-        gpu = values["gpu_kernel_union_s"]
-        change = changes[config]["warm_wall_s"]
         rows.append(
-            "| "
-            + " | ".join(
-                (
-                    config,
-                    f"{values['warm_wall_s']:.6f}",
-                    f"{values['warm_expectation_s']:.6f}",
-                    f"{sparse.get('pass1_time_s', math.nan):.6f}",
-                    f"{sparse.get('pass2_time_s', math.nan):.6f}",
-                    "n/a" if gpu is None else f"{gpu:.6f}",
-                    "n/a" if change is None else f"{change:+.2f}%",
-                )
-            )
-            + " |"
+            f"| {config} | {values['warm_wall_s']:.6f} | {changes[config]['warm_wall_s']:+.2f}% | "
+            f"{values['warm_expectation_s']:.6f} | {values['pass1_s']:.6f} | {values['pass2_s']:.6f} | "
+            f"{values['gpu_kernel_union_s']:.6f} | {values['coarse_kernel_sum_s']:.6f} | "
+            f"{values['coarse_kernel_interval_union_s']:.6f} | "
+            f"{values['coarse_kernel_launch_count']:.0f} |"
         )
     rows.extend(
         (
             "",
-            "| Matched candidate pair | Discrete/STAR exact | Map rel-L2 | Repeat envelope | Bounded |",
+            "## Repeat stability (raw R1/R2)",
+            "",
+            "| Configuration | Metric | R1 | R2 | Median | Repeat span | Span / median | Δ vs canonical |",
+            "|---|---|---:|---:|---:|---:|---:|---:|",
+        )
+    )
+    for config in CONFIGURATIONS:
+        stats = profiling["configurations"][config]
+        for name in PROFILE_METRICS:
+            rows.append(
+                f"| {config} | {metric_labels[name]} | {metric_value(name, stats['raw']['R1'][name])} | "
+                f"{metric_value(name, stats['raw']['R2'][name])} | "
+                f"{metric_value(name, stats['median'][name])} | "
+                f"{metric_value(name, stats['repeat_span'][name])} | "
+                f"{stats['repeat_span_percent'][name]:.3f}% | "
+                f"{stats['percent_change_vs_canonical_serial'][name]:+.2f}% |"
+            )
+    rows.extend(
+        (
+            "",
+            "### Map repeat envelope",
+            "",
+            "| Configuration | R1 ↔ R2 rel-L2 | Max abs | Signed mean | Relative scale drift |",
             "|---|---:|---:|---:|---:|",
         )
     )
-    for key, value in science["candidate_pairs"].items():
+    for config in CONFIGURATIONS:
+        value = science["repeat_map_deltas"][config]
+        rows.append(
+            f"| {config} | {value['relative_l2']:.3e} | {value['max_abs']:.3e} | "
+            f"{value['signed_mean']:.3e} | {value['relative_scale_drift']:.3e} |"
+        )
+    rows.extend(
+        (
+            "",
+            f"Observed repeat rel-L2 envelope: `{science['repeat_relative_l2_envelope']:.6e}`.",
+            "",
+            "## All six factorial numerical comparisons",
+            "",
+            "| Control → factorial arm | Discrete/STAR exact | Map rel-L2 | Max abs | Signed mean | "
+            "Signed mean / RMS | Scale drift | Repeat envelope | Bounded |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        )
+    )
+    for key, value in science["paired_factorial_comparisons"].items():
         map_row = value["map"]
         rows.append(
             f"| {key} | {value['all_discrete_exact']} | {map_row['relative_l2']:.3e} | "
+            f"{map_row['max_abs']:.3e} | {map_row['signed_mean']:.3e} | "
+            f"{map_row['signed_mean_over_delta_rms']:.3e} | {map_row['relative_scale_drift']:.3e} | "
             f"{map_row['repeat_envelope_relative_l2']:.3e} | {map_row['within_repeat_envelope']} |"
         )
-    rows.append("")
+    provenance = report["provenance"]
+    qualified = provenance["qualified_gpu_gate"]
+    rows.extend(
+        (
+            "",
+            "## Compact provenance",
+            "",
+            "| Evidence | Sealed value |",
+            "|---|---|",
+            f"| Result root | `{provenance['root']}` |",
+            f"| Slurm job | `{provenance['job_id']}` |",
+            f"| Git commit / tree | `{provenance['git_head']}` / `{provenance['git_tree']}` |",
+            f"| Node / GPU | `{provenance['node']}` / `{provenance['gpu_name']}` |",
+            f"| GPU UUID | `{provenance['gpu_uuid']}` |",
+            f"| CUDA binary SHA-256 | `{provenance['cuda_sha256']}` |",
+            f"| Source / input manifests | `{provenance['source_manifest_sha256']}` / "
+            f"`{provenance['input_manifest_sha256']}` |",
+            f"| Qualified focused GPU gate | job `{qualified['job_id']}`, `{qualified['root']}` |",
+            f"| Analyzer SHA-256 | `{provenance['analyzer_source_sha256']}` |",
+            "",
+            "### Nsight SQLite seals",
+            "",
+            "Each path below is absolute in `report.json`; the compact path is relative to the sealed result root.",
+            "",
+            "| Arm | SQLite | SQLite SHA-256 | Summary SHA-256 | Union cross-check |",
+            "|---|---|---|---|---:|",
+        )
+    )
+    root_path = Path(provenance["root"])
+    for label in ARM_LABELS:
+        seal = profiling["arms"][label]["nsight_sqlite"]
+        compact_path = Path(seal["path"]).relative_to(root_path)
+        rows.append(
+            f"| {label} | `{compact_path}` | `{seal['sha256']}` | `{seal['summary_sha256']}` | "
+            f"{seal['total_gpu_union_crosscheck_exact']} |"
+        )
+    transition_conclusion = (
+        "This run passes only the bounded one-transition gate; it does not qualify default enablement."
+        if acceptance["one_transition_gate_pass"]
+        else "This frozen result does not pass even the one-transition gate."
+    )
+    rows.extend(
+        (
+            "",
+            "## Promotion boundary",
+            "",
+            "The atomic + 8-stream selector remains **default-off**. Passing this one-transition diagnostic would not "
+            "establish long-trajectory numerical no-growth, basin preservation across a full run, or production "
+            f"enablement. {transition_conclusion}",
+            "",
+        )
+    )
     return "\n".join(rows)
 
 
@@ -1025,12 +1293,17 @@ def analyze(root: Path, *, repo: Path | None = None) -> dict[str, Any]:
     root = root.resolve()
     repo = (repo or Path(__file__).resolve().parents[1]).resolve()
     run, provenance_details = _validate_provenance(root, repo)
+    nsight_summaries = {path.name.removesuffix("_summary.json") for path in (root / "nsight").glob("*_summary.json")}
+    nsight_sqlites = {path.stem for path in (root / "nsight").glob("*.sqlite")}
+    _require(
+        nsight_summaries == set(ARM_LABELS) and nsight_sqlites == set(ARM_LABELS),
+        "Nsight summaries/SQLite exports are only partially present or have unexpected arms",
+    )
     arms = {spec[0]: _load_arm(root, spec) for spec in ARM_SPECS}
-    nsight_count = sum(arm["performance"]["gpu_kernel_union_s"] is not None for arm in arms.values())
-    _require(nsight_count in {0, len(ARM_SPECS)}, "Nsight summaries are only partially present")
     science = _paired_science(arms)
     performance = _summarize_performance(arms)
     selector_count = sum(len(arm["selector_audits"]) for arm in arms.values())
+    one_transition_gate_pass = science["pass"] and performance["pass"]
     report = {
         "schema": SCHEMA,
         "provenance": {
@@ -1057,7 +1330,20 @@ def analyze(root: Path, *, repo: Path | None = None) -> dict[str, Any]:
             "exact_discrete_and_star_parity": science["all_factorial_discrete_and_star_exact"],
             "map_deltas_within_repeat_envelope": science["all_factorial_maps_within_repeat_envelope"],
             "material_warm_wall_win": performance["atomic_multistream_material_warm_wall_win"],
-            "pass": science["pass"] and performance["pass"],
+            "one_transition_gate_pass": one_transition_gate_pass,
+            "long_trajectory_no_growth_evaluated": False,
+            "default_enablement_allowed": False,
+            "pass": one_transition_gate_pass,
+        },
+        "dashboard": {
+            "overall_status": "PASS" if one_transition_gate_pass else "FAIL",
+            "scope": "diagnostic_performance_only",
+            "transition": f"iteration_{PROFILED_ITERATION - 1}_to_{PROFILED_ITERATION}",
+            "candidate": "atomic_multistream",
+            "candidate_default_state": "off",
+            "one_transition_gate_pass": one_transition_gate_pass,
+            "long_trajectory_no_growth_evaluated": False,
+            "default_enablement_allowed": False,
         },
     }
     report["markdown"] = _markdown(report)
