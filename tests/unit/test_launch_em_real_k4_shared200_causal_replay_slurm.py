@@ -164,6 +164,7 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "--exclusive" not in script
     assert "run_native_arm control_a 0" in script
     assert "run_native_arm control_b 0" in script
+    assert "srun --mpi=pmix --ntasks=3" in script
     assert 'for class_id in 1 2 3 4; do run_native_arm "class${class_id}"' in script
     assert "--data-star" in script and "particles_shared200.star" in script
     assert "-eq 800" in script

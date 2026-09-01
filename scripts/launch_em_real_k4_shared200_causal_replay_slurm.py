@@ -612,7 +612,7 @@ run_native_arm() {{
     export RELION_FINE_SCORE_CAPTURE_CLASSES="${{capture_class}}"
   fi
   local command=(
-    srun --ntasks=3 --cpus-per-task=2 --cpu-bind=none {_quote(args.relion_capture_binary)}
+    srun --mpi=pmix --ntasks=3 --cpus-per-task=2 --cpu-bind=none {_quote(args.relion_capture_binary)}
     --continue {_quote(pair / "relion/run_it000_optimiser.star")}
     --o "${{arm_root}}/output/run" --iter 1 --auto_iter_max 1 --pool 3 --gpu 0:0:0 --j 2
   )
