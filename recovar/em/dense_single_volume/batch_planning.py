@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -76,6 +77,333 @@ class _ConsecutivePaddedBatch:
     item_indices: np.ndarray
     padded_size: int
     padded_item_capacity: int
+
+
+@dataclass(frozen=True)
+class _FixedCapacityLocalCall:
+    """One already-planned local call in its authoritative chronology.
+
+    ``row_counts`` contains the number of real candidate rows for each image;
+    ``radix_bucket`` is the existing rectangular rotation capacity.  This
+    descriptor deliberately does not regroup images or choose a new radix.
+    """
+
+    image_indices: np.ndarray
+    row_counts: np.ndarray
+    radix_bucket: int
+
+
+@dataclass(frozen=True)
+class _FixedCapacityWholeLocalPlan:
+    """Fixed-shape host descriptors for a future whole-local executor.
+
+    The fixed array capacities are static executor shapes.  The valid counts,
+    row offsets, call chronology, radix buckets, and logical Fourier cutoff are
+    runtime values.  Candidate payloads are packed without padded radix rows;
+    an executor can materialize its existing radix-specific scratch tile for
+    each call without changing the authoritative call or particle order.
+    """
+
+    physical_image_capacity: int
+    physical_row_capacity: int
+    physical_call_capacity: int
+    logical_cutoff_capacity: int
+    valid_image_count: int
+    valid_row_count: int
+    valid_call_count: int
+    image_indices: np.ndarray
+    row_offsets: np.ndarray
+    call_valid_mask: np.ndarray
+    call_image_offsets: np.ndarray
+    call_row_offsets: np.ndarray
+    call_valid_images: np.ndarray
+    call_valid_rows: np.ndarray
+    call_image_capacities: np.ndarray
+    call_radix_buckets: np.ndarray
+    logical_cutoff: np.ndarray
+
+
+def _normalized_fixed_capacity_palette(
+    image_capacity_palette: Mapping[int, Sequence[int]],
+) -> dict[int, tuple[int, ...]]:
+    palette: dict[int, tuple[int, ...]] = {}
+    for raw_radix, raw_capacities in image_capacity_palette.items():
+        radix = int(raw_radix)
+        if radix <= 0:
+            raise ValueError("fixed-capacity radix buckets must be positive")
+        capacities = tuple(sorted({int(value) for value in raw_capacities}))
+        if not capacities or capacities[0] <= 0:
+            raise ValueError(
+                "each fixed-capacity radix bucket needs at least one positive image capacity",
+            )
+        palette[radix] = capacities
+    return palette
+
+
+def _plan_fixed_capacity_whole_local(
+    calls: Sequence[_FixedCapacityLocalCall],
+    *,
+    expected_image_order,
+    physical_image_capacity: int,
+    physical_row_capacity: int,
+    physical_call_capacity: int,
+    image_capacity_palette: Mapping[int, Sequence[int]],
+    logical_cutoff: int,
+    logical_cutoff_capacity: int,
+    enabled: bool = False,
+) -> _FixedCapacityWholeLocalPlan | None:
+    """Pack existing local calls into one fixed-capacity execution program.
+
+    This is a host-only seam for a default-off whole-local executor.  It never
+    creates, splits, coalesces, or reorders calls.  The caller must provide the
+    sealed physical image order and a stable image-capacity palette for each
+    existing radix bucket.  Full and tail calls map to the smallest fitting
+    palette capacity while their real image/candidate counts remain runtime
+    descriptors.
+
+    Returning ``None`` while disabled makes the seam inert for both mature EM
+    and InitialModel.  Once enabled, every unsupported capacity or chronology
+    fails closed instead of falling back to a different grouping policy.
+    """
+
+    if not enabled:
+        return None
+
+    physical_image_capacity = int(physical_image_capacity)
+    physical_row_capacity = int(physical_row_capacity)
+    physical_call_capacity = int(physical_call_capacity)
+    logical_cutoff = int(logical_cutoff)
+    logical_cutoff_capacity = int(logical_cutoff_capacity)
+    if (
+        min(
+            physical_image_capacity,
+            physical_row_capacity,
+            physical_call_capacity,
+            logical_cutoff_capacity,
+        )
+        <= 0
+    ):
+        raise ValueError("fixed-capacity executor capacities must be positive")
+    if logical_cutoff <= 0 or logical_cutoff > logical_cutoff_capacity:
+        raise ValueError(
+            "logical_cutoff must be positive and no larger than logical_cutoff_capacity",
+        )
+
+    calls = tuple(calls)
+    if len(calls) > physical_call_capacity:
+        raise ValueError(
+            f"fixed-capacity call program overflow: valid={len(calls)}, capacity={physical_call_capacity}",
+        )
+    palette = _normalized_fixed_capacity_palette(image_capacity_palette)
+
+    image_parts: list[np.ndarray] = []
+    row_count_parts: list[np.ndarray] = []
+    call_image_offsets = np.full(
+        physical_call_capacity,
+        -1,
+        dtype=np.int32,
+    )
+    call_row_offsets = np.full(
+        physical_call_capacity,
+        -1,
+        dtype=np.int64,
+    )
+    call_valid_images = np.zeros(physical_call_capacity, dtype=np.int32)
+    call_valid_rows = np.zeros(physical_call_capacity, dtype=np.int64)
+    call_image_capacities = np.zeros(physical_call_capacity, dtype=np.int32)
+    call_radix_buckets = np.zeros(physical_call_capacity, dtype=np.int32)
+    call_valid_mask = np.zeros(physical_call_capacity, dtype=bool)
+
+    running_images = 0
+    running_rows = 0
+    for call_index, call in enumerate(calls):
+        image_indices = np.asarray(call.image_indices, dtype=np.int64).reshape(-1)
+        row_counts = np.asarray(call.row_counts, dtype=np.int64).reshape(-1)
+        radix_bucket = int(call.radix_bucket)
+        if image_indices.size == 0:
+            raise ValueError("fixed-capacity local calls cannot be empty")
+        if row_counts.shape != image_indices.shape:
+            raise ValueError(
+                f"fixed-capacity call row_counts must match image_indices: {row_counts.shape} vs {image_indices.shape}",
+            )
+        if np.any(image_indices < 0):
+            raise ValueError("fixed-capacity image indices must be non-negative")
+        if radix_bucket not in palette:
+            raise ValueError(
+                f"fixed-capacity palette has no entry for radix bucket {radix_bucket}",
+            )
+        if np.any(row_counts <= 0) or np.any(row_counts > radix_bucket):
+            raise ValueError(
+                f"fixed-capacity candidate row counts must be positive and no larger than radix bucket {radix_bucket}",
+            )
+
+        valid_images = int(image_indices.size)
+        fitting_capacities = [capacity for capacity in palette[radix_bucket] if capacity >= valid_images]
+        if not fitting_capacities:
+            raise ValueError(
+                "fixed-capacity image palette overflow for radix bucket "
+                f"{radix_bucket}: valid={valid_images}, "
+                f"capacities={palette[radix_bucket]}",
+            )
+        valid_rows = int(np.sum(row_counts, dtype=np.int64))
+        call_valid_mask[call_index] = True
+        call_image_offsets[call_index] = running_images
+        call_row_offsets[call_index] = running_rows
+        call_valid_images[call_index] = valid_images
+        call_valid_rows[call_index] = valid_rows
+        call_image_capacities[call_index] = fitting_capacities[0]
+        call_radix_buckets[call_index] = radix_bucket
+        image_parts.append(image_indices)
+        row_count_parts.append(row_counts)
+        running_images += valid_images
+        running_rows += valid_rows
+
+    chronological_image_indices = np.concatenate(image_parts) if image_parts else np.zeros(0, dtype=np.int64)
+    chronological_row_counts = np.concatenate(row_count_parts) if row_count_parts else np.zeros(0, dtype=np.int64)
+    expected_image_order = np.asarray(expected_image_order, dtype=np.int64).reshape(-1)
+    if not np.array_equal(chronological_image_indices, expected_image_order):
+        raise ValueError(
+            "fixed-capacity call chronology does not match expected physical image order",
+        )
+    if np.unique(chronological_image_indices).size != chronological_image_indices.size:
+        raise ValueError("fixed-capacity physical image order must not contain duplicates")
+    if running_images > physical_image_capacity:
+        raise ValueError(
+            f"fixed-capacity image storage overflow: valid={running_images}, capacity={physical_image_capacity}",
+        )
+    if running_rows > physical_row_capacity:
+        raise ValueError(
+            f"fixed-capacity candidate-row storage overflow: valid={running_rows}, capacity={physical_row_capacity}",
+        )
+
+    image_indices = np.full(physical_image_capacity, -1, dtype=np.int64)
+    image_indices[:running_images] = chronological_image_indices
+    row_offsets = np.full(
+        physical_image_capacity + 1,
+        running_rows,
+        dtype=np.int64,
+    )
+    row_offsets[0] = 0
+    if chronological_row_counts.size:
+        row_offsets[1 : running_images + 1] = np.cumsum(
+            chronological_row_counts,
+            dtype=np.int64,
+        )
+    if len(calls) < physical_call_capacity:
+        call_image_offsets[len(calls) :] = running_images
+        call_row_offsets[len(calls) :] = running_rows
+
+    return _FixedCapacityWholeLocalPlan(
+        physical_image_capacity=physical_image_capacity,
+        physical_row_capacity=physical_row_capacity,
+        physical_call_capacity=physical_call_capacity,
+        logical_cutoff_capacity=logical_cutoff_capacity,
+        valid_image_count=running_images,
+        valid_row_count=running_rows,
+        valid_call_count=len(calls),
+        image_indices=image_indices,
+        row_offsets=row_offsets,
+        call_valid_mask=call_valid_mask,
+        call_image_offsets=call_image_offsets,
+        call_row_offsets=call_row_offsets,
+        call_valid_images=call_valid_images,
+        call_valid_rows=call_valid_rows,
+        call_image_capacities=call_image_capacities,
+        call_radix_buckets=call_radix_buckets,
+        logical_cutoff=np.asarray(logical_cutoff, dtype=np.int32),
+    )
+
+
+def _validate_fixed_capacity_call_values(
+    plan: _FixedCapacityWholeLocalPlan,
+    values_by_call,
+    *,
+    candidate_rows: bool,
+) -> tuple[list[np.ndarray], tuple[int, ...], np.dtype]:
+    values = [np.asarray(value) for value in values_by_call]
+    if len(values) != plan.valid_call_count:
+        raise ValueError(
+            "fixed-capacity packed values must contain one array per valid call: "
+            f"got {len(values)}, expected {plan.valid_call_count}",
+        )
+    if not values:
+        raise ValueError("fixed-capacity packing requires at least one valid call")
+
+    first_trailing_shape = values[0].shape[2 if candidate_rows else 1 :]
+    first_dtype = values[0].dtype
+    for call_index, value in enumerate(values):
+        valid_images = int(plan.call_valid_images[call_index])
+        expected_prefix = (
+            (valid_images, int(plan.call_radix_buckets[call_index])) if candidate_rows else (valid_images,)
+        )
+        if value.shape[: len(expected_prefix)] != expected_prefix:
+            raise ValueError(
+                "fixed-capacity packed call has an unexpected leading shape: "
+                f"got {value.shape}, expected prefix {expected_prefix}",
+            )
+        trailing_shape = value.shape[len(expected_prefix) :]
+        if trailing_shape != first_trailing_shape or value.dtype != first_dtype:
+            raise ValueError(
+                "fixed-capacity packed call values must share dtype and trailing shape",
+            )
+    return values, first_trailing_shape, first_dtype
+
+
+def _pack_fixed_capacity_local_images(
+    plan: _FixedCapacityWholeLocalPlan,
+    values_by_call,
+    *,
+    fill_value=0,
+) -> np.ndarray:
+    """Pack per-image call operands into the plan's stable image axis."""
+
+    values, trailing_shape, dtype = _validate_fixed_capacity_call_values(
+        plan,
+        values_by_call,
+        candidate_rows=False,
+    )
+    packed = np.full(
+        (plan.physical_image_capacity,) + trailing_shape,
+        fill_value,
+        dtype=dtype,
+    )
+    for call_index, value in enumerate(values):
+        start = int(plan.call_image_offsets[call_index])
+        stop = start + int(plan.call_valid_images[call_index])
+        packed[start:stop] = value
+    return packed
+
+
+def _pack_fixed_capacity_local_candidate_rows(
+    plan: _FixedCapacityWholeLocalPlan,
+    values_by_call,
+    *,
+    fill_value=0,
+) -> np.ndarray:
+    """Pack real candidate rows without copying rectangular radix padding."""
+
+    values, trailing_shape, dtype = _validate_fixed_capacity_call_values(
+        plan,
+        values_by_call,
+        candidate_rows=True,
+    )
+    packed = np.full(
+        (plan.physical_row_capacity,) + trailing_shape,
+        fill_value,
+        dtype=dtype,
+    )
+    for call_index, value in enumerate(values):
+        image_start = int(plan.call_image_offsets[call_index])
+        valid_images = int(plan.call_valid_images[call_index])
+        for local_image_index in range(valid_images):
+            global_image_index = image_start + local_image_index
+            row_start = int(plan.row_offsets[global_image_index])
+            row_stop = int(plan.row_offsets[global_image_index + 1])
+            packed[row_start:row_stop] = value[
+                local_image_index,
+                : row_stop - row_start,
+            ]
+    return packed
 
 
 def _plan_consecutive_padded_batches(
