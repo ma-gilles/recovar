@@ -457,11 +457,6 @@ def _reconstruct_volume_eager(
     explicit_irfft_normalization = _large_irfft_requires_explicit_normalization(
         reconstruction_shape,
     )
-    inverse_fft_norm = (
-        "forward"
-        if explicit_irfft_normalization
-        else fourier_transform_utils.DEFAULT_FFT_NORM
-    )
     result = relion_functions._finish_large_relion_postprocess_from_fftw_half(
         fftw_half_host,
         vol_shape,
@@ -473,7 +468,6 @@ def _reconstruct_volume_eager(
         kernel_width=1,
         return_real_space=return_real_space,
         gridding_padding_factor=projection_padding_factor,
-        inverse_fft_norm=inverse_fft_norm,
     )
     if explicit_irfft_normalization:
         transform_size = math.prod(reconstruction_shape)
@@ -484,9 +478,9 @@ def _reconstruct_volume_eager(
             transform_size,
         )
         # XLA's built-in ``norm='backward'`` normalization overflows its
-        # signed-int32 transform-size product at 1600^3 and silently becomes
-        # one.  Run an unnormalised inverse FFT above that boundary, then
-        # apply the exact floating-point reciprocal in a separate executable.
+        # signed-int32 transform-size product at 1600^3 and silently omits the
+        # reciprocal. Apply that reciprocal in a separate executable after
+        # the affected inverse-FFT executable has completed.
         # Donation keeps this correction memory-neutral for box-scale maps.
         inverse_transform_scale = jnp.asarray(
             np.float32(1.0 / float(transform_size)),

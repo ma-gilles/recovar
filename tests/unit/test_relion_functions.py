@@ -1187,7 +1187,7 @@ def test_large_irfft_normalization_boundary_uses_signed_int32_limit():
     assert mean_helpers._large_irfft_requires_explicit_normalization((1600, 1600, 1600))
 
 
-def test_large_host_staged_irfft_uses_raw_transform_then_dynamic_normalization(monkeypatch):
+def test_large_host_staged_irfft_uses_backward_transform_then_dynamic_normalization(monkeypatch):
     from recovar.em.dense_single_volume import mean_helpers
 
     reconstruction_shape = (1600, 1600, 1600)
@@ -1203,7 +1203,7 @@ def test_large_host_staged_irfft_uses_raw_transform_then_dynamic_normalization(m
     def fake_finish(value, *_args, **kwargs):
         events.append("finish")
         assert np.asarray(value).shape == (2, 2, 2)
-        assert kwargs["inverse_fft_norm"] == "forward"
+        assert "inverse_fft_norm" not in kwargs
         return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
 
     monkeypatch.setattr(
