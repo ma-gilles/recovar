@@ -431,7 +431,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
-PERFORMANCE_GATE_UPDATES_SHA256 = "5284b54879b8bef9e6f517e879b1423aa624d7e013a7db5073abbf76c71e772d"
+PERFORMANCE_GATE_UPDATES_SHA256 = "121def2587a0a933d89eb0d76a19a78e9329e3f9342bbb82ee9a0bfea2dc6119"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -797,6 +797,9 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         == "3000/3000"
         and gate_updates.get("direct_relion_xhalf", {}).get("qualified_job") == "13281684"
         and gate_updates.get("direct_relion_xhalf", {}).get("direct_vs_legacy_bpref_bitwise") is True
+        and gate_updates.get("direct_relion_xhalf", {}).get("crossed_live_job") == "13282815"
+        and gate_updates.get("direct_relion_xhalf", {}).get("decision")
+        == "REJECT_NO_MATERIAL_WARM_RUNTIME_WIN"
         and gate_updates.get("shared_posterior_executor", {}).get("qualified_gpu_job") == "13280796"
         and gate_updates.get("shared_posterior_executor", {}).get("crossed_live_job") == "13281970"
         and gate_updates.get("shared_posterior_executor", {}).get("decision")
@@ -1074,9 +1077,11 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{abs(atomic_gate['abba_means']['warm_wall_change_percent']):.2f}% faster; all 3,000 winners are exact and "
         "map differences remain inside unbiased control-repeat noise. Default-off. | "
         f"{atomic_gate['next_gate']} |",
-        f"| **ACCEPTED GPU PRIMITIVE / HARNESS RETRY PENDING** | Direct RELION x-half BPref "
-        f"`{direct_xhalf_gate['qualified_job']}` | {direct_xhalf_gate['qualified_result']}; actual CUDA K=1 even/odd "
-        "and K=3x2-group outputs are bitwise identical to the poisoned legacy roundtrip. "
+        f"| **MATH ACCEPTED / PERFORMANCE REJECTED** | Direct RELION x-half BPref "
+        f"`{direct_xhalf_gate['qualified_job']}/{direct_xhalf_gate['crossed_live_job']}` | Actual CUDA K=1/K=3 "
+        f"primitive outputs are bitwise; crossed GF46 decisions are exact and map/BPref remain in repeat noise. "
+        f"Finalize improves {direct_xhalf_gate['performance_result']['finalize_speedup_percent']:.2f}%, but warm "
+        f"wall improves only {direct_xhalf_gate['performance_result']['warm_wall_speedup_percent']:.2f}%. "
         f"`{direct_xhalf_gate['invalid_harness_job']}` is invalid collection-only; jobs "
         f"`{'/'.join(row['job_id'] for row in direct_xhalf_gate['invalid_live_jobs'])}` stopped before science. | "
         f"{direct_xhalf_gate['next_gate']} |",
@@ -1349,8 +1354,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "1. Complete the crossed shared eight-stream canonical/atomic gate at T=29. The sealed single-stream ABBA "
             "is mathematically accepted and cuts the hot coarse kernel 8.00%; require stable repeat-bounded unbiased "
             "noise plus a material combined end-to-end gain before any default change.",
-            "2. Complete the crossed GF46 legacy/direct x-half pair after the 7/7 bitwise actual-CUDA primitive gate. "
-            "Report finalization time, wall, expectation, HWM, exact discrete state, maps, and both BPref halves.",
+            "2. Keep direct x-half default-off: it is mathematically qualified and makes finalization 85.40% faster, "
+            "but finalization is too small and warm wall improves only 2.12%. Preserve the primitive for a future "
+            "larger fused finalization redesign; do not spend a trajectory on it alone.",
             "3. Keep the shared posterior executor rejected: it is mathematically qualified but saves only 3.37% "
             "warm wall while its posterior kernels regress 36.86%. Decompose the sealed native/RECOVAR profiles to "
             "select a larger execution-topology boundary instead of spending a trajectory on this implementation.",

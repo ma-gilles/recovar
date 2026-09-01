@@ -1737,7 +1737,7 @@
       "next_gate": "Cross canonical and atomic reduction with the accepted shared eight-stream EM/VDAM scheduler; require the same stable numerical envelope and a material combined end-to-end gain before any default change."
     },
     "direct_relion_xhalf": {
-      "status": "PRIMITIVE_ACCEPTED_LIVE_PAIR_HARNESS_RETRY_PENDING",
+      "status": "MATH_ACCEPTED_PERFORMANCE_REJECTED",
       "promotion_authorized": false,
       "implementation_head": "9cfa9d9b9372159b05fc14423d6b6edaa78dde9b",
       "test_head": "8d00f3a4dbf32b8fe53824e256a18b983e788db6",
@@ -1772,7 +1772,42 @@
         "layout/dtype fail-closed"
       ],
       "direct_vs_legacy_bpref_bitwise": true,
-      "next_gate": "Port only the established diagnostic continuation entry point, then run crossed GF46 legacy1/direct1/direct2/legacy2 with one binary and report finalize time, wall, expectation, HWM, exact discrete state, maps, and both BPref halves."
+      "diagnostic_head": "8a047b0b9261c517eb99a65d6ff35a8e42c3f68d",
+      "crossed_live_job": "13282815",
+      "crossed_live_result": "COMPLETED 0:0",
+      "crossed_live_elapsed": "00:03:01",
+      "crossed_live_execution_order": "legacy_1,direct_1,direct_2,legacy_2",
+      "crossed_live_source_manifest_sha256": "2630b1741333c31ace54f6a68b92f73bec56eabb755cd1751a64523276740b52",
+      "crossed_live_input_manifest_sha256": "5c27ea1363592adcd88f36d78b3d70d6dc586b53729a06dca7a3264ef9b630bc",
+      "crossed_live_cuda_sha256": "b2bb7106a536f5854dbd30bf8c5321d3a414aa5e174e76be4268a0dd44811991",
+      "crossed_live_run_json_sha256": "21706ccb3d171bf23a63ffe3011149d9d99907042c9897b73563d0479eddde2c",
+      "qualification_json_sha256": "fe2d2516c6f2b53980bbd756f59ed153da4105c2093d9d12223f02bf4fa8c1c8",
+      "qualification_markdown_sha256": "625fc17fcfd5740b1e326c89de40e7d123764f65d32bbcead12c41a3ea1fbfd8",
+      "crossed_live_output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_direct_xhalf_late_abba_8a047b0b9_h21g4_20260831_r4",
+      "performance_result": {
+        "legacy_warm_wall_median_seconds": 9.41849477600772,
+        "direct_warm_wall_median_seconds": 9.218448917148635,
+        "warm_wall_speedup_percent": 2.1239684643524253,
+        "legacy_finalize_median_seconds": 0.11493468284606934,
+        "direct_finalize_median_seconds": 0.016775846481323242,
+        "finalize_speedup_percent": 85.40401725057097,
+        "legacy_hwm_median_kib": 3082114,
+        "direct_hwm_median_kib": 3072760,
+        "hwm_change_percent": -0.3034929921475974
+      },
+      "numerical_result": {
+        "all_discrete_exact_cold_and_warm": true,
+        "warm_cross_map_relative_l2_max": 2.3370569836646798e-09,
+        "warm_legacy_repeat_map_relative_l2": 2.20217263040826e-09,
+        "warm_direct_repeat_map_relative_l2": 2.501842558452933e-09,
+        "warm_cross_fsc_deficit_max": 5.551115123125783e-16,
+        "bpref_cross_relative_l2_max": 5.249860676475626e-08,
+        "bpref_repeat_envelope_floor": 2e-07,
+        "classification": "cross_process_atomic_repeat_noise_no_discrete_or_basin_effect"
+      },
+      "decision": "REJECT_NO_MATERIAL_WARM_RUNTIME_WIN",
+      "reason": "Returning x-half accumulators directly removes 85.40% of finalization time, but finalization is too small a fraction of the iteration and warm whole-wall improves only 2.12%, below the 5% material gate.",
+      "next_gate": "Keep default-off and do not spend a trajectory on this implementation; preserve it as a qualified primitive for a future larger fused finalization redesign."
     },
     "shared_posterior_executor": {
       "status": "MATH_ACCEPTED_PERFORMANCE_REJECTED",
