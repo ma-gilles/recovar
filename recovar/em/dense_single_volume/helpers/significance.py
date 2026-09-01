@@ -37,6 +37,9 @@ _K1_COARSE_FUSED_PROJECTOR_ENV = "RECOVAR_K1_COARSE_FUSED_PROJECTOR"
 _RELION_COARSE_CANONICAL_REDUCTION_ENV = (
     "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION"
 )
+_K1_COARSE_SINGLE_LANE_CANONICAL_ENV = (
+    "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL"
+)
 _K1_COARSE_MULTISTREAM_WORKERS_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
@@ -244,6 +247,22 @@ def _relion_coarse_canonical_reduction_enabled(*, default: bool = False) -> bool
         return True
     raise ValueError(
         f"Unsupported {_RELION_COARSE_CANONICAL_REDUCTION_ENV}={token!r}",
+    )
+
+
+def _k1_coarse_single_lane_canonical_enabled(*, default: bool = False) -> bool:
+    """Whether 65--128 translations use the single-lane CUDA specialization."""
+
+    token = os.environ.get(
+        _K1_COARSE_SINGLE_LANE_CANONICAL_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_COARSE_SINGLE_LANE_CANONICAL_ENV}={token!r}",
     )
 
 
@@ -2288,6 +2307,28 @@ def _compute_k_class_significance_batched(
             f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV} requires "
             f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1",
         )
+    coarse_single_lane_canonical_requested = (
+        _k1_coarse_single_lane_canonical_enabled()
+    )
+    coarse_single_lane_canonical_enabled = (
+        coarse_single_lane_canonical_requested and score_mode == "gaussian"
+    )
+    if coarse_single_lane_canonical_enabled:
+        if not coarse_fused_projector_enabled:
+            raise ValueError(
+                f"{_K1_COARSE_SINGLE_LANE_CANONICAL_ENV}=1 requires "
+                f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1",
+            )
+        if not coarse_canonical_reduction_enabled:
+            raise ValueError(
+                f"{_K1_COARSE_SINGLE_LANE_CANONICAL_ENV}=1 requires "
+                f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV}=1",
+            )
+        if not 65 <= int(n_trans) <= 128:
+            raise ValueError(
+                f"{_K1_COARSE_SINGLE_LANE_CANONICAL_ENV}=1 requires "
+                f"65--128 translations, got {n_trans}",
+            )
     coarse_multistream_worker_count = _k1_coarse_multistream_worker_count()
     coarse_multistream_enabled = (
         coarse_multistream_worker_count > 0 and score_mode == "gaussian"
@@ -2535,6 +2576,12 @@ def _compute_k_class_significance_batched(
                         if _RELION_COARSE_CANONICAL_REDUCTION_ENV not in os.environ
                         else "environment override"
                     ),
+                )
+            if coarse_single_lane_canonical_enabled:
+                logger.warning(
+                    "Opt-in RELION coarse single-lane canonical specialization "
+                    "enabled: translations=%d",
+                    n_trans,
                 )
             if coarse_multistream_enabled:
                 logger.warning(
@@ -2815,6 +2862,7 @@ def _compute_k_class_significance_batched(
                 physical_image_size=int(image_shape[0]),
                 model_max_r=int(relion_projector_r_max),
                 canonical_reduction=coarse_canonical_reduction_enabled,
+                single_lane_canonical=coarse_single_lane_canonical_enabled,
                 **coarse_projector_kwargs,
             )
             return -diff2

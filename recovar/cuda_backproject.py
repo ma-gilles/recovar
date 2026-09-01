@@ -2660,6 +2660,27 @@ def _prepare_relion_coarse_diff2_projector_f32(
     return compact_rotations, out_type
 
 
+def _validate_relion_coarse_single_lane_canonical(
+    translation_count: int,
+    *,
+    canonical_reduction: bool,
+    single_lane_canonical: bool,
+) -> None:
+    """Fail closed unless one CUDA thread owns each coarse translation."""
+
+    if not single_lane_canonical:
+        return
+    if not canonical_reduction:
+        raise ValueError(
+            "single_lane_canonical=True requires canonical_reduction=True",
+        )
+    if not 65 <= int(translation_count) <= 128:
+        raise ValueError(
+            "single_lane_canonical=True requires 65--128 translations, got "
+            f"{translation_count}",
+        )
+
+
 @functools.partial(
     jax.jit,
     static_argnames=(
@@ -2667,6 +2688,7 @@ def _prepare_relion_coarse_diff2_projector_f32(
         "physical_image_size",
         "model_max_r",
         "canonical_reduction",
+        "single_lane_canonical",
     ),
 )
 def relion_coarse_diff2_projector_f32(
@@ -2682,6 +2704,7 @@ def relion_coarse_diff2_projector_f32(
     physical_image_size: int,
     model_max_r: int,
     canonical_reduction: bool = False,
+    single_lane_canonical: bool = False,
 ) -> jax.Array:
     """Run the parity-locked shared RELION fused coarse projector.
 
@@ -2689,7 +2712,18 @@ def relion_coarse_diff2_projector_f32(
     fixed lane-index sum.  It retains the same projector, interpolation,
     translation, pixel traversal, and per-lane arithmetic and is intended for
     source-order parity qualification at marginal adaptive cutoffs.
+
+    ``single_lane_canonical`` is a default-off compile-time specialization for
+    65--128 translations, where one CUDA thread is the sole contributor to
+    each translation.  It preserves the canonical initial-plus-lane addition
+    while omitting the generic lane staging buffer.
     """
+
+    _validate_relion_coarse_single_lane_canonical(
+        translation_angles.shape[0],
+        canonical_reduction=canonical_reduction,
+        single_lane_canonical=single_lane_canonical,
+    )
 
     compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
         projector_full,
@@ -2719,6 +2753,7 @@ def relion_coarse_diff2_projector_f32(
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
         canonical_reduction=np.int64(bool(canonical_reduction)),
+        single_lane_canonical=np.int64(bool(single_lane_canonical)),
     )
 
 
@@ -2729,6 +2764,7 @@ def relion_coarse_diff2_projector_f32(
         "physical_image_size",
         "model_max_r",
         "canonical_reduction",
+        "single_lane_canonical",
     ),
 )
 def relion_coarse_diff2_projector_multistream_f32(
@@ -2745,6 +2781,7 @@ def relion_coarse_diff2_projector_multistream_f32(
     model_max_r: int,
     actual_batch_size: jax.Array,
     canonical_reduction: bool = True,
+    single_lane_canonical: bool = False,
 ) -> jax.Array:
     """Score physical particle rows over RELION's eight worker streams.
 
@@ -2760,6 +2797,11 @@ def relion_coarse_diff2_projector_multistream_f32(
         raise ValueError(
             "RELION coarse multistream scoring requires canonical_reduction=True",
         )
+    _validate_relion_coarse_single_lane_canonical(
+        translation_angles.shape[0],
+        canonical_reduction=canonical_reduction,
+        single_lane_canonical=single_lane_canonical,
+    )
     compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
         projector_full,
         rotation_matrices,
@@ -2795,6 +2837,7 @@ def relion_coarse_diff2_projector_multistream_f32(
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
         canonical_reduction=np.int64(bool(canonical_reduction)),
+        single_lane_canonical=np.int64(bool(single_lane_canonical)),
     )
 
 

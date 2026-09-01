@@ -264,10 +264,16 @@ def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation
     assert "relion_fine_diff2_update_f32(" in block
     assert "const int score_max_r = min(model_max_r, current_size / 2);" in launcher
     assert "(rotation_count / 128) * 128" in launcher
-    assert "1, CAPTURE_LANES, CANONICAL_REDUCTION" in launcher
+    assert "SINGLE_LANE_CANONICAL" in launcher
     assert "if constexpr (CAPTURE_LANES)" in block
     assert "if constexpr (CANONICAL_REDUCTION)" in block
     assert "shared_lane_partials[" in block
+    assert "CANONICAL_REDUCTION && !SINGLE_LANE_CANONICAL" in block
+    assert "if constexpr (SINGLE_LANE_CANONICAL)" in block
+    assert "translation = static_cast<int>(threadIdx.x);" in block
+    assert "active_thread = threadIdx.x < translation_count;" in block
+    assert "SINGLE_LANE_CANONICAL ? 1 : active_lanes" in block
+    assert "output[output_index] = __fadd_rn(" in block
     assert "threadIdx.x + lane_index * translation_count" in block
     assert "total = __fadd_rn(" in block
     assert "lane_partials[" in block
@@ -338,6 +344,7 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
     assert "kRelionVdamWorkerStreams" in handler
     assert "canonical_reduction != 1" in handler
     assert "launch_relion_coarse_diff2_projector_f32<false, true>" in handler
+    assert "launch_relion_coarse_diff2_projector_f32<false, true, true>" in handler
     assert "NativeTexture" not in handler
     assert "ProjectorLanes" not in handler
 
@@ -403,6 +410,67 @@ def test_k1_coarse_multistream_workers_are_default_off_and_fail_closed(monkeypat
         monkeypatch.setenv("RECOVAR_K1_COARSE_MULTISTREAM_WORKERS", invalid)
         with pytest.raises(ValueError, match="must be 0 or 8"):
             significance._k1_coarse_multistream_worker_count()
+
+
+def test_k1_coarse_single_lane_canonical_is_default_off_and_fail_closed(
+    monkeypatch,
+):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    variable = "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._k1_coarse_single_lane_canonical_enabled()
+    assert significance._k1_coarse_single_lane_canonical_enabled(default=True)
+    monkeypatch.setenv(variable, "1")
+    assert significance._k1_coarse_single_lane_canonical_enabled()
+    monkeypatch.setenv(variable, "0")
+    assert not significance._k1_coarse_single_lane_canonical_enabled(default=True)
+    monkeypatch.setenv(variable, "invalid")
+    with pytest.raises(ValueError, match=variable):
+        significance._k1_coarse_single_lane_canonical_enabled()
+
+
+@pytest.mark.parametrize("translation_count", [1, 64, 129])
+def test_relion_coarse_single_lane_canonical_rejects_unsupported_counts(
+    translation_count,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(ValueError, match="requires 65--128 translations"):
+        cuda_backproject.relion_coarse_diff2_projector_f32.__wrapped__(
+            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((translation_count, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            current_size=1,
+            physical_image_size=1,
+            model_max_r=1,
+            canonical_reduction=True,
+            single_lane_canonical=True,
+        )
+
+
+def test_relion_coarse_single_lane_canonical_requires_canonical_reduction():
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(ValueError, match="requires canonical_reduction=True"):
+        cuda_backproject.relion_coarse_diff2_projector_f32.__wrapped__(
+            jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+            jnp.eye(3, dtype=jnp.float32)[None, :, :],
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((116, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            current_size=1,
+            physical_image_size=1,
+            model_max_r=1,
+            canonical_reduction=False,
+            single_lane_canonical=True,
+        )
 
 
 def test_relion_coarse_multistream_rejects_noncanonical_reduction():
@@ -982,10 +1050,17 @@ def test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope(
 
 
 @pytest.mark.gpu
+@pytest.mark.parametrize(
+    ("translation_count", "single_lane_canonical"),
+    [(13, False), (116, True)],
+    ids=("generic_four_plus_lanes", "single_lane_canonical"),
+)
 def test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise(
     monkeypatch,
     custom_cuda_lib,
     gpu_device,
+    translation_count,
+    single_lane_canonical,
 ):
     import recovar.cuda_backproject as cuda_backproject
 
@@ -999,7 +1074,6 @@ def test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise(
     physical_batch_size = 12
     actual_batch_size = 9
     rotation_count = 129
-    translation_count = 13
     compact_pixel_count = current_size * (current_size // 2 + 1)
     projector = (
         rng.normal(0.0, 0.02, (projector_size,) * 3)
@@ -1070,10 +1144,11 @@ def test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise(
             model_max_r=model_max_r,
             actual_batch_size=jnp.asarray(actual, dtype=jnp.int32),
             canonical_reduction=True,
+            single_lane_canonical=single_lane_canonical,
         )
 
     with jax.default_device(gpu_device):
-        serial = cuda_backproject.relion_coarse_diff2_projector_f32(
+        generic_serial = cuda_backproject.relion_coarse_diff2_projector_f32(
             jnp.asarray(projector),
             jnp.asarray(rotations),
             jnp.asarray(active_images),
@@ -1086,15 +1161,38 @@ def test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise(
             model_max_r=model_max_r,
             canonical_reduction=True,
         )
+        selected_serial = (
+            cuda_backproject.relion_coarse_diff2_projector_f32(
+                jnp.asarray(projector),
+                jnp.asarray(rotations),
+                jnp.asarray(active_images),
+                jnp.asarray(translation_angles),
+                jnp.asarray(active_weight),
+                jnp.asarray(active_initial),
+                jnp.asarray(lookup),
+                current_size=current_size,
+                physical_image_size=current_size,
+                model_max_r=model_max_r,
+                canonical_reduction=True,
+                single_lane_canonical=True,
+            )
+            if single_lane_canonical
+            else generic_serial
+        )
         dispatched = multistream(actual_batch_size)
         repeated = multistream(actual_batch_size)
 
-        serial_np = np.asarray(serial)
+        generic_serial_np = np.asarray(generic_serial)
+        selected_serial_np = np.asarray(selected_serial)
         dispatched_np = np.asarray(dispatched)
         repeated_np = np.asarray(repeated)
         np.testing.assert_array_equal(
+            selected_serial_np.view(np.uint32),
+            generic_serial_np.view(np.uint32),
+        )
+        np.testing.assert_array_equal(
             dispatched_np[:actual_batch_size].view(np.uint32),
-            serial_np.view(np.uint32),
+            selected_serial_np.view(np.uint32),
         )
         np.testing.assert_array_equal(
             repeated_np.view(np.uint32),
@@ -1109,7 +1207,7 @@ def test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise(
             expected_padding.view(np.uint32),
         )
 
-        serial_flat = serial_np.reshape(actual_batch_size, -1)
+        serial_flat = generic_serial_np.reshape(actual_batch_size, -1)
         dispatched_flat = dispatched_np[:actual_batch_size].reshape(
             actual_batch_size,
             -1,
