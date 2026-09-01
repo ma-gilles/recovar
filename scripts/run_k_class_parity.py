@@ -489,6 +489,17 @@ def _volume_corr(lhs, rhs) -> float:
     return float(np.dot(lhs, rhs) / denom)
 
 
+def _require_nonzero_finite_reconstruction(volume, *, label: str) -> np.ndarray:
+    """Reject silent empty/non-finite parity maps before they are written."""
+
+    array = np.asarray(volume)
+    if not np.all(np.isfinite(array)):
+        raise FloatingPointError(f"{label} reconstruction contains non-finite values")
+    if not np.any(array != 0):
+        raise RuntimeError(f"{label} reconstruction is identically zero")
+    return array
+
+
 def _best_class_permutation(recovar_real, relion_real):
     n_classes = len(recovar_real)
     corr_matrix = np.asarray(
@@ -1855,7 +1866,12 @@ def main() -> None:
             class_real = ftu.get_idft3(class_ft.reshape(ds.volume_shape)).real
             if apply_solvent_mask:
                 class_real = class_real * solvent_mask
-            real_maps.append(np.asarray(class_real))
+            real_maps.append(
+                _require_nonzero_finite_reconstruction(
+                    class_real,
+                    label=f"class {class_index + 1}",
+                )
+            )
         return real_maps
 
     variant_specs = [

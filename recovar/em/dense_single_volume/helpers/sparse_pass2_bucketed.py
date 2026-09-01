@@ -6874,6 +6874,85 @@ def _normalize_split_relion_firstiter_bpref_accumulators(
     )
 
 
+def _native_bpref_array_status(value) -> tuple[bool, bool]:
+    """Return finite/nonzero flags without copying a device accumulator."""
+
+    if isinstance(value, np.ndarray):
+        return bool(np.all(np.isfinite(value))), bool(np.any(value != 0))
+    array = jnp.asarray(value)
+    flags = jnp.stack(
+        (
+            jnp.all(jnp.isfinite(array)),
+            jnp.any(array != 0),
+        )
+    )
+    finite, nonzero = np.asarray(jax.device_get(flags), dtype=bool).tolist()
+    return bool(finite), bool(nonzero)
+
+
+def _kclass_native_bpref_retained_weight_cutoff(
+    dense_posterior: np.ndarray,
+) -> float | None:
+    """Return the exact smallest staged weight, or ``None`` for empty support."""
+
+    posterior = np.asarray(dense_posterior)
+    if not np.all(np.isfinite(posterior)) or np.any(posterior < 0.0):
+        raise ValueError("K-class native BPref posterior must be finite and non-negative")
+    positive = posterior[posterior > 0.0]
+    if positive.size == 0:
+        return None
+    return float(np.min(positive))
+
+
+def _require_nonzero_kclass_native_bpref_split(
+    data_real,
+    data_imag,
+    weight,
+    *,
+    class_index: int,
+    posterior_mass: float,
+) -> None:
+    """Fail closed before finalization if retained K-class mass vanished."""
+
+    real_finite, real_nonzero = _native_bpref_array_status(data_real)
+    imag_finite, imag_nonzero = _native_bpref_array_status(data_imag)
+    weight_finite, weight_nonzero = _native_bpref_array_status(weight)
+    if not np.isfinite(posterior_mass) or posterior_mass <= 0.0:
+        raise RuntimeError(
+            f"K-class native BPref class {class_index + 1} has no retained posterior mass"
+        )
+    if not (real_finite and imag_finite and weight_finite):
+        raise FloatingPointError(
+            f"K-class native BPref class {class_index + 1} produced non-finite raw accumulators"
+        )
+    if not (real_nonzero or imag_nonzero) or not weight_nonzero:
+        raise RuntimeError(
+            "K-class native BPref class "
+            f"{class_index + 1} produced zero raw accumulators from retained "
+            f"posterior mass {posterior_mass:.9g}"
+        )
+
+
+def _require_nonzero_kclass_native_bpref_public(
+    data,
+    weight,
+    *,
+    class_index: int,
+) -> None:
+    """Fail closed if finalization or public-layout conversion erased a class."""
+
+    data_finite, data_nonzero = _native_bpref_array_status(data)
+    weight_finite, weight_nonzero = _native_bpref_array_status(weight)
+    if not (data_finite and weight_finite):
+        raise FloatingPointError(
+            f"K-class native BPref class {class_index + 1} produced non-finite public accumulators"
+        )
+    if not data_nonzero or not weight_nonzero:
+        raise RuntimeError(
+            f"K-class native BPref class {class_index + 1} produced zero public accumulators"
+        )
+
+
 def _replay_kclass_firstiter_native_bpref(
     store: KClassNativeBPrefOperandStore,
     contributions: list[KClassNativeBPrefContribution],
@@ -6886,7 +6965,6 @@ def _replay_kclass_firstiter_native_bpref(
     physical_image_shape,
     volume_shape,
     max_r: float,
-    adaptive_fraction: float,
     current_size: int | None,
     n_images: int,
     symmetry_label: str,
@@ -6909,6 +6987,7 @@ def _replay_kclass_firstiter_native_bpref(
         data_real = jnp.zeros(int(recon_volume_size), dtype=jnp.float32)
         data_imag = jnp.zeros(int(recon_volume_size), dtype=jnp.float32)
         weight = jnp.zeros(int(recon_volume_size), dtype=jnp.float32)
+        class_posterior_mass = 0.0
         for contribution in class_contributions:
             if int(contribution.n_translations) != n_translations:
                 raise ValueError(
@@ -6918,6 +6997,14 @@ def _replay_kclass_firstiter_native_bpref(
             dense_posterior = _materialize_kclass_native_bpref_posterior(
                 contribution
             )
+            significant_weight = _kclass_native_bpref_retained_weight_cutoff(
+                dense_posterior
+            )
+            class_posterior_mass += float(
+                np.sum(dense_posterior, dtype=np.float64)
+            )
+            if significant_weight is None:
+                continue
             native_batch = DeferredFirstiterBPrefBatch(
                 raw_images=operands.raw_image[None, :],
                 raw_ctf=operands.raw_ctf[None, :],
@@ -6945,9 +7032,22 @@ def _replay_kclass_firstiter_native_bpref(
                 physical_image_shape=physical_image_shape,
                 volume_shape=volume_shape,
                 max_r=max_r,
-                adaptive_fraction=adaptive_fraction,
+                # ``dense_posterior`` is already the jointly pruned M-step
+                # posterior.  Reusing the cumulative adaptive fraction here
+                # would drop every soft K=4 slot below 0.999.  Admit every
+                # retained positive value by using this batch's exact minimum;
+                # the positive cutoff robustly excludes zero padding even when
+                # the CUDA device flushes subnormal values to zero.
+                adaptive_fraction=significant_weight,
             )
 
+        _require_nonzero_kclass_native_bpref_split(
+            data_real,
+            data_imag,
+            weight,
+            class_index=class_index,
+            posterior_mass=class_posterior_mass,
+        )
         data_real, data_imag, weight = (
             _normalize_split_relion_firstiter_bpref_accumulators(
                 data_real,
@@ -6990,6 +7090,11 @@ def _replay_kclass_firstiter_native_bpref(
             class_Ft_y,
             class_Ft_ctf,
             volume_shape,
+        )
+        _require_nonzero_kclass_native_bpref_public(
+            class_Ft_y,
+            class_Ft_ctf,
+            class_index=class_index,
         )
         Ft_y_out.append(np.asarray(jax.device_get(class_Ft_y)))
         Ft_ctf_out.append(np.asarray(jax.device_get(class_Ft_ctf)))
@@ -21150,7 +21255,6 @@ def compute_k_class_pass2_stats_sparse_fused(
             physical_image_shape=image_shape,
             volume_shape=recon_volume_shape,
             max_r=float(current_size // 2),
-            adaptive_fraction=float(adaptive_fraction),
             current_size=current_size,
             n_images=n_images,
             symmetry_label=symmetry_label,

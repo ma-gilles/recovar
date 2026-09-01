@@ -440,7 +440,7 @@ def test_k4_native_bpref_replay_is_class_major_ordered_and_single_triplet(
     )
     class_masses = np.asarray(
         [
-            [0.125, 0.250],
+            [0.125, 0.000],
             [0.250, 0.125],
             [0.375, 0.375],
             [0.250, 0.250],
@@ -456,7 +456,7 @@ def test_k4_native_bpref_replay_is_class_major_ordered_and_single_triplet(
                     class_index=class_index,
                     half_local_index=local_index,
                     original_index=original_index,
-                    posterior=np.asarray([[mass / 2, mass / 2]], dtype=np.float32),
+                    posterior=np.asarray([[mass, 0.0]], dtype=np.float32),
                     rotations=_rotations(1),
                     actual_rotation_count=1,
                     n_translations=2,
@@ -464,6 +464,7 @@ def test_k4_native_bpref_replay_is_class_major_ordered_and_single_triplet(
             )
 
     events = []
+    significant_thresholds = []
     active_triplets = 0
     zero_count = 0
     peak_triplets = 0
@@ -489,9 +490,16 @@ def test_k4_native_bpref_replay_is_class_major_ordered_and_single_triplet(
         data_real,
         data_imag,
         weight,
-        **_kwargs,
+        **kwargs,
     ):
-        mass = np.float32(np.sum(np.asarray(posterior), dtype=np.float32))
+        significant_threshold = np.float32(kwargs["adaptive_fraction"])
+        significant_thresholds.append(significant_threshold)
+        retained = np.where(
+            np.asarray(posterior) >= significant_threshold,
+            np.asarray(posterior),
+            np.float32(0.0),
+        )
+        mass = np.float32(np.sum(retained, dtype=np.float32))
         original_index = int(np.asarray(original_indices)[0])
         events.append(("launch", original_index, float(mass)))
         next_real = np.array(data_real, copy=True)
@@ -541,7 +549,6 @@ def test_k4_native_bpref_replay_is_class_major_ordered_and_single_triplet(
         physical_image_shape=(2, 2),
         volume_shape=(2, 2, 2),
         max_r=1.0,
-        adaptive_fraction=0.999,
         current_size=2,
         n_images=2,
         symmetry_label="C1",
@@ -549,10 +556,17 @@ def test_k4_native_bpref_replay_is_class_major_ordered_and_single_triplet(
 
     assert peak_triplets == 1
     assert active_triplets == 0
+    assert significant_thresholds
+    np.testing.assert_array_equal(
+        significant_thresholds,
+        np.asarray(
+            [0.125, 0.250, 0.125, 0.375, 0.375, 0.250, 0.250],
+            dtype=np.float32,
+        ),
+    )
     assert events == [
         ("triplet", 1),
         ("launch", 10, 0.125),
-        ("launch", 30, 0.25),
         ("finalize",),
         ("triplet", 1),
         ("launch", 10, 0.25),
@@ -587,4 +601,32 @@ def test_k4_native_bpref_replay_is_class_major_ordered_and_single_triplet(
         np.testing.assert_array_equal(
             Ft_ctf[class_index],
             np.asarray([2.0 * expected_mass[class_index], 0.0], dtype=np.float32),
+        )
+
+
+def test_k4_native_bpref_nonzero_guards_reject_erased_accumulators():
+    assert (
+        bucketed._kclass_native_bpref_retained_weight_cutoff(
+            np.zeros((2, 3), dtype=np.float32)
+        )
+        is None
+    )
+    assert bucketed._kclass_native_bpref_retained_weight_cutoff(
+        np.asarray([[0.0, 0.25, 0.125]], dtype=np.float32)
+    ) == pytest.approx(0.125)
+
+    with pytest.raises(RuntimeError, match="zero raw accumulators"):
+        bucketed._require_nonzero_kclass_native_bpref_split(
+            np.zeros(4, dtype=np.float32),
+            np.zeros(4, dtype=np.float32),
+            np.zeros(4, dtype=np.float32),
+            class_index=0,
+            posterior_mass=0.25,
+        )
+
+    with pytest.raises(RuntimeError, match="zero public accumulators"):
+        bucketed._require_nonzero_kclass_native_bpref_public(
+            np.zeros(4, dtype=np.complex64),
+            np.zeros(4, dtype=np.float32),
+            class_index=0,
         )
