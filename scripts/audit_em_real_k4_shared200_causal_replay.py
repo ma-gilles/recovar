@@ -206,10 +206,17 @@ def discover_inventory(
         _require(set(observed) == set(stacks), f"native assigned set drift: {arm}")
         native_assignments[arm] = observed
     _require(set(reference_assignments) == set(stacks), "frozen target assigned set drift")
+    # Instrumentation inertness is a same-replay question. Compare every arm
+    # with the uncaptured replay, and measure restart drift against the frozen
+    # fresh-run checkpoint separately.
+    control_assignments = native_assignments["control_a"]
     inertness_matches = [
-        int(native_assignments[arm][stack] == reference_assignments[stack])
+        int(native_assignments[arm][stack] == control_assignments[stack])
         for arm in native_assignments
         for stack in stacks
+    ]
+    frozen_target_matches = [
+        int(control_assignments[stack] == reference_assignments[stack]) for stack in stacks
     ]
     return {
         "factors": _exact_keyed_paths(factors, key=_factor_key, expected=expected, label="factor"),
@@ -223,6 +230,7 @@ def discover_inventory(
         },
         "native_assignments": native_assignments,
         "native_assignment_inertness": float(np.mean(inertness_matches)),
+        "frozen_target_assignment_accuracy": float(np.mean(frozen_target_matches)),
     }
 
 
@@ -598,6 +606,11 @@ def evaluate_gates(metrics: dict[str, float], thresholds: dict[str, float]) -> d
         ("native_capture_inertness_map_fsc_auc", "minimum_capture_inertness_map_fsc_auc", "minimum"),
         ("frozen_target_map_fsc_auc", "minimum_frozen_target_map_fsc_auc", "minimum"),
         ("native_assignment_inertness", "minimum_native_assignment_inertness", "minimum"),
+        (
+            "frozen_target_assignment_accuracy",
+            "minimum_frozen_target_assignment_accuracy",
+            "minimum",
+        ),
         ("minimum_class_fraction", "minimum_class_fraction", "minimum"),
     )
     gates: dict[str, Any] = {}
@@ -828,6 +841,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         "native_capture_inertness_map_fsc_auc": maps["minimum_native_capture_inertness_fsc_auc"],
         "frozen_target_map_fsc_auc": maps["minimum_frozen_target_fsc_auc"],
         "native_assignment_inertness": inventory["native_assignment_inertness"],
+        "frozen_target_assignment_accuracy": inventory["frozen_target_assignment_accuracy"],
     }
     evaluation = evaluate_gates(gate_metrics, manifest["thresholds"])
     return {

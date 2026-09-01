@@ -26,6 +26,7 @@ def _passing_metrics() -> dict[str, float]:
         "native_capture_inertness_map_fsc_auc": 1.0,
         "frozen_target_map_fsc_auc": 1.0,
         "native_assignment_inertness": 1.0,
+        "frozen_target_assignment_accuracy": 1.0,
         "minimum_class_fraction": 0.25,
     }
 
@@ -178,11 +179,12 @@ def test_inventory_is_exact_across_every_stack_and_class(monkeypatch, tmp_path):
             (pass2 / f"pass2_orig{stack - 1:06d}_class{class_id:03d}_cs056.npz").touch()
 
     assignments = {3: 1, 7: 2}
+    frozen_assignments = {3: 2, 7: 2}
     monkeypatch.setattr(auditor, "_native_assignments", lambda _path: assignments)
     inventory = auditor.discover_inventory(
         tmp_path,
         [3, 7],
-        reference_assignments=assignments,
+        reference_assignments=frozen_assignments,
     )
     assert inventory["counts"] == {
         "native_factors": 4,
@@ -191,11 +193,12 @@ def test_inventory_is_exact_across_every_stack_and_class(monkeypatch, tmp_path):
         "native_data_stars": 6,
     }
     assert inventory["native_assignment_inertness"] == 1.0
+    assert inventory["frozen_target_assignment_accuracy"] == 0.5
 
     (pass2 / "pass2_orig000002_class002_cs056.npz").unlink()
     with pytest.raises(auditor.AuditError):
         auditor.discover_inventory(
             tmp_path,
             [3, 7],
-            reference_assignments=assignments,
+            reference_assignments=frozen_assignments,
         )

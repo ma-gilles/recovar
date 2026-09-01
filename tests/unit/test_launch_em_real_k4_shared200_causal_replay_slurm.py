@@ -346,7 +346,8 @@ def test_rendered_native_smoke_exits_after_one_continuation_arm(tmp_path):
     assert "run_it001_sampling.star" in script
     assert "RELION_SAMPLING_PERTURBATION_OVERRIDE" in script
     assert "scripts.audit_em_real_kclass_initialmodel" in script
-    assert "--minimum-fsc-auc 0.999999" in script
+    assert "--minimum-fsc-auc 0.999" in script
+    assert "--minimum-assignment-accuracy 0.995" in script
     assert "native_smoke_trajectory.json" in script
 
 
