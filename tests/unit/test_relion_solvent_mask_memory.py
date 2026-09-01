@@ -123,9 +123,12 @@ def test_box_scale_solvent_flatten_lifecycle_is_bitwise_exact(monkeypatch, volum
         half_index=0,
     )
 
+    assert isinstance(actual, np.ndarray)
+    assert actual.flags.c_contiguous
+    assert actual.flags.owndata
     assert actual.shape == (int(np.prod(volume_shape)),)
     assert actual.dtype == expected.dtype == jnp.complex128
-    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+    np.testing.assert_array_equal(actual, np.asarray(expected))
     assert not volume_actual.is_deleted()
     assert mask_actual.is_deleted()
 
@@ -162,6 +165,7 @@ def test_box_scale_solvent_flatten_releases_dead_inputs_in_order(monkeypatch, ca
     vol_real = FakeBuffer("vol_real", np.complex64)
     solvent_mask = FakeBuffer("solvent_mask", np.float64)
     flattened = FakeBuffer("flattened", np.complex128)
+    flattened_host_source = np.asarray([3.0 + 4.0j], dtype=np.complex128)
 
     def fake_idft(value):
         events.append(("idft", value.name))
@@ -174,6 +178,11 @@ def test_box_scale_solvent_flatten_releases_dead_inputs_in_order(monkeypatch, ca
 
     monkeypatch.setattr(mean_helpers.fourier_transform_utils, "get_idft3", fake_idft)
     monkeypatch.setattr(mean_helpers.fourier_transform_utils, "get_dft3", fake_dft)
+    monkeypatch.setattr(
+        mean_helpers.jax,
+        "device_get",
+        lambda value: events.append(("device_get", value.name)) or flattened_host_source,
+    )
     monkeypatch.setattr(
         mean_helpers,
         "_large_relion_solvent_mask_uses_compiled_builder",
@@ -189,7 +198,11 @@ def test_box_scale_solvent_flatten_releases_dead_inputs_in_order(monkeypatch, ca
         half_index=1,
     )
 
-    assert result is flattened
+    assert isinstance(result, np.ndarray)
+    assert result is not flattened_host_source
+    assert result.flags.c_contiguous
+    assert result.flags.owndata
+    np.testing.assert_array_equal(result, flattened_host_source)
     assert events == [
         ("reshape", "volume_ft", (800, 800, 800)),
         ("idft", "volume_ft"),
@@ -197,15 +210,96 @@ def test_box_scale_solvent_flatten_releases_dead_inputs_in_order(monkeypatch, ca
         ("dft", "masked_real"),
         ("reshape", "flattened", -1),
         ("block", "flattened"),
+        ("device_get", "flattened"),
+        ("delete", "flattened"),
         ("delete", "vol_real"),
         ("delete", "solvent_mask"),
         ("gc",),
     ]
     assert (
         "RELION box-scale solvent flatten lifecycle: half=2 shape=(800, 800, 800) "
-        "output_ready=True vol_real_deleted=True solvent_mask_deleted=True "
-        "output_dtype=complex128"
+        "output_ready=True output_host=True output_device_deleted=True "
+        "vol_real_deleted=True solvent_mask_deleted=True output_dtype=complex128 "
+        "output_c_contiguous=True"
     ) in caplog.text
+
+
+def test_box_scale_reconstruction_caller_keeps_both_half_outputs_on_host(monkeypatch):
+    from types import SimpleNamespace
+
+    volume_shape = (4, 4, 4)
+    volume_size = int(np.prod(volume_shape))
+    reconstruction_sources = []
+    masks = []
+
+    def fake_reconstruct(*_args, **_kwargs):
+        half_index = len(reconstruction_sources)
+        source = jnp.asarray(
+            np.arange(volume_size, dtype=np.float64) + 1j * np.float64(half_index + 1),
+            dtype=jnp.complex128,
+        )
+        reconstruction_sources.append(source)
+        return source
+
+    def fake_make_mask(shape, **_kwargs):
+        assert shape == volume_shape
+        solvent_mask = jnp.asarray(np.ones(shape, dtype=np.float64).copy())
+        masks.append(solvent_mask)
+        return solvent_mask
+
+    monkeypatch.setattr(mean_helpers, "_reconstruct_volume_eager", fake_reconstruct)
+    monkeypatch.setattr(
+        mean_helpers,
+        "_finish_host_staged_reconstruction",
+        lambda result, *_accumulators: result,
+    )
+    monkeypatch.setattr(mean_helpers, "_make_relion_solvent_mask", fake_make_mask)
+    monkeypatch.setattr(
+        mean_helpers,
+        "_large_relion_solvent_mask_uses_compiled_builder",
+        lambda _shape: True,
+    )
+
+    means = [None, None]
+    mean_helpers._reconstruct_and_postprocess_means(
+        means,
+        Ft_y_0=jnp.ones(volume_size, dtype=jnp.complex64),
+        Ft_y_1=jnp.ones(volume_size, dtype=jnp.complex64),
+        Ft_ctf_0=jnp.ones(volume_size, dtype=jnp.float32),
+        Ft_ctf_1=jnp.ones(volume_size, dtype=jnp.float32),
+        Ft_y_combined=None,
+        Ft_ctf_combined=None,
+        mean_signal_variance=None,
+        mean_signal_variance_shells=None,
+        mean_signal_variance_per_half=[
+            jnp.ones(volume_size, dtype=jnp.float32),
+            jnp.ones(volume_size, dtype=jnp.float32),
+        ],
+        n_classes=1,
+        k_class_enabled=False,
+        cs=4,
+        iteration=0,
+        grid_size=4,
+        cryo=SimpleNamespace(voxel_size=np.float32(1.0)),
+        volume_shape=volume_shape,
+        tau2_fudge=1.0,
+        padding_factor=1,
+        projection_padding_factor=1,
+        relion_minres_map=0,
+        particle_diameter_ang=2.0,
+        relion_firstiter_cc_this_iter=False,
+        relion_firstiter_ini_high_angstrom=None,
+        relion_width_mask_edge=1,
+        relion_fmask_edge=2,
+    )
+
+    assert len(reconstruction_sources) == len(masks) == 2
+    assert all(isinstance(mean, np.ndarray) for mean in means)
+    assert all(mean.dtype == np.complex128 for mean in means)
+    assert all(mean.flags.c_contiguous and mean.flags.owndata for mean in means)
+    assert not np.shares_memory(means[0], means[1])
+    assert all(not source.is_deleted() for source in reconstruction_sources)
+    assert all(solvent_mask.is_deleted() for solvent_mask in masks)
 
 
 def test_small_solvent_flatten_keeps_async_default_path(monkeypatch):

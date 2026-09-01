@@ -126,36 +126,44 @@ def _apply_relion_solvent_flatten_k1(
     *,
     half_index,
 ):
-    """Apply the K=1 solvent mask and release box-scale FFT inputs promptly."""
+    """Apply the K=1 solvent mask and host-stage box-scale FFT results."""
 
     vol_real = fourier_transform_utils.get_idft3(volume_ft_flat.reshape(volume_shape))
     flattened = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
     if not _large_relion_solvent_mask_uses_compiled_builder(volume_shape):
         return flattened
 
-    # JAX dispatch is asynchronous.  At box 800, retaining the first half's
-    # real-space volume and float64 mask into the second half keeps about
-    # 11.44 GiB live and prevents the second complex128 FFT result from being
-    # allocated.  Wait for the exact existing FFT to finish, then delete only
-    # those dead inputs; the Fourier result and its arithmetic are unchanged.
+    # JAX dispatch is asynchronous.  At box 800, even after the first half's
+    # real-space volume and mask are released, retaining its complex128 FFT
+    # output leaves too little room for the second normalized FFT allocation.
+    # Finish the exact existing FFT, copy its completed bits to host memory,
+    # and release all three device buffers before starting the next half.  The
+    # transform arithmetic, normalization, dtype, and flattened shape remain
+    # unchanged; only the storage owner crosses the device/host boundary.
     flattened.block_until_ready()
+    flattened_host = np.array(jax.device_get(flattened), copy=True, order="C")
+    _delete_device_array(flattened)
     _delete_device_array(vol_real)
     _delete_device_array(solvent_mask)
+    output_device_deleted = _device_array_is_deleted(flattened)
     vol_real_deleted = _device_array_is_deleted(vol_real)
     solvent_mask_deleted = _device_array_is_deleted(solvent_mask)
-    del vol_real, solvent_mask
+    del flattened, vol_real, solvent_mask
     gc.collect()
     logger.info(
         "RELION box-scale solvent flatten lifecycle: half=%d shape=%s "
-        "output_ready=True vol_real_deleted=%s solvent_mask_deleted=%s "
-        "output_dtype=%s",
+        "output_ready=True output_host=True output_device_deleted=%s "
+        "vol_real_deleted=%s solvent_mask_deleted=%s output_dtype=%s "
+        "output_c_contiguous=%s",
         int(half_index) + 1,
         tuple(int(size) for size in volume_shape),
+        output_device_deleted,
         vol_real_deleted,
         solvent_mask_deleted,
-        flattened.dtype,
+        flattened_host.dtype,
+        bool(flattened_host.flags.c_contiguous),
     )
-    return flattened
+    return flattened_host
 
 
 def _relion_host_fft_workers() -> int:
