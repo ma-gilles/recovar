@@ -80,6 +80,7 @@ TERM_DTYPE = np.dtype(
     }
 )
 FILE_NAME = re.compile(r"part(?P<part>\d+)_stack(?P<stack>\d+)_img(?P<img>\d+)_class(?P<class_>\d+)\.bpre-v2\.bin")
+EMPTY_SPARSE_SUPPORT = 1
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,10 @@ class FactorCapture:
     @property
     def geometry_only(self) -> bool:
         return bool(self.header[53])
+
+    @property
+    def empty_sparse_support(self) -> bool:
+        return bool(self.header[54] & EMPTY_SPARSE_SUPPORT)
 
 
 @dataclass(frozen=True)
@@ -288,6 +293,11 @@ def load_factor_pixel_capture(path: Path) -> FactorPixelCapture:
 def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, summaries, terms) -> None:
     _require(header[53] in (0, 1), f"invalid geometry-only capture flag: {path}")
     geometry_only = bool(header[53])
+    _require(
+        header[54] & ~EMPTY_SPARSE_SUPPORT == 0,
+        f"unknown factor capture flag: {path}",
+    )
+    empty_sparse_support = bool(header[54] & EMPTY_SPARSE_SUPPORT)
     _require(header[9] > 0 and header[10] > 0, f"invalid iteration/class: {path}")
     _require(header[16] > 0 and header[17] > 0 and header[18] == 1, f"invalid 2D image shape: {path}")
     _require(header[19] == header[16] * header[17], f"factor image size mismatch: {path}")
@@ -310,6 +320,34 @@ def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, 
         f"factor capture density/geometry flags disagree: {path}",
     )
 
+    significant_weight = _float32_from_bits(header[25])
+    weight_norm = _float32_from_bits(header[26])
+    _require(
+        np.isfinite(significant_weight) and np.isfinite(weight_norm) and weight_norm > 0,
+        f"invalid factor posterior scalars: {path}",
+    )
+    if empty_sparse_support:
+        _require(geometry_only, f"empty-support factor capture is not geometry-only: {path}")
+        _require(
+            header[20] == header[46] == rotations.size,
+            f"empty-support factor rotation geometry changed: {path}",
+        )
+        _require(
+            header[43] == header[44] == header[45] == 0,
+            f"empty-support factor support counts are nonzero: {path}",
+        )
+        _require(
+            header[21] == header[47] == translations.size and translations.size > 0,
+            f"empty-support factor translation grid changed: {path}",
+        )
+        _require(
+            header[48:53] == (0, 0, 0, 0, 0)
+            and hypotheses.size == pixels.size == summaries.size == terms.size == 0,
+            f"empty-support factor serialized a value panel: {path}",
+        )
+    else:
+        _require(rotations.size > 0, f"unflagged factor capture has no rotations: {path}")
+
     expected_rotations = np.arange(rotations.size, dtype=np.uint32)
     _require(np.array_equal(rotations["orientation_local"], expected_rotations), f"rotation order changed: {path}")
     _require(
@@ -328,6 +366,8 @@ def _validate_arrays(path, header, rotations, translations, hypotheses, pixels, 
         np.all(np.isfinite(np.stack((translations["x"], translations["y"], translations["z"])))),
         f"non-finite translation: {path}",
     )
+    if empty_sparse_support:
+        return
     if geometry_only:
         _require(header[43] == 0 and header[44] == 0, f"geometry-only summary accounting changed: {path}")
         _require(
@@ -500,6 +540,9 @@ def validate_directory(
         "selected_stack_text": canonical_stack_text,
         "selected_stack_fnv1a64": expected_set_hash,
         "particle_count": len(captures),
+        "empty_sparse_support_count": sum(
+            capture.empty_sparse_support for capture in captures
+        ),
         "mpi_rank": next(iter(rank_by_stack.values())) if len(rank_counts) == 1 else None,
         "mpi_rank_by_stack": {str(stack): rank_by_stack[stack] for stack in expected_stacks},
         "mpi_rank_counts": rank_counts,

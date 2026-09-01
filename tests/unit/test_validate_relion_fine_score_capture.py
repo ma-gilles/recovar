@@ -62,6 +62,29 @@ def _write_capture(path, *, stack, rank=2, selected_text="17,23", corrupt_algebr
     path.write_bytes(payload + candidates.tobytes() + footer)
 
 
+def _write_empty_capture(
+    path,
+    *,
+    stack,
+    flags=validator.EMPTY_SPARSE_SUPPORT,
+    sparse_weight_count=0,
+):
+    min_diff2 = np.float32(9.5)
+    weights_max = np.float32(-1.0)
+    shift = np.float32(50.0) - weights_max
+    header = [0] * 48
+    header[:4] = [1, 400, 64, 32]
+    header[4:10] = [10, 2, stack + 100, stack, 2, 0]
+    header[10:18] = [8, 2, 3, 1, 2, 0, 0, 0]
+    header[18:21] = [_bits(min_diff2), _bits(weights_max), _bits(shift)]
+    header[21:29] = [2, 2, 2, 1_000_000, 432, 1, 2, validator.fnv1a64("17,23")]
+    header[29:32] = [1, 1, 1]
+    header[32] = flags
+    header[33] = sparse_weight_count
+    footer = validator.FOOTER_STRUCT.pack(validator.FOOTER_MAGIC, 0, 0)
+    path.write_bytes(validator.HEADER_STRUCT.pack(validator.HEADER_MAGIC, *header) + footer)
+
+
 def _selection(path, *, ranks=(2, 2)):
     path.write_text(
         json.dumps(
@@ -168,6 +191,30 @@ def test_fine_score_capture_rejects_score_algebra_drift(tmp_path):
 
     with pytest.raises(ValueError, match="prior/diff2 algebra"):
         validator.load_fine_score_capture(capture)
+
+
+def test_fine_score_capture_accepts_only_explicit_empty_support_sentinel(tmp_path):
+    capture_path = tmp_path / "part117_stack17_class2.fine-score-v1.bin"
+    _write_empty_capture(capture_path, stack=17)
+
+    capture = validator.load_fine_score_capture(capture_path)
+
+    assert capture.empty_sparse_support is True
+    assert capture.candidates.size == 0
+    assert capture.algebra_max_abs == 0.0
+    assert capture_path.stat().st_size == 432
+
+    _write_empty_capture(capture_path, stack=17, flags=0)
+    with pytest.raises(ValueError, match="unflagged empty"):
+        validator.load_fine_score_capture(capture_path)
+
+    _write_empty_capture(capture_path, stack=17, flags=2)
+    with pytest.raises(ValueError, match="unknown fine-score capture flag"):
+        validator.load_fine_score_capture(capture_path)
+
+    _write_empty_capture(capture_path, stack=17, sparse_weight_count=1)
+    with pytest.raises(ValueError, match="empty-support fine-score counts are nonzero"):
+        validator.load_fine_score_capture(capture_path)
 
 
 def test_fine_score_capture_rejects_wrong_rank_and_truncation(tmp_path):

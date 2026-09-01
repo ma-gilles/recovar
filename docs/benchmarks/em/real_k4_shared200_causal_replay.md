@@ -27,7 +27,7 @@ the reconstruction/update boundary.
   STAR. The reduced STAR is essential: the earlier nominal shared-200 attempt
   still reconstructed all 10,000 rows because its particle list only limited
   diagnostics.
-- Hardware request: one H100, six CPUs, 192 GB, two hours, without
+- Hardware request: one H100, eight CPUs, 192 GB, two hours, without
   `--exclusive`.
 
 The launcher pins the fixture STAR/index/34.6 GB stack hashes, shared-target
@@ -37,6 +37,16 @@ maps, controller state, and the integrated clean RECOVAR source commit/tree.
 The scientific artifacts are fixed independently of the RECOVAR source
 commit: after this harness is integrated, the manifest binds whichever clean
 qualified staging commit actually runs it.
+
+The native capture default is the clean RELION source commit
+`6697bf85a98297153cd57e4485c63c4381548a1c`, tree
+`3b940fe717ded8e109364ace1b746ab0164a0874`, with non-MPI executable
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_empty_support_capture_20260901/build/bin/relion_refine`
+(SHA-256
+`2e109e842c93e34410be219db6ab0e978d4d26e52da0964fea0133d0878f0e84`).
+Preflight also requires and hashes
+`src/acc/empty_support_capture_contract.h`; a source tree with only the older
+stop-after-live-iteration hook is rejected.
 
 The 93/107 split is not an assumed balance. The launcher takes the ordered
 `rlnImageName` list from the sealed shared-set JSON, joins those identities
@@ -62,9 +72,11 @@ RUN_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_ca
 
 The default is dry-run only. It writes `SAFE_TO_DELETE`, a deterministic
 `inputs/particles_shared200.star`, `inputs/frozen_targets.json`, the sealed
-`launch_manifest.json`, and `scripts/run_shared200_causal_replay.sbatch`. It
+v4 `launch_manifest.json`, and `scripts/run_shared200_causal_replay.sbatch`. It
 prints the only admissible submission command, including the manifest digest.
-Do not submit if manifest validation or any focused test fails.
+The v4 validator rejects manifests sealed against the superseded capture
+binary or source tree. Do not submit if manifest validation or any focused
+test fails.
 
 To revalidate a sealed bundle without launching:
 
@@ -89,8 +101,23 @@ fixed gates are:
 - mapped hard-class agreement at least 0.995 and every class at least 1%;
 - every matched RECOVAR/RELION class-map FSC-AUC at least 0.999;
 - native repeat and passive-capture inertness FSC-AUC at least 0.999999.
-- native replay versus the frozen target maps FSC-AUC at least 0.999999 and
-  exact native hard-class assignments in every control/capture arm.
+- native replay versus the frozen target maps FSC-AUC at least 0.999 and
+  native hard-class assignment accuracy at least 0.995; and
+- exact native hard-class assignments between the uninstrumented replay and
+  every repeat/capture arm.
+
+A particle/class with no RELION sparse support still contributes one file of
+each native capture type. Fine-score v1 marks it with header flag word 32 bit
+0, sparse-weight word 33 equal to zero, zero candidate/footer counts, and no
+candidate payload. BPref v2 marks it with header flag word 54 bit 0, retains
+the exact rotation geometry when RELION constructed it (`header[20] ==
+header[46]`), retains the full translation grid, and has zero candidate,
+hypothesis, pixel, summary, and term counts. The audit accepts this sentinel
+only when both native files agree and RECOVAR has an empty candidate mask,
+posterior, and reconstruction support. Its empty-set candidate equality and
+support Jaccard are defined as 1.0; an unflagged zero-rotation record, unknown
+flag, inconsistent geometry, nonzero RECOVAR mass, or mismatched sentinel
+fails closed.
 
 Scores use centered, scale-sensitive errors solely to remove a class-table
 additive offset. Posterior and Pmax comparisons are not centered or fitted.
@@ -111,9 +138,15 @@ multi-iteration, multi-dataset K=4 half-map refinement evidence.
 pixi run ruff check \
   scripts/launch_em_real_k4_shared200_causal_replay_slurm.py \
   scripts/audit_em_real_k4_shared200_causal_replay.py \
+  scripts/validate_relion_bpref_factor_capture.py \
+  scripts/validate_relion_fine_score_capture.py \
   tests/unit/test_launch_em_real_k4_shared200_causal_replay_slurm.py \
-  tests/unit/test_audit_em_real_k4_shared200_causal_replay.py
+  tests/unit/test_audit_em_real_k4_shared200_causal_replay.py \
+  tests/unit/test_validate_relion_bpref_factor_capture.py \
+  tests/unit/test_validate_relion_fine_score_capture.py
 pixi run pytest -q \
   tests/unit/test_launch_em_real_k4_shared200_causal_replay_slurm.py \
-  tests/unit/test_audit_em_real_k4_shared200_causal_replay.py
+  tests/unit/test_audit_em_real_k4_shared200_causal_replay.py \
+  tests/unit/test_validate_relion_bpref_factor_capture.py \
+  tests/unit/test_validate_relion_fine_score_capture.py
 ```

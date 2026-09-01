@@ -120,6 +120,42 @@ def _write_capture(
     path.write_bytes(payload)
 
 
+def _write_empty_capture(
+    path,
+    *,
+    stack,
+    flags=validator.EMPTY_SPARSE_SUPPORT,
+    rotation_count=2,
+    runtime_rotation_count=None,
+):
+    rotations = np.zeros(rotation_count, dtype=ROTATION_DTYPE)
+    rotations["orientation_class_key"] = np.arange(10, 10 + rotation_count)
+    rotations["oversampled_rotation"] = np.arange(1, 1 + rotation_count)
+    rotations["orientation_local"] = np.arange(rotation_count)
+    rotations["matrix"] = np.eye(3, dtype=np.float32).reshape(1, 9)
+    translations = np.zeros(2, dtype=validator.TRANSLATION_DTYPE)
+    translations["translation"] = [0, 1]
+    translations["x"] = [0.0, 0.5]
+    translations["y"] = [0.0, -0.5]
+    header = [0] * 64
+    header[:9] = [2, 528, 64, 24, 24, 40, 40, 56, 64]
+    header[9:16] = [1, 1, stack + 100, stack, 0, 2, 0]
+    if runtime_rotation_count is None:
+        runtime_rotation_count = rotation_count
+    header[16:22] = [3, 4, 1, 12, runtime_rotation_count, 2]
+    header[22:29] = [1, 1, _bits(2.0), _bits(0.999), _bits(1.0), 0, 0]
+    header[29:37] = [2, 2, 2, 10_000_000, 1_280, 1, 2, validator.fnv1a64("17,23")]
+    header[37:43] = [5, 9, 9, (-4) & 0xFFFFFFFFFFFFFFFF, (-4) & 0xFFFFFFFFFFFFFFFF, 1]
+    header[43:53] = [0, 0, 0, rotation_count, 2, 0, 0, 0, 0, 0]
+    header[53] = 1
+    header[54] = flags
+    footer = validator.FOOTER_STRUCT.pack(
+        validator.FOOTER_MAGIC, rotation_count, 2, 0, 0, 0, 0
+    )
+    payload = validator.HEADER_STRUCT.pack(validator.HEADER_MAGIC, *header)
+    path.write_bytes(payload + rotations.tobytes() + translations.tobytes() + footer)
+
+
 def _selection(path, *, ranks=None):
     if ranks is None:
         ranks = (2, 2)
@@ -285,6 +321,33 @@ def test_factor_capture_accepts_explicit_geometry_only_panel(tmp_path):
     assert capture.pixels.size == 0
     assert capture.summaries.size == 0
     assert capture.terms.size == 0
+
+
+def test_factor_capture_accepts_only_explicit_empty_support_sentinel(tmp_path):
+    capture_path = tmp_path / "part117_stack17_img0_class1.bpre-v2.bin"
+    _write_empty_capture(capture_path, stack=17)
+
+    capture = validator.load_factor_capture(capture_path)
+
+    assert capture.empty_sparse_support is True
+    assert capture.geometry_only is True
+    assert capture.rotations.size == 2
+    assert capture.translations.size == 2
+
+    _write_empty_capture(capture_path, stack=17, flags=0)
+    assert validator.load_factor_capture(capture_path).empty_sparse_support is False
+
+    _write_empty_capture(capture_path, stack=17, flags=0, rotation_count=0)
+    with pytest.raises(ValueError, match="unflagged factor capture has no rotations"):
+        validator.load_factor_capture(capture_path)
+
+    _write_empty_capture(capture_path, stack=17, flags=2)
+    with pytest.raises(ValueError, match="unknown factor capture flag"):
+        validator.load_factor_capture(capture_path)
+
+    _write_empty_capture(capture_path, stack=17, runtime_rotation_count=3)
+    with pytest.raises(ValueError, match="factor panel counts changed"):
+        validator.load_factor_capture(capture_path)
 
 
 def test_factor_capture_directory_rejects_particle_on_wrong_mpi_rank(tmp_path):

@@ -370,16 +370,59 @@ def test_gradient_replay_rejects_mpi_capture_binary(tmp_path):
         launcher._validate_capture_binary_mode(tmp_path / "relion_refine_mpi")
 
 
+def test_capture_source_provenance_requires_empty_support_contract(monkeypatch, tmp_path):
+    source = tmp_path / "relion"
+    (source / "src/acc").mkdir(parents=True)
+    (source / "src/acc/acc_ml_optimiser_impl.h").write_text(
+        '#include "src/acc/empty_support_capture_contract.h"\n'
+        "RELION_BPRE_CAPTURE_STACKS\n"
+        "RELION_FINE_SCORE_CAPTURE_CLASSES\n"
+    )
+    contract = source / launcher.CAPTURE_CONTRACT_RELATIVE_PATH
+    contract.write_text("\n".join(launcher.EXPECTED_CAPTURE_CONTRACT_TOKENS))
+    (source / "src/ml_optimiser.cpp").write_text(
+        "RELION_SAMPLING_PERTURBATION_OVERRIDE\n"
+    )
+    (source / "src/ml_optimiser.h").write_text(
+        "RELION_CONTINUE_ITER0_PRESERVE_STATE\n"
+    )
+
+    def fake_git_text(_root, *args):
+        values = {
+            ("status", "--porcelain", "--untracked-files=no"): "",
+            ("rev-parse", "--show-toplevel"): str(source),
+            ("rev-parse", "HEAD"): launcher.EXPECTED_CAPTURE_RELION_HEAD,
+            ("rev-parse", "HEAD^{tree}"): launcher.EXPECTED_CAPTURE_RELION_TREE,
+        }
+        return values[args]
+
+    monkeypatch.setattr(launcher, "_git_text", fake_git_text)
+
+    provenance = launcher._source_provenance(source)
+
+    assert provenance["git_head"] == launcher.EXPECTED_CAPTURE_RELION_HEAD
+    assert provenance["git_tree"] == launcher.EXPECTED_CAPTURE_RELION_TREE
+    assert provenance["empty_support_contract_sha256"] == launcher._sha256(contract)
+
+    contract.write_text("\n".join(launcher.EXPECTED_CAPTURE_CONTRACT_TOKENS[:-1]))
+    with pytest.raises(launcher.PreflightError, match="contract lacks"):
+        launcher._source_provenance(source)
+
+
 def test_cli_is_dry_run_by_default(tmp_path):
     args = launcher.parse_args(["--output-root", str(tmp_path / "run")])
     assert args.submit is False
     assert args.native_smoke_only is False
     assert args.relion_capture_source == launcher.DEFAULT_RELION_CAPTURE_SOURCE.resolve()
     assert args.relion_capture_binary == launcher.DEFAULT_RELION_CAPTURE_BINARY.resolve()
-    assert launcher.EXPECTED_CAPTURE_RELION_HEAD == "9a90f5f18a8a0781d18a30fd5bd30f719d73e72e"
-    assert launcher.EXPECTED_CAPTURE_RELION_TREE == "8cf5543fa3e2976770db4938842172e31e866971"
+    assert launcher.SCHEMA == "recovar.em_real_k4_shared200_causal_replay_launch.v4"
+    assert str(launcher.DEFAULT_RELION_CAPTURE_ROOT).endswith(
+        "/relion_empty_support_capture_20260901"
+    )
+    assert launcher.EXPECTED_CAPTURE_RELION_HEAD == "6697bf85a98297153cd57e4485c63c4381548a1c"
+    assert launcher.EXPECTED_CAPTURE_RELION_TREE == "3b940fe717ded8e109364ace1b746ab0164a0874"
     assert launcher.EXPECTED_CAPTURE_RELION_BINARY_SHA256 == (
-        "c912b09593bfbeec35c3bf08399d8624adaacf87082444f5b2a706ceefda207f"
+        "2e109e842c93e34410be219db6ab0e978d4d26e52da0964fea0133d0878f0e84"
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from types import SimpleNamespace
 
 import numpy as np
@@ -7,6 +8,10 @@ import pytest
 
 from scripts import audit_em_real_k4_shared200_causal_replay as auditor
 from scripts import launch_em_real_k4_shared200_causal_replay_slurm as launcher
+
+
+def _bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _passing_metrics() -> dict[str, float]:
@@ -125,6 +130,111 @@ def test_particle_mass_diagnostics_rejects_per_class_or_incomplete_topology():
     }
     with pytest.raises(auditor.AuditError, match="complete and ordered"):
         auditor._particle_mass_diagnostics([{**base, "class_id": 2}])
+
+
+def test_empty_sparse_support_join_requires_matching_explicit_sentinels(monkeypatch, tmp_path):
+    factor_header = [0] * 64
+    factor_header[9:13] = [1, 2, 117, 17]
+    factor_header[20] = 1
+    factor_header[21] = 2
+    factor_header[25] = _bits(0.25)
+    factor_header[26] = _bits(1.0)
+    factor_header[46] = 1
+    rotations = np.zeros(1, dtype=[("matrix", "<f4", (9,))])
+    rotations["matrix"] = np.eye(3, dtype=np.float32).reshape(1, 9)
+    factor = SimpleNamespace(
+        geometry_only=True,
+        empty_sparse_support=True,
+        header=tuple(factor_header),
+        rotations=rotations,
+    )
+    score_header = [0] * 48
+    score_header[4:8] = [1, 2, 117, 17]
+    score = SimpleNamespace(
+        empty_sparse_support=True,
+        header=tuple(score_header),
+        candidates=np.empty(0, dtype=np.float32),
+    )
+    recovar = {
+        "rotations": np.eye(3, dtype=np.float32)[None, ...],
+        "candidate_mask": np.zeros((1, 2), dtype=bool),
+        "probs": np.zeros((1, 2), dtype=np.float64),
+        "reconstruction_probs": np.zeros((1, 2), dtype=np.float64),
+        "reconstruction_mask": np.zeros((1, 2), dtype=bool),
+    }
+    monkeypatch.setattr(auditor, "load_factor_capture", lambda _path: factor)
+    monkeypatch.setattr(auditor, "load_fine_score_capture", lambda _path: score)
+    monkeypatch.setattr(auditor, "_load_recovar", lambda *_args, **_kwargs: recovar)
+
+    joined = auditor._join_class(
+        stack=17,
+        class_id=2,
+        factor_path=tmp_path / "factor.bin",
+        score_path=tmp_path / "score.bin",
+        pass2_path=tmp_path / "pass2.npz",
+    )
+
+    assert joined["empty_sparse_support"] is True
+    assert joined["candidate_exact"] is True
+    assert joined["native_raw"].size == 0
+    assert joined["native_posterior"].shape == (1, 2)
+    assert not np.any(joined["native_posterior"])
+
+    score.empty_sparse_support = False
+    with pytest.raises(auditor.AuditError, match="sentinels disagree"):
+        auditor._join_class(
+            stack=17,
+            class_id=2,
+            factor_path=tmp_path / "factor.bin",
+            score_path=tmp_path / "score.bin",
+            pass2_path=tmp_path / "pass2.npz",
+        )
+
+
+def test_empty_sparse_support_join_rejects_nonzero_recovar_mass(monkeypatch, tmp_path):
+    factor_header = [0] * 64
+    factor_header[9:13] = [1, 2, 117, 17]
+    factor_header[21] = 2
+    factor_header[25] = _bits(0.25)
+    factor_header[26] = _bits(1.0)
+    score_header = [0] * 48
+    score_header[4:8] = [1, 2, 117, 17]
+    monkeypatch.setattr(
+        auditor,
+        "load_factor_capture",
+        lambda _path: SimpleNamespace(
+            geometry_only=True,
+            empty_sparse_support=True,
+            header=tuple(factor_header),
+            rotations=np.empty(0, dtype=np.float32),
+        ),
+    )
+    monkeypatch.setattr(
+        auditor,
+        "load_fine_score_capture",
+        lambda _path: SimpleNamespace(
+            empty_sparse_support=True,
+            header=tuple(score_header),
+            candidates=np.empty(0, dtype=np.float32),
+        ),
+    )
+    recovar = {
+        "rotations": np.eye(3, dtype=np.float32)[None, ...],
+        "candidate_mask": np.zeros((1, 2), dtype=bool),
+        "probs": np.asarray([[0.25, 0.0]], dtype=np.float64),
+        "reconstruction_probs": np.zeros((1, 2), dtype=np.float64),
+        "reconstruction_mask": np.zeros((1, 2), dtype=bool),
+    }
+    monkeypatch.setattr(auditor, "_load_recovar", lambda *_args, **_kwargs: recovar)
+
+    with pytest.raises(auditor.AuditError, match="posterior is nonzero"):
+        auditor._join_class(
+            stack=17,
+            class_id=2,
+            factor_path=tmp_path / "factor.bin",
+            score_path=tmp_path / "score.bin",
+            pass2_path=tmp_path / "pass2.npz",
+        )
 
 
 def test_exact_keyed_paths_rejects_duplicate_and_missing(tmp_path):

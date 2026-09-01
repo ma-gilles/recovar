@@ -47,6 +47,7 @@ TRANSLATION_ZERO = np.uint32(2)
 DIFF2_BELOW_MIN = np.uint32(4)
 ACTIVE = np.uint32(8)
 KNOWN_FLAGS = ORIENTATION_ZERO | TRANSLATION_ZERO | DIFF2_BELOW_MIN | ACTIVE
+EMPTY_SPARSE_SUPPORT = 1
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,10 @@ class FineScoreCapture:
     @property
     def stack_index(self) -> int:
         return self.header[7]
+
+    @property
+    def empty_sparse_support(self) -> bool:
+        return bool(self.header[32] & EMPTY_SPARSE_SUPPORT)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -180,11 +185,15 @@ def _validate_arrays(
         and header[11] > 0
         and header[12] > 0
         and header[13] > 0
-        and header[14] > 0
-        and header[15] > 0,
+        and header[14] > 0,
         f"invalid fine-score runtime dimensions: {path}",
     )
-    _require(header[16] == candidates.size and candidates.size > 0, f"empty fine-score panel: {path}")
+    _require(
+        header[32] & ~EMPTY_SPARSE_SUPPORT == 0,
+        f"unknown fine-score capture flag: {path}",
+    )
+    empty_sparse_support = bool(header[32] & EMPTY_SPARSE_SUPPORT)
+    _require(header[16] == candidates.size, f"fine-score candidate count changed: {path}")
     _require(header[17] <= header[16], f"invalid active fine-score count: {path}")
     _require(header[21] > 0 and header[21] <= header[22] * header[23], f"invalid fine-score capture caps: {path}")
     _require(
@@ -194,6 +203,35 @@ def _validate_arrays(
     _require(header[25] * header[21] <= header[24], f"fine-score capture byte cap exceeded: {path}")
     _require(header[26] and header[27] and header[28], f"fine-score identity hash is zero: {path}")
     _require(header[29:32] == (1, 1, 1), f"fine-score capture is not passive/canonical/complete: {path}")
+
+    min_diff2 = _float32_from_bits(header[18])
+    weights_max = _float32_from_bits(header[19])
+    exponent_shift = _float32_from_bits(header[20])
+    _require(
+        np.isfinite(min_diff2) and np.isfinite(weights_max) and np.isfinite(exponent_shift),
+        f"non-finite fine-score scalar: {path}",
+    )
+    expected_exponent_shift = np.float32(np.float32(50.0) - weights_max)
+    _require(
+        exponent_shift.view(np.uint32) == expected_exponent_shift.view(np.uint32),
+        f"fine-score global exponent shift changed: {path}",
+    )
+    if empty_sparse_support:
+        _require(
+            header[16] == header[17] == header[33] == 0 and candidates.size == 0,
+            f"empty-support fine-score counts are nonzero: {path}",
+        )
+        return 0.0, 0.0, 0.0, 0
+
+    _require(candidates.size > 0, f"unflagged empty fine-score panel: {path}")
+    _require(header[15] > 0, f"nonempty fine-score panel has no sparse jobs: {path}")
+    # Header word 33 was reserved in older v1 captures and is populated by
+    # the empty-support-capable writer.  Accept both sealed generations while
+    # requiring any populated value to reproduce the serialized panel.
+    _require(
+        header[33] in (0, candidates.size),
+        f"fine-score sparse weight count changed: {path}",
+    )
 
     expected_sparse_index = np.arange(candidates.size, dtype=np.uint64)
     _require(
@@ -218,18 +256,6 @@ def _validate_arrays(
         f"fine-score prior index is out of range: {path}",
     )
 
-    min_diff2 = _float32_from_bits(header[18])
-    weights_max = _float32_from_bits(header[19])
-    exponent_shift = _float32_from_bits(header[20])
-    _require(
-        np.isfinite(min_diff2) and np.isfinite(weights_max) and np.isfinite(exponent_shift),
-        f"non-finite fine-score scalar: {path}",
-    )
-    expected_exponent_shift = np.float32(np.float32(50.0) - weights_max)
-    _require(
-        exponent_shift.view(np.uint32) == expected_exponent_shift.view(np.uint32),
-        f"fine-score global exponent shift changed: {path}",
-    )
     expected_rejection = np.zeros(candidates.size, dtype=np.uint32)
     expected_rejection |= np.where(
         candidates["raw_diff2"] < min_diff2, DIFF2_BELOW_MIN, np.uint32(0)
@@ -385,6 +411,9 @@ def validate_directory(
         "iteration": next(iter(iterations)),
         "class_one_based": next(iter(classes)),
         "particle_count": len(captures),
+        "empty_sparse_support_count": sum(
+            capture.empty_sparse_support for capture in captures
+        ),
         "candidate_count": int(sum(candidates.candidates.size for candidates in captures)),
         "active_candidate_count": int(
             sum(np.count_nonzero(capture.candidates["flags"] & ACTIVE) for capture in captures)
@@ -405,6 +434,7 @@ def validate_directory(
                 "mpi_rank": capture.header[8],
                 "candidate_count": int(capture.candidates.size),
                 "active_candidate_count": int(np.count_nonzero(capture.candidates["flags"] & ACTIVE)),
+                "empty_sparse_support": capture.empty_sparse_support,
                 "underflow_candidate_count": capture.underflow_candidate_count,
             }
             for capture in captures

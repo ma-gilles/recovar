@@ -280,62 +280,19 @@ def _join_class(
     )
     _require(score.header[6] == factor.header[11], f"native particle identity differs: stack {stack} class {class_id}")
 
-    native_rotations = np.asarray(factor.rotations["matrix"], dtype=np.float32).reshape(-1, 3, 3).transpose(0, 2, 1)
     recovar_rotations = np.asarray(recovar["rotations"], dtype=np.float32)
-    native_to_recovar = exact_rotation_permutation(native_rotations, recovar_rotations)
     candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
-    _require(
-        candidate_mask.shape == (native_to_recovar.size, int(factor.header[21])),
-        f"candidate geometry drift: stack {stack} class {class_id}",
-    )
-    candidates = score.candidates
-    active = (candidates["flags"] & ACTIVE) != 0
-    native_rotation = np.asarray(candidates["rotation_local"], dtype=np.int64)
-    translations = np.asarray(candidates["translation_id"], dtype=np.int64)
-    _require(
-        np.all((native_rotation >= 0) & (native_rotation < native_to_recovar.size)),
-        "native rotation index is out of range",
-    )
-    _require(
-        np.all((translations >= 0) & (translations < candidate_mask.shape[1])),
-        "native translation index is out of range",
-    )
-    mapped_rotation = native_to_recovar[native_rotation]
-    native_candidates = np.zeros(candidate_mask.shape, dtype=bool)
-    native_candidates[mapped_rotation[active], translations[active]] = True
-    _require(
-        int(np.count_nonzero(native_candidates)) == int(np.count_nonzero(active)),
-        "native active tuple keys are not unique",
-    )
-    tuple_exact = bool(np.array_equal(native_candidates, candidate_mask))
-    common = active & candidate_mask[mapped_rotation, translations]
-    _require(np.any(common), "native/RECOVAR candidate intersection is empty")
-    mapped_common_rotation = mapped_rotation[common]
-    common_translation = translations[common]
-
-    significant_weight = _float32_from_bits(int(factor.header[25]))
-    weight_norm = _float32_from_bits(int(factor.header[26]))
-    _require(
-        np.isfinite(significant_weight) and np.isfinite(weight_norm) and weight_norm > 0,
-        "invalid native posterior scalars",
-    )
-    native_posterior = np.zeros(candidate_mask.shape, dtype=np.float32)
-    native_posterior[mapped_rotation[active], translations[active]] = np.divide(
-        candidates["post_exponent_weight"][active], weight_norm, dtype=np.float32
-    )
-    native_support = np.zeros(candidate_mask.shape, dtype=bool)
-    native_significant_rows = active & (candidates["post_exponent_weight"] >= significant_weight)
-    native_support[mapped_rotation[native_significant_rows], translations[native_significant_rows]] = True
-    _require(
-        int(np.count_nonzero(native_support)) == int(factor.header[45]),
-        "native support does not replay the BPref header",
-    )
     recovar_posterior = np.asarray(recovar["probs"], dtype=np.float64)
     recovar_reconstruction_posterior = np.asarray(
         recovar["reconstruction_probs"],
         dtype=np.float64,
     )
     recovar_support = np.asarray(recovar["reconstruction_mask"], dtype=bool)
+    _require(
+        recovar_rotations.shape == (candidate_mask.shape[0], 3, 3)
+        and candidate_mask.shape[1] == int(factor.header[21]),
+        f"candidate geometry drift: stack {stack} class {class_id}",
+    )
     _require(
         recovar_posterior.shape
         == recovar_reconstruction_posterior.shape
@@ -365,10 +322,104 @@ def _join_class(
         ),
         "RECOVAR retained posterior does not equal the full posterior on support",
     )
+
+    _require(
+        score.empty_sparse_support == factor.empty_sparse_support,
+        f"native empty-support sentinels disagree: stack {stack} class {class_id}",
+    )
+    significant_weight = _float32_from_bits(int(factor.header[25]))
+    weight_norm = _float32_from_bits(int(factor.header[26]))
+    _require(
+        np.isfinite(significant_weight) and np.isfinite(weight_norm) and weight_norm > 0,
+        "invalid native posterior scalars",
+    )
+    if score.empty_sparse_support:
+        _require(score.candidates.size == 0, "empty fine-score sentinel contains candidates")
+        if factor.rotations.size:
+            native_rotations = (
+                np.asarray(factor.rotations["matrix"], dtype=np.float32)
+                .reshape(-1, 3, 3)
+                .transpose(0, 2, 1)
+            )
+            exact_rotation_permutation(native_rotations, recovar_rotations)
+        _require(not np.any(candidate_mask), "RECOVAR candidate mask is nonempty for native empty support")
+        _require(not np.any(recovar_posterior), "RECOVAR posterior is nonzero for native empty support")
+        _require(
+            not np.any(recovar_reconstruction_posterior) and not np.any(recovar_support),
+            "RECOVAR retained support is nonzero for native empty support",
+        )
+        empty_scores = np.empty(0, dtype=np.float32)
+        native_posterior = np.zeros(candidate_mask.shape, dtype=np.float32)
+        native_support = np.zeros(candidate_mask.shape, dtype=bool)
+        return {
+            "stack": stack,
+            "class_id": class_id,
+            "particle_id": int(score.header[6]),
+            "empty_sparse_support": True,
+            "candidate_exact": True,
+            "candidate_intersection": 0,
+            "candidate_union": 0,
+            "native_raw": empty_scores,
+            "recovar_raw": empty_scores.copy(),
+            "native_combined": empty_scores.copy(),
+            "recovar_combined": empty_scores.copy(),
+            "native_posterior": native_posterior,
+            "recovar_posterior": recovar_posterior,
+            "native_reconstruction_posterior": native_posterior.copy(),
+            "recovar_reconstruction_posterior": recovar_reconstruction_posterior,
+            "native_support": native_support,
+            "recovar_support": recovar_support,
+            "significant_weight_bits": int(factor.header[25]),
+            "weight_norm_bits": int(factor.header[26]),
+        }
+
+    native_rotations = np.asarray(factor.rotations["matrix"], dtype=np.float32).reshape(-1, 3, 3).transpose(0, 2, 1)
+    native_to_recovar = exact_rotation_permutation(native_rotations, recovar_rotations)
+    _require(
+        candidate_mask.shape == (native_to_recovar.size, int(factor.header[21])),
+        f"candidate geometry drift: stack {stack} class {class_id}",
+    )
+    candidates = score.candidates
+    active = (candidates["flags"] & ACTIVE) != 0
+    native_rotation = np.asarray(candidates["rotation_local"], dtype=np.int64)
+    translations = np.asarray(candidates["translation_id"], dtype=np.int64)
+    _require(
+        np.all((native_rotation >= 0) & (native_rotation < native_to_recovar.size)),
+        "native rotation index is out of range",
+    )
+    _require(
+        np.all((translations >= 0) & (translations < candidate_mask.shape[1])),
+        "native translation index is out of range",
+    )
+    mapped_rotation = native_to_recovar[native_rotation]
+    native_candidates = np.zeros(candidate_mask.shape, dtype=bool)
+    native_candidates[mapped_rotation[active], translations[active]] = True
+    _require(
+        int(np.count_nonzero(native_candidates)) == int(np.count_nonzero(active)),
+        "native active tuple keys are not unique",
+    )
+    tuple_exact = bool(np.array_equal(native_candidates, candidate_mask))
+    common = active & candidate_mask[mapped_rotation, translations]
+    _require(np.any(common), "native/RECOVAR candidate intersection is empty")
+    mapped_common_rotation = mapped_rotation[common]
+    common_translation = translations[common]
+
+    native_posterior = np.zeros(candidate_mask.shape, dtype=np.float32)
+    native_posterior[mapped_rotation[active], translations[active]] = np.divide(
+        candidates["post_exponent_weight"][active], weight_norm, dtype=np.float32
+    )
+    native_support = np.zeros(candidate_mask.shape, dtype=bool)
+    native_significant_rows = active & (candidates["post_exponent_weight"] >= significant_weight)
+    native_support[mapped_rotation[native_significant_rows], translations[native_significant_rows]] = True
+    _require(
+        int(np.count_nonzero(native_support)) == int(factor.header[45]),
+        "native support does not replay the BPref header",
+    )
     return {
         "stack": stack,
         "class_id": class_id,
         "particle_id": int(score.header[6]),
+        "empty_sparse_support": False,
         "candidate_exact": tuple_exact,
         "candidate_intersection": int(np.count_nonzero(native_candidates & candidate_mask)),
         "candidate_union": int(np.count_nonzero(native_candidates | candidate_mask)),
@@ -497,7 +548,7 @@ def _particle_mass_diagnostics(joined: list[dict[str, Any]]) -> dict[str, Any]:
                 "recovar_support_count": int(np.count_nonzero(recovar_support)),
                 "support_intersection": intersection,
                 "support_union": union,
-                "support_jaccard": intersection / float(max(union, 1)),
+                "support_jaccard": 1.0 if union == 0 else intersection / float(union),
             }
         )
         normalized_offset = normalized_stop
@@ -687,6 +738,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
     combined = ErrorAccumulator()
     posterior = ErrorAccumulator()
     exact_count = 0
+    empty_sparse_support_count = 0
     support_intersection = 0
     support_union = 0
     winner_matches = 0
@@ -708,9 +760,12 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             )
             joined.append(item)
             exact_count += int(item["candidate_exact"])
-            raw.add(item["native_raw"], item["recovar_raw"], center=True)
-            combined.add(item["native_combined"], item["recovar_combined"], center=True)
-            posterior.add(item["native_posterior"], item["recovar_posterior"], center=False)
+            empty_sparse_support_count += int(item["empty_sparse_support"])
+            if item["native_raw"].size:
+                raw.add(item["native_raw"], item["recovar_raw"], center=True)
+                combined.add(item["native_combined"], item["recovar_combined"], center=True)
+            if item["native_posterior"].size:
+                posterior.add(item["native_posterior"], item["recovar_posterior"], center=False)
             support_intersection += int(np.count_nonzero(item["native_support"] & item["recovar_support"]))
             support_union += int(np.count_nonzero(item["native_support"] | item["recovar_support"]))
 
@@ -748,6 +803,9 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
                 "stack_index_one_based": stack,
                 "native_particle_id_zero_based": joined[0]["particle_id"],
                 "candidate_classes_exact": sum(item["candidate_exact"] for item in joined),
+                "empty_sparse_support_classes": sum(
+                    item["empty_sparse_support"] for item in joined
+                ),
                 "native_posterior_mass": native_mass,
                 "recovar_posterior_mass": recovar_mass,
                 "winner_exact": native_winner == recovar_winner,
@@ -821,7 +879,9 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         "centered_combined_score_relative_l2": combined_report["relative_l2"],
         "posterior_relative_l2": posterior_report["relative_l2"],
         "posterior_row_sum_abs_error": max(row_sum_errors),
-        "support_jaccard": support_intersection / float(max(support_union, 1)),
+        "support_jaccard": (
+            1.0 if support_union == 0 else support_intersection / float(support_union)
+        ),
         "winner_agreement": winner_matches / float(CASE.particle_count),
         "pmax_rmse": float(np.sqrt(np.mean(pmax_delta * pmax_delta))),
         "pmax_abs_error": float(np.max(np.abs(pmax_delta), initial=0.0)),
@@ -859,6 +919,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         "inventory": inventory["counts"],
         "causal_boundary": {
             "metrics": causal_metrics,
+            "empty_sparse_support_records": empty_sparse_support_count,
             "centered_raw_score": raw_report,
             "centered_combined_score": combined_report,
             "posterior": posterior_report,

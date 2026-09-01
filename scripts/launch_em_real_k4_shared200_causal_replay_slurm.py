@@ -29,7 +29,7 @@ from recovar.data_io.starfile import read_star
 from recovar.em.sampling import read_relion_sampling_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v3"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v4"
 TARGET_SCHEMA = "recovar.em_real_k4_shared200_targets.v1"
 SHARED_SET_SCHEMA = "recovar.em_real_kclass_shared_visited_subset.v1"
 
@@ -45,7 +45,7 @@ DEFAULT_SHARED_SET = Path(
 )
 DEFAULT_RELION_CAPTURE_ROOT = Path(
     "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
-    "relion_stop_after_live_iter_20260901"
+    "relion_empty_support_capture_20260901"
 )
 DEFAULT_RELION_CAPTURE_SOURCE = DEFAULT_RELION_CAPTURE_ROOT / "source"
 DEFAULT_RELION_CAPTURE_BINARY = DEFAULT_RELION_CAPTURE_ROOT / "build/bin/relion_refine"
@@ -58,9 +58,16 @@ EXPECTED_PARTICLE_STACK_SIZE = 34_576_532_480
 EXPECTED_PARTICLE_STACK_IMAGES = 131_879
 EXPECTED_SHARED_SET_SHA256 = "581157ff693aac6f5853d335d9cd0c59aa3fc11e60f54b325feb692ff05a9bd7"
 EXPECTED_PAIR_REPORT_SHA256 = "af22573582ea68dc07099686ebb09a282ad3ed82b2998c5bc962454baefdc31d"
-EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "c912b09593bfbeec35c3bf08399d8624adaacf87082444f5b2a706ceefda207f"
-EXPECTED_CAPTURE_RELION_HEAD = "9a90f5f18a8a0781d18a30fd5bd30f719d73e72e"
-EXPECTED_CAPTURE_RELION_TREE = "8cf5543fa3e2976770db4938842172e31e866971"
+EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "2e109e842c93e34410be219db6ab0e978d4d26e52da0964fea0133d0878f0e84"
+EXPECTED_CAPTURE_RELION_HEAD = "6697bf85a98297153cd57e4485c63c4381548a1c"
+EXPECTED_CAPTURE_RELION_TREE = "3b940fe717ded8e109364ace1b746ab0164a0874"
+CAPTURE_CONTRACT_RELATIVE_PATH = Path("src/acc/empty_support_capture_contract.h")
+EXPECTED_CAPTURE_CONTRACT_TOKENS = (
+    "fine_score_empty_sparse_support_v1",
+    "bpref_factor_empty_sparse_support_v2",
+    "fine_score_empty_support_is_well_formed_v1",
+    "bpref_factor_empty_support_is_well_formed_v2",
+)
 EXPECTED_BIND_RELION_HEAD = "f2c1a384400aec37dc6805856a5ba645650a44f1"
 EXPECTED_BIND_RELION_TREE = "1aa4902144f521ae29834e5acf382ff41cf302d0"
 EXPECTED_CONTINUED_ITER0_MARKER = (
@@ -495,26 +502,33 @@ def _validate_controller_state(control_pair_root: Path) -> dict[str, Any]:
 
 def _source_provenance(source_dir: Path) -> dict[str, Any]:
     _require((source_dir / "src/acc/acc_ml_optimiser_impl.h").is_file(), "capture source lacks scorer")
+    contract_header = source_dir / CAPTURE_CONTRACT_RELATIVE_PATH
+    _require(contract_header.is_file(), "capture source lacks empty-support contract header")
     _require((source_dir / "src/ml_optimiser.cpp").is_file(), "capture source lacks optimiser")
     _require((source_dir / "src/ml_optimiser.h").is_file(), "capture source lacks optimiser header")
     status = _git_text(source_dir, "status", "--porcelain", "--untracked-files=no")
     _require(not status, f"capture RELION source has tracked changes:\n{status}")
     scorer_text = (source_dir / "src/acc/acc_ml_optimiser_impl.h").read_text(errors="replace")
+    contract_text = contract_header.read_text(errors="replace")
     optimiser_text = (source_dir / "src/ml_optimiser.cpp").read_text(errors="replace")
     optimiser_header_text = (source_dir / "src/ml_optimiser.h").read_text(errors="replace")
     for token, text in (
         ("RELION_BPRE_CAPTURE_STACKS", scorer_text),
         ("RELION_FINE_SCORE_CAPTURE_CLASSES", scorer_text),
+        ('#include "src/acc/empty_support_capture_contract.h"', scorer_text),
         ("RELION_SAMPLING_PERTURBATION_OVERRIDE", optimiser_text),
         ("RELION_CONTINUE_ITER0_PRESERVE_STATE", optimiser_header_text),
     ):
         _require(token in text, f"capture RELION source lacks {token}")
+    for token in EXPECTED_CAPTURE_CONTRACT_TOKENS:
+        _require(token in contract_text, f"capture RELION contract lacks {token}")
     provenance = {
         "root": str(Path(_git_text(source_dir, "rev-parse", "--show-toplevel")).resolve()),
         "git_head": _git_text(source_dir, "rev-parse", "HEAD"),
         "git_tree": _git_text(source_dir, "rev-parse", "HEAD^{tree}"),
         "tracked_dirty": False,
         "scorer_sha256": _sha256(source_dir / "src/acc/acc_ml_optimiser_impl.h"),
+        "empty_support_contract_sha256": _sha256(contract_header),
         "optimiser_sha256": _sha256(source_dir / "src/ml_optimiser.cpp"),
         "optimiser_header_sha256": _sha256(source_dir / "src/ml_optimiser.h"),
     }
@@ -963,13 +977,22 @@ def validate_manifest(path: Path) -> dict[str, Any]:
     _require(_git_text(source_root, "rev-parse", "HEAD") == manifest["source"]["git_head"], "RECOVAR head drift")
     _require(_git_text(source_root, "rev-parse", "HEAD^{tree}") == manifest["source"]["git_tree"], "RECOVAR tree drift")
     _require(not _git_text(source_root, "status", "--porcelain", "--untracked-files=all"), "RECOVAR source is dirty")
-    capture_source = Path(manifest["relion_capture_source"]["root"])
+    capture_manifest = manifest["relion_capture_source"]
+    capture_source = Path(capture_manifest["root"])
     _require(
-        _git_text(capture_source, "rev-parse", "HEAD") == manifest["relion_capture_source"]["git_head"],
-        "capture RELION head drift",
+        _source_provenance(capture_source) == capture_manifest,
+        "capture RELION source provenance drift",
     )
+    capture_binary_records = [
+        record
+        for record in manifest["input_records"]
+        if record.get("role") == "capture RELION binary"
+    ]
     _require(
-        not _git_text(capture_source, "status", "--porcelain", "--untracked-files=no"), "capture RELION source is dirty"
+        len(capture_binary_records) == 1
+        and capture_binary_records[0]["sha256"]
+        == EXPECTED_CAPTURE_RELION_BINARY_SHA256,
+        "capture RELION binary provenance drift",
     )
     bind_source = Path(manifest["relion_bind_source"]["root"])
     _require(
