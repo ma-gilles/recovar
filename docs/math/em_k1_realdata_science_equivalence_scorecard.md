@@ -103,6 +103,28 @@ component audit. The isolated second job reused the literal audited 10097
 mask. Regenerating that mask changed only MRC header-statistic bytes 249,
 250, and 253; the voxel payload was identical.
 
+## Available EMPIAR-10202 per-engine evidence
+
+This is a deliberately partial report. RELION is sealed and complete;
+RECOVAR and every cross-engine acceptance metric remain pending.
+The RELION-only result cannot pass the fixed scoring case.
+
+| Engine | Status | Unmasked FSC=0.143 (A) | Corrected masked FSC=0.143 (A) | <= 3.0 A arm | Jobs |
+| --- | --- | ---: | ---: | --- | --- |
+| RELION | complete | 2.511554 | 2.122559 | pass | `13217551` / `13254149` |
+| RECOVAR | pending | -- | -- | pending | -- |
+
+The 2.511554-A value is RELION's final unmasked FSC estimate sealed by
+the postprocess result manifest. The 2.122559-A corrected masked value is
+supporting-only and cannot rescue an unmasked or cross-engine failure.
+The fixed scorecard's three-consecutive-shell joint-band metric is still
+unavailable until RECOVAR supplies its independent half maps.
+
+RELION refinement stdout SHA-256: `582e90f851b4f389e953113b0cf2b4cb3f46f833567015c34a35e5551c475fea`.
+Matched harness manifest SHA-256: `5764c09af9db73ac7523db7cf34e1422449e158fb40e84b0e3aef2ee49a4e279`.
+Postprocess result-manifest SHA-256: `de865eba64a3d8a9c7693af5e356cbece72572630bbb184462841f8517f2899d`.
+Common mask SHA-256: `dcc3fd17e7f728b3164416f695b257fef5fceeca7c2a4ba04ea6d82c9a933b17`.
+
 ## Fixed scoring case
 
 Equivalence and absolute high-resolution achievement are reported
@@ -139,8 +161,46 @@ The preparation contract is fully frozen: normalized STAR SHA-256 prefix
 `d66afb30`; RELION/RECOVAR initial-map file prefixes `4f83710c` and
 `d77516a0`; exact shared canonical-array prefix `b617f90d`. There are no
 pending preparation hashes. The subject commit must match exactly;
-ancestry is insufficient. The case remains pending only until both full
-refinements and their sealed FSC analysis complete.
+ancestry is insufficient. The RELION arm is complete; the case remains
+pending until the RECOVAR full refinement and sealed two-engine FSC
+analysis complete.
+
+## Reproduction and artifact replay
+
+From the repository root, this command re-hashes and replays every completed
+10073/10345/10097 unmasked and masked artifact, verifies the partial RELION
+10202 result, and checks that this generated Markdown is fresh:
+
+```bash
+pixi run python scripts/summarize_em_k1_realdata_science_equivalence.py --verify-calibrations --verify-masked-support --verify-target-partial --check-markdown
+```
+
+The original unmasked producer submissions are recorded verbatim in their
+sealed `SUBMITTED_JOBS.md` files:
+
+```bash
+sbatch --export=ALL,DATASET_ID=10073 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch
+sbatch --export=ALL,DATASET_ID=10345 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch
+sbatch --parsable --export=NONE /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/run_dataset_native_10097.sbatch
+```
+
+| Evidence | Frozen producer/collector reference | SHA-256 prefix |
+| --- | --- | --- |
+| 10073/10345 unmasked launcher | `/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch` | `f9544ae3eb4e` |
+| 10073/10345 submission record | `/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/SUBMITTED_JOBS.md` | `cf984cb270ca` |
+| 10097 unmasked launcher | `/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/run_dataset_native_10097.sbatch` | `b732039b378e` |
+| 10097 submission record | `/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/SUBMITTED_JOBS.md` | `205e3f8ef27e` |
+| Signed-FSC collector | `/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/scripts/collect_metrics.py` | `63d1a8f9f0a7` |
+| 10073/10345 masked launcher | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10073_10345_10097_r2_20260831/scripts/run_masked_fsc.sbatch` | `3ed871acbd6f` |
+| 10073/10345 masked driver | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10073_10345_10097_r2_20260831/scripts/run_masked_fsc.py` | `b8406ed10880` |
+| 10097 masked launcher | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10097_exactmask_20260831/scripts/run_exact_mask_postprocess.sbatch` | `71fbc466963e` |
+| 10097 masked driver | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10097_exactmask_20260831/scripts/run_exact_mask_postprocess.py` | `991a5214de7a` |
+| Masked aggregate builder | `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_final_10073_10345_10097_20260831/scripts/build_aggregate_report.py` | `36ce5201fe80` |
+
+No original `sbatch` argv was separately sealed for the two masked-FSC jobs,
+so none is reconstructed here. Their exact launchers and Python drivers are
+pinned above, while the repository replay command verifies their retained
+outputs without launching new science jobs.
 
 ## Diagnostics
 

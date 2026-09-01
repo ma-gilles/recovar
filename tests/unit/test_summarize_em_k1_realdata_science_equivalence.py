@@ -94,15 +94,11 @@ def _write_evidence(
 ) -> Path:
     metrics_path = tmp_path / "metrics.json"
     curves_path = tmp_path / "fsc_curves.npz"
-    input_paths = {
-        name: tmp_path / f"{name}.mrc"
-        for name in MODULE.SCIENCE_INPUT_TO_COLLECTOR_ARTIFACT
-    }
+    input_paths = {name: tmp_path / f"{name}.mrc" for name in MODULE.SCIENCE_INPUT_TO_COLLECTOR_ARTIFACT}
     for name, path in input_paths.items():
         path.write_bytes(f"{name}-map-fixture".encode())
     collector_artifacts = {
-        MODULE.SCIENCE_INPUT_TO_COLLECTOR_ARTIFACT[name]: MODULE.sha256_file(path)
-        for name, path in input_paths.items()
+        MODULE.SCIENCE_INPUT_TO_COLLECTOR_ARTIFACT[name]: MODULE.sha256_file(path) for name, path in input_paths.items()
     }
     metrics_path.write_text(json.dumps(_valid_metrics(collector_artifacts)))
     np.savez(curves_path, **_curves(cross_engine_fsc))
@@ -235,9 +231,7 @@ def _attach_science_diagnostics(
         n_shells = int(primary_archive[MODULE.CURVE_KEYS[0]].size)
     aligned = np.full(n_shells, aligned_fsc, dtype=np.float64)
     masked = np.full(n_shells, masked_fsc, dtype=np.float64)
-    curve_payload = {
-        key: aligned.copy() for key in MODULE.ALIGNED_CURVE_KEYS
-    }
+    curve_payload = {key: aligned.copy() for key in MODULE.ALIGNED_CURVE_KEYS}
     curve_payload.update({key: masked.copy() for key in MODULE.MASKED_CURVE_KEYS})
     np.savez(curves_path, **curve_payload)
     rotation = np.eye(3) if rotation_matrix is None else np.asarray(rotation_matrix, dtype=np.float64)
@@ -331,6 +325,7 @@ def _attach_science_diagnostics(
 def test_fixed_scorecard_is_valid_and_markdown_is_fresh() -> None:
     scorecard = MODULE.load_and_validate_scorecard()
     report = MODULE.build_report(scorecard, scorecard_path=MODULE.DEFAULT_SCORECARD)
+    target = next(row for row in report["cases"] if row["id"] == MODULE.TARGET_CASE_ID)
 
     assert report["aggregate"] == {
         "scoring_denominator": 1,
@@ -343,7 +338,71 @@ def test_fixed_scorecard_is_valid_and_markdown_is_fresh() -> None:
     assert report["masked_fsc_support"]["role"] == "supporting_only"
     assert report["masked_fsc_support"]["acceptance_metric"] is False
     assert report["masked_fsc_support"]["can_rescue"] is False
+    assert target["status"] == "pending"
+    assert target["high_resolution_achievement"] == {
+        "status": "pending",
+        "pass": None,
+        "each_engine_resolution_angstrom_max": 3.0,
+        "relion": {"status": "complete", "resolution_angstrom": 2.511554, "pass": True},
+        "recovar": {"status": "pending", "resolution_angstrom": None, "pass": None},
+        "partial_result_does_not_score_case": True,
+    }
+    assert target["partial_engine_results"]["verification_status"] == "frozen_not_replayed"
+    assert target["partial_engine_results"]["relion"]["corrected_masked"] == {
+        "role": "supporting_only",
+        "acceptance_metric": False,
+        "can_rescue": False,
+        "resolution_angstrom": 2.122559,
+    }
+    assert target["partial_engine_results"]["recovar"] == {"status": "pending"}
     assert MODULE.DEFAULT_MARKDOWN.read_text() == MODULE.render_markdown(report)
+
+
+def test_partial_relion_result_cannot_score_pending_recovar_case() -> None:
+    scorecard = MODULE.load_and_validate_scorecard()
+    report = MODULE.build_report(scorecard, scorecard_path=MODULE.DEFAULT_SCORECARD)
+    target = next(row for row in report["cases"] if row["id"] == MODULE.TARGET_CASE_ID)
+
+    assert target["status"] == "pending"
+    assert target["science_equivalence_pass"] is None
+    assert target["primary_metrics"] is None
+    assert report["aggregate"] == {
+        "scoring_denominator": 1,
+        "passed": 0,
+        "failed": 0,
+        "pending": 1,
+        "invalid": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value", "error"),
+    [
+        ("unmasked", "resolution_angstrom", 2.6, "unmasked resolution changed"),
+        ("corrected_masked", "can_rescue", True, "masked result became a rescue route"),
+    ],
+)
+def test_partial_relion_result_contract_is_fail_closed(
+    section: str,
+    field: str,
+    value: object,
+    error: str,
+) -> None:
+    scorecard = MODULE.load_and_validate_scorecard()
+    relion = _target(scorecard)["partial_engine_results"]["relion"]
+    relion[section][field] = value
+
+    with pytest.raises(ValueError, match=error):
+        MODULE._validate_target_partial_engine_results(_target(scorecard))
+
+
+def test_reproduction_contract_does_not_invent_masked_submission_command() -> None:
+    scorecard = MODULE.load_and_validate_scorecard()
+    masked = scorecard["reproduction"]["masked"]["10073_10345"]
+    masked["recorded_submission_commands"] = ["sbatch invented.sbatch"]
+
+    with pytest.raises(ValueError, match="masked reproduction fields changed"):
+        MODULE._validate_reproduction_contract(scorecard["reproduction"])
 
 
 def test_joint_band_and_resolution_use_crossing_shell() -> None:
@@ -667,6 +726,10 @@ def test_live_markdown_reports_route_resolutions_and_key_metrics(tmp_path: Path)
     assert "`none_unqualified`" in markdown
     assert "Supporting RELION corrected-masked FSC" in markdown
     assert "cannot rescue an unmasked failure" in markdown
+    assert "| RELION | complete | 2.511554 | 2.122559 | pass | `13217551` / `13254149` |" in markdown
+    assert "| RECOVAR | pending | -- | -- | pending | -- |" in markdown
+    assert MODULE.REPRODUCTION_REPLAY_COMMAND in markdown
+    assert "No original `sbatch` argv was separately sealed" in markdown
     assert "3.8 A sharpened full-complex map" in markdown
     assert "EMD-9012 records 1.86 A" in markdown
 

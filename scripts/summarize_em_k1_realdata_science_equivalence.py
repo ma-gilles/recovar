@@ -85,6 +85,25 @@ TARGET_HIGH_RESOLUTION_CEILING_ANGSTROM = 3.0
 TARGET_REFERENCE_ENTRY = "EMD-9012"
 TARGET_DEPOSITED_VALIDATION_RESOLUTION_ANGSTROM = 1.86
 TARGET_EMDB_UNMASKED_HALF_MAP_RESOLUTION_ANGSTROM = 1.94
+TARGET_RELION_UNMASKED_RESOLUTION_ANGSTROM = 2.511554
+TARGET_RELION_CORRECTED_MASKED_RESOLUTION_ANGSTROM = 2.122559
+TARGET_RELION_REFINEMENT_JOB_ID = 13217551
+TARGET_RELION_POSTPROCESS_JOB_ID = 13254149
+TARGET_PARTIAL_ENGINE_IDS = ("relion", "recovar")
+TARGET_RELION_PARTIAL_ARTIFACT_KEYS = (
+    "refinement_stdout",
+    "launch_manifest",
+    "refinement_command",
+    "postprocess_stdout",
+    "postprocess_result_manifest",
+    "common_mask",
+)
+REPRODUCTION_REPLAY_COMMAND = (
+    "pixi run python scripts/summarize_em_k1_realdata_science_equivalence.py "
+    "--verify-calibrations --verify-masked-support --verify-target-partial --check-markdown"
+)
+REPRODUCTION_UNMASKED_GROUPS = ("10073_10345", "10097")
+REPRODUCTION_MASKED_GROUPS = ("10073_10345", "10097", "aggregate")
 SCIENCE_INPUT_TO_COLLECTOR_ARTIFACT = {
     "recovar_merged": "recovar_final_sha256",
     "recovar_half1": "recovar_half1_sha256",
@@ -411,9 +430,188 @@ def _validate_masked_fsc_support_contract(support: Mapping[str, Any]) -> None:
     for dataset, metrics in expected.items():
         _require(int(metrics.get("recovar_crossing_shell", 0)) > 0, f"{dataset} RECOVAR masked crossing is invalid")
         _require(int(metrics.get("relion_crossing_shell", 0)) > 0, f"{dataset} RELION masked crossing is invalid")
-        for key in ("recovar_resolution_angstrom", "relion_resolution_angstrom", "curve_rmse", "band_auc_absolute_delta"):
+        for key in (
+            "recovar_resolution_angstrom",
+            "relion_resolution_angstrom",
+            "curve_rmse",
+            "band_auc_absolute_delta",
+        ):
             _finite_float(metrics.get(key), f"{dataset} {key}")
         _require(_is_sha256(metrics.get("mask_sha256")), f"{dataset} mask SHA-256 is invalid")
+
+
+def _validate_frozen_artifact(artifact: Mapping[str, Any], label: str) -> None:
+    """Validate one absolute-path/SHA-256 pair without touching the artifact."""
+
+    _require(Path(artifact.get("path", "")).is_absolute(), f"{label} path is not absolute")
+    _require(_is_sha256(artifact.get("sha256")), f"{label} SHA-256 is invalid")
+
+
+def _validate_target_partial_engine_results(case: Mapping[str, Any]) -> None:
+    """Validate the sealed RELION-only result without scoring the pending case."""
+
+    partial = case.get("partial_engine_results", {})
+    _require(tuple(partial) == TARGET_PARTIAL_ENGINE_IDS, "target partial-engine set changed")
+    relion = partial["relion"]
+    recovar = partial["recovar"]
+    _require(relion.get("status") == "complete", "target RELION partial status changed")
+    _require(recovar == {"status": "pending"}, "target RECOVAR partial result is not pending")
+
+    unmasked = relion.get("unmasked", {})
+    _require(
+        unmasked.get("metric")
+        == "RELION final unmasked FSC=0.143 estimate; result_manifest.source_final_unmasked_resolution_angstrom",
+        "target RELION unmasked metric changed",
+    )
+    _require(
+        float(unmasked.get("resolution_angstrom", float("nan"))) == TARGET_RELION_UNMASKED_RESOLUTION_ANGSTROM,
+        "target RELION unmasked resolution changed",
+    )
+    _require(
+        unmasked.get("high_resolution_gate_pass")
+        is (TARGET_RELION_UNMASKED_RESOLUTION_ANGSTROM <= TARGET_HIGH_RESOLUTION_CEILING_ANGSTROM),
+        "target RELION high-resolution partial gate changed",
+    )
+
+    masked = relion.get("corrected_masked", {})
+    _require(masked.get("role") == "supporting_only", "target RELION masked role changed")
+    _require(masked.get("acceptance_metric") is False, "target RELION masked result became an acceptance metric")
+    _require(masked.get("can_rescue") is False, "target RELION masked result became a rescue route")
+    _require(
+        float(masked.get("resolution_angstrom", float("nan"))) == TARGET_RELION_CORRECTED_MASKED_RESOLUTION_ANGSTROM,
+        "target RELION corrected-masked resolution changed",
+    )
+
+    jobs = relion.get("jobs", {})
+    _require(set(jobs) == {"refinement", "postprocess"}, "target RELION partial job set changed")
+    _require(jobs["refinement"].get("job_id") == TARGET_RELION_REFINEMENT_JOB_ID, "target RELION job changed")
+    _require(
+        jobs["postprocess"].get("job_id") == TARGET_RELION_POSTPROCESS_JOB_ID,
+        "target RELION postprocess job changed",
+    )
+    for name, job in jobs.items():
+        _require(job.get("state") == "COMPLETED", f"target RELION {name} job did not complete")
+        _require(job.get("exit_code") == "0:0", f"target RELION {name} exit code changed")
+        _require(job.get("ReqTRES") == job.get("AllocTRES"), f"target RELION {name} allocation changed")
+
+    artifacts = relion.get("artifacts", {})
+    _require(
+        tuple(artifacts) == TARGET_RELION_PARTIAL_ARTIFACT_KEYS,
+        "target RELION partial artifact set changed",
+    )
+    for name, artifact in artifacts.items():
+        _validate_frozen_artifact(artifact, f"target RELION {name}")
+
+
+def _validate_reproduction_contract(reproduction: Mapping[str, Any]) -> None:
+    """Validate exact recorded producer references and the repository replay command."""
+
+    _require(
+        reproduction.get("artifact_replay_command") == REPRODUCTION_REPLAY_COMMAND,
+        "real-data artifact replay command changed",
+    )
+    unmasked = reproduction.get("unmasked", {})
+    _require(tuple(unmasked) == REPRODUCTION_UNMASKED_GROUPS, "unmasked reproduction groups changed")
+    expected_commands = {
+        "10073_10345": [
+            "sbatch --export=ALL,DATASET_ID=10073 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch",
+            "sbatch --export=ALL,DATASET_ID=10345 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch",
+        ],
+        "10097": [
+            "sbatch --parsable --export=NONE /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/run_dataset_native_10097.sbatch"
+        ],
+    }
+    for group, commands in expected_commands.items():
+        spec = unmasked[group]
+        _require(spec.get("recorded_submission_commands") == commands, f"{group} submission commands changed")
+        for name in ("submission_record", "launcher", "collector"):
+            _validate_frozen_artifact(spec.get(name, {}), f"{group} {name}")
+
+    masked = reproduction.get("masked", {})
+    _require(tuple(masked) == REPRODUCTION_MASKED_GROUPS, "masked reproduction groups changed")
+    for group in ("10073_10345", "10097"):
+        spec = masked[group]
+        _require(
+            set(spec) == {"original_submission_command_recorded", "launcher", "driver"},
+            f"{group} masked reproduction fields changed",
+        )
+        _require(
+            spec.get("original_submission_command_recorded") is False,
+            f"{group} masked reproduction invents an original submission command",
+        )
+        for name in ("launcher", "driver"):
+            _validate_frozen_artifact(spec.get(name, {}), f"{group} masked {name}")
+    aggregate = masked["aggregate"]
+    _require(set(aggregate) == {"builder", "durable_provenance"}, "masked aggregate fields changed")
+    for name in ("builder", "durable_provenance"):
+        _validate_frozen_artifact(aggregate.get(name, {}), f"masked aggregate {name}")
+
+
+def replay_reproduction_contract(reproduction: Mapping[str, Any]) -> dict[str, Any]:
+    """Re-hash every external producer, collector, and submission reference."""
+
+    _validate_reproduction_contract(reproduction)
+    artifacts: list[tuple[str, Mapping[str, Any]]] = []
+    for group, spec in reproduction["unmasked"].items():
+        artifacts.extend((f"{group} {name}", spec[name]) for name in ("submission_record", "launcher", "collector"))
+    for group in ("10073_10345", "10097"):
+        spec = reproduction["masked"][group]
+        artifacts.extend((f"{group} masked {name}", spec[name]) for name in ("launcher", "driver"))
+    aggregate = reproduction["masked"]["aggregate"]
+    artifacts.extend((f"masked aggregate {name}", aggregate[name]) for name in ("builder", "durable_provenance"))
+    for label, artifact in artifacts:
+        path = Path(artifact["path"])
+        _require(path.is_file(), f"missing reproduction artifact {label}: {path}")
+        _require(sha256_file(path) == artifact["sha256"], f"reproduction artifact {label} SHA-256 changed")
+    return {"verification_status": "verified", **reproduction}
+
+
+def replay_target_partial_engine_results(case: Mapping[str, Any]) -> dict[str, Any]:
+    """Hash and parse the frozen RELION-only target evidence."""
+
+    _validate_target_partial_engine_results(case)
+    partial = case["partial_engine_results"]
+    relion = partial["relion"]
+    artifacts = relion["artifacts"]
+    for name, artifact in artifacts.items():
+        path = Path(artifact["path"])
+        _require(path.is_file(), f"missing target RELION {name}: {path}")
+        _require(sha256_file(path) == artifact["sha256"], f"target RELION {name} SHA-256 changed")
+
+    launch = json.loads(Path(artifacts["launch_manifest"]["path"]).read_text())
+    _require(launch.get("schema") == NATIVE_LAUNCH_MANIFEST_SCHEMA, "target RELION launch schema changed")
+    result = json.loads(Path(artifacts["postprocess_result_manifest"]["path"]).read_text())
+    _require(result.get("schema") == "recovar.em.relion_postprocess_evidence.v1", "target RELION result schema changed")
+    _require(result.get("dataset") == "EMPIAR-10202 image set 6", "target RELION result dataset changed")
+    _require(result.get("symmetry") == "I1", "target RELION result symmetry changed")
+    _require(
+        result.get("source_refinement_job_id") == TARGET_RELION_REFINEMENT_JOB_ID,
+        "target RELION result refinement job changed",
+    )
+    _require(
+        result.get("postprocess_job_id") == TARGET_RELION_POSTPROCESS_JOB_ID,
+        "target RELION result postprocess job changed",
+    )
+    _require(
+        float(result.get("source_final_unmasked_resolution_angstrom", float("nan")))
+        == TARGET_RELION_UNMASKED_RESOLUTION_ANGSTROM,
+        "target RELION result unmasked resolution changed",
+    )
+    _require(
+        float(result.get("postprocess_corrected_masked_resolution_angstrom", float("nan")))
+        == TARGET_RELION_CORRECTED_MASKED_RESOLUTION_ANGSTROM,
+        "target RELION result corrected-masked resolution changed",
+    )
+    _require(result.get("mask", {}).get("path") == artifacts["common_mask"]["path"], "target RELION mask path changed")
+    _require(
+        result.get("mask", {}).get("sha256") == artifacts["common_mask"]["sha256"],
+        "target RELION mask digest changed",
+    )
+    return {
+        "verification_status": "verified",
+        "relion": dict(relion),
+        "recovar": dict(partial["recovar"]),
+    }
 
 
 def _validate_calibration_route_contract(
@@ -430,7 +628,9 @@ def _validate_calibration_route_contract(
     )
     raw_failures = apply_cross_engine_gates(expected, thresholds)
     route = case.get("expected_cross_engine_route")
-    _require(route in {"raw_canonical", "continuous_proper_so3_rigid", "none_unqualified"}, f"{case_id} route is invalid")
+    _require(
+        route in {"raw_canonical", "continuous_proper_so3_rigid", "none_unqualified"}, f"{case_id} route is invalid"
+    )
     diagnostics = case.get("proper_so3_diagnostics")
     if route == "raw_canonical":
         _require(not raw_failures, f"{case_id} raw route no longer passes")
@@ -591,6 +791,10 @@ def load_and_validate_scorecard(path: Path = DEFAULT_SCORECARD) -> dict[str, Any
     _require(target.get("requires_execution_binding") is True, "target execution binding requirement changed")
     _require(target.get("dataset") == "10202", "target dataset changed")
     _require(
+        target.get("status") == "relion_complete_recovar_pending",
+        "target partial-completion status changed",
+    )
+    _require(
         target.get("expected_subject_commit") == suite["subject_commit"],
         "target subject commit changed",
     )
@@ -716,6 +920,8 @@ def load_and_validate_scorecard(path: Path = DEFAULT_SCORECARD) -> dict[str, Any
         target.get("pending_contract_fields") == _required_pending_contract_fields(target),
         "target pending-contract list is stale",
     )
+    _validate_target_partial_engine_results(target)
+    _validate_reproduction_contract(scorecard.get("reproduction", {}))
     for case_id in CALIBRATION_CASE_IDS:
         case = by_id[case_id]
         _require(case.get("role") == "calibration", f"{case_id} is not calibration-only")
@@ -861,7 +1067,9 @@ def replay_masked_fsc_support(scorecard: Mapping[str, Any]) -> dict[str, Any]:
         _require(sha256_file(path) == binary["sha256"], f"masked FSC RELION binary {name} SHA-256 changed")
 
     aggregate = json.loads(Path(support["artifacts"]["aggregate_summary"]["path"]).read_text())
-    _require(tuple(aggregate.get("datasets", {})) == MASKED_SUPPORT_DATASET_IDS, "masked FSC aggregate dataset order changed")
+    _require(
+        tuple(aggregate.get("datasets", {})) == MASKED_SUPPORT_DATASET_IDS, "masked FSC aggregate dataset order changed"
+    )
     observed_jobs = aggregate.get("producer_jobs", {})
     for job_id, expected_job in support["producer_jobs"].items():
         observed_job = observed_jobs.get(job_id, {})
@@ -871,7 +1079,9 @@ def replay_masked_fsc_support(scorecard: Mapping[str, Any]) -> dict[str, Any]:
         observed_binary = aggregate.get("relion_binaries", {}).get(name, {})
         _require(observed_binary.get("path") == expected_binary["path"], f"masked FSC {name} path changed")
         _require(observed_binary.get("sha256") == expected_binary["sha256"], f"masked FSC {name} digest changed")
-    _require(aggregate.get("postprocess_policy") == support["postprocess_policy"], "masked FSC aggregate policy changed")
+    _require(
+        aggregate.get("postprocess_policy") == support["postprocess_policy"], "masked FSC aggregate policy changed"
+    )
     for key, value in support["mask_policy"].items():
         _require(aggregate.get("mask_policy", {}).get(key) == value, f"masked FSC mask policy {key} changed")
     header_audit = aggregate.get("mask_header_nondeterminism", {})
@@ -891,8 +1101,12 @@ def replay_masked_fsc_support(scorecard: Mapping[str, Any]) -> dict[str, Any]:
     for dataset, expected in support["expected_corrected_metrics"].items():
         observed_dataset = aggregate["datasets"][dataset]
         _require(observed_dataset.get("producer_job") in (13273806, 13274377), f"{dataset} producer job changed")
-        _require(observed_dataset.get("same_literal_mask_path_for_both_engines") is True, f"{dataset} mask reuse changed")
-        _require(observed_dataset.get("same_postprocess_policy_for_both_engines") is True, f"{dataset} policy reuse changed")
+        _require(
+            observed_dataset.get("same_literal_mask_path_for_both_engines") is True, f"{dataset} mask reuse changed"
+        )
+        _require(
+            observed_dataset.get("same_postprocess_policy_for_both_engines") is True, f"{dataset} policy reuse changed"
+        )
         _require(observed_dataset.get("mask", {}).get("sha256") == expected["mask_sha256"], f"{dataset} mask changed")
         corrected = observed_dataset.get("curve_comparisons", {}).get("corrected_masked_fsc", {})
         crossings = corrected.get("threshold_crossings", {}).get("0.143", {})
@@ -906,9 +1120,16 @@ def replay_masked_fsc_support(scorecard: Mapping[str, Any]) -> dict[str, Any]:
         }
         for key in ("recovar_crossing_shell", "relion_crossing_shell"):
             _require(observed[key] == expected[key], f"{dataset} masked FSC {key} changed")
-        for key in ("recovar_resolution_angstrom", "relion_resolution_angstrom", "curve_rmse", "band_auc_absolute_delta"):
+        for key in (
+            "recovar_resolution_angstrom",
+            "relion_resolution_angstrom",
+            "curve_rmse",
+            "band_auc_absolute_delta",
+        ):
             _require(
-                math.isclose(float(observed[key]), float(expected[key]), rel_tol=0.0, abs_tol=MASKED_SUPPORT_REPLAY_ATOL),
+                math.isclose(
+                    float(observed[key]), float(expected[key]), rel_tol=0.0, abs_tol=MASKED_SUPPORT_REPLAY_ATOL
+                ),
                 f"{dataset} masked FSC {key} changed",
             )
     return {
@@ -1668,6 +1889,8 @@ def _frozen_case_rows(scorecard: Mapping[str, Any]) -> list[dict[str, Any]]:
                 }
             )
         else:
+            partial = case["partial_engine_results"]
+            relion_partial = partial["relion"]
             rows.append(
                 {
                     "id": case["id"],
@@ -1677,6 +1900,25 @@ def _frozen_case_rows(scorecard: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "primary_metrics": None,
                     "failed_gates": [],
                     "science_diagnostics": {"status": "not_supplied"},
+                    "equivalence_route": None,
+                    "science_equivalence_pass": None,
+                    "high_resolution_achievement": {
+                        "status": "pending",
+                        "pass": None,
+                        "each_engine_resolution_angstrom_max": TARGET_HIGH_RESOLUTION_CEILING_ANGSTROM,
+                        "relion": {
+                            "status": "complete",
+                            "resolution_angstrom": relion_partial["unmasked"]["resolution_angstrom"],
+                            "pass": relion_partial["unmasked"]["high_resolution_gate_pass"],
+                        },
+                        "recovar": {"status": "pending", "resolution_angstrom": None, "pass": None},
+                        "partial_result_does_not_score_case": True,
+                    },
+                    "partial_engine_results": {
+                        "verification_status": "frozen_not_replayed",
+                        "relion": dict(relion_partial),
+                        "recovar": dict(partial["recovar"]),
+                    },
                 }
             )
     return rows
@@ -1688,6 +1930,7 @@ def build_report(
     scorecard_path: Path,
     verify_calibrations: bool = False,
     verify_masked_support: bool = False,
+    verify_target_partial: bool = False,
     evidence_paths: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     """Build a fixed-denominator report from frozen and optionally live evidence."""
@@ -1698,8 +1941,14 @@ def build_report(
     if verify_calibrations:
         for case_id in CALIBRATION_CASE_IDS:
             by_id[case_id] = replay_calibration_case(scorecard, case_defs[case_id])
+    if verify_target_partial:
+        by_id[TARGET_CASE_ID]["partial_engine_results"] = replay_target_partial_engine_results(
+            case_defs[TARGET_CASE_ID]
+        )
     for evidence_path in evidence_paths:
         scored = score_case_evidence(scorecard, evidence_path)
+        if scored["id"] == TARGET_CASE_ID:
+            scored["partial_engine_results"] = by_id[TARGET_CASE_ID]["partial_engine_results"]
         by_id[scored["id"]] = scored
     rows = [by_id[case["id"]] for case in scorecard["cases"]]
 
@@ -1724,6 +1973,11 @@ def build_report(
             "expected_corrected_metrics": scorecard["masked_fsc_support"]["expected_corrected_metrics"],
         }
     )
+    reproduction = (
+        replay_reproduction_contract(scorecard["reproduction"])
+        if verify_calibrations and verify_masked_support
+        else {"verification_status": "frozen_not_replayed", **scorecard["reproduction"]}
+    )
     return {
         "schema": REPORT_SCHEMA,
         "suite": scorecard["suite"],
@@ -1746,6 +2000,7 @@ def build_report(
         "cases": rows,
         "aggregate": aggregate,
         "masked_fsc_support": masked_support,
+        "reproduction": reproduction,
     }
 
 
@@ -1906,6 +2161,43 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         ]
     )
     target = cases[TARGET_CASE_ID]
+    partial = target["partial_engine_results"]
+    partial_relion = partial["relion"]
+    partial_recovar = partial["recovar"]
+    partial_jobs = partial_relion["jobs"]
+    partial_artifacts = partial_relion["artifacts"]
+    reproduction = report["reproduction"]
+    unmasked_reproduction = reproduction["unmasked"]
+    masked_reproduction = reproduction["masked"]
+    lines.extend(
+        [
+            "",
+            "## Available EMPIAR-10202 per-engine evidence",
+            "",
+            "This is a deliberately partial report. RELION is sealed and complete;",
+            "RECOVAR and every cross-engine acceptance metric remain pending.",
+            "The RELION-only result cannot pass the fixed scoring case.",
+            "",
+            "| Engine | Status | Unmasked FSC=0.143 (A) | Corrected masked FSC=0.143 (A) | <= 3.0 A arm | Jobs |",
+            "| --- | --- | ---: | ---: | --- | --- |",
+            f"| RELION | {partial_relion['status']} | {_fmt(partial_relion['unmasked']['resolution_angstrom'])} | "
+            f"{_fmt(partial_relion['corrected_masked']['resolution_angstrom'])} | "
+            f"{'pass' if partial_relion['unmasked']['high_resolution_gate_pass'] else 'fail'} | "
+            f"`{partial_jobs['refinement']['job_id']}` / `{partial_jobs['postprocess']['job_id']}` |",
+            f"| RECOVAR | {partial_recovar['status']} | -- | -- | pending | -- |",
+            "",
+            "The 2.511554-A value is RELION's final unmasked FSC estimate sealed by",
+            "the postprocess result manifest. The 2.122559-A corrected masked value is",
+            "supporting-only and cannot rescue an unmasked or cross-engine failure.",
+            "The fixed scorecard's three-consecutive-shell joint-band metric is still",
+            "unavailable until RECOVAR supplies its independent half maps.",
+            "",
+            f"RELION refinement stdout SHA-256: `{partial_artifacts['refinement_stdout']['sha256']}`.",
+            f"Matched harness manifest SHA-256: `{partial_artifacts['launch_manifest']['sha256']}`.",
+            f"Postprocess result-manifest SHA-256: `{partial_artifacts['postprocess_result_manifest']['sha256']}`.",
+            f"Common mask SHA-256: `{partial_artifacts['common_mask']['sha256']}`.",
+        ]
+    )
     target_metrics = target.get("primary_metrics") or {}
     target_band = target.get("jointly_resolved_band") or {}
     target_alignment = target.get("science_diagnostics", {}).get("proper_so3_alignment", {})
@@ -1959,8 +2251,55 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "`d66afb30`; RELION/RECOVAR initial-map file prefixes `4f83710c` and",
             "`d77516a0`; exact shared canonical-array prefix `b617f90d`. There are no",
             "pending preparation hashes. The subject commit must match exactly;",
-            "ancestry is insufficient. The case remains pending only until both full",
-            "refinements and their sealed FSC analysis complete.",
+            "ancestry is insufficient. The RELION arm is complete; the case remains",
+            "pending until the RECOVAR full refinement and sealed two-engine FSC",
+            "analysis complete.",
+            "",
+            "## Reproduction and artifact replay",
+            "",
+            "From the repository root, this command re-hashes and replays every completed",
+            "10073/10345/10097 unmasked and masked artifact, verifies the partial RELION",
+            "10202 result, and checks that this generated Markdown is fresh:",
+            "",
+            "```bash",
+            reproduction["artifact_replay_command"],
+            "```",
+            "",
+            "The original unmasked producer submissions are recorded verbatim in their",
+            "sealed `SUBMITTED_JOBS.md` files:",
+            "",
+            "```bash",
+            *unmasked_reproduction["10073_10345"]["recorded_submission_commands"],
+            *unmasked_reproduction["10097"]["recorded_submission_commands"],
+            "```",
+            "",
+            "| Evidence | Frozen producer/collector reference | SHA-256 prefix |",
+            "| --- | --- | --- |",
+            f"| 10073/10345 unmasked launcher | `{unmasked_reproduction['10073_10345']['launcher']['path']}` | "
+            f"`{unmasked_reproduction['10073_10345']['launcher']['sha256'][:12]}` |",
+            f"| 10073/10345 submission record | `{unmasked_reproduction['10073_10345']['submission_record']['path']}` | "
+            f"`{unmasked_reproduction['10073_10345']['submission_record']['sha256'][:12]}` |",
+            f"| 10097 unmasked launcher | `{unmasked_reproduction['10097']['launcher']['path']}` | "
+            f"`{unmasked_reproduction['10097']['launcher']['sha256'][:12]}` |",
+            f"| 10097 submission record | `{unmasked_reproduction['10097']['submission_record']['path']}` | "
+            f"`{unmasked_reproduction['10097']['submission_record']['sha256'][:12]}` |",
+            f"| Signed-FSC collector | `{unmasked_reproduction['10073_10345']['collector']['path']}` | "
+            f"`{unmasked_reproduction['10073_10345']['collector']['sha256'][:12]}` |",
+            f"| 10073/10345 masked launcher | `{masked_reproduction['10073_10345']['launcher']['path']}` | "
+            f"`{masked_reproduction['10073_10345']['launcher']['sha256'][:12]}` |",
+            f"| 10073/10345 masked driver | `{masked_reproduction['10073_10345']['driver']['path']}` | "
+            f"`{masked_reproduction['10073_10345']['driver']['sha256'][:12]}` |",
+            f"| 10097 masked launcher | `{masked_reproduction['10097']['launcher']['path']}` | "
+            f"`{masked_reproduction['10097']['launcher']['sha256'][:12]}` |",
+            f"| 10097 masked driver | `{masked_reproduction['10097']['driver']['path']}` | "
+            f"`{masked_reproduction['10097']['driver']['sha256'][:12]}` |",
+            f"| Masked aggregate builder | `{masked_reproduction['aggregate']['builder']['path']}` | "
+            f"`{masked_reproduction['aggregate']['builder']['sha256'][:12]}` |",
+            "",
+            "No original `sbatch` argv was separately sealed for the two masked-FSC jobs,",
+            "so none is reconstructed here. Their exact launchers and Python drivers are",
+            "pinned above, while the repository replay command verifies their retained",
+            "outputs without launching new science jobs.",
             "",
             "## Diagnostics",
             "",
@@ -1999,6 +2338,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scorecard", type=Path, default=DEFAULT_SCORECARD)
     parser.add_argument("--verify-calibrations", action="store_true")
     parser.add_argument("--verify-masked-support", action="store_true")
+    parser.add_argument("--verify-target-partial", action="store_true")
     parser.add_argument("--evidence", type=Path, action="append", default=[])
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-markdown", type=Path)
@@ -2015,6 +2355,7 @@ def main(argv: list[str] | None = None) -> int:
         scorecard_path=scorecard_path,
         verify_calibrations=bool(args.verify_calibrations),
         verify_masked_support=bool(args.verify_masked_support),
+        verify_target_partial=bool(args.verify_target_partial),
         evidence_paths=tuple(path.resolve() for path in args.evidence),
     )
     markdown = render_markdown(report)

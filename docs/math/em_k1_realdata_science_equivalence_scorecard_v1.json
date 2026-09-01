@@ -175,6 +175,80 @@
       }
     }
   },
+  "reproduction": {
+    "artifact_replay_command": "pixi run python scripts/summarize_em_k1_realdata_science_equivalence.py --verify-calibrations --verify-masked-support --verify-target-partial --check-markdown",
+    "unmasked": {
+      "10073_10345": {
+        "recorded_submission_commands": [
+          "sbatch --export=ALL,DATASET_ID=10073 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch",
+          "sbatch --export=ALL,DATASET_ID=10345 /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch"
+        ],
+        "submission_record": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/SUBMITTED_JOBS.md",
+          "sha256": "cf984cb270caa7d362bdc89e2797c0b3c521a8b8bc6da4a6142c452c3e00b405"
+        },
+        "launcher": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution/scripts/run_dataset_native.sbatch",
+          "sha256": "f9544ae3eb4efffcd7b245d9a97d9a7d8353db6d012ecc1295473bdbc7c6455b"
+        },
+        "collector": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/scripts/collect_metrics.py",
+          "sha256": "63d1a8f9f0a772ef0db45d7417902f36cbde884b309fa6e94d69bdfe2edf2d88"
+        }
+      },
+      "10097": {
+        "recorded_submission_commands": [
+          "sbatch --parsable --export=NONE /home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/run_dataset_native_10097.sbatch"
+        ],
+        "submission_record": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/SUBMITTED_JOBS.md",
+          "sha256": "205e3f8ef27efeeb346aec15372721cc9ddf4620167a1b9226b2c1937da93f6d"
+        },
+        "launcher": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/run_dataset_native_10097.sbatch",
+          "sha256": "b732039b378ec9660e7bd587ec25b767bafb572dbfdabfdf5bcea9352b6ca18e"
+        },
+        "collector": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/full_dataset_native_resolution_replacement_10097_20260828T211155EDT/scripts/collect_metrics.py",
+          "sha256": "63d1a8f9f0a772ef0db45d7417902f36cbde884b309fa6e94d69bdfe2edf2d88"
+        }
+      }
+    },
+    "masked": {
+      "10073_10345": {
+        "original_submission_command_recorded": false,
+        "launcher": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10073_10345_10097_r2_20260831/scripts/run_masked_fsc.sbatch",
+          "sha256": "3ed871acbd6f2aa261c01aefc72911126d1dba5da1c070fd689bd6e6f89fbd34"
+        },
+        "driver": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10073_10345_10097_r2_20260831/scripts/run_masked_fsc.py",
+          "sha256": "b8406ed10880736d6a95bb52814c20db7815c8c0be5350fad283485e42cb0a3e"
+        }
+      },
+      "10097": {
+        "original_submission_command_recorded": false,
+        "launcher": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10097_exactmask_20260831/scripts/run_exact_mask_postprocess.sbatch",
+          "sha256": "71fbc466963e0764c12a80ff9f991ae41441b40061c5b4b6b1aa4ee43d677dfa"
+        },
+        "driver": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_10097_exactmask_20260831/scripts/run_exact_mask_postprocess.py",
+          "sha256": "991a5214de7aefa242f15f35f1f8506b594cb66a462adf3dba268b89e2c23783"
+        }
+      },
+      "aggregate": {
+        "builder": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_relion_masked_fsc_final_10073_10345_10097_20260831/scripts/build_aggregate_report.py",
+          "sha256": "36ce5201fe80af4261af0379d9747c8d7e36c48f6ef5e4e86cee542329741ce4"
+        },
+        "durable_provenance": {
+          "path": "/home/mg6942/mytigress/RECOVAR_RELION_EM_COMPARISON/fsc_exports/relion_masked_fsc_10073_10345_10097_20260831/PROVENANCE.json",
+          "sha256": "6d9d4779f06a45c52117eb9e2226c598bcfc923949757792bac80f750634a5a9"
+        }
+      }
+    }
+  },
   "cases": [
     {
       "id": "empiar-10202-set06-k1-I1",
@@ -182,7 +256,7 @@
       "dataset": "10202",
       "requires_execution_binding": true,
       "expected_subject_commit": "2249bf352377aae85ef9f3d378eda86dadef671f",
-      "status": "ready_to_launch",
+      "status": "relion_complete_recovar_pending",
       "scope": "06_Final_Stack only; image set 07 is excluded",
       "rejected_artifacts": [
         {
@@ -252,7 +326,68 @@
           "operators_sha256": "093a0876b93610ec141c87840ae3ff4dc4491b27dec87143558358ef556557b8"
         }
       },
-      "pending_contract_fields": []
+      "pending_contract_fields": [],
+      "partial_engine_results": {
+        "relion": {
+          "status": "complete",
+          "unmasked": {
+            "metric": "RELION final unmasked FSC=0.143 estimate; result_manifest.source_final_unmasked_resolution_angstrom",
+            "resolution_angstrom": 2.511554,
+            "high_resolution_gate_pass": true
+          },
+          "corrected_masked": {
+            "role": "supporting_only",
+            "acceptance_metric": false,
+            "can_rescue": false,
+            "resolution_angstrom": 2.122559
+          },
+          "jobs": {
+            "refinement": {
+              "job_id": 13217551,
+              "state": "COMPLETED",
+              "exit_code": "0:0",
+              "ReqTRES": "billing=40,cpu=12,gres/gpu=2,mem=500G,node=1",
+              "AllocTRES": "billing=40,cpu=12,gres/gpu=2,mem=500G,node=1"
+            },
+            "postprocess": {
+              "job_id": 13254149,
+              "state": "COMPLETED",
+              "exit_code": "0:0",
+              "ReqTRES": "cpu=8,mem=250G,node=1,billing=20",
+              "AllocTRES": "cpu=8,mem=250G,node=1,billing=20"
+            }
+          },
+          "artifacts": {
+            "refinement_stdout": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_matched_r4_20260830/logs/relion_full-13217551.out",
+              "sha256": "582e90f851b4f389e953113b0cf2b4cb3f46f833567015c34a35e5551c475fea"
+            },
+            "launch_manifest": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_matched_r4_20260830/launch_manifest.json",
+              "sha256": "5764c09af9db73ac7523db7cf34e1422449e158fb40e84b0e3aef2ee49a4e279"
+            },
+            "refinement_command": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_matched_r4_20260830/provenance/command_13217551.sh",
+              "sha256": "3d199e7a1cab64fab6338be06a3b957cd770a2f097d7d579eafc682351eb4893"
+            },
+            "postprocess_stdout": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_relion_postprocess_shell_20260831/logs/postprocess-13254149.out",
+              "sha256": "f5132389d8bc9fc39d91dd7964004559b59f2fcf3f2ab53411233ff039d8054c"
+            },
+            "postprocess_result_manifest": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_relion_postprocess_shell_20260831/result_manifest.json",
+              "sha256": "de865eba64a3d8a9c7693af5e356cbece72572630bbb184462841f8517f2899d"
+            },
+            "common_mask": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_relion_postprocess_shell_20260831/outputs/mask_publication_shell_r75_r150_soft8.mrc",
+              "sha256": "dcc3fd17e7f728b3164416f695b257fef5fceeca7c2a4ba04ea6d82c9a933b17"
+            }
+          }
+        },
+        "recovar": {
+          "status": "pending"
+        }
+      }
     },
     {
       "id": "empiar-10073-native-c1",
