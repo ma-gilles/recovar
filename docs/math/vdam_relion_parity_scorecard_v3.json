@@ -1584,8 +1584,194 @@
       "passed": false,
       "reason": "The scheduler is a real gain but remains 1.41x slower than native coarse union and misses the pass-1 target."
     },
-    "root_cause": "At 116 translations in a 128-thread block, active_lanes is one. The generic canonical reducer still reserves and traverses an 8192-byte shared lane buffer even though every translation has exactly one contributing thread.",
-    "next_gate": "Compile-time active_lanes=1 canonical specialization, with the same float32 add order and no shared lane buffer; compare generic serial, specialized serial, and specialized eight-stream execution on one H100 allocation."
+    "root_cause": "The earlier 116 count was 29x4 oversampled/fine translations, not the live coarse operand. GF46's T=29 call therefore uses four contributing lanes, while the generic canonical reducer still reserves and traverses an 8192-byte shared lane buffer.",
+    "next_gate": "The sealed T=29 factorial 13280655 supersedes the active_lanes=1 hypothesis for GF46. Compare the already-existing shared native-RELION atomic reduction against canonical reduction at T=29, then cross the winner with the accepted eight-stream scheduler under the stable numerical-equivalence policy."
+  },
+  "performance_gate_updates": {
+    "role": "diagnostic_performance",
+    "score_impact": "none",
+    "frozen_scores_changed": false,
+    "production_default_changed": false,
+    "numerical_policy": "Mathematical equivalence is required; bitwise identity is optional. Continuous differences must be repeat-bounded, unbiased, non-growing, remain in the same basin, and cause no material final-quality loss. A slight stable-envelope quality change is acceptable only for a large reproducible runtime gain; unstable numerics fail.",
+    "single_lane_applicability": {
+      "status": "REJECTED_FOR_GF46_RETAINED_PRIMITIVE_COVERAGE",
+      "promotion_authorized": false,
+      "initial_failed_job": "13280507",
+      "initial_failure": "The first live harness raised on the iteration-180 cold T=29 schedule before science completed; the high-level selector now falls back to the generic kernel outside 65--128 translations.",
+      "fallback_commit": "b4c6453c5e9daa064644fa5e47be66e117dc04cf",
+      "focused_requalification_job": "13280613",
+      "focused_requalification_result": "2/2 passed",
+      "late_factorial_job": "13280655",
+      "late_factorial_result": "8/8 cold+warm+Nsight arms completed",
+      "source_head": "07b9cf2bb535627b1130a2bb0e917dc16c2bd573",
+      "source_manifest_sha256": "56dbbefd82c4c64f26385d5971a9845a478fc2bcd21b4b72e587413427c53a72",
+      "input_manifest_sha256": "5c27ea1363592adcd88f36d78b3d70d6dc586b53729a06dca7a3264ef9b630bc",
+      "cuda_sha256": "8b5ee239c72e9702049f86bef9fa77127c14490e3b265f431485a0a9e3f13e13",
+      "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_single_lane_late_factorial_07b9cf2bb_h21g4_20260831",
+      "hardware": {
+        "node": "della-h21g4",
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+      },
+      "actual_coarse_translation_count": 29,
+      "previously_assumed_translation_count": 116,
+      "previous_count_interpretation": "29x4 oversampled/fine translations, not the coarse-kernel operand",
+      "generic_serial_means": {
+        "warm_wall_seconds": 13.504836,
+        "expectation_seconds": 8.488209,
+        "pass1_seconds": 5.881161,
+        "pass2_seconds": 1.825164,
+        "coarse_union_seconds": 4.354902
+      },
+      "requested_single_lane_serial_means": {
+        "warm_wall_seconds": 13.715370,
+        "expectation_seconds": 8.802589,
+        "pass1_seconds": 6.005393,
+        "pass2_seconds": 1.919086,
+        "coarse_union_seconds": 4.355054
+      },
+      "generic_multistream_means": {
+        "warm_wall_seconds": 13.035677,
+        "expectation_seconds": 8.291153,
+        "pass1_seconds": 5.591004,
+        "pass2_seconds": 1.952889,
+        "coarse_union_seconds": 3.885078
+      },
+      "requested_single_lane_multistream_means": {
+        "warm_wall_seconds": 13.229080,
+        "expectation_seconds": 8.276157,
+        "pass1_seconds": 5.492357,
+        "pass2_seconds": 2.009729,
+        "coarse_union_seconds": 3.885195
+      },
+      "nsight": {
+        "serial_launches": 6,
+        "multistream_launches": 1000,
+        "generic_resources_in_all_arms": true,
+        "registers_per_thread": 56,
+        "static_shared_bytes": 14208,
+        "single_lane_coarse_union_effect_percent_serial": 0.0035,
+        "single_lane_coarse_union_effect_percent_multistream": 0.0030
+      },
+      "numerical_result": {
+        "particle_identity_exact": true,
+        "winner_euler_translation_pmax_exact": "3000/3000",
+        "map_relative_l2_max": 3.17e-09,
+        "map_max_abs": 1.907e-06,
+        "signed_mean_abs_max": 1.73e-11,
+        "correlation_min": 0.9999999999999267,
+        "classification": "repeat_bounded_unbiased_roundoff_scale_no_discrete_or_basin_effect"
+      },
+      "conclusion": "The 65--128 single-lane specialization is mathematically qualified but never selected by GF46's T=29 coarse call, so it cannot improve this runtime boundary.",
+      "next_gate": "Benchmark the already-existing shared native-RELION atomic lane admission at T=29: 48 registers and 7040 B shared versus canonical's 56 registers and 15232 B. If materially faster, qualify atomic plus eight streams against native/control repeat envelopes before considering a T=29 four-lane canonical shuffle."
+    },
+    "atomic_t29_reduction": {
+      "status": "MATH_ACCEPTED_MATERIAL_SINGLE_STREAM_MULTISTREAM_PAIR_PENDING",
+      "promotion_authorized": false,
+      "job_id": "13281836",
+      "result": "COMPLETED 0:0",
+      "elapsed": "00:03:12",
+      "source_head": "865111fc1ea360b23636bb3c030beda4f7db5441",
+      "source_manifest_sha256": "956e1b5861de719df627fd2631870233808ee6fb10f8b198fe3e64c8282bfbab",
+      "input_manifest_sha256": "5c27ea1363592adcd88f36d78b3d70d6dc586b53729a06dca7a3264ef9b630bc",
+      "cuda_sha256": "8b5ee239c72e9702049f86bef9fa77127c14490e3b265f431485a0a9e3f13e13",
+      "run_json_sha256": "7e15970945dde81604ef8743b922c88d3314eee1df4fd1a825cb9d112f3db92c",
+      "resource_report_sha256": "341dc92959256a6c2407b348bdea2e07cffaf8de87ca61e67335399d47f40890",
+      "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_late_pair_865111fc1_h21g4_20260831",
+      "hardware": {
+        "node": "della-h21g4",
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "gpu_uuid": "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+      },
+      "execution_order": "canonical_1,atomic_1,atomic_2,canonical_2",
+      "abba_means": {
+        "canonical_cold_wall_seconds": 27.265440,
+        "atomic_cold_wall_seconds": 26.791157,
+        "cold_wall_change_percent": -1.74,
+        "canonical_warm_wall_seconds": 14.409003,
+        "atomic_warm_wall_seconds": 13.563295,
+        "warm_wall_change_percent": -5.87,
+        "canonical_warm_expectation_seconds": 9.216697,
+        "atomic_warm_expectation_seconds": 8.533973,
+        "expectation_change_percent": -7.41,
+        "canonical_pass1_seconds": 6.508669,
+        "atomic_pass1_seconds": 5.728856,
+        "pass1_change_percent": -11.98,
+        "canonical_pass2_seconds": 1.904260,
+        "atomic_pass2_seconds": 1.989082,
+        "pass2_change_percent": 4.45
+      },
+      "nsight": {
+        "canonical_capture_seconds": 9.989907,
+        "atomic_capture_seconds": 9.133703,
+        "capture_change_percent": -8.57,
+        "canonical_gpu_busy_seconds": 4.874681,
+        "atomic_gpu_busy_seconds": 4.528344,
+        "gpu_busy_change_percent": -7.10,
+        "canonical_hot_coarse_milliseconds": 725.0350,
+        "atomic_hot_coarse_milliseconds": 667.0627,
+        "hot_coarse_change_percent": -8.00,
+        "canonical_coarse_union_seconds": 4.350210,
+        "atomic_coarse_union_seconds": 4.002376,
+        "canonical_registers_per_thread": 56,
+        "atomic_registers_per_thread": 48,
+        "canonical_reported_shared_bytes": 14208,
+        "atomic_reported_shared_bytes": 6016,
+        "canonical_cuobjdump_shared_bytes": 15232,
+        "atomic_cuobjdump_shared_bytes": 7040,
+        "kernel_count_and_grid_identical": true
+      },
+      "numerical_result": {
+        "focused_t29_atomic_envelope": "1/1 passed",
+        "particle_identity_exact": true,
+        "winner_euler_translation_pmax_exact": "3000/3000",
+        "canonical_repeat_map_relative_l2": 2.200e-09,
+        "atomic_repeat_map_relative_l2": 2.082e-09,
+        "cross_map_relative_l2_min": 1.762e-09,
+        "cross_map_relative_l2_max": 2.210e-09,
+        "cross_map_max_abs_max": 1.907e-06,
+        "cross_signed_mean_abs_max": 2.61e-13,
+        "classification": "inside_control_repeat_envelope_unbiased_non_growing_no_discrete_or_basin_effect"
+      },
+      "decision": "ACCEPT_DEFAULT_OFF_FOR_SHARED_MULTISTREAM_QUALIFICATION",
+      "next_gate": "Cross canonical and atomic reduction with the accepted shared eight-stream EM/VDAM scheduler; require the same stable numerical envelope and a material combined end-to-end gain before any default change."
+    },
+    "direct_relion_xhalf": {
+      "status": "PRIMITIVE_ACCEPTED_LIVE_PAIR_PENDING",
+      "promotion_authorized": false,
+      "implementation_head": "9cfa9d9b9372159b05fc14423d6b6edaa78dde9b",
+      "test_head": "8d00f3a4dbf32b8fe53824e256a18b983e788db6",
+      "invalid_harness_job": "13281543",
+      "invalid_harness_reason": "pytest 9 rejected a tuple-valued module pytestmark during collection; zero candidate science executed",
+      "qualified_job": "13281684",
+      "qualified_result": "7/7 passed",
+      "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_direct_xhalf_gpu_gate_8d00f3a4d_h21g4_20260831_r2",
+      "source_manifest_sha256": "cf328e8d361ac729774a30810c296b1d91f1ec455b2e38df334750caa4cfcb5a",
+      "qualified_cuda_sha256": "b2bb7106a536f5854dbd30bf8c5321d3a414aa5e174e76be4268a0dd44811991",
+      "actual_cuda_cases": [
+        "K1 even current size/padding 1",
+        "K1 odd current size/padding 2",
+        "K3 x two reconstruction groups with an empty lane",
+        "NaN-poisoned redundant legacy half",
+        "default-off",
+        "empty accumulator",
+        "layout/dtype fail-closed"
+      ],
+      "direct_vs_legacy_bpref_bitwise": true,
+      "next_gate": "Run crossed GF46 legacy1/direct1/direct2/legacy2 with one binary and report finalize time, wall, expectation, HWM, exact discrete state, maps, and both BPref halves."
+    },
+    "shared_posterior_executor": {
+      "status": "PRIMITIVE_ACCEPTED_LIVE_PAIR_RETRY_PENDING",
+      "promotion_authorized": false,
+      "implementation_head": "616d231811cc06f492eb8fe05c2b5073fb23acda",
+      "qualified_cuda_sha256": "f745cb8aa72c000640065b0e796ef21e7be757ed459df1279324b9668a1df8bc",
+      "focused_cpu_source_result": "20+1 passed",
+      "qualified_gpu_job": "13280796",
+      "qualified_gpu_result": "1/1 adversarial executor-vs-scalar passed",
+      "invalid_live_job": "13281609",
+      "invalid_live_reason": "The older CLI wrapper did not expose the underlying continuation flag; execution stopped before the executor ran.",
+      "next_gate": "Retry the sealed GF46 C1/E1/E2/C2 pair through a direct driver shim, retaining one-row CUB arithmetic and shared mature eight-worker stream ownership."
+    }
   },
   "shared_em_reuse": [
     {"component": "coarse projector/scorer", "shared_with_em": true, "qualification": "production shared primitive"},

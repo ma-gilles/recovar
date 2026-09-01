@@ -431,6 +431,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
 LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
+PERFORMANCE_GATE_UPDATES_SHA256 = "a30c27fa067ab21598cceccdb4b1f9aa0a8c0a230bd6a41c98fc6d9162e3726e"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -780,6 +781,26 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         },
         "late-iteration numerical acceptance policy changed",
     )
+    gate_updates = scorecard.get("performance_gate_updates")
+    _require(
+        isinstance(gate_updates, dict)
+        and gate_updates.get("role") == "diagnostic_performance"
+        and gate_updates.get("score_impact") == "none"
+        and gate_updates.get("frozen_scores_changed") is False
+        and gate_updates.get("production_default_changed") is False
+        and gate_updates.get("single_lane_applicability", {}).get("late_factorial_job") == "13280655"
+        and gate_updates.get("single_lane_applicability", {}).get("actual_coarse_translation_count") == 29
+        and gate_updates.get("atomic_t29_reduction", {}).get("job_id") == "13281836"
+        and gate_updates.get("atomic_t29_reduction", {}).get("numerical_result", {}).get(
+            "winner_euler_translation_pmax_exact"
+        )
+        == "3000/3000"
+        and gate_updates.get("direct_relion_xhalf", {}).get("qualified_job") == "13281684"
+        and gate_updates.get("direct_relion_xhalf", {}).get("direct_vs_legacy_bpref_bitwise") is True
+        and gate_updates.get("shared_posterior_executor", {}).get("qualified_gpu_job") == "13280796"
+        and _sha256_json(gate_updates) == PERFORMANCE_GATE_UPDATES_SHA256,
+        "current performance gate updates changed without an evidence update",
+    )
     next_gate = scorecard.get("next_gate")
     _require(
         isinstance(next_gate, dict)
@@ -852,6 +873,11 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     coarse_gate = scorecard["coarse_multistream_gate"]
     coarse_means = coarse_gate["abba_means"]
     coarse_nsight = coarse_gate["nsight"]
+    gate_updates = scorecard["performance_gate_updates"]
+    single_lane_gate = gate_updates["single_lane_applicability"]
+    atomic_gate = gate_updates["atomic_t29_reduction"]
+    direct_xhalf_gate = gate_updates["direct_relion_xhalf"]
+    posterior_executor_gate = gate_updates["shared_posterior_executor"]
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
@@ -875,7 +901,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "without instability or quality loss. |",
         "| Performance lanes | non-scoring | Cache-only is retained for repeat/scale; chunking is rejected. The "
         "shared eight-stream coarse scheduler is mathematically accepted and measurably faster, but held below the "
-        "runtime target while its active-lanes=1 occupancy specialization is gated. |",
+        "runtime target. The 65--128 single-lane specialization is inapplicable to GF46's actual T=29 coarse call; "
+        "native-atomic T=29 is mathematically accepted with an 8.00% hot-kernel gain, and its shared multistream "
+        "cross is active. |",
         "| Numerical policy | non-scoring | Require mathematical equivalence plus stable, unbiased, non-growing "
         "repeat-bounded noise. Bitwise identity is not required. Measure discrete changes; rare marginal changes may "
         "be accepted only within control/native repeat variability, with the same basin and no material final-quality "
@@ -914,6 +942,21 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{coarse_nsight['excess_static_shared_bytes']} excess shared bytes plus "
         f"{coarse_nsight['recovar_registers_per_thread']} versus {coarse_nsight['native_registers_per_thread']} "
         f"registers/thread. | {coarse_gate['next_gate']} |",
+        f"| T=29 applicability factorial `{single_lane_gate['late_factorial_job']}` | **NEGATIVE / REDIRECTED.** "
+        f"All {single_lane_gate['numerical_result']['winner_euler_translation_pmax_exact']} winners are exact and "
+        f"map rel-L2 is at most `{single_lane_gate['numerical_result']['map_relative_l2_max']:.3e}`, but all arms "
+        f"ran the generic kernel because the live coarse operand has {single_lane_gate['actual_coarse_translation_count']} "
+        "translations. | The earlier 116 count was oversampled/fine, not coarse; active-lanes=1 cannot accelerate "
+        f"GF46. | {single_lane_gate['next_gate']} |",
+        f"| Native-atomic T=29 ABBA `{atomic_gate['job_id']}` | **MATH ACCEPTED; MATERIAL SINGLE-STREAM GAIN.** "
+        f"Hot coarse union {atomic_gate['nsight']['canonical_coarse_union_seconds']:.3f}->"
+        f"{atomic_gate['nsight']['atomic_coarse_union_seconds']:.3f} s "
+        f"({atomic_gate['nsight']['hot_coarse_change_percent']:.2f}%); warm expectation "
+        f"{atomic_gate['abba_means']['expectation_change_percent']:.2f}% and pass 1 "
+        f"{atomic_gate['abba_means']['pass1_change_percent']:.2f}%. | All "
+        f"{atomic_gate['numerical_result']['winner_euler_translation_pmax_exact']} winners are exact; cross-map "
+        f"rel-L2 is at most `{atomic_gate['numerical_result']['cross_map_relative_l2_max']:.3e}` and lies inside "
+        f"canonical repeat noise with negligible signed bias. | {atomic_gate['next_gate']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
         f"speedup is `{same_binary_lane['runtime_result']['warm_speedup']:.4f}x` | All four arms loaded CUDA SHA "
@@ -1018,8 +1061,24 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"warm expectation improves {abs(coarse_means['expectation_change_percent']):.2f}%, but coarse union remains "
         f"{coarse_nsight['multistream_coarse_union_seconds']:.3f} s versus the 3.0 s gate. | "
         f"{coarse_gate['next_gate']} |",
-        "| **PENDING** | None | The active-lanes=1 specialization is being implemented; it has no live evidence "
-        "or promotion status yet. | Add the row only after its provenance-sealed primitive and crossed H100 gate. |",
+        f"| **REJECTED FOR GF46 / RETAINED PRIMITIVE** | Single-lane coarse "
+        f"`{single_lane_gate['focused_requalification_job']}/{single_lane_gate['late_factorial_job']}` | Primitive "
+        f"2/2 passes, but GF46 is T={single_lane_gate['actual_coarse_translation_count']}; requested-vs-generic "
+        f"coarse union changed only {single_lane_gate['nsight']['single_lane_coarse_union_effect_percent_multistream']:.4f}%. "
+        f"No discrete/basin effect. | {single_lane_gate['next_gate']} |",
+        f"| **MATH ACCEPTED / MATERIAL SINGLE-STREAM** | Native-atomic T=29 `{atomic_gate['job_id']}` | "
+        f"Hot coarse is {abs(atomic_gate['nsight']['hot_coarse_change_percent']):.2f}% faster and warm wall is "
+        f"{abs(atomic_gate['abba_means']['warm_wall_change_percent']):.2f}% faster; all 3,000 winners are exact and "
+        "map differences remain inside unbiased control-repeat noise. Default-off. | "
+        f"{atomic_gate['next_gate']} |",
+        f"| **ACCEPTED GPU PRIMITIVE / LIVE PAIR PENDING** | Direct RELION x-half BPref "
+        f"`{direct_xhalf_gate['qualified_job']}` | {direct_xhalf_gate['qualified_result']}; actual CUDA K=1 even/odd "
+        "and K=3x2-group outputs are bitwise identical to the poisoned legacy roundtrip. "
+        f"`{direct_xhalf_gate['invalid_harness_job']}` is invalid collection-only. | {direct_xhalf_gate['next_gate']} |",
+        f"| **ACCEPTED GPU PRIMITIVE / LIVE RETRY PENDING** | Shared posterior executor "
+        f"`{posterior_executor_gate['qualified_gpu_job']}` | Adversarial executor-vs-scalar passes; support/counts/"
+        f"winners are exact. `{posterior_executor_gate['invalid_live_job']}` stopped before executor execution. | "
+        f"{posterior_executor_gate['next_gate']} |",
         "",
         "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All listed "
         "lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness "
@@ -1279,15 +1338,14 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            "1. Gate a compile-time active-lanes=1 specialization of the accepted canonical coarse kernel. Preserve "
-            "the exact float32 add order, remove the unnecessary 8192-byte shared reduction buffer, and compare "
-            "generic serial, specialized serial, and specialized eight-stream execution on one H100 allocation.",
-            "2. Return native RELION x-half accumulators directly through the mature shared EM half-volume contract, "
-            "and gate exact even/odd, two-group, K>1, empty-group, and poisoned-redundant-lane cases before timing the "
-            "removed full-cube roundtrip.",
-            "3. Build a shared coarse/fine posterior executor with per-worker persistent CUB scratch. Keep independent "
-            "one-row RELION sort/scan arithmetic and particle chronology; do not revive the rejected segmented batched "
-            "CUB implementation.",
+            "1. Complete the crossed shared eight-stream canonical/atomic gate at T=29. The sealed single-stream ABBA "
+            "is mathematically accepted and cuts the hot coarse kernel 8.00%; require stable repeat-bounded unbiased "
+            "noise plus a material combined end-to-end gain before any default change.",
+            "2. Complete the crossed GF46 legacy/direct x-half pair after the 7/7 bitwise actual-CUDA primitive gate. "
+            "Report finalization time, wall, expectation, HWM, exact discrete state, maps, and both BPref halves.",
+            "3. Retry the shared coarse/fine posterior executor GF46 pair through the direct continuation driver. Keep "
+            "independent one-row RELION sort/scan arithmetic and mature eight-worker ownership; report allocation/free/"
+            "sync removal, GPU union, numerical stability, and end-to-end gain.",
             "4. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
             "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
             "and the combined B arm out of the production default.",

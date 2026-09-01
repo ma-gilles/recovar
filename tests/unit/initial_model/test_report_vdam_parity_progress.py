@@ -436,6 +436,12 @@ def test_runtime_workboard_is_fail_closed(tmp_path: Path, scorecard: dict) -> No
         progress_mod.load_and_validate(_write(tmp_path, scorecard))
 
 
+def test_performance_gate_updates_are_fail_closed(tmp_path: Path, scorecard: dict) -> None:
+    scorecard["performance_gate_updates"]["single_lane_applicability"]["actual_coarse_translation_count"] = 116
+    with pytest.raises(ValueError, match="current performance gate updates changed"):
+        progress_mod.load_and_validate(_write(tmp_path, scorecard))
+
+
 def test_runtime_workboard_is_easy_to_scan() -> None:
     rendered = progress_mod.render_markdown(progress_mod.load_and_validate())
 
@@ -456,7 +462,15 @@ def test_runtime_workboard_is_easy_to_scan() -> None:
     assert "**NUMERICALLY EQUIVALENT / E2E IMMATERIAL** | Same-binary causal `13271166`" in rendered
     assert "ccb9d9cc4f4ee949aabbfa2c6045aea5b6c2007bcdbcd871e0e1df246d0c3db0" in rendered
     assert "Invalid jobs `13270868` and `13270984` stopped in preflight before science" in rendered
-    assert "**PENDING** | None" in rendered
+    assert "**REJECTED FOR GF46 / RETAINED PRIMITIVE** | Single-lane coarse" in rendered
+    assert "13280613/13280655" in rendered
+    assert "**MATH ACCEPTED / MATERIAL SINGLE-STREAM** | Native-atomic T=29 `13281836`" in rendered
+    assert "Hot coarse is 8.00% faster" in rendered
+    assert "**ACCEPTED GPU PRIMITIVE / LIVE PAIR PENDING** | Direct RELION x-half BPref" in rendered
+    assert "`13281684`" in rendered
+    assert "**ACCEPTED GPU PRIMITIVE / LIVE RETRY PENDING** | Shared posterior executor" in rendered
+    assert "`13280796`" in rendered
+    assert "**PENDING** | None" not in rendered
     assert "trajectory next" not in rendered.lower()
     assert "default-off/unwired" in rendered
     assert "no impact" in rendered
