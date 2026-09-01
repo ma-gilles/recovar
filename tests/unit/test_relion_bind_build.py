@@ -2,7 +2,6 @@ import pytest
 
 from recovar.relion_bind import build
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -29,3 +28,17 @@ def test_relion_bind_source_validates_projector_header(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError, match="does not contain projector.h"):
         build.get_relion_src()
+
+
+def test_relion_bind_build_jobs_honors_explicit_allocation(monkeypatch):
+    monkeypatch.setenv("RECOVAR_RELION_BIND_JOBS", "8")
+
+    assert build.get_build_jobs() == 8
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "many"])
+def test_relion_bind_build_jobs_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv("RECOVAR_RELION_BIND_JOBS", value)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        build.get_build_jobs()

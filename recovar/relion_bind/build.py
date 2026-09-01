@@ -39,6 +39,24 @@ def get_pybind11_cmake_dir():
     return pybind11.get_cmake_dir()
 
 
+def get_build_jobs() -> int:
+    """Return the requested build parallelism without escaping a Slurm allocation."""
+
+    configured = os.environ.get("RECOVAR_RELION_BIND_JOBS")
+    if configured is not None:
+        try:
+            jobs = int(configured)
+        except ValueError as exc:
+            raise ValueError("RECOVAR_RELION_BIND_JOBS must be a positive integer") from exc
+        if jobs <= 0:
+            raise ValueError("RECOVAR_RELION_BIND_JOBS must be a positive integer")
+        return jobs
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 4
+
+
 def build():
     relion_src = get_relion_src()
 
@@ -56,8 +74,7 @@ def build():
     print(f"Configuring: {' '.join(cmake_cmd)}")
     subprocess.check_call(cmake_cmd, cwd=BUILD_DIR)
 
-    ncpu = os.cpu_count() or 4
-    make_cmd = ["make", f"-j{ncpu}"]
+    make_cmd = ["make", f"-j{get_build_jobs()}"]
     print(f"Building: {' '.join(make_cmd)}")
     subprocess.check_call(make_cmd, cwd=BUILD_DIR)
 

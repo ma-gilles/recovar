@@ -33,6 +33,16 @@ RELION_DISPATCH_LOG_SCHEMA_MARKER = b"RELION_DISPATCH_LOG_SCHEMA_V2"
 KCLASS_INITIAL_RESOLUTION_ANG = 60.0
 
 
+def base_pixi_python() -> Path:
+    """Return the installed pixi Python used to seed the run-local venv."""
+
+    configured = os.environ.get(
+        "EM_KCLASS_MATRIX_PIXI_PY",
+        str(REPO_ROOT / ".pixi" / "envs" / "default" / "bin" / "python"),
+    )
+    return Path(configured).expanduser().resolve()
+
+
 @dataclass(frozen=True)
 class Case:
     index: int
@@ -699,10 +709,17 @@ CUDA_LIB_TMP="${RECOVAR_CUDA_LIB}.${SLURM_JOB_ID:-$$}.tmp"
 export CUDA_LIB_TMP PIXI_PY
 flock "$(dirname "${RECOVAR_CUDA_LIB}")/build.lock" bash -lc '
   set -euo pipefail
+  if [[ -s "${RECOVAR_CUDA_LIB}" && -s "${RECOVAR_CUDA_LIB}.sha256" ]]; then
+    sha256sum --check "${RECOVAR_CUDA_LIB}.sha256"
+    echo "Reusing sealed CUDA library ${RECOVAR_CUDA_LIB}"
+    exit 0
+  fi
   rm -f "${CUDA_LIB_TMP}"
   env PYTHON="${PIXI_PY}" make -C recovar/cuda LIB="${CUDA_LIB_TMP}" all
   mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"
+  sha256sum "${RECOVAR_CUDA_LIB}" > "${RECOVAR_CUDA_LIB}.sha256"
 '
+sha256sum --check "${RECOVAR_CUDA_LIB}.sha256"
 """
 
 
@@ -732,6 +749,10 @@ def job_preamble(
     job_name: str,
     expected_commit: str,
 ) -> str:
+    matrix_venv = scratch_dir / "venv"
+    matrix_python = matrix_venv / "bin" / "python"
+    pixi_env_root = base_pixi_python().parent.parent
+    shared_relion_bind_dir = scratch_dir / "relion_bind_build" / "shared"
     return f"""set -euo pipefail
 cd {q(REPO_ROOT)}
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
@@ -752,16 +773,24 @@ if [[ ! -f "${{RELION_SRC_DIR}}/projector.h" ]]; then
 fi
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PIXI_FROZEN=true
+export EM_KCLASS_MATRIX_VENV={q(matrix_venv)}
+export PIXI_PY={q(matrix_python)}
+export PIP_NO_INDEX=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export CMAKE_INCLUDE_PATH={q(pixi_env_root / "include" / "fftw")}:{q(pixi_env_root / "include")}:${{CMAKE_INCLUDE_PATH:-}}
+export CMAKE_LIBRARY_PATH={q(pixi_env_root / "lib")}:${{CMAKE_LIBRARY_PATH:-}}
+export RECOVAR_RELION_BIND_JOBS="${{SLURM_CPUS_ON_NODE:-${{SLURM_CPUS_PER_TASK:-1}}}}"
 RUNTIME_ROOT={q(DEFAULT_RUNTIME_ROOT / job_name)}_${{SLURM_JOB_ID}}
 export TMPDIR="${{RUNTIME_ROOT}}/tmp"
 export PIXI_HOME="${{RUNTIME_ROOT}}/pixi_home"
 export RATTLER_CACHE_DIR="${{RUNTIME_ROOT}}/rattler_cache"
 export RECOVAR_JAX_CACHE_DIR={q(scratch_dir)}/jax_cache
 export JAX_COMPILATION_CACHE_DIR="${{RECOVAR_JAX_CACHE_DIR}}"
-export RECOVAR_CUDA_LIB={q(cuda_lib.parent)}/${{SLURM_JOB_ID}}/{q(cuda_lib.name)}
+export RECOVAR_CUDA_LIB={q(cuda_lib)}
 export RECOVAR_CUDA_CACHE_DIR={q(scratch_dir)}/cuda_cache/{job_name}_${{SLURM_JOB_ID}}
-export RECOVAR_RELION_BIND_BUILD_DIR={q(scratch_dir)}/relion_bind_build/{job_name}_${{SLURM_JOB_ID}}
-mkdir -p "${{TMPDIR}}" "${{PIXI_HOME}}" "${{RATTLER_CACHE_DIR}}" "${{RECOVAR_JAX_CACHE_DIR}}" "${{RECOVAR_CUDA_CACHE_DIR}}" "${{RECOVAR_RELION_BIND_BUILD_DIR}}" "$(dirname "${{RECOVAR_CUDA_LIB}}")" {q(REPO_ROOT / ".pixi")}
+export RECOVAR_RELION_BIND_BUILD_DIR={q(shared_relion_bind_dir)}
+mkdir -p "${{TMPDIR}}" "${{PIXI_HOME}}" "${{RATTLER_CACHE_DIR}}" "${{RECOVAR_JAX_CACHE_DIR}}" "${{RECOVAR_CUDA_CACHE_DIR}}" "$(dirname "${{RECOVAR_CUDA_LIB}}")"
+touch "${{RUNTIME_ROOT}}/SAFE_TO_DELETE"
 
 if [[ -f /etc/profile.d/modules.sh ]]; then
   source /etc/profile.d/modules.sh
@@ -775,7 +804,7 @@ if [[ -d "${{CUDA_HOME}}/bin" ]]; then
   export PATH="${{CUDA_HOME}}/bin:${{PATH}}"
 fi
 CUDA_TARGET_LIB_DIR="${{CUDA_HOME}}/targets/x86_64-linux/lib"
-PIXI_NVIDIA_ROOT={q(REPO_ROOT)}/.pixi/envs/default/lib/python3.11/site-packages/nvidia
+PIXI_NVIDIA_ROOT={q(pixi_env_root)}/lib/python3.11/site-packages/nvidia
 if [[ -d "${{PIXI_NVIDIA_ROOT}}" ]]; then
   PIXI_NVIDIA_LIB_DIRS="$(find "${{PIXI_NVIDIA_ROOT}}" -type d -name lib 2>/dev/null | paste -sd: -)"
 else
@@ -841,12 +870,31 @@ def write_setup_script(
 
 {job_preamble(scratch_dir=scratch_dir, cuda_lib=cuda_lib, cuda_module=cuda_module, relion_src_dir=relion_src_dir, job_name="em_kclass_matrix_setup", expected_commit=expected_commit)}
 
-flock {q(REPO_ROOT / ".pixi" / "install-recovar.lock")} bash -lc '
+BASE_PIXI_PY={q(base_pixi_python())}
+if [[ ! -x "${{BASE_PIXI_PY}}" ]]; then
+  echo "ERROR: EM_KCLASS_MATRIX_PIXI_PY must name an installed pixi Python: ${{BASE_PIXI_PY}}" >&2
+  exit 2
+fi
+flock {q(scratch_dir / "install-recovar.lock")} bash -lc '
 set -euo pipefail
-pixi run --frozen install-recovar
-pixi run --frozen python recovar/relion_bind/build.py
+rm -rf "${{RECOVAR_RELION_BIND_BUILD_DIR:?}}"
+rm -rf "${{EM_KCLASS_MATRIX_VENV:?}}"
+mkdir -p "${{RECOVAR_RELION_BIND_BUILD_DIR}}"
+"${{BASE_PIXI_PY}}" -m venv --system-site-packages "${{EM_KCLASS_MATRIX_VENV}}"
+"${{PIXI_PY}}" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
+"${{PIXI_PY}}" recovar/relion_bind/build.py
 '
-PIXI_PY="$(pixi run --frozen which python)"
+mapfile -t RELION_BIND_LIBS < <(find "${{RECOVAR_RELION_BIND_BUILD_DIR}}" -maxdepth 1 -type f -name '_relion_bind_core*.so' -print)
+if [[ "${{#RELION_BIND_LIBS[@]}}" -ne 1 ]]; then
+  echo "ERROR: expected one sealed RELION binding, found ${{#RELION_BIND_LIBS[@]}}" >&2
+  exit 2
+fi
+sha256sum "${{RELION_BIND_LIBS[0]}}" > {q(scratch_dir / "relion_bind_build" / "shared.sha256")}
+sha256sum --check {q(scratch_dir / "relion_bind_build" / "shared.sha256")}
+export JAX_PLATFORMS=cpu
+export JAX_PLATFORM_NAME=cpu
+export RECOVAR_DISABLE_CUDA=1
+export CUDA_VISIBLE_DEVICES=""
 "${{PIXI_PY}}" - <<'PY'
 import os
 import pathlib
@@ -1015,9 +1063,7 @@ for ((i=0; i<{case.n_classes}; i++)); do
 done
 {outlier_pdb_setup}
 
-flock {q(REPO_ROOT / ".pixi" / "install-recovar.lock")} bash -lc 'pixi run --frozen install-recovar'
-PIXI_PY="$(pixi run --frozen which python)"
-"${{PIXI_PY}}" recovar/relion_bind/build.py
+sha256sum --check {q(scratch_dir / "relion_bind_build" / "shared.sha256")}
 {build_cuda_lib_command()}
 "${{PIXI_PY}}" - <<'PY'
 import os
@@ -1290,6 +1336,8 @@ def write_summary_script(
     expected_commit: str | None = None,
 ) -> Path:
     expected_commit = expected_commit or git_text("rev-parse", "HEAD")
+    matrix_python = scratch_dir / "venv" / "bin" / "python"
+    fallback_python = base_pixi_python()
     script = jobs_dir / "em_kclass_matrix_summary.sh"
     text = f"""#!/usr/bin/env bash
 #SBATCH --job-name=em_kclass_summary
@@ -1317,6 +1365,16 @@ export RECOVAR_DISABLE_CUDA=1
 export JAX_PLATFORM_NAME=cpu
 export JAX_PLATFORMS=cpu
 export PIXI_FROZEN=true
+MATRIX_PY={q(matrix_python)}
+BASE_PIXI_PY={q(fallback_python)}
+if [[ -x "${{MATRIX_PY}}" ]]; then
+  export PIXI_PY="${{MATRIX_PY}}"
+elif [[ -x "${{BASE_PIXI_PY}}" ]]; then
+  export PIXI_PY="${{BASE_PIXI_PY}}"
+else
+  echo "ERROR: neither run-local nor base pixi Python is executable" >&2
+  exit 2
+fi
 RUNTIME_ROOT={q(DEFAULT_RUNTIME_ROOT / "em_kclass_matrix_summary")}_${{SLURM_JOB_ID}}
 export TMPDIR="${{RUNTIME_ROOT}}/tmp"
 export PIXI_HOME="${{RUNTIME_ROOT}}/pixi_home"
@@ -1324,6 +1382,7 @@ export RATTLER_CACHE_DIR="${{RUNTIME_ROOT}}/rattler_cache"
 export RECOVAR_JAX_CACHE_DIR={q(scratch_dir)}/jax_cache
 export JAX_COMPILATION_CACHE_DIR="${{RECOVAR_JAX_CACHE_DIR}}"
 mkdir -p "${{TMPDIR}}" "${{PIXI_HOME}}" "${{RATTLER_CACHE_DIR}}" "${{RECOVAR_JAX_CACHE_DIR}}"
+touch "${{RUNTIME_ROOT}}/SAFE_TO_DELETE"
 
 {git_provenance_gate(expected_commit=expected_commit)}
 
@@ -1337,7 +1396,7 @@ for job_id in {" ".join(tracked_jobs)}; do
   sacct -j "${{job_id}}" -X -o JobID,JobName%40,State,Elapsed,MaxRSS,ReqMem,AllocTRES || true
 done
 echo
-pixi run --frozen python -m scripts.summarize_em_robustness_matrix \\
+"${{PIXI_PY}}" -m scripts.summarize_em_robustness_matrix \\
   {q(scratch_dir)} \\
   --output-markdown {q(scratch_dir / "em_kclass_robustness_summary.md")} \\
   --output-json {q(scratch_dir / "em_kclass_robustness_summary.json")} \\
@@ -1405,7 +1464,9 @@ def main() -> int:
     setup_partition = os.environ.get("EM_KCLASS_MATRIX_SETUP_PARTITION", "cpu")
     setup_constraint = os.environ.get("EM_KCLASS_MATRIX_SETUP_CONSTRAINT", "")
     setup_gres = os.environ.get("EM_KCLASS_MATRIX_SETUP_GRES", "")
-    exclusive = os.environ.get("EM_KCLASS_MATRIX_EXCLUSIVE", "0") != "0"
+    if os.environ.get("EM_KCLASS_MATRIX_EXCLUSIVE", "0") != "0":
+        raise SystemExit("EM_KCLASS_MATRIX_EXCLUSIVE is unsupported: K-class matrix jobs must be non-exclusive")
+    exclusive = False
     cuda_module = os.environ.get("CUDA_MODULE", "cudatoolkit/12.8")
     relion_src_value = os.environ.get("RELION_SRC_DIR", "").strip()
     if not relion_src_value:
@@ -1447,7 +1508,10 @@ def main() -> int:
     seed_offset_for_env = getattr(args, "seed_offset", None)
     if seed_offset_for_env is None:
         seed_offset_for_env = os.environ.get("EM_KCLASS_MATRIX_SEED_OFFSET", "")
-    setup_cuda_lib = scratch_dir / "cuda" / "setup" / "libcuda_backproject.so"
+    base_python = base_pixi_python()
+    if not base_python.is_file() or not os.access(base_python, os.X_OK):
+        raise SystemExit(f"EM_KCLASS_MATRIX_PIXI_PY must name an installed pixi Python: {base_python}")
+    shared_cuda_lib = scratch_dir / "cuda" / "shared" / "libcuda_backproject.so"
 
     print("EM K-class robustness matrix launcher")
     print(f"Repo: {REPO_ROOT}")
@@ -1464,6 +1528,7 @@ def main() -> int:
     print(f"RELION source: {relion_src_dir}")
     print(f"RELION module: {relion_module}")
     print(f"RELION dispatch-capture executable: {relion_refine_mpi}")
+    print(f"Base pixi Python: {base_python}")
     if max_iter_override_for_env:
         print(f"Max iter override: {max_iter_override_for_env}")
     if time_limit_override_for_env:
@@ -1504,7 +1569,7 @@ def main() -> int:
     setup_script = write_setup_script(
         scratch_dir=scratch_dir,
         jobs_dir=jobs_dir,
-        cuda_lib=setup_cuda_lib,
+        cuda_lib=shared_cuda_lib,
         account=account,
         partition=setup_partition,
         constraint=setup_constraint,
@@ -1524,7 +1589,7 @@ def main() -> int:
             case=case,
             scratch_dir=scratch_dir,
             jobs_dir=jobs_dir,
-            cuda_lib=scratch_dir / "cuda" / f"case_{case.index}_{case.name}" / "libcuda_backproject.so",
+            cuda_lib=shared_cuda_lib,
             account=account,
             partition=partition,
             constraint=constraint,
@@ -1576,6 +1641,11 @@ def main() -> int:
                 f"EXPECTED_GIT_HEAD={expected_commit}",
                 f"RUNTIME_ROOT={DEFAULT_RUNTIME_ROOT}",
                 f"SCRATCH_DIR={scratch_dir}",
+                f"EM_KCLASS_MATRIX_VENV={scratch_dir / 'venv'}",
+                f"PIXI_PY={scratch_dir / 'venv' / 'bin' / 'python'}",
+                f"EM_KCLASS_MATRIX_PIXI_PY={base_python}",
+                f"RECOVAR_CUDA_LIB={shared_cuda_lib}",
+                f"RECOVAR_RELION_BIND_BUILD_DIR={scratch_dir / 'relion_bind_build' / 'shared'}",
                 f"EM_KCLASS_MATRIX_SETUP_PARTITION={setup_partition}",
                 f"EM_KCLASS_MATRIX_SETUP_CONSTRAINT={setup_constraint}",
                 f"EM_KCLASS_MATRIX_SUMMARY_PARTITION={summary_partition}",

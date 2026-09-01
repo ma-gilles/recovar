@@ -195,7 +195,7 @@ def test_noise_rng_batch_size_generates_clean_prepare_command(tmp_path, monkeypa
     assert '--relion-dispatch-schedule "${RELION_DISPATCH_SCHEDULE}"' in text
 
 
-def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
+def test_case_jobs_build_or_reuse_one_sealed_cuda_lib_under_lock(tmp_path):
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
     script = launcher.write_case_script(
@@ -224,10 +224,14 @@ def test_case_jobs_build_cuda_lib_atomically_under_lock(tmp_path):
     assert 'CUDA_LIB_TMP="${RECOVAR_CUDA_LIB}.${SLURM_JOB_ID:-$$}.tmp"' in text
     assert "export CUDA_LIB_TMP PIXI_PY" in text
     assert 'flock "$(dirname "${RECOVAR_CUDA_LIB}")/build.lock"' in text
-    assert f"export RECOVAR_CUDA_LIB={tmp_path}/${{SLURM_JOB_ID}}/librecovar_cuda.so" in text
+    assert f"export RECOVAR_CUDA_LIB={tmp_path}/librecovar_cuda.so" in text
+    assert 'if [[ -s "${RECOVAR_CUDA_LIB}" && -s "${RECOVAR_CUDA_LIB}.sha256" ]]' in text
+    assert 'echo "Reusing sealed CUDA library ${RECOVAR_CUDA_LIB}"' in text
     assert 'rm -f "${CUDA_LIB_TMP}"' in text
     assert 'make -C recovar/cuda LIB="${CUDA_LIB_TMP}" all' in text
     assert 'mv -f "${CUDA_LIB_TMP}" "${RECOVAR_CUDA_LIB}"' in text
+    assert 'sha256sum "${RECOVAR_CUDA_LIB}" > "${RECOVAR_CUDA_LIB}.sha256"' in text
+    assert 'sha256sum --check "${RECOVAR_CUDA_LIB}.sha256"' in text
 
 
 def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
@@ -246,9 +250,39 @@ def test_setup_script_allows_external_relion_bind_build_dir(tmp_path):
     )
 
     text = script.read_text()
+    matrix_python = tmp_path / "venv" / "bin" / "python"
+    shared_bind = tmp_path / "relion_bind_build" / "shared"
+    assert f"export PIXI_PY={matrix_python}" in text
+    assert f"export RECOVAR_RELION_BIND_BUILD_DIR={shared_bind}" in text
+    assert '-m venv --system-site-packages "${EM_KCLASS_MATRIX_VENV}"' in text
+    assert '"${PIXI_PY}" -m pip install -e . --no-deps --no-build-isolation --ignore-installed' in text
+    assert '"${PIXI_PY}" recovar/relion_bind/build.py' in text
+    assert "pixi run" not in text
+    assert f"sha256sum --check {tmp_path}/relion_bind_build/shared.sha256" in text
     assert 'external_bind_dir = os.environ.get("RECOVAR_RELION_BIND_BUILD_DIR")' in text
     assert 'str(relion_bind_file).startswith(str(external_bind_root) + "/")' in text
     assert 'assert str(pathlib.Path(relion_bind.__file__).resolve()).startswith(str(repo) + "/")' not in text
+
+
+def test_main_rejects_exclusive_kclass_jobs(tmp_path, monkeypatch):
+    _set_relion_src(tmp_path, monkeypatch)
+    monkeypatch.setenv("EM_KCLASS_MATRIX_EXCLUSIVE", "1")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--dry-run",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--case",
+            "1",
+        ],
+    )
+    _set_dispatch_capture_executable(tmp_path, monkeypatch)
+
+    with pytest.raises(SystemExit, match="must be non-exclusive"):
+        launcher.main()
 
 
 def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monkeypatch):
@@ -306,6 +340,11 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_setup_" in setup_text
     assert f"export RELION_SRC_DIR={relion_src}" in setup_text
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}/em_kclass_matrix_summary_" in summary_text
+    assert f"MATRIX_PY={scratch / 'venv' / 'bin' / 'python'}" in summary_text
+    assert f"BASE_PIXI_PY={launcher.base_pixi_python()}" in summary_text
+    assert 'touch "${RUNTIME_ROOT}/SAFE_TO_DELETE"' in setup_text
+    assert 'touch "${RUNTIME_ROOT}/SAFE_TO_DELETE"' in summary_text
+    assert "pixi run" not in summary_text
     assert f"EXPECTED_GIT_HEAD={expected_head}" in submission
     assert "CASE_JOB_IDS='DRYRUN DRYRUN'" in submission
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}" in submission
