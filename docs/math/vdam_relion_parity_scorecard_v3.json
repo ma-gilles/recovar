@@ -1500,6 +1500,93 @@
     },
     "production_change_authorized": false
   },
+  "coarse_multistream_gate": {
+    "role": "diagnostic_performance",
+    "score_impact": "none",
+    "frozen_scores_changed": false,
+    "case_id": "vdam-gf46",
+    "transition": "iteration_180_to_181",
+    "primitive_job_id": "13279168",
+    "late_pair_job_id": "13279367",
+    "source_head": "54f78eace72a42442863c9f409b6337040268e16",
+    "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_multistream_late_pair_54f78eace_h21g4_20260831",
+    "hardware": {
+      "node": "della-h21g4",
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "gpu_uuid": "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+    },
+    "execution_order": "serial_1,multistream_1,multistream_2,serial_2",
+    "shared_worker_implementation": "mature_em_relion_vdam_worker_stream_helper",
+    "worker_count": 8,
+    "settings": {
+      "raw_image_cache": "off",
+      "exact_local_bucket_radix": 4,
+      "physical_order_chunk_size": 0
+    },
+    "decision": "MATH_ACCEPTED_PERFORMANCE_HOLD",
+    "promotion_authorized": false,
+    "primitive_result": {
+      "active_scores_bitwise": true,
+      "repeat_bitwise": true,
+      "poisoned_padding_inert": true,
+      "winners_exact": true,
+      "support_exact": true,
+      "invalid_actual_batch_size_failed_closed": true
+    },
+    "trajectory_boundary_result": {
+      "all_discrete_state_exact": true,
+      "map_cross_relative_l2_min": 1.93e-09,
+      "map_cross_relative_l2_max": 2.19e-09,
+      "map_serial_repeat_relative_l2": 1.84e-09,
+      "map_multistream_repeat_relative_l2": 2.05e-09,
+      "bpref_cross_relative_l2_max": 3.60e-10,
+      "noise_relative_l2_max": 2.15e-07,
+      "image_relative_l2_max": 1.62e-07,
+      "numerical_classification": "repeat_bounded_unbiased_roundoff_scale"
+    },
+    "abba_means": {
+      "serial_cold_wall_seconds": 28.061,
+      "multistream_cold_wall_seconds": 26.506,
+      "cold_wall_change_percent": -5.54,
+      "serial_warm_wall_seconds": 13.921,
+      "multistream_warm_wall_seconds": 12.920,
+      "warm_wall_change_percent": -7.19,
+      "serial_expectation_seconds": 9.104,
+      "multistream_expectation_seconds": 8.155,
+      "expectation_change_percent": -10.42,
+      "serial_pass1_seconds": 6.266,
+      "multistream_pass1_seconds": 5.493,
+      "pass1_change_percent": -12.35,
+      "serial_pass2_seconds": 1.976,
+      "multistream_pass2_seconds": 1.840,
+      "pass2_change_percent": -6.85,
+      "hwm_change_percent": -0.12
+    },
+    "nsight": {
+      "serial_coarse_union_seconds": 4.355,
+      "multistream_coarse_union_seconds": 3.885,
+      "coarse_union_change_percent": -10.78,
+      "multistream_coarse_kernel_count": 1000,
+      "multistream_kernel_mean_milliseconds": 5.881,
+      "native_kernel_mean_milliseconds": 3.925,
+      "multistream_kernel_slowdown_percent_vs_native": 49.8,
+      "multistream_max_concurrency": 2,
+      "recovar_registers_per_thread": 56,
+      "native_registers_per_thread": 48,
+      "recovar_static_shared_bytes": 14208,
+      "native_static_shared_bytes": 6208,
+      "excess_static_shared_bytes": 8192,
+      "excess_buffer": "shared_lane_partials[16*128]"
+    },
+    "performance_gate": {
+      "coarse_union_target_seconds": 3.0,
+      "pass1_reduction_target_percent": 30.0,
+      "passed": false,
+      "reason": "The scheduler is a real gain but remains 1.41x slower than native coarse union and misses the pass-1 target."
+    },
+    "root_cause": "At 116 translations in a 128-thread block, active_lanes is one. The generic canonical reducer still reserves and traverses an 8192-byte shared lane buffer even though every translation has exactly one contributing thread.",
+    "next_gate": "Compile-time active_lanes=1 canonical specialization, with the same float32 add order and no shared lane buffer; compare generic serial, specialized serial, and specialized eight-stream execution on one H100 allocation."
+  },
   "shared_em_reuse": [
     {"component": "coarse projector/scorer", "shared_with_em": true, "qualification": "production shared primitive"},
     {"component": "compact active-row planner, fine scorer, and posterior", "shared_with_em": true, "qualification": "production shared primitive"},

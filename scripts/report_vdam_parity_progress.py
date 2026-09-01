@@ -849,6 +849,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     late_arms = {row["id"]: row for row in late_gate["factorial_arms"]}
     late_reference = late_gate["reference_profile"]
     trace = late_gate["trace_decomposition"]
+    coarse_gate = scorecard["coarse_multistream_gate"]
+    coarse_means = coarse_gate["abba_means"]
+    coarse_nsight = coarse_gate["nsight"]
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
@@ -870,9 +873,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** | Unchanged; observed suite range "
         f"{min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x. Promotion requires a large reproducible gain "
         "without instability or quality loss. |",
-        "| Performance lanes | non-scoring | Existing six-lane workboard: 4 accepted/qualified evidence lanes and "
-        "2 rejected, all default-off. New late-iteration factorial: cache-only retained for repeat/scale; chunking "
-        "rejected. |",
+        "| Performance lanes | non-scoring | Cache-only is retained for repeat/scale; chunking is rejected. The "
+        "shared eight-stream coarse scheduler is mathematically accepted and measurably faster, but held below the "
+        "runtime target while its active-lanes=1 occupancy specialization is gated. |",
         "| Numerical policy | non-scoring | Require mathematical equivalence plus stable, unbiased, non-growing "
         "repeat-bounded noise. Bitwise identity is not required. Measure discrete changes; rare marginal changes may "
         "be accepted only within control/native repeat variability, with the same basin and no material final-quality "
@@ -900,6 +903,17 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"{trace['native_milliseconds_per_particle']:.3f} ms per native particle. | The shared production kernel "
         "is not slower per unit; six serial padded batches lose to native RELION's eight-stream overlap. | "
         f"{trace['next_focus']} |",
+        f"| Shared coarse multistream primitive `{coarse_gate['primitive_job_id']}` + crossed ABBA "
+        f"`{coarse_gate['late_pair_job_id']}` | **MATH ACCEPTED; PERFORMANCE HOLD.** Warm expectation "
+        f"{coarse_means['serial_expectation_seconds']:.3f}->{coarse_means['multistream_expectation_seconds']:.3f} s "
+        f"({coarse_means['expectation_change_percent']:.2f}%) and pass 1 "
+        f"{coarse_means['serial_pass1_seconds']:.3f}->{coarse_means['multistream_pass1_seconds']:.3f} s "
+        f"({coarse_means['pass1_change_percent']:.2f}%); every tracked discrete state is exact and map/BPref deltas "
+        "remain at repeat scale. | Scheduling is only part of the gap: the per-particle RECOVAR kernel is "
+        f"{coarse_nsight['multistream_kernel_slowdown_percent_vs_native']:.1f}% slower than native and carries "
+        f"{coarse_nsight['excess_static_shared_bytes']} excess shared bytes plus "
+        f"{coarse_nsight['recovar_registers_per_thread']} versus {coarse_nsight['native_registers_per_thread']} "
+        f"registers/thread. | {coarse_gate['next_gate']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
         f"speedup is `{same_binary_lane['runtime_result']['warm_speedup']:.4f}x` | All four arms loaded CUDA SHA "
@@ -999,10 +1013,15 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "Iteration-1 topology is identical but 3/3 artifacts differ; causal projection effect was not proved. "
         f"Prior {xhalf_lane['same_h100_wall_reduction_percent']:.2f}% wall reduction is unusable. | "
         f"{xhalf_lane['next_gate']} |",
-        "| **PENDING** | None | No performance candidate currently awaits an audit. | Submit the multi-repeat "
-        "elementwise stability/equivalence panel; add a pending row after its provenance-sealed job exists. |",
+        f"| **MATH ACCEPTED / PERFORMANCE HOLD** | Shared 8-stream coarse scheduler "
+        f"`{coarse_gate['primitive_job_id']}/{coarse_gate['late_pair_job_id']}` | All tracked discrete state is exact; "
+        f"warm expectation improves {abs(coarse_means['expectation_change_percent']):.2f}%, but coarse union remains "
+        f"{coarse_nsight['multistream_coarse_union_seconds']:.3f} s versus the 3.0 s gate. | "
+        f"{coarse_gate['next_gate']} |",
+        "| **PENDING** | None | The active-lanes=1 specialization is being implemented; it has no live evidence "
+        "or promotion status yet. | Add the row only after its provenance-sealed primitive and crossed H100 gate. |",
         "",
-        "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All six "
+        "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All listed "
         "lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness "
         f"{strict['passed']}/{strict['denominator']} or runtime {runtime['passed']}/{runtime['denominator']}.",
         "Historical tail-mask gate: Forced nondefault native-texture path; 120/120 strict artifacts differ.",
@@ -1260,26 +1279,32 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            "1. Implement a default-off K=1 multistream scheduler around the accepted shared production coarse "
-            "kernel. Reuse the mature EM worker-stream machinery, preserve texture math and canonical reduction, then "
-            "microgate discrete-change rates against control/native repeats plus stable, unbiased, non-growing "
-            "numerical noise, basin preservation, and final quality before any trajectory.",
-            "2. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
+            "1. Gate a compile-time active-lanes=1 specialization of the accepted canonical coarse kernel. Preserve "
+            "the exact float32 add order, remove the unnecessary 8192-byte shared reduction buffer, and compare "
+            "generic serial, specialized serial, and specialized eight-stream execution on one H100 allocation.",
+            "2. Return native RELION x-half accumulators directly through the mature shared EM half-volume contract, "
+            "and gate exact even/odd, two-group, K>1, empty-group, and poisoned-redundant-lane cases before timing the "
+            "removed full-cube roundtrip.",
+            "3. Build a shared coarse/fine posterior executor with per-worker persistent CUB scratch. Keep independent "
+            "one-row RELION sort/scan arithmetic and particle chronology; do not revive the rejected segmented batched "
+            "CUB implementation.",
+            "4. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
             "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
             "and the combined B arm out of the production default.",
-            "3. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
+            "5. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
             "control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, "
             "dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.",
-            "4. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
+            "6. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
             "as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact "
-            "boundary measurement before any trajectory.",
-            "5. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is "
+            "compile-amortized trajectory measurement; the isolated runtime-bound BPref primitive is numerically "
+            "qualified but 14.8--17.7% slower per steady call, so it cannot stand alone.",
+            "7. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is "
             "numerically equivalent, but the same-binary 1.0091x warm result is immaterial and the isolated primitive "
             "speedup cannot authorize promotion.",
-            "6. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
+            "8. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
             f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
             "the explicitly requested performance-first phase is active.",
-            "7. Do not revive the rejected 128-tail palette, float32 scorer, eager whole-stack raw cache, shared "
+            "9. Do not revive the rejected 128-tail palette, float32 scorer, eager whole-stack raw cache, shared "
             "coarse-projection cache, literal pool-per-call layout, physical-order chunking, or dynamic tail mask "
             "without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix "
             "before K>1 or real-data promotion.",
