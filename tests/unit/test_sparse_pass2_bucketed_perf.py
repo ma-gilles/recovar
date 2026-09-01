@@ -107,6 +107,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _logsumexp_pass2_pairs_score_only,
     _max_adjoint_block_bytes_for_pass,
     _max_hypotheses_per_microbatch_for_pass,
+    _max_images_for_mstep_output_budget,
     _max_images_for_sparse_pass2_translation_tile,
     _max_images_for_translation_tile,
     _max_noise_block_bytes_for_pass,
@@ -156,6 +157,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _select_active_noise_rows,
     _small_bucket_coalesce_size_for_pass,
     _split_compact_pair_buckets_by_projection_gather_budget,
+    _split_sparse_pass2_buckets_by_mstep_output_budget,
     _tail_bucket_coalesce_params_for_pass,
     _translation_tile_half_pixels_for_budget,
     _validate_k_class_execution_bucket_partition,
@@ -3718,6 +3720,55 @@ def test_sparse_pass2_windowed_translation_tile_image_cap_is_bounded(monkeypatch
     assert window_cap == 5 * half_image_size // window_pixels
     assert multiplier == 2
     assert chosen == 10
+
+
+def test_sparse_pass2_mstep_output_cap_matches_empiar10202_n800_boundary():
+    device_memory_bytes = 80 * 1024**3
+    output_budget = _max_adjoint_block_bytes_for_pass(device_memory_bytes)
+    n_recon_pixels = 320800
+
+    assert _max_images_for_mstep_output_budget(
+        64,
+        n_recon_pixels,
+        max_output_bytes=output_budget,
+    ) == 2
+    assert _max_images_for_mstep_output_budget(
+        128,
+        n_recon_pixels,
+        max_output_bytes=output_budget,
+    ) == 1
+    assert _max_images_for_mstep_output_budget(
+        256,
+        n_recon_pixels,
+        max_output_bytes=output_budget,
+    ) == 1
+
+    failed_request_bytes = 5 * 128 * n_recon_pixels * np.dtype(np.complex64).itemsize
+    assert failed_request_bytes == 1_642_496_000
+
+
+def test_sparse_pass2_mstep_output_budget_splits_buckets_without_reordering():
+    buckets = [
+        {
+            "bucket_size": 128,
+            "image_indices": np.asarray([7, 2, 9], dtype=np.int64),
+            "sentinel": "preserved",
+        },
+        {
+            "bucket_size": 256,
+            "image_indices": np.asarray([4, 1], dtype=np.int64),
+            "sentinel": "preserved",
+        },
+    ]
+    split = _split_sparse_pass2_buckets_by_mstep_output_budget(
+        buckets,
+        n_recon_pixels=320800,
+        max_output_bytes=_max_adjoint_block_bytes_for_pass(80 * 1024**3),
+    )
+
+    assert [int(bucket["bucket_size"]) for bucket in split] == [128, 128, 128, 256, 256]
+    assert [int(bucket["image_indices"][0]) for bucket in split] == [7, 2, 9, 4, 1]
+    assert all(bucket["sentinel"] == "preserved" for bucket in split)
 
 
 def test_sparse_kclass_windowed_translation_tile_cap_defaults_on(monkeypatch):

@@ -3467,6 +3467,60 @@ def _max_images_for_sparse_pass2_translation_tile(
     return min(window_cap, bounded_window_cap), full_cap, window_cap, multiplier
 
 
+def _max_images_for_mstep_output_budget(
+    bucket_size: int,
+    n_recon_pixels: int,
+    *,
+    max_output_bytes: int,
+    numerator_complex_dtype=np.complex64,
+    denominator_real_dtype=np.float32,
+) -> int:
+    """Cap one dense M-step bucket by its materialized output rows.
+
+    ``compute_local_mstep_sums`` returns a complex numerator and a real
+    denominator with shape ``(B, R, N)``.  The adjoint path can chunk these
+    rows only after both dense outputs have been formed, so its existing block
+    budget must also constrain the input bucket that creates them.
+    """
+
+    bytes_per_image = (
+        int(bucket_size)
+        * int(n_recon_pixels)
+        * (
+            _dtype_itemsize(numerator_complex_dtype)
+            + _dtype_itemsize(denominator_real_dtype)
+        )
+    )
+    return max(1, int(max_output_bytes) // max(1, bytes_per_image))
+
+
+def _split_sparse_pass2_buckets_by_mstep_output_budget(
+    buckets,
+    *,
+    n_recon_pixels: int,
+    max_output_bytes: int,
+    numerator_complex_dtype=np.complex64,
+    denominator_real_dtype=np.float32,
+):
+    """Split dense pass-2 buckets before their full-pixel M-step outputs exist."""
+
+    split_buckets = []
+    for bucket in buckets:
+        image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+        max_images = _max_images_for_mstep_output_budget(
+            int(bucket["bucket_size"]),
+            int(n_recon_pixels),
+            max_output_bytes=int(max_output_bytes),
+            numerator_complex_dtype=numerator_complex_dtype,
+            denominator_real_dtype=denominator_real_dtype,
+        )
+        for start in range(0, int(image_indices.size), int(max_images)):
+            split_bucket = dict(bucket)
+            split_bucket["image_indices"] = image_indices[start : start + max_images]
+            split_buckets.append(split_bucket)
+    return split_buckets
+
+
 def _compact_pair_execution_enabled_for_pass() -> bool:
     """Return whether fused K-class pass-2 should use compact-pair execution."""
 
@@ -13086,6 +13140,15 @@ def compute_pass2_stats_sparse_bucketed(
             processing_order_batch_consecutive_bucket_sizes
         ),
     )
+    max_mstep_output_bytes = None if score_only else max_adjoint_block_bytes
+    if max_mstep_output_bytes is not None:
+        buckets = _split_sparse_pass2_buckets_by_mstep_output_budget(
+            buckets,
+            n_recon_pixels=budget_window_spec.n_recon,
+            max_output_bytes=max_mstep_output_bytes,
+            numerator_complex_dtype=precision_policy.score_complex_dtype,
+            denominator_real_dtype=precision_policy.score_real_dtype,
+        )
     buckets = _prioritize_stopped_pass2_dump_buckets(
         buckets,
         experiment_dataset=experiment_dataset,
@@ -13101,6 +13164,7 @@ def compute_pass2_stats_sparse_bucketed(
         "small_bucket_coalesce_size=%s, tail_bucket_coalesce=%s/%s/%s, "
         "max_projected_rotations_per_projection_call=%s, max_translation_tile_bytes=%d, "
         "max_projection_gather_bytes=%d, max_noise_block_bytes=%d, max_adjoint_block_bytes=%d, "
+        "mstep_output_image_caps=%s, "
         "n_score_pixels=%d, device_memory_gib=%.2f)",
         n_images,
         len(buckets),
@@ -13131,6 +13195,27 @@ def compute_pass2_stats_sparse_bucketed(
         max_projection_gather_bytes,
         max_noise_block_bytes,
         max_adjoint_block_bytes,
+        (
+            "score_only"
+            if max_mstep_output_bytes is None
+            else str(
+                [
+                    (
+                        int(bucket_size),
+                        _max_images_for_mstep_output_budget(
+                            int(bucket_size),
+                            int(budget_window_spec.n_recon),
+                            max_output_bytes=max_mstep_output_bytes,
+                            numerator_complex_dtype=precision_policy.score_complex_dtype,
+                            denominator_real_dtype=precision_policy.score_real_dtype,
+                        ),
+                    )
+                    for bucket_size in sorted(
+                        {int(bucket["bucket_size"]) for bucket in buckets}
+                    )
+                ]
+            )
+        ),
         int(budget_window_spec.n_score),
         (-1.0 if device_memory_bytes is None else device_memory_bytes / float(1024**3)),
     )
