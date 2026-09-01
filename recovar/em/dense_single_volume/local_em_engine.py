@@ -2984,6 +2984,50 @@ def _select_fixed_capacity_call0_score_only_view(
     return view
 
 
+def _fetch_and_validate_fixed_capacity_call0_operands(
+    experiment_dataset,
+    view: _FixedCapacityLocalCallView,
+    mature_bucket: LocalBucketSpec,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Match sealed call operands to an authoritative current-dataset fetch."""
+
+    if not isinstance(view, _FixedCapacityLocalCallView) or view.call_index != 0:
+        raise ValueError("fixed-capacity current-dataset validation requires the sealed call-0 view")
+    if not isinstance(mature_bucket, LocalBucketSpec):
+        raise ValueError("fixed-capacity current-dataset validation requires the mature call-0 bucket")
+    expected_indices = np.asarray(mature_bucket.image_indices)
+    _fixed_capacity_call_arrays_match(
+        "current-dataset fetch image order",
+        expected_indices,
+        view.bucket.image_indices,
+    )
+    mature_raw, mature_ctf, fetched_indices = fetch_indexed_batch(
+        experiment_dataset,
+        expected_indices,
+    )
+    fetched_indices = np.asarray(fetched_indices)
+    if (
+        fetched_indices.ndim != 1
+        or not np.issubdtype(fetched_indices.dtype, np.integer)
+        or fetched_indices.shape != expected_indices.shape
+        or not np.array_equal(fetched_indices, expected_indices)
+    ):
+        raise ValueError(
+            "fixed-capacity call 0 current-dataset fetch did not preserve the authoritative image order",
+        )
+    _fixed_capacity_call_arrays_match(
+        "current-dataset raw_images",
+        mature_raw,
+        view.raw_images,
+    )
+    _fixed_capacity_call_arrays_match(
+        "current-dataset ctf_params",
+        mature_ctf,
+        view.ctf_params,
+    )
+    return view.raw_images, view.ctf_params, expected_indices
+
+
 def _validate_fixed_capacity_padded_call0(
     view: _FixedCapacityLocalCallView,
     padded_bucket: LocalBucketSpec,
@@ -4933,11 +4977,13 @@ def run_local_em_exact(
                 unsupported_diagnostics=fixed_capacity_call0_unsupported_diagnostics,
                 enabled=True,
             )
+            batch_data, ctf_params, fetched_indices = _fetch_and_validate_fixed_capacity_call0_operands(
+                experiment_dataset,
+                fixed_capacity_call_view,
+                bucket,
+            )
             bucket = fixed_capacity_call_view.bucket
-            bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
-            batch_data = fixed_capacity_call_view.raw_images
-            ctf_params = fixed_capacity_call_view.ctf_params
-            fetched_indices = bucket_image_indices
+            bucket_image_indices = np.asarray(fetched_indices, dtype=np.int32)
         elif raw_batch_cache is None:
             bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
             if processed_half_cache is None:

@@ -39,7 +39,7 @@ class _IndexedDataset:
         yield self.images[indices], None, None, self.ctf_params[indices], None, None, indices
 
 
-def _bucket(image_indices, row_counts, *, radix, image_capacity):
+def _bucket(image_indices, row_counts, *, radix, image_capacity, include_optional=True):
     image_indices = np.asarray(image_indices, dtype=np.int32)
     row_counts = np.asarray(row_counts, dtype=np.int32)
     n_images = int(image_indices.size)
@@ -48,16 +48,18 @@ def _bucket(image_indices, row_counts, *, radix, image_capacity):
     rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (n_images, radix, 3, 3)).copy()
     mstep_rotations = rotations.copy()
     rotation_log_prior = np.full((n_images, radix), -1e30, dtype=np.float32)
-    posterior_ids = np.full((n_images, radix), -1, dtype=np.int32)
-    sample_mask = np.zeros((n_images, radix, 2), dtype=bool)
+    posterior_ids = np.full((n_images, radix), -1, dtype=np.int32) if include_optional else None
+    sample_mask = np.zeros((n_images, radix, 2), dtype=bool) if include_optional else None
     translation_log_prior = np.empty((n_images, 2), dtype=np.float32)
     for row, (image_id, count) in enumerate(zip(image_indices.tolist(), row_counts.tolist(), strict=True)):
         rotation_ids[row, :count] = image_id * 10 + np.arange(count, dtype=np.int32)
         rotations[row, :count] = np.arange(count * 9, dtype=np.float32).reshape(count, 3, 3) + image_id
         mstep_rotations[row, :count] = rotations[row, :count] + 50
         rotation_log_prior[row, :count] = -np.arange(count, dtype=np.float32)
-        posterior_ids[row, :count] = image_id * 10 + np.arange(count, dtype=np.int32)
-        sample_mask[row, :count] = True
+        if posterior_ids is not None:
+            posterior_ids[row, :count] = image_id * 10 + np.arange(count, dtype=np.int32)
+        if sample_mask is not None:
+            sample_mask[row, :count] = True
         translation_log_prior[row] = np.asarray([-image_id, -image_id - 0.5], dtype=np.float32)
     return LocalBucketSpec(
         image_indices=image_indices,
@@ -75,10 +77,24 @@ def _bucket(image_indices, row_counts, *, radix, image_capacity):
     )
 
 
-def _components(*, logical_cutoff=8, payload_offset=0.0, call0_image_capacity=2, include_pre_shifts=True):
+def _components(
+    *,
+    logical_cutoff=8,
+    payload_offset=0.0,
+    call0_image_capacity=2,
+    call0_row_counts=(2, 3),
+    include_pre_shifts=True,
+    include_optional=True,
+):
     buckets = (
-        _bucket([2, 0], [2, 3], radix=4, image_capacity=call0_image_capacity),
-        _bucket([1], [1], radix=2, image_capacity=1),
+        _bucket(
+            [2, 0],
+            call0_row_counts,
+            radix=4,
+            image_capacity=call0_image_capacity,
+            include_optional=include_optional,
+        ),
+        _bucket([1], [1], radix=2, image_capacity=1, include_optional=include_optional),
     )
     if payload_offset:
         changed = []
@@ -265,13 +281,27 @@ def test_fixed_capacity_active_row_materialization_rejects_poison_boundary_corru
         _materialize_fixed_capacity_active_local_rows(bundle, enabled=True)
 
 
-def _call0_fixture(*, include_pre_shifts=True):
+def _call0_fixture(
+    *,
+    include_pre_shifts=True,
+    call0_image_capacity=4,
+    call0_row_counts=(2, 3),
+    include_optional=True,
+):
     plan, operands, hypotheses = _components(
-        call0_image_capacity=4,
+        call0_image_capacity=call0_image_capacity,
+        call0_row_counts=call0_row_counts,
         include_pre_shifts=include_pre_shifts,
+        include_optional=include_optional,
     )
     bundle = _bind_fixed_capacity_local_execution(plan, operands, hypotheses, enabled=True)
-    mature_bucket = _bucket([2, 0], [2, 3], radix=4, image_capacity=4)
+    mature_bucket = _bucket(
+        [2, 0],
+        call0_row_counts,
+        radix=4,
+        image_capacity=call0_image_capacity,
+        include_optional=include_optional,
+    )
     image_pre_shifts = np.asarray(
         [[0.25, -0.5], [1.25, -1.5], [2.25, -2.5]],
         dtype=np.float32,
@@ -394,6 +424,14 @@ def test_fixed_and_mature_call0_use_identical_common_padding_inputs():
     dataset = _IndexedDataset()
     mature_raw = dataset.images[mature_bucket.image_indices]
     mature_ctf = dataset.ctf_params[mature_bucket.image_indices]
+    fixed_raw, fixed_ctf, fetched_indices = (
+        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+            dataset,
+            view,
+            mature_bucket,
+        )
+    )
+    np.testing.assert_array_equal(fetched_indices, mature_bucket.image_indices)
 
     mature_padded = local_em_engine._pad_local_big_jit_image_axis(
         mature_bucket,
@@ -402,8 +440,8 @@ def test_fixed_and_mature_call0_use_identical_common_padding_inputs():
     )
     fixed_padded = local_em_engine._pad_local_big_jit_image_axis(
         view.bucket,
-        view.raw_images,
-        view.ctf_params,
+        fixed_raw,
+        fixed_ctf,
     )
 
     _assert_bucket_arrays_equal(fixed_padded[0], mature_padded[0])
@@ -416,6 +454,154 @@ def test_fixed_and_mature_call0_use_identical_common_padding_inputs():
     assert np.all(padded_bucket.translation_log_prior[2:] == 0)
     assert np.all(padded_raw[2:] == 0)
     np.testing.assert_array_equal(padded_ctf[2:], np.broadcast_to(padded_ctf[0], padded_ctf[2:].shape))
+
+
+def test_fixed_capacity_call0_common_padding_accepts_full_physical_image_capacity():
+    _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture(call0_image_capacity=2)
+    view = _select_call0(bundle, mature_bucket, image_pre_shifts)
+    dataset = _IndexedDataset()
+    raw, ctf, fetched_indices = local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+        dataset,
+        view,
+        mature_bucket,
+    )
+
+    padded = local_em_engine._pad_local_big_jit_image_axis(view.bucket, raw, ctf)
+
+    assert view.valid_image_count == view.physical_image_capacity == 2
+    assert padded[0] is view.bucket
+    assert padded[1] is raw
+    assert padded[2] is ctf
+    np.testing.assert_array_equal(fetched_indices, view.bucket.image_indices)
+    np.testing.assert_array_equal(padded[3], [True, True])
+    local_em_engine._validate_fixed_capacity_padded_call0(view, *padded)
+
+
+def test_fixed_capacity_call0_common_padding_accepts_active_row_equal_to_radix():
+    _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture(call0_row_counts=(4, 3))
+    view = _select_call0(bundle, mature_bucket, image_pre_shifts)
+    dataset = _IndexedDataset()
+    raw, ctf, _ = local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+        dataset,
+        view,
+        mature_bucket,
+    )
+
+    padded = local_em_engine._pad_local_big_jit_image_axis(view.bucket, raw, ctf)
+
+    assert view.bucket.actual_rotation_counts[0] == view.physical_rotation_capacity == 4
+    assert np.all(view.bucket.local_rotation_mask[0])
+    local_em_engine._validate_fixed_capacity_padded_call0(view, *padded)
+
+
+def test_fixed_capacity_call0_common_padding_accepts_absent_optional_arrays():
+    _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture(include_optional=False)
+    view = _select_call0(bundle, mature_bucket, image_pre_shifts)
+    dataset = _IndexedDataset()
+    raw, ctf, _ = local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+        dataset,
+        view,
+        mature_bucket,
+    )
+
+    padded = local_em_engine._pad_local_big_jit_image_axis(view.bucket, raw, ctf)
+
+    assert view.bucket.local_rotation_posterior_ids is None
+    assert view.bucket.local_sample_mask is None
+    assert padded[0].local_rotation_posterior_ids is None
+    assert padded[0].local_sample_mask is None
+    local_em_engine._validate_fixed_capacity_padded_call0(view, *padded)
+
+
+@pytest.mark.parametrize("mutated_field", ("raw_images", "ctf_params"))
+def test_fixed_capacity_call0_rejects_current_dataset_operand_mutation_before_jit(
+    monkeypatch,
+    mutated_field,
+):
+    _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture()
+    view = _select_call0(bundle, mature_bucket, image_pre_shifts)
+    dataset = _IndexedDataset()
+    if mutated_field == "raw_images":
+        dataset.images[2, 0, 0] += np.float32(1.0)
+    else:
+        dataset.ctf_params[2, 0] += np.float32(1.0)
+    jit_calls = []
+    monkeypatch.setattr(
+        local_em_engine,
+        "_invoke_local_bucket_big_jit",
+        lambda *args, **kwargs: jit_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(ValueError, match=f"current-dataset {mutated_field} does not match"):
+        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+            dataset,
+            view,
+            mature_bucket,
+        )
+
+    assert jit_calls == []
+
+
+def test_fixed_capacity_call0_rejects_different_current_dataset_with_same_plan_generation_before_jit(
+    monkeypatch,
+):
+    plan, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture()
+    view = _select_call0(bundle, mature_bucket, image_pre_shifts)
+    different_dataset = _IndexedDataset()
+    different_dataset.images += np.float32(100.0)
+    jit_calls = []
+    monkeypatch.setattr(
+        local_em_engine,
+        "_invoke_local_bucket_big_jit",
+        lambda *args, **kwargs: jit_calls.append((args, kwargs)),
+    )
+
+    assert view.descriptor_fingerprint == plan.descriptor_fingerprint
+    assert view.generation_token is plan.generation_token
+    with pytest.raises(ValueError, match="current-dataset raw_images does not match"):
+        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+            different_dataset,
+            view,
+            mature_bucket,
+        )
+
+    assert jit_calls == []
+
+
+def test_fixed_capacity_call0_rejects_current_dataset_fetch_order_before_jit(monkeypatch):
+    _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture()
+    view = _select_call0(bundle, mature_bucket, image_pre_shifts)
+    dataset = _IndexedDataset()
+
+    def reversed_batches(batch_size, *, indices, by_image):
+        assert by_image is False
+        reversed_indices = np.asarray(indices, dtype=np.int64)[::-1]
+        yield (
+            dataset.images[reversed_indices],
+            None,
+            None,
+            dataset.ctf_params[reversed_indices],
+            None,
+            None,
+            reversed_indices,
+        )
+
+    monkeypatch.setattr(dataset, "iter_batches", reversed_batches)
+    jit_calls = []
+    monkeypatch.setattr(
+        local_em_engine,
+        "_invoke_local_bucket_big_jit",
+        lambda *args, **kwargs: jit_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(ValueError, match="did not preserve the authoritative image order"):
+        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+            dataset,
+            view,
+            mature_bucket,
+        )
+
+    assert jit_calls == []
 
 
 @pytest.mark.parametrize(
@@ -572,3 +758,6 @@ def test_fixed_capacity_call0_selector_is_private_default_off_and_uses_shared_ma
     assert source.count("_invoke_local_bucket_big_jit(") == 1
     assert "big_jit_result = run_local_bucket_big_jit(" not in source
     assert "fixed_capacity_call0_enabled and not use_big_jit_buckets" in source
+    assert source.index("_fetch_and_validate_fixed_capacity_call0_operands(") < source.index(
+        "_invoke_local_bucket_big_jit(",
+    )
