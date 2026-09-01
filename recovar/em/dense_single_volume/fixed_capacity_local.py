@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from numbers import Integral
 from types import MappingProxyType
 
 import numpy as np
@@ -14,7 +15,10 @@ from recovar.em.dense_single_volume.batch_planning import (
     _FixedCapacityWholeLocalPlan,
 )
 from recovar.em.dense_single_volume.local_caches import _FixedCapacityLocalOperands
-from recovar.em.dense_single_volume.local_layout import _FixedCapacityLocalHypothesisProgram
+from recovar.em.dense_single_volume.local_layout import (
+    LocalBucketSpec,
+    _FixedCapacityLocalHypothesisProgram,
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,26 @@ class _FixedCapacityActiveLocalRows:
     translation_log_prior: np.ndarray
     local_rotation_posterior_ids: np.ndarray | None
     local_sample_mask: np.ndarray | None
+
+
+@dataclass(frozen=True)
+class _FixedCapacityLocalCallView:
+    """Read-only canonical view of one sealed physical call."""
+
+    call_index: int
+    descriptor_fingerprint: str
+    generation_token: _FixedCapacityLocalGenerationToken
+    call_image_offset: int
+    call_row_offset: int
+    physical_image_capacity: int
+    physical_rotation_capacity: int
+    valid_image_count: int
+    valid_row_count: int
+    row_offsets: np.ndarray
+    bucket: LocalBucketSpec
+    raw_images: np.ndarray
+    ctf_params: np.ndarray
+    metadata_by_name: Mapping[str, np.ndarray]
 
 
 _PLAN_ARRAY_FIELDS = (
@@ -338,4 +362,260 @@ def _materialize_fixed_capacity_active_local_rows(
         local_sample_mask=(
             None if bundle.hypotheses.local_sample_mask is None else bundle.hypotheses.local_sample_mask[:valid_rows]
         ),
+    )
+
+
+def _require_fixed_capacity_call_array(
+    field_name: str,
+    value,
+    *,
+    dtype,
+    shape: tuple[int, ...] | None = None,
+    ndim: int | None = None,
+) -> np.ndarray:
+    array = np.asarray(value)
+    expected_dtype = np.dtype(dtype)
+    if array.dtype != expected_dtype:
+        raise ValueError(
+            f"fixed-capacity call {field_name} must have canonical dtype {expected_dtype}; "
+            f"got {array.dtype}",
+        )
+    if shape is not None and array.shape != shape:
+        raise ValueError(
+            f"fixed-capacity call {field_name} must have canonical shape {shape}; "
+            f"got {array.shape}",
+        )
+    if ndim is not None and array.ndim != ndim:
+        raise ValueError(
+            f"fixed-capacity call {field_name} must have rank {ndim}; got {array.ndim}",
+        )
+    return array
+
+
+def _materialize_fixed_capacity_local_call_view(
+    bundle: _FixedCapacityLocalExecutionBundle,
+    *,
+    call_index: int = 0,
+    enabled: bool = False,
+) -> _FixedCapacityLocalCallView | None:
+    """Rebuild call 0 without exposing poison-filled whole-arena tails."""
+
+    if not enabled:
+        return None
+    if isinstance(call_index, (bool, np.bool_)) or not isinstance(call_index, Integral):
+        raise ValueError("fixed-capacity local call index must be an integer")
+    call_index = int(call_index)
+    if call_index != 0:
+        raise ValueError("fixed-capacity score-only execution currently supports call 0 only")
+
+    active = _materialize_fixed_capacity_active_local_rows(bundle, enabled=True)
+    plan = bundle.plan
+    if call_index >= plan.valid_call_count or not bool(plan.call_valid_mask[call_index]):
+        raise ValueError("fixed-capacity call 0 is not active in the bound plan")
+
+    image_offset = int(plan.call_image_offsets[call_index])
+    row_offset = int(plan.call_row_offsets[call_index])
+    valid_images = int(plan.call_valid_images[call_index])
+    valid_rows = int(plan.call_valid_rows[call_index])
+    physical_images = int(plan.call_image_capacities[call_index])
+    physical_rotations = int(plan.call_radix_buckets[call_index])
+    image_stop = image_offset + valid_images
+    row_stop = row_offset + valid_rows
+    if min(valid_images, valid_rows, physical_images, physical_rotations) <= 0:
+        raise ValueError("fixed-capacity call 0 has a nonpositive physical or active extent")
+    if valid_images > physical_images:
+        raise ValueError("fixed-capacity call 0 active image count exceeds its physical capacity")
+    if image_stop > active.image_indices.size or row_stop > active.local_rotation_ids.size:
+        raise ValueError("fixed-capacity call 0 offsets exceed the materialized active prefixes")
+
+    global_row_offsets = np.asarray(active.row_offsets[image_offset : image_stop + 1])
+    if global_row_offsets.shape != (valid_images + 1,):
+        raise ValueError("fixed-capacity call 0 row-offset slice has the wrong active shape")
+    if int(global_row_offsets[0]) != row_offset or int(global_row_offsets[-1]) != row_stop:
+        raise ValueError("fixed-capacity call 0 row offsets do not match its sealed row extent")
+    local_row_offsets = np.asarray(global_row_offsets - row_offset, dtype=np.int64)
+    row_counts_int64 = np.diff(local_row_offsets)
+    if (
+        int(np.sum(row_counts_int64, dtype=np.int64)) != valid_rows
+        or np.any(row_counts_int64 <= 0)
+        or np.any(row_counts_int64 > physical_rotations)
+    ):
+        raise ValueError("fixed-capacity call 0 active row counts do not fit its physical radix")
+
+    image_indices_active = np.asarray(active.image_indices[image_offset:image_stop])
+    expected_image_slice = np.asarray(plan.image_indices[image_offset:image_stop])
+    if not np.array_equal(image_indices_active, expected_image_slice):
+        raise ValueError("fixed-capacity call 0 image slice does not match its sealed image extent")
+    if np.any(image_indices_active < 0) or np.any(image_indices_active > np.iinfo(np.int32).max):
+        raise ValueError("fixed-capacity call 0 image IDs do not fit the canonical int32 bucket dtype")
+
+    raw_images_active = _require_fixed_capacity_call_array(
+        "raw_images",
+        active.raw_images,
+        dtype=np.float32,
+        ndim=3,
+    )
+    ctf_params_active = _require_fixed_capacity_call_array(
+        "ctf_params",
+        active.ctf_params,
+        dtype=np.float32,
+        ndim=2,
+    )
+    if raw_images_active.shape[0] != plan.valid_image_count:
+        raise ValueError("fixed-capacity call raw images do not match the sealed active image prefix")
+    if ctf_params_active.shape[0] != plan.valid_image_count:
+        raise ValueError("fixed-capacity call CTF parameters do not match the sealed active image prefix")
+    _require_fixed_capacity_call_array(
+        "local_rotation_ids",
+        active.local_rotation_ids,
+        dtype=np.int32,
+        shape=(plan.valid_row_count,),
+    )
+    _require_fixed_capacity_call_array(
+        "local_rotations",
+        active.local_rotations,
+        dtype=np.float32,
+        shape=(plan.valid_row_count, 3, 3),
+    )
+    _require_fixed_capacity_call_array(
+        "local_mstep_rotations",
+        active.local_mstep_rotations,
+        dtype=np.float32,
+        shape=(plan.valid_row_count, 3, 3),
+    )
+    _require_fixed_capacity_call_array(
+        "local_rotation_log_prior",
+        active.local_rotation_log_prior,
+        dtype=np.float32,
+        shape=(plan.valid_row_count,),
+    )
+    translation_log_prior_active = _require_fixed_capacity_call_array(
+        "translation_log_prior",
+        active.translation_log_prior,
+        dtype=np.float32,
+        ndim=2,
+    )
+    if translation_log_prior_active.shape[0] != plan.valid_image_count:
+        raise ValueError("fixed-capacity call translation priors do not match the sealed active image prefix")
+    n_translations = int(translation_log_prior_active.shape[1])
+    if n_translations <= 0:
+        raise ValueError("fixed-capacity call translation prior must have a nonempty translation axis")
+    if active.local_rotation_posterior_ids is not None:
+        _require_fixed_capacity_call_array(
+            "local_rotation_posterior_ids",
+            active.local_rotation_posterior_ids,
+            dtype=np.int32,
+            shape=(plan.valid_row_count,),
+        )
+    if active.local_sample_mask is not None:
+        _require_fixed_capacity_call_array(
+            "local_sample_mask",
+            active.local_sample_mask,
+            dtype=np.bool_,
+            shape=(plan.valid_row_count, n_translations),
+        )
+
+    image_indices = image_indices_active.astype(np.int32, copy=True)
+    row_counts = row_counts_int64.astype(np.int32, copy=True)
+    rotation_ids = np.full((valid_images, physical_rotations), -1, dtype=np.int32)
+    rotations = np.broadcast_to(
+        np.eye(3, dtype=np.float32),
+        (valid_images, physical_rotations, 3, 3),
+    ).copy()
+    mstep_rotations = rotations.copy()
+    rotation_log_prior = np.full((valid_images, physical_rotations), -1e30, dtype=np.float32)
+    rotation_mask = np.zeros((valid_images, physical_rotations), dtype=np.bool_)
+    posterior_ids = (
+        None
+        if active.local_rotation_posterior_ids is None
+        else np.full((valid_images, physical_rotations), -1, dtype=np.int32)
+    )
+    sample_mask = (
+        None
+        if active.local_sample_mask is None
+        else np.zeros((valid_images, physical_rotations, n_translations), dtype=np.bool_)
+    )
+
+    for image_row, count in enumerate(row_counts.tolist()):
+        source_start = row_offset + int(local_row_offsets[image_row])
+        source_stop = row_offset + int(local_row_offsets[image_row + 1])
+        source = slice(source_start, source_stop)
+        rotation_ids[image_row, :count] = active.local_rotation_ids[source]
+        rotations[image_row, :count] = active.local_rotations[source]
+        mstep_rotations[image_row, :count] = active.local_mstep_rotations[source]
+        rotation_log_prior[image_row, :count] = active.local_rotation_log_prior[source]
+        rotation_mask[image_row, :count] = True
+        if posterior_ids is not None:
+            posterior_ids[image_row, :count] = active.local_rotation_posterior_ids[source]
+        if sample_mask is not None:
+            sample_mask[image_row, :count] = active.local_sample_mask[source]
+
+    translation_log_prior = np.array(
+        translation_log_prior_active[image_offset:image_stop],
+        copy=True,
+        order="C",
+    )
+    local_row_offsets = np.array(local_row_offsets, copy=True, order="C")
+    bucket_arrays = (
+        image_indices,
+        row_counts,
+        rotation_ids,
+        rotations,
+        mstep_rotations,
+        rotation_log_prior,
+        rotation_mask,
+        translation_log_prior,
+        posterior_ids,
+        sample_mask,
+        local_row_offsets,
+    )
+    for value in bucket_arrays:
+        if value is not None:
+            value.setflags(write=False)
+
+    bucket = LocalBucketSpec(
+        image_indices=image_indices,
+        bucket_image_count=physical_images,
+        bucket_rotation_count=physical_rotations,
+        actual_rotation_counts=row_counts,
+        local_rotation_ids=rotation_ids,
+        local_rotations=rotations,
+        local_mstep_rotations=mstep_rotations,
+        local_rotation_log_prior=rotation_log_prior,
+        local_rotation_mask=rotation_mask,
+        translation_log_prior=translation_log_prior,
+        local_rotation_posterior_ids=posterior_ids,
+        local_sample_mask=sample_mask,
+    )
+    call_metadata = {}
+    for name, value in active.metadata_by_name.items():
+        metadata_array = np.asarray(value)
+        if metadata_array.shape[0] != plan.valid_image_count or metadata_array.flags.writeable:
+            raise ValueError(f"fixed-capacity call metadata {name!r} is not a sealed active image prefix")
+        call_value = metadata_array[image_offset:image_stop]
+        if call_value.flags.writeable:
+            raise ValueError(f"fixed-capacity call metadata {name!r} is not read-only")
+        call_metadata[name] = call_value
+    metadata = MappingProxyType(call_metadata)
+    raw_images = raw_images_active[image_offset:image_stop]
+    ctf_params = ctf_params_active[image_offset:image_stop]
+    if raw_images.shape[0] != valid_images or ctf_params.shape[0] != valid_images:
+        raise ValueError("fixed-capacity call operand slices do not match the sealed call image extent")
+    if raw_images.flags.writeable or ctf_params.flags.writeable:
+        raise ValueError("fixed-capacity call operand slices must be read-only")
+    return _FixedCapacityLocalCallView(
+        call_index=call_index,
+        descriptor_fingerprint=bundle.descriptor_fingerprint,
+        generation_token=bundle.generation_token,
+        call_image_offset=image_offset,
+        call_row_offset=row_offset,
+        physical_image_capacity=physical_images,
+        physical_rotation_capacity=physical_rotations,
+        valid_image_count=valid_images,
+        valid_row_count=valid_rows,
+        row_offsets=local_row_offsets,
+        bucket=bucket,
+        raw_images=raw_images,
+        ctf_params=ctf_params,
+        metadata_by_name=metadata,
     )
