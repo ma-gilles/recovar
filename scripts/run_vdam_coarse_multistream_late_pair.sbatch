@@ -28,6 +28,7 @@ set -euo pipefail
 : "${TARGET_GPU_UUID:?pin the physical H100 UUID}"
 : "${RELION_BIND_BINARY_OVERRIDE:?set the qualified RELION binding binary}"
 : "${EXPECTED_RELION_BIND_SHA256:?pin the qualified RELION binding binary}"
+: "${EXPECTED_INTERPRETER_SHA256:?pin the pixi interpreter}"
 : "${PRECOMPUTED_RESOURCE_REPORT:?set the login-node atomic resource JSON}"
 : "${EXPECTED_RESOURCE_REPORT_SHA256:?pin the atomic resource JSON}"
 : "${PRECOMPUTED_RESOURCE_DEMANGLED:?set the demangled cuobjdump report}"
@@ -93,6 +94,8 @@ trap on_error ERR
 
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
+test "$(sha256sum "${PIXI_PY}" | awk '{print $1}')" = \
+  "${EXPECTED_INTERPRETER_SHA256}"
 test -x "${NSYS}"
 test -s "${CUSPARSE_LIBRARY}"
 test -s "${CHECKPOINT}"
@@ -195,6 +198,7 @@ printf '%s\n' "${repo_tree}" > "${PROVENANCE}/repo_tree.txt"
 git -C "${REPO_ROOT}" symbolic-ref --short HEAD > "${PROVENANCE}/repo_branch.txt"
 git -C "${REPO_ROOT}" status --porcelain=v1 > "${PROVENANCE}/repo_status.txt"
 git -C "${REPO_ROOT}" diff HEAD | sha256sum > "${PROVENANCE}/repo_diff.sha256"
+sha256sum "${PIXI_PY}" > "${PROVENANCE}/interpreter.sha256"
 printf '%s\n' "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job_id.txt"
 printf '%s\n' "${SLURMD_NODENAME:-$(hostname -s)}" > "${PROVENANCE}/node.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${PROVENANCE}/selected_gpu_uuid.txt"
@@ -364,17 +368,24 @@ done
   "${SLURM_JOB_ID}" "${EXPECTED_REPO_HEAD}" "${selected_gpu_uuid}" \
   "${SLURMD_NODENAME:-$(hostname -s)}" "${gpu_name}" "${EXPECTED_CUDA_SHA256}" \
   "${source_manifest_sha256}" "${input_manifest_sha256}" \
-  "${QUALIFIED_GPU_GATE_ROOT}" "${repo_tree}" <<'PY'
+  "${QUALIFIED_GPU_GATE_ROOT}" "${repo_tree}" \
+  "${EXPECTED_RELION_BIND_SHA256}" "${EXPECTED_INTERPRETER_SHA256}" \
+  "${EXPECTED_RESOURCE_REPORT_SHA256}" \
+  "${EXPECTED_RESOURCE_DEMANGLED_SHA256}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.vdam_coarse_atomic_multistream_crossed.v1",
+    "schema": "recovar.vdam_coarse_atomic_multistream_crossed.v2",
     "classification": "diagnostic_performance_only",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],
     "git_tree": sys.argv[11],
+    "relion_bind_sha256": sys.argv[12],
+    "interpreter_sha256": sys.argv[13],
+    "resource_report_sha256": sys.argv[14],
+    "resource_demangled_sha256": sys.argv[15],
     "gpu_uuid": sys.argv[4],
     "node": sys.argv[5],
     "gpu_name": sys.argv[6],
@@ -420,6 +431,8 @@ test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = \
   "${EXPECTED_RELION_BIND_SHA256}"
+test "$(sha256sum "${PIXI_PY}" | awk '{print $1}')" = \
+  "${EXPECTED_INTERPRETER_SHA256}"
 sha256sum -c "${PROVENANCE}/input_manifest.sha256" > /dev/null
 (
   cd "${REPO_ROOT}"

@@ -18,6 +18,7 @@ set -euo pipefail
 : "${VDAM_COARSE_MULTISTREAM_TEST_ROOT:?set a new disposable output root}"
 : "${EXPECTED_REPO_HEAD:?pin the tracked RECOVAR source head}"
 : "${EXPECTED_SOURCE_MANIFEST_SHA256:?pin the source/test manifest}"
+: "${EXPECTED_INTERPRETER_SHA256:?pin the pixi interpreter}"
 : "${EXPECTED_NODE_NAME:?pin the Slurm node}"
 : "${TARGET_GPU_UUID:?pin the physical H100 UUID}"
 : "${PREBUILT_CUDA_BINARY:?set the exact binary built by the sealed first stage}"
@@ -66,6 +67,8 @@ trap on_error ERR
 
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
+test "$(sha256sum "${PIXI_PY}" | awk '{print $1}')" = \
+  "${EXPECTED_INTERPRETER_SHA256}"
 test -x "${CUDA_BUILD_TOOLKIT}/bin/nvcc"
 test -d "${CUDA_RUNTIME_TOOLKIT}/lib64"
 test -s "${PREBUILT_CUDA_BINARY}"
@@ -98,6 +101,7 @@ printf '%s\n' "${repo_tree}" > "${PROVENANCE}/repo_tree.txt"
 git -C "${REPO_ROOT}" symbolic-ref --short HEAD > "${PROVENANCE}/repo_branch.txt"
 git -C "${REPO_ROOT}" status --porcelain=v1 > "${PROVENANCE}/repo_status.txt"
 git -C "${REPO_ROOT}" diff HEAD | sha256sum > "${PROVENANCE}/repo_diff.sha256"
+sha256sum "${PIXI_PY}" > "${PROVENANCE}/interpreter.sha256"
 printf '%s\n' "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job_id.txt"
 printf '%s\n' "${SLURMD_NODENAME:-$(hostname -s)}" > "${PROVENANCE}/node.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${PROVENANCE}/selected_gpu_uuid.txt"
@@ -222,6 +226,8 @@ assert int(suite.attrib.get("skipped", 0)) == 0
 PY
 
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${cuda_sha256}"
+test "$(sha256sum "${PIXI_PY}" | awk '{print $1}')" = \
+  "${EXPECTED_INTERPRETER_SHA256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO_ROOT}" rev-parse 'HEAD^{tree}')" = "${repo_tree}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
@@ -237,17 +243,18 @@ vdam_verify_selected_gpu "${selected_gpu_uuid}"
   "${SLURMD_NODENAME:-$(hostname -s)}" "${gpu_name}" "${cuda_sha256}" \
   "${source_manifest_sha256}" "${build_started}" "${build_finished}" \
   "${test_started}" "${test_finished}" "${TEST_NODES[*]}" \
-  "${repo_tree}" <<'PY'
+  "${repo_tree}" "${EXPECTED_INTERPRETER_SHA256}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.vdam_coarse_multistream_focused_gpu_gate.v1",
+    "schema": "recovar.vdam_coarse_multistream_focused_gpu_gate.v2",
     "classification": "performance_only_qualification",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],
     "git_tree": sys.argv[14],
+    "interpreter_sha256": sys.argv[15],
     "gpu_uuid": sys.argv[4],
     "node": sys.argv[5],
     "gpu_name": sys.argv[6],
