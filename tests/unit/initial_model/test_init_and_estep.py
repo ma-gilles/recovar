@@ -253,6 +253,32 @@ class TestInitialiseDataVsPrior:
         np.testing.assert_array_equal(state.tau2_class, 0.0)
         np.testing.assert_array_equal(state.data_vs_prior_class, 0.0)
 
+    def test_reference_spectrum_uses_relion_volume_frame(self):
+        from recovar.em.initial_model.init import _relion_power_spectrum_3d
+        from recovar.utils.helpers import recovar_volume_to_relion
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+        )
+        z, y, x = np.indices((8, 8, 8), dtype=np.float64)
+        state.Iref[0] = np.exp(-((x - 1.0) ** 2 / 2.0 + (y - 3.0) ** 2 / 5.0 + (z - 5.0) ** 2 / 11.0))
+        state.sigma2_noise.fill(1.0)
+
+        out = initialise_data_vs_prior_from_references(state, nr_particles=10)
+        expected = _relion_power_spectrum_3d(
+            recovar_volume_to_relion(state.Iref[0]), state.ori_size // 2 + 1
+        ) * (state.ori_size * state.ori_size / 2.0)
+        direct_wrong_frame = _relion_power_spectrum_3d(state.Iref[0], state.ori_size // 2 + 1) * (
+            state.ori_size * state.ori_size / 2.0
+        )
+
+        np.testing.assert_allclose(out.tau2_class[0], expected, rtol=1e-14, atol=0.0)
+        assert not np.allclose(out.tau2_class[0], direct_wrong_frame, rtol=1e-8, atol=0.0)
+
     def test_rejects_missing_noise(self):
         state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=1, nr_iter=10, n_directions=12)
         state.Iref[0, 8, 8, 8] = 1.0

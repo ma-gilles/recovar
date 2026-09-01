@@ -924,29 +924,32 @@ def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteratio
 
 
 def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
-    """Replay RELION's per-iter perturbation sequence (seed=1 first, then random_seed+step)."""
+    """Replay RELION's per-iter perturbation sequence with source float arithmetic."""
     if perturbation_factor <= 0.0:
         return 0.0
-    pf = float(perturbation_factor)
-    value = 0.0
-    for step in range(max(1, int(n_steps)) + 1):
-        seed = 1 if step == 0 else int(random_seed) + step
-        value += 0.5 * pf + (pf - 0.5 * pf) * _relion_rnd_unif_factory(seed)(0)
-        while value > pf:
-            value -= 2.0 * pf
-        while value < -pf:
-            value += 2.0 * pf
-    return float(value)
+    # RELION applies rnd_unif(low, high) scaling inside its float function.
+    # Scaling an already rounded unit draw changes the seed-0 iteration-1
+    # perturbation by four float32 ULP and can alter the fine-projector rim.
+    return sampling.relion_sampling_perturbation_for_iteration(
+        float(perturbation_factor),
+        int(random_seed),
+        max(1, int(n_steps)),
+    )
 
 
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
     """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
     n4 = int(ori_size) ** 4
-    return (
-        np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size)))
-        .astype(np.float32, copy=False)
-        .reshape(-1)
-    )
+    # Preserve RELION's RFLOAT values through the reciprocal used by exact
+    # coarse scoring. Downstream float32 kernels narrow their operands at the
+    # same explicit boundaries as RELION.
+    return np.asarray(
+        make_radial_noise(
+            np.asarray(sigma2_noise, dtype=np.float64)[0] * n4,
+            (ori_size, ori_size),
+        ),
+        dtype=np.float64,
+    ).reshape(-1)
 
 
 def _n_directions_for_healpix_order(healpix_order: int) -> int:

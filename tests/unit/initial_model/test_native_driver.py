@@ -35,6 +35,15 @@ def _load_run_ab_initio():
     return module
 
 
+def test_noise_variance_preserves_relion_rfloat_shell_values():
+    sigma2 = np.asarray([[1.00000006e-5, 2.00000012e-5, 3.00000018e-5]], dtype=np.float64)
+
+    noise = driver._noise_variance_from_sigma2(sigma2, 4)
+
+    assert noise.dtype == np.float64
+    assert np.any(noise != noise.astype(np.float32).astype(np.float64))
+
+
 def test_micrograph_sort_order_matches_relion_experiment_order():
     main = pd.DataFrame(
         {
@@ -353,6 +362,14 @@ def test_random_perturbation_sequence_matches_relion_initialmodel_fixture():
 
     assert driver._random_perturbation_for_iteration(opts, 1) == pytest.approx(-0.25278, abs=5e-6)
     assert driver._random_perturbation_for_iteration(opts, 2) == pytest.approx(0.125066, abs=5e-6)
+
+    seed_zero = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        random_seed=0,
+        perturbation_factor=0.5,
+    )
+    assert driver._random_perturbation_for_iteration(seed_zero, 1) == -0.07990610599517822
+    assert driver._random_perturbation_for_iteration(seed_zero, 2) == 0.34533798694610596
 
 
 def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
