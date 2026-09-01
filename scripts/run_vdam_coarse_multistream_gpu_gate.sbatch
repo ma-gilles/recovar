@@ -135,14 +135,14 @@ from pathlib import Path
 report = json.loads(Path(sys.argv[1]).read_text())
 resources = report["resources"]
 assert report["binary_sha256"] == sys.argv[3], report
-assert set(resources) == {"generic", "single_lane"}, resources
+assert set(resources) == {"canonical", "atomic"}, resources
 assert (
-    resources["generic"]["static_shared_bytes"]
-    - resources["single_lane"]["static_shared_bytes"]
+    resources["canonical"]["static_shared_bytes"]
+    - resources["atomic"]["static_shared_bytes"]
 ) == 16 * 128 * 4, resources
 assert (
-    resources["single_lane"]["registers_per_thread"]
-    <= resources["generic"]["registers_per_thread"]
+    resources["atomic"]["registers_per_thread"]
+    < resources["canonical"]["registers_per_thread"]
 ), resources
 demangled_sha256 = hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest()
 assert demangled_sha256 == sys.argv[4], demangled_sha256
