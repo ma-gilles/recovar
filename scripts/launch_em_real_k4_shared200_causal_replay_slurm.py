@@ -545,11 +545,19 @@ test "$(sha256sum "${{MANIFEST}}" | awk '{{print $1}}')" = "${{EXPECTED_MANIFEST
 if [[ -f /etc/profile.d/modules.sh ]]; then source /etc/profile.d/modules.sh; fi
 set +u
 module purge
-module load {_quote(args.relion_module)}
 module load {_quote(args.cuda_module)}
 set -u
-export CUDA_HOME="${{CUDA_HOME:-/usr/local/cuda-12.8}}"
+export CUDA_HOME=/usr/local/cuda-12.8
 export PATH="${{CUDA_HOME}}/bin:${{PATH}}"
+CUDA_TARGET_LIB_DIR="${{CUDA_HOME}}/targets/x86_64-linux/lib"
+PIXI_ENV_ROOT={_quote(args.pixi_python.parent.parent)}
+PIXI_NVIDIA_ROOT="$(find "${{PIXI_ENV_ROOT}}/lib" -maxdepth 4 -type d -path '*/site-packages/nvidia' -print -quit)"
+test -d "${{CUDA_TARGET_LIB_DIR}}"
+test -n "${{PIXI_NVIDIA_ROOT}}" && test -d "${{PIXI_NVIDIA_ROOT}}"
+PIXI_NVIDIA_LIB_DIRS="$(find "${{PIXI_NVIDIA_ROOT}}" -type d -name lib -print | sort | paste -sd: -)"
+test -n "${{PIXI_NVIDIA_LIB_DIRS}}"
+test -n "$(find "${{PIXI_NVIDIA_ROOT}}" -type f -name 'libcusparse.so*' -print -quit)"
+export LD_LIBRARY_PATH="${{PIXI_NVIDIA_LIB_DIRS}}:${{CUDA_TARGET_LIB_DIR}}:${{PIXI_ENV_ROOT}}/lib:${{LD_LIBRARY_PATH:-}}"
 
 nvidia-smi --query-gpu=uuid,name,pci.bus_id --format=csv,noheader > "${{ROOT}}/provenance/allocation_gpu_table_${{SLURM_JOB_ID}}.csv"
 test "$(wc -l < "${{ROOT}}/provenance/allocation_gpu_table_${{SLURM_JOB_ID}}.csv")" -eq 1
@@ -752,7 +760,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--constraint", default=os.environ.get("SBATCH_CONSTRAINT", "h100"))
     parser.add_argument("--mem", default="192G")
     parser.add_argument("--time-limit", default="02:00:00")
-    parser.add_argument("--relion-module", default="relion/5.0.0/gcc-11.5.0")
     parser.add_argument("--cuda-module", default="cudatoolkit/12.8")
     parser.add_argument("--submit", action="store_true")
     args = parser.parse_args(argv)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -152,12 +153,12 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
         constraint="h100",
         mem="192G",
         time_limit="02:00:00",
-        relion_module="relion/5.0.0/gcc-11.5.0",
         cuda_module="cudatoolkit/12.8",
     )
     script = launcher.render_sbatch(
         args, expected_head="a" * 40, manifest_path=args.output_root / "launch_manifest.json"
     )
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
 
     assert "#SBATCH --gres=gpu:1" in script
     assert "--exclusive" not in script
@@ -170,6 +171,12 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "\n+  " not in script
     assert 'test "${REQ_TRES}" = "${ALLOC_TRES}"' in script
     assert '[[ "${ALLOC_TRES}" == *"gres/gpu=1"* ]]' in script
+    assert "module load relion" not in script
+    assert "module load cudatoolkit/12.8" in script
+    assert "PIXI_NVIDIA_ROOT=" in script
+    assert "PIXI_NVIDIA_LIB_DIRS=" in script
+    assert "libcusparse.so*" in script
+    assert 'export LD_LIBRARY_PATH="${PIXI_NVIDIA_LIB_DIRS}:${CUDA_TARGET_LIB_DIR}:${PIXI_ENV_ROOT}/lib:' in script
 
 
 def test_manifest_record_rejects_checksum_drift(tmp_path):
