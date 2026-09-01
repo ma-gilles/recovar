@@ -177,7 +177,7 @@ scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
   printf '%q ' "${PIXI_PY}" -m pytest -vv --run-gpu \
     --junitxml="${PYTEST_JUNIT}" "${FOCUSED_GPU_TEST}"
   printf '\n'
-  printf '%q ' "${PIXI_PY}" scripts/benchmark_vdam_coarse_prehalf.py \
+  printf '%q ' "${PIXI_PY}" -m scripts.benchmark_vdam_coarse_prehalf \
     --repo "${REPO_ROOT}" --output-json "${BENCHMARK_JSON}"
   printf '\n'
 } > "${PROVENANCE}/commands.txt"
@@ -308,7 +308,7 @@ vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" scripts/benchmark_vdam_coarse_prehalf.py \
+  "${PIXI_PY}" -m scripts.benchmark_vdam_coarse_prehalf \
     --repo "${REPO_ROOT}" \
     --output-json "${BENCHMARK_JSON}"
 ) > "${RESULTS}/gf46_benchmark.stdout" 2> "${RESULTS}/gf46_benchmark.stderr"

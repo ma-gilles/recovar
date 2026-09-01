@@ -68,7 +68,7 @@ def test_runner_uses_only_focused_gpu_test_then_exact_default_benchmark() -> Non
     assert f"FOCUSED_GPU_TEST={test_node}" in source
     assert '"${PIXI_PY}" -m pytest -vv --run-gpu' in source
     assert "assert len(cases) == 1" in source
-    assert source.count('"${PIXI_PY}" scripts/benchmark_vdam_coarse_prehalf.py') == 2
+    assert source.count('"${PIXI_PY}" -m scripts.benchmark_vdam_coarse_prehalf') == 2
     for override in (
         "--current-size",
         "--model-max-r",
