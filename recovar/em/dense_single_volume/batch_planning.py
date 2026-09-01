@@ -124,6 +124,7 @@ def _estimate_relion_em_batch_sizes(
     current_size: int | None = None,
     use_float64_scoring: bool = True,
     compact_k1_relion_layout: bool = False,
+    compact_k1_relion_score_bpref_overlap: bool = False,
     model_current_size: int | None = None,
     runtime_free_memory_gb: float | None = None,
 ) -> _RelionEMBatchPlan:
@@ -135,9 +136,12 @@ def _estimate_relion_em_batch_sizes(
     :class:`DensePrecisionPolicy` flag explicitly.
 
     ``compact_k1_relion_layout`` is an explicit opt-in for the K=1 RELION
-    x-half lifetime.  Its static fallback models the larger of two disjoint
-    phases: one complex64 Projector texture during scoring, or one
-    complex64/float32 BPref pair during deferred replay.  When the caller
+    x-half lifetime.  The first-iteration default models the larger of two
+    disjoint phases: one complex64 Projector texture during scoring, or one
+    complex64/float32 BPref pair during deferred replay.  Later soft-posterior
+    iterations set ``compact_k1_relion_score_bpref_overlap`` and conservatively
+    add the texture and BPref pair because both remain live during scoring.
+    When the caller
     supplies a live ``runtime_free_memory_gb`` sample, the core allocations
     are already reflected in that free-memory value, so only the not-yet-live
     score texture is subtracted.  This mirrors RELION's order of allocating
@@ -188,6 +192,11 @@ def _estimate_relion_em_batch_sizes(
     padded_volume_voxels = float(np.prod([d * padding_factor for d in volume_shape]))
     native_volume_voxels = float(np.prod(volume_shape))
     pending_score_persistent_gb = 0.0
+    if compact_k1_relion_score_bpref_overlap and not compact_k1_relion_layout:
+        raise ValueError(
+            "compact_k1_relion_score_bpref_overlap requires "
+            "compact_k1_relion_layout=True"
+        )
     if compact_k1_relion_layout:
         if n_classes != 1:
             raise ValueError(
@@ -226,14 +235,26 @@ def _estimate_relion_em_batch_sizes(
         bpref_bytes = compact_voxels * (
             np.dtype(np.complex64).itemsize + np.dtype(np.float32).itemsize
         )
-        # The fresh K=1 path defers BPref until the Projector texture closes;
-        # these allocations are phase alternatives, not an additive overlap.
-        persistent_gb = _RELION_EM_COMPACT_K1_FIXED_BASE_GB + max(
-            texture_bytes,
-            bpref_bytes,
-        ) / 1e9
-        pending_score_persistent_gb = texture_bytes / 1e9
-        persistent_estimate_mode = "compact_k1_relion_phase_max"
+        if compact_k1_relion_score_bpref_overlap:
+            # Later soft-posterior K=1 keeps BPref live while the Projector
+            # texture scores particles.  Both allocations are pending at this
+            # planner boundary and must be subtracted from live free memory.
+            persistent_bytes = texture_bytes + bpref_bytes
+            persistent_gb = (
+                _RELION_EM_COMPACT_K1_FIXED_BASE_GB
+                + persistent_bytes / 1e9
+            )
+            pending_score_persistent_gb = persistent_bytes / 1e9
+            persistent_estimate_mode = "compact_k1_relion_score_bpref_overlap"
+        else:
+            # The fresh K=1 path defers BPref until the Projector texture
+            # closes; these allocations are phase alternatives.
+            persistent_gb = _RELION_EM_COMPACT_K1_FIXED_BASE_GB + max(
+                texture_bytes,
+                bpref_bytes,
+            ) / 1e9
+            pending_score_persistent_gb = texture_bytes / 1e9
+            persistent_estimate_mode = "compact_k1_relion_phase_max"
     else:
         persistent_bytes = (
             2.0 * padded_volume_voxels * np.dtype(np.complex64).itemsize * n_classes
@@ -245,9 +266,9 @@ def _estimate_relion_em_batch_sizes(
     runtime_free_gb = max(1.0, gpu_memory_gb - gpu_used_gb)
     if compact_k1_relion_layout:
         # The live free-memory sample already excludes all fixed objects that
-        # have reached the device.  Reserve only the score texture that is
-        # uploaded after this planning point.  Applying ``persistent_gb`` here
-        # as well would double-count those live objects and recreate the box-
+        # have reached the device.  Reserve only the compact objects still
+        # pending at this planning point.  Applying ``persistent_gb`` here as
+        # well would double-count already-live objects and recreate the box-
         # 800 batch collapse this mode is intended to remove.
         usable_from_runtime_gb = max(
             1.0,

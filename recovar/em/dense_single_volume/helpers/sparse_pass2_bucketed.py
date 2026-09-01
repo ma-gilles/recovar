@@ -5659,6 +5659,39 @@ def _relion_firstiter_compact_batch_planning_safe(
     )
 
 
+def _relion_soft_compact_batch_planning_safe(
+    *,
+    source_faithful_spectrum_norm: bool,
+    preserve_bpref_particle_order: bool,
+    use_relion_x_half_mstep: bool,
+    relion_cuda_images: bool,
+    projector_half,
+    score_complex_dtype,
+    model_current_size: int,
+    image_size: int,
+    bpref_device_signature_active: bool,
+) -> bool:
+    """Admit compact planning for the exact windowed K=1 soft-posterior path."""
+
+    if projector_half is None:
+        return False
+    diagnostics_active = _relion_firstiter_bpref_diagnostics_active(
+        bpref_device_signature_active=bpref_device_signature_active,
+    )
+    projector_host_owned = not isinstance(projector_half, jax.Array)
+    return bool(
+        source_faithful_spectrum_norm
+        and preserve_bpref_particle_order
+        and use_relion_x_half_mstep
+        and relion_cuda_images
+        and projector_host_owned
+        and np.dtype(projector_half.dtype) == np.dtype(np.complex64)
+        and np.dtype(score_complex_dtype) == np.dtype(np.complex64)
+        and 0 < int(model_current_size) < int(image_size)
+        and not diagnostics_active
+    )
+
+
 class _RelionFirstiterCompactBatchPlanningDecision(NamedTuple):
     enabled: bool
     deferred_firstiter_bpref: bool

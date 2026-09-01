@@ -5267,6 +5267,7 @@ def _run_relion_iteration_loop(
         image_shape_for_batch=None,
         current_size_for_batch=None,
         compact_k1_relion_layout=False,
+        compact_k1_relion_score_bpref_overlap=False,
         model_current_size_for_batch=None,
     ):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
@@ -5319,6 +5320,9 @@ def _run_relion_iteration_loop(
             # than sizing an eventual complex128 pass from complex64 bytes.
             use_float64_scoring=use_float64_scoring_for_batch,
             compact_k1_relion_layout=bool(compact_k1_relion_layout),
+            compact_k1_relion_score_bpref_overlap=bool(
+                compact_k1_relion_score_bpref_overlap
+            ),
             model_current_size=model_current_size_for_batch,
             runtime_free_memory_gb=runtime_free_memory_gb,
         )
@@ -6927,6 +6931,47 @@ def _run_relion_iteration_loop(
                         explicit_model_current_size,
                         compact_decision.deferred_firstiter_bpref,
                         compact_decision.direct_peak_bytes / 1e9,
+                    )
+            elif use_adaptive and not k_class_enabled:
+                explicit_model_current_size = (
+                    int(volume_shape[0])
+                    if model_current_size_for_engine is None
+                    else int(model_current_size_for_engine)
+                )
+                soft_compact_enabled = (
+                    _sparse_pass2_diagnostics._relion_soft_compact_batch_planning_safe(
+                        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                        preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
+                        use_relion_x_half_mstep=_k1_relion_x_half_mstep_enabled(),
+                        relion_cuda_images=(
+                            parity.image_fourier_backend == "relion_cuda"
+                        ),
+                        projector_half=relion_projector_half_by_half[k],
+                        score_complex_dtype=(
+                            np.complex128
+                            if _DENSE_EM_STATIC_KWARGS["use_float64_scoring"]
+                            or os.environ.get(
+                                "RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS",
+                                "",
+                            ).strip()
+                            else np.complex64
+                        ),
+                        model_current_size=explicit_model_current_size,
+                        image_size=int(experiment_datasets[k].image_shape[0]),
+                        bpref_device_signature_active=bpref_device_signature_active,
+                    )
+                )
+                if soft_compact_enabled:
+                    safe_batch_sizes_for_half = partial(
+                        _safe_batch_sizes,
+                        compact_k1_relion_layout=True,
+                        compact_k1_relion_score_bpref_overlap=True,
+                        model_current_size_for_batch=explicit_model_current_size,
+                    )
+                    logger.info(
+                        "RELION K=1 soft-posterior compact batch planning enabled: "
+                        "model_current_size=%d projector_and_bpref_overlap=true",
+                        explicit_model_current_size,
                     )
             if use_adaptive:
                 adaptive_batch_plan = _plan_adaptive_dense_batch_sizes(

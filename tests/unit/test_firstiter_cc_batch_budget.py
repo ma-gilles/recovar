@@ -539,6 +539,38 @@ def test_box800_compact_k1_persistent_estimate_uses_model_current_size_phase_max
     assert current_size_62.score_pixel_count == full_box_model.score_pixel_count == 1532
 
 
+def test_box800_soft_k1_compact_plan_adds_overlapping_projector_and_bpref():
+    plan = _box800_plan(
+        n_rot=576,
+        n_trans=21,
+        current_size=294,
+        gpu_memory_gb=80,
+        runtime_free_memory_gb=80,
+        use_float64_scoring=False,
+        compact_k1_relion_layout=True,
+        compact_k1_relion_score_bpref_overlap=True,
+        model_current_size=294,
+    )
+    compact_voxels = 591 * 591 * 296
+    overlapping_bytes = compact_voxels * (8 + 8 + 4)
+
+    assert (
+        plan.persistent_estimate_mode
+        == "compact_k1_relion_score_bpref_overlap"
+    )
+    assert plan.persistent_estimate_gb == pytest.approx(
+        4.0 + overlapping_bytes / 1e9
+    )
+    assert plan.pending_score_persistent_gb == pytest.approx(
+        overlapping_bytes / 1e9
+    )
+    assert plan.usable_estimate_gb == pytest.approx(
+        (80.0 - overlapping_bytes / 1e9) * 0.8
+    )
+    assert plan.image_batch_size == 64
+    assert plan.rotation_block_size == 576
+
+
 @pytest.mark.parametrize(
     ("score_size", "model_size", "n_rot", "n_trans", "live_free_gb", "image_batch", "rotation_block"),
     [
@@ -588,6 +620,16 @@ def test_compact_k1_plan_rejects_genuine_float64_and_kclass_routes():
         _box800_plan(
             **compact,
             n_classes=2,
+            use_float64_scoring=False,
+        )
+    with pytest.raises(
+        ValueError,
+        match="compact_k1_relion_score_bpref_overlap requires",
+    ):
+        _box800_plan(
+            compact_k1_relion_layout=False,
+            compact_k1_relion_score_bpref_overlap=True,
+            model_current_size=62,
             use_float64_scoring=False,
         )
 
@@ -684,3 +726,52 @@ def test_compact_k1_route_gate_honors_explicit_route_env(monkeypatch):
         assert disabled_fused.enabled is False
     finally:
         sparse.clear_bpref_contribution_dump_context()
+
+
+def test_soft_compact_k1_route_gate_is_windowed_exact_and_diagnostic_free(
+    monkeypatch,
+):
+    sparse = iteration_loop._sparse_pass2_diagnostics
+    host_projector = SimpleNamespace(
+        shape=(591, 591, 296),
+        dtype=np.dtype(np.complex64),
+    )
+    for name in (
+        "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR",
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR",
+        "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR",
+        "RECOVAR_BPREF_ACCUMULATOR_DELTA_DUMP_DIR",
+        "RECOVAR_PASS2_DUMP_DIR",
+        "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH",
+        "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS",
+        "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    common = dict(
+        source_faithful_spectrum_norm=True,
+        preserve_bpref_particle_order=True,
+        use_relion_x_half_mstep=True,
+        relion_cuda_images=True,
+        projector_half=host_projector,
+        score_complex_dtype=np.complex64,
+        model_current_size=294,
+        image_size=800,
+        bpref_device_signature_active=False,
+    )
+    assert sparse._relion_soft_compact_batch_planning_safe(**common)
+
+    for override in (
+        {"source_faithful_spectrum_norm": False},
+        {"preserve_bpref_particle_order": False},
+        {"use_relion_x_half_mstep": False},
+        {"relion_cuda_images": False},
+        {"score_complex_dtype": np.complex128},
+        {"model_current_size": 800},
+    ):
+        assert not sparse._relion_soft_compact_batch_planning_safe(
+            **(common | override)
+        )
+
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", "/tmp/diagnostic")
+    assert not sparse._relion_soft_compact_batch_planning_safe(**common)
