@@ -1,87 +1,158 @@
 # EM evidence inventory, 2026-09-01
 
-## What already exists
+This is the compact coverage index for the EM evidence checked into the pull
+request. It distinguishes accepted registry records, supporting calibration
+evidence, rejected diagnostics, and runnable but unfinished gates. It indexes
+only completed artifacts already present at RECOVAR commit `c1529f96d`; live
+or later runs must be sealed separately before this inventory can promote
+them.
 
-The repository has substantial K-class implementation coverage:
+The machine registry currently contains six single-run entries, six campaign
+records, and one synthetic negative diagnostic. The exact filenames are pinned
+by `tests/unit/test_validate_em_benchmark_registry.py`, while
+`scripts/validate_em_benchmark_registry.py` validates every accepted or
+synthetic-negative JSON and fails closed on an unknown diagnostic family.
+Three real-data diagnostic families are deliberately routed outside the
+accepted registry and are never counted as accepted results. The InitialModel
+and offset-prior ledgers have dedicated whole-ledger validators; the
+selected-fine record's missing equivalent validator is listed as an open
+evidence gap below.
 
-- focused unit guards in `tests/unit/test_refine_relion_mode.py`,
-  `tests/unit/test_em_kclass_merge_guards.py`,
-  `tests/unit/test_k_class_joint_semantics.py`,
-  `tests/unit/test_run_k_class_parity.py`, and the K4 audit/analyzer tests;
-- permutation/GT evaluator tests in
-  `tests/unit/initial_model/test_evaluate_kclass_gt.py`;
-- fast parity integration in `tests/integration/test_em_parity_fast.py`;
-- a production-scale K=4 case in `tests/long_test/test_em_parity_long.py` and
-  `scripts/run_em_parity_long_slurm.sh`;
-- `scripts/run_em_kclass_robustness_matrix_slurm.py`, whose 36 default cases
-  span K=2/4/8/16, four PDB families, white/radial and low/very-high noise,
-  uniform/nonuniform/Kent/no-CTF poses, class imbalance, contrast/noise
-  scaling, offsets, 20%/50% outliers, 128/256 grids, three independent seeds,
-  and matched image-batch/rotation-block invariance controls; and
-- detailed K=4 causal and repeatability scorecards under `docs/math/`, plus
-  the long historical log in `docs/math/em_parity_program.md`.
+## Accepted synthetic K=4 single-run entries
 
-These assets are useful, but they do not constitute one reproducible result
-ledger. Most medium/scale matrix rows remain single-seed, the old completion
-baseline locks mean correlation rather than the current FSC policy, and the
-historical scorecards do not uniformly bind source tree, all inputs, Slurm
-allocation, quality, and performance in one schema.
+All six entries retain source and executable provenance, input and artifact
+hashes, exact commands, Slurm accounting, permutation-aware class quality,
+class populations, and measured performance. A `SCIENCE_EQUIVALENT` result
+does not erase a frozen formal failure.
 
-## Records admitted now
+| Record | Workload | Formal / science | Performance disposition |
+| --- | --- | --- | --- |
+| `k4-ribosembly-100k256-ac5177d2-a100` | Ribosembly, 100k, box 256, C1, 15 iterations | FAIL / PASS | Same-A100 wall and RSS are formal; RELION HBM was not sampled and is explicitly null. |
+| `k4-ribosembly-100k256-1b9209cd8-h100` | Same frozen 100k fixture on the candidate | FAIL / PASS | H100 RECOVAR values are retained, but the RELION comparator is the A100 oracle; the cross-model speed value is diagnostic only. |
+| `k4-ribosembly-10k128-white1-uniform-0050dc54f-h100` | Ribosembly, white noise, uniform | PASS / PASS | Matched same-H100 wall/HBM; RECOVAR 1199 s / 17087 MiB, RELION 122 s / 79563 MiB. |
+| `k4-ribosembly-10k128-radial3-nonuniform-linear-0050dc54f-h100` | Ribosembly, radial noise, nonuniform poses, linear weights | PASS / PASS | Matched same-H100 wall/HBM; RECOVAR 1621 s / 33495 MiB, RELION 143 s / 79559 MiB. |
+| `k4-ribosembly-10k128-radial3-nonuniform-outliers20-0050dc54f-h100` | Previous case with 20% outliers | FAIL / PASS | Matched same-H100 wall/HBM; RECOVAR 1674 s / 33495 MiB, RELION 143 s / 79559 MiB. |
+| `k4-igg-10k128-white1-uniform-0050dc54f-h100` | IgG-1D, white noise, uniform | FAIL / PASS | Matched same-H100 wall/HBM; RECOVAR 1343 s / 17087 MiB, RELION 117 s / 79561 MiB. Both engines have the recorded near-collapse. |
 
-| Record | Source | Hardware | Frozen gate | Scientific result |
-| --- | --- | --- | --- | --- |
-| `k4-ribosembly-100k256-ac5177d2-a100` | ac5177d2 / tree 58476f9e | A100 80 GB | FAIL at iteration 10 class 2 | Accepted SCIENCE_EQUIVALENT reference; 0.99320 assignment agreement; exact controller topology. |
-| `k4-ribosembly-100k256-1b9209cd8-h100` | 1b9209cd / tree a16a976c | H100 80 GB | FAIL at iteration 10 class 2 | SCIENCE_EQUIVALENT to accepted; 0.99282 assignment agreement; exact controller topology. |
+The historical 100k records explicitly retain missing common-mask half-map
+FSC and missing RELION HBM rather than treating either as zero. The four 10k
+pilots stop at a nonconverged five-iteration cap and are not substitutes for
+the 100k/256 completion workload.
 
-Both records include the 100k/256 input hashes, exact commands, environment,
-Slurm jobs/TRES, logs and artifact hashes, per-class cross-engine and per-engine
-GT FSC-AUC, populations, wall time, peak HBM, and MaxRSS. Both explicitly
-record that common-mask half-map FSC is missing. The candidate's apparent
-1.4858x iteration-time improvement is diagnostic only because it compares an
-H100 candidate with an A100 reference.
+## Accepted synthetic K=4 campaigns
 
-## Evidence not admitted
+Campaign JSON stores one row per case rather than only an aggregate. Each row
+retains its generator/configuration, source inputs, final class quality,
+occupancy, wall/HBM, and Slurm ReqTRES/AllocTRES.
 
-### K=1 real data
+| Campaign | Cases | Frozen / science outcomes | Performance coverage |
+| --- | ---: | --- | --- |
+| `k4-expanded14-3466e7a32-h100` | 14 | 6 PASS, 7 FAIL, 1 NOT_EVALUABLE / 11 PASS, 2 BOUNDARY, 1 UNRESOLVED | Both wall/HBM values are present for all 14 same-H100 cases, with limitations retained for non-evaluable endpoints. |
+| `k4-exact-input-invariance-91e8a30f4-h100` | 9 | 3 PASS, 6 FAIL / 3 PASS, 6 UNRESOLVED | All nine rows retain timing/HBM, but only the three producer rows admit a matched-hardware comparison; consumers reuse the sealed RELION oracle. |
+| `k4-c4-three-seed-c75cbfffc-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
+| `k4-d4-three-seed-c75cbfffc-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
+| `k4-o-three-seed-22efd8065-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
+| `k4-i1-three-seed-22efd8065-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
 
-`docs/math/em_k1_realdata_science_equivalence_scorecard_v1.json` is the best
-current real-data summary. It seals FSC artifacts for EMPIAR-10073, 10345, and
-10097 and defines the EMPIAR-10202 set-6 I1 contract. It is not copied into the
-registry yet because:
+The C4, D4, O, and I1 records are the checked-in multi-seed rotational-
+symmetry evidence. The no-CTF cases 30, 35, and 36 are not positive campaign
+results: all nine RELION replicates had a zero-mass class before RECOVAR ran.
+Their sealed RELION-only provenance and performance are retained in
+`diagnostics/k4-noctf-collapse-cases30-35-36-h100.json` with
+`EXCLUDED_FROM_ACCEPTED_RESULTS` disposition.
 
-- EMPIAR-10202 is still marked `relion_complete_recovar_pending` at its pinned
-  subject commit;
-- the three calibration entries do not uniformly seal both producer commands,
-  exact source trees, requested/allocated TRES, wall time, peak HBM, and MaxRSS;
-  and
-- masked half-map evidence and mask provenance are not complete for every
-  calibration row.
+## K=1 evidence
 
-These are evidence-completeness gaps, not claims that the reported FSC results
-are invalid. Once the missing fields are sealed, each dataset should become a
-separate registry record rather than one aggregate scorecard.
+### Synthetic
 
-### K=4 synthetic data
+K=1 has extensive unit, fast-parity, long-run, and historical trajectory
+coverage, but there is no current-source K=1 single-run or campaign JSON under
+this schema-v1 registry. `k1_box800_memory_qualification_20260901.md` is a
+qualified memory-boundary report, not a full-dataset resolution or matched
+cross-engine quality/performance result. A future K=1 completion record must
+be added rather than inferring registry admission from those tests.
 
-The admitted fixture is only one molecular family, generation seed, refinement
-seed, noise regime, pose distribution, class distribution, grid, and symmetry.
-Its consumed files are hashed, but its original generator command and staged
-PDB files were not retained. RELION half maps and a common mask were not
-retained, and the candidate/reference performance comparison crosses GPU
-models. The matrix in `k4_validation_matrix.md` is designed to close these
-specific gaps.
+### Real particles
 
-### K>1 real data
+`docs/math/em_k1_realdata_science_equivalence_scorecard_v1.json` is the frozen
+quality scorecard. It hashes the FSC artifacts and producer/collector
+references for EMPIAR-10073, 10345, and 10097 and fixes the EMPIAR-10202 set-6
+I1 contract. These calibration rows are supporting evidence, not entries in
+the PR scoring denominator.
 
-No real-data K>1 run presently meets the registry contract. Until matched
-multi-seed refinements report half-map quality, permutation-aware class maps,
-populations, stability, and matched performance, synthetic K=4 parity must not
-be generalized into a real-data K>1 claim.
+| Dataset | Frozen unmasked result | Corrected masked 0.143 resolution, RECOVAR / RELION | Registry/performance status |
+| --- | --- | --- | --- |
+| EMPIAR-10073 | Within-engine half-map calibration PASS; raw cross-engine route qualified | 4.156 A / 4.092 A | Quality artifacts and rerun commands are sealed; uniform source-tree, wall, HBM, and MaxRSS fields are incomplete. |
+| EMPIAR-10345 | Within-engine half-map calibration PASS; raw cross-engine route qualified | 5.240 A / 5.240 A | Quality artifacts and rerun commands are sealed; uniform source-tree, wall, HBM, and MaxRSS fields are incomplete. |
+| EMPIAR-10097 | Within-engine half-map calibration PASS; raw and allowed proper-rigid cross-engine routes remain unqualified | 5.782 A / 5.684 A | Quality artifacts and rerun commands are sealed; uniform source-tree, wall, HBM, and MaxRSS fields are incomplete. Masking does not rescue the frozen cross-engine failure. |
+| EMPIAR-10202 set 6, I1 | RELION complete at 2.511554 A unmasked; RECOVAR pending at the frozen subject commit | RECOVAR pending / RELION 2.122559 A | Partial RELION jobs and hashes are sealed. No two-engine final quality or performance record exists yet. |
 
-## Files intentionally left unchanged
+The common-mask artifacts for 10073, 10345, and 10097 are now complete and
+hashed. They remain supporting-only because each mask was derived from the
+RELION merged map. The reason these cases are not registry entries is no longer
+missing mask provenance; it is the incomplete uniform producer/source/Slurm
+and performance envelope, plus the frozen pending 10202 RECOVAR arm.
 
-`tests/baselines/em_parity_completion_k4_100k256.json` remains a historical
-completion guard and still records correlation-based metrics from job 8290126.
-It was not silently rewritten with the newer FSC evidence. The new registry is
-the versioned location for current scientific and performance records.
+## Real K=4 diagnostics
+
+No real-data K=4 result is admitted. The checked evidence is nevertheless
+repeatable and records useful negative performance without turning a failed
+quality pair into a formal speed comparison.
+
+| Evidence | Scope | Quality disposition | Performance disposition |
+| --- | --- | --- | --- |
+| `diagnostics/real-kclass-initialmodel-20260901.json` | Three 10k-particle, eight-iteration C1 pairs over EMPIAR-10076 and 10345 | All three fail FSC/assignment; two also retain the class-2 collapse | Per-engine wall/HBM/RSS retained as diagnostics; formal ratios are null. |
+| `diagnostics/real-kclass-offset-prior-fullpairs-92438c285-20260901.json` | Two clean-source same-H100 pairs, one per dataset | Both fail from the iteration-1 M-step map boundary despite exact raw iteration-1 labels | Native wall/HBM/RSS retained; raw 31.59x and 26.90x RECOVAR/RELION wall ratios are diagnostic only. |
+| `diagnostics/real-kclass-selected-fine-10076-20260901.json` | Two-particle iteration-1 selected-fine capture | Causal support/prior discriminator only; no map or half-map admission | No final performance claim. This routed record does not yet have a standalone whole-ledger validator. |
+| `real_k4_shared200_causal_replay.md` | Frozen 200-particle, four-class iteration-1 replay harness | Runnable acceptance contract; no terminal accepted record checked in at this commit | Pending. |
+| `real_kclass_halfmap_refinement.md` | Independent-half refinement launcher/runbook | Runnable infrastructure only; no accepted completed pair | Pending. |
+
+InitialModel emits one class map rather than independently refined half maps,
+so none of these diagnostics can support final resolution. A real K=4
+admission still requires matched multi-seed independent-half refinement,
+Hungarian per-class FSC, stable populations, a common mask, and same-hardware
+performance after the quality gate passes.
+
+## Remaining coverage gaps
+
+1. Seal at least one current-source K=1 synthetic completion record with final
+   FSC/FSC-AUC and matched performance.
+2. Convert each finished K=1 real calibration into a separate registry entry
+   only after source tree, exact producer commands, Slurm allocation, wall,
+   HBM, and MaxRSS are complete. Keep 10097's cross-engine route unqualified
+   unless a new frozen gate passes.
+3. Finish and seal the RECOVAR EMPIAR-10202 arm before making any target-grid
+   high-resolution or two-engine performance claim.
+4. Repair the first real K=4 M-step divergence, then rerun the shared-200 gate
+   and a full independent-half, multi-seed refinement. Existing diagnostic
+   timing cannot be promoted after a scientific failure.
+5. Add a dedicated whole-ledger validator for the selected-fine diagnostic or
+   migrate it into a versioned diagnostic schema before relying on it as more
+   than causal evidence.
+6. The runnable robustness matrix includes K=2, K=8, and K=16, but no accepted
+   schema-v1 result for those K values is checked in. Do not generalize the K=4
+   campaigns to them.
+
+## Validation and replay
+
+The ordinary checks do not rehash large external stacks:
+
+```bash
+pixi run python scripts/validate_em_benchmark_registry.py
+pixi run pytest tests/unit/test_validate_em_benchmark_registry.py
+pixi run python scripts/validate_em_real_kclass_diagnostics.py
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_diagnostics.py
+pixi run python scripts/validate_em_real_kclass_offset_prior_fullpairs.py
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_offset_prior_fullpairs.py
+pixi run python scripts/summarize_em_k1_realdata_science_equivalence.py --verify-calibrations --verify-masked-support --verify-target-partial --check-markdown
+```
+
+Use each validator's explicit `--verify-files` mode only when resealing or
+re-auditing external evidence. No command in this inventory submits Slurm.
+
+## Historical baseline left unchanged
+
+`tests/baselines/em_parity_completion_k4_100k256.json` remains the historical
+correlation-based completion guard from job 8290126. It was not rewritten with
+new FSC evidence. Current scientific and performance claims belong in the
+versioned registry and dedicated diagnostic ledgers above.

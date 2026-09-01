@@ -154,6 +154,12 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
         )
         == "separate"
     )
+    assert (
+        registry_validator._diagnostic_registry_route(
+            {"schema": "recovar.em_real_kclass_offset_prior_fullpairs.v1"}
+        )
+        == "separate"
+    )
     with pytest.raises(RegistryValidationError, match="unrecognized diagnostic family"):
         registry_validator._diagnostic_registry_route({"schema": "unknown.v1"})
 

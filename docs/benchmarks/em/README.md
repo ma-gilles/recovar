@@ -162,6 +162,25 @@ audit, no half-map claim, and a null formal performance ratio. The checked
 records and their exact rerun commands are in
 `diagnostics/real-kclass-initialmodel-20260901.json`.
 
+The later offset-prior treatment pairs have a separate, stricter compact
+ledger because both engines completed successfully and the wrapper failed
+only on the frozen scientific gate. Validate its two same-H100 cases and,
+when explicitly re-auditing the seal, their retained compact files with:
+
+```bash
+pixi run python scripts/validate_em_real_kclass_offset_prior_fullpairs.py
+pixi run python scripts/validate_em_real_kclass_offset_prior_fullpairs.py --verify-files
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_offset_prior_fullpairs.py
+```
+
+The top-level registry validator recognizes both real-data ledgers and the
+selected-fine diagnostic as separately routed evidence. It does not count any
+of them as an accepted `entries/` or `campaigns/` result. The current admitted,
+supporting, diagnostic, and pending coverage is indexed in
+`audit_inventory_20260901.md`; that inventory also records which real-data and
+K=1 performance fields are still missing rather than treating them as zero or
+equivalent.
+
 ## Sealing a new record
 
 1. Create an isolated run root with `SAFE_TO_DELETE`; record the clean source
