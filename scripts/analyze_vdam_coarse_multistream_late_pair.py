@@ -38,7 +38,7 @@ from scripts.analyze_vdam_coarse_combined_true200 import (
 )
 
 SCHEMA = "recovar.vdam_coarse_multistream_late_pair_analysis.v1"
-RUN_SCHEMA = "recovar.vdam_coarse_atomic_multistream_crossed.v2"
+RUN_SCHEMA = "recovar.vdam_coarse_atomic_multistream_crossed.v3"
 FOCUSED_GATE_SCHEMA = "recovar.vdam_coarse_multistream_focused_gpu_gate.v2"
 PROFILE_SCHEMA = "recovar.vdam_late_iteration_profile.v1"
 NSIGHT_SCHEMA = "recovar.vdam_nsys_sqlite_summary.v1"
@@ -323,7 +323,6 @@ def _validate_focused_gate(
     *,
     repo: Path,
     late_run: dict[str, Any],
-    late_source_manifest: Path,
 ) -> dict[str, Any]:
     _require(gate_root.is_dir(), "qualified focused GPU gate root is missing")
     _require((gate_root / "COMPLETED").is_file(), "qualified focused GPU gate is incomplete")
@@ -340,7 +339,6 @@ def _validate_focused_gate(
         "node": late_run["node"],
         "gpu_name": late_run["gpu_name"],
         "cuda_sha256": late_run["cuda_sha256"],
-        "source_manifest_sha256": late_run["source_manifest_sha256"],
         "source_manifest_scope": "selected_high_risk_files",
         "tests": 3,
         "passed": 3,
@@ -351,6 +349,11 @@ def _validate_focused_gate(
     }
     _require(not mismatches, f"qualified focused GPU gate differs: {mismatches}")
     _require(isinstance(gate.get("job_id"), str) and gate["job_id"], "qualified gate job ID is invalid")
+    _require(
+        isinstance(gate.get("source_manifest_sha256"), str)
+        and bool(_SHA256_RE.fullmatch(gate["source_manifest_sha256"])),
+        "qualified gate source manifest digest is invalid",
+    )
     for name in ("cuda_stage_wall_s", "test_wall_s"):
         value = gate.get(name)
         _require(
@@ -382,13 +385,12 @@ def _validate_focused_gate(
         _require(uuids == [gate["gpu_uuid"]], f"qualified gate {name} does not prove single-GPU ownership")
 
     source_path = provenance / "source_manifest.sha256"
-    _validate_manifest(
+    source = _validate_manifest(
         source_path,
         expected_digest=gate["source_manifest_sha256"],
         relative_base=repo,
         label="qualified gate source manifest",
     )
-    _require(source_path.read_bytes() == late_source_manifest.read_bytes(), "qualified gate source differs")
     final_source = provenance / "source_manifest.final.sha256"
     _require(final_source.is_file(), "qualified gate final source manifest is missing")
     _require(final_source.read_bytes() == source_path.read_bytes(), "qualified gate source changed during execution")
@@ -415,6 +417,7 @@ def _validate_focused_gate(
         "job_id": gate["job_id"],
         "interpreter": {"path": str(interpreter_path), "sha256": interpreter_sha},
         "cuda_binary": {"path": str(cuda_path), "sha256": cuda_sha},
+        "source_manifest": source,
         "resources": resources,
     }
 
@@ -533,7 +536,6 @@ def _validate_provenance(root: Path, repo: Path) -> tuple[dict[str, Any], dict[s
         qualified_root,
         repo=repo,
         late_run=run,
-        late_source_manifest=provenance / "source_manifest.sha256",
     )
 
     _validate_junit(root / "focused_pytest.junit.xml")

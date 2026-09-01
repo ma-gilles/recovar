@@ -168,7 +168,7 @@ assert canonical["registers_per_thread"] - atomic["registers_per_thread"] == 8
 PY
 
 checkpoint_prefix=${CHECKPOINT%_optimiser.star}
-INPUT_FILES=(
+INPUT_CANDIDATES=(
   "${CHECKPOINT}"
   "${checkpoint_prefix}_model.star"
   "${checkpoint_prefix}_data.star"
@@ -180,9 +180,17 @@ INPUT_FILES=(
   "${DATA_STAR}"
   "${PARTICLE_STACK}"
 )
-for path in "${INPUT_FILES[@]}"; do
+declare -A SEEN_INPUT_FILES=()
+INPUT_FILES=()
+for path in "${INPUT_CANDIDATES[@]}"; do
   test -s "${path}"
+  resolved_path=$(realpath -e -- "${path}")
+  if [[ -z "${SEEN_INPUT_FILES[${resolved_path}]+x}" ]]; then
+    INPUT_FILES+=("${path}")
+    SEEN_INPUT_FILES["${resolved_path}"]=1
+  fi
 done
+test "${#INPUT_FILES[@]}" -eq "${#SEEN_INPUT_FILES[@]}"
 sha256sum "${INPUT_FILES[@]}" > "${PROVENANCE}/input_manifest.sha256"
 input_manifest_sha256=$(sha256sum "${PROVENANCE}/input_manifest.sha256" | awk '{print $1}')
 test "${input_manifest_sha256}" = "${EXPECTED_INPUT_MANIFEST_SHA256}"
@@ -377,7 +385,7 @@ import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.vdam_coarse_atomic_multistream_crossed.v2",
+    "schema": "recovar.vdam_coarse_atomic_multistream_crossed.v3",
     "classification": "diagnostic_performance_only",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],

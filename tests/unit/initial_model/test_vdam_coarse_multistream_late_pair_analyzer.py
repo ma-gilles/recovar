@@ -137,10 +137,12 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
 
     source = repo / "source.py"
     source.write_text("VALUE = 1\n")
+    gate_source_artifact = repo / "gate_source.py"
+    gate_source_artifact.write_text("GATE_VALUE = 1\n")
     interpreter = repo / "python"
     interpreter.write_bytes(b"pinned pixi interpreter")
     _git(repo, "init", "--quiet")
-    _git(repo, "add", "source.py", "python")
+    _git(repo, "add", "source.py", "gate_source.py", "python")
     _git(
         repo,
         "-c",
@@ -240,7 +242,7 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
 
     gate_provenance = qualified / "provenance"
     gate_source = gate_provenance / "source_manifest.sha256"
-    gate_source.write_bytes(source_manifest.read_bytes())
+    gate_source_digest = _write_manifest(gate_source, [(gate_source_artifact, "gate_source.py")])
     (gate_provenance / "source_manifest.final.sha256").write_bytes(gate_source.read_bytes())
     gate_cuda = qualified / "runtime" / "cuda" / "libcuda_backproject.so"
     gate_cuda.parent.mkdir(parents=True)
@@ -260,7 +262,7 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
         "node": run["node"],
         "gpu_name": run["gpu_name"],
         "cuda_sha256": run["cuda_sha256"],
-        "source_manifest_sha256": run["source_manifest_sha256"],
+        "source_manifest_sha256": gate_source_digest,
         "source_manifest_scope": "selected_high_risk_files",
         "cuda_stage_wall_s": 2.5,
         "test_wall_s": 3.5,
@@ -372,6 +374,10 @@ def test_complete_crossed_fixture_passes_and_renders_outputs(tmp_path):
         "pass": True,
     }
     assert report["performance"]["percent_change_vs_canonical_serial"]["atomic_multistream"]["warm_wall_s"] < -10.0
+    assert (
+        report["provenance"]["source_manifest"]["sha256"]
+        != report["provenance"]["qualified_gpu_gate"]["source_manifest"]["sha256"]
+    )
     assert "| atomic_multistream |" in report["markdown"]
     assert "canonical_serial_1__atomic_multistream_1" in report["markdown"]
 
@@ -500,11 +506,47 @@ def test_candidate_map_shift_outside_zero_repeat_envelope_fails(tmp_path):
 
 
 @pytest.mark.unit
-def test_source_manifest_mutation_fails_closed(tmp_path):
+def test_late_source_artifact_mutation_fails_closed(tmp_path):
     root, repo = _build_root(tmp_path)
     (repo / "source.py").write_text("VALUE = 2\n")
 
     with pytest.raises(analyzer.LatePairSetupError, match="artifact digest differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_late_source_manifest_corruption_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    manifest = root / "provenance" / "source_manifest.sha256"
+    manifest.write_text(manifest.read_text() + "\n")
+
+    with pytest.raises(analyzer.LatePairSetupError, match="source manifest digest differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_qualified_gate_source_manifest_corruption_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    run = json.loads((root / "provenance" / "run.json").read_text())
+    manifest = Path(run["qualified_gpu_gate_root"]) / "provenance" / "source_manifest.sha256"
+    manifest.write_text(manifest.read_text() + "\n")
+
+    with pytest.raises(analyzer.LatePairSetupError, match="qualified gate source manifest digest differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_duplicate_input_manifest_artifact_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    provenance = root / "provenance"
+    manifest = provenance / "input_manifest.sha256"
+    manifest.write_text(manifest.read_text() * 2)
+    run_path = provenance / "run.json"
+    run = json.loads(run_path.read_text())
+    run["input_manifest_sha256"] = _sha256(manifest)
+    _write_json(run_path, run)
+
+    with pytest.raises(analyzer.LatePairSetupError, match="input manifest repeats an artifact"):
         analyzer.analyze(root, repo=repo)
 
 
