@@ -1,0 +1,391 @@
+{
+  "schema": "recovar.em_real_kclass_offset_prior_fullpairs.v1",
+  "recorded_at": "2026-09-01",
+  "source_contract": {
+    "git_head": "92438c285172998baf958ef46d7e3053a51052d2",
+    "git_tree": "ef74c6c6069bd54e1ca5f898e886863bd7ca2ba9",
+    "tracked_dirty": false
+  },
+  "experiment_contract": {
+    "K": 4,
+    "checkpoints": [1, 2, 3, 4, 5, 6, 7, 8],
+    "particles": 10000,
+    "symmetry": "C1",
+    "random_seed": 0,
+    "tau2_fudge": 4.0,
+    "healpix_order": 1,
+    "oversampling": 1,
+    "offset_range_pixels": 6.0,
+    "offset_step_pixels": 2.0,
+    "padding_factor": 1,
+    "image_batch_size": 500,
+    "image_fourier_backend": "relion_cuda",
+    "rotation_block_size": 5000,
+    "minimum_per_class_fsc_auc": 0.999,
+    "minimum_assignment_accuracy": 0.995,
+    "minimum_class_fraction": 0.01
+  },
+  "reproduction": {
+    "working_directory": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_qualified_staging_20260901",
+    "launcher_argv_template": [
+      "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_qualified_staging_20260901/.pixi/envs/default/bin/python3.11",
+      "-m",
+      "scripts.launch_em_real_kclass_initialmodel_slurm",
+      "--dataset",
+      "<10076-or-10345>",
+      "--output-root",
+      "<fresh-absolute-run-root>",
+      "--relion-refine",
+      "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine",
+      "--relion-source-dir",
+      "/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src",
+      "--pixi-python",
+      "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_qualified_staging_20260901/.pixi/envs/default/bin/python3.11",
+      "--submit"
+    ],
+    "exact_original_pair_argv_location": "submission_manifest.json:pair_command",
+    "fresh_root_required": true
+  },
+  "scientific_scope": {
+    "kind": "real-particle K-class InitialModel cross-engine diagnostic",
+    "gold_standard_halfmaps_available": false,
+    "halfmap_fsc_available": false,
+    "formal_runtime_ratio_admissible": false,
+    "benchmark_registry_admission": "REJECTED",
+    "reason": "InitialModel emits one map per class, and both full trajectories fail the fixed cross-engine FSC/assignment quality gate."
+  },
+  "cases": [
+    {
+      "diagnostic_id": "empiar-10076-k4-offset-prior-fullpair-92438c285-h100",
+      "dataset": "EMPIAR-10076",
+      "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901",
+      "fixture": {
+        "directory": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data",
+        "particles_star": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.star",
+          "sha256": "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f",
+          "size_bytes": 1267736
+        },
+        "particle_stack": {
+          "path": "/projects/CRYOEM/singerlab/mg6942/10076/test_new/downsampled/particles.256.mrcs",
+          "sha256": "70d0c19995221491d27c9323f21c40df27e153bdf1e783bc78c4d38fe41a9c09",
+          "size_bytes": 34576532480
+        },
+        "source_indices": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/source_indices.npy",
+          "sha256": "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d",
+          "size_bytes": 80128
+        },
+        "manifest": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/fixture_manifest.json",
+          "sha256": "762645e0d77c53bb9ce61701e1fd0d03868021c494f84b73a281b39d753d9750",
+          "size_bytes": 585
+        }
+      },
+      "slurm": {
+        "job_id": "13313941",
+        "terminal_state": "FAILED",
+        "exit_code": "1:0",
+        "elapsed_seconds": 2762,
+        "node": "della-h19g1",
+        "req_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1",
+        "alloc_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1",
+        "oversubscribe": "OK",
+        "exclusive": false,
+        "terminal_reason": "Both engines exited 0; the pair wrapper exited 1 because the scientific gate was rejected.",
+        "capture_command": "sacct -X -j 13313941 --format=JobIDRaw,JobName%32,State,ExitCode,ElapsedRaw,NodeList,ReqTRES%70,AllocTRES%70 -P"
+      },
+      "quality": {
+        "result": "REJECTED",
+        "trajectory_parity_result": "fail",
+        "class_stability_result": "fail",
+        "minimum_matched_fsc_auc": 0.03516473673879514,
+        "minimum_map_hungarian_assignment_accuracy": 0.2173076923076923,
+        "iteration_1": {
+          "assigned_particles": 200,
+          "raw_class_label_exact_count": 200,
+          "raw_class_label_accuracy": 1.0,
+          "recovar_counts": [15, 150, 17, 18],
+          "relion_counts": [15, 150, 17, 18],
+          "raw_pose_joint_le_1e_3_count": 196,
+          "map_hungarian_permutation_candidate_to_reference": [0, 1, 2, 3],
+          "assignment_accuracy_after_map_hungarian_permutation": 1.0,
+          "matched_fsc_auc": [
+            0.15528485292529248,
+            0.44592655645938684,
+            0.03516473673879514,
+            0.29185614342049765
+          ],
+          "interpretation": "The raw class-label component of the first E-step is exact, but the maps written after the iteration-1 M-step already fail FSC. This localizes the first material map divergence to the iteration-1 post-E-step/reconstruction boundary; it does not claim every pose field is bitwise exact."
+        },
+        "iteration_2": {
+          "map_hungarian_permutation_candidate_to_reference": [0, 1, 2, 3],
+          "assignment_accuracy_after_map_hungarian_permutation": 0.545,
+          "recovar_counts": [25, 106, 22, 47],
+          "relion_counts": [23, 120, 15, 42],
+          "interpretation": "The divergent iteration-1 maps feed the next E-step, where hard assignments materially diverge."
+        },
+        "final_iteration_8": {
+          "map_hungarian_permutation_candidate_to_reference": [1, 2, 0, 3],
+          "assignment_accuracy_after_map_hungarian_permutation": 0.2604,
+          "matched_fsc_auc": [
+            0.24541858366722255,
+            0.22372454850996715,
+            0.042277798778958334,
+            0.14402684518776623
+          ],
+          "recovar_counts": [2426, 14, 5914, 1646],
+          "relion_counts": [4099, 10, 3987, 1904],
+          "recovar_collapsed_class_ids_one_based": [2],
+          "relion_collapsed_class_ids_one_based": [2]
+        }
+      },
+      "performance": {
+        "same_physical_gpu": true,
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "recovar": {
+          "exit_code": 0,
+          "wall_seconds": 2247.479921528997,
+          "peak_hbm_mib": 66789,
+          "max_rss_kib": 17722084
+        },
+        "relion": {
+          "exit_code": 0,
+          "wall_seconds": 71.14793624800222,
+          "peak_hbm_mib": 79547,
+          "max_rss_kib": 2855564
+        },
+        "raw_recovar_over_relion_wall_ratio": 31.588828011748607,
+        "formal_ratio_admitted": false,
+        "measurement_limitations": [
+          "Peak HBM is a one-second sampled lower bound.",
+          "The raw same-GPU ratio is diagnostic only because the scientific gate failed."
+        ]
+      },
+      "artifacts": {
+        "submission_manifest": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/submission_manifest.json",
+          "sha256": "4ee4587cb239bb8e19f92cfdbcf334cd4604a0fffad4a69a01d45ee6925880ba"
+        },
+        "sbatch_script": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/scripts/run_pair.sbatch",
+          "sha256": "da5f490202b5b34b45d07425708c18cb60086a7d1aac1a76f36ebaf37e1e8bc1"
+        },
+        "pair_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/pair_report.json",
+          "sha256": "5b5ab3706ae879bbcbec19db9b035682ef854118cbf31689ac87c677a35e6cc6"
+        },
+        "trajectory_audit": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/trajectory_audit.json",
+          "sha256": "998ed59aa1b22cc6e2b2d40bead6f49fe057bdb58dadd40fc3738002715bb053"
+        },
+        "trajectory_shellwise_fsc": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/trajectory_shellwise_fsc.npz",
+          "sha256": "ca236fdc629fc2cec13bd197944d717df5e9c187d2963df44da6b58f16b4808f"
+        },
+        "recovar_command": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/recovar/command.json",
+          "sha256": "070c4102cfb6926bef11e5aab608a4c9e9cee8f31587e2324436ede3e990b765"
+        },
+        "relion_command": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/relion/command.json",
+          "sha256": "01efe8185f09f432ba26055975b51464f7c8b844f47214ffe2a256146c6d9e34"
+        },
+        "recovar_gpu_monitor": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/recovar/gpu_monitor.csv",
+          "sha256": "05e987985a6d9c8854330bef9e0325ebdafb5e2492ad797c3f1068b4fa46bc18"
+        },
+        "relion_gpu_monitor": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/relion/gpu_monitor.csv",
+          "sha256": "7dc5abe0c805306e7288941728b0973f5b2a186065c0b4bdd90881e9280b0a1e"
+        },
+        "recovar_resources": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/recovar/process_resources.txt",
+          "sha256": "8c703eb59dfa07bfbaa342b12d49e851a57612b051b8078808cb47ec786e47a4"
+        },
+        "relion_resources": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/pair/relion/process_resources.txt",
+          "sha256": "562026ce85d2962b483b3e39bd214f7f851d62b2531923dfc4ac62af104d9577"
+        },
+        "slurm_stdout": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/logs/pair-13313941.out",
+          "sha256": "ffa9cd91636c52551b4dc7d17d85ab326ce498e7db7d973185e2a3819ee9bea1"
+        },
+        "slurm_stderr": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/logs/pair-13313941.err",
+          "sha256": "88adf6e477a35f64d889176faf1e9cb1e3a742004f038ec3bd54a0787b1561be"
+        },
+        "iteration_1_model_state_discriminator": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_offset_prior_fullpair_92438c285_20260901/audit/it001_model_state_discriminator.json",
+          "sha256": "fbeddfc9a48c45e3c72f9ba80a437565e798c07cee5bde33b42264d33848a7b6"
+        }
+      }
+    },
+    {
+      "diagnostic_id": "empiar-10345-k4-offset-prior-fullpair-92438c285-h100",
+      "dataset": "EMPIAR-10345",
+      "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901",
+      "fixture": {
+        "directory": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data",
+        "particles_star": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/particles.star",
+          "sha256": "e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5",
+          "size_bytes": 1451626
+        },
+        "particle_stack": {
+          "path": "/projects/CRYOEM/singerlab/mg6942/10345/recovar_data/particles.256.mrcs",
+          "sha256": "7909a695db68b65bfe6d0391054a1b19ae37fc4cd8da5cc4eb9595d76e4116e4",
+          "size_bytes": 22089827328
+        },
+        "source_indices": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/source_indices.npy",
+          "sha256": "9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3",
+          "size_bytes": 80128
+        },
+        "manifest": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/fixture_manifest.json",
+          "sha256": "175972d7911dc512ceca2668c0f9b9372d76a3828ee4e9217c9870f55cec4683",
+          "size_bytes": 1452
+        }
+      },
+      "slurm": {
+        "job_id": "13314322",
+        "terminal_state": "FAILED",
+        "exit_code": "1:0",
+        "elapsed_seconds": 2430,
+        "node": "della-h19g1",
+        "req_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1",
+        "alloc_tres": "billing=15,cpu=8,gres/gpu=1,mem=192G,node=1",
+        "oversubscribe": "OK",
+        "exclusive": false,
+        "terminal_reason": "Both engines exited 0; the pair wrapper exited 1 because the scientific gate was rejected.",
+        "capture_command": "sacct -X -j 13314322 --format=JobIDRaw,JobName%32,State,ExitCode,ElapsedRaw,NodeList,ReqTRES%70,AllocTRES%70 -P"
+      },
+      "quality": {
+        "result": "REJECTED",
+        "trajectory_parity_result": "fail",
+        "class_stability_result": "pass",
+        "minimum_matched_fsc_auc": 0.027988507574617637,
+        "minimum_map_hungarian_assignment_accuracy": 0.13690476190476192,
+        "iteration_1": {
+          "assigned_particles": 200,
+          "raw_class_label_exact_count": 200,
+          "raw_class_label_accuracy": 1.0,
+          "recovar_counts": [63, 9, 115, 13],
+          "relion_counts": [63, 9, 115, 13],
+          "raw_pose_joint_le_1e_3_count": 199,
+          "map_hungarian_permutation_candidate_to_reference": [0, 2, 3, 1],
+          "assignment_accuracy_after_map_hungarian_permutation": 0.315,
+          "matched_fsc_auc": [
+            0.1081187575874067,
+            0.21128794019874853,
+            0.06885693087653022,
+            0.08268406194115775
+          ],
+          "interpretation": "The raw class labels are exactly identical. The 0.315 assignment number is not a raw-label mismatch: it is obtained only after applying the map-derived Hungarian permutation [0,2,3,1] to already-divergent maps. The maps written after the iteration-1 M-step already fail FSC."
+        },
+        "iteration_2": {
+          "map_hungarian_permutation_candidate_to_reference": [0, 2, 1, 3],
+          "assignment_accuracy_after_map_hungarian_permutation": 0.27,
+          "recovar_counts": [79, 13, 105, 3],
+          "relion_counts": [70, 23, 90, 17],
+          "interpretation": "The divergent iteration-1 maps feed the next E-step, where hard assignments materially diverge."
+        },
+        "final_iteration_8": {
+          "map_hungarian_permutation_candidate_to_reference": [1, 2, 3, 0],
+          "assignment_accuracy_after_map_hungarian_permutation": 0.1698,
+          "matched_fsc_auc": [
+            0.029988991861716205,
+            0.18647140540286125,
+            0.11436215010737581,
+            0.03911437678201761
+          ],
+          "recovar_counts": [1799, 1523, 3138, 3540],
+          "relion_counts": [2669, 1007, 3264, 3060],
+          "recovar_collapsed_class_ids_one_based": [],
+          "relion_collapsed_class_ids_one_based": []
+        }
+      },
+      "performance": {
+        "same_physical_gpu": true,
+        "gpu": "NVIDIA H100 80GB HBM3",
+        "recovar": {
+          "exit_code": 0,
+          "wall_seconds": 1938.4689274779957,
+          "peak_hbm_mib": 34015,
+          "max_rss_kib": 16425408
+        },
+        "relion": {
+          "exit_code": 0,
+          "wall_seconds": 72.05315399100073,
+          "peak_hbm_mib": 79561,
+          "max_rss_kib": 2847356
+        },
+        "raw_recovar_over_relion_wall_ratio": 26.90331817702395,
+        "formal_ratio_admitted": false,
+        "measurement_limitations": [
+          "Peak HBM is a one-second sampled lower bound.",
+          "The raw same-GPU ratio is diagnostic only because the scientific gate failed."
+        ]
+      },
+      "artifacts": {
+        "submission_manifest": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/submission_manifest.json",
+          "sha256": "74b59e16c33486f48e63341681f65097016531f74e08c5a2e99a9ea69f84c7ea"
+        },
+        "sbatch_script": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/scripts/run_pair.sbatch",
+          "sha256": "a36bdb96c46e74bd1e097258e19d0f2c745f86e0771959cb049d91b2deb3a8aa"
+        },
+        "pair_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/pair_report.json",
+          "sha256": "851abd5144d1b89507fbcd6807e0836ecf6ae307795b145b6203feb212fc7d9e"
+        },
+        "trajectory_audit": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/trajectory_audit.json",
+          "sha256": "323f44c5ddb08b085dbe55617353fc64cce9429d54cc2ea64e8032dffc056a8b"
+        },
+        "trajectory_shellwise_fsc": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/trajectory_shellwise_fsc.npz",
+          "sha256": "d86fd7f1311ef65958580bc5f913bd54496e310ec6f09a621b7f1502708ac731"
+        },
+        "recovar_command": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/recovar/command.json",
+          "sha256": "45d212b87393bcb64c0b8eff77718c901960ee2ac164a5462dcb2807b8fc571b"
+        },
+        "relion_command": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/relion/command.json",
+          "sha256": "7557cfb2c63174d91ed01f152aa401e76e7bcdcfe6cd6e173b17ceabda2c02f9"
+        },
+        "recovar_gpu_monitor": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/recovar/gpu_monitor.csv",
+          "sha256": "f0c212bba986686342d70e409859ff60bd42e2c4b8d10150d116e4247ab257c4"
+        },
+        "relion_gpu_monitor": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/relion/gpu_monitor.csv",
+          "sha256": "61e6c8885a49a1c82061bfeb3529073e0ad9eb743f72afb4e15fcf681f411349"
+        },
+        "recovar_resources": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/recovar/process_resources.txt",
+          "sha256": "b1682fccc0cdc824c647ac6b27438f826c4aacebb5c4ca650800708011e058a0"
+        },
+        "relion_resources": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/relion/process_resources.txt",
+          "sha256": "95916f934b66d192cb04a955dfbd44865539326c3ddb23901c3f10c84c59fc1c"
+        },
+        "slurm_stdout": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/logs/pair-13314322.out",
+          "sha256": "df6156a31febd64c32544d21dfcb1a1d71fa0c65bfe1436416e65dea1f122d9b"
+        },
+        "slurm_stderr": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/logs/pair-13314322.err",
+          "sha256": "88adf6e477a35f64d889176faf1e9cb1e3a742004f038ec3bd54a0787b1561be"
+        },
+        "iteration_1_model_state_discriminator": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/audit/it001_model_state_discriminator.json",
+          "sha256": "d6a3d467ee4d613efe68f1a41cec68b0767274cd566de90d8fcda4525e6d4d57"
+        }
+      }
+    }
+  ]
+}

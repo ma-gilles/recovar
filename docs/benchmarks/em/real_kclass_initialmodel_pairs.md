@@ -152,6 +152,80 @@ pixi run python scripts/validate_em_real_kclass_diagnostics.py
 pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_diagnostics.py
 ```
 
+## Offset-prior treatment full pairs at `92438c285`
+
+Two independent 10,000-particle, K=4, iteration-1--8 pairs were rerun from
+clean commit `92438c285172998baf958ef46d7e3053a51052d2` after the offset-prior
+treatment. Both engines completed successfully on the same physical H100 in
+each job. The outer Slurm jobs are `FAILED` with exit code `1:0` by design:
+the pair wrapper returns nonzero when its fixed scientific gate rejects the
+trajectory. ReqTRES and AllocTRES are identical in both jobs
+(`billing=15,cpu=8,gres/gpu=1,mem=192G,node=1`), and neither job was
+exclusive.
+
+| Dataset | Job / terminal elapsed | Iteration-1 raw labels | Iteration-1 matched FSC-AUC | Iteration-2 map-Hungarian assignment | Final FSC-AUC / counts (RECOVAR; RELION) | RECOVAR wall / HBM / RSS | RELION wall / HBM / RSS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10076 | 13313941 / 2762 s | 200/200; counts 15,150,17,18 in both | 0.15528, 0.44593, 0.03516, 0.29186 | 54.5% | 0.24542, 0.22372, 0.04228, 0.14403 / 2426,14,5914,1646; 4099,10,3987,1904 | 2247.5 s / 66789 MiB / 17722084 KiB | 71.1 s / 79547 MiB / 2855564 KiB |
+| 10345 | 13314322 / 2430 s | 200/200; counts 63,9,115,13 in both | 0.10812, 0.21129, 0.06886, 0.08268 | 27.0% | 0.02999, 0.18647, 0.11436, 0.03911 / 1799,1523,3138,3540; 2669,1007,3264,3060 | 1938.5 s / 34015 MiB / 16425408 KiB | 72.1 s / 79561 MiB / 2847356 KiB |
+
+The iteration-1 raw class labels are exactly identical in both pairs. This is
+not the same quantity as assignment agreement after map-based Hungarian
+matching. In 10345, the already-divergent maps select permutation
+`[0,2,3,1]`; applying that permutation to identical raw labels produces the
+reported 31.5% map-Hungarian assignment value. The raw-label agreement remains
+100%. In 10076 the map permutation happens to be the identity, so both values
+are 100% at iteration 1.
+
+The scientific conclusion is therefore narrow but useful. The class-label
+component of iteration 1 agrees, while the maps written after its M-step
+already fail FSC. At iteration 2 the hard assignments diverge to 54.5% and
+27.0%, respectively. The first observed material map divergence is at the
+iteration-1 post-E-step/reconstruction boundary, not a harmless final global
+rotation and not merely a late label permutation. The next discriminator is
+the shared-200-particle M-step: compare per-class posterior mass and BPref
+numerator/denominator accumulator norms and shells before gridding, followed
+by reconstructed maps and tau2.
+
+The complete compact record, including every absolute run/report/log path,
+input and artifact SHA-256, terminal `sacct` fields, source tree, FSC,
+assignments, counts, wall time, sampled HBM, GNU-time RSS, and the explicit
+half-map/performance limitations, is
+`docs/benchmarks/em/diagnostics/real-kclass-offset-prior-fullpairs-92438c285-20260901.json`.
+Validate both its claims and the retained compact files with:
+
+```bash
+pixi run python scripts/validate_em_real_kclass_offset_prior_fullpairs.py
+pixi run python scripts/validate_em_real_kclass_offset_prior_fullpairs.py --verify-files
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_offset_prior_fullpairs.py
+```
+
+To reproduce on fresh roots from the sealed source commit:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_qualified_staging_20260901
+test "$(git rev-parse HEAD)" = 92438c285172998baf958ef46d7e3053a51052d2
+test -z "$(git status --porcelain)"
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+export PYTHONNOUSERSITE=1
+PIXI_PY=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_qualified_staging_20260901/.pixi/envs/default/bin/python3.11
+for DATASET in 10076 10345; do
+  RUN_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_${DATASET}_offset_prior_fullpair_replay_92438c285_20260901
+  "${PIXI_PY}" -m scripts.launch_em_real_kclass_initialmodel_slurm \
+    --dataset "${DATASET}" \
+    --output-root "${RUN_ROOT}" \
+    --relion-refine /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/build_clean_pinned/bin/relion_refine \
+    --relion-source-dir /scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src \
+    --pixi-python "${PIXI_PY}" \
+    --submit
+done
+```
+
+Use new run roots if those replay paths already exist. The exact original
+pair argv, including every scientific option, is retained under `pair_command`
+in each hashed `submission_manifest.json` named by the compact record. These
+InitialModel pairs do not have independent half maps, and the raw timing ratios
+(31.59x and 26.90x) are diagnostic only because quality failed.
+
 ### Causal follow-ups
 
 These failures are not explained by a harmless global rotational drift. A
