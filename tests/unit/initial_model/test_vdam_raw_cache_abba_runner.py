@@ -20,6 +20,8 @@ def _array(name: str) -> list[str]:
 def test_runner_pins_qualified_gate_runtime_and_exact_h100() -> None:
     source = _source()
 
+    assert "unset PYTHONOPTIMIZE" in source
+    assert source.count("sys.flags.optimize != 0") == 2
     assert "#SBATCH --nodelist=della-h21g4" in source
     assert "readonly TARGET_NODE=della-h21g4" in source
     assert "readonly TARGET_GPU_UUID=GPU-099c0d77-bb85-f2e9-f628-148b733c9176" in source

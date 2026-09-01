@@ -14,6 +14,7 @@
 #SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-cache-abba-%j.out
 
 set -euo pipefail
+unset PYTHONOPTIMIZE
 
 : "${VDAM_RAW_CACHE_ABBA_ROOT:?set a new disposable output root}"
 : "${EXPECTED_REPO_HEAD:?pin the committed harness head}"
@@ -309,6 +310,7 @@ mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
   cd "${REPO_ROOT}"
   env LD_PRELOAD="${CUSPARSE_LIBRARY}" "${PIXI_PY}" - <<'PY'
 import os
+import sys
 from pathlib import Path
 
 import jax
@@ -320,6 +322,8 @@ from recovar.utils.parity_provenance import assert_parity_ancestors
 
 repo = Path(os.environ["RECOVAR_EXPECTED_REPO_ROOT"]).resolve()
 cuda = Path(os.environ["RECOVAR_CUDA_LIB"]).resolve()
+if sys.flags.optimize != 0:
+    raise RuntimeError("runtime validation requires Python assertions")
 assert str(Path(recovar.__file__).resolve()).startswith(str(repo) + "/")
 assert ".pixi/envs/default/" in str(Path(jax.__file__).resolve())
 assert jax.default_backend() == "gpu"
@@ -399,6 +403,9 @@ import json
 import sys
 from pathlib import Path
 
+if sys.flags.optimize != 0:
+    raise RuntimeError("cache-admission validation requires Python assertions")
+
 summary_path, output_path, label, mode, max_gb, expected_bytes = sys.argv[1:]
 summary = json.loads(Path(summary_path).read_text())
 max_gb = float(max_gb)
@@ -416,6 +423,7 @@ for phase in ("cold", "warm"):
         assert mode == "auto", mode
         assert len(events) == 1, events
         event = events[0]
+        assert event["loader_type"] == "recovar.data_io.image_loader.MRCLoader", event
         assert event["num_images"] == 3000, event
         assert event["image_size"] == 128, event
         assert event["estimated_bytes"] == expected_bytes, event
@@ -432,6 +440,15 @@ for phase in ("cold", "warm"):
             == event["high_water_rss_delta_bytes"]
         ), event
         assert event["high_water_rss_delta_bytes"] >= 0, event
+        assert event["high_water_rss_before_bytes"] >= event["current_rss_before_bytes"], event
+        assert event["high_water_rss_after_bytes"] >= event["current_rss_after_bytes"], event
+        for key in (
+            "current_rss_before_bytes",
+            "current_rss_after_bytes",
+            "high_water_rss_before_bytes",
+            "high_water_rss_after_bytes",
+        ):
+            assert event[key] >= 0, event
     phases[phase] = {
         "load_all_count": len(events),
         "load_all_events": events,

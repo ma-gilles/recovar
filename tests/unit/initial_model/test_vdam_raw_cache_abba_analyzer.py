@@ -1,9 +1,6 @@
 import hashlib
 import json
-import os
 import sqlite3
-import subprocess
-import sys
 from pathlib import Path
 
 import mrcfile
@@ -29,12 +26,6 @@ def _write_json(path: Path, value: dict) -> None:
 def _write_manifest(path: Path, entries: list[tuple[Path, str]]) -> str:
     path.write_text("".join(f"{_sha256(artifact)}  {name}\n" for artifact, name in entries))
     return _sha256(path)
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
 
 
 def _audit() -> dict:
@@ -152,7 +143,7 @@ def _resource_snapshot(*, hwm_kb: int) -> dict:
 
 def _cache_event() -> dict:
     rss_before = 1_000_000_000
-    hwm_before = 1_100_000_000
+    hwm_before = rss_before + 8 * 1024**2
     return {
         "loader_type": "recovar.data_io.image_loader.MRCLoader",
         "num_images": 3000,
@@ -202,9 +193,7 @@ def _write_nsight(
         )
         kernel_rows = []
         for index in range(launches):
-            bounds = pass1 if index < launches // 2 else pass2
-            local = index if index < launches // 2 else index - launches // 2
-            start = bounds[0] + local * 2_000_000
+            start = pass1[0] + index * 2_000_000
             kernel_rows.append((start, start + 1_000_000, 0, 1, 1, 1, 1, 32, 1, 1))
         connection.executemany(
             "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", kernel_rows
@@ -261,20 +250,36 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
     interpreter = repo / "python"
     interpreter.symlink_to(external_interpreter)
     source.write_text("VALUE = 1\n")
-    _git(repo, "init", "--quiet")
-    _git(repo, "add", "source.py", "python")
-    _git(repo, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "fixture")
-    git_head = _git(repo, "rev-parse", "HEAD")
-    git_tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    git_head = "1" * 40
+    git_tree = "2" * 40
+
+    def fixture_git_rev_parse(_repo, revision, _label):
+        expected = {
+            f"{git_head}^{{commit}}": git_head,
+            f"{git_head}^{{tree}}": git_tree,
+        }
+        if revision not in expected:
+            raise analyzer.RawCacheSetupError(f"unexpected fixture git revision: {revision}")
+        return expected[revision]
+
+    analyzer._git_rev_parse = fixture_git_rev_parse
     source_digest = _write_manifest(provenance / "source_manifest.sha256", [(source, "source.py")])
 
-    particle_stack = tmp_path / "particles.128.mrcs"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    particle_stack = data_dir / "particles.128.mrcs"
     particle_stack.write_bytes(b"synthetic particle stack")
-    input_file = tmp_path / "checkpoint.star"
-    input_file.write_bytes(b"synthetic checkpoint")
+    checkpoint = tmp_path / "checkpoint.star"
+    checkpoint.write_bytes(b"synthetic checkpoint")
+    input_star = tmp_path / "input.star"
+    input_star.write_bytes(b"synthetic input star")
     input_digest = _write_manifest(
         provenance / "input_manifest.sha256",
-        [(input_file, str(input_file.resolve())), (particle_stack, str(particle_stack.resolve()))],
+        [
+            (checkpoint, str(checkpoint.resolve())),
+            (input_star, str(input_star.resolve())),
+            (particle_stack, str(particle_stack.resolve())),
+        ],
     )
     cuda = root / "runtime" / "cuda" / "libcuda_backproject.so"
     binding = root / "runtime" / "relion_bind" / "_relion_bind_core.so"
@@ -292,6 +297,32 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
     cusparse_library = tmp_path / "libcusparse.so.12"
     nsys_binary.write_bytes(b"nsys")
     cusparse_library.write_bytes(b"cusparse")
+
+    # Unit fixtures replace the production-sealed contract in-process.  The
+    # production CLI has no override path and therefore remains pinned to GF46.
+    analyzer.EXPECTED_CHECKPOINT_OPTIMISER = checkpoint.resolve()
+    analyzer.EXPECTED_INPUT_STAR = input_star.resolve()
+    analyzer.EXPECTED_DATA_DIR = data_dir.resolve()
+    analyzer.EXPECTED_PARTICLE_STACK = particle_stack.resolve()
+    analyzer.EXPECTED_INPUT_MANIFEST_SHA256 = input_digest
+    analyzer.EXPECTED_CHECKPOINT_OPTIMISER_SHA256 = _sha256(checkpoint)
+    analyzer.EXPECTED_INPUT_STAR_SHA256 = _sha256(input_star)
+    analyzer.PARTICLE_STACK_SHA256 = _sha256(particle_stack)
+    analyzer.QUALIFIED_GATE_SHA256SUMS_SHA256 = _sha256(gate_ledger)
+    analyzer.CUDA_SHA256 = _sha256(cuda)
+    analyzer.RELION_BIND_SHA256 = _sha256(binding)
+    analyzer.INTERPRETER_SHA256 = _sha256(interpreter)
+    analyzer.NSYS_SHA256 = _sha256(nsys_binary)
+    analyzer.CUSPARSE_SHA256 = _sha256(cusparse_library)
+    analyzer.EXPECTED_QUALIFIED_GPU_GATE_ROOT = Path("/sealed/gate")
+    analyzer.EXPECTED_GPU_UUID = GPU_UUID
+    analyzer.EXPECTED_GPU_NAME = "NVIDIA H100 80GB HBM3"
+    analyzer.EXPECTED_NODE = "della-h21g4"
+    analyzer.EXPECTED_INPUTS = (
+        (checkpoint.resolve(), _sha256(checkpoint)),
+        (input_star.resolve(), _sha256(input_star)),
+        (particle_stack.resolve(), _sha256(particle_stack)),
+    )
 
     run = {
         "schema": analyzer.RUN_SCHEMA,
@@ -402,7 +433,9 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
             "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL=0 "
             "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=1 "
             f"JAX_COMPILATION_CACHE_DIR={cache.resolve()} python -m scripts.run_vdam_late_iteration_profile "
-            "--checkpoint-iteration 180 --nr-iter 200 --image-batch-size 500 "
+            f"--checkpoint-optimiser {checkpoint.resolve()} --input-star {input_star.resolve()} "
+            f"--data-dir {data_dir.resolve()} --output-root {profile_root.resolve()} "
+            "--checkpoint-iteration 180 --nr-iter 200 --random-seed 29 --image-batch-size 500 "
             "--exact-local-bucket-radix 4 --exact-local-physical-order-chunk-size 0 "
             "--audit-raw-image-cache --cuda-profiler-range\n"
         )
@@ -420,6 +453,49 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
             phase_audits[phase_name] = audit
             phases[phase_name] = {
                 "wall_s": wall + (1.0 if phase_name == "cold" else 0.0),
+                "argv": [
+                    "--i",
+                    str(input_star.resolve()),
+                    "--o",
+                    str((phase_root / "run").resolve()),
+                    "--nr_iter",
+                    "200",
+                    "--grad_write_iter",
+                    "1",
+                    "--K",
+                    "1",
+                    "--tau2_fudge",
+                    "4",
+                    "--sym",
+                    "C1",
+                    "--do_run_C1",
+                    "1",
+                    "--particle_diameter",
+                    "200.0",
+                    "--random_seed",
+                    "29",
+                    "--healpix_order",
+                    "1",
+                    "--oversampling",
+                    "1",
+                    "--offset_range",
+                    "6",
+                    "--offset_step",
+                    "2",
+                    "--padding_factor",
+                    "1",
+                    "--image_batch_size",
+                    "500",
+                    "--datadir",
+                    str(data_dir.resolve()),
+                    "--gpu",
+                    "0",
+                    "--require_custom_cuda",
+                    "--diagnostic_continue_optimiser",
+                    str(checkpoint.resolve()),
+                    "--diagnostic_stop_after_iteration",
+                    "181",
+                ],
                 "meta_path": str(metadata_path.resolve()),
                 "meta_sha256": _sha256(metadata_path),
                 "iteration_profile": {"expectation_time_s": expectation},
@@ -439,6 +515,11 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
                 "raw_image_cache_audit_enabled": True,
                 "exact_local_bucket_radix": 4,
                 "exact_local_physical_order_chunk_size": 0,
+                "checkpoint_optimiser": str(checkpoint.resolve()),
+                "checkpoint_optimiser_sha256": _sha256(checkpoint),
+                "input_star": str(input_star.resolve()),
+                "input_star_sha256": _sha256(input_star),
+                "data_dir": str(data_dir.resolve()),
                 **phases,
             },
         )
@@ -479,6 +560,13 @@ def _rewrite_summary(root: Path, label: str, mutate) -> None:
     _write_json(path, value)
 
 
+def _rewrite_run(root: Path, mutate) -> None:
+    path = root / "provenance" / "run.json"
+    value = json.loads(path.read_text())
+    mutate(value)
+    _write_json(path, value)
+
+
 def _rewrite_cache_event(root: Path, label: str, phase: str, mutate) -> None:
     summary_path = root / "runs" / label / "profile" / "profile_summary.json"
     summary = json.loads(summary_path.read_text())
@@ -504,6 +592,29 @@ def _rewrite_metadata(root: Path, label: str, phase: str, mutate) -> None:
         label,
         lambda summary: summary[phase].update(meta_sha256=_sha256(metadata_path)),
     )
+
+
+def _set_kernel_duration(root: Path, label: str, duration_ns: int) -> None:
+    sqlite_path = root / "nsight" / f"{label}.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET end = start + ?",
+            (duration_ns,),
+        )
+        count = connection.execute(
+            "SELECT COUNT(*) FROM CUPTI_ACTIVITY_KIND_KERNEL"
+        ).fetchone()[0]
+    total_ns = int(count) * int(duration_ns)
+    summary_path = root / "nsight" / f"{label}_summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["devices"]["0"].update(kernel_count=count, gpu_busy_ns=total_ns)
+    summary["kernels"][0].update(
+        count=count,
+        total_ns=total_ns,
+        max_ns=duration_ns,
+        mean_ns=float(duration_ns),
+    )
+    _write_json(summary_path, summary)
 
 
 def _kernel_signature(name: str, *, block_x: int, grid_x: int) -> str:
@@ -592,6 +703,19 @@ def test_gpu_timing_equivalence_requires_one_percent_medians_and_two_percent_arm
 
 
 @pytest.mark.unit
+def test_full_analyzer_rejects_mode_dependent_gpu_time_shift(tmp_path):
+    root, repo = _build_root(tmp_path)
+    for repeat in analyzer.REPEAT_IDS:
+        _set_kernel_duration(root, f"cache_auto_{repeat}", 1_015_000)
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["coarse_sum_gpu_time_equivalent"] is False
+    assert report["performance"]["gates"]["total_union_gpu_time_equivalent"] is False
+
+
+@pytest.mark.unit
 def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
     root, repo = _build_root(tmp_path)
 
@@ -606,7 +730,8 @@ def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
     assert report["performance"]["cache_admission_memory"]["limit_bytes"] == (
         analyzer.EXPECTED_CACHE_BYTES + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES
     )
-    assert report["science"]["all_cross_mode_maps_within_repeat_envelope"] is True
+    assert report["science"]["all_auto_repeat_maps_within_off_repeat_envelope"] is True
+    assert report["science"]["all_cross_mode_maps_within_off_repeat_envelope"] is True
     assert report["provenance"]["final_source_manifest_state"] == "pending_runner_seal"
     assert Path(report["provenance"]["interpreter"]["path"]).resolve() == (
         tmp_path / "external_python"
@@ -621,34 +746,7 @@ def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
     assert json.loads(output_json.read_text())["decision"]["status"] == "GO"
     assert output_markdown.read_text().startswith("# GO")
 
-    subprocess_json = tmp_path / "analysis" / "subprocess_report.json"
-    subprocess_markdown = tmp_path / "analysis" / "subprocess_report.md"
-    environment = dict(os.environ)
-    environment.update(JAX_PLATFORMS="cpu", JAX_PLATFORM_NAME="cpu")
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "scripts.analyze_vdam_raw_cache_abba",
-            "--root",
-            str(root),
-            "--repo",
-            str(repo),
-            "--output-json",
-            str(subprocess_json),
-            "--output-markdown",
-            str(subprocess_markdown),
-        ],
-        cwd=Path(__file__).resolve().parents[3],
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert json.loads(subprocess_json.read_text())["decision"]["status"] == "GO"
-
-
+@pytest.mark.unit
 def test_valid_but_slow_auto_reports_no_go_and_cli_exit_one(tmp_path):
     root, repo = _build_root(tmp_path)
     for repeat in analyzer.REPEAT_IDS:
@@ -668,6 +766,121 @@ def test_valid_but_slow_auto_reports_no_go_and_cli_exit_one(tmp_path):
         ["--root", str(root), "--repo", str(repo), "--output-json", str(output_json), "--output-markdown", str(output_md)]
     ) == 1
     assert json.loads(output_json.read_text())["decision"]["status"] == "NO_GO"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutations", "expected_status", "gate"),
+    [
+        (
+            [("cache_auto_4", {"wall_s": 10.0})],
+            "GO",
+            "at_least_3_of_4_paired_warm_wall_faster",
+        ),
+        (
+            [
+                ("cache_auto_3", {"wall_s": 10.2}),
+                ("cache_auto_4", {"wall_s": 10.0}),
+            ],
+            "NO_GO",
+            "at_least_3_of_4_paired_warm_wall_faster",
+        ),
+        (
+            [("cache_auto_4", {"iteration_profile": {"expectation_time_s": 8.0}})],
+            "NO_GO",
+            "all_4_paired_expectation_faster",
+        ),
+    ],
+)
+def test_paired_win_boundaries_are_exact(tmp_path, mutations, expected_status, gate):
+    root, repo = _build_root(tmp_path)
+    for label, values in mutations:
+        _rewrite_summary(
+            root,
+            label,
+            lambda summary, values=values: summary["warm"].update(values),
+        )
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == expected_status
+    assert report["performance"]["gates"][gate] is (expected_status == "GO")
+
+
+@pytest.mark.unit
+def test_run_json_cannot_self_authorize_an_unsealed_toolchain(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_run(root, lambda run: run.update(nsys_sha256="0" * 64))
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="run provenance differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--checkpoint-optimiser",
+        "--input-star",
+        "--data-dir",
+        "--output-root",
+        "--random-seed",
+    ],
+)
+def test_command_ledger_must_use_sealed_inputs_seed_and_output(tmp_path, option):
+    root, repo = _build_root(tmp_path)
+    command_path = root / "provenance" / "cache_auto_4_command.sh"
+    expected = {
+        "--checkpoint-optimiser": str(analyzer.EXPECTED_CHECKPOINT_OPTIMISER),
+        "--input-star": str(analyzer.EXPECTED_INPUT_STAR),
+        "--data-dir": str(analyzer.EXPECTED_DATA_DIR),
+        "--output-root": str((root / "runs/cache_auto_4/profile").resolve()),
+        "--random-seed": "29",
+    }
+    wrong = {
+        "--checkpoint-optimiser": str(analyzer.EXPECTED_INPUT_STAR),
+        "--input-star": str(analyzer.EXPECTED_CHECKPOINT_OPTIMISER),
+        "--data-dir": str(root.resolve()),
+        "--output-root": str((root / "runs/cache_auto_4/wrong-profile").resolve()),
+        "--random-seed": "30",
+    }
+    command = command_path.read_text().replace(
+        f"{option} {expected[option]}",
+        f"{option} {wrong[option]}",
+    )
+    command_path.write_text(command)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=f"wrong {option}"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_profile_summary_must_bind_sealed_input_paths_and_digests(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_summary(
+        root,
+        "cache_off_3",
+        lambda summary: summary.update(
+            input_star=str(analyzer.EXPECTED_CHECKPOINT_OPTIMISER),
+            input_star_sha256=analyzer.EXPECTED_CHECKPOINT_OPTIMISER_SHA256,
+        ),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="profile summary differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_profile_argv_rejects_appended_equals_form_override(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_summary(
+        root,
+        "cache_auto_4",
+        lambda summary: summary["warm"]["argv"].append("--random_seed=30"),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="profiler argv differs"):
+        analyzer.analyze(root, repo=repo)
 
 
 @pytest.mark.unit
@@ -719,6 +932,32 @@ def test_selected_particle_count_must_match_gf46_subset(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda metadata: metadata["selected_particle_ids"].__setitem__(
+                1, metadata["selected_particle_ids"][0]
+            ),
+            "selected particle IDs repeat",
+        ),
+        (
+            lambda metadata: metadata["selected_particle_ids"].__setitem__(
+                0, analyzer.EXPECTED_CACHE_IMAGES
+            ),
+            "selected particle IDs are outside",
+        ),
+    ],
+)
+def test_selected_particle_ids_must_be_unique_and_in_range(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_metadata(root, "cache_auto_4", "warm", mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
 def test_directional_cross_mode_map_drift_is_no_go(tmp_path):
     root, repo = _build_root(tmp_path)
     shifted = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
@@ -733,7 +972,39 @@ def test_directional_cross_mode_map_drift_is_no_go(tmp_path):
 
 
 @pytest.mark.unit
-def test_cache_admission_hwm_gate_is_no_go(tmp_path):
+def test_auto_variability_cannot_inflate_its_own_science_envelope(tmp_path):
+    root, repo = _build_root(tmp_path)
+    baseline = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
+    for repeat in analyzer.REPEAT_IDS:
+        _write_map(
+            root
+            / "runs"
+            / f"cache_off_{repeat}"
+            / "profile"
+            / "warm"
+            / "run_it181_class001.mrc",
+            baseline,
+        )
+        shifted = baseline + (0.5 if repeat % 2 else -0.5)
+        _write_map(
+            root
+            / "runs"
+            / f"cache_auto_{repeat}"
+            / "profile"
+            / "warm"
+            / "run_it181_class001.mrc",
+            shifted,
+        )
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["science"]["all_auto_repeat_maps_within_off_repeat_envelope"] is False
+    assert report["decision"]["gates"]["auto_repeat_map_variability_within_off_envelope"] is False
+
+
+@pytest.mark.unit
+def test_cache_admission_peak_gate_is_no_go(tmp_path):
     root, repo = _build_root(tmp_path)
     excess = (
         analyzer.EXPECTED_CACHE_BYTES
@@ -753,11 +1024,69 @@ def test_cache_admission_hwm_gate_is_no_go(tmp_path):
     report = analyzer.analyze(root, repo=repo)
 
     assert report["decision"]["status"] == "NO_GO"
-    assert report["performance"]["gates"]["each_cache_admission_hwm_within_cache_plus_64mib"] is False
+    assert (
+        report["performance"]["gates"][
+            "each_cache_admission_peak_and_retained_rss_within_cache_plus_64mib"
+        ]
+        is False
+    )
 
 
 @pytest.mark.unit
-def test_stage_kernel_count_change_is_no_go(tmp_path):
+def test_preexisting_hwm_cannot_mask_excess_cache_admission_memory(tmp_path):
+    root, repo = _build_root(tmp_path)
+    retained = 2 * analyzer.EXPECTED_CACHE_BYTES
+
+    def mask_with_old_hwm(event):
+        baseline = event["current_rss_before_bytes"]
+        event.update(
+            current_rss_after_bytes=baseline + retained,
+            current_rss_delta_bytes=retained,
+            high_water_rss_before_bytes=baseline + retained,
+            high_water_rss_after_bytes=baseline + retained,
+            high_water_rss_delta_bytes=0,
+        )
+
+    _rewrite_cache_event(root, "cache_auto_1", "warm", mask_with_old_hwm)
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    memory = report["performance"]["cache_admission_memory"]["arms"]["cache_auto_1"]["warm"]
+    assert memory["high_water_rss_increment_bytes"] == 0
+    assert memory["peak_rss_above_call_baseline_bytes"] == retained
+    assert memory["current_rss_delta_bytes"] == retained
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda event: event.update(loader_type="wrong.Loader"),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event.update(
+                current_rss_before_bytes=-1,
+                current_rss_after_bytes=analyzer.EXPECTED_CACHE_BYTES - 1,
+                high_water_rss_before_bytes=-1,
+                high_water_rss_after_bytes=analyzer.EXPECTED_CACHE_BYTES - 1,
+            ),
+            "current_rss_before_bytes is negative",
+        ),
+    ],
+)
+def test_cache_event_loader_and_absolute_memory_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_cache_event(root, "cache_auto_4", "warm", mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_coarse_kernel_outside_pass1_fails_closed(tmp_path):
     root, repo = _build_root(tmp_path)
     sqlite_path = root / "nsight" / "cache_auto_1.sqlite"
     with sqlite3.connect(sqlite_path) as connection:
@@ -766,14 +1095,50 @@ def test_stage_kernel_count_change_is_no_go(tmp_path):
             (7_000_000_000, 7_001_000_000),
         )
 
-    report = analyzer.analyze(root, repo=repo)
-
-    assert report["decision"]["status"] == "NO_GO"
-    assert report["performance"]["gates"]["cuda_kernel_names_and_recovar_geometry_exact"] is False
+    with pytest.raises(analyzer.RawCacheSetupError, match="coarse-kernel stage placement differs"):
+        analyzer.analyze(root, repo=repo)
 
 
 @pytest.mark.unit
-def test_kernel_name_and_coarse_count_change_is_no_go(tmp_path):
+def test_missing_nsight_geometry_column_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_auto_2.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("ALTER TABLE CUPTI_ACTIVITY_KIND_KERNEL DROP COLUMN gridZ")
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="kernel geometry columns differ"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_overlapping_or_reordered_pass_ranges_fail_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_off_4.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "UPDATE NVTX_EVENTS SET start = ?, end = ? WHERE textId = 5",
+            (3_000_000_000, 4_000_000_000),
+        )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="ordered, and disjoint"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_nvtx_stage_duration_must_match_serialized_timer(tmp_path):
+    root, repo = _build_root(tmp_path)
+
+    def inflate_pass2(metadata):
+        metadata["sparse_pass2_profile_summary"]["pass2_time_s"] += 0.10
+
+    _rewrite_metadata(root, "cache_auto_3", "warm", inflate_pass2)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="NVTX duration differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_coarse_kernel_name_and_count_change_fails_closed(tmp_path):
     root, repo = _build_root(tmp_path)
     sqlite_path = root / "nsight" / "cache_auto_1.sqlite"
     with sqlite3.connect(sqlite_path) as connection:
@@ -790,11 +1155,8 @@ def test_kernel_name_and_coarse_count_change_is_no_go(tmp_path):
     summary["kernels"][0]["total_ns"] = 999_000_000
     _write_json(summary_path, summary)
 
-    report = analyzer.analyze(root, repo=repo)
-
-    assert report["decision"]["status"] == "NO_GO"
-    assert report["performance"]["gates"]["coarse_launches_exactly_1000_all_arms"] is False
-    assert report["performance"]["gates"]["cuda_kernel_names_and_recovar_geometry_exact"] is False
+    with pytest.raises(analyzer.RawCacheSetupError, match="coarse-kernel stage placement differs"):
+        analyzer.analyze(root, repo=repo)
 
 
 @pytest.mark.unit
@@ -830,14 +1192,14 @@ def test_kernel_name_and_coarse_count_change_is_no_go(tmp_path):
             ),
             "GF46 iteration-181 schedule differs",
         ),
-        (
-            lambda root: _rewrite_summary(
-                root,
-                "cache_off_1",
-                lambda value: value["warm"]["schedule"].update(subset_size=None),
+            (
+                lambda root: _rewrite_summary(
+                    root,
+                    "cache_off_1",
+                    lambda value: value["warm"]["schedule"].update(subset_size=None),
+                ),
+                "subset_size must be an integer",
             ),
-            "GF46 subset size differs",
-        ),
     ],
 )
 def test_structural_evidence_mutations_fail_closed(tmp_path, mutate, message):

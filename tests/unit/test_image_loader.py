@@ -1,12 +1,12 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
-from pathlib import Path
 
-from recovar.data_io import image_loader
-from recovar.data_io import starfile
 from recovar import utils
 from recovar.data_io import image_backends as cryo_dataset
+from recovar.data_io import image_loader, starfile
 
 pytestmark = pytest.mark.unit
 

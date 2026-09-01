@@ -116,6 +116,11 @@ def test_late_profile_metadata_requires_exactly_one_diagnostic_iteration(tmp_pat
     with pytest.raises(RuntimeError, match="subset_size is invalid"):
         _profile_metadata(prefix, 181)
 
+    metadata["subset_size"] = 1000.0
+    meta_path.write_text(json.dumps(metadata))
+    with pytest.raises(RuntimeError, match="subset_size is invalid"):
+        _profile_metadata(prefix, 181)
+
     metadata["subset_size"] = 999
     meta_path.write_text(json.dumps(metadata))
     with pytest.raises(RuntimeError, match="does not match selected_particle_ids"):

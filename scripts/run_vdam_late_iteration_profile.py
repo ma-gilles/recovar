@@ -222,10 +222,10 @@ def _profile_metadata(output_prefix: Path, iteration: int) -> dict[str, object]:
     missing_schedule = [key for key in schedule_keys if key not in meta]
     if missing_schedule:
         raise RuntimeError(f"iteration metadata lacks required schedule fields: {missing_schedule}")
-    try:
-        subset_size = int(meta["subset_size"])
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("iteration metadata subset_size is invalid") from exc
+    raw_subset_size = meta["subset_size"]
+    if isinstance(raw_subset_size, bool) or not isinstance(raw_subset_size, int):
+        raise RuntimeError("iteration metadata subset_size is invalid")
+    subset_size = int(raw_subset_size)
     if subset_size == 0 or subset_size < -1:
         raise RuntimeError(f"iteration metadata subset_size is invalid: {subset_size}")
     selected_particle_ids = meta.get("selected_particle_ids")

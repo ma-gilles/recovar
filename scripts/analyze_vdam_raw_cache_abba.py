@@ -80,12 +80,53 @@ LOADER_RANGE = "MRCLoader._load"
 PASS1_RANGE = "kclass.adaptive.pass1_significance"
 PASS2_RANGE = "local.run_local_em_exact"
 STAGE_RANGES = (PASS1_RANGE, PASS2_RANGE)
+MIN_STAGE_TIMER_DELTA_S = -0.001
+MAX_STAGE_TIMER_ABS_DELTA_S = {
+    PASS1_RANGE: 0.001,
+    PASS2_RANGE: 0.064,
+}
+MAX_STAGE_TIMER_RELATIVE_DELTA = {
+    PASS1_RANGE: 0.0005,
+    PASS2_RANGE: 0.03,
+}
 SCIENCE_BASE_HEAD = "77e09c292e438a265a6d157414b2a0fe525710e6"
 SCIENCE_BASE_TREE = "384448a3ce6639e571cad53d2b82c1b18df1979a"
+GF46_ROOT = Path(
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "vdam_full_expansion_v3_984637b7d_87274be_20260826/"
+    "vdam-gf46/repeat-01/vdam-gf46"
+)
+EXPECTED_CHECKPOINT_OPTIMISER = GF46_ROOT / "relion/run_it180_optimiser.star"
+EXPECTED_INPUT_STAR = GF46_ROOT / "relion/run_it180_data.star"
+EXPECTED_DATA_DIR = GF46_ROOT / "data"
+EXPECTED_PARTICLE_STACK = EXPECTED_DATA_DIR / "particles.128.mrcs"
+EXPECTED_INPUT_MANIFEST_SHA256 = "de224471a690d1faaae4067217dbcc90b632269d62b0b3372b20aafa69157d91"
+EXPECTED_CHECKPOINT_OPTIMISER_SHA256 = "e55c86262ab1800eef5da19845833dac852c8d0b01b6940018dbb4ad95558606"
+EXPECTED_INPUT_STAR_SHA256 = "90d4b8cf9413d81d71dc91cb3bf36c56cfe74b218fffc52e8adc0452c64d99c0"
 PARTICLE_STACK_SHA256 = "804af933bd315f41f0159f62e93867cf852d70cb29f2f27a525fb2fc3eb68ad9"
 QUALIFIED_GATE_SHA256SUMS_SHA256 = "9ab443af3a90f63bc0fd6eeac90f9c15f84d7f667c6c19171682a11f0c168cc8"
+CUDA_SHA256 = "2af7bf1e4cbdc10705948d907c087d1662db612fe8d57362f1390033ac6c047b"
+RELION_BIND_SHA256 = "9bbb1fb0ce6fa7ac816598ec521453515d163221642b916e5715bb2850798980"
+INTERPRETER_SHA256 = "48556a44c0dd1570866beb838e6fcbea771bce93d413acd4197bb2f254b72d23"
 NSYS_SHA256 = "9b32b4e9beee469bc8c26640db228b04583234505c315e23f7e622efd61a68ab"
 CUSPARSE_SHA256 = "58ffc54edb1d007f56a1718aaadcb30f45bbf662f43515920ea8ff094304bdbf"
+EXPECTED_QUALIFIED_GPU_GATE_ROOT = Path(
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_prehalf_h100_13315513"
+)
+EXPECTED_GPU_UUID = "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+EXPECTED_GPU_NAME = "NVIDIA H100 80GB HBM3"
+EXPECTED_NODE = "della-h21g4"
+EXPECTED_INPUTS = (
+    (EXPECTED_CHECKPOINT_OPTIMISER, EXPECTED_CHECKPOINT_OPTIMISER_SHA256),
+    (GF46_ROOT / "relion/run_it180_model.star", "b13bc7cc92e4af593ef37192e4d240837ce53f582a964e9314ad81e5bfb2a9bd"),
+    (EXPECTED_INPUT_STAR, EXPECTED_INPUT_STAR_SHA256),
+    (GF46_ROOT / "relion/run_it180_sampling.star", "e89eff677d2b5f4135758112d394b175e59ffc5961ffb23e17e77af46534db71"),
+    (GF46_ROOT / "relion/run_it180_class001.mrc", "79bb88f637f3ee8b52232102e0b1b1111e34b32b35efd84829252cfd65867180"),
+    (GF46_ROOT / "relion/run_it180_1moment001.mrc", "0a60c687c8b7b7594786dd70c57fdaa7f4ae5a7f9f3270918f1c73ef4551d294"),
+    (GF46_ROOT / "relion/run_it180_1moment002.mrc", "18ecd542140a6671d393b41136df943caa17c17c21ed57d8bb791c2ad2efbcc8"),
+    (GF46_ROOT / "relion/run_it180_2moment001.mrc", "a5140486112948bf93cf4cf63db7afead89a7fd62bdef0ca167af6b8f692bec5"),
+    (EXPECTED_PARTICLE_STACK, PARTICLE_STACK_SHA256),
+)
 
 ARM_SPECS = (
     ("cache_off_1", "off", 1),
@@ -207,8 +248,18 @@ def _validate_command(
     )
     for flag in ("--audit-raw-image-cache", "--cuda-profiler-range"):
         _require(tokens.count(flag) == 1, f"{label} command must contain {flag} exactly once")
+    _exact_option(tokens, "--checkpoint-optimiser", str(EXPECTED_CHECKPOINT_OPTIMISER), label)
+    _exact_option(tokens, "--input-star", str(EXPECTED_INPUT_STAR), label)
+    _exact_option(tokens, "--data-dir", str(EXPECTED_DATA_DIR), label)
+    _exact_option(
+        tokens,
+        "--output-root",
+        str((root / "runs" / label / "profile").resolve()),
+        label,
+    )
     _exact_option(tokens, "--checkpoint-iteration", "180", label)
     _exact_option(tokens, "--nr-iter", "200", label)
+    _exact_option(tokens, "--random-seed", "29", label)
     _exact_option(tokens, "--image-batch-size", "500", label)
     _exact_option(tokens, "--exact-local-bucket-radix", "4", label)
     _exact_option(tokens, "--exact-local-physical-order-chunk-size", "0", label)
@@ -220,6 +271,64 @@ def _validate_command(
     expected_cache = (root / "runs" / label / "jax_cache").resolve()
     _require(cache_path == expected_cache, f"{label} JAX cache path differs")
     return {"sha256": _sha256(path), "jax_cache": str(cache_path)}
+
+
+def _validate_profile_argv(
+    argv: Any,
+    *,
+    root: Path,
+    label: str,
+    phase_name: str,
+) -> None:
+    _require(
+        isinstance(argv, list) and all(isinstance(token, str) for token in argv),
+        f"{label} {phase_name} profiler argv is invalid",
+    )
+    expected_output = root / "runs" / label / "profile" / phase_name / "run"
+    expected = [
+        "--i",
+        str(EXPECTED_INPUT_STAR),
+        "--o",
+        str(expected_output.resolve()),
+        "--nr_iter",
+        "200",
+        "--grad_write_iter",
+        "1",
+        "--K",
+        "1",
+        "--tau2_fudge",
+        "4",
+        "--sym",
+        "C1",
+        "--do_run_C1",
+        "1",
+        "--particle_diameter",
+        "200.0",
+        "--random_seed",
+        "29",
+        "--healpix_order",
+        "1",
+        "--oversampling",
+        "1",
+        "--offset_range",
+        "6",
+        "--offset_step",
+        "2",
+        "--padding_factor",
+        "1",
+        "--image_batch_size",
+        "500",
+        "--datadir",
+        str(EXPECTED_DATA_DIR),
+        "--gpu",
+        "0",
+        "--require_custom_cuda",
+        "--diagnostic_continue_optimiser",
+        str(EXPECTED_CHECKPOINT_OPTIMISER),
+        "--diagnostic_stop_after_iteration",
+        "181",
+    ]
+    _require(argv == expected, f"{label} {phase_name} profiler argv differs")
 
 
 def _validate_execution_order(path: Path, root: Path) -> list[dict[str, Any]]:
@@ -330,6 +439,18 @@ def _validate_provenance(root: Path, repo: Path) -> tuple[dict[str, Any], dict[s
         "science_promotion_allowed": False,
         "science_base_head": SCIENCE_BASE_HEAD,
         "science_base_tree": SCIENCE_BASE_TREE,
+        "input_manifest_sha256": EXPECTED_INPUT_MANIFEST_SHA256,
+        "particle_stack_sha256": PARTICLE_STACK_SHA256,
+        "qualified_gpu_gate_root": str(EXPECTED_QUALIFIED_GPU_GATE_ROOT),
+        "qualified_gate_sha256sums_sha256": QUALIFIED_GATE_SHA256SUMS_SHA256,
+        "cuda_sha256": CUDA_SHA256,
+        "relion_bind_sha256": RELION_BIND_SHA256,
+        "interpreter_sha256": INTERPRETER_SHA256,
+        "nsys_sha256": NSYS_SHA256,
+        "cusparse_sha256": CUSPARSE_SHA256,
+        "gpu_uuid": EXPECTED_GPU_UUID,
+        "gpu_name": EXPECTED_GPU_NAME,
+        "node": EXPECTED_NODE,
     }
     mismatches = {
         key: {"expected": value, "observed": run.get(key)}
@@ -416,35 +537,54 @@ def _validate_provenance(root: Path, repo: Path) -> tuple[dict[str, Any], dict[s
         _require(final_source.read_bytes() == source_path.read_bytes(), "source changed during the ABBA run")
     inputs = _validate_manifest(
         provenance / "input_manifest.sha256",
-        expected_digest=run["input_manifest_sha256"],
+        expected_digest=EXPECTED_INPUT_MANIFEST_SHA256,
         relative_base=None,
         label="input manifest",
     )
+    observed_inputs = {
+        (entry["path"], entry["sha256"])
+        for entry in inputs["entries"]
+    }
+    expected_inputs = {
+        (str(path.resolve()), digest)
+        for path, digest in EXPECTED_INPUTS
+    }
+    _require(observed_inputs == expected_inputs, "input manifest entries differ from sealed GF46 inputs")
     _require(
-        sum(entry["sha256"] == run["particle_stack_sha256"] for entry in inputs["entries"]) == 1,
+        sum(
+            entry["path"] == str(EXPECTED_PARTICLE_STACK.resolve())
+            and entry["sha256"] == PARTICLE_STACK_SHA256
+            for entry in inputs["entries"]
+        )
+        == 1,
         "input manifest does not uniquely seal the GF46 particle stack",
     )
     gate_ledger = provenance / "qualified_gate.SHA256SUMS"
     gate_ledger_digest = provenance / "qualified_gate.SHA256SUMS.sha256"
     _require(gate_ledger.is_file() and gate_ledger_digest.is_file(), "qualified gate ledgers are missing")
-    _require(_sha256(gate_ledger) == run["qualified_gate_sha256sums_sha256"], "qualified gate ledger digest differs")
+    _require(
+        _sha256(gate_ledger) == QUALIFIED_GATE_SHA256SUMS_SHA256,
+        "qualified gate ledger digest differs",
+    )
     _require(
         _read_single_line(gate_ledger_digest, "qualified gate ledger digest").split()[0]
-        == run["qualified_gate_sha256sums_sha256"],
+        == QUALIFIED_GATE_SHA256SUMS_SHA256,
         "qualified gate digest ledger differs",
     )
     cuda_sha, cuda_path = _parse_sha_line(provenance / "qualified_cuda.sha256", "CUDA binary", root=root)
     bind_sha, bind_path = _parse_sha_line(provenance / "relion_bind.sha256", "RELION binding", root=root)
     interpreter = _validate_external_sha_line(
         provenance / "interpreter.sha256",
-        run["interpreter_sha256"],
+        INTERPRETER_SHA256,
         "interpreter",
     )
-    _require(cuda_sha == run["cuda_sha256"], "CUDA digest differs from run.json")
-    _require(bind_sha == run["relion_bind_sha256"], "RELION binding digest differs from run.json")
-    nsys_binary = _validate_external_sha_line(provenance / "nsys.sha256", run["nsys_sha256"], "Nsight binary")
+    _require(cuda_sha == CUDA_SHA256, "CUDA digest differs from sealed binary")
+    _require(bind_sha == RELION_BIND_SHA256, "RELION binding digest differs from sealed binary")
+    nsys_binary = _validate_external_sha_line(
+        provenance / "nsys.sha256", NSYS_SHA256, "Nsight binary"
+    )
     cusparse = _validate_external_sha_line(
-        provenance / "cusparse.sha256", run["cusparse_sha256"], "cuSPARSE library"
+        provenance / "cusparse.sha256", CUSPARSE_SHA256, "cuSPARSE library"
     )
     execution = _validate_execution_order(provenance / "execution_order.tsv", root)
     run_dirs = {path.name for path in (root / "runs").iterdir() if path.is_dir()}
@@ -527,31 +667,41 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
     coarse: list[tuple[int, int]] = []
     devices: set[int] = set()
     signature_counts: dict[str, int] = {}
-    shape_columns = tuple(
-        column
-        for column in ("gridX", "gridY", "gridZ", "blockX", "blockY", "blockZ")
-        if column in kernel_rows[0].keys()
+    shape_columns = ("gridX", "gridY", "gridZ", "blockX", "blockY", "blockZ")
+    required_kernel_columns = {
+        "start",
+        "end",
+        "deviceId",
+        *shape_columns,
+    }
+    _require(
+        required_kernel_columns.issubset(kernel_rows[0].keys()),
+        f"{label} Nsight kernel geometry columns differ",
     )
     for row in kernel_rows:
+        _require(
+            all(column in row.keys() and row[column] is not None for column in required_kernel_columns),
+            f"{label} Nsight kernel row lacks required geometry",
+        )
         start, end = int(row["start"]), int(row["end"])
         _require(end >= start, f"{label} has a negative kernel interval")
         interval = (start, end)
         kernels.append(interval)
-        devices.add(int(row["deviceId"]) if "deviceId" in row.keys() else 0)
+        devices.add(int(row["deviceId"]))
         name = nsys_sqlite._name(
             row,
             candidates=("shortName", "demangledName", "mangledName", "name"),
             strings=strings,
         )
         signature = json.dumps(
-            {"name": name, "device": int(row["deviceId"]) if "deviceId" in row.keys() else 0,
+            {"name": name, "device": int(row["deviceId"]),
              **{column: int(row[column]) for column in shape_columns}},
             sort_keys=True,
         )
         signature_counts[signature] = signature_counts.get(signature, 0) + 1
         if name == COARSE_KERNEL_NAME:
             coarse.append(interval)
-    _require(len(devices) == 1, f"{label} Nsight GPU topology differs")
+    _require(devices == {0}, f"{label} Nsight GPU topology differs")
     _require(coarse, f"{label} has no coarse kernels")
     ranges: dict[str, list[tuple[int, int]]] = {
         name: [] for name in (GETITEM_RANGE, LOADER_RANGE, PASS1_RANGE, PASS2_RANGE)
@@ -573,6 +723,21 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
     expected_loader_count = 2_000 if mode == "off" else 1
     _require(len(ranges[LOADER_RANGE]) == expected_loader_count, f"{label} loader NVTX count differs")
     pass_bounds = {name: ranges[name][0] for name in STAGE_RANGES}
+    pass1_bounds = pass_bounds[PASS1_RANGE]
+    pass2_bounds = pass_bounds[PASS2_RANGE]
+    _require(
+        pass1_bounds[0] < pass1_bounds[1] <= pass2_bounds[0] < pass2_bounds[1],
+        f"{label} pass ranges are not positive, ordered, and disjoint",
+    )
+    coarse_inside = {
+        name: sum(_inside(interval, pass_bounds[name]) for interval in coarse)
+        for name in STAGE_RANGES
+    }
+    _require(
+        coarse_inside == {PASS1_RANGE: EXPECTED_COARSE_LAUNCHES, PASS2_RANGE: 0}
+        and coarse_inside[PASS1_RANGE] == len(coarse),
+        f"{label} coarse-kernel stage placement differs",
+    )
     loader_inside = {
         name: sum(_inside(interval, pass_bounds[name]) for interval in ranges[LOADER_RANGE])
         for name in STAGE_RANGES
@@ -600,6 +765,7 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
         stage_rows[name] = {
             "duration_s": duration_ns / 1e9,
             "kernel_count": sum(_inside(interval, bounds) for interval in kernels),
+            "coarse_kernel_count": coarse_inside[name],
             "gpu_kernel_union_s": kernel_union_ns / 1e9,
             "no_kernel_s": (duration_ns - kernel_union_ns) / 1e9,
             "loader_count": loader_inside[name],
@@ -645,6 +811,7 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
 def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
     _require(isinstance(event, dict), f"{label} cache event is invalid")
     expected = {
+        "loader_type": "recovar.data_io.image_loader.MRCLoader",
         "num_images": EXPECTED_CACHE_IMAGES,
         "image_size": EXPECTED_IMAGE_SIZE,
         "dtype": EXPECTED_CACHE_DTYPE,
@@ -655,7 +822,6 @@ def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
     }
     mismatches = {key: (event.get(key), value) for key, value in expected.items() if event.get(key) != value}
     _require(not mismatches, f"{label} cache admission differs: {mismatches}")
-    _require(isinstance(event.get("loader_type"), str) and event["loader_type"], f"{label} loader type is invalid")
     elapsed = _finite_number(event.get("elapsed_s"), f"{label} cache preload time", positive=True)
     memory: dict[str, int] = {}
     for key in (
@@ -667,6 +833,8 @@ def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
         "high_water_rss_delta_bytes",
     ):
         memory[key] = _integer(event.get(key), f"{label} {key}")
+        if key.endswith(("_before_bytes", "_after_bytes")):
+            _require(memory[key] >= 0, f"{label} {key} is negative")
     _require(
         memory["current_rss_after_bytes"] - memory["current_rss_before_bytes"]
         == memory["current_rss_delta_bytes"],
@@ -678,6 +846,14 @@ def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
         f"{label} high-water RSS delta differs",
     )
     _require(memory["high_water_rss_delta_bytes"] >= 0, f"{label} high-water RSS decreased")
+    _require(
+        memory["high_water_rss_before_bytes"] >= memory["current_rss_before_bytes"],
+        f"{label} pre-load high-water RSS is below current RSS",
+    )
+    _require(
+        memory["high_water_rss_after_bytes"] >= memory["current_rss_after_bytes"],
+        f"{label} post-load high-water RSS is below current RSS",
+    )
     return {**event, **memory, "elapsed_s": elapsed}
 
 
@@ -737,7 +913,8 @@ def _validate_schedule(schedule: Any, label: str) -> dict[str, Any]:
         _require(_integer(schedule[key], f"{label} {key}") > 0, f"{label} {key} must be positive")
     _require(schedule["current_size"] == EXPECTED_IMAGE_SIZE, f"{label} current size differs from GF46")
     _require(
-        schedule["subset_size"] == EXPECTED_SUBSET_SIZE,
+        _integer(schedule["subset_size"], f"{label} subset_size")
+        == EXPECTED_SUBSET_SIZE,
         f"{label} GF46 subset size differs",
     )
     perturbation = schedule["random_perturbation"]
@@ -835,11 +1012,18 @@ def _load_arm(root: Path, spec: tuple[str, str, int]) -> dict[str, Any]:
         "raw_image_cache_audit_enabled": True,
         "exact_local_bucket_radix": 4,
         "exact_local_physical_order_chunk_size": 0,
+        "checkpoint_optimiser": str(EXPECTED_CHECKPOINT_OPTIMISER),
+        "checkpoint_optimiser_sha256": EXPECTED_CHECKPOINT_OPTIMISER_SHA256,
+        "input_star": str(EXPECTED_INPUT_STAR),
+        "input_star_sha256": EXPECTED_INPUT_STAR_SHA256,
+        "data_dir": str(EXPECTED_DATA_DIR),
     }
     mismatches = {key: (summary.get(key), value) for key, value in expected.items() if summary.get(key) != value}
     _require(not mismatches, f"{label} profile summary differs: {mismatches}")
     _require(isinstance(summary.get("cold"), dict) and isinstance(summary.get("warm"), dict), f"{label} phases differ")
     cold, warm = summary["cold"], summary["warm"]
+    _validate_profile_argv(cold.get("argv"), root=root, label=label, phase_name="cold")
+    _validate_profile_argv(warm.get("argv"), root=root, label=label, phase_name="warm")
     cold_events = _validate_cache_audit(cold, label=label, mode=mode, phase_name="cold")
     warm_events = _validate_cache_audit(warm, label=label, mode=mode, phase_name="warm")
     cold_outputs = _load_phase_outputs(root, label, "cold", cold)
@@ -853,6 +1037,33 @@ def _load_arm(root: Path, spec: tuple[str, str, int]) -> dict[str, Any]:
     process = _process_metrics(warm.get("process_resources"), f"{label} warm")
     cold_process = _process_metrics(cold.get("process_resources"), f"{label} cold")
     nsight = _load_nsight(root, label, mode)
+    stage_timer_crosscheck = {}
+    for stage_name, timer_name in (
+        (PASS1_RANGE, "pass1_time_s"),
+        (PASS2_RANGE, "pass2_time_s"),
+    ):
+        nvtx_s = float(nsight["stages"][stage_name]["duration_s"])
+        serialized_s = float(sparse[timer_name])
+        delta_s = serialized_s - nvtx_s
+        absolute_delta_s = abs(delta_s)
+        relative_delta = absolute_delta_s / nvtx_s
+        _require(
+            delta_s >= MIN_STAGE_TIMER_DELTA_S
+            and absolute_delta_s <= MAX_STAGE_TIMER_ABS_DELTA_S[stage_name]
+            and relative_delta <= MAX_STAGE_TIMER_RELATIVE_DELTA[stage_name],
+            f"{label} {stage_name} NVTX duration differs from serialized timer",
+        )
+        stage_timer_crosscheck[stage_name] = {
+            "nvtx_s": nvtx_s,
+            "serialized_s": serialized_s,
+            "serialized_minus_nvtx_s": delta_s,
+            "absolute_delta_s": absolute_delta_s,
+            "absolute_delta_limit_s": MAX_STAGE_TIMER_ABS_DELTA_S[stage_name],
+            "relative_delta": relative_delta,
+            "relative_delta_limit": MAX_STAGE_TIMER_RELATIVE_DELTA[stage_name],
+            "minimum_signed_delta_s": MIN_STAGE_TIMER_DELTA_S,
+        }
+    nsight["stage_timer_crosscheck"] = stage_timer_crosscheck
     performance = {
         "warm_wall_s": wall,
         "warm_expectation_s": iteration["expectation_time_s"],
@@ -958,16 +1169,58 @@ def _science(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         for mode in MODES
         for left, right in combinations(REPEAT_IDS, 2)
     }
-    repeat_envelopes = {
-        "relative_l2": max(row["relative_l2"] for row in repeat_deltas.values()),
-        "max_abs": max(row["max_abs"] for row in repeat_deltas.values()),
-        "abs_relative_scale_drift": max(abs(row["relative_scale_drift"]) for row in repeat_deltas.values()),
+    off_repeat_deltas = {
+        name: row for name, row in repeat_deltas.items() if name.startswith("off_")
     }
-    repeat_envelope = repeat_envelopes["relative_l2"]
-    signed_repeat_envelope = max(abs(row["signed_mean_over_delta_rms"]) for row in repeat_deltas.values())
+    auto_repeat_deltas = {
+        name: row for name, row in repeat_deltas.items() if name.startswith("auto_")
+    }
+    off_repeat_envelopes = {
+        "relative_l2": max(row["relative_l2"] for row in off_repeat_deltas.values()),
+        "max_abs": max(row["max_abs"] for row in off_repeat_deltas.values()),
+        "abs_relative_scale_drift": max(
+            abs(row["relative_scale_drift"]) for row in off_repeat_deltas.values()
+        ),
+    }
+    off_signed_repeat_envelope = max(
+        abs(row["signed_mean_over_delta_rms"])
+        for row in off_repeat_deltas.values()
+    )
+
+    def against_off_envelope(delta: dict[str, Any]) -> tuple[dict[str, bool], bool]:
+        bounded_metrics = {
+            "relative_l2": _within_envelope(
+                delta["relative_l2"], off_repeat_envelopes["relative_l2"]
+            ),
+            "max_abs": _within_envelope(delta["max_abs"], off_repeat_envelopes["max_abs"]),
+            "abs_relative_scale_drift": _within_envelope(
+                abs(delta["relative_scale_drift"]),
+                off_repeat_envelopes["abs_relative_scale_drift"],
+            ),
+        }
+        signed_ok = _within_envelope(
+            abs(delta["signed_mean_over_delta_rms"]),
+            off_signed_repeat_envelope,
+        )
+        return bounded_metrics, signed_ok
+
+    auto_repeat_checks = {}
+    auto_repeat_maps_bounded = True
+    auto_repeat_signed_bounded = True
+    for name, delta in auto_repeat_deltas.items():
+        bounded_metrics, signed_ok = against_off_envelope(delta)
+        bounded = all(bounded_metrics.values())
+        auto_repeat_maps_bounded &= bounded
+        auto_repeat_signed_bounded &= signed_ok
+        auto_repeat_checks[name] = {
+            **delta,
+            "bounded_metrics": bounded_metrics,
+            "within_off_repeat_envelope": bounded,
+            "signed_drift_within_off_repeat_envelope": signed_ok,
+        }
     cross = {}
-    maps_bounded = True
-    nondirectional = True
+    cross_maps_bounded = True
+    cross_signed_bounded = True
     signed_cross_drifts: list[float] = []
     for repeat in REPEAT_IDS:
         off = arms[f"cache_off_{repeat}"]
@@ -982,25 +1235,18 @@ def _science(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         exact = all(meta.values()) and star
         all_exact &= exact
         delta = _map_delta(off["warm"]["map"], auto["warm"]["map"])
-        bounded_metrics = {
-            "relative_l2": _within_envelope(delta["relative_l2"], repeat_envelopes["relative_l2"]),
-            "max_abs": _within_envelope(delta["max_abs"], repeat_envelopes["max_abs"]),
-            "abs_relative_scale_drift": _within_envelope(
-                abs(delta["relative_scale_drift"]), repeat_envelopes["abs_relative_scale_drift"]
-            ),
-        }
+        bounded_metrics, signed_ok = against_off_envelope(delta)
         bounded = all(bounded_metrics.values())
-        signed_ok = _within_envelope(abs(delta["signed_mean_over_delta_rms"]), signed_repeat_envelope)
         signed_cross_drifts.append(delta["signed_mean"])
-        maps_bounded &= bounded
-        nondirectional &= signed_ok
+        cross_maps_bounded &= bounded
+        cross_signed_bounded &= signed_ok
         delta.update(
             {
-                "repeat_envelope_relative_l2": repeat_envelope,
-                "within_repeat_envelope": bounded,
+                "off_repeat_envelope_relative_l2": off_repeat_envelopes["relative_l2"],
+                "within_off_repeat_envelope": bounded,
                 "bounded_metrics": bounded_metrics,
-                "repeat_envelopes": repeat_envelopes,
-                "repeat_envelope_abs_signed_mean_over_delta_rms": signed_repeat_envelope,
+                "off_repeat_envelopes": off_repeat_envelopes,
+                "off_repeat_envelope_abs_signed_mean_over_delta_rms": off_signed_repeat_envelope,
                 "nondirectional_signed_drift": signed_ok,
             }
         )
@@ -1011,22 +1257,30 @@ def _science(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "map": delta,
         }
     cross_pair_nondirectional = min(signed_cross_drifts) <= 0.0 <= max(signed_cross_drifts)
-    nondirectional &= cross_pair_nondirectional
+    cross_signed_nondirectional = cross_signed_bounded and cross_pair_nondirectional
     return {
         "discrete_meta_keys": list(DISCRETE_META_KEYS),
         "cold_warm_checks": phase_checks,
         "warm_all_arm_checks": warm_panel_checks,
         "repeat_map_deltas": repeat_deltas,
-        "repeat_relative_l2_envelope": repeat_envelope,
-        "repeat_map_envelopes": repeat_envelopes,
-        "repeat_abs_signed_drift_envelope": signed_repeat_envelope,
+        "off_control_repeat_map_envelopes": off_repeat_envelopes,
+        "off_control_repeat_abs_signed_drift_envelope": off_signed_repeat_envelope,
+        "auto_repeat_checks": auto_repeat_checks,
         "cross_pair_signed_means": signed_cross_drifts,
         "cross_pair_signed_drift_opposes_or_is_zero": cross_pair_nondirectional,
         "cross_mode_comparisons": cross,
         "all_particle_star_and_discrete_metadata_exact": all_exact,
-        "all_cross_mode_maps_within_repeat_envelope": maps_bounded,
-        "all_cross_mode_signed_drift_nondirectional": nondirectional,
-        "pass": all_exact and maps_bounded and nondirectional,
+        "all_auto_repeat_maps_within_off_repeat_envelope": auto_repeat_maps_bounded,
+        "all_auto_repeat_signed_drift_within_off_repeat_envelope": auto_repeat_signed_bounded,
+        "all_cross_mode_maps_within_off_repeat_envelope": cross_maps_bounded,
+        "all_cross_mode_signed_drift_nondirectional": cross_signed_nondirectional,
+        "pass": (
+            all_exact
+            and auto_repeat_maps_bounded
+            and auto_repeat_signed_bounded
+            and cross_maps_bounded
+            and cross_signed_nondirectional
+        ),
     }
 
 
@@ -1176,18 +1430,31 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
     gross_post_preload_saving = off["warm_wall_s"] - post_preload_auto_wall
     break_even = median_preload / gross_post_preload_saving if gross_post_preload_saving > 0.0 else math.inf
     admission_hwm_limit = EXPECTED_CACHE_BYTES + CACHE_ADMISSION_HWM_SLACK_BYTES
-    admission_hwm_deltas = {
+    admission_memory = {
         label: {
-            phase: arms[label]["cache_events"][phase][0]["high_water_rss_delta_bytes"]
+            phase: {
+                "current_rss_delta_bytes": event["current_rss_delta_bytes"],
+                "peak_rss_above_call_baseline_bytes": (
+                    event["high_water_rss_after_bytes"]
+                    - event["current_rss_before_bytes"]
+                ),
+                "preexisting_hwm_gap_bytes": (
+                    event["high_water_rss_before_bytes"]
+                    - event["current_rss_before_bytes"]
+                ),
+                "high_water_rss_increment_bytes": event["high_water_rss_delta_bytes"],
+            }
             for phase in ("cold", "warm")
+            for event in (arms[label]["cache_events"][phase][0],)
         }
         for label in ARM_LABELS
         if arms[label]["mode"] == "auto"
     }
-    admission_hwm_ok = all(
-        0 <= delta <= admission_hwm_limit
-        for phases in admission_hwm_deltas.values()
-        for delta in phases.values()
+    admission_memory_ok = all(
+        0 <= row["current_rss_delta_bytes"] <= admission_hwm_limit
+        and 0 <= row["peak_rss_above_call_baseline_bytes"] <= admission_hwm_limit
+        for phases in admission_memory.values()
+        for row in phases.values()
     )
     paired_wall_wins = sum(
         row["warm_wall_s"]["auto_faster"] for row in adjacent.values()
@@ -1208,7 +1475,9 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "total_sum_gpu_time_equivalent": gpu_timing["gpu_kernel_sum_s"]["equivalent"],
         "coarse_union_gpu_time_equivalent": gpu_timing["coarse_kernel_union_s"]["equivalent"],
         "total_union_gpu_time_equivalent": gpu_timing["gpu_kernel_union_s"]["equivalent"],
-        "each_cache_admission_hwm_within_cache_plus_64mib": admission_hwm_ok,
+        "each_cache_admission_peak_and_retained_rss_within_cache_plus_64mib": (
+            admission_memory_ok
+        ),
     }
     return {
         "metric_order": list(PERFORMANCE_METRICS),
@@ -1238,7 +1507,7 @@ def _performance(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "classification": "diagnostic_two-call_process_high_water_only",
         },
         "cache_admission_memory": {
-            "high_water_rss_delta_bytes": admission_hwm_deltas,
+            "arms": admission_memory,
             "limit_bytes": admission_hwm_limit,
         },
         "coarse_launches": {"expected_per_gpu": EXPECTED_COARSE_LAUNCHES, "repeat_envelope": launch_repeat_envelope},
@@ -1300,10 +1569,15 @@ def _markdown(report: dict[str, Any]) -> str:
         lines.append("| " + " | ".join(values) + " |")
     preload = performance["preload"]
     admission_memory = performance["cache_admission_memory"]
-    max_admission_hwm = max(
-        delta
-        for phases in admission_memory["high_water_rss_delta_bytes"].values()
-        for delta in phases.values()
+    max_admission_peak = max(
+        row["peak_rss_above_call_baseline_bytes"]
+        for phases in admission_memory["arms"].values()
+        for row in phases.values()
+    )
+    max_admission_retained = max(
+        row["current_rss_delta_bytes"]
+        for phases in admission_memory["arms"].values()
+        for row in phases.values()
     )
     lines.extend(
         (
@@ -1314,15 +1588,23 @@ def _markdown(report: dict[str, Any]) -> str:
             f"- Gross post-preload wall saving: `{preload['gross_post_preload_wall_saving_s']:.6f} s/iteration`.",
             f"- Break-even: `{preload['break_even_iterations']:.3f}` iterations "
             f"(ceiling `{preload['break_even_iterations_ceiling']}`).",
-            f"- Maximum direct cache-admission HWM increase: `{max_admission_hwm}` bytes "
+            f"- Maximum cache-admission peak above call baseline: `{max_admission_peak}` bytes "
+            f"(limit `{admission_memory['limit_bytes']}` bytes).",
+            f"- Maximum retained RSS increase: `{max_admission_retained}` bytes "
             f"(limit `{admission_memory['limit_bytes']}` bytes).",
             "",
             "## Correctness",
             "",
             f"- Particle STAR and discrete metadata exact: `{science['all_particle_star_and_discrete_metadata_exact']}`.",
-            f"- Cross-mode maps within repeat envelope: `{science['all_cross_mode_maps_within_repeat_envelope']}`.",
+            "- AUTO repeat maps within the OFF control envelope: "
+            f"`{science['all_auto_repeat_maps_within_off_repeat_envelope']}`.",
+            "- AUTO repeat signed drift within the OFF control envelope: "
+            f"`{science['all_auto_repeat_signed_drift_within_off_repeat_envelope']}`.",
+            "- Cross-mode maps within the OFF control envelope: "
+            f"`{science['all_cross_mode_maps_within_off_repeat_envelope']}`.",
             f"- Signed map drift nondirectional: `{science['all_cross_mode_signed_drift_nondirectional']}`.",
-            f"- Repeat relative-L2 envelope: `{science['repeat_relative_l2_envelope']:.6e}`.",
+            "- OFF control relative-L2 envelope: "
+            f"`{science['off_control_repeat_map_envelopes']['relative_l2']:.6e}`.",
             "",
             "## Compact provenance",
             "",
@@ -1356,8 +1638,18 @@ def analyze(root: Path, *, repo: Path | None = None) -> dict[str, Any]:
     gates = {
         "provenance_topology_cache_selector_schedule": True,
         "particle_star_and_discrete_metadata_exact": science["all_particle_star_and_discrete_metadata_exact"],
-        "map_deltas_within_repeat_envelope": science["all_cross_mode_maps_within_repeat_envelope"],
-        "map_signed_drift_nondirectional": science["all_cross_mode_signed_drift_nondirectional"],
+        "auto_repeat_map_variability_within_off_envelope": science[
+            "all_auto_repeat_maps_within_off_repeat_envelope"
+        ],
+        "auto_repeat_signed_variability_within_off_envelope": science[
+            "all_auto_repeat_signed_drift_within_off_repeat_envelope"
+        ],
+        "cross_mode_map_deltas_within_off_repeat_envelope": science[
+            "all_cross_mode_maps_within_off_repeat_envelope"
+        ],
+        "cross_mode_map_signed_drift_nondirectional": science[
+            "all_cross_mode_signed_drift_nondirectional"
+        ],
         **performance["gates"],
     }
     passed = all(gates.values())

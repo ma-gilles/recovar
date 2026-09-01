@@ -11,12 +11,13 @@ All loaders share the ImageLoader base class which provides a uniform
 interface for indexing, batching, and caching.
 """
 
+import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
+from typing import Iterator, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import Optional, Tuple, Iterator
-from concurrent.futures import ThreadPoolExecutor
-import logging
 
 from recovar.data_io._index_utils import normalize_indices
 from recovar.utils.nvtx_shim import nvtx
@@ -387,6 +388,7 @@ class MRCLoader(ImageLoader):
         self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True, skip_staging: bool = False
     ):
         import mrcfile
+
         from recovar.data_io.staging import get_cache_dir, stage_mrc
 
         if not skip_staging:
