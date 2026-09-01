@@ -2106,6 +2106,20 @@ def _host_offload_array(value):
     return host_value
 
 
+def _snapshot_and_release_previous_k1_means(means):
+    """Copy K=1 half maps to host, then release their device references."""
+
+    if len(means) != 2:
+        raise ValueError(f"K=1 refinement requires exactly two half maps, got {len(means)}")
+    previous_means = [
+        np.asarray(mean).copy() if mean is not None else None for mean in means
+    ]
+    for half_index in range(2):
+        means[half_index] = None
+    gc.collect()
+    return previous_means
+
+
 def _maybe_host_offload_half0_local_accumulators(
     *,
     half_index: int,
@@ -7627,7 +7641,10 @@ def _run_relion_iteration_loop(
             # code transfer only the slices it actually needs.
             previous_means = [jnp.asarray(mean) if mean is not None else None for mean in means]
         else:
-            previous_means = [np.asarray(mean).copy() if mean is not None else None for mean in means]
+            # K=1 already owns exact host copies for later sign alignment.
+            # Release both device-backed references before FSC/tau2 work so
+            # reconstruction can reuse their two box-scale allocator bins.
+            previous_means = _snapshot_and_release_previous_k1_means(means)
 
         _t_unreg_first = time.time()
         if k_class_enabled:
@@ -8068,10 +8085,11 @@ def _run_relion_iteration_loop(
         else:
             mean_variance_per_half = [mean_variance, mean_variance]
 
-        # --- Free previous-iteration means to reclaim GPU memory ---
-        # (previous_means already snapshotted earlier for FSC sign alignment)
-        for k in range(2):
-            means[k] = None
+        # K=1 released its device references immediately after the owned host
+        # snapshot. K-class keeps device snapshots and releases them only now.
+        if k_class_enabled:
+            for k in range(2):
+                means[k] = None
 
         # --- Now reconstruct the regularized means ---
         _reconstruct_and_postprocess_means(
