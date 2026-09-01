@@ -177,6 +177,7 @@
           }
         },
         "class_assignment_agreement": {"type": "number", "minimum": 0, "maximum": 1},
+        "class_collapse": {"$ref": "#/$defs/classCollapse"},
         "controller_rows_match": {"type": "boolean"},
         "ground_truth_available": {"type": "boolean"}
       }
@@ -332,6 +333,26 @@
         "unmasked_fsc_auc": {"type": "array", "items": {"type": ["number", "null"], "minimum": -1, "maximum": 1}},
         "masked_fsc_auc": {"type": "array", "items": {"type": ["number", "null"], "minimum": -1, "maximum": 1}},
         "masked_resolution_0_143_angstrom": {"type": "array", "items": {"type": ["number", "null"], "exclusiveMinimum": 0}}
+      }
+    },
+    "classCollapse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "threshold", "recovar_classes", "relion_classes", "status"],
+      "properties": {
+        "metric": {"const": "hard_assignment_fraction_below_threshold"},
+        "threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "recovar_classes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "relion_classes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "status": {"enum": ["CLEAR", "FLAGGED"]}
       }
     }
   }

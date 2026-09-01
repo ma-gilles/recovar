@@ -66,6 +66,29 @@ def _semantic_errors(record: dict[str, Any]) -> list[str]:
     if any(value is None for value in population_values) and not populations["missing_reason"]:
         errors.append("missing class-population values require missing_reason")
 
+    class_collapse = quality.get("class_collapse")
+    if class_collapse is not None:
+        threshold = class_collapse["threshold"]
+        expected_flags: dict[str, list[int]] = {}
+        for engine in ("recovar", "relion"):
+            values = populations[engine]
+            if any(value is None for value in values):
+                errors.append("quality.class_collapse requires complete hard class populations")
+                continue
+            expected_flags[engine] = [
+                class_id
+                for class_id, count in enumerate(values, start=1)
+                if count / n_particles < threshold
+            ]
+            if class_collapse[f"{engine}_classes"] != expected_flags[engine]:
+                errors.append(
+                    f"quality.class_collapse.{engine}_classes must match the hard-population threshold"
+                )
+        if len(expected_flags) == 2:
+            expected_status = "FLAGGED" if any(expected_flags.values()) else "CLEAR"
+            if class_collapse["status"] != expected_status:
+                errors.append("quality.class_collapse.status conflicts with the flagged classes")
+
     halfmap = quality["halfmap_fsc"]
     halfmap_values: list[float | None] = []
     for engine in ("recovar", "relion"):
@@ -114,6 +137,16 @@ def _semantic_errors(record: dict[str, Any]) -> list[str]:
         errors.append("NOT_EQUIVALENT requires science_status=FAIL")
 
     comparison = record["performance"]["comparison"]
+    for engine in ("recovar", "relion"):
+        measurement = record["performance"][engine]
+        measured_values = [
+            measurement["wall_s"],
+            measurement["iteration_sum_s"],
+            measurement["peak_hbm_mib"],
+            measurement["max_rss_kib"],
+        ]
+        if any(value is None for value in measured_values) and not measurement["missing_reason"]:
+            errors.append(f"performance.{engine} missing values require missing_reason")
     if comparison["hardware_comparable"] and comparison["formal_speedup"] is None:
         errors.append("hardware_comparable=true requires formal_speedup")
     if not comparison["hardware_comparable"] and comparison["formal_speedup"] is not None:

@@ -21,9 +21,40 @@ the same scientific result. A record classified `SCIENCE_EQUIVALENT` must say
 `trajectory_exact=false` and retain any formal failure. A record may be called
 `TRAJECTORY_EXACT` only when the formal and scientific gates both pass.
 
-This distinction matters for the two checked-in K=4 records. Both reproduce
-the RELION scientific outcome, but both first miss the frozen 0.995 trajectory
-threshold at iteration 10. Neither is trajectory-exact.
+This distinction matters for the two historical 100k-particle K=4 records.
+Both reproduce the RELION scientific outcome, but both first miss the frozen
+0.995 trajectory threshold at iteration 10. Neither is trajectory-exact.
+
+The four 10k-particle/128-box pilot records broaden that evidence to white and
+radial noise, uniform and nonuniform poses, linear class weights, 20% outliers,
+and a second molecular family. The two Ribosembly controls pass every frozen
+map-trajectory cell. The outlier case passes every map cell but misses the
+final 0.99 assignment gate. The IgG pilot is a deliberately retained negative
+result: two classes contain less than 1% of the particles in both engines and
+their direct FSC trajectories separate at iteration 4. The optional
+`quality.class_collapse` diagnostic records this condition mechanically from
+the final hard populations; classes are flagged when their fraction is
+strictly below the recorded threshold.
+
+### Sealed 10k/128 K=4 pilot results
+
+All four cases were produced from RECOVAR `0050dc54f`, ran RELION and RECOVAR
+serially on the same physical H100, and stopped at the nonconverged
+five-iteration cap. `Map cells` counts numbered iteration/class cells meeting
+direct FSC-AUC 0.995. HBM values are MiB lower bounds from the combined
+60-second monitor, filtered by each engine's sealed walltime window.
+
+| Fixture | Job | Frozen / science | Map cells | Final agreement | Collapse (<1%) | RECOVAR wall / HBM | RELION wall / HBM |
+| --- | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| Ribosembly, white noise 1, uniform | 13296060 | PASS / PASS | 20/20 | 99.73% | none | 1199 s / 17087 | 122 s / 79563 |
+| Ribosembly, radial noise 3, nonuniform, linear weights | 13296061 | PASS / PASS | 20/20 | 99.17% | none | 1621 s / 33495 | 143 s / 79559 |
+| IgG-1D, white noise 1, uniform | 13296062 | FAIL / PASS | 13/20 | 98.61% | classes 2, 3 in both | 1343 s / 17087 | 117 s / 79561 |
+| Ribosembly, radial noise 3, nonuniform, 20% outliers | 13296063 | FAIL / PASS | 20/20 | 98.79% | none | 1674 s / 33495 | 143 s / 79559 |
+
+The record JSON contains the full commands, source/input/output hashes,
+controller rows, per-class metrics and populations, accounting, and known
+limitations. The sealed run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_robustness_pilot_0050dc54f_20260901`.
 
 ## Required evidence
 
@@ -40,6 +71,7 @@ Schema v1 requires:
   artifacts;
 - Hungarian permutation-aware class matching, per-class cross-engine FSC-AUC,
   per-engine GT FSC-AUC, class agreement, and hard/posterior populations;
+- an explicit hard-population class-collapse diagnostic when it was evaluated;
 - per-engine masked and unmasked half-map FSC-AUC and masked 0.143 resolution;
   historical missing values must be explicit `null` values with a reason;
 - RECOVAR and RELION wall time, peak HBM, and MaxRSS, with missing measurements

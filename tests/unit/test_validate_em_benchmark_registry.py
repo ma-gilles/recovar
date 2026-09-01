@@ -29,8 +29,12 @@ CANDIDATE = json.loads(
 def test_checked_in_em_benchmark_registry_is_valid():
     paths = validate_registry(REGISTRY_ROOT)
     assert [path.stem for path in paths] == [
+        "k4-igg-10k128-white1-uniform-0050dc54f-h100",
         "k4-ribosembly-100k256-1b9209cd8-h100",
         "k4-ribosembly-100k256-ac5177d2-a100",
+        "k4-ribosembly-10k128-radial3-nonuniform-linear-0050dc54f-h100",
+        "k4-ribosembly-10k128-radial3-nonuniform-outliers20-0050dc54f-h100",
+        "k4-ribosembly-10k128-white1-uniform-0050dc54f-h100",
     ]
 
 
@@ -72,4 +76,26 @@ def test_cross_hardware_record_cannot_report_formal_speedup():
     record["performance"]["comparison"]["formal_speedup"] = 1.4
 
     with pytest.raises(RegistryValidationError, match="cannot report formal_speedup"):
+        validate_record(record, SCHEMA)
+
+
+def test_class_collapse_flags_must_match_hard_populations():
+    record = copy.deepcopy(CANDIDATE)
+    record["quality"]["class_collapse"] = {
+        "metric": "hard_assignment_fraction_below_threshold",
+        "threshold": 0.25,
+        "recovar_classes": [],
+        "relion_classes": [],
+        "status": "CLEAR",
+    }
+
+    with pytest.raises(RegistryValidationError, match="must match the hard-population threshold"):
+        validate_record(record, SCHEMA)
+
+
+def test_missing_performance_values_require_a_reason():
+    record = copy.deepcopy(CANDIDATE)
+    record["performance"]["relion"]["missing_reason"] = None
+
+    with pytest.raises(RegistryValidationError, match="missing values require missing_reason"):
         validate_record(record, SCHEMA)
