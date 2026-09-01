@@ -558,6 +558,9 @@ PIXI_NVIDIA_LIB_DIRS="$(find "${{PIXI_NVIDIA_ROOT}}" -type d -name lib -print | 
 test -n "${{PIXI_NVIDIA_LIB_DIRS}}"
 test -n "$(find "${{PIXI_NVIDIA_ROOT}}" -type f -name 'libcusparse.so*' -print -quit)"
 export LD_LIBRARY_PATH="${{PIXI_NVIDIA_LIB_DIRS}}:${{CUDA_TARGET_LIB_DIR}}:${{PIXI_ENV_ROOT}}/lib:${{LD_LIBRARY_PATH:-}}"
+test -f "${{PIXI_ENV_ROOT}}/include/fftw/fftw3.h"
+export CMAKE_INCLUDE_PATH="${{PIXI_ENV_ROOT}}/include/fftw:${{PIXI_ENV_ROOT}}/include:${{CMAKE_INCLUDE_PATH:-}}"
+export CMAKE_LIBRARY_PATH="${{PIXI_ENV_ROOT}}/lib:${{CMAKE_LIBRARY_PATH:-}}"
 
 nvidia-smi --query-gpu=uuid,name,pci.bus_id --format=csv,noheader > "${{ROOT}}/provenance/allocation_gpu_table_${{SLURM_JOB_ID}}.csv"
 test "$(wc -l < "${{ROOT}}/provenance/allocation_gpu_table_${{SLURM_JOB_ID}}.csv")" -eq 1

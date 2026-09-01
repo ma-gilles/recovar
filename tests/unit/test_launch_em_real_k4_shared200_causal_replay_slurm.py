@@ -177,6 +177,9 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "PIXI_NVIDIA_LIB_DIRS=" in script
     assert "libcusparse.so*" in script
     assert 'export LD_LIBRARY_PATH="${PIXI_NVIDIA_LIB_DIRS}:${CUDA_TARGET_LIB_DIR}:${PIXI_ENV_ROOT}/lib:' in script
+    assert '${PIXI_ENV_ROOT}/include/fftw/fftw3.h' in script
+    assert 'export CMAKE_INCLUDE_PATH="${PIXI_ENV_ROOT}/include/fftw:${PIXI_ENV_ROOT}/include:' in script
+    assert 'export CMAKE_LIBRARY_PATH="${PIXI_ENV_ROOT}/lib:' in script
 
 
 def test_manifest_record_rejects_checksum_drift(tmp_path):
