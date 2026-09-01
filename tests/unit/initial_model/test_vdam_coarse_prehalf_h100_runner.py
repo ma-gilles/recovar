@@ -30,6 +30,8 @@ def test_runner_builds_sm90_outside_repo_and_audits_frozen_binary() -> None:
     source = _source()
 
     assert "CUDA_TOOLKIT=/usr/local/cuda-12.6" in source
+    assert "CUDA_BINARY_TOOLS_TOOLKIT=/usr/local/cuda-13.1" in source
+    assert "CUOBJDUMP=${CUDA_BINARY_TOOLS_TOOLKIT}/bin/cuobjdump" in source
     assert "CUDA_ARCH_FLAGS='-gencode arch=compute_90,code=sm_90'" in source
     assert "CANDIDATE_BINARY=${BUILD}/libcuda_backproject.so" in source
     assert "result root must be outside the repository" in source

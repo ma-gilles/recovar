@@ -22,6 +22,7 @@ readonly PRIMITIVE_TREE=95c4a7cd4c40878beb87380e43d7e310748586fe
 readonly BASELINE_BINARY=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_multistream_resources_129280420_20260831/libcuda_backproject.so
 readonly BASELINE_SHA256=fcd9f03383ec42483016cf2b686adc998e61f1cc6fdf338b3a6713bbc3554d56
 readonly CUDA_TOOLKIT=/usr/local/cuda-12.6
+readonly CUDA_BINARY_TOOLS_TOOLKIT=/usr/local/cuda-13.1
 readonly CUDA_ARCH_FLAGS='-gencode arch=compute_90,code=sm_90'
 readonly FOCUSED_GPU_TEST=tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_prehalf_source_order_across_dispatchers
 
@@ -29,7 +30,7 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 REPO_ROOT=$(realpath -e -- "${REPO_ROOT}")
 PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
 NVCC=${CUDA_TOOLKIT}/bin/nvcc
-CUOBJDUMP=${CUDA_TOOLKIT}/bin/cuobjdump
+CUOBJDUMP=${CUDA_BINARY_TOOLS_TOOLKIT}/bin/cuobjdump
 RESULT_ROOT=${VDAM_PREHALF_RESULT_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_prehalf_h100_${SLURM_JOB_ID}}
 RESULT_ROOT=$(realpath -m -- "${RESULT_ROOT}")
 PROVENANCE=${RESULT_ROOT}/provenance
