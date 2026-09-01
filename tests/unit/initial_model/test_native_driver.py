@@ -97,23 +97,22 @@ def test_experiment_read_order_uses_micrograph_lexicographic_order():
     assert driver._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
-def test_translation_log_prior_matches_relion_pdf_offset_scaling():
-    translations = np.asarray([[0.0, 0.0], [2.0, 0.0], [0.0, -1.0]], dtype=np.float32)
+def test_translation_log_prior_matches_relion_initialmodel_source_arithmetic():
+    translations = np.asarray([[0.0, 0.0], [0.0, -6.0], [0.0, 6.0]], dtype=np.float32)
 
-    prior = driver._translation_log_prior(translations, voxel_size=3.0, sigma_angstrom=6.0)
-
-    np.testing.assert_allclose(prior, np.asarray([0.0, -0.5, -0.125], dtype=np.float32), rtol=1e-6)
-
-    centered = driver._translation_log_prior(
+    prior = driver._translation_log_prior(
         translations,
-        voxel_size=3.0,
-        sigma_angstrom=6.0,
-        centers=np.asarray([[-1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        voxel_size=1.6375,
+        sigma_angstrom=10.0,
+        old_offsets=np.asarray([[4.0, -14.0]], dtype=np.float32),
     )
+
+    # Frozen from RELION's row-114 InitialModel fine-pass candidate prior.
     np.testing.assert_allclose(
-        centered,
-        np.asarray([[-0.125, -1.125, -0.25], [-0.125, -0.625, -0.5]], dtype=np.float32),
-        rtol=1e-6,
+        prior,
+        np.asarray([[-2.8422906, -7.8247542, -0.44820544]], dtype=np.float32),
+        rtol=1e-7,
+        atol=0.0,
     )
 
 
@@ -548,7 +547,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
         np.asarray(
             [
                 [0.0, -0.025, -0.08],
-                [-0.00005, -0.02305, -0.07605],
+                [-0.01, -0.065, -0.13],
             ],
             dtype=np.float32,
         ),
@@ -559,8 +558,8 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
         calls[1]["prior"],
         np.asarray(
             [
-                [0.0, -0.025, -0.08],
-                [0.0, -0.025, -0.08],
+                [-0.025, -0.1, -0.185],
+                [-0.13, -0.265, -0.41],
             ],
             dtype=np.float32,
         ),
@@ -974,18 +973,18 @@ def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeyp
 
 
 def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
-    dataset = SimpleNamespace(voxel_size=2.0, n_images=1)
+    dataset = SimpleNamespace(voxel_size=1.6375, n_images=1)
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
         oversampling=1,
-        translation_sigma_angstrom=4.0,
+        translation_sigma_angstrom=10.0,
     )
     plan = driver.NativeSamplingPlan(
         rotations=np.zeros((1, 3, 3), dtype=np.float32),
-        translations=np.asarray([[0.5, 0.0], [1.5, 0.0]], dtype=np.float32),
+        translations=np.asarray([[0.0, -6.5], [0.0, -5.5]], dtype=np.float32),
         random_perturbation=0.0,
         coarse_translations=np.asarray([[99.0, 0.0]], dtype=np.float32),
-        coarse_prior_translations=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        coarse_prior_translations=np.asarray([[0.0, -6.0]], dtype=np.float32),
         translation_parent=np.asarray([0, 0], dtype=np.int64),
     )
 
@@ -994,13 +993,22 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
         opts,
         np.ones(5, dtype=np.float32),
         plan,
-        np.zeros((1, 2), dtype=np.float32),
+        np.asarray([[4.2, -14.1]], dtype=np.float32),
     )
 
     fine_prior = np.asarray(config.engine_kwargs["translation_log_prior"], dtype=np.float32)
     coarse_prior = np.asarray(config.engine_kwargs["coarse_translation_log_prior"], dtype=np.float32)
-    np.testing.assert_allclose(fine_prior, np.asarray([[-0.03125, -0.28125]], dtype=np.float32), rtol=1e-6)
-    np.testing.assert_allclose(coarse_prior, np.asarray([[-0.125]], dtype=np.float32), rtol=1e-6)
+    expected_parent_prior = np.asarray([[-7.8247542]], dtype=np.float32)
+    np.testing.assert_array_equal(coarse_prior, expected_parent_prior)
+    np.testing.assert_array_equal(fine_prior, expected_parent_prior[:, [0, 0]])
+    np.testing.assert_array_equal(
+        config.engine_kwargs["image_pre_shifts"],
+        np.asarray([[4.0, -14.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        config.engine_kwargs["translation_prior_centers"],
+        np.asarray([[-4.0, 14.0]], dtype=np.float32),
+    )
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():

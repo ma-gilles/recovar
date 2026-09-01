@@ -888,26 +888,42 @@ def _translation_log_prior(
     *,
     voxel_size: float,
     sigma_angstrom: float | None,
-    centers: np.ndarray | None = None,
+    old_offsets: np.ndarray,
+    prior_offsets: np.ndarray | None = None,
 ) -> np.ndarray | None:
+    """Mirror InitialModel's accelerated coarse ``pdf_offset`` arithmetic.
+
+    RELION stores the sampling translations in Angstroms, but its accelerated
+    InitialModel path adds them directly to the rounded, pixel-valued previous
+    offset before applying one more ``pixel_size**2`` factor.  This mixed-unit
+    arithmetic is source behavior and is distinct from both the image
+    pre-shift and the offset-variance sufficient statistic.
+    """
+
     if sigma_angstrom is None:
         return None
     sigma_angstrom = float(sigma_angstrom)
     if sigma_angstrom <= 0.0:
         raise ValueError("translation_sigma_angstrom must be positive when provided")
-    translations = np.asarray(translations, dtype=np.float32)
-    shared = centers is None
-    if centers is not None:
-        centers_arr = np.asarray(centers, dtype=np.float32)
-        if centers_arr.ndim != 2 or centers_arr.shape[1] != 2:
-            raise ValueError(f"translation prior centers must have shape (N, 2), got {centers_arr.shape}")
+    translations_arr = np.asarray(translations, dtype=np.float64)
+    if translations_arr.ndim != 2 or translations_arr.shape[1] != 2:
+        raise ValueError(f"translations must have shape (N, 2), got {translations_arr.shape}")
+    old_offsets_arr = np.asarray(old_offsets, dtype=np.float64)
+    if old_offsets_arr.ndim != 2 or old_offsets_arr.shape[1] != 2:
+        raise ValueError(f"old_offsets must have shape (N, 2), got {old_offsets_arr.shape}")
+    if prior_offsets is None:
+        prior_offsets_arr = np.zeros_like(old_offsets_arr)
     else:
-        centers_arr = np.zeros((1, 2), dtype=np.float32)
+        prior_offsets_arr = np.asarray(prior_offsets, dtype=np.float64)
+        if prior_offsets_arr.shape != old_offsets_arr.shape:
+            raise ValueError(
+                f"prior_offsets must match old_offsets shape; got {prior_offsets_arr.shape} and {old_offsets_arr.shape}"
+            )
 
-    diffs_angstrom = (translations[None, :, :2] - centers_arr[:, None, :2]) * float(voxel_size)
-    log_prior = -0.5 * np.sum(diffs_angstrom**2, axis=-1) / (sigma_angstrom**2)
-    log_prior = log_prior.astype(np.float32, copy=False)
-    return log_prior[0] if shared else log_prior
+    sampled_translations_angstrom = translations_arr[None, :, :] * float(voxel_size)
+    source_differences = old_offsets_arr[:, None, :] + sampled_translations_angstrom - prior_offsets_arr[:, None, :]
+    log_prior = -0.5 * np.sum(source_differences**2, axis=-1) * float(voxel_size) ** 2 / sigma_angstrom**2
+    return log_prior.astype(np.float32, copy=False)
 
 
 def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
@@ -1033,17 +1049,31 @@ def _dense_estep_config(
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # InitialModel pre-applies rounded image shifts, so pdf_offset is centered
-    # on the remaining sub-pixel residual and scored in Angstrom units.
-    residual_offsets = np.asarray(translation_offsets, dtype=np.float32)[:, :2] - image_pre_shifts[:, :2]
-    translation_prior_centers = (residual_offsets / float(dataset.voxel_size)).astype(np.float32, copy=False)
+    # InitialModel's accelerated pdf_offset uses the rounded absolute old
+    # offset, independently of the same integer shift being pre-applied to the
+    # image. RELION computes this prior on the coarse translation grid and
+    # reuses each parent value for all oversampled children.
     _prior_kwargs = dict(
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
-        centers=translation_prior_centers,
+        old_offsets=image_pre_shifts,
     )
     coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
-    translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
+    if sampling_plan.translation_parent is None:
+        if int(np.asarray(sampling_plan.translations).shape[0]) != int(coarse_translation_log_prior.shape[1]):
+            raise ValueError(
+                "translation grid and coarse prior must have the same length without an oversampling parent map"
+            )
+        translation_log_prior = coarse_translation_log_prior
+    else:
+        translation_parent = np.asarray(sampling_plan.translation_parent, dtype=np.int64)
+        if translation_parent.shape != (int(np.asarray(sampling_plan.translations).shape[0]),):
+            raise ValueError("translation_parent must contain one coarse parent per fine translation")
+        if np.any(translation_parent < 0) or int(translation_parent.max(initial=-1)) >= int(
+            coarse_translation_log_prior.shape[1]
+        ):
+            raise ValueError("translation_parent contains indices outside the coarse translation prior")
+        translation_log_prior = coarse_translation_log_prior[:, translation_parent]
 
     engine_kwargs: dict = {
         "score_with_masked_images": True,
