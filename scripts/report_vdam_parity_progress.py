@@ -430,6 +430,7 @@ DYNAMIC_TAIL_ACTIVE200_EVIDENCE = {
 }
 ENGINEERING_SNAPSHOT_SHA256 = "7a3818973db45ef0bb3cb84689c6bd9765897b7553b8338d8819d9a21e7c37aa"
 RUNTIME_LANE_WORKBOARD_SHA256 = "4aa6666ba0c47c2bce67f5a27e073f145c088c433563e805a77417f67ee03287"
+LATE_ITERATION_FACTORIAL_GATE_SHA256 = "24027e3b0bd98e449eb99570e2712cc0c14a3fd9d87f9c77a2a056c32c07946c"
 RUNTIME_LANE_IDS = [
     "call_neutral_flat_row",
     "stable_fine_window",
@@ -738,6 +739,47 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and speed.get("current_claim_authorized") is False,
         "speed diagnostic changed role or score impact",
     )
+    late_gate = scorecard.get("late_iteration_factorial_gate")
+    _require(
+        isinstance(late_gate, dict)
+        and late_gate.get("role") == "diagnostic_performance"
+        and late_gate.get("score_impact") == "none"
+        and late_gate.get("frozen_scores_changed") is False
+        and late_gate.get("production_change_authorized") is False
+        and late_gate.get("case_id") == "vdam-gf46"
+        and late_gate.get("transition") == "iteration_180_to_181"
+        and late_gate.get("source_head") == "f61808a0e6649aa1f53e77ea52d7ce067ff0f817"
+        and late_gate.get("hardware", {}).get("node") == "della-h21g4"
+        and late_gate.get("hardware", {}).get("gpu_uuid")
+        == "GPU-099c0d77-bb85-f2e9-f628-148b733c9176"
+        and late_gate.get("factorial_control") == "A"
+        and [row.get("id") for row in late_gate.get("factorial_arms", [])] == ["A", "B", "C", "D"]
+        and [row.get("job_id") for row in late_gate.get("factorial_arms", [])]
+        == ["13276891", "13276923", "13277456", "13277457"]
+        and all(row.get("tracked_discrete_invariants_exact") is True for row in late_gate["factorial_arms"])
+        and [row.get("decision") for row in late_gate["factorial_arms"]]
+        == ["CONTROL", "HOLD_REJECT_DEFAULT", "RETAIN_FOR_REPEAT_AND_SCALE_GATE_NOT_PROMOTED", "REJECT"]
+        and _sha256_json(late_gate) == LATE_ITERATION_FACTORIAL_GATE_SHA256,
+        "late-iteration factorial gate changed without an evidence update",
+    )
+    numerical_policy = late_gate["numerical_acceptance_policy"]
+    _require(
+        numerical_policy
+        == {
+            "mathematical_equivalence_required": True,
+            "stable_repeat_envelope_bounded_floating_point_noise_accepted": True,
+            "bitwise_identity_required": False,
+            "discrete_changes_measured": True,
+            "rare_marginal_discrete_changes_may_be_accepted_only_with_control_or_native_repeat_variability": True,
+            "accepted_noise_must_be_unbiased_and_non_growing": True,
+            "same_basin_required": True,
+            "no_material_final_quality_loss_required": True,
+            "slight_quality_change_within_stable_repeat_envelope_allowed_for_large_runtime_gain": True,
+            "unstable_numerics_rejected": True,
+            "meaningful_runtime_gain_required": True,
+        },
+        "late-iteration numerical acceptance policy changed",
+    )
     next_gate = scorecard.get("next_gate")
     _require(
         isinstance(next_gate, dict)
@@ -749,9 +791,11 @@ def load_and_validate(path: Path = DEFAULT_SCORECARD) -> dict[str, Any]:
         and next_gate.get("pre_diagnostic_head") == "94bc7d890"
         and next_gate.get("typed_warm80_audit_job") == "13256248"
         and next_gate.get("same_binary_causal_job") == "13271166"
+        and next_gate.get("late_factorial_jobs") == ["13276891", "13276923", "13277456", "13277457"]
         and next_gate.get("current_blocker")
-        == "elementwise_large_end_to_end_gain_not_demonstrated_and_stability_panel_open"
-        and next_gate.get("runtime_status") == "elementwise_same_binary_gain_immaterial"
+        == "serial_padded_coarse_scheduling_vs_native_eight_stream_overlap"
+        and next_gate.get("runtime_status")
+        == "cache_only_retained_for_repeat_scale_gate_chunking_rejected"
         and next_gate.get("production_change_authorized") is False,
         "current causal gate changed",
     )
@@ -801,6 +845,10 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
     elementwise_lane = runtime_lanes["batched_posterior_elementwise"]
     same_binary_lane = runtime_lanes["elementwise_same_binary_causal"]
     xhalf_lane = runtime_lanes["xhalf_projection_cap"]
+    late_gate = scorecard["late_iteration_factorial_gate"]
+    late_arms = {row["id"]: row for row in late_gate["factorial_arms"]}
+    late_reference = late_gate["reference_profile"]
+    trace = late_gate["trace_decomposition"]
     runtime_ratios = [case["runtime"]["ratio_vs_relion"] for case in scorecard["cases"]]
     lines = [
         "# RECOVAR / RELION VDAM parity dashboard",
@@ -822,10 +870,13 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         f"| Runtime | **{runtime['passed']}/{runtime['denominator']}** | Unchanged; observed suite range "
         f"{min(runtime_ratios):.2f}--{max(runtime_ratios):.2f}x. Promotion requires a large reproducible gain "
         "without instability or quality loss. |",
-        "| Performance lanes | non-scoring | 4 accepted/qualified evidence lanes; 2 rejected; **0 pending**; all "
-        "default-off. |",
-        "| Numerical policy | non-scoring | Roundoff-scale map differences are acceptable when stable, unbiased, "
-        "basin-preserving, quality-neutral, and paired with a large reproducible end-to-end gain. |",
+        "| Performance lanes | non-scoring | Existing six-lane workboard: 4 accepted/qualified evidence lanes and "
+        "2 rejected, all default-off. New late-iteration factorial: cache-only retained for repeat/scale; chunking "
+        "rejected. |",
+        "| Numerical policy | non-scoring | Require mathematical equivalence plus stable, unbiased, non-growing "
+        "repeat-bounded noise. Bitwise identity is not required. Measure discrete changes; rare marginal changes may "
+        "be accepted only within control/native repeat variability, with the same basin and no material final-quality "
+        "loss. A slight stable-envelope quality change is allowed only for a large runtime gain. |",
         "| EM reuse | shared production primitives | The remaining boundary is execution topology/variability, "
         "not duplicate projector or scorer math. |",
         "| Later gates | separate | K>1 remains unqualified; real data remains unscored. |",
@@ -834,12 +885,79 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "",
         "| Evidence | Result | What it rules out | Explicit next gate |",
         "|---|---|---|---|",
+        f"| Same-H100 GF46 it180->181 factorial `{'/'.join(row['job_id'] for row in late_gate['factorial_arms'])}` | "
+        f"**CACHE-ONLY RETAINED FOR REPEAT/SCALE; CHUNKING REJECTED.** Cache-only warm wall "
+        f"{late_arms['C']['warm_wall_change_percent']:.2f}% and cold wall "
+        f"{late_arms['C']['cold_wall_change_percent']:.2f}%, with +{late_arms['C']['warm_hwm_change_gib']:.3f} GiB "
+        "HWM; all tracked discrete invariants exact. | Padding reduction alone does not close the gap: chunk-only "
+        f"was {late_arms['D']['cold_wall_change_percent']:+.2f}% cold and "
+        f"{late_arms['D']['warm_wall_change_percent']:+.2f}% warm. | Repeat cache-only across scales; do not promote "
+        "it yet. |",
+        f"| Production coarse trace `{late_reference['job_id']}` | **SCHEDULING/OVERLAP IS THE MEASURED GAP.** "
+        f"RECOVAR coarse union {trace['recovar_coarse_union_seconds']:.3f} s versus native "
+        f"{trace['native_coarse_union_seconds']:.3f} s, despite "
+        f"{trace['recovar_milliseconds_per_executed_slot']:.3f} ms per RECOVAR slot versus "
+        f"{trace['native_milliseconds_per_particle']:.3f} ms per native particle. | The shared production kernel "
+        "is not slower per unit; six serial padded batches lose to native RELION's eight-stream overlap. | "
+        f"{trace['next_focus']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
         f"speedup is `{same_binary_lane['runtime_result']['warm_speedup']:.4f}x` | All four arms loaded CUDA SHA "
         f"`{same_binary_lane['shared_cuda_library_sha256']}`; different CUDA libraries are not the cause, and the "
         "strict two-control map-diameter flag alone is not a scientific rejection. | "
         f"{same_binary_lane['next_gate']} |",
+        "",
+        "## Late-iteration same-H100 factorial",
+        "",
+        f"GF46 iteration 180->181 ran at source `{late_gate['source_head'][:10]}` on "
+        f"`{late_gate['hardware']['node']}` / `{late_gate['hardware']['gpu_uuid']}`. This is a one-transition "
+        "diagnostic gate only; it cannot change frozen correctness **2/20** or runtime **0/20**, and no production "
+        "default is authorized.",
+        "",
+        "| Arm / job | Cache / radix / chunk | Cold wall | Warm wall | Warm expectation | Warm HWM | Numerical read | Decision |",
+        "|---|---|---:|---:|---:|---:|---|---|",
+        f"| A / `{late_arms['A']['job_id']}` | off / 4 / 0 | {late_arms['A']['cold_wall_seconds']:.3f} s "
+        f"(control) | {late_arms['A']['warm_wall_seconds']:.3f} s (control) | "
+        f"{late_arms['A']['warm_expectation_seconds']:.3f} s (control) | "
+        f"{late_arms['A']['warm_hwm_gib']:.3f} GiB (control) | discrete exact; control repeat map rel-L2 "
+        f"`{late_arms['A']['control_repeat_map_relative_l2']:.6g}` | **CONTROL** |",
+        f"| B / `{late_arms['B']['job_id']}` | auto / 2 / 220 | {late_arms['B']['cold_wall_seconds']:.3f} s "
+        f"({late_arms['B']['cold_wall_change_percent']:+.2f}%) | {late_arms['B']['warm_wall_seconds']:.3f} s "
+        f"({late_arms['B']['warm_wall_change_percent']:+.2f}%) | "
+        f"{late_arms['B']['warm_expectation_seconds']:.3f} s "
+        f"({late_arms['B']['warm_expectation_change_percent']:+.2f}%) | "
+        f"{late_arms['B']['warm_hwm_gib']:.3f} GiB ({late_arms['B']['warm_hwm_change_percent']:+.2f}%) | "
+        f"discrete exact; map rel-L2 `{late_arms['B']['map_relative_l2_vs_control']:.6g}` | "
+        "**HOLD / REJECT AS DEFAULT** |",
+        f"| C / `{late_arms['C']['job_id']}` | auto / 4 / 0 | {late_arms['C']['cold_wall_seconds']:.3f} s "
+        f"({late_arms['C']['cold_wall_change_percent']:+.2f}%) | {late_arms['C']['warm_wall_seconds']:.3f} s "
+        f"({late_arms['C']['warm_wall_change_percent']:+.2f}%) | "
+        f"{late_arms['C']['warm_expectation_seconds']:.3f} s "
+        f"({late_arms['C']['warm_expectation_change_percent']:+.2f}%) | "
+        f"{late_arms['C']['warm_hwm_gib']:.3f} GiB (+{late_arms['C']['warm_hwm_change_gib']:.3f} GiB) | "
+        f"discrete exact; map rel-L2 `{late_arms['C']['map_relative_l2_vs_control']:.6g}`, within repeat envelope | "
+        "**RETAIN FOR REPEAT/SCALE; NOT PROMOTED** |",
+        f"| D / `{late_arms['D']['job_id']}` | off / 2 / 220 | {late_arms['D']['cold_wall_seconds']:.3f} s "
+        f"({late_arms['D']['cold_wall_change_percent']:+.2f}%) | {late_arms['D']['warm_wall_seconds']:.3f} s "
+        f"({late_arms['D']['warm_wall_change_percent']:+.2f}%) | "
+        f"{late_arms['D']['warm_expectation_seconds']:.3f} s "
+        f"({late_arms['D']['warm_expectation_change_percent']:+.2f}%) | "
+        f"{late_arms['D']['warm_hwm_gib']:.3f} GiB ({late_arms['D']['warm_hwm_change_percent']:+.2f}%) | "
+        f"discrete exact; map rel-L2 `{late_arms['D']['map_relative_l2_vs_control']:.6g}` | **REJECT** |",
+        "",
+        f"Reference job `{late_reference['job_id']}` measured native RELION at "
+        f"{late_reference['native_unprofiled']['process_seconds']:.3f} s process / "
+        f"{late_reference['native_unprofiled']['expectation_seconds']:.3f} s expectation, versus RECOVAR "
+        f"{late_reference['recovar']['warm_wall_seconds']:.3f} s warm wall / "
+        f"{late_reference['recovar']['warm_expectation_seconds']:.3f} s expectation. Nsight resolves the coarse "
+        f"path as `{trace['recovar_launches']}` versus `{trace['native_launches']}`. {trace['conclusion']}",
+        "",
+        "The numerical gate is scientific, not bitwise. Mathematical equivalence and stable, unbiased, non-growing "
+        "repeat-bounded noise are mandatory. Discrete changes are measured, not universally forbidden: rare marginal "
+        "changes may be accepted only when consistent with control/native repeat variability, remain in the same "
+        "basin, and cause no material final-quality loss. A slight quality change inside that stable envelope is "
+        "acceptable only when paired with a large runtime gain. This factorial's exact tracked decisions are strong "
+        "evidence, not the universal acceptance definition.",
         "",
         "## Performance lanes",
         "",
@@ -887,6 +1005,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All six "
         "lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness "
         f"{strict['passed']}/{strict['denominator']} or runtime {runtime['passed']}/{runtime['denominator']}.",
+        "Historical tail-mask gate: Forced nondefault native-texture path; 120/120 strict artifacts differ.",
         "",
         "### Gate progression",
         "",
@@ -1060,15 +1179,7 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "selection is still exact before differences become visible in ordered noise and both-half BPref.",
         ]
     )
-    speed = scorecard["speed_snapshot"]
     invalid_speed = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13212500")
-    palette = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13254010")
-    tail_micro = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13256612")
-    tail_full = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257087")
-    tail_active200 = next(row for row in scorecard["active_diagnostics"] if row["job_id"] == "13257182")
-    projection_cache = engineering["shared_coarse_projection_cache"]
-    xhalf_batch = engineering["xhalf_projection_batch_gate"]
-    pool_layout = engineering["pool_preserving_layout_gate"]
     source_cuda = invalid_speed["source_cuda_library"]
     source_lock = invalid_speed["source_build_lock"]
     lines.extend(
@@ -1086,60 +1197,6 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"(SHA-256 `{invalid_speed['runner_log_sha256']}`); Slurm log SHA-256 "
             f"`{invalid_speed['evidence_sha256']}`.",
             "",
-            "## Speed snapshot",
-            "",
-            "| Experiment | Timing readout | Exactness / scope | Decision |",
-            "|---|---|---|---|",
-            f"| typed warm80 audit `{active_gate['job_id']}` | cold {current_runtime['cold']['typed_seconds']} vs "
-            f"{current_runtime['cold']['old_seconds']} s ({current_runtime['cold']['change_percent']:+.1f}%); "
-            f"warm {current_runtime['warm']['typed_seconds']} vs {current_runtime['warm']['old_seconds']} s "
-            f"({current_runtime['warm']['change_percent']:+.1f}%) | Same hard state only through iterations "
-            f"1--{current_runtime['cold']['hard_state_exact_through_iteration']}; warm is cross-GPU. | "
-            "**INCONCLUSIVE — no speed claim** |",
-            f"| 128-tail palette `{palette['job_id']}` | warm wall +{palette['warm_wall_change_percent']:.1f}%; "
-            f"pass 1 +{palette['warm_pass1_change_percent']:.1f}% | 20/20 particle states, then sealed cache "
-            f"changed {palette['cache_contract']['candidate_files_before']}->"
-            f"{palette['cache_contract']['candidate_files_after']} files. | **REJECTED / DEFAULT OFF** |",
-            f"| dynamic tail mask `{tail_full['job_id']}` | {tail_full['candidate_median_wall_seconds']:.4f} vs "
-            f"{tail_full['control_median_wall_seconds']:.4f} s = {tail_full['candidate_speedup']:.5f}x | "
-            f"Forced nondefault native-texture path; 120/120 strict artifacts differ. Microgates: active-3 "
-            f"{tail_micro['microgate']['speedup']:.2f}x bitwise; active-200 {tail_active200['speedup']:.3f}x "
-            "not bitwise. | **VALID SCIENCE FAIL / DO NOT PROMOTE** |",
-            f"| shared coarse-projection cache `{' / '.join(projection_cache['exact_jobs'])} / "
-            f"{projection_cache['microbench_job_id']} / {projection_cache['batch_sweep_job_id']}` | exact at "
-            f"every tested batch; `{projection_cache['batch_200_speedup']:.5f}x` at batch 200 | GF46 has "
-            f"{projection_cache['gf46_image_batches_per_pass']} image batch per pass; loose overall ceiling "
-            f"`{projection_cache['estimated_end_to_end_ceiling_percent']:.2f}%`, observed iteration contribution "
-            f"about `{projection_cache['observed_iteration_contribution_percent']:.2f}%`; retains "
-            f"`{projection_cache['projection_cache_gib']:.2f}--{projection_cache['retained_memory_upper_gib']:.1f} "
-            "GiB`. | **EXACT BUT IMMATERIAL; NOT INTEGRATED** |",
-            f"| x-half projection batch `{xhalf_batch['job_id']}` | median "
-            f"{xhalf_batch['scored_external_median_wall_seconds']['control']:.3f} -> "
-            f"{xhalf_batch['scored_external_median_wall_seconds']['candidate']:.3f} s "
-            f"({xhalf_batch['median_wall_reduction_percent']:.2f}% lower); both pairs faster | Peak memory "
-            "unchanged, but operand job 13265965 found iteration-1 trajectory differences before cap topology "
-            "differs; no causal x-half invariant. | **REJECTED / CAUSAL PROOF UNQUALIFIED** |",
-            f"| literal pool-local buckets `{pool_layout['job_id']}` | logical padded rows -"
-            f"{min(pool_layout['literal_pool_rows_reduction_percent']):.1f}% to -"
-            f"{max(pool_layout['literal_pool_rows_reduction_percent']):.1f}% | Exact source chronology, but calls "
-            f"{pool_layout['current_outer_calls']} -> {pool_layout['literal_pool_calls']}; earlier less-fragmented "
-            "exact variants were 31--36% slower. | **REJECTED BEFORE GPU PAIR** |",
-            f"| ordered-scatter CUDA Graph `{speed['paired_job']}` | {speed['candidate_seconds']} vs "
-            f"{speed['control_seconds']} s ({speed['wall_time_change_percent']:.2f}%) | particles "
-            f"{speed['candidate_control_particle_passed']}/{speed['candidate_control_particle_denominator']}; "
-            f"maps {speed['candidate_control_map_passed']}/{speed['candidate_control_map_denominator']}. | "
-            "**QUALIFIED CANDIDATE** |",
-            "",
-            "The x-half pair measured a runtime opportunity but failed the required causal invariant: all three "
-            "iteration-1 artifacts differ even though both caps predict identical iteration-1 topology. Commit "
-            "`732868abb` rejects the lane as unqualified; it does not attribute later projector differences to the "
-            "cap. None of these diagnostics can change the frozen correctness or runtime panels.",
-            "",
-            f"Palette evidence: `{palette['evidence_root']}/{palette['failure_report']}` "
-            f"(SHA-256 `{palette['failure_report_sha256']}`); Slurm log `{palette['evidence_sha256']}`. "
-            f"Tail-pair evidence: `{tail_full['evidence_root']}/{tail_full['summary_report']}` "
-            f"(SHA-256 `{tail_full['summary_report_sha256']}`); Slurm log `{tail_full['evidence_sha256']}`.",
-            "",
             f"### Warm H100 profile: job `{engineering['warm_profile']['job_id']}`",
             "",
             f"Iterations {engineering['warm_profile']['iteration_window']}: "
@@ -1149,28 +1206,6 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             f"{engineering['warm_profile']['xla_compile_seconds']:.2f} s XLA compile, and "
             f"{engineering['warm_profile']['dataset_getitem_seconds']:.2f} s dataset getitem. The profile points to "
             "execution topology and shape churn; full artifact paths and hashes remain bound in the JSON ledger.",
-            "",
-            "### Archived speed gates",
-            "",
-            "| Gate | Compact decision |",
-            "|---|---|",
-            f"| profiler `{engineering['profile_toggle']['job_id']}` | Keep unset; both crossed pairs favored off, "
-            f"but contention forbids a magnitude claim; {engineering['profile_toggle']['particle_pose_translation_exact_iterations']}/"
-            f"{engineering['profile_toggle']['particle_pose_translation_exact_iterations']} particle checkpoints exact. |",
-            f"| pass-to-pass raw cache `{engineering['between_pass_raw_cache']['microbench_job_id']}` | "
-            f"{engineering['between_pass_raw_cache']['exact_array_blocks']}/"
-            f"{engineering['between_pass_raw_cache']['exact_array_blocks']} blocks exact, but only "
-            f"~{engineering['between_pass_raw_cache']['estimated_80_iteration_ceiling_seconds']:.1f} s ceiling and "
-            f"the full pair was {engineering['between_pass_raw_cache']['first_clean_paired_change_percent']:+.2f}% slower; default off. |",
-            f"| shared coarse cache `{'/'.join(projection_cache['exact_jobs'])}/{projection_cache['batch_sweep_job_id']}` | "
-            f"Exact but only {projection_cache['batch_200_speedup']:.5f}x at batch 200 and <"
-            f"{projection_cache['estimated_end_to_end_ceiling_percent']:.2f}% end-to-end ceiling; not integrated. |",
-            f"| x-half `{xhalf_batch['job_id']}/13265965` | {xhalf_batch['median_wall_reduction_percent']:.2f}% lower "
-            "wall, but preboundary state was noninvariant; rejected/unqualified at `732868abb`. |",
-            f"| literal pool `{pool_layout['job_id']}` | Rows fell "
-            f"{min(pool_layout['literal_pool_rows_reduction_percent']):.1f}--"
-            f"{max(pool_layout['literal_pool_rows_reduction_percent']):.1f}%, but calls rose to "
-            f"{pool_layout['literal_pool_calls']}; rejected before GPU pair. |",
             "",
             "### Engineering decision ledger",
             "",
@@ -1225,24 +1260,29 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
             "",
             "## Next gates",
             "",
-            "1. Run a multi-repeat elementwise stability/equivalence panel across the full trajectory. Measure drift "
-            "growth, bias, variance, discrete state-escape rate, basin changes, final quality, and end-to-end runtime "
-            "distributions; do not require a brittle zero two-control map diameter.",
-            "2. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
+            "1. Implement a default-off K=1 multistream scheduler around the accepted shared production coarse "
+            "kernel. Reuse the mature EM worker-stream machinery, preserve texture math and canonical reduction, then "
+            "microgate discrete-change rates against control/native repeats plus stable, unbiased, non-growing "
+            "numerical noise, basin preservation, and final quality before any trajectory.",
+            "2. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the "
+            "0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking "
+            "and the combined B arm out of the production default.",
+            "3. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed "
             "control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, "
             "dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.",
-            "3. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
+            "4. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff "
             "as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact "
             "boundary measurement before any trajectory.",
-            "4. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is "
+            "5. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is "
             "numerically equivalent, but the same-binary 1.0091x warm result is immaterial and the isolated primitive "
             "speedup cannot authorize promotion.",
-            "5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
+            "6. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@"
             f"{particle_gate['first_failure_iteration']} boundary, but defer its arithmetic investigation while "
             "the explicitly requested performance-first phase is active.",
-            "6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, shared coarse-projection "
-            "cache, literal pool-per-call layout, or dynamic tail mask without new evidence. After speed closes, "
-            "isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.",
+            "7. Do not revive the rejected 128-tail palette, float32 scorer, eager whole-stack raw cache, shared "
+            "coarse-projection cache, literal pool-per-call layout, physical-order chunking, or dynamic tail mask "
+            "without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix "
+            "before K>1 or real-data promotion.",
             "",
             "## Evidence and reproducibility",
             "",

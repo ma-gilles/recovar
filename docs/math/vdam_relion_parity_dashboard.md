@@ -10,8 +10,8 @@
 |---|---|---|
 | K=1 correctness | **2/20** | Unchanged; accepted cases are `vdam-gf44, vdam-gf45`. |
 | Runtime | **0/20** | Unchanged; observed suite range 4.91--11.58x. Promotion requires a large reproducible gain without instability or quality loss. |
-| Performance lanes | non-scoring | 4 accepted/qualified evidence lanes; 2 rejected; **0 pending**; all default-off. |
-| Numerical policy | non-scoring | Roundoff-scale map differences are acceptable when stable, unbiased, basin-preserving, quality-neutral, and paired with a large reproducible end-to-end gain. |
+| Performance lanes | non-scoring | Existing six-lane workboard: 4 accepted/qualified evidence lanes and 2 rejected, all default-off. New late-iteration factorial: cache-only retained for repeat/scale; chunking rejected. |
+| Numerical policy | non-scoring | Require mathematical equivalence plus stable, unbiased, non-growing repeat-bounded noise. Bitwise identity is not required. Measure discrete changes; rare marginal changes may be accepted only within control/native repeat variability, with the same basin and no material final-quality loss. A slight stable-envelope quality change is allowed only for a large runtime gain. |
 | EM reuse | shared production primitives | The remaining boundary is execution topology/variability, not duplicate projector or scorer math. |
 | Later gates | separate | K>1 remains unqualified; real data remains unscored. |
 
@@ -19,7 +19,24 @@
 
 | Evidence | Result | What it rules out | Explicit next gate |
 |---|---|---|---|
+| Same-H100 GF46 it180->181 factorial `13276891/13276923/13277456/13277457` | **CACHE-ONLY RETAINED FOR REPEAT/SCALE; CHUNKING REJECTED.** Cache-only warm wall -5.27% and cold wall -1.24%, with +0.365 GiB HWM; all tracked discrete invariants exact. | Padding reduction alone does not close the gap: chunk-only was +14.09% cold and +0.23% warm. | Repeat cache-only across scales; do not promote it yet. |
+| Production coarse trace `13275886` | **SCHEDULING/OVERLAP IS THE MEASURED GAP.** RECOVAR coarse union 4.355 s versus native 2.752 s, despite 3.881 ms per RECOVAR slot versus 3.925 ms per native particle. | The shared production kernel is not slower per unit; six serial padded batches lose to native RELION's eight-stream overlap. | Default-off K=1 multistream scheduling around the accepted shared production coarse kernel, preserving its texture math and canonical reduction; do not substitute the rejected diagnostic native-texture path. |
 | Same-binary ABBA `13271166` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm speedup is `1.0091x` | All four arms loaded CUDA SHA `6210cdb1cc97aa72fbdf80b36b501ad48c8d1d1e4866f4a2c11889076e1bff53`; different CUDA libraries are not the cause, and the strict two-control map-diameter flag alone is not a scientific rejection. | Run multi-repeat stability/equivalence checks for drift growth, bias, variance, state-escape rate, basin changes, and final quality; seek a different optimization if end-to-end gain remains near 1.009x. |
+
+## Late-iteration same-H100 factorial
+
+GF46 iteration 180->181 ran at source `f61808a0e6` on `della-h21g4` / `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`. This is a one-transition diagnostic gate only; it cannot change frozen correctness **2/20** or runtime **0/20**, and no production default is authorized.
+
+| Arm / job | Cache / radix / chunk | Cold wall | Warm wall | Warm expectation | Warm HWM | Numerical read | Decision |
+|---|---|---:|---:|---:|---:|---|---|
+| A / `13276891` | off / 4 / 0 | 26.637 s (control) | 13.904 s (control) | 8.899 s (control) | 3.556 GiB (control) | discrete exact; control repeat map rel-L2 `2.19155e-09` | **CONTROL** |
+| B / `13276923` | auto / 2 / 220 | 30.646 s (+15.05%) | 13.021 s (-6.35%) | 8.311 s (-6.60%) | 3.959 GiB (+11.35%) | discrete exact; map rel-L2 `2.44339e-09` | **HOLD / REJECT AS DEFAULT** |
+| C / `13277456` | auto / 4 / 0 | 26.306 s (-1.24%) | 13.172 s (-5.27%) | 8.132 s (-8.62%) | 3.920 GiB (+0.365 GiB) | discrete exact; map rel-L2 `2.033e-09`, within repeat envelope | **RETAIN FOR REPEAT/SCALE; NOT PROMOTED** |
+| D / `13277457` | off / 2 / 220 | 30.388 s (+14.09%) | 13.936 s (+0.23%) | 8.866 s (-0.37%) | 3.620 GiB (+1.80%) | discrete exact; map rel-L2 `2.249e-09` | **REJECT** |
+
+Reference job `13275886` measured native RELION at 5.240 s process / 4.334 s expectation, versus RECOVAR 14.714 s warm wall / 9.751 s expectation. Nsight resolves the coarse path as `6_serial_padded_batches_on_one_stream` versus `1000_per_particle_launches_over_8_streams`. The shared RECOVAR coarse kernel is slightly faster per executed slot; the remaining gap is serial scheduling, padding, and lost overlap rather than different projector math.
+
+The numerical gate is scientific, not bitwise. Mathematical equivalence and stable, unbiased, non-growing repeat-bounded noise are mandatory. Discrete changes are measured, not universally forbidden: rare marginal changes may be accepted only when consistent with control/native repeat variability, remain in the same basin, and cause no material final-quality loss. A slight quality change inside that stable envelope is acceptable only when paired with a large runtime gain. This factorial's exact tracked decisions are strong evidence, not the universal acceptance definition.
 
 ## Performance lanes
 
@@ -34,6 +51,7 @@
 | **PENDING** | None | No performance candidate currently awaits an audit. | Submit the multi-repeat elementwise stability/equivalence panel; add a pending row after its provenance-sealed job exists. |
 
 Invalid jobs `13270868` and `13270984` stopped in preflight before science and are not evidence. All six lanes are diagnostic and default-off/unwired, with **no impact** on frozen correctness 2/20 or runtime 0/20.
+Historical tail-mask gate: Forced nondefault native-texture path; 120/120 strict artifacts differ.
 
 ### Gate progression
 
@@ -150,35 +168,9 @@ Cancelled after 00:04:23 before any A/B science or timing result. The loader tre
 
 Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf01_sig_bucket_ab_73945d69f_20260830T1900ET/trials/cold/control/runner.log` (SHA-256 `693ca77cb8a01ad7dc78b282df19f7df8c5ef4bc624ad2c9f99ef365b508fc04`); Slurm log SHA-256 `f39303615d8f692e242f0df8116649139e9d47d4bc78ad5186b2a2f82c47eed3`.
 
-## Speed snapshot
-
-| Experiment | Timing readout | Exactness / scope | Decision |
-|---|---|---|---|
-| typed warm80 audit `13256248` | cold 704 vs 644 s (+9.3%); warm 415 vs 423 s (-1.9%) | Same hard state only through iterations 1--36; warm is cross-GPU. | **INCONCLUSIVE — no speed claim** |
-| 128-tail palette `13254010` | warm wall +4.1%; pass 1 +7.3% | 20/20 particle states, then sealed cache changed 1277->1280 files. | **REJECTED / DEFAULT OFF** |
-| dynamic tail mask `13257087` | 65.1455 vs 65.5981 s = 1.00695x | Forced nondefault native-texture path; 120/120 strict artifacts differ. Microgates: active-3 23.91x bitwise; active-200 2.317x not bitwise. | **VALID SCIENCE FAIL / DO NOT PROMOTE** |
-| shared coarse-projection cache `13261042 / 13261159 / 13261300 / 13261339` | exact at every tested batch; `1.01115x` at batch 200 | GF46 has 1 image batch per pass; loose overall ceiling `0.52%`, observed iteration contribution about `0.10%`; retains `0.99--1.5 GiB`. | **EXACT BUT IMMATERIAL; NOT INTEGRATED** |
-| x-half projection batch `13260950` | median 310.949 -> 287.444 s (7.56% lower); both pairs faster | Peak memory unchanged, but operand job 13265965 found iteration-1 trajectory differences before cap topology differs; no causal x-half invariant. | **REJECTED / CAUSAL PROOF UNQUALIFIED** |
-| literal pool-local buckets `13262146` | logical padded rows -49.5% to -82.2% | Exact source chronology, but calls [7, 3, 4, 5] -> [67, 67, 67, 120]; earlier less-fragmented exact variants were 31--36% slower. | **REJECTED BEFORE GPU PAIR** |
-| ordered-scatter CUDA Graph `13203664` | 291 vs 293 s (-0.68%) | particles 80/80; maps 81/81. | **QUALIFIED CANDIDATE** |
-
-The x-half pair measured a runtime opportunity but failed the required causal invariant: all three iteration-1 artifacts differ even though both caps predict identical iteration-1 topology. Commit `732868abb` rejects the lane as unqualified; it does not attribute later projector differences to the cap. None of these diagnostics can change the frozen correctness or runtime panels.
-
-Palette evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_sig_bucket_ab_4846bd5c5_20260831/FAILED.json` (SHA-256 `91754058b814633ea39fd3f8f958a3765d48bd21575cc69be489765657da92af`); Slurm log `324bb62a9e257fb8b9871462d99bcb2cbda9750a021db6809b63f85ea088fc7a`. Tail-pair evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_gf46_coarse_tail_pair_51357fbec_20260831/pair_summary.json` (SHA-256 `fe00d3936fefa751a676ee8b3b52b262770e50e865d2716a1512a26076d4b1ba`); Slurm log `8e27a0f48d42c072604b326d4ee96e6052b1a794715795f5a9662e5f17f38699`.
-
 ### Warm H100 profile: job `13248509`
 
 Iterations 47--80: 240.36 s wall, 44.58 s kernels, 35.899 s coarse projector, 57.83 s XLA compile, and 31.90 s dataset getitem. The profile points to execution topology and shape churn; full artifact paths and hashes remain bound in the JSON ledger.
-
-### Archived speed gates
-
-| Gate | Compact decision |
-|---|---|
-| profiler `13258895` | Keep unset; both crossed pairs favored off, but contention forbids a magnitude claim; 20/20 particle checkpoints exact. |
-| pass-to-pass raw cache `13260861` | 15/15 blocks exact, but only ~4.9 s ceiling and the full pair was +1.45% slower; default off. |
-| shared coarse cache `13261042/13261159/13261339` | Exact but only 1.01115x at batch 200 and <0.52% end-to-end ceiling; not integrated. |
-| x-half `13260950/13265965` | 7.56% lower wall, but preboundary state was noninvariant; rejected/unqualified at `732868abb`. |
-| literal pool `13262146` | Rows fell 49.5--82.2%, but calls rose to [67, 67, 67, 120]; rejected before GPU pair. |
 
 ### Engineering decision ledger
 
@@ -226,12 +218,13 @@ CLI and GUI both default to `relion_fast`; `reference` remains diagnostic. Curre
 
 ## Next gates
 
-1. Run a multi-repeat elementwise stability/equivalence panel across the full trajectory. Measure drift growth, bias, variance, discrete state-escape rate, basin changes, final quality, and end-to-end runtime distributions; do not require a brittle zero two-control map diameter.
-2. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.
-3. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact boundary measurement before any trajectory.
-4. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is numerically equivalent, but the same-binary 1.0091x warm result is immaterial and the isolated primitive speedup cannot authorize promotion.
-5. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
-6. Do not revive the rejected 128-tail palette, float32 scorer, eager raw cache, shared coarse-projection cache, literal pool-per-call layout, or dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.
+1. Implement a default-off K=1 multistream scheduler around the accepted shared production coarse kernel. Reuse the mature EM worker-stream machinery, preserve texture math and canonical reduction, then microgate discrete-change rates against control/native repeats plus stable, unbiased, non-growing numerical noise, basin preservation, and final quality before any trajectory.
+2. Repeat cache-only arm C across seeds, scales, and representative trajectory checkpoints. Track the 0.365 GiB HWM cost and promote only if the cold/warm gain is reproducible; keep physical-order chunking and the combined B arm out of the production default.
+3. Keep the profiler unset. Wire the qualified flat-row scorer behind an explicit default-off typed control, reuse shared compact-pair packing/projection, and time the complete live call. Repeat the raw, dense-score, six-posterior, poisoned-tail, and outer-call exactness audit before any trajectory.
+4. Integrate stable physical score, Wavg, and BPref shapes together while retaining the logical cutoff as the runtime bound. Poison-test padded tails and replace the 5.2--5.4% forecast with a live exact boundary measurement before any trajectory.
+5. Keep batched CUB and the 80M x-half cap rejected. Keep elementwise default-off and unpromoted: it is numerically equivalent, but the same-binary 1.0091x warm result is immaterial and the isolated primitive speedup cannot authorize promotion.
+6. Keep the audited typed Wavg/radix defaults. Preserve the active-particle FAIL@37 boundary, but defer its arithmetic investigation while the explicitly requested performance-first phase is active.
+7. Do not revive the rejected 128-tail palette, float32 scorer, eager whole-stack raw cache, shared coarse-projection cache, literal pool-per-call layout, physical-order chunking, or dynamic tail mask without new evidence. After speed closes, isolate correctness and then expand the frozen K=1 matrix before K>1 or real-data promotion.
 
 ## Evidence and reproducibility
 
