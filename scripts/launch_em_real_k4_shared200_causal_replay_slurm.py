@@ -29,7 +29,7 @@ from recovar.data_io.starfile import read_star
 from recovar.em.sampling import read_relion_sampling_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v2"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v3"
 TARGET_SCHEMA = "recovar.em_real_k4_shared200_targets.v1"
 SHARED_SET_SCHEMA = "recovar.em_real_kclass_shared_visited_subset.v1"
 
@@ -47,7 +47,7 @@ DEFAULT_RELION_CAPTURE_ROOT = Path(
     "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_allclass_score_f34f9dc_20260804T0118ET"
 )
 DEFAULT_RELION_CAPTURE_SOURCE = DEFAULT_RELION_CAPTURE_ROOT / "source"
-DEFAULT_RELION_CAPTURE_BINARY = DEFAULT_RELION_CAPTURE_ROOT / "build/bin/relion_refine_mpi"
+DEFAULT_RELION_CAPTURE_BINARY = DEFAULT_RELION_CAPTURE_ROOT / "build/bin/relion_refine"
 DEFAULT_RELION_BIND_SOURCE = Path("/scratch/gpfs/GILLES/mg6942/relion_clean_f2c1a384/src")
 
 EXPECTED_FIXTURE_STAR_SHA256 = "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f"
@@ -56,7 +56,7 @@ EXPECTED_PARTICLE_STACK_SHA256 = "70d0c19995221491d27c9323f21c40df27e153bdf1e783
 EXPECTED_PARTICLE_STACK_SIZE = 34_576_532_480
 EXPECTED_SHARED_SET_SHA256 = "581157ff693aac6f5853d335d9cd0c59aa3fc11e60f54b325feb692ff05a9bd7"
 EXPECTED_PAIR_REPORT_SHA256 = "af22573582ea68dc07099686ebb09a282ad3ed82b2998c5bc962454baefdc31d"
-EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "6fcfa065c628fafa92aaa03fccae3cb148df5d838af6701585d9b7e3b0a75da4"
+EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "3e8c501c387fa22d4e0b01da2dbf93d3a5c7c8444b605ae77e810bffd93f8615"
 EXPECTED_CAPTURE_RELION_HEAD = "f34f9dc65b1112b3bc2f9b98c4c035c240b40c72"
 EXPECTED_CAPTURE_RELION_TREE = "29dc59f99e3599ba00340f042c96229a47d61ec7"
 EXPECTED_BIND_RELION_HEAD = "f2c1a384400aec37dc6805856a5ba645650a44f1"
@@ -185,6 +185,13 @@ def _validate_record(record: dict[str, Any]) -> None:
     _require(observed == record.get("sha256"), f"input checksum drift: {path}: {observed}")
 
 
+def _validate_capture_binary_mode(path: Path) -> None:
+    _require(
+        path.name == "relion_refine",
+        "gradient InitialModel replay requires the non-MPI relion_refine executable",
+    )
+
+
 def _star_scalar(text: str, label: str) -> str:
     match = re.search(rf"(?m)^{re.escape(label)}\s+(\S+)\s*$", text)
     _require(match is not None, f"STAR scalar is missing: {label}")
@@ -254,6 +261,10 @@ def materialize_iteration0_continuation_bundle(
     _require(derived_metadata["random_perturbation"] == 0.0, "derived perturbation must be clear")
 
     optimiser_text = source_optimiser.read_text()
+    _require(
+        _star_scalar(optimiser_text, "_rlnDoGradientRefine") == "1",
+        "iteration-0 optimiser is no longer a gradient InitialModel state",
+    )
     source_sampling_reference = Path(_star_scalar(optimiser_text, "_rlnOrientSamplingStarFile"))
     _require(
         source_sampling_reference.name == "run_it000_sampling.star" and not source_sampling_reference.exists(),
@@ -400,6 +411,27 @@ def write_deterministic_subset_star(
             _write_star_block(stream, "data_particles", selected)
         else:
             _write_star_block(stream, "data_", selected)
+
+
+def write_fixed_image_identity_mapping(
+    *,
+    output: Path,
+    particles,
+    particle_stack: Path,
+) -> None:
+    """Seal the full fixture's stack identities without object arrays/pickle."""
+
+    image_column = _column(particles, "rlnImageName")
+    stack_indices = np.asarray([_stack_index(value) for value in particles[image_column]], dtype=np.int64)
+    expected = np.arange(1, len(particles) + 1, dtype=np.int64)
+    _require(
+        np.array_equal(stack_indices, expected),
+        "fixture image identities must be the contiguous one-based stack order",
+    )
+    absolute_stack = particle_stack.resolve()
+    identities = [f"{index}@{absolute_stack}" for index in stack_indices.tolist()]
+    width = max(map(len, identities), default=1)
+    np.save(output, np.asarray(identities, dtype=f"<U{width}"), allow_pickle=False)
 
 
 def _fixed_case_record() -> dict[str, Any]:
@@ -556,6 +588,7 @@ def preflight(args: argparse.Namespace) -> dict[str, Any]:
     for _, path in _input_paths(args):
         _require(path.is_file(), f"required input is missing: {path}")
     _require(os.access(args.relion_capture_binary, os.X_OK), "capture RELION binary is not executable")
+    _validate_capture_binary_mode(args.relion_capture_binary)
     _require(_sha256(args.fixture_dir / "particles.star") == EXPECTED_FIXTURE_STAR_SHA256, "fixture STAR drift")
     _require(
         _sha256(args.fixture_dir / "source_indices.npy") == EXPECTED_SOURCE_INDICES_SHA256,
@@ -613,6 +646,7 @@ def render_sbatch(args: argparse.Namespace, *, expected_head: str, manifest_path
     subset_star = run_root / "inputs/particles_shared200.star"
     targets = run_root / "inputs/frozen_targets.json"
     replay_optimiser = run_root / "inputs/continuation/run_it000_optimiser_replay.star"
+    image_names_mapping = run_root / "inputs/image_names_full.npy"
     target_loader = (
         "import json,pathlib; p=json.loads(pathlib.Path(" + repr(str(targets)) + ").read_text()); "
         "print(','.join(map(str,p['stack_indices_one_based'])))"
@@ -653,9 +687,17 @@ def render_sbatch(args: argparse.Namespace, *, expected_head: str, manifest_path
     recovar_text = continuation.join(_quote(value) for value in recovar_command)
     native_smoke_exit = ""
     if args.native_smoke_only:
-        native_smoke_exit = """test -s "${ROOT}/native/control_a/output/run_it001_sampling.star"
-find "${ROOT}/native/control_a" -type f -print0 \\
-  | sort -z | xargs -0 sha256sum > "${ROOT}/provenance/science_outputs_${SLURM_JOB_ID}.sha256"
+        native_smoke_exit = f"""test -s "${{ROOT}}/native/control_a/output/run_it001_sampling.star"
+{_quote(python)} -m scripts.audit_em_real_kclass_initialmodel \\
+  --candidate-dir "${{ROOT}}/native/control_a/output" \\
+  --reference-dir {_quote(pair / "relion")} \\
+  --K {CASE.K} --checkpoint 1 \\
+  --minimum-fsc-auc {THRESHOLDS["minimum_native_control_map_fsc_auc"]} \\
+  --minimum-assignment-accuracy 1.0 --minimum-class-fraction {THRESHOLDS["minimum_class_fraction"]} \\
+  --output-json "${{ROOT}}/analysis/native_smoke_trajectory.json" \\
+  --output-shells-npz "${{ROOT}}/analysis/native_smoke_shells.npz"
+find "${{ROOT}}/native/control_a" -type f -print0 \\
+  | sort -z | xargs -0 sha256sum > "${{ROOT}}/provenance/science_outputs_${{SLURM_JOB_ID}}.sha256"
 exit 0
 """
     return f"""#!/usr/bin/env bash
@@ -667,8 +709,8 @@ exit 0
 #SBATCH --constraint={args.constraint}
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
-#SBATCH --ntasks=3
-#SBATCH --cpus-per-task=2
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
 #SBATCH --mem={args.mem}
 #SBATCH --time={args.time_limit}
 
@@ -692,7 +734,7 @@ while IFS='=' read -r variable_name _; do
 done < <(env)
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export OMP_NUM_THREADS=6
+export OMP_NUM_THREADS=8
 
 test "$(git rev-parse HEAD)" = "${{EXPECTED_HEAD}}"
 test -z "$(git status --short --untracked-files=all)"
@@ -762,17 +804,17 @@ run_native_arm() {{
     export RELION_BPRE_CAPTURE_ITER=1
     export RELION_BPRE_CAPTURE_CLASS="${{capture_class}}"
     export RELION_BPRE_CAPTURE_EXPECTED_PARTICLES={CASE.particle_count}
-    export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK={max(CASE.half1_particle_count, CASE.half2_particle_count)}
-    export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=2
+    export RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK={CASE.particle_count}
+    export RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=1
     export RELION_BPRE_CAPTURE_MAX_BYTES=8000000000
     export RELION_BPRE_CAPTURE_STACKS="${{TARGET_STACKS}}"
     export RELION_BPRE_CAPTURE_GEOMETRY_ONLY=1
     export RELION_FINE_SCORE_CAPTURE_CLASSES="${{capture_class}}"
   fi
   local command=(
-    srun --mpi=pmix --ntasks=3 --cpus-per-task=2 --cpu-bind=none {_quote(args.relion_capture_binary)}
+    srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none {_quote(args.relion_capture_binary)}
     --continue {_quote(replay_optimiser)}
-    --o "${{arm_root}}/output/run" --iter 1 --auto_iter_max 1 --pool 3 --gpu 0:0:0 --j 2
+    --o "${{arm_root}}/output/run" --iter 1 --auto_iter_max 1 --pool 3 --gpu 0 --j 8
   )
   printf '%q ' "${{command[@]}}" > "${{ROOT}}/provenance/command_${{arm}}_${{SLURM_JOB_ID}}.sh"
   printf '\n' >> "${{ROOT}}/provenance/command_${{arm}}_${{SLURM_JOB_ID}}.sh"
@@ -796,7 +838,8 @@ run_native_arm control_a 0
 run_native_arm control_b 0
 for class_id in 1 2 3 4; do run_native_arm "class${{class_id}}" "${{class_id}}"; done
 
-mkdir -p "${{ROOT}}/recovar/output" "${{ROOT}}/recovar/pass2" "${{ROOT}}/recovar/accum"
+mkdir -p "${{ROOT}}/recovar/output" "${{ROOT}}/recovar/pass2" \
+  "${{ROOT}}/recovar/accum" "${{ROOT}}/recovar/contributions"
 export RECOVAR_EXPECTED_REPO_ROOT={_quote(REPO_ROOT)}
 export RECOVAR_SPARSE_KCLASS_FUSED=1
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
@@ -805,10 +848,21 @@ export RECOVAR_PASS2_DUMP_CURRENT_SIZE={CASE.current_size}
 export RECOVAR_PASS2_DUMP_ITERATION=1
 export RECOVAR_PASS2_DUMP_DIR="${{ROOT}}/recovar/pass2"
 export RECOVAR_INITIAL_MODEL_ACCUM_DUMP_DIR="${{ROOT}}/recovar/accum"
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR="${{ROOT}}/recovar/contributions"
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE={CASE.current_size}
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES="${{TARGET_ORIGINALS}}"
+export RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1
+export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY={_quote(image_names_mapping)}
+export RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256={EXPECTED_PARTICLE_STACK_SHA256}
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID="empiar10076-k4-shared200-it1-${{SLURM_JOB_ID}}"
 unset RECOVAR_PASS2_DUMP_CLASS RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET
+unset RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF
+unset RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET
 unset RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER RECOVAR_FINAL_ALL_DATA_GRID_CORRECT
 {recovar_text} > "${{ROOT}}/recovar/output/runner.stdout" 2> "${{ROOT}}/recovar/output/runner.stderr"
 test "$(find "${{ROOT}}/recovar/pass2" -maxdepth 1 -name '*.npz' | wc -l)" -eq 800
+test -n "$(find "${{ROOT}}/recovar/contributions" -maxdepth 1 -name '*.npz' -print -quit)"
 test -s "${{ROOT}}/recovar/output/k_class_parity_arrays.npz"
 test -s "${{ROOT}}/recovar/output/summary.json"
 
@@ -860,6 +914,7 @@ def validate_manifest(path: Path) -> dict[str, Any]:
     _require(manifest.get("input_records"), "launch manifest has no input records")
     for key in ("targets", "subset_star", "sbatch_script"):
         _validate_record(manifest[key])
+    _validate_record(manifest["image_names_mapping"])
     continuation = manifest.get("continuation_bundle", {})
     for key in ("source_sampling", "source_optimiser", "derived_sampling", "derived_optimiser"):
         _validate_record(continuation[key])
@@ -927,6 +982,20 @@ def validate_manifest(path: Path) -> dict[str, Any]:
         ),
         "target ordered identity/half digest drift",
     )
+    identity_mapping = np.load(manifest["image_names_mapping"]["path"], allow_pickle=False)
+    _require(
+        identity_mapping.ndim == 1 and identity_mapping.dtype.kind in {"U", "S"},
+        "sealed image identity mapping must be a fixed-width rank-1 string array",
+    )
+    _require(len(identity_mapping) == 10_000, "sealed image identity mapping count drift")
+    selected_mapping = identity_mapping[np.asarray(stacks, dtype=np.int64) - 1].astype(str).tolist()
+    stack_records = [
+        record for record in manifest["input_records"] if record.get("role") == "fixture particle stack"
+    ]
+    _require(len(stack_records) == 1, "manifest must seal exactly one fixture particle stack")
+    sealed_stack = Path(stack_records[0]["path"]).resolve()
+    expected_mapping = [f"{stack}@{sealed_stack}" for stack in stacks]
+    _require(selected_mapping == expected_mapping, "sealed image identity mapping target join drift")
     return manifest
 
 
@@ -1008,6 +1077,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     reread, _ = read_star(str(subset_path))
     _require(len(reread) == CASE.particle_count, "materialized subset count drift")
+    fixture_particles, _ = read_star(str(args.fixture_dir / "particles.star"))
+    image_names_mapping_path = args.output_root / "inputs/image_names_full.npy"
+    write_fixed_image_identity_mapping(
+        output=image_names_mapping_path,
+        particles=fixture_particles,
+        particle_stack=args.fixture_dir / "particles.256.mrcs",
+    )
     _, _, continuation_bundle = materialize_iteration0_continuation_bundle(
         source_optimiser=args.control_pair_root / "relion/run_it000_optimiser.star",
         source_sampling=args.control_pair_root / "relion/run_it001_sampling.star",
@@ -1047,6 +1123,10 @@ def main(argv: list[str] | None = None) -> int:
         "input_records": input_records,
         "targets": _file_record(targets_path, role="frozen shared-200 target manifest"),
         "subset_star": _file_record(subset_path, role="deterministic shared-200 STAR"),
+        "image_names_mapping": _file_record(
+            image_names_mapping_path,
+            role="fixed-width full-fixture rlnImageName mapping",
+        ),
         "sbatch_script": _file_record(script_path, role="sealed Slurm launcher"),
         "expected_outputs": _expected_outputs(args.output_root, native_smoke_only=args.native_smoke_only),
         "requested_resources": {
@@ -1056,9 +1136,9 @@ def main(argv: list[str] | None = None) -> int:
             "gpus": 1,
             "gpu_type": "H100 80GB",
             "nodes": 1,
-            "ntasks": 3,
-            "cpus_per_task": 2,
-            "total_cpus": 6,
+            "ntasks": 1,
+            "cpus_per_task": 8,
+            "total_cpus": 8,
             "mem": args.mem,
             "time_limit": args.time_limit,
             "exclusive": False,
@@ -1068,7 +1148,12 @@ def main(argv: list[str] | None = None) -> int:
             "native_repeat_controls": 2,
             "native_class_capture_arms": 4,
             "native_capture_geometry_only": True,
+            "native_gradient_execution": "non-MPI relion_refine under one Slurm task with eight threads",
+            "native_capture_rank_count": 1,
+            "native_gradient_pseudo_half_rule": "op.part_id modulo 2",
+            "native_gradient_pseudo_half_counts": [100, 100],
             "recovar_all_classes_single_replay": True,
+            "recovar_high_precision_contribution_bundle": True,
             "recovar_subset_particle_count": CASE.particle_count,
             "correlation_used": False,
         },

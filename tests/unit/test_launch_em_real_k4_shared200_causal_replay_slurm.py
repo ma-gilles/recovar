@@ -139,6 +139,22 @@ def test_subset_star_is_deterministic_and_uses_absolute_stack(tmp_path):
     assert particles["_rlnImageName"].tolist() == [f"1@{stack}", f"2@{stack}"]
 
 
+def test_image_identity_mapping_is_fixed_width_absolute_and_deterministic(tmp_path):
+    stack = tmp_path / "particles.256.mrcs"
+    stack.touch()
+    particles = _particles().iloc[:2].copy()
+    first = tmp_path / "first.npy"
+    second = tmp_path / "second.npy"
+
+    launcher.write_fixed_image_identity_mapping(output=first, particles=particles, particle_stack=stack)
+    launcher.write_fixed_image_identity_mapping(output=second, particles=particles, particle_stack=stack)
+
+    assert first.read_bytes() == second.read_bytes()
+    identities = launcher.np.load(first, allow_pickle=False)
+    assert identities.dtype.kind == "U"
+    assert identities.tolist() == [f"1@{stack}", f"2@{stack}"]
+
+
 def test_iteration0_continuation_bundle_restores_preinitialisation_offsets(tmp_path):
     pair = tmp_path / "pair"
     output = tmp_path / "output"
@@ -154,6 +170,7 @@ def test_iteration0_continuation_bundle_restores_preinitialisation_offsets(tmp_p
         f"_rlnModelStarFile {model}\n"
         f"_rlnExperimentalDataStarFile {data}\n"
         f"_rlnOrientSamplingStarFile {missing_sampling}\n"
+        "_rlnDoGradientRefine 1\n"
     )
     sampling = pair / "run_it001_sampling.star"
     sampling.write_text(
@@ -182,6 +199,7 @@ def test_iteration0_continuation_bundle_restores_preinitialisation_offsets(tmp_p
     replay_text = replay_optimiser.read_text()
     assert launcher._star_scalar(replay_text, "_rlnOrientSamplingStarFile") == str(replay_sampling.resolve())
     assert launcher._star_scalar(replay_text, "_rlnModelStarFile") == str(model)
+    assert launcher._star_scalar(replay_text, "_rlnDoGradientRefine") == "1"
     assert provenance["method"].startswith("iteration-1 topology")
 
 
@@ -195,6 +213,7 @@ def test_iteration0_continuation_bundle_rejects_angstrom_geometry_drift(tmp_path
         f"_rlnModelStarFile {model}\n"
         f"_rlnExperimentalDataStarFile {data}\n"
         f"_rlnOrientSamplingStarFile {tmp_path / 'run_it000_sampling.star'}\n"
+        "_rlnDoGradientRefine 1\n"
     )
     sampling = tmp_path / "run_it001_sampling.star"
     sampling.write_text(
@@ -219,7 +238,7 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
         fixture_dir=tmp_path / "fixture",
         pixi_python=tmp_path / "python",
         relion_bind_source=tmp_path / "relion-src",
-        relion_capture_binary=tmp_path / "relion_refine_mpi",
+        relion_capture_binary=tmp_path / "relion_refine",
         partition="cryoem",
         account="gilles",
         constraint="h100",
@@ -237,7 +256,19 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "--exclusive" not in script
     assert "run_native_arm control_a 0" in script
     assert "run_native_arm control_b 0" in script
-    assert "srun --mpi=pmix --ntasks=3" in script
+    assert "#SBATCH --ntasks=1" in script
+    assert "#SBATCH --cpus-per-task=8" in script
+    assert "srun --ntasks=1 --cpus-per-task=8" in script
+    assert "--mpi=pmix" not in script
+    assert "--gpu 0 --j 8" in script
+    assert "RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=200" in script
+    assert "RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=1" in script
+    assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR" in script
+    assert "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1" in script
+    assert "RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY" in script
+    assert f"RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256={launcher.EXPECTED_PARTICLE_STACK_SHA256}" in script
+    assert "unset RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF" in script
+    assert "unset RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET" in script
     assert "inputs/continuation/run_it000_optimiser_replay.star" in script
     assert "pair/relion/run_it000_optimiser.star" not in script
     assert 'for class_id in 1 2 3 4; do run_native_arm "class${class_id}"' in script
@@ -266,7 +297,7 @@ def test_rendered_native_smoke_exits_after_one_continuation_arm(tmp_path):
         fixture_dir=tmp_path / "fixture",
         pixi_python=tmp_path / "python",
         relion_bind_source=tmp_path / "relion-src",
-        relion_capture_binary=tmp_path / "relion_refine_mpi",
+        relion_capture_binary=tmp_path / "relion_refine",
         partition="cryoem",
         account="gilles",
         constraint="h100",
@@ -285,6 +316,9 @@ def test_rendered_native_smoke_exits_after_one_continuation_arm(tmp_path):
     assert first_arm < smoke_exit < second_arm
     assert "run_it001_sampling.star" in script
     assert "RELION_SAMPLING_PERTURBATION_OVERRIDE" in script
+    assert "scripts.audit_em_real_kclass_initialmodel" in script
+    assert "--minimum-fsc-auc 0.999999" in script
+    assert "native_smoke_trajectory.json" in script
 
 
 def test_manifest_record_rejects_checksum_drift(tmp_path):
@@ -295,6 +329,12 @@ def test_manifest_record_rejects_checksum_drift(tmp_path):
     path.write_text("drifted")
     with pytest.raises(launcher.PreflightError, match="drift"):
         launcher._validate_record(record)
+
+
+def test_gradient_replay_rejects_mpi_capture_binary(tmp_path):
+    launcher._validate_capture_binary_mode(tmp_path / "relion_refine")
+    with pytest.raises(launcher.PreflightError, match="non-MPI"):
+        launcher._validate_capture_binary_mode(tmp_path / "relion_refine_mpi")
 
 
 def test_cli_is_dry_run_by_default(tmp_path):
@@ -308,7 +348,7 @@ def test_input_closure_includes_gradient_moment_maps(tmp_path):
         fixture_dir=tmp_path / "fixture",
         shared_set=tmp_path / "shared.json",
         control_pair_root=tmp_path / "pair",
-        relion_capture_binary=tmp_path / "relion_refine_mpi",
+        relion_capture_binary=tmp_path / "relion_refine",
         relion_bind_source=tmp_path / "relion-src",
         pixi_python=tmp_path / "python",
     )
