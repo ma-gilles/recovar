@@ -129,6 +129,21 @@ def _selected_environment(env: dict[str, str]) -> dict[str, str]:
     return {key: env[key] for key in sorted(keys) if key in env}
 
 
+def _git_branch(repo_root: Path) -> str:
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    if result.returncode == 1:
+        return "<detached>"
+    raise PairRunError(f"could not determine git branch: {result.stderr.strip()}")
+
+
 def _source_provenance(repo_root: Path, *, allow_dirty: bool) -> dict[str, Any]:
     tracked_status = subprocess.check_output(
         ["git", "status", "--porcelain", "--untracked-files=all"],
@@ -149,9 +164,7 @@ def _source_provenance(repo_root: Path, *, allow_dirty: bool) -> dict[str, Any]:
         "git_tree": subprocess.check_output(
             ["git", "rev-parse", "HEAD^{tree}"], cwd=repo_root, text=True
         ).strip(),
-        "git_branch": subprocess.check_output(
-            ["git", "symbolic-ref", "--short", "HEAD"], cwd=repo_root, text=True
-        ).strip(),
+        "git_branch": _git_branch(repo_root),
         "tracked_dirty": bool(tracked_status),
         "worktree": git_worktree_provenance(),
         "python_executable": str(Path(sys.executable).resolve()),

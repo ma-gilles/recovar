@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,22 @@ import pytest
 from scripts import run_em_real_kclass_initialmodel_pair as runner
 
 pytestmark = pytest.mark.unit
+
+
+def test_git_branch_records_detached_head(tmp_path: Path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "config", "user.name", "RECOVAR test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    (repo / "tracked.txt").write_text("sealed\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "sealed"], cwd=repo, check=True)
+
+    branch = runner._git_branch(repo)
+    assert branch not in {"", "<detached>"}
+
+    subprocess.run(["git", "switch", "--detach", "-q", "HEAD"], cwd=repo, check=True)
+    assert runner._git_branch(repo) == "<detached>"
 
 
 def test_pair_commands_share_scientific_parameters_and_current_entrypoint(tmp_path: Path):
