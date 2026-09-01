@@ -556,13 +556,14 @@ def _rotation_map(factor_rotations: np.ndarray, recovar_rotations: np.ndarray) -
         np.asarray(recovar_rotations, dtype=np.float32).reshape(-1, 3, 3)
     )
     _require(
-        native.shape == recovar.shape and native.size > 0,
-        "native and RECOVAR rotation tables have different shapes",
+        native.size > 0 and recovar.size > 0,
+        "native or RECOVAR rotation table is empty",
     )
-    # Production tables contain the same float32 matrices in different row
-    # orders.  Match their exact 36-byte keys in O(N log N); broadcasting an
-    # N-by-N distance matrix would require hundreds of gigabytes for the
-    # 150,840-row case-22 table and is not a viable diagnostic.
+    # Match the native float32 matrices to RECOVAR's table using exact 36-byte
+    # keys.  Native may contain only a subset when coarse significance differs;
+    # rejecting that shape difference would hide the candidate-set boundary we
+    # are trying to diagnose.  An N-by-N distance matrix would require hundreds
+    # of gigabytes for the 150,840-row case-22 table and is not viable.
     key_dtype = np.dtype((np.void, 9 * np.dtype(np.float32).itemsize))
     native_keys = native.reshape(-1, 9).view(key_dtype).reshape(-1)
     recovar_keys = recovar.reshape(-1, 9).view(key_dtype).reshape(-1)
@@ -579,7 +580,10 @@ def _rotation_map(factor_rotations: np.ndarray, recovar_rotations: np.ndarray) -
     exact[in_bounds] = sorted_recovar_keys[positions[in_bounds]] == native_keys[in_bounds]
     _require(np.all(exact), "native and RECOVAR rotation matrices are not byte-identical")
     nearest = recovar_order[positions]
-    _require(np.unique(nearest).size == nearest.size, "rotation mapping is not bijective")
+    _require(
+        np.unique(nearest).size == nearest.size,
+        "native-to-RECOVAR rotation mapping is not injective",
+    )
     return nearest.astype(np.int64), 0.0
 
 

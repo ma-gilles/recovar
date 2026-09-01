@@ -137,6 +137,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _projection_rotation_chunk_size,
     _rectangular_active_prematmul_is_efficient,
     _rectangular_active_weighted_sums_or_none,
+    _relion_cuda_corr_img_from_native_noise_variance,
     _relion_cuda_corr_img_from_rfloat_ctf,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_fine_mstep_prune_mode,
@@ -198,6 +199,77 @@ def test_relion_corr_img_squares_rfloat_ctf_before_xfloat_cast():
 
     actual = np.asarray(
         _relion_cuda_corr_img_from_rfloat_ctf(inverse_noise, ctf_rfloat)
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_relion_corr_img_applies_xfloat_scale_square_after_rfloat_ctf_cast():
+    inverse_noise = np.asarray([0.7455480098724365], dtype=np.float32)
+    ctf_rfloat = np.asarray([-0.48569034637572805], dtype=np.float64)
+    scale = np.asarray([[0.30007338523864746]], dtype=np.float32)
+    corr_unscaled = np.asarray(
+        inverse_noise.astype(np.float64) * (ctf_rfloat * ctf_rfloat),
+        dtype=np.float32,
+    )
+    scale_squared = np.asarray(scale * scale, dtype=np.float32)
+    expected = np.asarray(corr_unscaled * scale_squared, dtype=np.float32)
+    rejected_fused_rfloat_path = np.asarray(
+        inverse_noise.astype(np.float64)
+        * (ctf_rfloat * ctf_rfloat)
+        * scale.astype(np.float64)
+        * scale.astype(np.float64),
+        dtype=np.float32,
+    )
+    assert np.any(expected != rejected_fused_rfloat_path)
+
+    actual = np.asarray(
+        _relion_cuda_corr_img_from_rfloat_ctf(
+            inverse_noise,
+            ctf_rfloat,
+            scale,
+        )
+    )
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_relion_corr_img_converts_noise_units_after_native_xfloat_product():
+    image_shape = (384, 384)
+    native_noise_variance = np.asarray(
+        [1.262594e-6, 1.36236e-6],
+        dtype=np.float64,
+    )
+    fourier_scale = np.float64(image_shape[0] ** 4)
+    recovar_noise_variance = native_noise_variance * fourier_scale
+    ctf_rfloat = np.asarray([0.994443123456, -0.7135792468], dtype=np.float64)
+    scale = np.asarray([1.0, 0.30007338523864746], dtype=np.float32)
+    native_inverse_noise = np.asarray(1.0 / native_noise_variance, dtype=np.float32)
+    native_corr = np.asarray(
+        native_inverse_noise.astype(np.float64) * (ctf_rfloat * ctf_rfloat),
+        dtype=np.float32,
+    )
+    native_corr = np.asarray(native_corr * (scale * scale), dtype=np.float32)
+    expected = np.asarray(
+        native_corr / np.float32(image_shape[0] ** 4),
+        dtype=np.float32,
+    )
+    rejected_early_conversion = np.asarray(
+        np.asarray(1.0 / recovar_noise_variance, dtype=np.float32).astype(np.float64)
+        * (ctf_rfloat * ctf_rfloat),
+        dtype=np.float32,
+    )
+    rejected_early_conversion = np.asarray(
+        rejected_early_conversion * (scale * scale),
+        dtype=np.float32,
+    )
+    assert np.any(expected != rejected_early_conversion)
+
+    actual = np.asarray(
+        _relion_cuda_corr_img_from_native_noise_variance(
+            recovar_noise_variance,
+            ctf_rfloat,
+            image_shape,
+            scale,
+        )
     )
     np.testing.assert_array_equal(actual, expected)
 
@@ -5660,6 +5732,24 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
     np.testing.assert_array_equal(np.asarray(recon[4].real), np.asarray([41.0, 45.0], dtype=np.float32))
 
 
+def test_relion_score_window_keeps_particle_crop_separate_from_model_radius():
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _projection_kwargs_for_relion_score_window,
+    )
+
+    kwargs = _projection_kwargs_for_relion_score_window(
+        {"max_r": 28.0, "return_abs2": False},
+        use_relion_projector=True,
+        current_size=58,
+    )
+
+    assert kwargs == {
+        "max_r": 28.0,
+        "return_abs2": False,
+        "projector_output_size": 58,
+    }
+
+
 def test_sparse_pass2_windowed_projection_cap_casts_chunks_before_concat(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
@@ -5967,6 +6057,7 @@ def test_prepare_bucket_io_exact_cc_keeps_relion_image_and_corr_operands_separat
     corrected_image = np.asarray(exact[7]).reshape(batch_indices.size, 1, n_half)
     corr_image = np.asarray(exact[3])[:, None, :]
 
+    assert np.asarray(exact[2]).dtype == np.float64
     assert not np.array_equal(corrected_image, folded_image)
     np.testing.assert_allclose(
         corrected_image * corr_image,

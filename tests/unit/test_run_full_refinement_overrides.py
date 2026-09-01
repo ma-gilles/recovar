@@ -162,6 +162,10 @@ def test_k1_relion_live_initial_noise_rejects_unknown_token():
         )
 
 
+def test_k1_relion_live_initial_noise_defaults_off():
+    assert not _k1_relion_live_initial_noise_enabled({})
+
+
 class _FakeImageSource:
     def __init__(self, images):
         self.images = np.asarray(images)

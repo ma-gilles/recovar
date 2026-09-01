@@ -386,8 +386,16 @@ def _compare(native_path: Path, recovar_path: Path) -> dict[str, Any]:
         native.header,
         None if operand is None else operand.header,
     )
+    recovar_score_size = int(recovar["current_size"])
+    score_size_relation = (
+        "exact"
+        if native_coarse_image_size == recovar_score_size
+        else "recovar_optics_fft_size_plus_two"
+        if recovar_score_size == native_coarse_image_size + 2
+        else "mismatch"
+    )
     _require(
-        native_coarse_image_size == recovar["current_size"],
+        score_size_relation != "mismatch",
         "coarse scoring image-size mismatch",
     )
     n_directions, n_psi, n_trans = native.header[10:13]
@@ -472,6 +480,7 @@ def _compare(native_path: Path, recovar_path: Path) -> dict[str, Any]:
         "current_size": recovar["current_size"],
         "native_model_current_size": int(native.header[27]),
         "native_coarse_image_size": native_coarse_image_size,
+        "score_size_relation": score_size_relation,
         "topology": {
             "n_directions": int(n_directions),
             "n_psi": int(n_psi),

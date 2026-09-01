@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -5,9 +7,56 @@ from scripts.analyze_k1_native_reference_score_counterfactual import (
     _apply_high_shell_retained_fraction,
     _apply_shell_factors,
     _apply_uniform_pixel_weight_factor,
+    _authoritative_native_raw_diff2,
+    _complex_operand_stats,
     _pixel_weight_shell_stats,
     _raw_parent_margin,
+    _rotation_matrix_stats,
 )
+
+
+def test_complex_operand_stats_preserves_complex64_bit_patterns():
+    reference = np.asarray([1.0 + 2.0j, -3.0 + 4.0j], dtype=np.complex64)
+    candidate = reference.copy()
+    candidate[1] = np.nextafter(candidate[1].real, np.float32(np.inf)) + 4.0j
+
+    report = _complex_operand_stats(candidate, reference)
+
+    assert report["count"] == 2
+    assert report["bitwise_equal_count"] == 1
+    assert report["relative_l2"] > 0.0
+    assert report["max_abs"] == float(np.spacing(np.float32(-3.0))) * -1.0
+
+
+def test_authoritative_native_raw_diff2_overrides_rejected_component_scores():
+    component = SimpleNamespace(raw_diff2=np.zeros((2, 3), dtype=np.float32))
+    operand = SimpleNamespace(stack_index=68695, part_id=65218)
+    header = [0] * 32
+    header[2] = 68695
+    header[3] = 65218
+    coarse = SimpleNamespace(
+        header=tuple(header),
+        raw_diff2=np.arange(6, dtype=np.float32),
+    )
+
+    actual = _authoritative_native_raw_diff2(component, operand, coarse)
+
+    np.testing.assert_array_equal(actual, np.arange(6, dtype=np.float32).reshape(2, 3))
+
+
+def test_rotation_matrix_stats_applies_relion_recovar_transpose_convention():
+    recovar = np.arange(18, dtype=np.float32).reshape(2, 3, 3)
+    native = np.swapaxes(recovar, -1, -2).copy()
+
+    report = _rotation_matrix_stats(native, recovar)
+
+    assert report == {
+        "matrix_count": 2,
+        "element_count": 18,
+        "bitwise_equal_count": 18,
+        "relative_l2": 0.0,
+        "max_abs": 0.0,
+    }
 
 
 def test_uniform_pixel_weight_factor_preserves_zero_support():

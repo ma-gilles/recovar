@@ -18,21 +18,38 @@ set -euo pipefail
 : "${EXPECTED_REPO_HEAD:?set EXPECTED_REPO_HEAD}"
 : "${EXPECTED_REPO_DIFF_SHA256:?set EXPECTED_REPO_DIFF_SHA256}"
 : "${EXPECTED_CUDA_LIB_SHA256:?set EXPECTED_CUDA_LIB_SHA256}"
+: "${EXPECTED_LAUNCHER_SHA256:?set EXPECTED_LAUNCHER_SHA256}"
 
-REPO=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810
+REPO=${K1_NATIVE_REF_REPO:-/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k1_docs_20260810}
 PYTHON=${REPO}/.pixi/envs/default/bin/python
 PIXI_ENV=${REPO}/.pixi/envs/default
+LAUNCHER=${REPO}/scripts/run_k1_native_reference_score_counterfactual.sbatch
 CUDA_LIB=${K1_CUDA_LIB:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_it2_bpref_factor_boundary_7c3b5478_20260810T0610ET/small_control_retry2/cuda/libcuda_backproject.so}
 COMPONENTS=${K1_NATIVE_REF_COMPONENTS:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_source011_two_projection_20260811T1339ET/capture/part24_stack12.p1-v2.bin}
 OPERANDS=${K1_NATIVE_REF_OPERANDS:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_source011_two_projection_20260811T1339ET/capture/part24_stack12.p1-op-v2.bin}
+NATIVE_COARSE=${K1_NATIVE_REF_NATIVE_COARSE-}
 RECOVAR=${K1_NATIVE_REF_RECOVAR:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case26_source011_expf_ffi_capture_20260811T1640ET/score/significance_orig000011_it002_cs056.npz}
 NATIVE_PARENT=${K1_NATIVE_REF_NATIVE_PARENT-}
 RECOVAR_PARENT=${K1_NATIVE_REF_RECOVAR_PARENT-}
+NATIVE_PARENT_ROTATION=${K1_NATIVE_REF_NATIVE_PARENT_ROTATION-}
+NATIVE_PARENT_TRANSLATION=${K1_NATIVE_REF_NATIVE_PARENT_TRANSLATION-}
+RECOVAR_PARENT_ROTATION=${K1_NATIVE_REF_RECOVAR_PARENT_ROTATION-}
+RECOVAR_PARENT_TRANSLATION=${K1_NATIVE_REF_RECOVAR_PARENT_TRANSLATION-}
 HIGH_SHELL_CUTOFF=${K1_NATIVE_REF_HIGH_SHELL_CUTOFF-}
 HIGH_SHELL_RETAINED_FRACTION=${K1_NATIVE_REF_HIGH_SHELL_RETAINED_FRACTION-}
 UNIFORM_PIXEL_WEIGHT_FACTOR=${K1_NATIVE_REF_UNIFORM_PIXEL_WEIGHT_FACTOR-}
 NOISE_REPORT_JSON=${K1_NATIVE_REF_NOISE_REPORT_JSON-}
 NOISE_SHELL_MAX=${K1_NATIVE_REF_NOISE_SHELL_MAX-}
+PHYSICAL_IMAGE_SIZE=${K1_NATIVE_REF_PHYSICAL_IMAGE_SIZE:-128}
+if [[ -z "${NATIVE_PARENT}" && -z "${RECOVAR_PARENT}" ]]; then
+    if [[ -n "${NATIVE_PARENT_ROTATION}" || -n "${NATIVE_PARENT_TRANSLATION}" || \
+          -n "${RECOVAR_PARENT_ROTATION}" || -n "${RECOVAR_PARENT_TRANSLATION}" ]]; then
+        test -n "${NATIVE_PARENT_ROTATION}" -a -n "${NATIVE_PARENT_TRANSLATION}"
+        test -n "${RECOVAR_PARENT_ROTATION}" -a -n "${RECOVAR_PARENT_TRANSLATION}"
+        NATIVE_PARENT="${NATIVE_PARENT_ROTATION},${NATIVE_PARENT_TRANSLATION}"
+        RECOVAR_PARENT="${RECOVAR_PARENT_ROTATION},${RECOVAR_PARENT_TRANSLATION}"
+    fi
+fi
 if [[ -n "${NATIVE_PARENT}" || -n "${RECOVAR_PARENT}" ]]; then
     test -n "${NATIVE_PARENT}" -a -n "${RECOVAR_PARENT}"
 fi
@@ -43,8 +60,12 @@ fi
 test -f "${RUN_ROOT}/SAFE_TO_DELETE" -a -f "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO}" diff --binary | sha256sum | awk '{print $1}')" = "${EXPECTED_REPO_DIFF_SHA256}"
+test "$(sha256sum "${LAUNCHER}" | awk '{print $1}')" = "${EXPECTED_LAUNCHER_SHA256}"
 test "$(sha256sum "${CUDA_LIB}" | awk '{print $1}')" = "${EXPECTED_CUDA_LIB_SHA256}"
 test -s "${COMPONENTS}" -a -s "${OPERANDS}" -a -s "${RECOVAR}"
+if [[ -n "${NATIVE_COARSE}" ]]; then
+    test -s "${NATIVE_COARSE}"
+fi
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_PLATFORMS JAX_PLATFORM_NAME RECOVAR_DISABLE_CUDA
@@ -70,13 +91,28 @@ NVIDIA_LIBS=$(find "${NVIDIA_ROOT}" -type d -name lib | paste -sd: -)
 export LD_LIBRARY_PATH=${NVIDIA_LIBS}:${CUDA_HOME}/targets/x86_64-linux/lib:${PIXI_ENV}/lib
 export RECOVAR_CUDA_LIB=${CUDA_LIB}
 
+nvidia-smi --query-gpu=uuid,name,memory.total --format=csv,noheader \
+    > "${RUN_ROOT}/provenance/gpu_${SLURM_JOB_ID}.txt"
+env | sort > "${RUN_ROOT}/provenance/environment_${SLURM_JOB_ID}.txt"
+git -C "${REPO}" status --short --branch \
+    > "${RUN_ROOT}/provenance/repo_status_${SLURM_JOB_ID}.txt"
+sha256sum "${LAUNCHER}" "${CUDA_LIB}" "${COMPONENTS}" "${OPERANDS}" "${RECOVAR}" \
+    > "${RUN_ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
+if [[ -n "${NATIVE_COARSE}" ]]; then
+    sha256sum "${NATIVE_COARSE}" >> "${RUN_ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
+fi
+
 COMMAND=(
     "${PYTHON}" -m scripts.analyze_k1_native_reference_score_counterfactual
     --components "${COMPONENTS}"
     --operands "${OPERANDS}"
     --recovar "${RECOVAR}"
+    --physical-image-size "${PHYSICAL_IMAGE_SIZE}"
     --output-json "${RUN_ROOT}/analysis/native_reference_score_counterfactual.json"
 )
+if [[ -n "${NATIVE_COARSE}" ]]; then
+    COMMAND+=(--native-coarse "${NATIVE_COARSE}")
+fi
 if [[ -n "${NATIVE_PARENT}" ]]; then
     COMMAND+=(--native-parent "${NATIVE_PARENT}" --recovar-parent "${RECOVAR_PARENT}")
 fi
@@ -96,6 +132,8 @@ if [[ -n "${NOISE_REPORT_JSON}" ]]; then
     fi
 fi
 cd "${REPO}"
+printf '%q ' "${COMMAND[@]}" > "${RUN_ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
+printf '\n' >> "${RUN_ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
 "${COMMAND[@]}"
 sha256sum "${RUN_ROOT}/analysis/native_reference_score_counterfactual.json" \
     > "${RUN_ROOT}/provenance/artifacts_${SLURM_JOB_ID}.sha256"

@@ -375,7 +375,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
     relion_dir = (args.relion_dir or case_root / "relion_ref").resolve()
     gt_path = (args.gt_volume or case_root / "data" / "reference_gt.mrc").resolve()
     intermediates = recovar_dir / "intermediates"
-    if not intermediates.is_dir():
+    if not args.final_only and not intermediates.is_dir():
         raise AuditError(f"missing RECOVAR intermediates directory: {intermediates}")
     if not relion_dir.is_dir():
         raise AuditError(f"missing RELION directory: {relion_dir}")
@@ -383,23 +383,31 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         raise AuditError(f"missing GT volume: {gt_path}")
     if args.allow_incomplete and not args.numbered_only:
         raise AuditError("--allow-incomplete requires --numbered-only")
+    if args.final_only and args.numbered_only:
+        raise AuditError("--final-only and --numbered-only are mutually exclusive")
 
     if args.relion_start_iteration < 1:
         raise AuditError("--relion-start-iteration must be at least 1")
-    recovar_maps = _discover_maps(intermediates, RECOVAR_MAP_RE, engine="RECOVAR")
-    all_relion_maps = _discover_maps(relion_dir, RELION_MAP_RE, engine="RELION")
-    relion_maps = {
-        iteration: paths
-        for iteration, paths in all_relion_maps.items()
-        if iteration >= args.relion_start_iteration
-    }
-    pairs, topology_failures = _validate_numbered_topology(
-        recovar_maps,
-        relion_maps,
-        recovar_dir / "refinement_results.npz",
-        allow_incomplete=bool(args.allow_incomplete),
-        relion_start_iteration=int(args.relion_start_iteration),
-    )
+    if args.final_only:
+        recovar_maps: dict[int, dict[int, Path]] = {}
+        relion_maps: dict[int, dict[int, Path]] = {}
+        pairs: list[tuple[int, int]] = []
+        topology_failures: list[str] = []
+    else:
+        recovar_maps = _discover_maps(intermediates, RECOVAR_MAP_RE, engine="RECOVAR")
+        all_relion_maps = _discover_maps(relion_dir, RELION_MAP_RE, engine="RELION")
+        relion_maps = {
+            iteration: paths
+            for iteration, paths in all_relion_maps.items()
+            if iteration >= args.relion_start_iteration
+        }
+        pairs, topology_failures = _validate_numbered_topology(
+            recovar_maps,
+            relion_maps,
+            recovar_dir / "refinement_results.npz",
+            allow_incomplete=bool(args.allow_incomplete),
+            relion_start_iteration=int(args.relion_start_iteration),
+        )
     gt_sign_invariant, sign_reason = _gt_sign_invariant(case_root, args.gt_sign_mode)
     gt = _load_recovar_volume(gt_path)
     shellwise: dict[str, np.ndarray] = {}
@@ -424,6 +432,8 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
             gt_sign_invariant=gt_sign_invariant,
             shellwise=shellwise,
         )
+    if args.final_only and final is None:
+        raise AuditError("--final-only requires complete RECOVAR and RELION final products")
     failures = topology_failures + _apply_gates(
         rows,
         final,
@@ -454,14 +464,20 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         "recovar_numbered_iteration_count": len(recovar_maps),
         "relion_numbered_iteration_count": len(relion_maps),
         "trajectory_scope": (
-            "in_progress_numbered_prefix" if args.allow_incomplete else "complete_numbered_trajectory"
+            "final_products_only"
+            if args.final_only
+            else "in_progress_numbered_prefix"
+            if args.allow_incomplete
+            else "complete_numbered_trajectory"
         ),
-        "completion_claim": not bool(args.allow_incomplete),
+        "completion_claim": not bool(args.allow_incomplete or args.final_only),
         "topology_failures": topology_failures,
         "numbered_iterations": rows,
         "final": final,
         "final_policy": (
-            "in_progress_numbered_prefix"
+            "final_products_only"
+            if args.final_only
+            else "in_progress_numbered_prefix"
             if args.allow_incomplete
             else "numbered_only"
             if args.numbered_only
@@ -542,6 +558,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Audit numbered half-map iterations only. Ignore all final products, "
             "including incomplete convenience outputs from --skip_final_iteration."
+        ),
+    )
+    parser.add_argument(
+        "--final-only",
+        action="store_true",
+        help=(
+            "Audit only complete final split-half and merged products. This is "
+            "an explicit non-trajectory mode for runs that did not retain numbered maps."
         ),
     )
     parser.add_argument(

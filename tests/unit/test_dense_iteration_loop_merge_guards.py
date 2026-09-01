@@ -140,7 +140,10 @@ def test_local_search_keeps_relion_x_half_mstep_contract():
     assert "mstep_full_half_axis=0 if local_relion_x_half_mstep else None" in source
     assert "mstep_accumulator_shape=(" in source
     assert "relion_backprojector_volume_shape(" in source
-    assert "current_size=model_current_size_for_engine" in source[
+    assert "reconstruction_current_size_for_engine = (" in source
+    assert "if model_current_size_for_engine is None" in source
+    assert "else model_current_size_for_engine" in source
+    assert "current_size=reconstruction_current_size_for_engine" in source[
         source.index("mstep_accumulator_shape=(") :
     ]
 
@@ -153,7 +156,9 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
     assert "empty_k1_x_half_mstep = (" in empty_source
     assert "and (use_local or use_adaptive)" in empty_source
     assert "relion_backprojector_volume_shape(" in empty_source
-    assert "current_size=model_current_size_for_engine" in empty_source
+    assert "current_size=(" in empty_source
+    assert "if model_current_size_for_engine is None" in empty_source
+    assert "else model_current_size_for_engine" in empty_source
     assert "half_volume_accumulator_shape(empty_mstep_accumulator_shape)" in empty_source
     assert "relion_x_half_accumulators_to_public_layout(" in empty_source
     assert "mstep_full_half_axis=0 if empty_k1_x_half_mstep else None" in empty_source
@@ -193,6 +198,22 @@ def test_k1_local_search_stats_use_relion_retained_weights():
     assert "stats_use_reconstruction_probs=local_reconstruct_significant_only" in source
     assert "stats_use_reconstruction_probs=False" in wrapper_source
     assert "stats_use_reconstruction_probs=stats_use_reconstruction_probs" in wrapper_source
+
+
+def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
+    score_source = inspect.getsource(iteration_loop._score_half_local)
+    wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
+    loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+
+    assert "if source_faithful_spectrum_norm and k_class_enabled:" in score_source
+    assert score_source.count("source_faithful_spectrum_norm=source_faithful_spectrum_norm") == 3
+    assert "if source_faithful_spectrum_norm:" in wrapper_source
+    assert "fresh K=1-only" in wrapper_source
+    assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in wrapper_source
+    local_dispatch = loop_source[
+        loop_source.index("if use_local:") : loop_source.index("elif use_adaptive:")
+    ]
+    assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in local_dispatch
 
 
 def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout():

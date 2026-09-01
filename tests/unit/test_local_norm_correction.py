@@ -193,6 +193,65 @@ def test_local_noise_spectrum_omits_shared_high_shell_for_non_owner_class():
     np.testing.assert_array_equal(np.asarray(shells), np.asarray([0.25, 1.0, 0.0], dtype=np.float32))
 
 
+def test_local_norm_correction_can_use_relion_powerclass_spectrum_tail():
+    rng = np.random.default_rng(21084)
+    height = 32
+    current_size = 15
+    processed = (
+        rng.normal(size=(2, height, height // 2 + 1))
+        + 1j * rng.normal(size=(2, height, height // 2 + 1))
+    ).astype(np.complex64) * np.float32(height * height)
+    processed = jnp.asarray(processed.reshape(2, -1))
+    shell_indices = jnp.asarray(make_relion_noise_shell_indices_half((height, height)))
+    zero_support = jnp.zeros(2, dtype=jnp.float32)
+    valid_images = jnp.ones(2, dtype=bool)
+
+    historical = _norm_correction_image_power_per_image(
+        processed,
+        zero_support,
+        shell_indices,
+        valid_images,
+        current_size // 2,
+        shell_count=height // 2 + 1,
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+    source_faithful = _norm_correction_image_power_per_image(
+        processed,
+        zero_support,
+        shell_indices,
+        valid_images,
+        current_size // 2,
+        shell_count=height // 2 + 1,
+        image_shape=(height, height),
+        current_size=current_size,
+        source_faithful_spectrum_norm=True,
+    )
+
+    expected_historical = _relion_cuda_powerclass_highres_norm_units(
+        processed,
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+    expected_source = _relion_cuda_powerclass_spectrum_highres_norm_units(
+        processed,
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+    np.testing.assert_array_equal(np.asarray(historical), np.asarray(expected_historical))
+    # The source-faithful powerClass spectrum is binned with GPU scatter-adds.
+    # Independent invocations can differ by a few float32 ULPs even though the
+    # final accumulated value is float64.
+    np.testing.assert_allclose(
+        np.asarray(source_faithful),
+        np.asarray(expected_source),
+        rtol=2 * np.finfo(np.float32).eps,
+        atol=0.0,
+    )
+    assert np.asarray(source_faithful).dtype == np.float64
+    assert np.any(np.asarray(source_faithful) != np.asarray(historical, dtype=np.float64))
+
+
 def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
     height = 8
     current_size = 4

@@ -209,7 +209,12 @@ def map_relion_scale_groups_to_half_order(
     return group_ids, group_count
 
 
-def retain_group_scale_update_state(*, max_iter: int, skip_final_iteration: bool) -> bool:
+def retain_group_scale_update_state(
+    *,
+    max_iter: int,
+    skip_final_iteration: bool,
+    diagnostic_retain_terminal_state: bool = False,
+) -> bool:
     """Whether a later score can consume group scales updated by this replay.
 
     The legacy dense ``adaptive_oversampling=0`` engine does not accumulate
@@ -220,7 +225,9 @@ def retain_group_scale_update_state(*, max_iter: int, skip_final_iteration: bool
     engine's fail-closed protection against silently skipping an update.
     """
 
-    return not (int(max_iter) == 1 and bool(skip_final_iteration))
+    return bool(diagnostic_retain_terminal_state) or not (
+        int(max_iter) == 1 and bool(skip_final_iteration)
+    )
 
 
 def add_significant_count_artifacts(save_dict, significant_counts, half_indices, n_images):
@@ -1143,6 +1150,14 @@ def main():
     )
     parser.add_argument("--max_healpix_order", type=int, default=8)
     parser.add_argument("--skip_final_iteration", action="store_true", help="Skip the final combined-data Nyquist iter")
+    parser.add_argument(
+        "--diagnostic-retain-terminal-group-scale-state",
+        action="store_true",
+        help=(
+            "Diagnostic only: retain scale-group IDs and XA/AA sufficient "
+            "statistics for a one-iteration --skip_final_iteration replay."
+        ),
+    )
     parser.add_argument(
         "--force_max_iter_after_convergence",
         action="store_true",
@@ -2227,6 +2242,7 @@ def main():
     keep_group_scale_update_state = retain_group_scale_update_state(
         max_iter=args.max_iter,
         skip_final_iteration=args.skip_final_iteration,
+        diagnostic_retain_terminal_state=args.diagnostic_retain_terminal_group_scale_state,
     )
     if not keep_group_scale_update_state:
         print(

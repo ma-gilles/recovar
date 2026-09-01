@@ -95,6 +95,9 @@ COMMAND=(
 if [[ -n "${K1_FOCUSED_NATIVE_PPREF:-}" ]]; then
     COMMAND+=(--native-ppref "${K1_FOCUSED_NATIVE_PPREF}")
 fi
+if [[ -n "${K1_FOCUSED_RELION_STATE_DIR:-}" ]]; then
+    COMMAND+=(--relion-state-dir "${K1_FOCUSED_RELION_STATE_DIR}")
+fi
 if [[ -n "${K1_FOCUSED_NATIVE_PREPROCESS_CAPTURE:-}" ]]; then
     COMMAND+=(--native-preprocess-capture "${K1_FOCUSED_NATIVE_PREPROCESS_CAPTURE}")
 fi

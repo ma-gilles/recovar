@@ -4,6 +4,8 @@ import pytest
 from scripts.analyze_k1_bpref_factor_boundary import (
     _capture_stack_indices,
     _classify_localization,
+    _first_cross_engine_boundary,
+    _first_primitive_boundary,
     _metric,
     _recovar_capture_path,
     _translation_map,
@@ -85,3 +87,56 @@ def test_capture_stack_indices_reject_missing_target():
             {"capture_stack_indices_one_based": [11, 13]},
             [11, 17],
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        ({"support_exact": False}, "support"),
+        ({"posterior_rel_l2": 2.0e-5}, "posterior"),
+        ({"same_posterior_operands_close": False}, "bpref_primitive:inverse_noise"),
+        (
+            {"sequential_summary_closes": False, "highest_summary_closes": False},
+            "translation_reduction_or_unmeasured_operand",
+        ),
+        ({"highest_summary_closes": False}, "translation_reduction_order"),
+        ({}, "accumulator_destination_and_inter_particle_reduction"),
+    ],
+)
+def test_first_cross_engine_boundary_preserves_causal_order(override, expected):
+    particle = {
+        "support_exact": True,
+        "comparisons": {
+            "posterior_common_support": {"relative_l2_over_reference": 0.0},
+        },
+        "same_posterior_operands_close": True,
+        "first_primitive_boundary": "inverse_noise",
+        "sequential_summary_closes": True,
+        "highest_summary_closes": True,
+    }
+    posterior_rel_l2 = override.pop("posterior_rel_l2", None)
+    particle.update(override)
+    if posterior_rel_l2 is not None:
+        particle["comparisons"]["posterior_common_support"][
+            "relative_l2_over_reference"
+        ] = posterior_rel_l2
+    assert _first_cross_engine_boundary([particle]) == expected
+
+
+@pytest.mark.unit
+def test_first_primitive_boundary_uses_observer_qualified_tolerance():
+    comparisons = {
+        name: {"relative_l2_over_reference": 0.0}
+        for name in (
+            "ctf_with_scale",
+            "inverse_noise",
+            "weighted_ctf",
+            "translated_fourier_image",
+            "same_posterior_numerator_terms",
+            "same_posterior_denominator_terms",
+        )
+    }
+    comparisons["inverse_noise"]["relative_l2_over_reference"] = 1.01e-7
+    comparisons["weighted_ctf"]["relative_l2_over_reference"] = 2.0e-7
+    assert _first_primitive_boundary(comparisons) == "inverse_noise"

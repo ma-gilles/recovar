@@ -731,8 +731,25 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert "relion_coarse_gaussian_default and coarse_gaussian_ffi_enabled" in source
     assert "relion_coarse_gaussian_default\n                and coarse_fused_projector_enabled" in source
     assert "production half-image preprocessing path" in source
-    assert "relion_coarse_diff2_projector_f32(" in source
+    assert "else cuda_backproject.relion_coarse_diff2_projector_f32" in source
+    assert "diff2 = coarse_projector(" in source
     assert "rotation_block_size = n_rot" in source
+
+
+def test_compact_projection_window_positions_map_full_indices_to_compact_rows():
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _compact_projection_window_positions,
+    )
+
+    compact = np.asarray([20, 21, 25, 26, 10, 11], dtype=np.int32)
+    window = np.asarray([10, 20, 26, 11], dtype=np.int32)
+
+    np.testing.assert_array_equal(
+        _compact_projection_window_positions(compact, window),
+        [4, 0, 3, 5],
+    )
+    with pytest.raises(ValueError, match="absent from the compact projection"):
+        _compact_projection_window_positions(compact, [10, 99])
 
 
 def test_exact_relion_ctf_source_defaults_to_dataset_star(monkeypatch, tmp_path):

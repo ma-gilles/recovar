@@ -1744,8 +1744,8 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         calls["local"].append(
             {
                 "has_image_indices": "image_indices" in kwargs,
-                "has_reconstruction_group_ids": "reconstruction_group_ids" in kwargs,
-                "has_reconstruction_group_count": "reconstruction_group_count" in kwargs,
+                "reconstruction_group_ids": kwargs.get("reconstruction_group_ids"),
+                "reconstruction_group_count": kwargs.get("reconstruction_group_count"),
                 "n_images": int(dataset.n_images),
             }
         )
@@ -1811,14 +1811,14 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
     assert calls["local"] == [
         {
             "has_image_indices": False,
-            "has_reconstruction_group_ids": False,
-            "has_reconstruction_group_count": False,
+            "reconstruction_group_ids": None,
+            "reconstruction_group_count": None,
             "n_images": 2,
         },
         {
             "has_image_indices": False,
-            "has_reconstruction_group_ids": False,
-            "has_reconstruction_group_count": False,
+            "reconstruction_group_ids": None,
+            "reconstruction_group_count": None,
             "n_images": 2,
         },
     ]

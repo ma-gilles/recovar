@@ -255,6 +255,7 @@ _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
     "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
 )
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
+_RELION_EXACT_BPREF_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _RELION_WAVG_SEQUENTIAL_CUDA_ENV = "RECOVAR_K1_RELION_WAVG_SEQUENTIAL_CUDA"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
@@ -1325,6 +1326,14 @@ def _maybe_dump_bpref_contribution_rows(
         class_index=np.int32(class_index),
         run_id=np.asarray(run_id),
         current_size=np.int64(current_size),
+        # ``current_size`` is the scoring window. During fresh firstiter-CC,
+        # RELION may keep the BPref/model support one shell smaller. Persist
+        # the actual scatter radius so focused replay never infers it from the
+        # score window or the odd accumulator shape.
+        mstep_max_r=np.float64(np.nan if max_r is None else float(max_r)),
+        mstep_current_size=np.int64(
+            -1 if max_r is None else 2 * int(round(float(max_r)))
+        ),
         image_shape=np.asarray(image_shape, dtype=np.int32),
         volume_shape=np.asarray(volume_shape, dtype=np.int32),
         window_indices=np.asarray(window_indices, dtype=np.int32),
@@ -3069,6 +3078,31 @@ def _fresh_k1_direct_noise_default(
     return bool(preserve_bpref_particle_order and relion_exact_bpref_operands)
 
 
+def _relion_powerclass_spectrum_norm_enabled(
+    *,
+    fresh_k1_guard: bool,
+) -> bool:
+    """Use RELION's shell spectrum by default only in the fresh K=1 guard."""
+
+    return _env_flag_enabled(
+        _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
+        default=bool(fresh_k1_guard),
+    )
+
+
+def _relion_exact_bpref_operands_enabled(
+    *,
+    fresh_k1_guard: bool,
+    source_faithful_spectrum_norm: bool,
+) -> bool:
+    """Pair exact BPref with the qualified fresh-K=1 spectrum path."""
+
+    return _env_flag_enabled(
+        _RELION_EXACT_BPREF_OPERANDS_ENV,
+        default=bool(fresh_k1_guard and source_faithful_spectrum_norm),
+    )
+
+
 def _relion_wavg_direct_modes(
     *,
     accumulate_noise: bool,
@@ -4352,6 +4386,31 @@ def _compute_sparse_pass2_projections_block(
     return proj_half, jnp.concatenate(abs2_chunks, axis=0)
 
 
+def _projection_kwargs_for_relion_score_window(
+    projection_kwargs,
+    *,
+    use_relion_projector: bool,
+    current_size: int | None,
+):
+    """Keep the RELION projector crop large enough for the particle image.
+
+    ``r_max`` describes the model sphere, but it does not always describe the
+    particle-image crop.  In particular, fresh first-iteration CC can score a
+    size-58 particle image from a projector whose model ``r_max`` is 28.  A
+    crop inferred as ``2 * r_max == 56`` drops the valid ``ky=-28`` row before
+    the score window gathers it.  RELION projects into the particle-image box
+    and clips samples independently to the model sphere, so preserve that
+    distinction here.
+    """
+
+    kwargs = dict(projection_kwargs)
+    if use_relion_projector:
+        if current_size is None:
+            raise ValueError("windowed RELION projection requires current_size")
+        kwargs["projector_output_size"] = int(current_size)
+    return kwargs
+
+
 def _compute_sparse_pass2_windowed_projections_block(
     mean_for_proj,
     rotations_block,
@@ -4698,6 +4757,7 @@ def _weighted_image_power_shells_and_per_image(
     norm_unweighted_high_shell=None,
     include_unweighted_high_shell: bool = True,
     valid_image_mask=None,
+    source_faithful_spectrum_norm: bool | None = None,
 ):
     """Accumulate image power for noise shells and per-image norm correction.
 
@@ -4741,10 +4801,12 @@ def _weighted_image_power_shells_and_per_image(
         )
     else:
         weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
-    source_faithful_spectrum_norm = _env_flag_enabled(
-        _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-        default=False,
-    )
+    if source_faithful_spectrum_norm is None:
+        source_faithful_spectrum_norm = _env_flag_enabled(
+            _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
+            default=False,
+        )
+    source_faithful_spectrum_norm = bool(source_faithful_spectrum_norm)
     deterministic_norm_reduction = source_faithful_spectrum_norm or _env_flag_enabled(
         "RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION",
         default=False,
@@ -4782,16 +4844,33 @@ def _make_relion_wavg_rectangle(
     image_shape,
     current_size,
     recon_window_indices,
+    *,
+    reconstruction_current_size=None,
 ):
-    """Map active reconstruction pixels into RELION's FFTW-ordered Wavg crop.
+    """Map active reconstruction pixels into RELION's complete Wavg crop.
 
     ``exact_positions`` retains its historical field name, but may describe
     either the exact BackProjector disk or RELION InitialModel's rounded-shell
-    Wavg support. The supplied reconstruction indices select the contract.
+    Wavg support. The supplied reconstruction indices select that contract.
+
+    RELION may remap the particle-image ``current_size`` for an optics group
+    while retaining the model-coordinate radius for Projector/BackProjector.
+    The rectangle and its rounded noise-shell mask therefore use the particle
+    size, while the exact projected terms use ``reconstruction_current_size``.
     """
 
     image_shape = tuple(int(value) for value in image_shape)
     current_size = int(current_size)
+    model_current_size = (
+        current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    if model_current_size > current_size:
+        raise ValueError(
+            "RELION Wavg model support cannot exceed the particle-image crop: "
+            f"model={model_current_size}, image={current_size}"
+        )
     rectangle_indices, _ = make_fourier_window_indices_np(
         image_shape,
         current_size,
@@ -4812,7 +4891,7 @@ def _make_relion_wavg_rectangle(
     )
     exact_indices, _ = make_fourier_window_indices_np(
         image_shape,
-        current_size,
+        model_current_size,
         include_dc=True,
         exact_radius=True,
     )
@@ -6736,6 +6815,46 @@ def _relion_cuda_corr_img_from_rfloat_ctf(inverse_noise, ctf_rfloat, scale=None)
         scale_squared = jax.lax.optimization_barrier(scale * scale)
         corr_img = corr_img * scale_squared
     return corr_img
+
+
+def _relion_cuda_corr_img_from_native_noise_variance(
+    noise_variance,
+    ctf_rfloat,
+    image_shape,
+    scale=None,
+):
+    """Form score-unit ``corr_img`` with RELION's native-FFT cast order.
+
+    RECOVAR stores the noise variance in its normalized-FFT units, larger than
+    RELION's variance by ``N**4``.  Reciprocating that value into float32 and
+    then applying the compensating Fourier scale is algebraically correct but
+    changes ``Minvsigma2`` by one ULP on real parity fixtures.  RELION first
+    reciprocates its native-unit binary64 variance into XFLOAT, forms the
+    CTF-square product, and only then does RECOVAR need to convert the completed
+    XFLOAT operand back to normalized-FFT score units.
+    """
+
+    image_size = int(image_shape[0])
+    if tuple(image_shape) != (image_size, image_size):
+        raise ValueError(f"RELION corr_img requires a square image, got {image_shape}")
+    native_fourier_scale_rfloat = jnp.asarray(image_size**4, dtype=jnp.float64)
+    native_variance = (
+        jnp.asarray(noise_variance, dtype=jnp.float64)
+        / native_fourier_scale_rfloat
+    )
+    native_inverse_noise = jnp.reciprocal(native_variance).astype(jnp.float32)
+    native_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
+        native_inverse_noise,
+        ctf_rfloat,
+        scale,
+    )
+    # XLA's float32 division may lower to a reciprocal multiply and differs
+    # from correctly rounded division by one ULP.  This conversion is not a
+    # RELION operation, so perform it in binary64 and cast once to preserve the
+    # native XFLOAT operand under RECOVAR's Fourier normalization.
+    return (
+        native_corr_img.astype(jnp.float64) / native_fourier_scale_rfloat
+    ).astype(jnp.float32)
 
 
 def _relion_cuda_pixel_correction_from_rfloat_ctf(scale, ctf_rfloat):
@@ -9313,6 +9432,7 @@ def _maybe_dump_pass2_bucket(
     relion_min_diff2=None,
     relion_raw_diff2=None,
     relion_full_to_compact=None,
+    raw_score_mode="gaussian",
 ):
     """Env-gated sparse pass-2 dump for RELION operand parity debugging."""
     dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
@@ -9348,9 +9468,19 @@ def _maybe_dump_pass2_bucket(
     raw_highres_np = None
     if raw_operands_requested:
         if relion_raw_diff2 is None:
-            raise ValueError(
-                f"{_PASS2_DUMP_RAW_OPERANDS_ENV}=1 requires the production "
-                "K=1 RELION raw-diff2 tensor"
+            if raw_score_mode != "normalized_cc":
+                raise ValueError(
+                    f"{_PASS2_DUMP_RAW_OPERANDS_ENV}=1 requires the production "
+                    "K=1 RELION raw-diff2 tensor"
+                )
+            # Fresh firstiter-CC produces a score tensor directly rather than
+            # a Gaussian ``raw_diff2`` tensor. Preserve the effective
+            # float32 kernel result by removing the additive priors here;
+            # this is capture-only and does not alter scoring or selection.
+            relion_raw_diff2 = (
+                jnp.asarray(scores)
+                - jnp.asarray(rotation_log_prior)[:, :, None]
+                - jnp.asarray(translation_log_prior)[:, None, :]
             )
         if shifted_corrected_score_split is None:
             raise ValueError(
@@ -9824,6 +9954,8 @@ def _maybe_dump_norm_residual_inputs(
     scale_correction_pixel_mask,
     scale_shell_indices,
     bucket_group_ids,
+    relion_wavg_atomic_diff2_rectangle=None,
+    relion_wavg_atomic_rectangle_shell_indices=None,
 ):
     """Capture norm and group-scale AA inputs before any global reduction.
 
@@ -10016,6 +10148,28 @@ def _maybe_dump_norm_residual_inputs(
         if bucket_group_ids is None
         else np.asarray(bucket_group_ids, dtype=np.int64)
     )
+    atomic_rectangle_np = (
+        None
+        if relion_wavg_atomic_diff2_rectangle is None
+        else np.asarray(relion_wavg_atomic_diff2_rectangle, dtype=np.float32)
+    )
+    atomic_rectangle_shells_np = (
+        None
+        if relion_wavg_atomic_rectangle_shell_indices is None
+        else np.asarray(
+            relion_wavg_atomic_rectangle_shell_indices,
+            dtype=np.int32,
+        ).reshape(-1)
+    )
+    if (atomic_rectangle_np is None) != (atomic_rectangle_shells_np is None):
+        raise ValueError(
+            "ordinary Wavg rectangle values and shell labels must be supplied together"
+        )
+    if atomic_rectangle_np is not None and atomic_rectangle_np.shape != (
+        local_indices.size,
+        atomic_rectangle_shells_np.size,
+    ):
+        raise ValueError("ordinary Wavg rectangle diff2 topology changed")
     original_indices = _original_indices_for_local(experiment_dataset, local_indices)
     os.makedirs(dump_dir, exist_ok=True)
     context_half = int(_bpref_contribution_context["half"])
@@ -10037,8 +10191,7 @@ def _maybe_dump_norm_residual_inputs(
             scale_shell_indices_np[valid_scale_shell],
             aa_per_pixel_np[selected_row, valid_scale_shell].astype(np.float64),
         )
-        np.savez_compressed(
-            out_path,
+        payload = dict(
             schema=np.asarray("recovar-k1-norm-residual-inputs-v3"),
             iteration=np.int64(context_iteration),
             half=np.int64(context_half),
@@ -10088,6 +10241,17 @@ def _maybe_dump_norm_residual_inputs(
             recon_window_indices=np.asarray(recon_window_indices, dtype=np.int32),
             wavg_window_indices=np.asarray(score_window_indices, dtype=np.int32),
         )
+        if atomic_rectangle_np is not None:
+            rectangle_pixels = atomic_rectangle_np[bucket_row]
+            valid_rectangle = atomic_rectangle_shells_np >= 0
+            payload.update(
+                wavg_diff2_atomic_rectangle_per_pixel=rectangle_pixels,
+                wavg_diff2_atomic_rectangle_shell_indices=atomic_rectangle_shells_np,
+                wavg_diff2_atomic_rectangle_per_image=np.float64(
+                    np.sum(rectangle_pixels[valid_rectangle], dtype=np.float64)
+                ),
+            )
+        np.savez_compressed(out_path, **payload)
     return int(target_rows.size)
 
 
@@ -10913,6 +11077,10 @@ def _pass2_dump_target_rows(
         target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
     if not target_original_indices:
         return np.empty((0,), dtype=np.int64)
+    target_iteration = os.environ.get("RECOVAR_PASS2_DUMP_ITERATION")
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    if target_iteration and context_iteration != int(target_iteration):
+        return np.empty((0,), dtype=np.int64)
     target_current_size = os.environ.get("RECOVAR_PASS2_DUMP_CURRENT_SIZE")
     if target_current_size:
         if current_size is None or int(current_size) != int(target_current_size):
@@ -11211,9 +11379,10 @@ def _prepare_bucket_io(
         ).astype(jnp.float32)
         weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
         ctf2_over_nv_half = weighted_ctf_half * ctf_half
-        relion_score_corr_img_half = _relion_cuda_corr_img_from_rfloat_ctf(
-            inverse_noise_half[None, :],
+        relion_score_corr_img_half = _relion_cuda_corr_img_from_native_noise_variance(
+            noise_variance_half[None, :],
             ctf_half_rfloat,
+            image_shape,
             batch_scale[:, None] if scale_corrections is not None else None,
         )
     else:
@@ -11244,7 +11413,16 @@ def _prepare_bucket_io(
     if use_normalized_cc:
         # RELION firstiter_cc uses unweighted image power over the same Fourier
         # window as the score denominator, with no Hermitian doubling.
-        abs2_half = jnp.abs(processed_score_half_raw) ** 2
+        if relion_exact_normalized_cc_operands:
+            # ``exp_local_sqrtXi2`` is formed from an RFLOAT (float64) serial
+            # sum before RELION casts its reciprocal to XFLOAT.  A float32 XLA
+            # reduction can move that reciprocal by one ULP, which is enough
+            # to erase demonstrated fine-translation score margins.
+            norm_real = processed_score_half_raw.real.astype(jnp.float64)
+            norm_imag = processed_score_half_raw.imag.astype(jnp.float64)
+            abs2_half = norm_real * norm_real + norm_imag * norm_imag
+        else:
+            abs2_half = jnp.abs(processed_score_half_raw) ** 2
         if window_indices is not None:
             abs2_half = abs2_half[:, window_indices]
         batch_norm = jnp.sum(abs2_half, axis=-1, keepdims=True).real
@@ -11526,7 +11704,23 @@ def _prepare_bucket_io(
         )
         if folded_normalized_cc_operands:
             shifted_corrected_score_half = shifted_corrected_score_half * jnp.repeat(inv_xi2, n_trans, axis=0)
-        ctf2_over_nv_half = ctf2_score_half * inv_xi2
+            ctf2_over_nv_half = ctf2_score_half * inv_xi2
+        else:
+            # buildCorrImage evaluates CTF * CTF in RFLOAT and casts the full
+            # product to XFLOAT once.  Reusing the generic float32 CTF-square
+            # path changes most corr_img pixels by one or two ULPs.  Preserve
+            # the source order here; the existing RECOVAR FFT normalization
+            # is already encoded in ``inv_xi2``.
+            corr_ctf_rfloat = (
+                ctf_half.astype(jnp.float64)
+                if ctf_half_rfloat is None
+                else ctf_half_rfloat
+            )
+            ctf2_over_nv_half = _relion_cuda_corr_img_from_rfloat_ctf(
+                inv_xi2,
+                corr_ctf_rfloat,
+                batch_scale[:, None] if scale_corrections is not None else None,
+            )
     if return_windowed_shifted:
         score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
         ctf2_over_nv_half = ctf2_over_nv_half[:, score_indices]
@@ -11671,6 +11865,7 @@ def compute_pass2_stats_sparse_bucketed(
     bpref_class_index: int = 0,
     include_unweighted_norm_high_shell: bool = True,
     preserve_bpref_particle_order: bool = False,
+    source_faithful_spectrum_norm: bool = False,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
 
@@ -12337,9 +12532,13 @@ def compute_pass2_stats_sparse_bucketed(
     )
 
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
-    relion_exact_bpref_operands = _env_flag_enabled(
-        "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS",
-        default=False,
+    fresh_k1_guard = bool(source_faithful_spectrum_norm)
+    source_faithful_spectrum_norm = _relion_powerclass_spectrum_norm_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+    )
+    relion_exact_bpref_operands = _relion_exact_bpref_operands_enabled(
+        fresh_k1_guard=fresh_k1_guard,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     if relion_exact_bpref_operands:
         if use_float64_scoring:
@@ -12347,6 +12546,11 @@ def compute_pass2_stats_sparse_bucketed(
         logger.info(
             "STRICT-PARITY: using RELION binary64-to-float32 inverse-noise and "
             "fused translate-then-weight BPref operands"
+        )
+    if source_faithful_spectrum_norm:
+        logger.info(
+            "STRICT-PARITY: normalization high shell consumes RELION's "
+            "powerClass shell spectrum"
         )
 
     if accumulate_noise:
@@ -12419,7 +12623,11 @@ def compute_pass2_stats_sparse_bucketed(
         if _projection_cache_fits_budget(transient_projection_bytes, max_projection_cache_bytes):
             cache_t0 = time.time()
             if use_window:
-                projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                projection_kwargs = _projection_kwargs_for_relion_score_window(
+                    window_spec.projection_kwargs(return_abs2=False),
+                    use_relion_projector=use_relion_projector,
+                    current_size=current_size,
+                )
                 projection_kwargs["mask_current_image_disk"] = bool(
                     projection_mask_current_image_disk
                 )
@@ -12862,10 +13070,7 @@ def compute_pass2_stats_sparse_bucketed(
                 current_size=current_size,
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
-            if _env_flag_enabled(
-                _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-                default=False,
-            ):
+            if source_faithful_spectrum_norm:
                 relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
                     processed_score_half_for_noise,
                     image_shape=image_shape,
@@ -12898,9 +13103,19 @@ def compute_pass2_stats_sparse_bucketed(
         raw_translated_wavg_for_atomic = None
         raw_translated_wavg_rectangle = None
         relion_wavg_rectangle = None
+        diagnostic_wavg_atomic_capture = bool(
+            accumulate_noise
+            and _env_flag_enabled(
+                "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS",
+                default=False,
+            )
+        )
         relion_wavg_atomic_scale_aa = bool(
             accumulate_noise
-            and noise_scale_correction_aa_total is not None
+            and (
+                noise_scale_correction_aa_total is not None
+                or diagnostic_wavg_atomic_capture
+            )
             and _env_flag_enabled(
                 _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
                 default=_fresh_k1_direct_noise_default(
@@ -12933,6 +13148,7 @@ def compute_pass2_stats_sparse_bucketed(
                 image_shape,
                 current_size,
                 recon_window_indices,
+                reconstruction_current_size=mstep_current_size,
             )
             raw_translated_wavg_rectangle = _relion_cuda_translate_wavg_norm_images(
                 processed_score_half_for_noise,
@@ -13077,7 +13293,11 @@ def compute_pass2_stats_sparse_bucketed(
                 if projection_cache is None:
                     rotations_chunk = jnp.asarray(rotations[:, start:stop])
                     flat_rotations_chunk = flatten_bucket_rotations(rotations_chunk)
-                    projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                    projection_kwargs = _projection_kwargs_for_relion_score_window(
+                        window_spec.projection_kwargs(return_abs2=False),
+                        use_relion_projector=use_relion_projector,
+                        current_size=current_size,
+                    )
                     projection_kwargs["mask_current_image_disk"] = bool(
                         projection_mask_current_image_disk
                     )
@@ -14298,6 +14518,7 @@ def compute_pass2_stats_sparse_bucketed(
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                     norm_unweighted_high_shell=relion_norm_high_shell,
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
                 if translated_wavg_norm and not relion_wavg_atomic_direct_norm:
                     weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
@@ -14488,11 +14709,18 @@ def compute_pass2_stats_sparse_bucketed(
                 proj_abs2_for_noise = projection_cache["recon_abs2"][rotation_indices_jax]
         else:
             # Project (B*R, 3, 3) -> (B*R, n_half) -> reshape (B, R, n_half)
-            projection_kwargs = window_spec.projection_kwargs(return_abs2=False if (use_window or score_only) else None)
+            projection_kwargs = window_spec.projection_kwargs(
+                return_abs2=False if (use_window or score_only) else None
+            )
             projection_kwargs["mask_current_image_disk"] = bool(
                 projection_mask_current_image_disk
             )
             if use_window:
+                projection_kwargs = _projection_kwargs_for_relion_score_window(
+                    projection_kwargs,
+                    use_relion_projector=use_relion_projector,
+                    current_size=current_size,
+                )
                 proj_half_flat, proj_for_noise_flat, proj_abs2_for_noise_flat = (
                     _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj,
@@ -14888,6 +15116,7 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_min_diff2=min_diff2,
                 relion_raw_diff2=raw_diff2,
                 relion_full_to_compact=relion_score_full_to_compact,
+                raw_score_mode=relion_firstiter_score_mode,
             )
             if pass2_dump_count and _env_flag_enabled(
                 _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
@@ -15267,6 +15496,7 @@ def compute_pass2_stats_sparse_bucketed(
                 norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                 norm_unweighted_high_shell=relion_norm_high_shell,
                 include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             )
             if translated_wavg_norm and not relion_wavg_atomic_direct_norm:
                 weighted_img_per_image = _replace_untranslated_low_shell_norm_power(
@@ -15409,6 +15639,16 @@ def compute_pass2_stats_sparse_bucketed(
                 scale_correction_pixel_mask=scale_correction_pixel_mask,
                 scale_shell_indices=shell_indices_noise,
                 bucket_group_ids=bucket_group_ids,
+                relion_wavg_atomic_diff2_rectangle=(
+                    None
+                    if relion_wavg_atomic_scale_triplet_pixels_np is None
+                    else relion_wavg_atomic_scale_triplet_pixels_np[:, :, 2]
+                ),
+                relion_wavg_atomic_rectangle_shell_indices=(
+                    None
+                    if relion_wavg_atomic_scale_triplet_pixels_np is None
+                    else relion_wavg_rectangle.shell_indices
+                ),
             )
             if norm_residual_dump_count and _env_flag_enabled(
                 _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,
@@ -15763,6 +16003,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     compact_pair_tail_coalesce_max_images_default: int | None = None,
     compact_pair_tail_coalesce_max_inflation_default: float | None = None,
     compact_pair_tail_coalesce_min_bucket_size_default: int | None = None,
+    source_faithful_spectrum_norm: bool = False,
 ) -> SparseKClassPass2FusedResult:
     """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
 
@@ -15835,6 +16076,8 @@ def compute_k_class_pass2_stats_sparse_fused(
         )
     volumes = jnp.asarray(volumes)
     n_classes = int(volumes.shape[0])
+    if source_faithful_spectrum_norm and n_classes != 1:
+        raise ValueError("source-faithful powerClass normalization is K=1-only")
     if device_signature_requested and not any(
         _bpref_contribution_class_enabled(class_index)
         for class_index in range(n_classes)
@@ -17306,10 +17549,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 current_size=current_size,
             )
         if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
-            if _env_flag_enabled(
-                _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-                default=False,
-            ):
+            if source_faithful_spectrum_norm:
                 relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
                     processed_score_half_for_noise,
                     image_shape=image_shape,

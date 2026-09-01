@@ -45,6 +45,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_highres_xi2_half_atomic,
+    _relion_cuda_powerclass_spectrum_highres_norm_units,
     _relion_cuda_powerclass_spectrum_norm_units,
     _relion_cuda_translate_wavg_norm_images,
     _relion_f32_fine_reconstruction_probs,
@@ -164,6 +165,7 @@ def _norm_correction_image_power_per_image(
     image_shape,
     current_size,
     include_unweighted_high_shell: bool = True,
+    source_faithful_spectrum_norm: bool = False,
 ):
     """Return RELION norm-correction image power for one local class.
 
@@ -184,7 +186,11 @@ def _norm_correction_image_power_per_image(
         shell_count=shell_count,
         include_unweighted_high_shell=include_unweighted_high_shell,
     )
-    per_image = jnp.sum(pixel_power * power_mass, axis=-1).astype(jnp.float32)
+    norm_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
+    per_image = jnp.sum(
+        (pixel_power * power_mass).astype(norm_dtype),
+        axis=-1,
+    ).astype(norm_dtype)
     if (
         current_size is None
         or projection_max_r == "auto"
@@ -197,15 +203,33 @@ def _norm_correction_image_power_per_image(
     valid_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
     unmodeled_shell = valid_shell & (shell_indices_half > int(projection_max_r))
     generic_high = jnp.sum(
-        jnp.where(unmodeled_shell[None, :], pixel_power, 0.0),
+        jnp.where(unmodeled_shell[None, :], pixel_power, 0.0).astype(norm_dtype),
         axis=-1,
-    ).astype(jnp.float32)
-    relion_high = _relion_cuda_powerclass_highres_norm_units(
+    ).astype(norm_dtype)
+    relion_high_fn = (
+        _relion_cuda_powerclass_spectrum_highres_norm_units
+        if source_faithful_spectrum_norm
+        else _relion_cuda_powerclass_highres_norm_units
+    )
+    relion_high = relion_high_fn(
         processed_noise_power_half,
         image_shape=image_shape,
         current_size=current_size,
-    )
-    full_mass = jnp.asarray(valid_image_mask, dtype=jnp.float32)
+    ).astype(norm_dtype)
+    full_mass = jnp.asarray(valid_image_mask, dtype=norm_dtype)
+    if source_faithful_spectrum_norm:
+        # RELION accumulates the modeled Wavg residual and the independently
+        # binned powerClass high-shell spectrum as separate terms.  Form that
+        # split directly: subtracting a generic high-shell sum from a full
+        # image sum leaves an avoidable float64 cancellation residue and can
+        # cross the subsequent float32 normalization boundary.
+        modeled_mass = jnp.where(unmodeled_shell[None, :], 0.0, power_mass)
+        modeled_power = jnp.sum(
+            (pixel_power * modeled_mass).astype(norm_dtype),
+            axis=-1,
+        ).astype(norm_dtype)
+        modeled_power = jax.lax.optimization_barrier(modeled_power)
+        return modeled_power + full_mass * relion_high
     per_image = jax.lax.optimization_barrier(per_image)
     return per_image + full_mass * (relion_high - generic_high)
 
@@ -222,6 +246,7 @@ def _noise_image_power_shells_and_per_image(
     current_size,
     include_unweighted_high_shell: bool = True,
     use_relion_cuda_powerclass_spectrum: bool = False,
+    source_faithful_spectrum_norm: bool = False,
 ):
     """Return RELION's noise-spectrum and norm-correction image power.
 
@@ -268,6 +293,7 @@ def _noise_image_power_shells_and_per_image(
         image_shape=image_shape,
         current_size=current_size,
         include_unweighted_high_shell=include_unweighted_high_shell,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     return shells, per_image
 
@@ -870,6 +896,7 @@ def _project_local_half_spectrum(
         "n_shells",
         "norm_current_size",
         "include_unweighted_norm_high_shell",
+        "source_faithful_spectrum_norm",
         "has_normalization_log_z",
         "has_normalization_log_evidence",
         "has_normalization_max_posterior",
@@ -989,6 +1016,7 @@ def run_local_bucket_big_jit(
     n_shells: int,
     norm_current_size: int | None,
     include_unweighted_norm_high_shell: bool,
+    source_faithful_spectrum_norm: bool = False,
     has_normalization_log_z: bool,
     has_normalization_log_evidence: bool,
     has_normalization_max_posterior: bool,
@@ -1804,7 +1832,8 @@ def run_local_bucket_big_jit(
             relion_x_half_mstep=mstep_relion_x_half,
         )
 
-    bucket_norm_correction = jnp.zeros((batch_size,), dtype=jnp.float32)
+    norm_correction_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
+    bucket_norm_correction = jnp.zeros((batch_size,), dtype=norm_correction_dtype)
     debug_wavg_cutoff_triplet = jnp.zeros((1, 3), dtype=jnp.float64)
     if accumulate_noise:
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
@@ -1823,6 +1852,7 @@ def run_local_bucket_big_jit(
             current_size=norm_current_size,
             include_unweighted_high_shell=include_unweighted_norm_high_shell,
             use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
         noise_sumw = noise_sumw + jnp.sum(support_mass)
 
@@ -1904,7 +1934,9 @@ def run_local_bucket_big_jit(
             ctf_probs,
             noise_variance_for_noise,
         )
-        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(jnp.float32)
+        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(
+            norm_correction_dtype
+        )
 
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
     if return_mstep_tensors:

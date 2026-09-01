@@ -37,6 +37,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scripts.run_full_refinement import _read_relion_mrc_model_pixel_size
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ITERATION_LOOP_PY = REPO_ROOT / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
 MEAN_HELPERS_PY = REPO_ROOT / "recovar" / "em" / "dense_single_volume" / "mean_helpers.py"
@@ -218,6 +220,42 @@ def test_apply_initial_lowpass_helper_uses_init_resolution_as_ini_high():
         "Expected --apply-initial-lowpass to use --init_resolution as the LP cutoff. "
         "Splitting them into two CLI flags would be confusing and break parity."
     )
+
+
+def test_k1_initial_lowpass_uses_model_mrc_pixel_size():
+    """RELION filters Iref in model rather than particle-optics coordinates."""
+
+    source = _build_run_full_refinement_parser()
+    k1_block = source.split("elif args.n_classes == 1:", 1)[1].split("else:", 1)[0]
+    assert re.search(
+        r"_apply_ini_high_lowpass_real\(\s*init_vol_real,\s*ds\.volume_shape,\s*"
+        r"relion_model_pixel_size,\s*_ini_high_for_lowpass",
+        k1_block,
+        re.DOTALL,
+    ), "K=1 startup low-pass must use the initial model MRC pixel size"
+    assert not re.search(
+        r"_apply_ini_high_lowpass_real\([^\)]*ds\.voxel_size",
+        k1_block,
+        re.DOTALL,
+    )
+
+
+def test_relion_mrc_model_pixel_size_divides_header_in_binary64(tmp_path):
+    import mrcfile
+
+    path = tmp_path / "model.mrc"
+    with mrcfile.new(path) as handle:
+        handle.set_data(np.zeros((6, 6, 6), dtype=np.float32))
+        handle.header.cella.x = 17.0
+        handle.header.cella.y = 17.0
+        handle.header.cella.z = 17.0
+        handle.header.mx = 12
+        handle.header.my = 12
+        handle.header.mz = 12
+    expected = 17.0 / 12.0
+    assert _read_relion_mrc_model_pixel_size(path) == expected
+    with mrcfile.open(path, permissive=False) as handle:
+        assert float(handle.voxel_size.x) != expected
 
 
 def test_firstiter_cc_post_reconstruction_lowpass_uses_relion_cli_ini_high_only():

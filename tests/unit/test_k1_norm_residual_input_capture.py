@@ -68,6 +68,8 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
         scale_correction_pixel_mask=jnp.asarray([True, False]),
         scale_shell_indices=jnp.asarray([0, 1], dtype=jnp.int32),
         bucket_group_ids=bucket_group_ids,
+        relion_wavg_atomic_diff2_rectangle=jnp.asarray([[37.0, 41.0, 43.0]]),
+        relion_wavg_atomic_rectangle_shell_indices=jnp.asarray([0, -1, 1]),
     )
 
     assert count == 1
@@ -101,6 +103,15 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
         assert float(capture["support_mass"]) == 1.0
         assert float(capture["relion_norm_high_shell"]) == 19.0
         assert float(capture["weighted_img_per_image"]) == 23.0
+        np.testing.assert_array_equal(
+            capture["wavg_diff2_atomic_rectangle_per_pixel"],
+            np.asarray([37.0, 41.0, 43.0], dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            capture["wavg_diff2_atomic_rectangle_shell_indices"],
+            np.asarray([0, -1, 1], dtype=np.int32),
+        )
+        assert float(capture["wavg_diff2_atomic_rectangle_per_image"]) == 80.0
         assert int(capture["group_id"]) == expected_group_id
         assert float(capture["scale_for_stats"]) == 2.0
         np.testing.assert_array_equal(capture["scale_correction_pixel_mask"], [True, False])

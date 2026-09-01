@@ -121,6 +121,23 @@ def _pad_significance_preprocess_inputs(
     )
 
 
+def _compact_projection_window_positions(compact_indices, window_indices) -> np.ndarray:
+    """Map full-image Fourier indices to positions in a compact projection."""
+
+    compact = np.asarray(compact_indices, dtype=np.int64).reshape(-1)
+    window = np.asarray(window_indices, dtype=np.int64).reshape(-1)
+    if np.unique(compact).size != compact.size:
+        raise ValueError("compact projection indices must be unique")
+    position_by_index = {int(index): position for position, index in enumerate(compact)}
+    missing = [int(index) for index in window if int(index) not in position_by_index]
+    if missing:
+        raise ValueError(
+            "projection window contains indices absent from the compact projection: "
+            f"{missing[:8]}"
+        )
+    return np.asarray([position_by_index[int(index)] for index in window], dtype=np.int32)
+
+
 class SignificanceDumpComplete(RuntimeError):
     """Raised after an explicitly targeted coarse-significance dump is durable."""
 
@@ -2513,6 +2530,7 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_full_to_compact = None
     coarse_gaussian_score_indices = None
     coarse_gaussian_score_active_mask = None
+    coarse_gaussian_window_positions = None
     coarse_gaussian_powerclass = None
     coarse_gaussian_projector_full = None
     if coarse_gaussian_ffi_enabled:
@@ -2539,6 +2557,7 @@ def _compute_k_class_significance_batched(
             relion_projector_half_to_texture_full,
         )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            _relion_cuda_corr_img_from_native_noise_variance,
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_fine_full_to_compact_lookup,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
@@ -2576,6 +2595,13 @@ def _compute_k_class_significance_batched(
         coarse_gaussian_score_active_mask = jnp.asarray(
             np.isin(square_score_indices_np, active_score_indices_np),
             dtype=jnp.bool_,
+        )
+        coarse_gaussian_window_positions = jnp.asarray(
+            _compact_projection_window_positions(
+                square_score_indices_np,
+                active_score_indices_np,
+            ),
+            dtype=jnp.int32,
         )
         coarse_gaussian_full_to_compact = jnp.asarray(
             _relion_cuda_fine_full_to_compact_lookup(
@@ -2891,11 +2917,26 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_pixel_weight = None
     coarse_gaussian_initial_diff2 = None
 
+    # The texture projector naturally produces a centered current-size crop.
+    # Ask it only for the rows consumed by the scorer instead of scattering the
+    # crop into a full image and immediately gathering the same rows again.
+    # This is an exact index remapping and avoids a large transient scatter for
+    # global rotation blocks.
+    projector_compact_indices = None
+    if use_relion_projector and coarse_texture_interp:
+        if coarse_gaussian_ffi_enabled:
+            projector_compact_indices = coarse_gaussian_score_indices
+        elif use_window:
+            projector_compact_indices = window_indices
+    projector_returns_compact = projector_compact_indices is not None
+
     def _project_block(class_index, mean_for_proj, rots_b):
         if use_relion_projector:
             projector_kwargs = {}
             if current_size is not None:
                 projector_kwargs["projector_output_size"] = int(current_size)
+            if projector_returns_compact:
+                projector_kwargs["pixel_indices"] = projector_compact_indices
             if coarse_texture_interp:
                 proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
                     relion_projector_half[class_index],
@@ -2982,7 +3023,11 @@ def _compute_k_class_significance_batched(
         if coarse_gaussian_ffi_enabled:
             from recovar import cuda_backproject
 
-            proj_score = proj_half_b[:, coarse_gaussian_score_indices]
+            proj_score = (
+                proj_half_b
+                if projector_returns_compact
+                else proj_half_b[:, coarse_gaussian_score_indices]
+            )
             proj_score = jnp.asarray(proj_score, dtype=jnp.complex64)
             diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
                 proj_score,
@@ -2993,8 +3038,12 @@ def _compute_k_class_significance_batched(
             )
             return -diff2
         if use_window:
-            proj_w = proj_half_b[:, window_indices]
-            proj_abs2_w = proj_abs2_half_b[:, window_indices]
+            if projector_returns_compact:
+                proj_w = proj_half_b
+                proj_abs2_w = proj_abs2_half_b
+            else:
+                proj_w = proj_half_b[:, window_indices]
+                proj_abs2_w = proj_abs2_half_b[:, window_indices]
             if not use_float64_scoring:
                 proj_w = proj_w.astype(jnp.complex64)
                 proj_abs2_w = proj_abs2_w.astype(jnp.float32)
@@ -3477,12 +3526,10 @@ def _compute_k_class_significance_batched(
                     coarse_gaussian_score_indices,
                     image_shape,
                 ).reshape(batch_size, n_trans, -1)
-                inverse_noise_half = jnp.reciprocal(
-                    jnp.asarray(noise_variance_half, dtype=jnp.float64),
-                ).astype(jnp.float32)
-                exact_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
-                    inverse_noise_half[None, :],
+                exact_corr_img = _relion_cuda_corr_img_from_native_noise_variance(
+                    noise_variance_half[None, :],
                     ctf_half_rfloat,
+                    image_shape,
                     batch_scale_f32[:, None] if scale_corrections is not None else None,
                 )
                 exact_square_corr_img = exact_corr_img[:, coarse_gaussian_score_indices]
@@ -4146,8 +4193,13 @@ def _compute_k_class_significance_batched(
                         projection_rotations,
                     )
                     if use_window:
-                        projected_half = projected_half[:, window_indices]
-                        projected_abs2 = projected_abs2[:, window_indices]
+                        if projector_returns_compact:
+                            if coarse_gaussian_window_positions is not None:
+                                projected_half = projected_half[:, coarse_gaussian_window_positions]
+                                projected_abs2 = projected_abs2[:, coarse_gaussian_window_positions]
+                        else:
+                            projected_half = projected_half[:, window_indices]
+                            projected_abs2 = projected_abs2[:, window_indices]
                     if not use_float64_scoring:
                         projected_half = projected_half.astype(jnp.complex64)
                         projected_abs2 = projected_abs2.astype(jnp.float32)

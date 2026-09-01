@@ -101,7 +101,7 @@ _STATE_SWAP_FORCE_FRESH_PARTICLE_ORDER_ENV = (
 def _k1_relion_live_initial_noise_enabled(
     environ: MutableMapping[str, str] | None = None,
 ) -> bool:
-    """Return whether the diagnostic fresh-K=1 live-noise bootstrap is active."""
+    """Return whether the source-faithful fresh-K=1 noise diagnostic is active."""
 
     environment = os.environ if environ is None else environ
     token = environment.get(_K1_RELION_LIVE_INITIAL_NOISE_ENV, "0").strip().lower()
@@ -784,6 +784,34 @@ def _parse_relion_cli_ini_high(text):
     if val <= 0.0:
         return None
     return val
+
+
+def _read_relion_mrc_model_pixel_size(path):
+    """Read RELION's binary64 sampling rate from MRC cell length/grid size.
+
+    ``mrcfile.voxel_size`` performs the division in float32.  RELION retains
+    the float32 header cell length and integer grid size, then divides them in
+    ``RFLOAT`` (binary64 in the parity build).  Keeping that division boundary
+    matters for marginal first-iteration normalized-CC winners.
+    """
+
+    import mrcfile
+
+    with mrcfile.open(path, permissive=False, header_only=True) as handle:
+        cell_lengths = np.asarray(
+            [handle.header.cella.x, handle.header.cella.y, handle.header.cella.z],
+            dtype=np.float64,
+        )
+        grid_sizes = np.asarray(
+            [handle.header.mx, handle.header.my, handle.header.mz],
+            dtype=np.int64,
+        )
+    if np.any(grid_sizes <= 0) or not np.all(np.isfinite(cell_lengths)):
+        raise ValueError(f"invalid MRC sampling header: {path}")
+    sampling = cell_lengths / grid_sizes.astype(np.float64)
+    if np.any(sampling <= 0.0) or not np.allclose(sampling, sampling[0], rtol=0.0, atol=1e-12):
+        raise ValueError(f"K=1 RELION model requires isotropic MRC sampling: {path}")
+    return float(sampling[0])
 
 
 def _parse_relion_tau2_fudge(text):
@@ -2753,6 +2781,16 @@ def main():
             "selects the source-faithful CUDA normalization, translation, and mask path."
         ),
     )
+    parser.add_argument(
+        "--relion-softmask-reduction",
+        choices=("control", "native_lane", "native_atomic"),
+        default="control",
+        help=(
+            "Diagnostic RELION-CUDA soft-mask background reduction. control keeps "
+            "the production deterministic reduction; native_lane and native_atomic "
+            "probe source-observer addition orders."
+        ),
+    )
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
     parser.add_argument(
         "--rotation_block_size",
@@ -3184,6 +3222,22 @@ def main():
             else fixed_diagnostic_source_paths["completed_optimiser"]
         ),
     )
+    if args.relion_softmask_reduction != "control":
+        if args.image_fourier_backend != "relion_cuda":
+            raise ValueError(
+                "--relion-softmask-reduction requires --image-fourier-backend relion_cuda"
+            )
+        backend = getattr(getattr(ds, "image_source", None), "backend", None)
+        if backend is None or not hasattr(backend, "set_relion_native_lane_reduction"):
+            raise ValueError("Dataset backend does not support RELION soft-mask reduction probes")
+        if args.relion_softmask_reduction == "native_lane":
+            backend.set_relion_native_lane_reduction(True)
+        else:
+            os.environ["RECOVAR_RELION_NATIVE_ATOMIC_SOFTMASK_REDUCTION"] = "1"
+        logger.warning(
+            "Diagnostic RELION soft-mask reduction enabled: %s",
+            args.relion_softmask_reduction,
+        )
     args._relion_mask_params = relion_mask_params
     particle_diameter_ang = None if relion_mask_params is None else float(relion_mask_params[0])
     logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px", ds.n_units, ds.image_shape, ds.voxel_size)
@@ -3273,7 +3327,21 @@ def main():
                 half1_idx.size,
                 dtype=np.int64,
             )
-        if use_relion_live_initial_noise:
+        live_initial_noise_layout_candidate = bool(
+            use_fresh_auto_refine_order
+            and args.perturb_replay_relion_dir is None
+            and args.relion_init_dir is not None
+            and relion_mask_params is not None
+        )
+        if live_initial_noise_layout_candidate:
+            (
+                relion_fresh_initial_noise_source_rows,
+                relion_fresh_initial_noise_optics_group_ids,
+            ) = _relion_fresh_initial_noise_layout(our_particles, relion_particles)
+        if (
+            use_relion_live_initial_noise
+            and relion_fresh_initial_noise_source_rows is None
+        ):
             (
                 relion_fresh_initial_noise_source_rows,
                 relion_fresh_initial_noise_optics_group_ids,
@@ -3728,12 +3796,9 @@ def main():
         )
     elif args.n_classes == 1:
         init_mrc_path = args.init_volume or os.path.join(args.data_dir, "reference_init.mrc")
-        init_vol_real, init_mrc_voxel_size = _load_mrc(
-            init_mrc_path,
-            return_voxel_size=True,
-        )
+        init_vol_real = _load_mrc(init_mrc_path)
         init_vol_real = init_vol_real.astype(np.float32)
-        relion_model_pixel_size = float(init_mrc_voxel_size.x)
+        relion_model_pixel_size = _read_relion_mrc_model_pixel_size(init_mrc_path)
         if not np.isfinite(relion_model_pixel_size) or relion_model_pixel_size <= 0.0:
             raise SystemExit(
                 f"Initial RELION reference has invalid voxel size {relion_model_pixel_size}: "
@@ -3743,8 +3808,16 @@ def main():
             f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
         )
         if _ini_high_for_lowpass is not None:
+            # RELION filters ``mymodel.Iref`` in model coordinates.  The
+            # particle STAR optics pixel size can be a rounded serialization
+            # (for example 1.416667 versus the MRC header ratio
+            # 544.0 / 384 = 1.4166666666666667 A/px),
+            # which is enough to flip marginal firstiter-CC winners.
             filtered_real = _apply_ini_high_lowpass_real(
-                init_vol_real, ds.volume_shape, ds.voxel_size, _ini_high_for_lowpass,
+                init_vol_real,
+                ds.volume_shape,
+                relion_model_pixel_size,
+                _ini_high_for_lowpass,
             )
             if _use_initial_projector_real:
                 init_reference_real_for_projector = filtered_real
@@ -4000,7 +4073,7 @@ def main():
             ),
         )
         logger.warning(
-            "Opt-in fresh K=1 RELION live initial noise enabled: particles=%d "
+            "STRICT-PARITY: fresh K=1 RELION live initial noise enabled: particles=%d "
             "source_rows_head=%s sigma2_head=%s",
             min(1000, int(np.asarray(relion_fresh_initial_noise_source_rows).size)),
             np.asarray(relion_fresh_initial_noise_source_rows, dtype=np.int64)[:5].tolist(),

@@ -356,7 +356,7 @@ class TestRunVdamIterations:
             n_directions=12,
             pseudo_halfsets=True,
         )
-        with pytest.raises(ValueError, match="between 1 and state.nr_iter"):
+        with pytest.raises(ValueError, match="greater than start_iteration"):
             run_vdam_iterations(
                 state,
                 nr_particles=1,

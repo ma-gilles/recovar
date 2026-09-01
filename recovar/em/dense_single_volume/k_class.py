@@ -882,6 +882,11 @@ def _run_sparse_k_class_adaptive_pass2(
         from recovar import cuda_backproject
 
         use_k1_fine_diff2_ffi = cuda_backproject.cuda_available()
+    source_faithful_spectrum_norm = bool(
+        base_engine_kwargs.get("source_faithful_spectrum_norm", False)
+    )
+    if source_faithful_spectrum_norm and n_classes != 1:
+        raise ValueError("source-faithful powerClass normalization is K=1-only")
 
     def _class_rotation_prior(class_index: int):
         class_prior = base_engine_kwargs.get("class_rotation_log_prior")
@@ -959,6 +964,7 @@ def _run_sparse_k_class_adaptive_pass2(
         bpref_device_signature_active=bool(
             base_engine_kwargs.get("bpref_device_signature_active", False)
         ),
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     preserve_bpref_particle_order = _apply_bpref_particle_order_policy(
         common,
@@ -1018,6 +1024,8 @@ def _run_sparse_k_class_adaptive_pass2(
         fused_common = dict(common)
         fused_common.pop("relion_fine_mstep_prune", None)
         fused_common.pop("relion_exact_fine_normalized_cc", None)
+        fused_common.pop("relion_fine_diff2_fused_ffi", None)
+        fused_common.pop("relion_f32_fine_posterior", None)
         # The fused K-class scorer preserves one joint class-by-pose minimum,
         # so it can use the same source-faithful CUDA reduction qualified by
         # the K=1 path.  The legacy 2K-1 fallback remains unchanged.
@@ -1030,6 +1038,12 @@ def _run_sparse_k_class_adaptive_pass2(
             fused_common["relion_f32_fine_posterior"] = (
                 cuda_backproject.cuda_available()
             )
+        # The separate model-coordinate cutoff and source-faithful spectrum
+        # norm are qualified only for K=1. Keep fused K>1 on its historical
+        # score-space cutoff until Class3D is diagnosed.
+        if n_classes > 1:
+            fused_common.pop("reconstruction_current_size", None)
+            fused_common.pop("source_faithful_spectrum_norm", None)
         fused_common["relion_projector_half"] = relion_projector_half_by_class
         fused_common["relion_projector_r_max"] = relion_projector_r_max
         if "normalization_log_evidence" in base_engine_kwargs:
@@ -2064,6 +2078,11 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
     n_images = int(coarse_class_assignments.shape[0])
     relion_projector_half_by_class = pass2_kwargs.get("relion_projector_half")
     relion_projector_r_max = pass2_kwargs.get("relion_projector_r_max")
+    source_faithful_spectrum_norm = bool(
+        pass2_kwargs.get("source_faithful_spectrum_norm", False)
+    )
+    if source_faithful_spectrum_norm and n_classes != 1:
+        raise ValueError("source-faithful powerClass normalization is K=1-only")
 
     def _class_rotation_prior(class_index: int):
         del class_index
@@ -2093,10 +2112,17 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         relion_half_volume_mstep=bool(pass2_kwargs.get("relion_half_volume_mstep", False)),
         relion_x_half_mstep=bool(pass2_kwargs.get("mstep_relion_x_half", False)),
         relion_firstiter_score_mode="normalized_cc",
+        # This adapter is the production fresh-K=1 ``--firstiter_cc`` route.
+        # Keep its fine pass on the same source-faithful 256-lane CUDA tree as
+        # the general K=1 sparse adapter.  Omitting this argument silently
+        # selected the historical algebraic scorer because the lower-level
+        # default is deliberately conservative for K>1.
+        relion_exact_fine_normalized_cc=n_classes == 1,
         relion_firstiter_winner_take_all=True,
         bpref_device_signature_active=bool(
             pass2_kwargs.get("bpref_device_signature_active", False)
         ),
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
     _apply_bpref_particle_order_policy(
         common,

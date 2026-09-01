@@ -362,6 +362,16 @@ def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
         assert needle in source, f"adaptive sparse pass-2 lost projector forwarding: {needle!r}"
 
 
+def test_sparse_firstiter_k1_forwards_source_faithful_spectrum_norm():
+    """The firstiter global-winner adapter must retain fresh K=1 parity flags."""
+
+    source = inspect.getsource(k_class_mod._run_sparse_firstiter_global_winner_subset_pass2)
+    assert 'pass2_kwargs.get("source_faithful_spectrum_norm", False)' in source
+    assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in source
+    assert "relion_exact_fine_normalized_cc=n_classes == 1" in source
+    assert "source-faithful powerClass normalization is K=1-only" in source
+
+
 # ----------------------------------------------------------------------
 # K-class significance dump operand-recording schema
 # ----------------------------------------------------------------------
@@ -897,6 +907,71 @@ def test_significance_dump_half_selector_fails_closed(tmp_path):
         )
 
 
+def test_pass2_norm_dump_half_selector_reaches_only_target_half(tmp_path):
+    datasets = [
+        SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
+        SimpleNamespace(dataset_indices=np.asarray([1, 3], dtype=np.int64)),
+    ]
+    environ = {
+        "RECOVAR_PASS2_DUMP_TARGET_HALF": "2",
+        "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS": "1",
+        "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET": "1",
+        "RECOVAR_PASS2_DUMP_DIR": str(tmp_path),
+        "RECOVAR_PASS2_DUMP_ITERATION": "2",
+        "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES": "1,3",
+    }
+
+    assert iteration_loop._significance_dump_half_indices(
+        numbered_iteration=1,
+        n_classes=1,
+        experiment_datasets=datasets,
+        environ=environ,
+    ) == (0, 1)
+    assert iteration_loop._significance_dump_half_indices(
+        numbered_iteration=2,
+        n_classes=1,
+        experiment_datasets=datasets,
+        environ=environ,
+    ) == (1,)
+
+
+def test_pass2_norm_dump_half_selector_fails_closed(tmp_path):
+    datasets = [
+        SimpleNamespace(dataset_indices=np.asarray([2, 4], dtype=np.int64)),
+        SimpleNamespace(dataset_indices=np.asarray([1, 3], dtype=np.int64)),
+    ]
+    base = {
+        "RECOVAR_PASS2_DUMP_TARGET_HALF": "2",
+        "RECOVAR_PASS2_DUMP_DIR": str(tmp_path),
+        "RECOVAR_PASS2_DUMP_ITERATION": "2",
+        "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES": "1",
+    }
+    with pytest.raises(RuntimeError, match="NORM_RESIDUAL_INPUTS"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ=base,
+        )
+    with pytest.raises(RuntimeError, match="NORM_RESIDUAL_STOP_AFTER_TARGET"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ={**base, "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS": "1"},
+        )
+    with pytest.raises(RuntimeError, match="mutually exclusive"):
+        iteration_loop._significance_dump_half_indices(
+            numbered_iteration=2,
+            n_classes=1,
+            experiment_datasets=datasets,
+            environ={
+                **base,
+                "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF": "2",
+            },
+        )
+
+
 def test_relion_adaptive_fraction_preserves_text_to_float_boundary():
     expected = float(np.float32("0.999"))
     assert iteration_loop.RELION_ADAPTIVE_FRACTION == expected
@@ -1248,6 +1323,53 @@ def test_sparse_pass2_raw_operand_dump_fails_closed_without_raw_diff2(
         )
 
 
+def test_sparse_pass2_raw_operand_dump_uses_normalized_cc_score_without_diff2(
+    monkeypatch,
+    tmp_path,
+):
+    experiment_dataset = SimpleNamespace(
+        dataset_indices=np.asarray([42], dtype=np.int64)
+    )
+    per_image_inputs = {
+        "oversampled_rots": [np.eye(3, dtype=np.float32)[None]],
+        "oversampled_rot_indices": [np.asarray([7], dtype=np.int64)],
+        "parent_map": [np.asarray([0], dtype=np.int32)],
+    }
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ROTATION_ROWS", "0")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_RAW_OPERANDS", "1")
+    score = np.asarray([[[0.25, 0.5]]], dtype=np.float32)
+    rotation_prior = np.asarray([[0.125]], dtype=np.float32)
+    translation_prior = np.asarray([[0.0, -0.25]], dtype=np.float32)
+
+    sparse_pass2_mod._maybe_dump_pass2_bucket(
+        experiment_dataset=experiment_dataset,
+        image_indices=np.asarray([0], dtype=np.int64),
+        per_image_inputs=per_image_inputs,
+        current_size=14,
+        n_fine_trans=2,
+        fine_translations=np.zeros((2, 2), dtype=np.float32),
+        scores=score,
+        probs=np.ones((1, 1, 2), dtype=np.float32) * 0.5,
+        rotation_log_prior=rotation_prior,
+        translation_log_prior=translation_prior,
+        candidate_mask=np.ones((1, 1, 2), dtype=bool),
+        ctf2_over_nv_score=np.ones((1, 2), dtype=np.float32),
+        proj_half=np.ones((1, 1, 2), dtype=np.complex64),
+        half_weights_used=np.ones(2, dtype=np.float32),
+        window_indices=np.arange(2, dtype=np.int32),
+        shifted_corrected_score_split=np.ones((1, 2, 2), dtype=np.complex64),
+        raw_score_mode="normalized_cc",
+    )
+
+    with np.load(tmp_path / "pass2_orig000042_cs014.npz", allow_pickle=False) as payload:
+        np.testing.assert_array_equal(
+            payload["raw_operand_raw_diff2"],
+            score[0] - rotation_prior[0, :, None] - translation_prior[0, None, :],
+        )
+
+
 def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     """Sparse pass-2 dumps use the same original-id targeting as pass1."""
 
@@ -1562,6 +1684,38 @@ def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path
     )
 
     np.testing.assert_array_equal(rows, np.asarray([1, 2], dtype=np.int64))
+
+
+def test_pass2_dump_target_rows_require_requested_iteration(monkeypatch, tmp_path):
+    experiment_dataset = SimpleNamespace(
+        original_image_indices_from_local=lambda indices: np.asarray(
+            [100, 42, 300],
+            dtype=np.int64,
+        )
+    )
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42,300")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "14")
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "2")
+
+    try:
+        sparse_pass2_mod.set_bpref_contribution_dump_context(iteration=1, half=1)
+        before_target = sparse_pass2_mod._pass2_dump_target_rows(
+            experiment_dataset=experiment_dataset,
+            image_indices=np.asarray([7, 8, 9], dtype=np.int64),
+            current_size=14,
+        )
+        sparse_pass2_mod.set_bpref_contribution_dump_context(iteration=2, half=1)
+        at_target = sparse_pass2_mod._pass2_dump_target_rows(
+            experiment_dataset=experiment_dataset,
+            image_indices=np.asarray([7, 8, 9], dtype=np.int64),
+            current_size=14,
+        )
+    finally:
+        sparse_pass2_mod.clear_bpref_contribution_dump_context()
+
+    np.testing.assert_array_equal(before_target, np.empty((0,), dtype=np.int64))
+    np.testing.assert_array_equal(at_target, np.asarray([1, 2], dtype=np.int64))
 
 
 # ----------------------------------------------------------------------
