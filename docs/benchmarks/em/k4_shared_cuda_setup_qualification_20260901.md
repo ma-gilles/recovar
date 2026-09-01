@@ -43,18 +43,43 @@ RECOVAR-minus-RELION difference of `3.720413213614826e-08`. RECOVAR used
 11 s wall time. These are one-iteration smoke measurements and should not be
 used as converged performance numbers.
 
-## Reproduce the sealed scripts
+## Reproduce from source
 
-The generated scripts are immutable evidence. To repeat the same dependency
-chain in a fresh copy of the sealed root, submit the setup first, make the case
-depend on successful setup, and make the summary depend on the case reaching a
-terminal state:
+The generated scripts in the sealed run root are immutable evidence and must
+not be resubmitted in place. To reproduce the one-iteration case from the
+qualified source, choose a new empty scratch root and invoke the source
+launcher. The launcher writes the setup, case, and summary jobs with the same
+dependency chain, creates the `SAFE_TO_DELETE` marker, and records the resolved
+environment in its new run root:
 
 ```bash
-setup_job=$(sbatch --parsable /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_latest_setupqual_23a980366_20260901/jobs/em_kclass_matrix_setup.sh)
-case_job=$(sbatch --parsable --dependency=afterok:${setup_job} /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_latest_setupqual_23a980366_20260901/jobs/em_kclass_matrix_21_ribo_k4_3k_g128_white_noise0p2_uniform.sh)
-sbatch --dependency=afterany:${case_job} /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_latest_setupqual_23a980366_20260901/jobs/em_kclass_matrix_summary.sh
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_em_evidence_integration_20260901
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+export PYTHONNOUSERSITE=1
+export SBATCH_PARTITION=cryoem
+export SBATCH_ACCOUNT=gilles
+export SBATCH_CONSTRAINT=h100
+export RELION_MODULE=relion/5.0.0/gcc-11.5.0
+export RELION_SRC_DIR=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/source/src
+export EM_KCLASS_MATRIX_RELION_REFINE_MPI=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_100k_dispatchv2_20260717/build/bin/relion_refine_mpi
+export EM_KCLASS_MATRIX_PIXI_PY=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_em_evidence_integration_20260901/.pixi/envs/default/bin/python
+export RELION_MPI_RANKS=3
+export KCLASS_IMAGE_BATCH_SIZE=50
+export KCLASS_ROTATION_BLOCK_SIZE=2000
+export EM_KCLASS_MATRIX_GT_ALIGN_REFINE_ORDERS=3
+/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_em_evidence_integration_20260901/.pixi/envs/default/bin/python \
+  scripts/run_em_kclass_robustness_matrix_slurm.py \
+  --scratch-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_shared_cuda_setup_reproduction_20260901 \
+  --case 21 \
+  --max-iter-override 1 \
+  --time-limit-override 00:45:00
 ```
+
+Use a different new absolute `--scratch-dir` for each repetition. The command
+submits exactly one H100 GPU for setup and one H100 GPU for the case; it never
+requests an exclusive node. After submission, verify requested and allocated
+resources from the recorded job IDs with `scontrol show job` before accepting
+the run.
 
 The setup and case launcher SHA-256 digests are, respectively,
 `11022ed0aaf5331624a61c42bb197c288c94d3d2a72fc761536453b23aeb90e8`
