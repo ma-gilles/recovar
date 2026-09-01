@@ -814,7 +814,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if not 0.0 <= args.minimum_class_fraction < 1.0 / args.K:
         parser.error("--minimum-class-fraction must be in [0, 1/K)")
     if args.checkpoint is None:
-        args.checkpoint = list(range(args.nr_iter + 1))
+        # Native InitialModel emits artifacts only after iterations 1..N.
+        # Keep zero valid for explicit legacy/frozen-oracle replays, but do
+        # not request an artifact that a fresh current run cannot produce.
+        args.checkpoint = list(range(1, args.nr_iter + 1))
     if sorted(set(args.checkpoint)) != args.checkpoint or not all(
         0 <= value <= args.nr_iter for value in args.checkpoint
     ):

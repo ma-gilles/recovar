@@ -77,15 +77,32 @@ def test_pair_commands_share_scientific_parameters_and_current_entrypoint(tmp_pa
     assert recovar[recovar.index("--do_run_C1") + 1] == "0"
 
 
-def test_default_contract_covers_all_iterations_and_flags_collapsed_classes(tmp_path: Path):
+def test_default_contract_covers_emitted_iterations_and_flags_collapsed_classes(tmp_path: Path):
     args = runner._parse_args(
         ["--fixture-dir", str(tmp_path), "--output-root", str(tmp_path / "out"), "--nr-iter", "8"]
     )
 
-    assert args.checkpoint == list(range(9))
+    assert args.checkpoint == list(range(1, 9))
     assert args.minimum_assignment_accuracy == 0.995
     assert args.minimum_class_fraction == 0.01
     assert args.reference_pair_report is None
+
+
+def test_explicit_legacy_iteration_zero_checkpoint_is_retained(tmp_path: Path):
+    args = runner._parse_args(
+        [
+            "--fixture-dir",
+            str(tmp_path),
+            "--output-root",
+            str(tmp_path / "out"),
+            "--checkpoint",
+            "0",
+            "--checkpoint",
+            "8",
+        ]
+    )
+
+    assert args.checkpoint == [0, 8]
 
 
 def test_required_fixture_paths_and_lineage_are_separate(tmp_path: Path):
@@ -179,6 +196,12 @@ def _write_frozen_reference(tmp_path: Path):
             "--K",
             "4",
             "--nr-iter",
+            "2",
+            "--checkpoint",
+            "0",
+            "--checkpoint",
+            "1",
+            "--checkpoint",
             "2",
         ]
     )

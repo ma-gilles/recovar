@@ -49,14 +49,35 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     )
 
 
-def test_pair_command_targets_current_runner_and_full_checkpoint_range(tmp_path: Path):
+def test_pair_command_targets_current_runner_and_emitted_checkpoint_range(tmp_path: Path):
     args = _args(tmp_path)
     command = launcher.build_pair_command(args, launcher.FIXTURES["10345"], tmp_path / "pair")
 
     assert command[1:3] == ["-m", "scripts.run_em_real_kclass_initialmodel_pair"]
     checkpoints = [int(command[index + 1]) for index, value in enumerate(command) if value == "--checkpoint"]
-    assert checkpoints == list(range(9))
+    assert checkpoints == list(range(1, 9))
     assert command[command.index("--minimum-class-fraction") + 1] == "0.01"
+
+
+def test_explicit_legacy_iteration_zero_checkpoint_is_retained(tmp_path: Path):
+    args = launcher.parse_args(
+        [
+            "--dataset",
+            "10345",
+            "--output-root",
+            str(tmp_path / "run"),
+            "--relion-source-dir",
+            str(tmp_path / "relion/src"),
+            "--pixi-python",
+            str(tmp_path / "pixi/envs/default/bin/python"),
+            "--checkpoint",
+            "0",
+            "--checkpoint",
+            "8",
+        ]
+    )
+
+    assert args.checkpoint == [0, 8]
 
 
 def test_sbatch_is_one_gpu_nonexclusive_and_builds_sealed_runtime(tmp_path: Path):

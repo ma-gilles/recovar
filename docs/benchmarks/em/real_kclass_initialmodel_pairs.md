@@ -35,7 +35,10 @@ consume that split as two independent refinements.
 
 The default pilot is K=4, C1, eight iterations, seed 0, `tau2_fudge=4`,
 HEALPix order 1, oversampling 1, offset range/step 6/2 pixels, padding factor
-1, 500-image batches, and 5,000-rotation blocks. It audits iterations 0--8.
+1, 500-image batches, and 5,000-rotation blocks. It audits iterations 1--8,
+the numbered artifacts emitted after each completed native InitialModel update.
+Iteration 0 remains available only as an explicit checkpoint for legacy or
+frozen oracles that actually retain matching iteration-0 artifacts.
 Every iteration requires minimum matched cross-engine FSC-AUC 0.999,
 permutation-aware assignment agreement 0.995 wherever assignments exist,
 identical particle identity and assigned/unassigned sets, and no class below

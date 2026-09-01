@@ -311,7 +311,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.reference_pair_report is not None:
         args.reference_pair_report = args.reference_pair_report.expanduser().resolve()
     if args.checkpoint is None:
-        args.checkpoint = list(range(args.nr_iter + 1))
+        # Native InitialModel writes numbered artifacts after each completed
+        # update, so a fresh run has iterations 1..nr_iter and no iteration 0.
+        args.checkpoint = list(range(1, args.nr_iter + 1))
     if args.K < 2 or args.nr_iter < 1:
         parser.error("K must be >=2 and nr-iter must be positive")
     if args.cpus_per_task < 1:
