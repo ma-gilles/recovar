@@ -594,7 +594,7 @@ def test_main_rejects_nonempty_reused_scratch_root(tmp_path, monkeypatch):
         launcher.main()
 
 
-def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monkeypatch):
+def test_setup_defaults_to_case_gpu_while_summary_remains_cpu(tmp_path, monkeypatch):
     relion_src = _set_relion_src(tmp_path, monkeypatch)
     pdb_dir = tmp_path / "pdbs"
     pdb_dir.mkdir()
@@ -623,6 +623,7 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     for name in (
         "EM_KCLASS_MATRIX_SETUP_PARTITION",
         "EM_KCLASS_MATRIX_SETUP_CONSTRAINT",
+        "EM_KCLASS_MATRIX_SETUP_GRES",
         "EM_KCLASS_MATRIX_SUMMARY_PARTITION",
         "EM_KCLASS_MATRIX_SUMMARY_CONSTRAINT",
     ):
@@ -633,13 +634,15 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     setup_text = (scratch / "jobs" / "em_kclass_matrix_setup.sh").read_text()
     summary_text = (scratch / "jobs" / "em_kclass_matrix_summary.sh").read_text()
     submission = (scratch / "submission.env").read_text()
-    assert "#SBATCH --partition=cpu" in setup_text
+    assert "#SBATCH --partition=cryoem" in setup_text
+    assert "#SBATCH --constraint=h100" in setup_text
+    assert "#SBATCH --gres=gpu:1" in setup_text
     assert "#SBATCH --partition=cpu" in summary_text
-    assert "#SBATCH --constraint=h100" not in setup_text
     assert "#SBATCH --constraint=h100" not in summary_text
-    assert "EM_KCLASS_MATRIX_SETUP_PARTITION=cpu" in submission
+    assert "EM_KCLASS_MATRIX_SETUP_PARTITION=cryoem" in submission
+    assert "EM_KCLASS_MATRIX_SETUP_CONSTRAINT=h100" in submission
+    assert "EM_KCLASS_MATRIX_SETUP_GRES=gpu:1" in submission
     assert "EM_KCLASS_MATRIX_SUMMARY_PARTITION=cpu" in submission
-    assert "EM_KCLASS_MATRIX_SETUP_CONSTRAINT=" in submission
     assert "EM_KCLASS_MATRIX_SUMMARY_CONSTRAINT=" in submission
     expected_head = launcher.git_text("rev-parse", "HEAD")
     assert f"EXPECTED_GIT_HEAD={expected_head}" in setup_text
@@ -661,6 +664,28 @@ def test_setup_and_summary_default_to_cpu_without_gpu_constraint(tmp_path, monke
     assert f"RUNTIME_ROOT={launcher.DEFAULT_RUNTIME_ROOT}" in submission
     assert f"export RELION_SRC_DIR={relion_src}" in setup_text
     assert f"RELION_SRC_DIR={relion_src}" in submission
+
+
+def test_main_rejects_cpu_only_setup_for_shared_cuda_build(tmp_path, monkeypatch):
+    _set_relion_src(tmp_path, monkeypatch)
+    _set_dispatch_capture_executable(tmp_path, monkeypatch)
+    monkeypatch.setenv("EM_KCLASS_MATRIX_SETUP_PARTITION", "cpu")
+    monkeypatch.setenv("EM_KCLASS_MATRIX_SETUP_GRES", "")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_em_kclass_robustness_matrix_slurm.py",
+            "--dry-run",
+            "--scratch-dir",
+            str(tmp_path / "scratch"),
+            "--case",
+            "1",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="must request a GPU"):
+        launcher.main()
 
 
 def test_main_fails_closed_without_dispatch_capture_relion(tmp_path, monkeypatch):

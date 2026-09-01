@@ -2392,9 +2392,17 @@ def main() -> int:
     summary_partition = args.summary_partition or "cpu"
     constraint = os.environ.get("SBATCH_CONSTRAINT", "")
     summary_constraint = os.environ.get("EM_KCLASS_MATRIX_SUMMARY_CONSTRAINT", "")
-    setup_partition = os.environ.get("EM_KCLASS_MATRIX_SETUP_PARTITION", "cpu")
-    setup_constraint = os.environ.get("EM_KCLASS_MATRIX_SETUP_CONSTRAINT", "")
-    setup_gres = os.environ.get("EM_KCLASS_MATRIX_SETUP_GRES", "")
+    # The setup job seals the custom CUDA library once for all dependent case
+    # jobs.  It therefore needs the same GPU/toolkit contract as the cases;
+    # CPU-only setup nodes on Della do not expose nvcc or nvidia-smi.
+    setup_partition = os.environ.get("EM_KCLASS_MATRIX_SETUP_PARTITION", partition)
+    setup_constraint = os.environ.get("EM_KCLASS_MATRIX_SETUP_CONSTRAINT", constraint)
+    setup_gres = os.environ.get("EM_KCLASS_MATRIX_SETUP_GRES", "gpu:1")
+    if "gpu" not in setup_gres.lower():
+        raise SystemExit(
+            "EM_KCLASS_MATRIX_SETUP_GRES must request a GPU because the setup job "
+            "builds and seals the shared CUDA library"
+        )
     if os.environ.get("EM_KCLASS_MATRIX_EXCLUSIVE", "0") != "0":
         raise SystemExit("EM_KCLASS_MATRIX_EXCLUSIVE is unsupported: K-class matrix jobs must be non-exclusive")
     exclusive = False
@@ -2460,6 +2468,7 @@ def main() -> int:
     print(f"Partition/account: {partition}/{account}")
     print(f"Setup partition: {setup_partition}")
     print(f"Setup constraint: {setup_constraint or '<none>'}")
+    print(f"Setup gres: {setup_gres}")
     print(f"Summary partition: {summary_partition}")
     print(f"Summary constraint: {summary_constraint or '<none>'}")
     print(f"Constraint: {constraint or '<none>'}")
@@ -2611,6 +2620,7 @@ def main() -> int:
                 f"RECOVAR_RELION_BIND_BUILD_DIR={scratch_dir / 'relion_bind_build' / 'shared'}",
                 f"EM_KCLASS_MATRIX_SETUP_PARTITION={setup_partition}",
                 f"EM_KCLASS_MATRIX_SETUP_CONSTRAINT={setup_constraint}",
+                f"EM_KCLASS_MATRIX_SETUP_GRES={setup_gres}",
                 f"EM_KCLASS_MATRIX_SUMMARY_PARTITION={summary_partition}",
                 f"EM_KCLASS_MATRIX_SUMMARY_CONSTRAINT={summary_constraint}",
                 f"SETUP_JOB_ID={setup_job}",
