@@ -12039,6 +12039,8 @@ class TestRelionModeSmokeTest:
                 else:
                     np.testing.assert_array_equal(cached_sig, uncached_sig)
         for key, cached in cached_result[5].items():
+            if key == "coarse_selector_audit":
+                continue
             np.testing.assert_allclose(
                 np.asarray(cached),
                 np.asarray(uncached_result[5][key]),
@@ -12098,6 +12100,8 @@ class TestRelionModeSmokeTest:
             for expected, actual in zip(expected_by_class, actual_by_class):
                 np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
         for key, expected in unpadded[5].items():
+            if key == "coarse_selector_audit":
+                continue
             np.testing.assert_allclose(
                 np.asarray(padded[5][key]),
                 np.asarray(expected),
@@ -12176,6 +12180,8 @@ class TestRelionModeSmokeTest:
                 else:
                     np.testing.assert_array_equal(fused_sig, unfused_sig)
         for key, fused in fused_result[5].items():
+            if key == "coarse_selector_audit":
+                continue
             np.testing.assert_allclose(
                 np.asarray(fused),
                 np.asarray(unfused_result[5][key]),

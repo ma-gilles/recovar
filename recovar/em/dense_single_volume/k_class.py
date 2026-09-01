@@ -17,7 +17,11 @@ from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
 from .helpers.half_volume_mstep import relion_backprojector_volume_shape
-from .helpers.significance import ComplementSignificantSampleIndices, significant_sample_count
+from .helpers.significance import (
+    ComplementSignificantSampleIndices,
+    _validate_coarse_selector_audit,
+    significant_sample_count,
+)
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
 from .local_layout import LocalHypothesisLayout
@@ -65,6 +69,36 @@ class _DenseKClassScoreProbeResult(NamedTuple):
     per_class_hard_assignments: np.ndarray
     per_class_stats: tuple[RelionStats, ...]
     class_assignments: np.ndarray
+    coarse_selector_audit: dict | None = None
+
+
+def _coarse_selector_audit_from_full_stats(full_stats: dict) -> dict:
+    """Require a valid execution audit at the coarse-score boundary."""
+
+    if not isinstance(full_stats, dict):
+        raise RuntimeError("K-class significance did not return coarse full_stats")
+    if "coarse_selector_audit" not in full_stats:
+        raise RuntimeError(
+            "K-class significance did not return a coarse selector execution audit"
+        )
+    try:
+        return _validate_coarse_selector_audit(full_stats["coarse_selector_audit"])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("K-class significance returned an invalid coarse selector audit") from error
+
+
+def _with_coarse_selector_audit(result, audit: dict | None):
+    """Seal the validated coarse audit into a result profile summary."""
+
+    if audit is None:
+        return result
+    try:
+        validated = _validate_coarse_selector_audit(audit)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("cannot propagate an invalid coarse selector audit") from error
+    profile_summary = dict(result.profile_summary or {})
+    profile_summary["coarse_selector_audit"] = validated
+    return result._replace(profile_summary=profile_summary)
 
 
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
@@ -1696,6 +1730,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         n_translations=int(np.asarray(translations).shape[0]),
         iteration=engine_kwargs.get("debug_iteration"),
     )
+    coarse_selector_audit = _coarse_selector_audit_from_full_stats(full_stats)
 
     class_log_evidence = np.asarray(full_stats["class_log_evidence_per_image"], dtype=np.float64)
     per_class_hard = np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
@@ -1716,6 +1751,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         per_class_hard_assignments=per_class_hard,
         per_class_stats=per_class_stats,
         class_assignments=class_assignments,
+        coarse_selector_audit=coarse_selector_audit,
     )
 
 
@@ -3121,6 +3157,7 @@ def run_dense_k_class_em_adaptive(
 
     coarse_class_assignments_for_override = None
     significant_counts_for_result = None
+    coarse_selector_audit = None
     pass1_t0 = time.time()
     if firstiter_cc_pass2_only_best_coarse:
         # RELION firstiter_cc branch: restrict pass-2 to children of each
@@ -3165,6 +3202,7 @@ def run_dense_k_class_em_adaptive(
                     class_log_priors=class_log_priors,
                     **coarse_probe_kwargs,
                 )
+        coarse_selector_audit = coarse_result.coarse_selector_audit
         # ``per_class_hard_assignments[k, i]`` is class k's best coarse pose
         # (independently scored per class). For each class, restrict pass-2
         # to that single pose's children.
@@ -3248,14 +3286,20 @@ def run_dense_k_class_em_adaptive(
             _full_coarse_stats["significant_cutoff_counts"],
             dtype=np.int32,
         )
+        coarse_selector_audit = _coarse_selector_audit_from_full_stats(
+            _full_coarse_stats
+        )
     pass1_s = time.time() - pass1_t0
 
     def _with_significant_counts(result: KClassEMResult) -> KClassEMResult:
-        if significant_counts_for_result is None:
-            return result
-        return result._replace(
-            significant_counts=jnp.asarray(significant_counts_for_result, dtype=jnp.int32),
-        )
+        if significant_counts_for_result is not None:
+            result = result._replace(
+                significant_counts=jnp.asarray(
+                    significant_counts_for_result,
+                    dtype=jnp.int32,
+                ),
+            )
+        return _with_coarse_selector_audit(result, coarse_selector_audit)
 
     mask_t0 = time.time()
     pass2_kwargs = dict(engine_kwargs)

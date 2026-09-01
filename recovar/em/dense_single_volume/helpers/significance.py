@@ -44,6 +44,12 @@ _K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV = (
     "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION"
 )
 _K1_COARSE_MULTISTREAM_WORKERS_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
+_COARSE_SELECTOR_WRAPPER_TARGETS = {
+    "relion_coarse_diff2_projector_f32": "cuda_relion_coarse_diff2_projector_f32",
+    "relion_coarse_diff2_projector_multistream_f32": (
+        "cuda_relion_coarse_diff2_projector_multistream_f32"
+    ),
+}
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
@@ -355,6 +361,182 @@ def _k1_coarse_multistream_worker_count(*, default: int = 0) -> int:
             f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV} must be 0 or 8, got {token!r}",
         )
     return count
+
+
+def _validate_coarse_selector_audit(audit: dict) -> dict:
+    """Validate and normalize one host-observed coarse selector audit.
+
+    A configured fused selector is not evidence that its wrapper ran.  The
+    wrapper name, XLA target, and positive call/row counters are therefore
+    required whenever the fused path is effective.  An inactive control is
+    represented explicitly by ``None`` wrapper/target values and zero counts.
+    """
+
+    if not isinstance(audit, dict):
+        raise TypeError("coarse selector audit must be a dict")
+    required = {
+        "score_mode",
+        "translation_count",
+        "requested_fused",
+        "effective_fused",
+        "requested_workers",
+        "effective_workers",
+        "requested_atomic",
+        "effective_atomic",
+        "wrapper",
+        "target",
+        "counts",
+    }
+    missing = sorted(required.difference(audit))
+    if missing:
+        raise ValueError(
+            "coarse selector audit is missing fields: " + ", ".join(missing)
+        )
+
+    score_mode = audit["score_mode"]
+    if score_mode not in {"gaussian", "normalized_cc"}:
+        raise ValueError(
+            f"coarse selector audit has unsupported score_mode={score_mode!r}"
+        )
+
+    integer_fields = {
+        "translation_count": audit["translation_count"],
+        "requested_workers": audit["requested_workers"],
+        "effective_workers": audit["effective_workers"],
+    }
+    normalized_integers = {}
+    for name, value in integer_fields.items():
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value,
+            (int, np.integer),
+        ):
+            raise TypeError(f"coarse selector audit {name} must be an integer")
+        normalized_integers[name] = int(value)
+    translation_count = normalized_integers["translation_count"]
+    requested_workers = normalized_integers["requested_workers"]
+    effective_workers = normalized_integers["effective_workers"]
+    if translation_count <= 0:
+        raise ValueError("coarse selector audit translation_count must be positive")
+    if requested_workers not in {0, 8} or effective_workers not in {0, 8}:
+        raise ValueError(
+            "coarse selector audit requested/effective workers must be 0 or 8"
+        )
+
+    normalized_booleans = {}
+    for name in (
+        "requested_fused",
+        "effective_fused",
+        "requested_atomic",
+        "effective_atomic",
+    ):
+        value = audit[name]
+        if not isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"coarse selector audit {name} must be boolean")
+        normalized_booleans[name] = bool(value)
+    requested_fused = normalized_booleans["requested_fused"]
+    effective_fused = normalized_booleans["effective_fused"]
+    requested_atomic = normalized_booleans["requested_atomic"]
+    effective_atomic = normalized_booleans["effective_atomic"]
+    if effective_fused and not requested_fused:
+        raise ValueError("effective fused coarse selector was not requested")
+    if effective_workers and requested_workers != effective_workers:
+        raise ValueError("effective coarse workers do not match the request")
+    if effective_atomic and not requested_atomic:
+        raise ValueError("effective native-atomic coarse reduction was not requested")
+    if effective_workers and not effective_fused:
+        raise ValueError("effective coarse workers require the fused selector")
+    if effective_atomic and not effective_fused:
+        raise ValueError("effective native-atomic reduction requires the fused selector")
+    if effective_fused and score_mode != "gaussian":
+        raise ValueError("the fused coarse selector is Gaussian-only")
+    if effective_workers and score_mode != "gaussian":
+        raise ValueError("coarse worker streams are Gaussian-only")
+    if effective_atomic and (
+        score_mode != "gaussian" or translation_count != 29
+    ):
+        raise ValueError(
+            "effective native-atomic reduction requires the Gaussian T=29 gate"
+        )
+
+    counts = audit["counts"]
+    if not isinstance(counts, dict):
+        raise TypeError("coarse selector audit counts must be a dict")
+    required_counts = {
+        "fused_calls",
+        "actual_rows",
+        "multistream_calls",
+        "native_atomic_selected_calls",
+    }
+    missing_counts = sorted(required_counts.difference(counts))
+    if missing_counts:
+        raise ValueError(
+            "coarse selector audit counts are missing fields: "
+            + ", ".join(missing_counts)
+        )
+    normalized_counts = {}
+    for name in sorted(required_counts):
+        value = counts[name]
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value,
+            (int, np.integer),
+        ):
+            raise TypeError(f"coarse selector audit count {name} must be an integer")
+        value = int(value)
+        if value < 0:
+            raise ValueError(f"coarse selector audit count {name} must be non-negative")
+        normalized_counts[name] = value
+
+    wrapper = audit["wrapper"]
+    target = audit["target"]
+    if wrapper is not None and not isinstance(wrapper, str):
+        raise TypeError("coarse selector audit wrapper must be a string or None")
+    if target is not None and not isinstance(target, str):
+        raise TypeError("coarse selector audit target must be a string or None")
+    fused_calls = normalized_counts["fused_calls"]
+    actual_rows = normalized_counts["actual_rows"]
+    multistream_calls = normalized_counts["multistream_calls"]
+    native_atomic_calls = normalized_counts["native_atomic_selected_calls"]
+    if effective_fused:
+        expected_wrapper = (
+            "relion_coarse_diff2_projector_multistream_f32"
+            if effective_workers
+            else "relion_coarse_diff2_projector_f32"
+        )
+        expected_target = _COARSE_SELECTOR_WRAPPER_TARGETS[expected_wrapper]
+        if wrapper != expected_wrapper or target != expected_target:
+            raise ValueError(
+                "coarse selector audit observed the wrong wrapper/target: "
+                f"{wrapper!r}/{target!r} != {expected_wrapper!r}/{expected_target!r}"
+            )
+        if fused_calls <= 0:
+            raise ValueError("effective fused coarse selector recorded zero calls")
+        if actual_rows <= 0:
+            raise ValueError("effective fused coarse selector recorded zero actual rows")
+        if actual_rows < fused_calls:
+            raise ValueError("coarse selector actual rows cannot be smaller than calls")
+        expected_multistream_calls = fused_calls if effective_workers else 0
+        if multistream_calls != expected_multistream_calls:
+            raise ValueError(
+                "coarse selector multistream call count does not match the effective wrapper"
+            )
+        expected_atomic_calls = fused_calls if effective_atomic else 0
+        if native_atomic_calls != expected_atomic_calls:
+            raise ValueError(
+                "coarse selector native-atomic call count does not match the effective reduction"
+            )
+    else:
+        if wrapper is not None or target is not None:
+            raise ValueError("inactive coarse selector must not report a wrapper/target")
+        if effective_workers or effective_atomic:
+            raise ValueError("inactive coarse selector cannot report effective workers/atomic")
+        if any(normalized_counts.values()):
+            raise ValueError("inactive coarse selector must report zero execution counts")
+
+    normalized = dict(audit)
+    normalized.update(normalized_integers)
+    normalized.update(normalized_booleans)
+    normalized["counts"] = normalized_counts
+    return normalized
 
 
 def _k1_coarse_fused_projector_supports_padding(padding_factor: int) -> bool:
@@ -2971,6 +3153,15 @@ def _compute_k_class_significance_batched(
             )
         return proj_half_b, proj_abs2_half_b
 
+    coarse_selector_execution = {
+        "wrapper": None,
+        "target": None,
+        "fused_calls": 0,
+        "actual_rows": 0,
+        "multistream_calls": 0,
+        "native_atomic_selected_calls": 0,
+    }
+
     def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
         if coarse_fused_projector_enabled:
             from recovar import cuda_backproject
@@ -2986,6 +3177,27 @@ def _compute_k_class_significance_batched(
                     actual_batch_size,
                     dtype=jnp.int32,
                 )
+            selected_wrapper = getattr(coarse_projector, "__name__", None)
+            selected_target = (
+                cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32
+                if coarse_multistream_enabled
+                else cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32
+            )
+            previous_wrapper = coarse_selector_execution["wrapper"]
+            previous_target = coarse_selector_execution["target"]
+            if previous_wrapper is None:
+                coarse_selector_execution["wrapper"] = selected_wrapper
+                coarse_selector_execution["target"] = selected_target
+            elif previous_wrapper != selected_wrapper or previous_target != selected_target:
+                raise RuntimeError(
+                    "coarse selector changed wrapper/target within one significance pass"
+                )
+            coarse_selector_execution["fused_calls"] += 1
+            coarse_selector_execution["actual_rows"] += int(actual_batch_size)
+            if coarse_multistream_enabled:
+                coarse_selector_execution["multistream_calls"] += 1
+            if coarse_native_atomic_reduction_enabled:
+                coarse_selector_execution["native_atomic_selected_calls"] += 1
             diff2 = coarse_projector(
                 coarse_gaussian_projector_full_by_class[class_index],
                 jnp.asarray(rots_b, dtype=jnp.float32),
@@ -4329,6 +4541,34 @@ def _compute_k_class_significance_batched(
                     )
         start_idx = end_idx
 
+    coarse_selector_audit = _validate_coarse_selector_audit(
+        {
+            "score_mode": score_mode,
+            "translation_count": int(n_trans),
+            "requested_fused": bool(coarse_fused_projector_requested),
+            "effective_fused": bool(coarse_fused_projector_enabled),
+            "requested_workers": int(coarse_multistream_worker_count),
+            "effective_workers": (
+                int(coarse_multistream_worker_count)
+                if coarse_fused_projector_enabled and coarse_multistream_enabled
+                else 0
+            ),
+            "requested_atomic": bool(coarse_native_atomic_reduction_requested),
+            "effective_atomic": bool(coarse_native_atomic_reduction_enabled),
+            "wrapper": coarse_selector_execution["wrapper"],
+            "target": coarse_selector_execution["target"],
+            "counts": {
+                "fused_calls": int(coarse_selector_execution["fused_calls"]),
+                "actual_rows": int(coarse_selector_execution["actual_rows"]),
+                "multistream_calls": int(
+                    coarse_selector_execution["multistream_calls"]
+                ),
+                "native_atomic_selected_calls": int(
+                    coarse_selector_execution["native_atomic_selected_calls"]
+                ),
+            },
+        }
+    )
     full_stats = {
         "normalization_log_z": normalization_log_z,
         "normalization_log_evidence": normalization_log_evidence,
@@ -4340,6 +4580,7 @@ def _compute_k_class_significance_batched(
         # RELION serializes the cutoff rank before inclusive threshold ties
         # expand the pass-2/M-step support represented by ``n_sig_all``.
         "significant_cutoff_counts": cutoff_count_all,
+        "coarse_selector_audit": coarse_selector_audit,
     }
     if relion_f32_sum_weight is not None:
         # RELION's oversampling-zero second pass deliberately reuses this

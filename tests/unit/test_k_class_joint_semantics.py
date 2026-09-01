@@ -73,6 +73,27 @@ def _firstiter_probe_result(class_assignments, per_class_hard=None, n_rot=1):
     )
 
 
+def _control_coarse_selector_audit(score_mode: str, translation_count: int) -> dict:
+    return {
+        "score_mode": score_mode,
+        "translation_count": int(translation_count),
+        "requested_fused": False,
+        "effective_fused": False,
+        "requested_workers": 0,
+        "effective_workers": 0,
+        "requested_atomic": False,
+        "effective_atomic": False,
+        "wrapper": None,
+        "target": None,
+        "counts": {
+            "fused_calls": 0,
+            "actual_rows": 0,
+            "multistream_calls": 0,
+            "native_atomic_selected_calls": 0,
+        },
+    }
+
+
 def test_large_k_class_prefers_compact_sparse_pass2_over_dense_fallback(monkeypatch):
     monkeypatch.delenv("RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES", raising=False)
     monkeypatch.delenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", raising=False)
@@ -167,7 +188,13 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
             np.zeros(1, dtype=np.int32),
             np.zeros(1, dtype=np.int32),
             [[np.asarray([0], dtype=np.int32)]],
-            {"significant_cutoff_counts": np.full(1, 5, dtype=np.int32)},
+            {
+                "significant_cutoff_counts": np.full(1, 5, dtype=np.int32),
+                "coarse_selector_audit": _control_coarse_selector_audit(
+                    "gaussian",
+                    1,
+                ),
+            },
         )
 
     sparse_result = _assemble_result(
@@ -895,6 +922,10 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
                     dtype=np.float32,
                 ),
                 "class_assignments": np.asarray([1, 0, 1], dtype=np.int32),
+                "coarse_selector_audit": _control_coarse_selector_audit(
+                    "normalized_cc",
+                    3,
+                ),
             },
         )
 
