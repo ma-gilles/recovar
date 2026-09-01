@@ -7,6 +7,12 @@ board. A record may be added only after its run has completed and its evidence
 has been sealed. Planned runs belong in `k4_validation_matrix.md`, not in
 `entries/`.
 
+The dry-by-default EMPIAR-10076 K=4 independent-half launcher and its
+prospective acceptance contract are documented in
+`real_kclass_halfmap_refinement.md`. This is runnable infrastructure only;
+until a completed run passes the audit and is sealed, it must not appear in
+`entries/` as accepted evidence.
+
 Single-run evidence lives in `entries/` and validates against
 `schema_v1.json`. Multi-case campaign scorecards live in `campaigns/` and
 validate against `campaign_schema_v1.json`. Campaign scorecards retain one

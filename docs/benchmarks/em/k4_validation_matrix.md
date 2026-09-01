@@ -31,12 +31,17 @@ multi-seed summary.
 For real data, where GT is unavailable, freeze the following before launching:
 the same particles/order, half split, poses/CTFs, initial maps, symmetry,
 mask-generation command, and random seed for both engines; per-class masked
-and unmasked half-map curves; common-mask 0.143 resolution; registered
-cross-engine FSC; class populations; and seed-to-seed stability. RECOVAR's
-masked 0.143 resolution must not be worse than RELION by more than one Fourier
-shell or 5%, whichever is larger, and masked/unmasked half-map FSC-AUC must not
-drop by more than 0.01. These real-data thresholds are prospective and must
-not be retrofitted to existing runs.
+and unmasked half-map curves after one proper-rigid transform shared across
+each four-class set; raw frozen-frame curves as non-rescuing diagnostics; a
+common mask derived from the nonnegative RMS envelope of all aligned maps;
+common-mask 0.143 resolution; registered cross-engine FSC; class populations;
+and seed-to-seed stability. RECOVAR's masked 0.143 resolution must not be worse
+than RELION by more than one Fourier shell or 5%, whichever is larger, and
+masked/unmasked half-map FSC-AUC must not drop by more than 0.01. A missing
+0.143 crossing is recorded as beyond the measured range, never as a finite
+resolution; if only RELION remains beyond range, the comparison fails closed.
+These real-data thresholds are prospective and must not be retrofitted to
+existing runs.
 
 ## Tier 0: fail-closed CPU controls
 
@@ -284,6 +289,15 @@ matched one-GPU performance. Because InitialModel does not emit independently
 refined half maps, this precursor does not satisfy the native full-run
 admission rule above.
 
+The independent-half EMPIAR-10076 refinement gate is now runnable through
+`scripts/launch_em_real_kclass_halfmaps_slurm.py`; see
+`real_kclass_halfmap_refinement.md`. RELION does not permit K>1 and
+`--split_random_halves` in one process, so the harness runs two independent
+K=4 processes per engine, one on each immutable random subset. The launcher is
+dry-run by default. Its presence does not count as completed evidence; the
+three-seed 128-grid pilots and subsequent native runs remain pending until
+their audited products are admitted to the registry.
+
 ## Runnable now versus planned-only
 
 The current launcher can run cases 1--36, including the shared-input
@@ -301,9 +315,9 @@ implementation:
 - fail-closed permutation/duplicate-map/controller-corruption fixtures beyond
   the existing evaluator unit tests;
 - the independent exactly generated 100k/256 release fixture; and
-- matched Class3D/gold-standard-half-map K=4 launchers for EMPIAR-10076 and
-  EMPIAR-10345 (and optional EMPIAR-10073); the InitialModel-only diagnostic is
-  runnable but cannot replace this gate.
+- an independent-half K=4 launcher for EMPIAR-10345 (and optional
+  EMPIAR-10073); EMPIAR-10076 is runnable but not yet executed, and the
+  InitialModel-only diagnostic cannot replace this gate.
 
 These are deliberately documented as pending execution infrastructure, not as
 completed coverage.
