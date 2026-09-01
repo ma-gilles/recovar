@@ -14193,3 +14193,57 @@ noise/norm accumulator initializers now preserve input-derived precision.
 Focused CPU tests pass. GPU job `60374777` proves the change is live in the
 noise trajectory (`noise_radial_iter_001` relative L2 `4.14e-8`) but negligible
 for the open gap (`ave_Pmax` change `1.1e-16`; final-map relative L2 `<6e-15`).
+
+### Direct first-iteration pre-join BPref comparison
+
+Built an isolated, env-gated double-precision RELION diagnostic binary and
+dumped `BPref.data`/`weight` immediately before the low-resolution half join.
+The rerun's iteration-1 maps are byte-identical to the established oracle.
+Against RECOVAR job `60374928`, support topology matches exactly, but the raw
+pre-join accumulators already differ. After the repository's established
+frame/downsampling transform, numerator/denominator relative L2 is
+`8.97e-3/2.55e-3` for half 1 and `4.53e-2/1.64e-2` for half 2. Radial
+denominator shell-sum differences through shell 10 are much smaller
+(`~1e-6` to `4e-4`). This proves the join is downstream of the first
+divergence and points to per-particle image/CTF operand construction or pose
+scatter; identical support rules out missing particles or pixels.
+
+The remaining perturbation casts in `_run_relion_iteration_loop` were also
+corrected: perturbed matrices, working Eulers, and translations now follow
+the active scoring dtype, including final-all-data. RELION stores these as
+RFLOAT, so float32 was not justified for the double oracle. Tests pass 42/42.
+Nevertheless, pre-join job `60375148` changed the tensors only at `~1e-15`,
+and full job `60375147` left all reported metrics unchanged. The existing
+separate float64 M-step-rotation construction explains this null result.
+
+That null conclusion applied only to the first, downstream-cast patch. A
+follow-up audit found an earlier narrow-then-widen boundary: the canonical
+Euler grid itself remained float32 in `_relion_rotation_grid_float32`, sealed
+sampling, and the final-all-data setup. These are working RFLOAT values used
+as inputs to perturbation and subsequent matrix construction, not just output
+metadata. Preserving their source precision is strongly causal: job
+`60375338` changed half-2 pre-join numerator/denominator relative L2 from
+`4.53e-2/1.64e-2` to `5.66e-3/2.34e-3`; half 1 changed from
+`8.97e-3/2.55e-3` to `7.18e-3/2.55e-3`. Support stayed exact.
+
+Full job `60375361` produced iteration-3 RELION/RECOVAR optimizer Pmax
+`0.9322/0.9320` (previous RECOVAR `0.9317`), sigma-offset mean
+`1.4769/1.4768` (previous `1.4772`), and direction-prior relative L1
+`2.23e-4/4.01e-4` (previous `3.73e-4/4.14e-4`). The half-2 first-iteration
+improvement is consistent with the known near-tie particles selecting the
+RELION winners once the pre-perturbation Eulers retain double precision.
+
+The ordinary matched-particle preprocessed Fourier operand is not the next
+large gap: RECOVAR-vs-RELION relative L2 is `3.45e-8`, while merely rounding
+RELION's complex128 operand to complex64 gives `2.56e-8`.
+
+The concurrently fixed `reference_to_relion_projector_half_maps` path no
+longer narrows the binding's `Projector::data` from complex128 to complex64.
+Combined-tree job `60382385` is stable at the improved metrics above, and
+fresh pre-join job `60382549` gives `7.18e-3/2.55e-3` (half 1) and
+`5.66e-3/2.34e-3` (half 2) numerator/denominator relative L2. At this boundary
+iteration-1 Pmax and significant-support arrays are exactly equal for all
+1000 particles; maximum pose and translation errors are only `1.52e-5`
+degrees and `2.42e-6` angstrom. The next oracle should therefore capture one
+matched hypothesis's projected reference, CTF product, posterior-weighted
+numerator, and denominator immediately before scatter in both engines.

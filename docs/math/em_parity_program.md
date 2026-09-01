@@ -16089,3 +16089,67 @@ passes. GPU job `60374777` confirms the change is live in the noise trajectory
 but the reconstruction/Pmax effect is only roundoff (`ave_Pmax` `1.1e-16`,
 final-map relative L2 below `6e-15`). It is a valid precision fix, not the
 cause of the remaining parity gap.
+
+### First-iteration pre-join BPref boundary
+
+An isolated double-precision RELION build dumped each half's raw `BPref.data`
+and `BPref.weight` immediately before `joinTwoHalvesAtLowResolution`; its
+iteration-1 maps are byte-identical to the saved oracle. RECOVAR job `60374928`
+captured the matching boundary. Both halves have identical support topology
+(`support_jaccard=1`, zero mismatched coordinates), proving the gap is not
+particle/pixel membership. After matched frame conversion/downsampling, half 1
+has numerator/denominator relative L2 `8.97e-3/2.55e-3`; half 2 has
+`4.53e-2/1.64e-2`. The asymmetry is explained largely by the known half-2
+near-tie pose/translation flips, while radial denominator shell-sum residuals
+remain only approximately `1e-6` to `4e-4` through shells 1-10. Thus the join
+is not the first divergent operation: raw weighted-image and weight
+backprojection inputs already differ, with the numerator the stronger signal.
+
+### Sampling perturbation precision
+
+The iteration loop still narrowed perturbed rotation matrices, working Eulers,
+and translation grids to float32. RELION uses RFLOAT for perturbation and
+working sampling coordinates, so these now follow the active scoring dtype in
+both ordinary and final-all-data paths. Default float32 behavior is retained.
+Focused tests pass 42/42. Fresh pre-join job `60375148` changed `Ft_y/Ft_ctf`
+only at relative `1.8e-15` to `3.5e-15`, and full GPU job `60375147` left the
+reported three-iteration trajectory unchanged. This is a real double-mode
+contract fix but a null attribution here because a separate preserved-float64
+M-step rotation path was already active and the winning candidates did not
+change.
+
+Follow-up found that this first patch was incomplete: the unperturbed Euler
+grid had already been narrowed in `_relion_rotation_grid_float32` (and in the
+sealed/final-grid variants) before reaching the newly dtype-aware perturbation
+helper. That array is a working RFLOAT operand because RELION perturbs it and
+reconstructs scoring matrices from it; it is not merely public STAR metadata.
+The base Euler and translation grids now preserve the active dtype from their
+point of construction.
+
+This correction is causal. GPU job `60375338` reduced iteration-1 pre-join
+numerator/denominator relative L2 from `8.97e-3/2.55e-3` to
+`7.18e-3/2.55e-3` in half 1 and from `4.53e-2/1.64e-2` to
+`5.66e-3/2.34e-3` in half 2, with support still exact. Full three-iteration
+job `60375361` improved iteration-3 optimizer Pmax from `0.9317` to `0.9320`
+versus RELION `0.9322`, sigma-offset mean from `1.4772` to `1.4768` versus
+`1.4769`, and direction-prior relative L1 from `3.73e-4/4.14e-4` to
+`2.23e-4/4.01e-4`. Iteration-1 direction priors and sigma offsets are now
+exact at the report's precision. The large half-2 improvement confirms that
+the earlier narrowing changed near-tie fine-pose winners.
+
+A matched-particle operand check separately showed that RECOVAR's complex64
+preprocessed Fourier image differs from RELION double by only `3.45e-8`
+relative L2, close to RELION-to-complex64 quantization alone (`2.56e-8`).
+That boundary is therefore not the source of the percent-scale pre-join gap.
+
+The RELION projector builder also contained an unconditional complex64 cast on
+`Projector::data`; this was removed so the binding's complex128 result reaches
+double projection unchanged. Combined-tree GPU job `60382385` reproduces the
+improved three-iteration trajectory above. Fresh pre-join job `60382549`
+reproduces numerator/denominator relative L2 `7.18e-3/2.55e-3` (half 1) and
+`5.66e-3/2.34e-3` (half 2). A complete iteration-1 particle audit now shows
+exact Pmax and significant-support arrays, with maximum pose error
+`1.52e-5` degrees and maximum translation error `2.42e-6` angstrom. Therefore
+the remaining pre-join residual is no longer attributable to discrete pose,
+translation, posterior-support, or particle/pixel membership differences; it
+is inside the per-hypothesis projection/CTF/weighted-backprojection arithmetic.

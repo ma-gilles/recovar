@@ -725,11 +725,11 @@ def apply_relion_rotation_perturbation_to_eulers(
     reconstruction here. Adaptive coarse scoring has a distinct matrix
     path exposed by :func:`_relion_adaptive_pass1_rotations`.
 
-    ``dtype`` controls the returned rotation-matrix precision (default
+    ``dtype`` controls the returned rotation-matrix and Euler precision (default
     float32, matching RELION's single-precision ACC build's XFLOAT cast).
     Pass ``np.float64`` to match ``ACC_DOUBLE_PRECISION``, where that cast is
-    a no-op. It does not affect the second return value (the public Euler
-    angles), which stays float32.
+    a no-op. RELION stores these working Euler angles as RFLOAT, so retaining
+    float64 here is also required for a double-precision build.
 
     When ``return_mstep_rotations`` is true, a third array contains the
     RECOVAR-frame matrices produced by RELION's separate host-side inverse
@@ -740,8 +740,8 @@ def apply_relion_rotation_perturbation_to_eulers(
     if abs(float(random_perturbation)) < 1e-12:
         rotations = _relion_mstep_rotations_from_eulers(eulers, dtype=dtype)
         if return_mstep_rotations:
-            return rotations, eulers.astype(np.float32), rotations
-        return rotations, eulers.astype(np.float32)
+            return rotations, eulers.astype(dtype), rotations
+        return rotations, eulers.astype(dtype)
 
     myperturb = float(random_perturbation) * float(angular_sampling_deg)
     A = _relion_euler_angles_to_matrix(eulers)
@@ -752,10 +752,10 @@ def apply_relion_rotation_perturbation_to_eulers(
     if return_mstep_rotations:
         return (
             perturbed_rotations,
-            perturbed_eulers.astype(np.float32),
+            perturbed_eulers.astype(dtype),
             perturbed_rotations,
         )
-    return perturbed_rotations, perturbed_eulers.astype(np.float32)
+    return perturbed_rotations, perturbed_eulers.astype(dtype)
 
 
 def apply_relion_rotation_perturbation(rotations, random_perturbation, angular_sampling_deg):

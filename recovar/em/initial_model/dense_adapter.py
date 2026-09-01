@@ -366,11 +366,11 @@ def reference_to_relion_projector_half_maps(
             True,
             2,
         )
-        halves.append(np.asarray(projector_data, dtype=np.complex64))
+        halves.append(np.asarray(projector_data))
         r_max_values.append(int(r_max))
     if len(set(r_max_values)) != 1:
         raise ValueError(f"RELION projector maps disagree on r_max: {r_max_values}")
-    return np.asarray(halves, dtype=np.complex64), int(r_max_values[0])
+    return np.asarray(halves), int(r_max_values[0])
 
 
 def relion_projector_half_maps_to_dense_means(projector_half_maps: np.ndarray, ori_size: int) -> np.ndarray:

@@ -4443,8 +4443,8 @@ def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number)
 def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom, dtype: np.dtype = np.float32):
     """Construct scorer grids directly from a schema-v3 captured sampling state.
 
-    ``dtype`` controls only the returned rotation matrices, matching
-    ``_relion_rotation_grid_float32``'s policy: pass ``np.float64`` under
+    ``dtype`` controls the returned rotation matrices, working Euler grid, and
+    translations, matching ``_relion_rotation_grid_float32``'s policy: pass ``np.float64`` under
     float64 scoring/projections so a restart from a sealed boundary keeps the
     same coarse-grid precision as a fresh (non-restarted) run.
     """
@@ -4469,7 +4469,7 @@ def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom, d
     from recovar.em.sampling import _relion_mstep_rotations_from_eulers
 
     rotations = _relion_mstep_rotations_from_eulers(source_eulers, dtype=dtype)
-    eulers = source_eulers.astype(np.float32)
+    eulers = source_eulers.astype(dtype)
     voxel_size = float(voxel_size_angstrom)
     if not np.isfinite(voxel_size) or voxel_size <= 0.0:
         raise ValueError("sealed sampling requires a finite positive voxel size")
@@ -5864,7 +5864,10 @@ def _run_relion_iteration_loop(
         # exact rotations selected in the previous iteration, not the nearest
         # snapped grid indices.
         effective_rotations = current_rotations
-        effective_rotation_eulers = np.asarray(current_rotation_eulers, dtype=np.float32)
+        effective_rotation_eulers = np.asarray(
+            current_rotation_eulers,
+            dtype=_dense_global_scoring_dtype(),
+        )
         effective_mstep_rotations = None
         adaptive_pass1_rotations = None
         rotation_log_prior_per_half = [None, None]
@@ -5949,28 +5952,33 @@ def _run_relion_iteration_loop(
                     effective_rotation_eulers,
                     random_perturbation,
                     angsamp_deg,
+                    dtype=_dense_global_scoring_dtype(),
                 )
                 _, _, effective_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
                     mstep_source_eulers,
                     random_perturbation,
                     angsamp_deg,
                     return_mstep_rotations=True,
+                    dtype=_dense_global_scoring_dtype(),
                 )
             else:
                 effective_rotations = apply_relion_rotation_perturbation(
                     np.asarray(effective_rotations),
                     random_perturbation,
                     angsamp_deg,
-                ).astype(np.float32)
+                ).astype(_dense_global_scoring_dtype(), copy=False)
                 effective_rotation_eulers = utils.R_to_relion(np.asarray(effective_rotations), degrees=True).astype(
-                    np.float32
+                    _dense_global_scoring_dtype()
                 )
             _perturbed_translations = apply_relion_translation_perturbation(
                 np.asarray(base_translations),
                 random_perturbation,
                 float(state.translation_step),
             )
-            current_translations = jnp.asarray(_perturbed_translations, dtype=jnp.float32)
+            current_translations = jnp.asarray(
+                _perturbed_translations,
+                dtype=_dense_global_scoring_dtype(),
+            )
         if not use_local and int(state.adaptive_oversampling) > 0:
             adaptive_pass1_order = (
                 int(_replay_meta["healpix_order"])
@@ -8907,15 +8915,18 @@ def _run_relion_iteration_loop(
             final_current_healpix_order, dtype=_dense_global_scoring_dtype()
         )
     final_effective_rotations = final_current_rotations
-    final_effective_rotation_eulers = np.asarray(final_current_rotation_eulers, dtype=np.float32)
+    final_effective_rotation_eulers = np.asarray(
+        final_current_rotation_eulers,
+        dtype=_dense_global_scoring_dtype(),
+    )
     final_effective_mstep_rotations = None
     final_base_translations = jnp.asarray(
         _translation_grid_for_class_count(
             state.translation_range,
             state.translation_step,
             n_classes=n_classes,
-        ).astype(np.float32),
-        dtype=jnp.float32,
+        ).astype(_dense_global_scoring_dtype(), copy=False),
+        dtype=_dense_global_scoring_dtype(),
     )
     final_current_translations = final_base_translations
     final_translation_range = float(state.translation_range)
@@ -9064,8 +9075,8 @@ def _run_relion_iteration_loop(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
-                ).astype(np.float32),
-                dtype=jnp.float32,
+                ).astype(_dense_global_scoring_dtype(), copy=False),
+                dtype=_dense_global_scoring_dtype(),
             )
             final_current_translations = final_base_translations
             logger.info(
@@ -9131,12 +9142,14 @@ def _run_relion_iteration_loop(
             final_effective_rotation_eulers,
             final_random_perturbation,
             final_angsamp_deg,
+            dtype=_dense_global_scoring_dtype(),
         )
         _, _, final_effective_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
             final_mstep_source_eulers,
             final_random_perturbation,
             final_angsamp_deg,
             return_mstep_rotations=True,
+            dtype=_dense_global_scoring_dtype(),
         )
         final_current_translations = jnp.asarray(
             apply_relion_translation_perturbation(
@@ -9144,7 +9157,7 @@ def _run_relion_iteration_loop(
                 final_random_perturbation,
                 final_translation_step,
             ),
-            dtype=jnp.float32,
+            dtype=_dense_global_scoring_dtype(),
         )
         final_perturbation_applied = True
     final_use_local = bool(

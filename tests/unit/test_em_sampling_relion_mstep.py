@@ -310,6 +310,20 @@ def test_unperturbed_optional_mstep_return_is_backward_compatible():
     )
 
 
+def test_perturbation_float64_preserves_working_eulers_and_rotations():
+    rotations, eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        _UNPERTURBED_FINE_EULERS_F64[:2],
+        -0.04961434006690979,
+        7.5,
+        return_mstep_rotations=True,
+        dtype=np.float64,
+    )
+
+    assert rotations.dtype == np.float64
+    assert eulers.dtype == np.float64
+    assert mstep_rotations.dtype == np.float64
+
+
 def test_perturbed_scorer_uses_captured_host_generated_matrix_bits():
     random_perturbation = np.float64(-0.04961434006690979)
     rotations, public_eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
@@ -353,6 +367,15 @@ def test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast(m
     np.testing.assert_array_equal(returned_eulers, source_eulers.astype(np.float32))
     late_cast_rotations = _relion_mstep_rotations_from_eulers(returned_eulers)
     assert np.any(rotations.view(np.uint32) != late_cast_rotations.view(np.uint32))
+
+    rotations_f64, returned_eulers_f64 = relion_metadata._relion_rotation_grid_float32(
+        3, dtype=np.float64
+    )
+    np.testing.assert_array_equal(returned_eulers_f64, source_eulers)
+    np.testing.assert_array_equal(
+        rotations_f64,
+        _relion_mstep_rotations_from_eulers(source_eulers, dtype=np.float64),
+    )
 
 
 def test_oversampled_grid_optionally_returns_mstep_rotations_without_changing_score_grid():

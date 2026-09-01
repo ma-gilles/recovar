@@ -272,8 +272,8 @@ def test_dense_global_scoring_dtype_tracks_global_float64_switches(monkeypatch):
     assert iteration_loop_module._dense_global_scoring_dtype() == np.float64
 
 
-def test_relion_rotation_grid_float32_honors_explicit_float64_dtype():
-    """``_relion_rotation_grid_float32``'s scorer matrices, not its eulers, follow ``dtype``.
+def test_relion_rotation_grid_float32_honors_explicit_float64_dtype(monkeypatch):
+    """``_relion_rotation_grid_float32``'s working operands follow ``dtype``.
 
     Regression for the bug the coarse pass-1 grid shared with the already-fixed
     ``_relion_adaptive_pass1_rotations``/``_relion_mstep_rotations_from_eulers``:
@@ -282,17 +282,25 @@ def test_relion_rotation_grid_float32_honors_explicit_float64_dtype():
     ``ACC_DOUBLE_PRECISION`` build never narrows this matrix.
     """
 
+    source_eulers = np.asarray(
+        [[13.123456789, 47.987654321, 91.234567891]], dtype=np.float64
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "_get_relion_rotation_grid_eulers_float64",
+        lambda _order: source_eulers,
+    )
+
     rotations_f32, eulers_f32 = iteration_loop_module._relion_rotation_grid_float32(2)
     rotations_f64, eulers_f64 = iteration_loop_module._relion_rotation_grid_float32(2, dtype=np.float64)
 
     assert rotations_f32.dtype == np.float32
     assert rotations_f64.dtype == np.float64
     np.testing.assert_allclose(rotations_f32, rotations_f64, atol=1e-6, rtol=0.0)
-    # The "public" eulers are RELION metadata, not a scoring operand -- they
-    # stay float32 regardless of the scorer-matrix dtype.
     assert eulers_f32.dtype == np.float32
-    assert eulers_f64.dtype == np.float32
-    np.testing.assert_array_equal(eulers_f32, eulers_f64)
+    assert eulers_f64.dtype == np.float64
+    np.testing.assert_allclose(eulers_f32, eulers_f64, atol=5e-6, rtol=0.0)
+    np.testing.assert_array_equal(eulers_f64, source_eulers)
 
 
 def test_sealed_sampling_base_grids_honors_explicit_float64_dtype():
@@ -320,8 +328,8 @@ def test_sealed_sampling_base_grids_honors_explicit_float64_dtype():
     assert translations_f64.dtype == np.float64
     np.testing.assert_allclose(rotations_f32, rotations_f64, atol=1e-6, rtol=0.0)
     assert eulers_f32.dtype == np.float32
-    assert eulers_f64.dtype == np.float32
-    np.testing.assert_array_equal(eulers_f32, eulers_f64)
+    assert eulers_f64.dtype == np.float64
+    np.testing.assert_allclose(eulers_f32, eulers_f64, atol=1e-6, rtol=0.0)
 
 
 def test_dense_global_prior_helpers_honor_explicit_float64_dtype():
@@ -10131,11 +10139,12 @@ class TestRelionModeSmokeTest:
             angular_sampling_deg,
             *,
             return_mstep_rotations=False,
+            dtype=np.float32,
         ):
             _ = (random_perturbation, angular_sampling_deg)
             n_rows = int(np.asarray(eulers).shape[0])
-            score = np.repeat(np.eye(3, dtype=np.float32)[None], n_rows, axis=0)
-            public_eulers = np.asarray(eulers, dtype=np.float32)
+            score = np.repeat(np.eye(3, dtype=dtype)[None], n_rows, axis=0)
+            public_eulers = np.asarray(eulers, dtype=dtype)
             if return_mstep_rotations:
                 mstep = np.repeat((13.0 * np.eye(3, dtype=np.float32))[None], n_rows, axis=0)
                 return score, public_eulers, mstep
@@ -14042,6 +14051,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         angular_sampling_deg,
         *,
         return_mstep_rotations=False,
+        dtype=np.float32,
     ):
         perturb_calls.append(
             {
@@ -14050,9 +14060,9 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
                 "angular_sampling_deg": float(angular_sampling_deg),
             }
         )
-        sentinel_rotations = np.zeros((np.asarray(eulers).shape[0], 3, 3), dtype=np.float32)
+        sentinel_rotations = np.zeros((np.asarray(eulers).shape[0], 3, 3), dtype=dtype)
         sentinel_rotations[:, 0, 0] = 7.0
-        sentinel_eulers = np.full((np.asarray(eulers).shape[0], 3), 5.0, dtype=np.float32)
+        sentinel_eulers = np.full((np.asarray(eulers).shape[0], 3), 5.0, dtype=dtype)
         if return_mstep_rotations:
             sentinel_mstep_rotations = np.zeros_like(sentinel_rotations)
             sentinel_mstep_rotations[:, 1, 1] = 11.0
