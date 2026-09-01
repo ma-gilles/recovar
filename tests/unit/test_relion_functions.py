@@ -1708,6 +1708,77 @@ def test_large_device_accumulator_does_not_enter_host_staged_split(monkeypatch):
     assert returned is sentinel
 
 
+def test_large_device_accumulator_normalizes_monolithic_giant_padded_ifft(monkeypatch, caplog):
+    """A physically large device accumulator must not bypass giant-iFFT normalization."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "always")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "100")
+    volume_shape = (2, 2, 2)
+    accumulator_shape = (5, 5, 5)
+    reconstruction_shape = (1600, 1600, 1600)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf = jnp.ones(half_shape, dtype=jnp.float32)
+    ft_y = jnp.ones(half_shape, dtype=jnp.complex64)
+    sentinel = jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    assert rf._large_grid_postprocess_is_physically_large(
+        int(np.prod(accumulator_shape, dtype=np.int64))
+    )
+
+    def fake_monolithic(*args, **kwargs):
+        assert args[0] is ft_ctf
+        assert args[1] is ft_y
+        assert "return_fftw_half_before_ifft" not in kwargs
+        return sentinel
+
+    def reject_split(*_args, **_kwargs):
+        raise AssertionError("A large device accumulator must remain on the monolithic path")
+
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_monolithic)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        reject_split,
+    )
+    caplog.set_level("INFO", logger=mean_helpers.__name__)
+
+    assert not mean_helpers._should_host_stage_large_relion_ifft(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        accumulator_shape,
+        rf,
+    )
+    result = mean_helpers._reconstruct_volume_eager(
+        ft_ctf,
+        ft_y,
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    expected = np.asarray(
+        [np.complex64(2.0 / np.prod(reconstruction_shape, dtype=np.int64))],
+    )
+    np.testing.assert_array_equal(np.asarray(result), expected)
+    assert (
+        "implementation=jax_monolithic_dynamic_scale"
+        in caplog.text
+    )
+
+
 def test_pre_ifft_boundary_accepts_compact_accumulator_for_large_reconstruction(monkeypatch):
     """Only the padded inverse-FFT grid needs to cross the large-grid threshold."""
 

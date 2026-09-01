@@ -699,10 +699,37 @@ def _reconstruct_volume_eager(
             "RELION reconstruction path"
         )
     if not host_stage_large_ifft:
-        return relion_functions.post_process_from_filter_v2(
+        result = relion_functions.post_process_from_filter_v2(
             *postprocess_args,
             **postprocess_kwargs,
         )
+        reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
+            vol_shape,
+            padding_factor,
+        )
+        if _large_irfft_requires_explicit_normalization(reconstruction_shape):
+            # XLA's built-in ``norm='backward'`` normalization overflows its
+            # signed-int32 transform-size product at 1600^3 and silently omits
+            # the reciprocal.  Physically large device accumulators take this
+            # monolithic branch to avoid overlapping another box-scale device
+            # buffer, so apply the reciprocal to the completed result in a
+            # separate donating executable.
+            transform_size = math.prod(reconstruction_shape)
+            logger.info(
+                "RELION large inverse-FFT normalization boundary: "
+                "reconstruction_shape=%s transform_size=%d "
+                "implementation=jax_monolithic_dynamic_scale",
+                reconstruction_shape,
+                transform_size,
+            )
+            inverse_transform_scale = jnp.asarray(
+                np.float32(1.0 / float(transform_size)),
+            )
+            result = _normalize_large_irfft_result_donate(
+                result,
+                inverse_transform_scale,
+            )
+        return result
 
     accumulator_shape = (
         tuple(3 * [int(vol_shape[0]) * int(padding_factor)])
