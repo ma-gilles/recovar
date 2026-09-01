@@ -1,0 +1,371 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ma-gilles/recovar/docs/benchmarks/em/diagnostic_schema_v1.json",
+  "title": "RECOVAR EM negative diagnostic collection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "diagnostic_id",
+    "recorded_at",
+    "record_type",
+    "registry_disposition",
+    "subject",
+    "source_structures",
+    "expected_seeds",
+    "runs",
+    "conclusion",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "diagnostic_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "record_type": {"const": "synthetic_kclass_negative_campaign_collection"},
+    "registry_disposition": {"const": "EXCLUDED_FROM_ACCEPTED_RESULTS"},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "molecular_family", "k", "symmetry", "diagnostic_question"],
+      "properties": {
+        "kind": {"const": "synthetic"},
+        "molecular_family": {"type": "string", "minLength": 1},
+        "k": {"type": "integer", "minimum": 2},
+        "symmetry": {"type": "string", "minLength": 1},
+        "diagnostic_question": {"type": "string", "minLength": 1}
+      }
+    },
+    "source_structures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/roleFileRef"}
+    },
+    "expected_seeds": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/run"}
+    },
+    "conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted_result",
+        "all_replicates_relion_zero_class",
+        "recovar_was_evaluated",
+        "classification",
+        "interpretation",
+        "limitations"
+      ],
+      "properties": {
+        "accepted_result": {"const": false},
+        "all_replicates_relion_zero_class": {"const": true},
+        "recovar_was_evaluated": {"const": false},
+        "classification": {"const": "NEGATIVE_RELION_CLASS_COLLAPSE"},
+        "interpretation": {"type": "string", "minLength": 1},
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_checked_at", "commands"],
+      "properties": {
+        "evidence_checked_at": {"type": "string", "format": "date-time"},
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {"type": "string", "pattern": "^/"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "roleFileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256", "size_bytes"],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree", "checkout", "clean"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/gitSha"},
+        "tree": {"$ref": "#/$defs/gitSha"},
+        "checkout": {"$ref": "#/$defs/absolutePath"},
+        "clean": {"const": true}
+      }
+    },
+    "relionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree", "checkout", "source_diff_sha256", "executable"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/gitSha"},
+        "tree": {"$ref": "#/$defs/gitSha"},
+        "checkout": {"$ref": "#/$defs/absolutePath"},
+        "source_diff_sha256": {"$ref": "#/$defs/sha256"},
+        "executable": {"$ref": "#/$defs/fileRef"}
+      }
+    },
+    "supportJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role", "job_id", "status", "exit_code", "elapsed_s", "node",
+        "req_tres", "alloc_tres", "max_rss_kib", "logs"
+      ],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "job_id": {"type": "string", "pattern": "^[0-9]+$"},
+        "status": {"const": "COMPLETED"},
+        "exit_code": {"const": "0:0"},
+        "elapsed_s": {"type": "integer", "minimum": 0},
+        "node": {"type": "string", "minLength": 1},
+        "req_tres": {"type": "string", "minLength": 1},
+        "alloc_tres": {"type": "string", "minLength": 1},
+        "max_rss_kib": {"type": ["integer", "null"], "minimum": 0},
+        "logs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/absolutePath"}
+        }
+      }
+    },
+    "failedJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id", "status", "exit_code", "elapsed_s", "node", "gpu_model",
+        "gpu_uuid", "req_tres", "alloc_tres", "max_rss_kib", "logs"
+      ],
+      "properties": {
+        "job_id": {"type": "string", "pattern": "^[0-9]+$"},
+        "status": {"const": "FAILED"},
+        "exit_code": {"type": "string", "pattern": "^[1-9][0-9]*:[0-9]+$"},
+        "elapsed_s": {"type": "integer", "minimum": 1},
+        "node": {"type": "string", "minLength": 1},
+        "gpu_model": {"type": "string", "minLength": 1},
+        "gpu_uuid": {"type": "string", "pattern": "^GPU-"},
+        "req_tres": {"type": "string", "minLength": 1},
+        "alloc_tres": {"type": "string", "minLength": 1},
+        "max_rss_kib": {"type": "integer", "minimum": 1},
+        "logs": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/absolutePath"}
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id", "name", "run_root", "source", "configuration",
+        "reproduction", "support_jobs", "shared_artifacts", "replicates"
+      ],
+      "properties": {
+        "case_id": {"type": "integer", "minimum": 0},
+        "name": {"type": "string", "minLength": 1},
+        "run_root": {"$ref": "#/$defs/absolutePath"},
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["recovar", "relion", "custom_cuda"],
+          "properties": {
+            "recovar": {"$ref": "#/$defs/sourceRef"},
+            "relion": {"$ref": "#/$defs/relionRef"},
+            "custom_cuda": {"$ref": "#/$defs/fileRef"}
+          }
+        },
+        "configuration": {
+          "type": "object",
+          "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]}
+        },
+        "reproduction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command", "environment", "fresh_root_required"],
+          "properties": {
+            "command": {"type": "string", "minLength": 1},
+            "environment": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["set", "confirmed_unset"],
+              "properties": {
+                "set": {"type": "object", "additionalProperties": {"type": "string"}},
+                "confirmed_unset": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 1}
+                }
+              }
+            },
+            "fresh_root_required": {"const": true}
+          }
+        },
+        "support_jobs": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/supportJob"}
+        },
+        "shared_artifacts": {
+          "type": "array",
+          "minItems": 4,
+          "items": {"$ref": "#/$defs/roleFileRef"}
+        },
+        "replicates": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/replicate"}
+        }
+      }
+    },
+    "replicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "seed", "case_root", "job", "launcher", "case_config",
+        "inputs", "artifacts", "relion_collapse", "quality", "performance", "outcome"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "case_root": {"$ref": "#/$defs/absolutePath"},
+        "job": {"$ref": "#/$defs/failedJob"},
+        "launcher": {"$ref": "#/$defs/fileRef"},
+        "case_config": {"$ref": "#/$defs/fileRef"},
+        "inputs": {
+          "type": "array",
+          "minItems": 5,
+          "items": {"$ref": "#/$defs/roleFileRef"}
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 5,
+          "items": {"$ref": "#/$defs/roleFileRef"}
+        },
+        "relion_collapse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status", "numbered_iterations", "earliest_iteration",
+            "collapsed_events", "collapsed_event_count", "final_class_distributions",
+            "final_orientation_masses", "zero_classes"
+          ],
+          "properties": {
+            "status": {"const": "ZERO_CLASS"},
+            "numbered_iterations": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "integer", "minimum": 1}
+            },
+            "earliest_iteration": {"type": "integer", "minimum": 1},
+            "collapsed_events": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["iteration", "class", "class_distribution", "orientation_mass"],
+                "properties": {
+                  "iteration": {"type": "integer", "minimum": 1},
+                  "class": {"type": "integer", "minimum": 1},
+                  "class_distribution": {"const": 0},
+                  "orientation_mass": {"const": 0}
+                }
+              }
+            },
+            "collapsed_event_count": {"type": "integer", "minimum": 1},
+            "final_class_distributions": {
+              "type": "array",
+              "minItems": 2,
+              "items": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "final_orientation_masses": {
+              "type": "array",
+              "minItems": 2,
+              "items": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "zero_classes": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "integer", "minimum": 1}
+            }
+          }
+        },
+        "quality": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["comparable_endpoint", "fsc_evaluated", "class_assignment_evaluated", "missing_reason"],
+          "properties": {
+            "comparable_endpoint": {"const": false},
+            "fsc_evaluated": {"const": false},
+            "class_assignment_evaluated": {"const": false},
+            "missing_reason": {"type": "string", "minLength": 1}
+          }
+        },
+        "performance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relion_wall_s", "relion_peak_hbm_mib", "recovar_wall_s",
+            "recovar_peak_hbm_mib", "comparison_available", "missing_reason"
+          ],
+          "properties": {
+            "relion_wall_s": {"type": "number", "minimum": 0},
+            "relion_peak_hbm_mib": {"type": "number", "minimum": 0},
+            "recovar_wall_s": {"type": "null"},
+            "recovar_peak_hbm_mib": {"type": "null"},
+            "comparison_available": {"const": false},
+            "missing_reason": {"type": "string", "minLength": 1}
+          }
+        },
+        "outcome": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoint_status", "formal_status", "science_status", "classification", "recovar_started", "reason"],
+          "properties": {
+            "endpoint_status": {"const": "NOT_EVALUABLE"},
+            "formal_status": {"const": "NOT_EVALUABLE"},
+            "science_status": {"const": "BOUNDARY"},
+            "classification": {"const": "NEGATIVE_RELION_CLASS_COLLAPSE"},
+            "recovar_started": {"const": false},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  }
+}

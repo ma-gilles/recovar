@@ -16,6 +16,14 @@ classification for successful, boundary, and unresolved outcomes. They point
 to sealed external products instead of checking particle stacks or maps into
 Git.
 
+Completed controls that fail before both engines produce comparable outputs
+live separately in `diagnostics/` and validate against
+`diagnostic_schema_v1.json`. These records are permanently marked
+`EXCLUDED_FROM_ACCEPTED_RESULTS`; they preserve useful negative evidence
+without relaxing the quality or performance requirements of the accepted
+single-run and campaign schemas. They must not report cross-engine FSC,
+RECOVAR performance, or speed ratios when RECOVAR never ran.
+
 Campaign failure labels are deliberately causal. A RELION class-collapse
 negative is distinct from a RECOVAR implementation failure, and both are
 distinct from a completed trajectory whose endpoint remains scientifically
@@ -101,6 +109,14 @@ per-class signed RECOVAR-minus-RELION GT FSC-AUC deltas, class populations,
 numbered-trajectory result, matched-H100 wall/HBM measurements, and Slurm
 ReqTRES/AllocTRES. Intended execution-invariance groups are admissible only
 when their particle hashes match; a shared seed is not sufficient evidence.
+
+Diagnostic schema v1 is deliberately narrower. It seals completed
+fail-closed controls whose RELION oracle has an exact zero-mass class before
+RECOVAR starts. It requires all frozen seeds, per-iteration collapse events,
+final class/orientation masses, RELION-only timing and HBM, fresh Slurm
+ReqTRES/AllocTRES and MaxRSS, hashed inputs and artifacts, and a fresh-root
+reproduction command. Its schema fixes `accepted_result=false` and forbids
+RECOVAR quality or performance values.
 
 Performance ratios are formal only when the engines use the same GPU model
 under a matched workload. Cross-model ratios may be stored only as diagnostic
@@ -230,6 +246,14 @@ CPU-only setup attempt, the corrected one-H100 setup/case/summary dependency
 chain, sealed binary and launcher hashes, exact Slurm accounting, and the
 one-iteration case-21 smoke result. It is infrastructure evidence, not a
 converged K=4 trajectory record.
+
+The three completed no-CTF fixture escalations (cases 30, 35, and 36; three
+seeds each) are documented in `k4_noctf_negative_boundaries_20260901.md` and
+sealed in
+`diagnostics/k4-noctf-collapse-cases30-35-36-h100.json`. All nine are excluded
+negative diagnostics: RELION assigned zero class-3 mass at iteration 1, so the
+fail-closed launcher did not start RECOVAR and no cross-engine FSC result
+exists.
 
 ## Sealed C4/D4 three-seed symmetry results
 

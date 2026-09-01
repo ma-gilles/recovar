@@ -492,6 +492,181 @@ def validate_campaign(campaign: dict[str, Any], schema: dict[str, Any]) -> None:
         raise RegistryValidationError("\n".join(errors))
 
 
+def _requested_gpu_count(tres: str) -> int | None:
+    total = 0
+    found = False
+    for component in tres.split(","):
+        key, separator, raw_value = component.partition("=")
+        if not separator or (key != "gres/gpu" and not key.startswith("gres/gpu:")):
+            continue
+        found = True
+        try:
+            total += int(raw_value)
+        except ValueError:
+            return None
+    return total if found else 0
+
+
+def _diagnostic_semantic_errors(diagnostic: dict[str, Any]) -> list[str]:
+    """Validate invariants specific to excluded negative diagnostic evidence."""
+    errors: list[str] = []
+    k = diagnostic["subject"]["k"]
+    expected_seeds = diagnostic["expected_seeds"]
+
+    run_ids = [run["case_id"] for run in diagnostic["runs"]]
+    run_names = [run["name"] for run in diagnostic["runs"]]
+    if len(run_ids) != len(set(run_ids)):
+        errors.append("runs.case_id values must be unique")
+    if len(run_names) != len(set(run_names)):
+        errors.append("runs.name values must be unique")
+
+    source_roles = [item["role"] for item in diagnostic["source_structures"]]
+    expected_source_roles = [f"pdb_class_{class_id}" for class_id in range(1, k + 1)]
+    if source_roles != expected_source_roles:
+        errors.append("source_structures roles must be ordered pdb_class_1..pdb_class_K")
+
+    for run in diagnostic["runs"]:
+        prefix = f"diagnostic case {run['case_id']}"
+        configuration = run["configuration"]
+        if configuration.get("n_classes") != k:
+            errors.append(f"{prefix} n_classes must equal subject.k")
+        if configuration.get("case_id") != run["case_id"]:
+            errors.append(f"{prefix} configuration.case_id must match case_id")
+        if configuration.get("base_name") != run["name"]:
+            errors.append(f"{prefix} configuration.base_name must match name")
+        if configuration.get("symmetry") != diagnostic["subject"]["symmetry"]:
+            errors.append(f"{prefix} configuration.symmetry must match subject.symmetry")
+
+        support_roles = [job["role"] for job in run["support_jobs"]]
+        if sorted(support_roles) != ["setup", "summary"]:
+            errors.append(f"{prefix} support_jobs must contain exactly setup and summary")
+        for job in run["support_jobs"]:
+            if job["req_tres"] != job["alloc_tres"]:
+                errors.append(f"{prefix} support job {job['job_id']} ReqTRES and AllocTRES differ")
+
+        shared_roles = [item["role"] for item in run["shared_artifacts"]]
+        if len(shared_roles) != len(set(shared_roles)):
+            errors.append(f"{prefix} shared_artifacts roles must be unique")
+        required_shared_roles = {
+            "safe_to_delete_marker",
+            "case_table",
+            "submission_environment",
+            "setup_stdout",
+            "setup_stderr",
+            "summary_stdout",
+            "summary_stderr",
+            "multiseed_summary_json",
+            "matrix_summary_json",
+            "historical_accounting_snapshot_may_be_stale",
+        }
+        if not required_shared_roles.issubset(shared_roles):
+            errors.append(f"{prefix} shared_artifacts omit required sealed evidence")
+
+        seeds = [replicate["seed"] for replicate in run["replicates"]]
+        if seeds != expected_seeds:
+            errors.append(f"{prefix} replicate seeds must exactly match expected_seeds in order")
+        names = [replicate["name"] for replicate in run["replicates"]]
+        if len(names) != len(set(names)):
+            errors.append(f"{prefix} replicate names must be unique")
+
+        for replicate in run["replicates"]:
+            replicate_prefix = f"{prefix} seed {replicate['seed']}"
+            job = replicate["job"]
+            if job["req_tres"] != job["alloc_tres"]:
+                errors.append(f"{replicate_prefix} job ReqTRES and AllocTRES differ")
+            if _requested_gpu_count(job["req_tres"]) != 1:
+                errors.append(f"{replicate_prefix} must request exactly one GPU")
+
+            for collection_name in ("inputs", "artifacts"):
+                roles = [item["role"] for item in replicate[collection_name]]
+                if len(roles) != len(set(roles)):
+                    errors.append(f"{replicate_prefix} {collection_name} roles must be unique")
+            input_roles = {item["role"] for item in replicate["inputs"]}
+            for required_role in ("particles", "poses", "ctf", "generation_config", "class_manifest"):
+                if required_role not in input_roles:
+                    errors.append(f"{replicate_prefix} inputs must contain role={required_role}")
+            artifact_roles = {item["role"] for item in replicate["artifacts"]}
+            required_artifact_roles = {
+                "relion_class_population_audit",
+                "relion_walltime",
+                "relion_gpu_monitor",
+                "gpu_inventory",
+                "gpu_uuid",
+                "job_stdout",
+                "job_stderr",
+            }
+            if not required_artifact_roles.issubset(artifact_roles):
+                errors.append(f"{replicate_prefix} artifacts omit required sealed evidence")
+
+            collapse = replicate["relion_collapse"]
+            distributions = collapse["final_class_distributions"]
+            orientation_masses = collapse["final_orientation_masses"]
+            if len(distributions) != k or len(orientation_masses) != k:
+                errors.append(f"{replicate_prefix} final RELION populations must contain K values")
+            if len(distributions) == k and not math.isclose(
+                sum(distributions), 1.0, rel_tol=0.0, abs_tol=2e-6
+            ):
+                errors.append(f"{replicate_prefix} final class distributions must sum to one")
+            if len(orientation_masses) == k and not math.isclose(
+                sum(orientation_masses), 1.0, rel_tol=0.0, abs_tol=2e-6
+            ):
+                errors.append(f"{replicate_prefix} final orientation masses must sum to one")
+            expected_zero_classes = [
+                class_id
+                for class_id, (distribution, mass) in enumerate(
+                    zip(distributions, orientation_masses, strict=True), start=1
+                )
+                if distribution == 0 or mass == 0
+            ]
+            if collapse["zero_classes"] != expected_zero_classes:
+                errors.append(f"{replicate_prefix} zero_classes must match final RELION populations")
+            events = collapse["collapsed_events"]
+            if collapse["collapsed_event_count"] != len(events):
+                errors.append(f"{replicate_prefix} collapsed_event_count must match collapsed_events")
+            if collapse["earliest_iteration"] != min(event["iteration"] for event in events):
+                errors.append(f"{replicate_prefix} earliest_iteration must match collapsed_events")
+            numbered_iterations = collapse["numbered_iterations"]
+            max_iter = configuration.get("max_iter")
+            if isinstance(max_iter, int) and numbered_iterations != list(range(1, max_iter + 1)):
+                errors.append(f"{replicate_prefix} numbered_iterations must cover 1..max_iter")
+            if any(event["iteration"] not in numbered_iterations for event in events):
+                errors.append(f"{replicate_prefix} collapsed event lies outside numbered_iterations")
+            event_keys = [(event["iteration"], event["class"]) for event in events]
+            if len(event_keys) != len(set(event_keys)):
+                errors.append(f"{replicate_prefix} collapsed_events contain duplicate cells")
+            if any(event["class"] > k for event in events) or any(
+                class_id > k for class_id in collapse["zero_classes"]
+            ):
+                errors.append(f"{replicate_prefix} collapse class lies outside 1..K")
+            final_zero_classes = sorted(
+                event["class"]
+                for event in events
+                if event["iteration"] == numbered_iterations[-1]
+            )
+            if final_zero_classes != collapse["zero_classes"]:
+                errors.append(f"{replicate_prefix} final collapse events must match zero_classes")
+
+            if replicate["outcome"]["recovar_started"]:
+                errors.append(f"{replicate_prefix} negative boundary cannot claim RECOVAR started")
+            performance = replicate["performance"]
+            if performance["recovar_wall_s"] is not None or performance["recovar_peak_hbm_mib"] is not None:
+                errors.append(f"{replicate_prefix} cannot report RECOVAR performance before it ran")
+            if performance["relion_wall_s"] > job["elapsed_s"]:
+                errors.append(f"{replicate_prefix} RELION wall time cannot exceed Slurm elapsed time")
+
+    return errors
+
+
+def validate_diagnostic(diagnostic: dict[str, Any], schema: dict[str, Any]) -> None:
+    """Validate excluded negative evidence without admitting it as an accepted result."""
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    schema_errors = sorted(validator.iter_errors(diagnostic), key=lambda error: list(error.path))
+    errors = [f"{_json_path(list(error.path))}: {error.message}" for error in schema_errors]
+    errors.extend(_diagnostic_semantic_errors(diagnostic) if not schema_errors else [])
+    if errors:
+        raise RegistryValidationError("\n".join(errors))
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -575,14 +750,57 @@ def verify_campaign_files(campaign: dict[str, Any], digest_cache: dict[Path, str
         raise RegistryValidationError("\n".join(errors))
 
 
+def _diagnostic_file_references(diagnostic: dict[str, Any]) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = [*diagnostic["source_structures"]]
+    for run in diagnostic["runs"]:
+        references.extend(
+            (
+                run["source"]["relion"]["executable"],
+                run["source"]["custom_cuda"],
+                *run["shared_artifacts"],
+            )
+        )
+        for replicate in run["replicates"]:
+            references.extend((replicate["launcher"], replicate["case_config"]))
+            references.extend(replicate["inputs"])
+            references.extend(replicate["artifacts"])
+    return references
+
+
+def verify_diagnostic_files(diagnostic: dict[str, Any], digest_cache: dict[Path, str]) -> None:
+    """Verify external files for negative diagnostics, sharing the registry hash cache."""
+    errors: list[str] = []
+    for reference in _diagnostic_file_references(diagnostic):
+        path = Path(reference["path"])
+        if not path.is_file():
+            errors.append(f"missing file: {path}")
+            continue
+        actual_size = path.stat().st_size
+        if actual_size != reference["size_bytes"]:
+            errors.append(
+                f"size mismatch: {path}: expected {reference['size_bytes']}, got {actual_size}"
+            )
+            continue
+        if path not in digest_cache:
+            digest_cache[path] = _sha256(path)
+        digest = digest_cache[path]
+        if digest != reference["sha256"]:
+            errors.append(f"checksum mismatch: {path}: expected {reference['sha256']}, got {digest}")
+    if errors:
+        raise RegistryValidationError("\n".join(errors))
+
+
 def validate_registry(registry_root: Path, *, verify_files: bool = False) -> list[Path]:
     """Validate all registry entries and return their paths."""
     schema_path = registry_root / "schema_v1.json"
     campaign_schema_path = registry_root / "campaign_schema_v1.json"
+    diagnostic_schema_path = registry_root / "diagnostic_schema_v1.json"
     entries_dir = registry_root / "entries"
     campaigns_dir = registry_root / "campaigns"
+    diagnostics_dir = registry_root / "diagnostics"
     schema = json.loads(schema_path.read_text())
     campaign_schema = json.loads(campaign_schema_path.read_text())
+    diagnostic_schema = json.loads(diagnostic_schema_path.read_text())
     entry_paths = sorted(entries_dir.glob("*.json"))
     if not entry_paths:
         raise RegistryValidationError(f"no records found under {entries_dir}")
@@ -629,7 +847,26 @@ def validate_registry(registry_root: Path, *, verify_files: bool = False) -> lis
         if campaign_id in campaign_ids:
             raise RegistryValidationError(f"duplicate campaign_id: {campaign_id}")
         campaign_ids.add(campaign_id)
-    return [*entry_paths, *campaign_paths]
+
+    diagnostic_paths = sorted(diagnostics_dir.glob("*.json"))
+    if not diagnostic_paths:
+        raise RegistryValidationError(f"no negative diagnostic records found under {diagnostics_dir}")
+    diagnostic_ids: set[str] = set()
+    for path in diagnostic_paths:
+        diagnostic = json.loads(path.read_text())
+        try:
+            validate_diagnostic(diagnostic, diagnostic_schema)
+            if verify_files:
+                verify_diagnostic_files(diagnostic, digest_cache)
+        except RegistryValidationError as error:
+            raise RegistryValidationError(f"{path}:\n{error}") from error
+        diagnostic_id = diagnostic["diagnostic_id"]
+        if path.stem != diagnostic_id:
+            raise RegistryValidationError(f"{path}: filename must equal diagnostic_id")
+        if diagnostic_id in diagnostic_ids:
+            raise RegistryValidationError(f"duplicate diagnostic_id: {diagnostic_id}")
+        diagnostic_ids.add(diagnostic_id)
+    return [*entry_paths, *campaign_paths, *diagnostic_paths]
 
 
 def _default_registry_root() -> Path:

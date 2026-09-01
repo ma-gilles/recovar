@@ -13,15 +13,18 @@ import scripts.validate_em_benchmark_registry as registry_validator
 from scripts.validate_em_benchmark_registry import (
     RegistryValidationError,
     validate_campaign,
+    validate_diagnostic,
     validate_record,
     validate_registry,
     verify_campaign_files,
+    verify_diagnostic_files,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_ROOT = REPO_ROOT / "docs" / "benchmarks" / "em"
 SCHEMA = json.loads((REGISTRY_ROOT / "schema_v1.json").read_text())
 CAMPAIGN_SCHEMA = json.loads((REGISTRY_ROOT / "campaign_schema_v1.json").read_text())
+DIAGNOSTIC_SCHEMA = json.loads((REGISTRY_ROOT / "diagnostic_schema_v1.json").read_text())
 CANDIDATE = json.loads(
     (
         REGISTRY_ROOT
@@ -64,6 +67,13 @@ I1_SYMMETRY_CAMPAIGN = json.loads(
         / "k4-i1-three-seed-22efd8065-h100"
     ).with_suffix(".json").read_text()
 )
+NEGATIVE_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "k4-noctf-collapse-cases30-35-36-h100"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -80,12 +90,73 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-expanded14-3466e7a32-h100",
         "k4-i1-three-seed-22efd8065-h100",
         "k4-o-three-seed-22efd8065-h100",
+        "k4-noctf-collapse-cases30-35-36-h100",
     ]
     assert [case["case_id"] for case in CAMPAIGN["cases"]] == list(range(16, 30))
     classifications = {case["case_id"]: case["outcome"]["classification"] for case in CAMPAIGN["cases"]}
     assert classifications[17] == "NEGATIVE_ZERO_CLASS_BOUNDARY"
     assert classifications[20] == "TRAJECTORY_EXACT_NEAR_COLLAPSE"
     assert classifications[27] == "UNRESOLVED_TRAJECTORY_FAILURE"
+
+
+def test_negative_diagnostic_is_complete_but_never_an_accepted_result():
+    assert NEGATIVE_DIAGNOSTIC["registry_disposition"] == "EXCLUDED_FROM_ACCEPTED_RESULTS"
+    conclusion = NEGATIVE_DIAGNOSTIC["conclusion"]
+    assert conclusion["accepted_result"] is False
+    assert conclusion["all_replicates_relion_zero_class"] is True
+    assert conclusion["recovar_was_evaluated"] is False
+    assert conclusion["classification"] == "NEGATIVE_RELION_CLASS_COLLAPSE"
+    assert [run["case_id"] for run in NEGATIVE_DIAGNOSTIC["runs"]] == [30, 35, 36]
+    for run in NEGATIVE_DIAGNOSTIC["runs"]:
+        assert [replicate["seed"] for replicate in run["replicates"]] == [41001, 41002, 41003]
+        for replicate in run["replicates"]:
+            assert replicate["relion_collapse"]["status"] == "ZERO_CLASS"
+            assert replicate["relion_collapse"]["zero_classes"]
+            assert replicate["quality"]["fsc_evaluated"] is False
+            assert replicate["outcome"]["recovar_started"] is False
+            assert replicate["performance"]["recovar_wall_s"] is None
+            assert replicate["performance"]["recovar_peak_hbm_mib"] is None
+
+
+def test_negative_diagnostic_cannot_claim_acceptance_or_recovar_metrics():
+    diagnostic = copy.deepcopy(NEGATIVE_DIAGNOSTIC)
+    diagnostic["conclusion"]["accepted_result"] = True
+
+    with pytest.raises(RegistryValidationError, match="False was expected"):
+        validate_diagnostic(diagnostic, DIAGNOSTIC_SCHEMA)
+
+    diagnostic = copy.deepcopy(NEGATIVE_DIAGNOSTIC)
+    diagnostic["runs"][0]["replicates"][0]["performance"]["recovar_wall_s"] = 1
+
+    with pytest.raises(RegistryValidationError, match="not of type 'null'"):
+        validate_diagnostic(diagnostic, DIAGNOSTIC_SCHEMA)
+
+
+def test_negative_diagnostic_collapse_flags_and_allocations_are_mechanical():
+    diagnostic = copy.deepcopy(NEGATIVE_DIAGNOSTIC)
+    diagnostic["runs"][0]["replicates"][0]["relion_collapse"]["zero_classes"] = [4]
+
+    with pytest.raises(RegistryValidationError, match="zero_classes must match"):
+        validate_diagnostic(diagnostic, DIAGNOSTIC_SCHEMA)
+
+    diagnostic = copy.deepcopy(NEGATIVE_DIAGNOSTIC)
+    diagnostic["runs"][0]["replicates"][0]["job"]["alloc_tres"] = (
+        "billing=48,cpu=24,gres/gpu=2,mem=192G,node=1"
+    )
+
+    with pytest.raises(RegistryValidationError, match="ReqTRES and AllocTRES differ"):
+        validate_diagnostic(diagnostic, DIAGNOSTIC_SCHEMA)
+
+    diagnostic = copy.deepcopy(NEGATIVE_DIAGNOSTIC)
+    diagnostic["runs"][0]["replicates"][0]["job"]["req_tres"] = (
+        "billing=24,cpu=24,gres/gpu=10,mem=192G,node=1"
+    )
+    diagnostic["runs"][0]["replicates"][0]["job"]["alloc_tres"] = (
+        "billing=24,cpu=24,gres/gpu=10,mem=192G,node=1"
+    )
+
+    with pytest.raises(RegistryValidationError, match="must request exactly one GPU"):
+        validate_diagnostic(diagnostic, DIAGNOSTIC_SCHEMA)
 
 
 @pytest.mark.parametrize(
@@ -276,3 +347,29 @@ def test_campaign_external_verification_fails_closed(tmp_path, monkeypatch):
     reference["path"] = str(tmp_path / "missing.json")
     with pytest.raises(RegistryValidationError, match="missing file"):
         verify_campaign_files(CAMPAIGN, {})
+
+
+def test_diagnostic_external_verification_fails_closed(tmp_path, monkeypatch):
+    existing = tmp_path / "negative-evidence.json"
+    existing.write_text("sealed negative evidence\n")
+    digest = hashlib.sha256(existing.read_bytes()).hexdigest()
+    reference = {
+        "path": str(existing),
+        "sha256": digest,
+        "size_bytes": existing.stat().st_size,
+    }
+    monkeypatch.setattr(registry_validator, "_diagnostic_file_references", lambda _: [reference])
+    verify_diagnostic_files(NEGATIVE_DIAGNOSTIC, {})
+
+    reference["size_bytes"] += 1
+    with pytest.raises(RegistryValidationError, match="size mismatch"):
+        verify_diagnostic_files(NEGATIVE_DIAGNOSTIC, {})
+
+    reference["size_bytes"] = existing.stat().st_size
+    reference["sha256"] = "0" * 64
+    with pytest.raises(RegistryValidationError, match="checksum mismatch"):
+        verify_diagnostic_files(NEGATIVE_DIAGNOSTIC, {})
+
+    reference["path"] = str(tmp_path / "missing.json")
+    with pytest.raises(RegistryValidationError, match="missing file"):
+        verify_diagnostic_files(NEGATIVE_DIAGNOSTIC, {})
