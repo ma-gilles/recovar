@@ -186,7 +186,13 @@ def _gpu_inventory() -> dict[str, Any]:
 
 
 def _parse_scontrol_fields(text: str) -> dict[str, str]:
-    matches = list(re.finditer(r"(?:^|\s)([A-Za-z][A-Za-z0-9]*)=", text))
+    # Slurm field names are not restricted to alphanumerics.  In particular,
+    # the one-line ``scontrol show job`` output contains keys such as
+    # ``Socks/Node`` and ``NtasksPerN:B:S:C``.  If those delimiters are not
+    # recognised, their text is accidentally appended to the preceding value
+    # (most dangerously ``AllocTRES``), making an exact allocation look like a
+    # resource mismatch.
+    matches = list(re.finditer(r"(?:^|\s)([A-Za-z][A-Za-z0-9_/:.-]*)=", text))
     fields: dict[str, str] = {}
     for index, match in enumerate(matches):
         start = match.end()
