@@ -1141,7 +1141,9 @@ def render_markdown(scorecard: dict[str, Any]) -> str:
         "Slurm wrapper failed only while JSON-serializing two NumPy booleans after RUNS_COMPLETED; the sealed "
         f"analyzer stayed byte-identical at `{batched_repeat_panel['analyzer_source_sha256']}` and the original "
         f"acceptance contract is `{batched_repeat_panel['acceptance_config_sha256']}`. The original failure/absent "
-        "COMPLETED marker remain preserved. The frozen n=2 rejection is not overwritten. | "
+        "COMPLETED marker remain preserved. Recovered JSON SHA-256 "
+        f"`{batched_repeat_panel['report_json_sha256']}`; recovery provenance SHA-256 "
+        f"`{batched_repeat_panel['recovery_provenance_sha256']}`. The frozen n=2 rejection is not overwritten. | "
         f"{batched_repeat_panel['long_trajectory_blocker']} |",
         f"| Same-binary ABBA `{same_binary_lane['job_id']}` | **NUMERICALLY EQUIVALENT; END-TO-END GAIN "
         f"IMMATERIAL**; zero particle-state/schedule escapes; relative-L2 map differences remain ~1e-7 and warm "
