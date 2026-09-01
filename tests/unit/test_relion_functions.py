@@ -1180,6 +1180,69 @@ def test_large_host_staged_pre_ifft_split_matches_monolith_bitwise(monkeypatch):
             clear_cache()
 
 
+def test_large_irfft_normalization_boundary_uses_signed_int32_limit():
+    from recovar.em.dense_single_volume import mean_helpers
+
+    assert not mean_helpers._large_irfft_requires_explicit_normalization((800, 800, 800))
+    assert mean_helpers._large_irfft_requires_explicit_normalization((1600, 1600, 1600))
+
+
+def test_large_host_staged_irfft_uses_raw_transform_then_dynamic_normalization(monkeypatch):
+    from recovar.em.dense_single_volume import mean_helpers
+
+    reconstruction_shape = (1600, 1600, 1600)
+    transform_size = int(np.prod(reconstruction_shape, dtype=np.int64))
+    events = []
+
+    def fake_stage(*_args, **kwargs):
+        events.append("stage")
+        assert kwargs["input_half_volume"] is True
+        assert kwargs["return_fftw_half_before_ifft"] is True
+        return jnp.ones((2, 2, 2), dtype=jnp.complex64)
+
+    def fake_finish(value, *_args, **kwargs):
+        events.append("finish")
+        assert np.asarray(value).shape == (2, 2, 2)
+        assert kwargs["inverse_fft_norm"] == "forward"
+        return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    monkeypatch.setattr(
+        mean_helpers,
+        "_should_host_stage_large_relion_ifft",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        fake_finish,
+    )
+
+    result = mean_helpers._reconstruct_volume_eager(
+        np.ones((2, 2, 2), dtype=np.float32),
+        np.ones((2, 2, 2), dtype=np.complex64),
+        (2, 2, 2),
+        2,
+        tau=np.ones(8, dtype=np.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=(3, 3, 3),
+    )
+
+    assert events == ["stage", "finish"]
+    np.testing.assert_allclose(
+        np.asarray(result),
+        np.asarray([2.0 / transform_size], dtype=np.complex64),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
 def test_relion_odd_accumulator_postprocess_windows_to_even_padded_grid():
     import recovar.core.fourier_transform_utils as ftu
 

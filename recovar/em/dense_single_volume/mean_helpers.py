@@ -7,8 +7,10 @@ at ``iteration_loop.<name>``; all dependencies are imported directly.
 
 from __future__ import annotations
 
+import functools
 import gc
 import logging
+import math
 import os
 import time
 
@@ -24,6 +26,21 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats
 
 logger = logging.getLogger(__name__)
+
+_LARGE_IRFFT_TRANSFORM_SIZE_LIMIT = np.iinfo(np.int32).max
+
+
+def _large_irfft_requires_explicit_normalization(volume_shape) -> bool:
+    """Return whether XLA's inverse-FFT normalization exceeds int32 range."""
+
+    return math.prod(int(size) for size in volume_shape) > _LARGE_IRFFT_TRANSFORM_SIZE_LIMIT
+
+
+@functools.partial(jax.jit, donate_argnums=(0,))
+def _normalize_large_irfft_result_donate(result, inverse_transform_scale):
+    """Normalize a large raw inverse FFT in a separate donating executable."""
+
+    return result * inverse_transform_scale
 
 
 def _normalize_noise_variance_per_half(init_noise_variance, n_halves=2):
@@ -437,7 +454,15 @@ def _reconstruct_volume_eager(
         del fftw_half_device
         gc.collect()
 
-    return relion_functions._finish_large_relion_postprocess_from_fftw_half(
+    explicit_irfft_normalization = _large_irfft_requires_explicit_normalization(
+        reconstruction_shape,
+    )
+    inverse_fft_norm = (
+        "forward"
+        if explicit_irfft_normalization
+        else fourier_transform_utils.DEFAULT_FFT_NORM
+    )
+    result = relion_functions._finish_large_relion_postprocess_from_fftw_half(
         fftw_half_host,
         vol_shape,
         padding_factor,
@@ -448,7 +473,29 @@ def _reconstruct_volume_eager(
         kernel_width=1,
         return_real_space=return_real_space,
         gridding_padding_factor=projection_padding_factor,
+        inverse_fft_norm=inverse_fft_norm,
     )
+    if explicit_irfft_normalization:
+        transform_size = math.prod(reconstruction_shape)
+        logger.info(
+            "RELION large inverse-FFT normalization boundary: "
+            "reconstruction_shape=%s transform_size=%d",
+            reconstruction_shape,
+            transform_size,
+        )
+        # XLA's built-in ``norm='backward'`` normalization overflows its
+        # signed-int32 transform-size product at 1600^3 and silently becomes
+        # one.  Run an unnormalised inverse FFT above that boundary, then
+        # apply the exact floating-point reciprocal in a separate executable.
+        # Donation keeps this correction memory-neutral for box-scale maps.
+        inverse_transform_scale = jnp.asarray(
+            np.float32(1.0 / float(transform_size)),
+        )
+        result = _normalize_large_irfft_result_donate(
+            result,
+            inverse_transform_scale,
+        )
+    return result
 
 
 def _finish_host_staged_reconstruction(result, *accumulators):

@@ -1214,7 +1214,11 @@ def _relion_crop_centered_half_fourier_to_fftw(vol_half, old_volume_shape, new_v
     ]
 
 
-def _relion_idft3_real_from_fftw_half(vol_half, volume_shape):
+def _relion_idft3_real_from_fftw_half(
+    vol_half,
+    volume_shape,
+    norm=fourier_transform_utils.DEFAULT_FFT_NORM,
+):
     """Inverse-transform a packed half-volume already in raw FFTW order."""
 
     axes = (-3, -2, -1)
@@ -1222,7 +1226,7 @@ def _relion_idft3_real_from_fftw_half(vol_half, volume_shape):
         vol_half,
         s=tuple(int(s) for s in volume_shape),
         axes=axes,
-        norm=fourier_transform_utils.DEFAULT_FFT_NORM,
+        norm=norm,
     )
     return jnp.fft.ifftshift(vol, axes=axes)
 
@@ -1586,7 +1590,7 @@ _post_process_from_filter_v2_donate_numerator = jax.jit(
 )
 
 
-@functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 9, 10])
+@functools.partial(jax.jit, static_argnums=[1, 2, 3, 4, 5, 6, 7, 9, 10, 13])
 def _finish_large_relion_postprocess_from_fftw_half(
     vol_half,
     og_volume_shape,
@@ -1601,6 +1605,7 @@ def _finish_large_relion_postprocess_from_fftw_half(
     return_half_volume=False,
     gridding_padding_factor=None,
     gridding_order=None,
+    inverse_fft_norm=fourier_transform_utils.DEFAULT_FFT_NORM,
 ):
     """Finish a large c64/f32 reconstruction from a raw-FFTW half-volume.
 
@@ -1614,7 +1619,11 @@ def _finish_large_relion_postprocess_from_fftw_half(
         og_volume_shape,
         volume_upsampling_factor,
     )
-    vol = _relion_idft3_real_from_fftw_half(vol_half, reconstruction_volume_shape)
+    vol = _relion_idft3_real_from_fftw_half(
+        vol_half,
+        reconstruction_volume_shape,
+        norm=inverse_fft_norm,
+    )
     vol = padding.unpad_volume_spatial_domain(vol, reconstruction_volume_shape[0] - og_volume_shape[0])
 
     if use_spherical_mask:
