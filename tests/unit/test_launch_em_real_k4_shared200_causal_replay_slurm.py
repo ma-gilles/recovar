@@ -296,6 +296,8 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "unset RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET" in script
     assert "inputs/continuation/run_it000_optimiser_replay.star" in script
     assert "pair/relion/run_it000_optimiser.star" not in script
+    assert launcher.EXPECTED_CONTINUED_ITER0_MARKER in script
+    assert "grep -Fxc" in script
     assert 'for class_id in 1 2 3 4; do run_native_arm "class${class_id}"' in script
     assert "--data-star" in script and "particles_shared200.star" in script
     assert "-eq 800" in script
@@ -366,6 +368,13 @@ def test_cli_is_dry_run_by_default(tmp_path):
     args = launcher.parse_args(["--output-root", str(tmp_path / "run")])
     assert args.submit is False
     assert args.native_smoke_only is False
+    assert args.relion_capture_source == launcher.DEFAULT_RELION_CAPTURE_SOURCE.resolve()
+    assert args.relion_capture_binary == launcher.DEFAULT_RELION_CAPTURE_BINARY.resolve()
+    assert launcher.EXPECTED_CAPTURE_RELION_HEAD == "8680e84c906a5eeedad7eeda2703d617b1f9e9e5"
+    assert launcher.EXPECTED_CAPTURE_RELION_TREE == "0ed8161a7dd10ddcb01ff4bb10d41ddd25e9fd69"
+    assert launcher.EXPECTED_CAPTURE_RELION_BINARY_SHA256 == (
+        "882a37de3449ede0132f3bed29638603b880ee3abf46d753b5f6a28ef9f90afd"
+    )
 
 
 def test_input_closure_includes_gradient_moment_maps(tmp_path):

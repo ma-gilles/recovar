@@ -44,7 +44,8 @@ DEFAULT_SHARED_SET = Path(
     "shared_visited_particles_it001.json"
 )
 DEFAULT_RELION_CAPTURE_ROOT = Path(
-    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_allclass_score_f34f9dc_20260804T0118ET"
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "relion_iter0_continue_preserve_f34f9dc_20260901"
 )
 DEFAULT_RELION_CAPTURE_SOURCE = DEFAULT_RELION_CAPTURE_ROOT / "source"
 DEFAULT_RELION_CAPTURE_BINARY = DEFAULT_RELION_CAPTURE_ROOT / "build/bin/relion_refine"
@@ -57,11 +58,15 @@ EXPECTED_PARTICLE_STACK_SIZE = 34_576_532_480
 EXPECTED_PARTICLE_STACK_IMAGES = 131_879
 EXPECTED_SHARED_SET_SHA256 = "581157ff693aac6f5853d335d9cd0c59aa3fc11e60f54b325feb692ff05a9bd7"
 EXPECTED_PAIR_REPORT_SHA256 = "af22573582ea68dc07099686ebb09a282ad3ed82b2998c5bc962454baefdc31d"
-EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "3e8c501c387fa22d4e0b01da2dbf93d3a5c7c8444b605ae77e810bffd93f8615"
-EXPECTED_CAPTURE_RELION_HEAD = "f34f9dc65b1112b3bc2f9b98c4c035c240b40c72"
-EXPECTED_CAPTURE_RELION_TREE = "29dc59f99e3599ba00340f042c96229a47d61ec7"
+EXPECTED_CAPTURE_RELION_BINARY_SHA256 = "882a37de3449ede0132f3bed29638603b880ee3abf46d753b5f6a28ef9f90afd"
+EXPECTED_CAPTURE_RELION_HEAD = "8680e84c906a5eeedad7eeda2703d617b1f9e9e5"
+EXPECTED_CAPTURE_RELION_TREE = "0ed8161a7dd10ddcb01ff4bb10d41ddd25e9fd69"
 EXPECTED_BIND_RELION_HEAD = "f2c1a384400aec37dc6805856a5ba645650a44f1"
 EXPECTED_BIND_RELION_TREE = "1aa4902144f521ae29834e5acf382ff41cf302d0"
+EXPECTED_CONTINUED_ITER0_MARKER = (
+    "[RELION_CONTINUE_ITER0_PRESERVE_STATE] iter=0 skipping fresh initialiseFromImages "
+    "maps=4 first_moments=8 second_moments=4 pseudo_halfsets=1"
+)
 
 
 @dataclass(frozen=True)
@@ -483,14 +488,17 @@ def _validate_controller_state(control_pair_root: Path) -> dict[str, Any]:
 def _source_provenance(source_dir: Path) -> dict[str, Any]:
     _require((source_dir / "src/acc/acc_ml_optimiser_impl.h").is_file(), "capture source lacks scorer")
     _require((source_dir / "src/ml_optimiser.cpp").is_file(), "capture source lacks optimiser")
+    _require((source_dir / "src/ml_optimiser.h").is_file(), "capture source lacks optimiser header")
     status = _git_text(source_dir, "status", "--porcelain", "--untracked-files=no")
     _require(not status, f"capture RELION source has tracked changes:\n{status}")
     scorer_text = (source_dir / "src/acc/acc_ml_optimiser_impl.h").read_text(errors="replace")
     optimiser_text = (source_dir / "src/ml_optimiser.cpp").read_text(errors="replace")
+    optimiser_header_text = (source_dir / "src/ml_optimiser.h").read_text(errors="replace")
     for token, text in (
         ("RELION_BPRE_CAPTURE_STACKS", scorer_text),
         ("RELION_FINE_SCORE_CAPTURE_CLASSES", scorer_text),
         ("RELION_SAMPLING_PERTURBATION_OVERRIDE", optimiser_text),
+        ("RELION_CONTINUE_ITER0_PRESERVE_STATE", optimiser_header_text),
     ):
         _require(token in text, f"capture RELION source lacks {token}")
     provenance = {
@@ -500,6 +508,7 @@ def _source_provenance(source_dir: Path) -> dict[str, Any]:
         "tracked_dirty": False,
         "scorer_sha256": _sha256(source_dir / "src/acc/acc_ml_optimiser_impl.h"),
         "optimiser_sha256": _sha256(source_dir / "src/ml_optimiser.cpp"),
+        "optimiser_header_sha256": _sha256(source_dir / "src/ml_optimiser.h"),
     }
     _require(provenance["git_head"] == EXPECTED_CAPTURE_RELION_HEAD, "capture RELION head drift")
     _require(provenance["git_tree"] == EXPECTED_CAPTURE_RELION_TREE, "capture RELION tree drift")
@@ -831,6 +840,7 @@ run_native_arm() {{
   for class_id in 001 002 003 004; do test -s "${{arm_root}}/output/run_it001_class${{class_id}}.mrc"; done
   test -s "${{arm_root}}/output/run_it001_data.star"
   test -s "${{arm_root}}/output/run_it001_sampling.star"
+  test "$(grep -Fxc {_quote(EXPECTED_CONTINUED_ITER0_MARKER)} "${{arm_root}}/output/runner.stdout")" -eq 1
   grep -Fq '[RELION_SAMPLING_PERTURBATION_OVERRIDE] iter 1 requested' "${{arm_root}}/output/runner.stdout"
   {_quote(python)} -c "from recovar.em.sampling import read_relion_sampling_metadata as r; m=r('${{arm_root}}/output/run_it001_sampling.star'); assert m['healpix_order']=={CASE.healpix_order}; assert abs(m['offset_range']-{CASE.offset_range_pixels * CASE.pixel_size_angstrom})<1e-7; assert abs(m['offset_step']-{CASE.offset_step_pixels * CASE.pixel_size_angstrom})<1e-7; assert abs(m['random_perturbation']-({CASE.random_perturbation}))<1e-5"
   if [[ "${{capture_class}}" = 0 ]]; then
