@@ -1126,7 +1126,7 @@ def test_relion_coarse_vdam_multistream_skips_poisoned_padding_bitwise(
 
         for invalid in (0, physical_batch_size + 1):
             with pytest.raises(
-                jax.errors.JaxRuntimeError,
+                ValueError,
                 match="actual_batch_size",
             ):
                 np.asarray(multistream(invalid))
