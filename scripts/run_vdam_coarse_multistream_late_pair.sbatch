@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vdam-coarse-sl-2x2
+#SBATCH --job-name=vdam-coarse-atomic
 #SBATCH --account=gilles
 #SBATCH --partition=cryoem
 #SBATCH --qos=della-cryoem
@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=180G
 #SBATCH --time=00:35:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-coarse-ms-pair-%j.out
+#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-coarse-atomic-%j.out
 
 set -euo pipefail
 
@@ -28,6 +28,10 @@ set -euo pipefail
 : "${TARGET_GPU_UUID:?pin the physical H100 UUID}"
 : "${RELION_BIND_BINARY_OVERRIDE:?set the qualified RELION binding binary}"
 : "${EXPECTED_RELION_BIND_SHA256:?pin the qualified RELION binding binary}"
+: "${PRECOMPUTED_RESOURCE_REPORT:?set the login-node atomic resource JSON}"
+: "${EXPECTED_RESOURCE_REPORT_SHA256:?pin the atomic resource JSON}"
+: "${PRECOMPUTED_RESOURCE_DEMANGLED:?set the demangled cuobjdump report}"
+: "${EXPECTED_RESOURCE_DEMANGLED_SHA256:?pin the demangled cuobjdump report}"
 
 ROOT=${VDAM_COARSE_MULTISTREAM_PAIR_ROOT}
 CHECKPOINT=${VDAM_LATE_PROFILE_CHECKPOINT}
@@ -51,11 +55,14 @@ RUNTIME=${ROOT}/runtime
 NSIGHT=${ROOT}/nsight
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 RELION_BIND_DIR=${RUNTIME}/relion_bind
+FOCUSED_TEST_NODE=tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope
 SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
   recovar/em/dense_single_volume/helpers/significance.py
+  tests/conftest.py
+  tests/unit/test_cuda_relion_fine_diff2.py
   scripts/run_vdam_late_iteration_profile.py
   scripts/summarize_vdam_nsys_sqlite.py
   scripts/run_vdam_coarse_multistream_late_pair.sbatch
@@ -66,7 +73,7 @@ SOURCE_FILES=(
 
 on_error() {
   local status=$?
-  local message="VDAM coarse multistream late pair failed: status=${status} line=${BASH_LINENO[0]} command=${BASH_COMMAND}"
+  local message="VDAM coarse atomic late pair failed: status=${status} line=${BASH_LINENO[0]} command=${BASH_COMMAND}"
   printf '%s\n' "${message}" >&2
   if [[ -d "${PROVENANCE}" ]]; then
     printf '%s\n' "${message}" > "${PROVENANCE}/failure.txt"
@@ -87,12 +94,18 @@ test -e "${QUALIFIED_GPU_GATE_ROOT}/COMPLETED"
 test -s "${QUALIFIED_GPU_GATE_ROOT}/provenance/source_manifest.sha256"
 test -s "${QUALIFIED_CUDA}"
 test -s "${RELION_BIND_BINARY_OVERRIDE}"
+test -s "${PRECOMPUTED_RESOURCE_REPORT}"
+test -s "${PRECOMPUTED_RESOURCE_DEMANGLED}"
 test "${SLURMD_NODENAME:-$(hostname -s)}" = "${EXPECTED_NODE_NAME}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
 test "$(sha256sum "${QUALIFIED_CUDA}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY_OVERRIDE}" | awk '{print $1}')" = \
   "${EXPECTED_RELION_BIND_SHA256}"
+test "$(sha256sum "${PRECOMPUTED_RESOURCE_REPORT}" | awk '{print $1}')" = \
+  "${EXPECTED_RESOURCE_REPORT_SHA256}"
+test "$(sha256sum "${PRECOMPUTED_RESOURCE_DEMANGLED}" | awk '{print $1}')" = \
+  "${EXPECTED_RESOURCE_DEMANGLED_SHA256}"
 (
   cd "${REPO_ROOT}"
   sha256sum -c "${QUALIFIED_GPU_GATE_ROOT}/provenance/source_manifest.sha256"
@@ -109,10 +122,35 @@ mkdir -p "${PROVENANCE}" "${RUNTIME}/cuda" "${RELION_BIND_DIR}" "${NSIGHT}"
 touch "${ROOT}/SAFE_TO_DELETE"
 cp --reflink=auto "${QUALIFIED_CUDA}" "${CUDA_BINARY}"
 cp --reflink=auto "${RELION_BIND_BINARY_OVERRIDE}" "${RELION_BIND_DIR}/"
+cp --reflink=auto "${PRECOMPUTED_RESOURCE_REPORT}" \
+  "${PROVENANCE}/coarse_atomic_resources.json"
+cp --reflink=auto "${PRECOMPUTED_RESOURCE_DEMANGLED}" \
+  "${PROVENANCE}/cuda_resource_usage.demangled.txt"
 RELION_BIND_BINARY=${RELION_BIND_DIR}/$(basename "${RELION_BIND_BINARY_OVERRIDE}")
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${EXPECTED_CUDA_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = \
   "${EXPECTED_RELION_BIND_SHA256}"
+test "$(sha256sum "${PROVENANCE}/coarse_atomic_resources.json" | awk '{print $1}')" = \
+  "${EXPECTED_RESOURCE_REPORT_SHA256}"
+test "$(sha256sum "${PROVENANCE}/cuda_resource_usage.demangled.txt" | awk '{print $1}')" = \
+  "${EXPECTED_RESOURCE_DEMANGLED_SHA256}"
+
+"${PIXI_PY}" - "${PROVENANCE}/coarse_atomic_resources.json" \
+  "${EXPECTED_CUDA_SHA256}" "${EXPECTED_RESOURCE_DEMANGLED_SHA256}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text())
+assert report["binary_sha256"] == sys.argv[2], report
+assert report["demangled_resource_report_sha256"] == sys.argv[3], report
+canonical = report["resources"]["canonical"]
+atomic = report["resources"]["atomic"]
+assert canonical == {"registers_per_thread": 56, "static_shared_bytes": 15232}
+assert atomic == {"registers_per_thread": 48, "static_shared_bytes": 7040}
+assert canonical["static_shared_bytes"] - atomic["static_shared_bytes"] == 8192
+assert canonical["registers_per_thread"] - atomic["registers_per_thread"] == 8
+PY
 
 checkpoint_prefix=${CHECKPOINT%_optimiser.star}
 INPUT_FILES=(
@@ -193,44 +231,71 @@ assert len(jax.devices("gpu")) == 1
 assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_error()
 assert callable(getattr(relion_bind_core, "vdam_rnd_unif_sequence", None))
 assert_parity_ancestors()
-print("VDAM coarse multistream late-pair runtime gate passed", jax.devices(), recovar.__file__)
+print("VDAM coarse atomic late-pair runtime gate passed", jax.devices(), recovar.__file__)
 PY
 ) > "${PROVENANCE}/runtime_gate.stdout" 2> "${PROVENANCE}/runtime_gate.stderr"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
+(
+  cd "${REPO_ROOT}"
+  env LD_PRELOAD="${CUSPARSE_LIBRARY}" \
+    JAX_COMPILATION_CACHE_DIR="${RUNTIME}/focused_jax_cache" \
+    RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1 \
+    RECOVAR_ENABLE_CUSTOM_CUDA=1 \
+    JAX_PLATFORMS=cuda,cpu \
+    "${PIXI_PY}" -m pytest -v --run-gpu \
+      --junitxml="${ROOT}/focused_pytest.junit.xml" \
+      "${FOCUSED_TEST_NODE}"
+) > "${ROOT}/focused_pytest.stdout" 2> "${ROOT}/focused_pytest.stderr"
+test -s "${ROOT}/focused_pytest.junit.xml"
+"${PIXI_PY}" - "${ROOT}/focused_pytest.junit.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+suite = root if root.tag == "testsuite" else root.find("testsuite")
+assert suite is not None
+assert int(suite.attrib["tests"]) == 1
+assert int(suite.attrib.get("failures", 0)) == 0
+assert int(suite.attrib.get("errors", 0)) == 0
+assert int(suite.attrib.get("skipped", 0)) == 0
+PY
+vdam_verify_selected_gpu "${selected_gpu_uuid}"
+
 RUN_LABELS=(
-  generic_serial_1
-  singlelane_serial_1
-  singlelane_multistream_1
-  generic_multistream_1
-  generic_multistream_2
-  singlelane_multistream_2
-  singlelane_serial_2
-  generic_serial_2
+  canonical_1
+  atomic_1
+  atomic_2
+  canonical_2
 )
-RUN_WORKERS=(0 0 8 8 8 8 0 0)
-RUN_SINGLE_LANE=(0 1 1 0 0 1 1 0)
+RUN_WORKERS=(0 0 0 0)
+RUN_SINGLE_LANE=(0 0 0 0)
+RUN_CANONICAL=(1 0 0 1)
 test "${#RUN_LABELS[@]}" -eq "${#RUN_WORKERS[@]}"
 test "${#RUN_LABELS[@]}" -eq "${#RUN_SINGLE_LANE[@]}"
-printf 'order\tlabel\tworkers\tsingle_lane_canonical\tnsys_base\n' \
+test "${#RUN_LABELS[@]}" -eq "${#RUN_CANONICAL[@]}"
+printf 'order\tlabel\tworkers\tsingle_lane_canonical\tcanonical_reduction\tnsys_base\n' \
   > "${PROVENANCE}/execution_order.tsv"
 for index in "${!RUN_LABELS[@]}"; do
   label=${RUN_LABELS[index]}
   workers=${RUN_WORKERS[index]}
   single_lane=${RUN_SINGLE_LANE[index]}
+  canonical=${RUN_CANONICAL[index]}
   run_root=${ROOT}/runs/${label}
   cache_root=${run_root}/jax_cache
   nsys_base=${NSIGHT}/${label}_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
   mkdir -p "${run_root}" "${cache_root}"
   touch "${cache_root}/SAFE_TO_DELETE"
-  printf '%d\t%s\t%s\t%s\t%s\n' \
-    "$((index + 1))" "${label}" "${workers}" "${single_lane}" "${nsys_base}" \
+  printf '%d\t%s\t%s\t%s\t%s\t%s\n' \
+    "$((index + 1))" "${label}" "${workers}" "${single_lane}" \
+    "${canonical}" "${nsys_base}" \
     >> "${PROVENANCE}/execution_order.tsv"
   command=(
     env
     "LD_PRELOAD=${CUSPARSE_LIBRARY}"
     "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"
     "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL=${single_lane}"
+    "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION=${canonical}"
     "JAX_COMPILATION_CACHE_DIR=${cache_root}"
     "${PIXI_PY}" -m scripts.run_vdam_late_iteration_profile
     --checkpoint-optimiser "${CHECKPOINT}"
@@ -286,7 +351,7 @@ import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.vdam_coarse_single_lane_late_factorial.v1",
+    "schema": "recovar.vdam_coarse_atomic_late_pair.v1",
     "classification": "diagnostic_performance_only",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],
@@ -298,17 +363,15 @@ payload = {
     "input_manifest_sha256": sys.argv[9],
     "qualified_gpu_gate_root": sys.argv[10],
     "execution_order": [
-        "generic_serial_1",
-        "singlelane_serial_1",
-        "singlelane_multistream_1",
-        "generic_multistream_1",
-        "generic_multistream_2",
-        "singlelane_multistream_2",
-        "singlelane_serial_2",
-        "generic_serial_2",
+        "canonical_1",
+        "atomic_1",
+        "atomic_2",
+        "canonical_2",
     ],
-    "coarse_multistream_workers": [0, 0, 8, 8, 8, 8, 0, 0],
-    "single_lane_canonical": [False, True, True, False, False, True, True, False],
+    "coarse_multistream_workers": [0, 0, 0, 0],
+    "single_lane_canonical": [False, False, False, False],
+    "canonical_reduction": [True, False, False, True],
+    "focused_test_node": "tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope",
     "raw_image_cache": "off",
     "exact_local_bucket_radix": 4,
     "exact_local_physical_order_chunk_size": 0,
