@@ -5,6 +5,7 @@ pairs per image without materializing the full weight matrix.
 Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refine.py``.
 """
 
+import json
 import logging
 import os
 from enum import Enum
@@ -19,6 +20,7 @@ from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.projection import compute_projections_block
 from recovar.em.dense_single_volume.helpers.scoring import (
     _coarse_gaussian_direct_macro_diagnostics,
+    _coarse_gaussian_qualification_decision,
     _e_step_block_scores,
     _e_step_block_scores_windowed,
     _relion_coarse_gaussian_gemm_scores,
@@ -711,6 +713,107 @@ class CoarseGaussianGemmResources(NamedTuple):
     pixel_index_device_to_host_materializations: int
 
 
+class CoarseGaussianGemmDiagnosticScope(NamedTuple):
+    """Deterministic identity and completion contract for one diagnostic call.
+
+    InitialModel invokes the shared significance engine once per non-empty
+    pseudo-halfset/group.  ``expected_call_ids`` names that complete run, and
+    exactly one (the final call) sets ``finalize=True`` so an aggregate
+    manifest can prove that every globally requested particle was captured
+    exactly once across the disjoint call scopes.
+    """
+
+    run_id: str
+    call_id: str
+    expected_call_ids: tuple[str, ...]
+    finalize: bool
+
+
+def _validate_coarse_gaussian_gemm_diagnostic_identifier(
+    value: str,
+    *,
+    field: str,
+) -> str:
+    """Return one filename-safe deterministic diagnostic identifier."""
+
+    token = str(value)
+    allowed = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+    )
+    if not token or len(token) > 160 or any(character not in allowed for character in token):
+        raise ValueError(
+            f"coarse GEMM diagnostic {field} must be 1--160 filename-safe "
+            f"characters, got {token!r}",
+        )
+    return token
+
+
+def _resolve_coarse_gaussian_gemm_diagnostic_scope(
+    scope: CoarseGaussianGemmDiagnosticScope | None,
+    *,
+    debug_iteration: int | None,
+    current_size: int | None,
+) -> tuple[CoarseGaussianGemmDiagnosticScope, bool]:
+    """Resolve an explicit multi-call scope or a strict single-call default."""
+
+    if scope is None:
+        iteration_label = -1 if debug_iteration is None else int(debug_iteration)
+        size_label = -1 if current_size is None else int(current_size)
+        iteration_token = (
+            f"m{-iteration_label:04d}"
+            if iteration_label < 0
+            else f"{iteration_label:04d}"
+        )
+        size_token = f"m{-size_label:04d}" if size_label < 0 else f"{size_label:04d}"
+        run_id = f"shared_it{iteration_token}_cs{size_token}"
+        return (
+            CoarseGaussianGemmDiagnosticScope(
+                run_id=run_id,
+                call_id="call0000_global",
+                expected_call_ids=("call0000_global",),
+                finalize=True,
+            ),
+            False,
+        )
+    run_id = _validate_coarse_gaussian_gemm_diagnostic_identifier(
+        scope.run_id,
+        field="run_id",
+    )
+    call_id = _validate_coarse_gaussian_gemm_diagnostic_identifier(
+        scope.call_id,
+        field="call_id",
+    )
+    expected_call_ids = tuple(
+        _validate_coarse_gaussian_gemm_diagnostic_identifier(
+            value,
+            field="expected_call_id",
+        )
+        for value in scope.expected_call_ids
+    )
+    if not expected_call_ids or len(set(expected_call_ids)) != len(expected_call_ids):
+        raise ValueError(
+            "coarse GEMM diagnostic expected_call_ids must be non-empty and unique",
+        )
+    if call_id not in expected_call_ids:
+        raise ValueError(
+            "coarse GEMM diagnostic call_id must occur in expected_call_ids",
+        )
+    if bool(scope.finalize) != (call_id == expected_call_ids[-1]):
+        raise ValueError(
+            "coarse GEMM diagnostic finalize must be true exactly for the last "
+            "expected call",
+        )
+    return (
+        CoarseGaussianGemmDiagnosticScope(
+            run_id=run_id,
+            call_id=call_id,
+            expected_call_ids=expected_call_ids,
+            finalize=bool(scope.finalize),
+        ),
+        True,
+    )
+
+
 def _coarse_gaussian_gemm_projected_transient_budget_bytes(
     *,
     default_gb: float = 2.0,
@@ -815,6 +918,152 @@ def _coarse_gaussian_gemm_diagnostic_request() -> tuple[str | None, set[int] | N
     return os.path.abspath(os.path.expanduser(directory)), {int(target) for target in targets}
 
 
+def _coarse_gaussian_gemm_scope_manifest_path(
+    directory: str,
+    scope: CoarseGaussianGemmDiagnosticScope,
+) -> str:
+    return os.path.join(
+        directory,
+        f"coarse_gemm_scope_{scope.run_id}_{scope.call_id}.json",
+    )
+
+
+def _write_json_exclusive(path: str, payload: dict) -> None:
+    """Write immutable diagnostic metadata without hiding path collisions."""
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, "x", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+    except FileExistsError as error:
+        raise FileExistsError(
+            f"refusing to overwrite a coarse GEMM diagnostic manifest: {path}",
+        ) from error
+
+
+def _seal_coarse_gaussian_gemm_diagnostic_scope(
+    directory: str,
+    *,
+    scope: CoarseGaussianGemmDiagnosticScope,
+    selection_policy: str,
+    requested_targets: set[int],
+    targets_in_scope: set[int],
+    captured_target_counts: dict[int, int],
+    artifact_paths: list[str],
+) -> tuple[str, str | None]:
+    """Seal one call record and, on the final call, its aggregate manifest."""
+
+    requested = sorted(int(value) for value in requested_targets)
+    in_scope = sorted(int(value) for value in targets_in_scope)
+    counts = {
+        str(int(target)): int(captured_target_counts.get(int(target), 0))
+        for target in in_scope
+    }
+    bad_scope_counts = {
+        target: count
+        for target, count in counts.items()
+        if count != 1
+    }
+    if bad_scope_counts:
+        raise RuntimeError(
+            "coarse GEMM diagnostic targets must be captured exactly once "
+            f"within call {scope.call_id}: {bad_scope_counts}",
+        )
+    scope_record = {
+        "schema_version": 1,
+        "run_id": scope.run_id,
+        "call_id": scope.call_id,
+        "expected_call_ids": list(scope.expected_call_ids),
+        "selection_policy": str(selection_policy),
+        "requested_original_indices": requested,
+        "targets_in_scope": in_scope,
+        "targets_explicitly_out_of_scope": sorted(
+            set(requested) - set(in_scope),
+        ),
+        "captured_target_counts": counts,
+        "artifact_paths": [os.path.basename(path) for path in artifact_paths],
+    }
+    scope_path = _coarse_gaussian_gemm_scope_manifest_path(directory, scope)
+    _write_json_exclusive(scope_path, scope_record)
+    if not scope.finalize:
+        return scope_path, None
+
+    scope_records = []
+    missing_call_ids = []
+    for expected_call_id in scope.expected_call_ids:
+        expected_scope = scope._replace(
+            call_id=expected_call_id,
+            finalize=expected_call_id == scope.expected_call_ids[-1],
+        )
+        expected_path = _coarse_gaussian_gemm_scope_manifest_path(
+            directory,
+            expected_scope,
+        )
+        if not os.path.isfile(expected_path):
+            missing_call_ids.append(expected_call_id)
+            continue
+        with open(expected_path, encoding="utf-8") as stream:
+            record = json.load(stream)
+        if (
+            record.get("run_id") != scope.run_id
+            or record.get("call_id") != expected_call_id
+            or record.get("expected_call_ids") != list(scope.expected_call_ids)
+            or record.get("requested_original_indices") != requested
+        ):
+            raise RuntimeError(
+                "coarse GEMM diagnostic scope manifest does not match the "
+                f"aggregate contract: {expected_path}",
+            )
+        scope_records.append(record)
+    if missing_call_ids:
+        raise RuntimeError(
+            "coarse GEMM diagnostic aggregate is missing expected calls: "
+            f"{missing_call_ids}",
+        )
+
+    aggregate_counts = {str(target): 0 for target in requested}
+    for record in scope_records:
+        for target, count in record["captured_target_counts"].items():
+            if target not in aggregate_counts:
+                raise RuntimeError(
+                    "coarse GEMM scope captured an unrequested target: "
+                    f"{target}",
+                )
+            aggregate_counts[target] += int(count)
+    missing_targets = [
+        int(target)
+        for target, count in aggregate_counts.items()
+        if count == 0
+    ]
+    duplicate_targets = [
+        int(target)
+        for target, count in aggregate_counts.items()
+        if count > 1
+    ]
+    if missing_targets or duplicate_targets:
+        raise RuntimeError(
+            "coarse GEMM diagnostic aggregate requires every requested target "
+            "exactly once; "
+            f"missing={missing_targets}, duplicate={duplicate_targets}",
+        )
+    aggregate_record = {
+        "schema_version": 1,
+        "run_id": scope.run_id,
+        "expected_call_ids": list(scope.expected_call_ids),
+        "requested_original_indices": requested,
+        "captured_target_counts": aggregate_counts,
+        "all_requested_captured_exactly_once": True,
+        "scope_records": scope_records,
+    }
+    aggregate_path = os.path.join(
+        directory,
+        f"coarse_gemm_manifest_{scope.run_id}.json",
+    )
+    _write_json_exclusive(aggregate_path, aggregate_record)
+    return scope_path, aggregate_path
+
+
 def _write_coarse_gaussian_gemm_diagnostic(
     output_path: str,
     *,
@@ -831,6 +1080,10 @@ def _write_coarse_gaussian_gemm_diagnostic(
     adaptive_fraction: float,
     max_significants: int,
     resource_estimate: CoarseGaussianGemmResources,
+    diagnostic_scope: CoarseGaussianGemmDiagnosticScope,
+    diagnostic_selection_policy: str,
+    debug_iteration: int | None,
+    current_size: int | None,
 ) -> None:
     """Write one immutable paired score surface for repeat-envelope analysis."""
 
@@ -845,18 +1098,77 @@ def _write_coarse_gaussian_gemm_diagnostic(
         direct_support=direct_support,
         macro_support=macro_support,
     )
+    direct_pre_prior = np.asarray(direct_scores_pre_prior)
+    macro_pre_prior = np.asarray(macro_scores_pre_prior)
+    macro_negative_implied_diff2 = macro_pre_prior > 0.0
+    direct_negative_implied_diff2 = direct_pre_prior > 0.0
+    qualification = _coarse_gaussian_qualification_decision(
+        exact_arithmetic_equivalent=True,
+        repeat_stable=None,
+        unbiased_non_directional=None,
+        bounded_non_growing=None,
+        discrete_choices_equal=bool(
+            np.all(diagnostics["argmax_equal"])
+            and np.all(diagnostics["support_equal"])
+        ),
+        final_basin_quality_equal=None,
+        material_runtime_win=None,
+        scale_amplified=None,
+        negative_implied_diff2=bool(
+            np.any(macro_negative_implied_diff2 & ~direct_negative_implied_diff2)
+        ),
+        nonfinite_scores=bool(np.any(~np.isfinite(macro_pre_prior))),
+        exact_zero_cancellation_drift=bool(
+            np.any(diagnostics["exact_zero_direct_nonzero_macro_per_image"])
+        ),
+    )
     payload = {
         "layout": np.asarray("image,class,rotation,translation"),
         "numerical_policy": np.asarray(
             "exact-arithmetic-equivalent_expanded-square_cancellation-sensitive_qualification-only"
+        ),
+        "qualification_status": np.asarray(qualification["status"]),
+        "qualification_policy": np.asarray(
+            "allow_repeat-stable_unbiased_bounded_non-growing_noise_never_lone-epsilon_promotion"
+        ),
+        "automatic_no_go_reasons": np.asarray(
+            qualification["failure_reasons"],
+            dtype=np.str_,
+        ),
+        "pending_qualification_gates": np.asarray(
+            qualification["pending_gates"],
+            dtype=np.str_,
+        ),
+        "requires_bitwise_score_identity": np.asarray(
+            qualification["requires_bitwise_score_identity"],
+        ),
+        "requires_exact_discrete_identity": np.asarray(
+            qualification["requires_exact_discrete_identity"],
+        ),
+        "repeat_spread_assessment": np.asarray(
+            "NO_GO_until_same-hardware_repeat_artifacts_establish_native-relative_spread"
+        ),
+        "scale_growth_assessment": np.asarray(
+            "NO_GO_until_multiscale_artifacts_exclude_scale-amplified_drift"
         ),
         "paired_capture_active": np.asarray(True),
         "clean_timing_eligible": np.asarray(False),
         "timing_policy": np.asarray(
             "paired_capture_executes_both_scorers_use_separate_diagnostic-off_timing_arm"
         ),
-        "direct_scores_pre_prior": np.asarray(direct_scores_pre_prior),
-        "macro_scores_pre_prior": np.asarray(macro_scores_pre_prior),
+        "diagnostic_run_id": np.asarray(diagnostic_scope.run_id),
+        "diagnostic_call_id": np.asarray(diagnostic_scope.call_id),
+        "diagnostic_selection_policy": np.asarray(diagnostic_selection_policy),
+        "debug_iteration": np.asarray(
+            -1 if debug_iteration is None else int(debug_iteration),
+            dtype=np.int64,
+        ),
+        "current_size": np.asarray(
+            -1 if current_size is None else int(current_size),
+            dtype=np.int64,
+        ),
+        "direct_scores_pre_prior": direct_pre_prior,
+        "macro_scores_pre_prior": macro_pre_prior,
         "direct_scores_with_prior": np.asarray(direct_scores_with_prior),
         "macro_scores_with_prior": np.asarray(macro_scores_with_prior),
         "original_indices": np.asarray(original_indices, dtype=np.int64),
@@ -865,6 +1177,20 @@ def _write_coarse_gaussian_gemm_diagnostic(
         "padded_batch_size": np.asarray(padded_batch_size, dtype=np.int64),
         "adaptive_fraction": np.asarray(adaptive_fraction, dtype=np.float64),
         "max_significants": np.asarray(max_significants, dtype=np.int64),
+        "direct_negative_implied_diff2_count": np.asarray(
+            np.count_nonzero(direct_negative_implied_diff2),
+            dtype=np.int64,
+        ),
+        "macro_negative_implied_diff2_count": np.asarray(
+            np.count_nonzero(macro_negative_implied_diff2),
+            dtype=np.int64,
+        ),
+        "macro_only_negative_implied_diff2_count": np.asarray(
+            np.count_nonzero(
+                macro_negative_implied_diff2 & ~direct_negative_implied_diff2,
+            ),
+            dtype=np.int64,
+        ),
     }
     payload.update(diagnostics)
     payload.update(
@@ -2729,6 +3055,7 @@ def _compute_k_class_significance_batched(
     relion_coarse_gaussian_default: bool = False,
     relion_f32_coarse_tie_ulps: int = 0,
     pad_final_image_batch: bool = False,
+    coarse_gemm_diagnostic_scope: CoarseGaussianGemmDiagnosticScope | None = None,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
 
@@ -3090,6 +3417,9 @@ def _compute_k_class_significance_batched(
         coarse_gaussian_gemm_diagnostic_dir,
         coarse_gaussian_gemm_diagnostic_targets,
     ) = _coarse_gaussian_gemm_diagnostic_request()
+    coarse_gaussian_gemm_requested_targets = coarse_gaussian_gemm_diagnostic_targets
+    coarse_gaussian_gemm_diagnostic_scope = None
+    coarse_gaussian_gemm_diagnostic_selection_policy = None
     if coarse_gaussian_gemm_diagnostic_dir is not None:
         if not coarse_gaussian_gemm_macro_enabled:
             raise ValueError(
@@ -3102,9 +3432,34 @@ def _compute_k_class_significance_batched(
                 "collect_significance=True so exact support can be compared",
             )
         logger.warning(
-            "coarse GEMM paired capture is active and executes both direct and "
-            "GEMM scorers; this run is excluded from runtime qualification"
+            "coarse GEMM paired capture is requested; calls containing target "
+            "particles execute both direct and GEMM scorers, and the configured "
+            "run is excluded from runtime qualification"
         )
+        (
+            coarse_gaussian_gemm_diagnostic_scope,
+            explicitly_scoped_diagnostic,
+        ) = _resolve_coarse_gaussian_gemm_diagnostic_scope(
+            coarse_gemm_diagnostic_scope,
+            debug_iteration=debug_iteration,
+            current_size=current_size,
+        )
+        if explicitly_scoped_diagnostic:
+            available_original_indices = set(
+                int(value)
+                for value in _original_indices_for_local(
+                    experiment_dataset,
+                    np.arange(n_images, dtype=np.int64),
+                )
+            )
+            coarse_gaussian_gemm_diagnostic_targets = (
+                coarse_gaussian_gemm_requested_targets & available_original_indices
+            )
+            coarse_gaussian_gemm_diagnostic_selection_policy = (
+                "explicit_call_scope_intersection"
+            )
+        else:
+            coarse_gaussian_gemm_diagnostic_selection_policy = "strict_single_call"
     if coarse_gaussian_gemm_macro_enabled and not exact_coarse_operands_enabled:
         raise ValueError(
             f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1 requires "
@@ -3928,6 +4283,7 @@ def _compute_k_class_significance_batched(
     tree_rescore_exact_ties = 0
     coarse_gaussian_gemm_diagnostic_paths = []
     coarse_gaussian_gemm_diagnostic_found_targets = set()
+    coarse_gaussian_gemm_diagnostic_target_counts = {}
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -3990,9 +4346,6 @@ def _compute_k_class_significance_batched(
             if positions.size:
                 coarse_gemm_diagnostic_positions = positions
                 coarse_gemm_diagnostic_original_indices = original_indices_np[positions]
-                coarse_gaussian_gemm_diagnostic_found_targets.update(
-                    int(value) for value in coarse_gemm_diagnostic_original_indices
-                )
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
@@ -4985,6 +5338,8 @@ def _compute_k_class_significance_batched(
             diagnostic_path = os.path.join(
                 coarse_gaussian_gemm_diagnostic_dir,
                 "coarse_gemm_ab_"
+                f"{coarse_gaussian_gemm_diagnostic_scope.run_id}_"
+                f"{coarse_gaussian_gemm_diagnostic_scope.call_id}_"
                 f"it{iteration_label:04d}_cs{size_label:04d}_"
                 f"batch{start_idx:08d}_{end_idx:08d}.npz",
             )
@@ -5004,8 +5359,20 @@ def _compute_k_class_significance_batched(
                 adaptive_fraction=adaptive_fraction,
                 max_significants=max_significants,
                 resource_estimate=coarse_gaussian_gemm_resource_estimate,
+                diagnostic_scope=coarse_gaussian_gemm_diagnostic_scope,
+                diagnostic_selection_policy=(
+                    coarse_gaussian_gemm_diagnostic_selection_policy
+                ),
+                debug_iteration=debug_iteration,
+                current_size=current_size,
             )
             coarse_gaussian_gemm_diagnostic_paths.append(diagnostic_path)
+            for value in coarse_gemm_diagnostic_original_indices:
+                target = int(value)
+                coarse_gaussian_gemm_diagnostic_found_targets.add(target)
+                coarse_gaussian_gemm_diagnostic_target_counts[target] = (
+                    coarse_gaussian_gemm_diagnostic_target_counts.get(target, 0) + 1
+                )
 
         hard_assignment[start_idx:end_idx] = np.asarray(
             best_argmax_batch[:actual_batch_size],
@@ -5320,6 +5687,8 @@ def _compute_k_class_significance_batched(
             },
         }
     )
+    coarse_gaussian_gemm_scope_manifest_path = None
+    coarse_gaussian_gemm_aggregate_manifest_path = None
     if coarse_gaussian_gemm_diagnostic_targets is not None:
         missing_targets = (
             coarse_gaussian_gemm_diagnostic_targets
@@ -5328,8 +5697,21 @@ def _compute_k_class_significance_batched(
         if missing_targets:
             raise ValueError(
                 f"{_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_INDICES_ENV} contains "
-                f"indices absent from the dataset: {sorted(missing_targets)}",
+                "targets that were not captured in this diagnostic call "
+                f"scope: {sorted(missing_targets)}",
             )
+        (
+            coarse_gaussian_gemm_scope_manifest_path,
+            coarse_gaussian_gemm_aggregate_manifest_path,
+        ) = _seal_coarse_gaussian_gemm_diagnostic_scope(
+            coarse_gaussian_gemm_diagnostic_dir,
+            scope=coarse_gaussian_gemm_diagnostic_scope,
+            selection_policy=coarse_gaussian_gemm_diagnostic_selection_policy,
+            requested_targets=coarse_gaussian_gemm_requested_targets,
+            targets_in_scope=coarse_gaussian_gemm_diagnostic_targets,
+            captured_target_counts=coarse_gaussian_gemm_diagnostic_target_counts,
+            artifact_paths=coarse_gaussian_gemm_diagnostic_paths,
+        )
     full_stats = {
         "normalization_log_z": normalization_log_z,
         "normalization_log_evidence": normalization_log_evidence,
@@ -5348,18 +5730,37 @@ def _compute_k_class_significance_batched(
             field: int(value)
             for field, value in coarse_gaussian_gemm_resource_estimate._asdict().items()
         }
-        paired_capture_active = coarse_gaussian_gemm_diagnostic_dir is not None
+        paired_capture_requested = coarse_gaussian_gemm_diagnostic_dir is not None
+        paired_capture_active = bool(coarse_gaussian_gemm_diagnostic_targets)
         full_stats["coarse_gaussian_gemm_qualification"] = {
+            "paired_capture_requested": paired_capture_requested,
             "paired_capture_active": paired_capture_active,
-            "clean_timing_eligible": not paired_capture_active,
+            "clean_timing_eligible": not paired_capture_requested,
+            "numerical_qualification_status": "NO_GO_UNQUALIFIED",
+            "requires_bitwise_score_identity": False,
+            "requires_exact_discrete_identity": True,
             "timing_policy": (
                 "paired capture executes both scorers; use a separate "
                 "diagnostic-off timing arm"
+            ),
+            "numerical_policy": (
+                "mathematically equivalent score noise may pass only when "
+                "repeat-stable, unbiased/non-directional, bounded/non-growing, "
+                "discrete-identical, basin/quality-neutral, and materially faster; "
+                "scale amplification or negative implied diff2 is NO-GO"
             ),
         }
     if coarse_gaussian_gemm_diagnostic_paths:
         full_stats["coarse_gaussian_gemm_diagnostic_paths"] = tuple(
             coarse_gaussian_gemm_diagnostic_paths,
+        )
+    if coarse_gaussian_gemm_scope_manifest_path is not None:
+        full_stats["coarse_gaussian_gemm_scope_manifest_path"] = (
+            coarse_gaussian_gemm_scope_manifest_path
+        )
+    if coarse_gaussian_gemm_aggregate_manifest_path is not None:
+        full_stats["coarse_gaussian_gemm_aggregate_manifest_path"] = (
+            coarse_gaussian_gemm_aggregate_manifest_path
         )
     if relion_f32_sum_weight is not None:
         # RELION's oversampling-zero second pass deliberately reuses this

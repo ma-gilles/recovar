@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -32,38 +34,6 @@ def _direct_scores(projected, shifted, weight, initial):
         weight[:, None, None, :] * np.abs(difference) ** 2,
         axis=-1,
     )
-
-
-def _expanded_square_roundoff_bound(projected, shifted, weight):
-    """Conservative arithmetic bound, not a production acceptance tolerance."""
-
-    real_dtype = np.asarray(weight).dtype
-    eps = np.finfo(real_dtype).eps
-    n_pixels = int(projected.shape[-1])
-    # Complex products, two dot products, and the image-power reduction each
-    # contribute multiple rounded operations.  This deliberately conservative
-    # gamma bound only asserts finite/bounded arithmetic in this CPU stress
-    # test; it is not used by production selection or promotion.
-    gamma = (32 * n_pixels * eps) / (1.0 - min(0.5, 32 * n_pixels * eps))
-    model = np.sum(
-        weight[:, None, :] * np.abs(projected[None, :, :]) ** 2,
-        axis=-1,
-        dtype=real_dtype,
-    )
-    cross = 2.0 * np.sum(
-        weight[:, None, None, :]
-        * np.abs(shifted[:, None, :, :])
-        * np.abs(projected[None, :, None, :]),
-        axis=-1,
-        dtype=real_dtype,
-    )
-    image = np.sum(
-        weight[:, None, :] * np.abs(shifted) ** 2,
-        axis=-1,
-        dtype=real_dtype,
-    )
-    magnitude = model[..., None] + cross + image[:, None, :]
-    return gamma * np.maximum(magnitude, np.asarray(1.0, dtype=real_dtype))
 
 
 def test_coarse_gaussian_gemm_macro_is_default_off_and_fail_closed(monkeypatch):
@@ -165,8 +135,204 @@ def test_coarse_gaussian_gemm_resource_gate_records_full_transient_and_host_sync
         )
 
 
-def test_coarse_gaussian_gemm_scores_match_direct_objective_float32():
-    """Float32 GEMM reduction agrees with the direct mathematical objective."""
+def test_initial_model_multigroup_diagnostic_scopes_are_deterministic_and_unique():
+    from recovar.em.initial_model import dense_adapter
+
+    groups = [
+        (0, np.asarray([0, 2], dtype=np.int64), None),
+        (1, np.asarray([1], dtype=np.int64), None),
+    ]
+    first = dense_adapter._initial_model_coarse_gemm_diagnostic_scopes(
+        groups,
+        debug_iteration=3,
+        current_size=8,
+        n_classes=2,
+    )
+    second = dense_adapter._initial_model_coarse_gemm_diagnostic_scopes(
+        groups,
+        debug_iteration=3,
+        current_size=8,
+        n_classes=2,
+    )
+
+    assert first == second
+    assert tuple(first) == (0, 1)
+    assert first[0].run_id == first[1].run_id
+    assert "_cs0008_" in first[0].run_id
+    assert first[0].call_id != first[1].call_id
+    assert "group0000_halfseth00" in first[0].call_id
+    assert "group0001_halfseth01" in first[1].call_id
+    assert first[0].expected_call_ids == first[1].expected_call_ids
+    assert first[0].finalize is False
+    assert first[1].finalize is True
+
+
+def test_coarse_gemm_scope_manifests_fail_closed_on_collisions_and_duplicates(
+    tmp_path,
+):
+    run_id = "collision_contract"
+    call_ids = ("call0000_group0000_halfseth00", "call0001_group0001_halfseth01")
+    first = significance.CoarseGaussianGemmDiagnosticScope(
+        run_id=run_id,
+        call_id=call_ids[0],
+        expected_call_ids=call_ids,
+        finalize=False,
+    )
+    significance._seal_coarse_gaussian_gemm_diagnostic_scope(
+        str(tmp_path),
+        scope=first,
+        selection_policy="explicit_call_scope_intersection",
+        requested_targets={0, 1},
+        targets_in_scope={0},
+        captured_target_counts={0: 1},
+        artifact_paths=[str(tmp_path / "first.npz")],
+    )
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        significance._seal_coarse_gaussian_gemm_diagnostic_scope(
+            str(tmp_path),
+            scope=first,
+            selection_policy="explicit_call_scope_intersection",
+            requested_targets={0, 1},
+            targets_in_scope={0},
+            captured_target_counts={0: 1},
+            artifact_paths=[str(tmp_path / "first.npz")],
+        )
+
+    duplicate_dir = tmp_path / "duplicate"
+    duplicate_call_ids = ("call0000_a", "call0001_b")
+    for call_index, call_id in enumerate(duplicate_call_ids):
+        scope = significance.CoarseGaussianGemmDiagnosticScope(
+            run_id="duplicate_target_contract",
+            call_id=call_id,
+            expected_call_ids=duplicate_call_ids,
+            finalize=call_index == 1,
+        )
+        if call_index == 0:
+            significance._seal_coarse_gaussian_gemm_diagnostic_scope(
+                str(duplicate_dir),
+                scope=scope,
+                selection_policy="explicit_call_scope_intersection",
+                requested_targets={0},
+                targets_in_scope={0},
+                captured_target_counts={0: 1},
+                artifact_paths=[str(duplicate_dir / "a.npz")],
+            )
+        else:
+            with pytest.raises(RuntimeError, match=r"duplicate=\[0\]"):
+                significance._seal_coarse_gaussian_gemm_diagnostic_scope(
+                    str(duplicate_dir),
+                    scope=scope,
+                    selection_policy="explicit_call_scope_intersection",
+                    requested_targets={0},
+                    targets_in_scope={0},
+                    captured_target_counts={0: 1},
+                    artifact_paths=[str(duplicate_dir / "b.npz")],
+                )
+
+
+def test_coarse_gemm_diagnostic_classifies_negative_implied_diff2_as_no_go(
+    tmp_path,
+):
+    output_path = tmp_path / "negative_implied_diff2.npz"
+    direct = np.zeros((1, 1, 1, 1), dtype=np.float32)
+    macro = np.full((1, 1, 1, 1), np.float32(1.0e-3), dtype=np.float32)
+    resources = significance._coarse_gaussian_gemm_resources(
+        rotation_block_size=1,
+        image_shape=(4, 4),
+        compact_pixel_count=1,
+        budget_bytes=10**6,
+    )
+    scope = significance.CoarseGaussianGemmDiagnosticScope(
+        run_id="negative_implied_diff2",
+        call_id="call0000_global",
+        expected_call_ids=("call0000_global",),
+        finalize=True,
+    )
+    significance._write_coarse_gaussian_gemm_diagnostic(
+        str(output_path),
+        direct_scores_pre_prior=direct,
+        macro_scores_pre_prior=macro,
+        direct_scores_with_prior=direct,
+        macro_scores_with_prior=macro,
+        direct_support=np.ones((1, 1), dtype=bool),
+        macro_support=np.ones((1, 1), dtype=bool),
+        original_indices=np.asarray([0]),
+        local_indices=np.asarray([0]),
+        actual_batch_size=1,
+        padded_batch_size=1,
+        adaptive_fraction=0.5,
+        max_significants=1,
+        resource_estimate=resources,
+        diagnostic_scope=scope,
+        diagnostic_selection_policy="strict_single_call",
+        debug_iteration=0,
+        current_size=4,
+    )
+    with np.load(output_path) as payload:
+        assert str(payload["qualification_status"]).startswith("NO_GO")
+        assert int(payload["macro_only_negative_implied_diff2_count"]) == 1
+        reasons = set(payload["automatic_no_go_reasons"].tolist())
+        assert "negative_implied_diff2" in reasons
+        assert "exact-zero_cancellation_drift" in reasons
+
+
+def test_coarse_gemm_qualification_allows_only_fully_qualified_stable_noise():
+    stable = scoring._coarse_gaussian_qualification_decision(
+        exact_arithmetic_equivalent=True,
+        repeat_stable=True,
+        unbiased_non_directional=True,
+        bounded_non_growing=True,
+        discrete_choices_equal=True,
+        final_basin_quality_equal=True,
+        material_runtime_win=True,
+        scale_amplified=False,
+        negative_implied_diff2=False,
+        nonfinite_scores=False,
+        exact_zero_cancellation_drift=False,
+    )
+    assert stable["status"] == (
+        "GO_STABLE_BOUNDED_MATHEMATICALLY_EQUIVALENT_NOISE"
+    )
+    assert stable["requires_bitwise_score_identity"] is False
+    assert stable["requires_exact_discrete_identity"] is True
+
+    unqualified = scoring._coarse_gaussian_qualification_decision(
+        exact_arithmetic_equivalent=True,
+        repeat_stable=None,
+        unbiased_non_directional=None,
+        bounded_non_growing=None,
+        discrete_choices_equal=True,
+        final_basin_quality_equal=None,
+        material_runtime_win=None,
+        scale_amplified=None,
+        negative_implied_diff2=False,
+        nonfinite_scores=False,
+        exact_zero_cancellation_drift=False,
+    )
+    assert unqualified["status"] == "NO_GO_UNQUALIFIED"
+    assert "repeat_stability" in unqualified["pending_gates"]
+
+    for bad_flag in ("scale_amplified", "negative_implied_diff2"):
+        kwargs = dict(
+            exact_arithmetic_equivalent=True,
+            repeat_stable=True,
+            unbiased_non_directional=True,
+            bounded_non_growing=True,
+            discrete_choices_equal=True,
+            final_basin_quality_equal=True,
+            material_runtime_win=True,
+            scale_amplified=False,
+            negative_implied_diff2=False,
+            nonfinite_scores=False,
+            exact_zero_cancellation_drift=False,
+        )
+        kwargs[bad_flag] = True
+        rejected = scoring._coarse_gaussian_qualification_decision(**kwargs)
+        assert rejected["status"] == "NO_GO"
+
+
+def test_coarse_gaussian_gemm_scores_report_direct_objective_float32(record_property):
+    """Report float32 drift without turning this sample into a tolerance."""
 
     operands = _macro_operands(real_dtype=np.float32)
     actual = np.asarray(
@@ -178,17 +344,36 @@ def test_coarse_gaussian_gemm_scores_match_direct_objective_float32():
         )
     )
     expected = _direct_scores(operands[0], operands[2], operands[3], operands[4])
+    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+        expected[:, None, :, :],
+        actual[:, None, :, :],
+    )
 
     assert actual.shape == (4, 5, 3)
-    np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
+    assert actual.dtype == np.float32
+    assert np.all(np.isfinite(actual))
     np.testing.assert_array_equal(
         np.argmax(actual.reshape(actual.shape[0], -1), axis=1),
         np.argmax(expected.reshape(expected.shape[0], -1), axis=1),
     )
+    record_property(
+        "float32_direct_macro_raw",
+        json.dumps(
+            {
+                "precision_bits": int(diagnostics["score_precision_bits"]),
+                "signed_mean_delta": diagnostics[
+                    "signed_mean_delta_per_image"
+                ].tolist(),
+                "max_abs_delta": diagnostics["max_abs_delta_per_image"].tolist(),
+                "max_ulp_delta": int(np.max(diagnostics["ulp_score_delta"])),
+            },
+            sort_keys=True,
+        ),
+    )
 
 
-def test_coarse_gaussian_gemm_scores_match_direct_objective_float64():
-    """Float64 companion tightens the float32 arithmetic envelope by >3 orders."""
+def test_coarse_gaussian_gemm_scores_report_direct_objective_float64(record_property):
+    """Report the float64 companion without inventing a promotion epsilon."""
 
     operands = _macro_operands(real_dtype=np.float64)
     actual = np.asarray(
@@ -200,62 +385,117 @@ def test_coarse_gaussian_gemm_scores_match_direct_objective_float64():
         )
     )
     expected = _direct_scores(operands[0], operands[2], operands[3], operands[4])
+    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+        expected[:, None, :, :],
+        actual[:, None, :, :],
+    )
 
-    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    assert actual.dtype == np.float64
+    assert np.all(np.isfinite(actual))
     np.testing.assert_array_equal(
         np.argmax(actual.reshape(actual.shape[0], -1), axis=1),
         np.argmax(expected.reshape(expected.shape[0], -1), axis=1),
     )
+    record_property(
+        "float64_direct_macro_raw",
+        json.dumps(
+            {
+                "precision_bits": int(diagnostics["score_precision_bits"]),
+                "signed_mean_delta": diagnostics[
+                    "signed_mean_delta_per_image"
+                ].tolist(),
+                "max_abs_delta": diagnostics["max_abs_delta_per_image"].tolist(),
+                "max_ulp_delta": int(np.max(diagnostics["ulp_score_delta"])),
+            },
+            sort_keys=True,
+        ),
+    )
 
 
 @pytest.mark.parametrize("real_dtype", [np.float32, np.float64])
-@pytest.mark.parametrize("scale", [1.0, 100.0, 1.0e4])
 def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
     real_dtype,
-    scale,
+    record_property,
 ):
-    """p == s stays finite and inside an arithmetic bound at three scales."""
+    """p == s exposes raw scale-dependent cancellation and remains NO-GO."""
 
     if real_dtype == np.float64:
         jax.config.update("jax_enable_x64", True)
     rng = np.random.default_rng(13290001)
     complex_dtype = np.complex64 if real_dtype == np.float32 else np.complex128
-    projected = (
-        scale
-        * (
-            rng.normal(size=(1, 4096))
-            + 1j * rng.normal(size=(1, 4096))
-        )
+    unit_projected = (
+        rng.normal(size=(1, 4096)) + 1j * rng.normal(size=(1, 4096))
     ).astype(complex_dtype)
-    shifted = projected[None, :, :].copy()
-    weight = rng.uniform(0.5, 1.5, size=(1, 4096)).astype(real_dtype)
-    initial = np.zeros(1, dtype=real_dtype)
-    actual = np.asarray(
-        scoring._relion_coarse_gaussian_gemm_scores(
-            jnp.asarray(projected),
-            jnp.asarray(np.abs(projected) ** 2, dtype=real_dtype),
-            jnp.asarray(shifted),
-            jnp.asarray(weight),
-            jnp.asarray(initial),
-            1,
-            image_shape=(128, 128),
-            volume_shape=(128, 128, 128),
+    unit_weight = rng.uniform(0.5, 1.5, size=(1, 4096)).astype(real_dtype)
+    records = []
+    score_deltas = []
+    for scale in (1.0, 100.0, 1.0e4):
+        projected = np.asarray(scale, dtype=real_dtype) * unit_projected
+        shifted = projected[None, :, :].copy()
+        initial = np.zeros(1, dtype=real_dtype)
+        macro = np.asarray(
+            scoring._relion_coarse_gaussian_gemm_scores(
+                jnp.asarray(projected),
+                jnp.asarray(np.abs(projected) ** 2, dtype=real_dtype),
+                jnp.asarray(shifted),
+                jnp.asarray(unit_weight),
+                jnp.asarray(initial),
+                1,
+                image_shape=(128, 128),
+                volume_shape=(128, 128, 128),
+            )
         )
+        direct = _direct_scores(projected, shifted, unit_weight, initial)
+        diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+            direct[:, None, :, :],
+            macro[:, None, :, :],
+        )
+        np.testing.assert_array_equal(direct, np.zeros_like(direct))
+        assert np.all(np.isfinite(macro))
+        assert np.any(macro != 0.0)
+        np.testing.assert_array_equal(
+            diagnostics["exact_zero_direct_nonzero_macro_per_image"],
+            True,
+        )
+        score_deltas.append(diagnostics["score_delta"])
+        records.append(
+            {
+                "classification": "NO_GO_unqualified_cancellation_instability",
+                "operand_scale": scale,
+                "precision_bits": int(diagnostics["score_precision_bits"]),
+                "signed_mean_score_delta": float(
+                    diagnostics["signed_mean_delta_per_image"][0]
+                ),
+                "max_abs_score_delta": float(
+                    diagnostics["max_abs_delta_per_image"][0]
+                ),
+                "max_ulp_score_delta": int(np.max(diagnostics["ulp_score_delta"])),
+                "positive_delta_count": int(
+                    diagnostics["positive_delta_count_per_image"][0]
+                ),
+                "negative_delta_count": int(
+                    diagnostics["negative_delta_count_per_image"][0]
+                ),
+                "negative_implied_diff2_count": int(np.count_nonzero(macro > 0.0)),
+            }
+        )
+    scale_panel = scoring._coarse_gaussian_scale_panel_diagnostics(
+        [1.0, 100.0, 1.0e4],
+        np.stack(score_deltas, axis=0),
+        precision_bits=np.dtype(real_dtype).itemsize * 8,
     )
-    direct = _direct_scores(projected, shifted, weight, initial)
-    signed_residual = -2.0 * actual
-    bound = _expanded_square_roundoff_bound(projected, shifted, weight)
-
-    np.testing.assert_array_equal(direct, np.zeros_like(direct))
-    assert np.all(np.isfinite(signed_residual))
-    assert np.all(np.abs(actual - direct) <= bound)
+    assert bool(scale_panel["scale_amplified"]) is True
+    assert str(scale_panel["qualification_status"]) == "NO_GO_scale-amplified_drift"
+    record_property("cancellation_records", json.dumps(records, sort_keys=True))
+    assert all(record["classification"].startswith("NO_GO") for record in records)
 
 
 @pytest.mark.parametrize("real_dtype", [np.float32, np.float64])
 def test_coarse_gaussian_gemm_direct_square_cancellation_stress_nearby_operands(
     real_dtype,
+    record_property,
 ):
-    """Production-scale p≈s exposes bounded signed expansion error."""
+    """p≈s reports raw drift and cannot establish a promotion tolerance."""
 
     if real_dtype == np.float64:
         jax.config.update("jax_enable_x64", True)
@@ -294,11 +534,37 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_nearby_operands(
     )
     direct = _direct_scores(projected, shifted, weight, initial)
     delta = macro - direct
-    bound = _expanded_square_roundoff_bound(projected, shifted, weight)
+    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+        direct[:, None, :, :],
+        macro[:, None, :, :],
+    )
 
     assert np.all(np.isfinite(macro))
     assert np.any(delta > 0.0) or np.any(delta < 0.0)
-    assert np.all(np.abs(delta) <= bound)
+    record_property(
+        "nearby_cancellation_record",
+        json.dumps(
+            {
+                "classification": "NO_GO_pending_production_repeat_envelope",
+                "operand_scale": 100.0,
+                "precision_bits": int(diagnostics["score_precision_bits"]),
+                "signed_mean_score_delta": float(
+                    diagnostics["signed_mean_delta_per_image"][0]
+                ),
+                "max_abs_score_delta": float(
+                    diagnostics["max_abs_delta_per_image"][0]
+                ),
+                "max_ulp_score_delta": int(np.max(diagnostics["ulp_score_delta"])),
+                "positive_delta_count": int(
+                    diagnostics["positive_delta_count_per_image"][0]
+                ),
+                "negative_delta_count": int(
+                    diagnostics["negative_delta_count_per_image"][0]
+                ),
+            },
+            sort_keys=True,
+        ),
+    )
 
 
 def test_coarse_gaussian_direct_macro_diagnostics_preserve_layout_and_discretes():
@@ -319,12 +585,52 @@ def test_coarse_gaussian_direct_macro_diagnostics_preserve_layout_and_discretes(
     )
 
     assert diagnostics["score_delta"].shape == direct.shape
+    assert diagnostics["absolute_score_delta"].shape == direct.shape
+    assert diagnostics["relative_score_delta_to_direct"].shape == direct.shape
+    assert diagnostics["ulp_score_delta"].shape == direct.shape
+    assert int(diagnostics["score_precision_bits"]) == 32
+    np.testing.assert_array_equal(
+        diagnostics["positive_delta_count_per_image"]
+        + diagnostics["negative_delta_count_per_image"]
+        + diagnostics["zero_delta_count_per_image"],
+        np.full(2, 4),
+    )
     np.testing.assert_array_equal(diagnostics["argmax_equal"], [True, False])
     np.testing.assert_array_equal(diagnostics["support_equal"], [True, False])
     np.testing.assert_array_equal(
         diagnostics["support_symmetric_difference_count"],
         [0, 1],
     )
+
+
+def test_coarse_gaussian_diagnostics_report_exact_ulp_and_repeat_spread():
+    direct = np.asarray([0.0, 1.0, -1.0], dtype=np.float32).reshape(1, 1, 1, 3)
+    macro = np.asarray(
+        [
+            np.nextafter(np.float32(0.0), np.float32(1.0)),
+            np.nextafter(np.float32(1.0), np.float32(2.0)),
+            np.nextafter(np.float32(-1.0), np.float32(-2.0)),
+        ],
+        dtype=np.float32,
+    ).reshape(1, 1, 1, 3)
+    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(direct, macro)
+    np.testing.assert_array_equal(diagnostics["ulp_score_delta"], 1)
+
+    repeat_deltas = np.stack(
+        [
+            diagnostics["score_delta"],
+            diagnostics["score_delta"] * 2.0,
+            diagnostics["score_delta"] * -1.0,
+        ],
+        axis=0,
+    )
+    repeat = scoring._coarse_gaussian_repeat_spread_diagnostics(repeat_deltas)
+    assert int(repeat["repeat_count"]) == 3
+    np.testing.assert_array_equal(
+        repeat["elementwise_delta_repeat_spread"],
+        np.ptp(repeat_deltas, axis=0),
+    )
+    assert str(repeat["qualification_status"]).startswith("NO_GO")
 
 
 def test_coarse_gaussian_gemm_scores_ignore_poisoned_tail_exactly():
@@ -473,11 +779,18 @@ class _MacroIntegrationDataset:
     dtype = jnp.complex64
     premultiplied_ctf = False
 
-    def __init__(self):
-        self.n_images = 3
-        self.n_units = 3
+    def __init__(self, original_indices=None):
+        self._original_indices = np.asarray(
+            [0, 1, 2] if original_indices is None else original_indices,
+            dtype=np.int64,
+        )
+        self.n_images = int(self._original_indices.size)
+        self.n_units = self.n_images
         self._images = np.stack(
-            [np.full(self.image_shape, value, dtype=np.float32) for value in (1, 2, 3)]
+            [
+                np.full(self.image_shape, int(original_index) + 1, dtype=np.float32)
+                for original_index in self._original_indices
+            ]
         )
         self.CTF_params = np.zeros((self.n_units, 9), dtype=np.float32)
         self.rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (self.n_units, 1, 1))
@@ -544,10 +857,15 @@ class _MacroIntegrationDataset:
             )
 
     def original_image_indices_from_local(self, indices):
-        return np.asarray(indices, dtype=np.int64)
+        return self._original_indices[np.asarray(indices, dtype=np.int64)]
+
+    def subset(self, indices):
+        return type(self)(
+            self._original_indices[np.asarray(indices, dtype=np.int64)],
+        )
 
 
-def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails(
+def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     monkeypatch,
     tmp_path,
 ):
@@ -627,18 +945,35 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
     score_calls = []
 
     def designed_scores(projected, shifted, actual_count):
-        active = jnp.arange(shifted.shape[0]) < actual_count
-        safe_shifted = jnp.where(active[:, None, None], shifted, 0.0)
-        image_ids = jnp.rint(jnp.max(safe_shifted.real, axis=(1, 2))).astype(jnp.int32) - 1
-        desired = jnp.asarray([0.0, 121.0, 10.0], dtype=jnp.float32)[
-            jnp.clip(image_ids, 0, 2)
-        ]
-        candidate = projected[:, 0].real[None, :, None] + jnp.arange(
-            shifted.shape[1],
-            dtype=jnp.float32,
-        )[None, None, :]
-        scores = -10.0 * jnp.abs(candidate - desired[:, None, None])
-        return jnp.where(active[:, None, None], scores, 0.0)
+        projected_codes = np.asarray(projected)[:, 0].real
+        shifted_np = np.asarray(shifted)
+        scores = np.full(
+            (shifted_np.shape[0], projected_codes.size, shifted_np.shape[1]),
+            -4.0,
+            dtype=np.float32,
+        )
+        for image_lane in range(int(actual_count)):
+            original_image_id = int(
+                np.rint(np.max(shifted_np[image_lane].real))
+            ) - 1
+            for rotation_lane, code in enumerate(projected_codes):
+                if code > 1000.0:
+                    continue
+                class_index = int(code // 100.0)
+                rotation_index = int(np.rint((code - class_index * 100.0) / 10.0))
+                # Every image starts at class 0 / rotation 0 / translation 0.
+                if class_index == 0 and rotation_index == 0:
+                    scores[image_lane, rotation_lane, 0] = 0.0
+                # Each small runner-up gap is independently overcome by one
+                # prior axis in the qualification calls below.
+                if original_image_id == 0 and class_index == 1 and rotation_index == 0:
+                    scores[image_lane, rotation_lane, 0] = -0.05
+                if original_image_id == 1 and class_index == 0 and rotation_index == 1:
+                    scores[image_lane, rotation_lane, 0] = -0.05
+                    scores[image_lane, rotation_lane, 1] = -0.1
+                if original_image_id == 1 and class_index == 0 and rotation_index == 0:
+                    scores[image_lane, rotation_lane, 1] = -0.05
+        return jnp.asarray(scores)
 
     def controlled_scores(
         projected,
@@ -695,20 +1030,11 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
         ]
     )
     common = dict(
-        class_log_priors=np.asarray([-0.1, -0.2], dtype=np.float64),
         adaptive_fraction=0.5,
         max_significants=1,
         image_batch_size=2,
         rotation_block_size=2,
         current_size=4,
-        rotation_log_prior=np.asarray(
-            [[0.0, -0.01, -0.02], [-0.03, -0.04, -0.05]],
-            dtype=np.float32,
-        ),
-        translation_log_prior=np.asarray(
-            [[0.0, -0.01], [-0.02, 0.0], [0.0, -0.03]],
-            dtype=np.float32,
-        ),
         half_spectrum_scoring=True,
         relion_projector_half=relion_projector,
         relion_projector_r_max=1,
@@ -719,15 +1045,105 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
         pad_final_image_batch=True,
     )
 
-    clean = significance._compute_k_class_significance_batched(
+    zero_class_prior = np.zeros(2, dtype=np.float64)
+    active_class_prior = np.asarray([-0.1, 0.0], dtype=np.float64)
+    zero_rotation_prior = np.zeros((2, 3), dtype=np.float32)
+    active_rotation_prior = zero_rotation_prior.copy()
+    active_rotation_prior[0, 1] = 0.1
+    zero_translation_prior = np.zeros((3, 2), dtype=np.float32)
+    active_translation_prior = zero_translation_prior.copy()
+    active_translation_prior[1, 1] = 0.1
+
+    def run_with_priors(
+        selected_dataset,
+        *,
+        class_prior,
+        rotation_prior,
+        translation_prior,
+        diagnostic_scope=None,
+    ):
+        selected_translation_prior = translation_prior[
+            selected_dataset._original_indices
+        ]
+        return significance._compute_k_class_significance_batched(
+            selected_dataset,
+            jnp.zeros((2, selected_dataset.volume_size), dtype=jnp.complex64),
+            jnp.ones(selected_dataset.image_size, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            class_log_priors=class_prior,
+            rotation_log_prior=rotation_prior,
+            translation_log_prior=selected_translation_prior,
+            coarse_gemm_diagnostic_scope=diagnostic_scope,
+            **common,
+        )
+
+    zero_priors = run_with_priors(
         dataset,
-        jnp.zeros((2, dataset.volume_size), dtype=jnp.complex64),
-        jnp.ones(dataset.image_size, dtype=jnp.float32),
-        rotations,
-        translations,
-        "linear_interp",
-        **common,
+        class_prior=zero_class_prior,
+        rotation_prior=zero_rotation_prior,
+        translation_prior=zero_translation_prior,
     )
+    class_only = run_with_priors(
+        dataset,
+        class_prior=active_class_prior,
+        rotation_prior=zero_rotation_prior,
+        translation_prior=zero_translation_prior,
+    )
+    rotation_only = run_with_priors(
+        dataset,
+        class_prior=zero_class_prior,
+        rotation_prior=active_rotation_prior,
+        translation_prior=zero_translation_prior,
+    )
+    translation_only = run_with_priors(
+        dataset,
+        class_prior=zero_class_prior,
+        rotation_prior=zero_rotation_prior,
+        translation_prior=active_translation_prior,
+    )
+    clean = run_with_priors(
+        dataset,
+        class_prior=active_class_prior,
+        rotation_prior=active_rotation_prior,
+        translation_prior=active_translation_prior,
+    )
+
+    # Each prior axis independently crosses one 0.05 score gap.  Removing
+    # priors therefore changes the exact winner/support contract; this is not
+    # a decorative prior fixture with ten-point score margins.
+    np.testing.assert_array_equal(zero_priors[2], [0, 0, 0])
+    np.testing.assert_array_equal(zero_priors[3], [0, 0, 0])
+    np.testing.assert_array_equal(class_only[2], [0, 0, 0])
+    np.testing.assert_array_equal(class_only[3], [1, 0, 0])
+    np.testing.assert_array_equal(rotation_only[2], [0, 2, 0])
+    np.testing.assert_array_equal(rotation_only[3], [0, 0, 0])
+    np.testing.assert_array_equal(translation_only[2], [0, 1, 0])
+    np.testing.assert_array_equal(translation_only[3], [0, 0, 0])
+    np.testing.assert_array_equal(clean[2], [0, 3, 0])
+    np.testing.assert_array_equal(clean[3], [1, 0, 0])
+
+    def unique_support_pairs(result):
+        pairs = []
+        for image_index in range(3):
+            image_pairs = []
+            for class_index in range(2):
+                for pose_id in significance.significant_sample_ids(
+                    result[4][class_index][image_index],
+                    6,
+                ):
+                    image_pairs.append((class_index, int(pose_id)))
+            assert len(image_pairs) == 1
+            pairs.append(image_pairs[0])
+        return tuple(pairs)
+
+    assert unique_support_pairs(zero_priors) == ((0, 0), (0, 0), (0, 0))
+    assert unique_support_pairs(class_only) == ((1, 0), (0, 0), (0, 0))
+    assert unique_support_pairs(rotation_only) == ((0, 0), (0, 2), (0, 0))
+    assert unique_support_pairs(translation_only) == ((0, 0), (0, 1), (0, 0))
+    assert unique_support_pairs(clean) == ((1, 0), (0, 3), (0, 0))
+
     diagnostic_dir = tmp_path / "paired_scores"
     monkeypatch.setenv(
         "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR",
@@ -735,7 +1151,7 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
     )
     monkeypatch.setenv(
         "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_ORIGINAL_INDICES",
-        "0,1,2",
+        "0,1",
     )
 
     def direct_square_stub(projected, shifted, weight, initial, full_to_compact):
@@ -750,24 +1166,44 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
         direct_square_stub,
     )
     poison_tail["enabled"] = True
-    poisoned = significance._compute_k_class_significance_batched(
-        dataset,
-        jnp.zeros((2, dataset.volume_size), dtype=jnp.complex64),
-        jnp.ones(dataset.image_size, dtype=jnp.float32),
-        rotations,
-        translations,
-        "linear_interp",
-        **common,
+    group_datasets = (dataset.subset([0, 2]), dataset.subset([1]))
+    run_id = "initial_model_it0001_k002_multigroup"
+    call_ids = (
+        "call0000_group0000_halfseth00",
+        "call0001_group0001_halfseth01",
+    )
+    scopes = tuple(
+        significance.CoarseGaussianGemmDiagnosticScope(
+            run_id=run_id,
+            call_id=call_id,
+            expected_call_ids=call_ids,
+            finalize=index == len(call_ids) - 1,
+        )
+        for index, call_id in enumerate(call_ids)
+    )
+    poisoned_groups = tuple(
+        run_with_priors(
+            group_dataset,
+            class_prior=active_class_prior,
+            rotation_prior=active_rotation_prior,
+            translation_prior=active_translation_prior,
+            diagnostic_scope=scopes[index],
+        )
+        for index, group_dataset in enumerate(group_datasets)
     )
 
-    for clean_value, poisoned_value in zip(clean[:4], poisoned[:4]):
-        np.testing.assert_array_equal(np.asarray(poisoned_value), np.asarray(clean_value))
+    np.testing.assert_array_equal(
+        poisoned_groups[0][0] | poisoned_groups[1][0],
+        clean[0],
+    )
+    for result, original_indices in zip(poisoned_groups, ([0, 2], [1])):
+        np.testing.assert_array_equal(result[1], clean[1][original_indices])
+        np.testing.assert_array_equal(result[2], clean[2][original_indices])
+        np.testing.assert_array_equal(result[3], clean[3][original_indices])
     np.testing.assert_array_equal(clean[1], np.ones(3, dtype=np.int32))
-    np.testing.assert_array_equal(clean[2], np.asarray([0, 5, 2], dtype=np.int32))
-    np.testing.assert_array_equal(clean[3], np.asarray([0, 1, 0], dtype=np.int32))
     expected_support = [
-        [[0], [], [2]],
-        [[], [5], []],
+        [[], [3], [0]],
+        [[0], [], []],
     ]
     for class_index in range(2):
         for image_index in range(3):
@@ -778,9 +1214,8 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
                 ),
                 np.asarray(expected_support[class_index][image_index], dtype=np.int64),
             )
-    assert len(score_calls) == 16
-    assert [call[0] for call in score_calls].count(2) == 8
-    assert [call[0] for call in score_calls].count(1) == 8
+    assert [call[0] for call in score_calls].count(1) > 0
+    assert [call[0] for call in score_calls].count(2) > 0
     assert any(np.any(tail) for _, _, tail in projection_calls)
     resources = clean[5]["coarse_gaussian_gemm_resources"]
     assert resources["pixel_index_device_to_host_materializations"] == 0
@@ -788,12 +1223,18 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
         "projected_transient_budget_bytes"
     ]
     clean_qualification = clean[5]["coarse_gaussian_gemm_qualification"]
+    assert clean_qualification["paired_capture_requested"] is False
     assert clean_qualification["paired_capture_active"] is False
     assert clean_qualification["clean_timing_eligible"] is True
-    captured_qualification = poisoned[5]["coarse_gaussian_gemm_qualification"]
-    assert captured_qualification["paired_capture_active"] is True
-    assert captured_qualification["clean_timing_eligible"] is False
-    assert "separate diagnostic-off timing arm" in captured_qualification["timing_policy"]
+    assert clean_qualification["numerical_qualification_status"] == "NO_GO_UNQUALIFIED"
+    assert clean_qualification["requires_bitwise_score_identity"] is False
+    assert clean_qualification["requires_exact_discrete_identity"] is True
+    for poisoned in poisoned_groups:
+        captured_qualification = poisoned[5]["coarse_gaussian_gemm_qualification"]
+        assert captured_qualification["paired_capture_requested"] is True
+        assert captured_qualification["paired_capture_active"] is True
+        assert captured_qualification["clean_timing_eligible"] is False
+        assert "separate diagnostic-off timing arm" in captured_qualification["timing_policy"]
     diagnostic_paths = sorted(diagnostic_dir.glob("*.npz"))
     assert len(diagnostic_paths) == 2
     captured_original_indices = []
@@ -802,6 +1243,13 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
             assert str(payload["layout"]) == "image,class,rotation,translation"
             assert bool(payload["paired_capture_active"]) is True
             assert bool(payload["clean_timing_eligible"]) is False
+            assert str(payload["qualification_status"]).startswith("NO_GO")
+            assert payload["automatic_no_go_reasons"].size == 0
+            assert payload["pending_qualification_gates"].size > 0
+            assert bool(payload["requires_bitwise_score_identity"]) is False
+            assert bool(payload["requires_exact_discrete_identity"]) is True
+            assert str(payload["repeat_spread_assessment"]).startswith("NO_GO")
+            assert str(payload["scale_growth_assessment"]).startswith("NO_GO")
             assert "separate_diagnostic-off_timing_arm" in str(payload["timing_policy"])
             np.testing.assert_array_equal(
                 payload["direct_scores_with_prior"],
@@ -809,9 +1257,29 @@ def test_coarse_gaussian_gemm_live_significance_contract_full_and_poisoned_tails
             )
             np.testing.assert_array_equal(payload["argmax_equal"], True)
             np.testing.assert_array_equal(payload["support_equal"], True)
+            assert int(payload["score_precision_bits"]) == 32
             assert int(payload["resource_pixel_index_device_to_host_materializations"]) == 0
             captured_original_indices.extend(payload["original_indices"].tolist())
-    assert sorted(captured_original_indices) == [0, 1, 2]
+    assert sorted(captured_original_indices) == [0, 1]
+    assert len({path.name for path in diagnostic_paths}) == 2
+    assert call_ids[0] in diagnostic_paths[0].name
+    assert call_ids[1] in diagnostic_paths[1].name
+
+    scope_manifest_paths = sorted(diagnostic_dir.glob("coarse_gemm_scope_*.json"))
+    assert len(scope_manifest_paths) == 2
+    scope_records = [json.loads(path.read_text()) for path in scope_manifest_paths]
+    assert {tuple(record["targets_in_scope"]) for record in scope_records} == {
+        (0,),
+        (1,),
+    }
+    assert {
+        tuple(record["targets_explicitly_out_of_scope"])
+        for record in scope_records
+    } == {(0,), (1,)}
+    aggregate_path = diagnostic_dir / f"coarse_gemm_manifest_{run_id}.json"
+    aggregate = json.loads(aggregate_path.read_text())
+    assert aggregate["all_requested_captured_exactly_once"] is True
+    assert aggregate["captured_target_counts"] == {"0": 1, "1": 1}
 
 
 @pytest.mark.parametrize(

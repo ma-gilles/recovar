@@ -7,6 +7,7 @@ duplicated while the VDAM M-step still gets independent halfset BackProjectors.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -19,7 +20,10 @@ import numpy as np
 from recovar.em.dense_single_volume.batch_planning import RELION_SCORE_TENSOR_FLOAT_BUDGET
 from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
 from recovar.em.dense_single_volume.helpers.resolution import compute_coarse_image_size
-from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
+from recovar.em.dense_single_volume.helpers.significance import (
+    CoarseGaussianGemmDiagnosticScope,
+    _compute_k_class_significance_batched,
+)
 from recovar.em.dense_single_volume.k_class import (
     _coarse_selector_audit_from_full_stats,
     _run_sparse_k_class_adaptive_pass2,
@@ -277,6 +281,59 @@ def _image_groups(
             raise ValueError("halfset_ids must contain only 0/1 values")
         h0, h1 = ids[halves == 0], ids[halves == 1]
     return [(0, h0), (1, h1)]
+
+
+def _initial_model_coarse_gemm_diagnostic_scopes(
+    processing_groups,
+    *,
+    debug_iteration: int | None,
+    current_size: int | None,
+    n_classes: int,
+) -> dict[int, CoarseGaussianGemmDiagnosticScope]:
+    """Name every non-empty InitialModel pass-1 call without collisions."""
+
+    nonempty_groups = []
+    digest = hashlib.sha256()
+    for processing_index, (halfset_idx, image_indices, reconstruction_group_ids) in enumerate(
+        processing_groups
+    ):
+        image_indices = np.asarray(image_indices, dtype=np.int64).reshape(-1)
+        if image_indices.size == 0:
+            continue
+        digest.update(np.asarray([processing_index, halfset_idx], dtype="<i8").tobytes())
+        digest.update(image_indices.astype("<i8", copy=False).tobytes())
+        if reconstruction_group_ids is not None:
+            digest.update(
+                np.asarray(reconstruction_group_ids, dtype="<i4").reshape(-1).tobytes()
+            )
+            halfset_label = "joint"
+        else:
+            halfset_label = f"h{int(halfset_idx):02d}"
+        nonempty_groups.append((processing_index, halfset_label))
+    if not nonempty_groups:
+        return {}
+
+    iteration = -1 if debug_iteration is None else int(debug_iteration)
+    iteration_token = f"m{-iteration:04d}" if iteration < 0 else f"{iteration:04d}"
+    size = -1 if current_size is None else int(current_size)
+    size_token = f"m{-size:04d}" if size < 0 else f"{size:04d}"
+    run_id = (
+        f"initial_model_it{iteration_token}_cs{size_token}_k{int(n_classes):03d}_"
+        f"particles{digest.hexdigest()[:16]}"
+    )
+    call_ids = tuple(
+        f"call{call_ordinal:04d}_group{processing_index:04d}_halfset{halfset_label}"
+        for call_ordinal, (processing_index, halfset_label) in enumerate(nonempty_groups)
+    )
+    return {
+        processing_index: CoarseGaussianGemmDiagnosticScope(
+            run_id=run_id,
+            call_id=call_ids[call_ordinal],
+            expected_call_ids=call_ids,
+            finalize=call_ordinal == len(call_ids) - 1,
+        )
+        for call_ordinal, (processing_index, _halfset_label) in enumerate(nonempty_groups)
+    }
 
 
 def _dense_engine_kwargs(state: InitialModelState, config: DenseInitialModelEstepConfig) -> dict[str, Any]:
@@ -824,6 +881,7 @@ def _run_sparse_pass2_initial_model_estep(
     pass1_time_s = 0.0
     pass2_time_s = 0.0
     exact_local_runtime_policy_active = False
+    coarse_gemm_aggregate_manifest_path = None
     n_significant_by_image: list[np.ndarray] = []
     use_exact_relion_projector = relion_projector_half_by_class is not None
     if use_exact_relion_projector and relion_projector_r_max is None:
@@ -915,7 +973,37 @@ def _run_sparse_pass2_initial_model_estep(
             RELION_SCORE_TENSOR_FLOAT_BUDGET / 1e6,
         )
 
-    for halfset_idx, image_indices, reconstruction_group_ids in processing_groups:
+    coarse_gemm_diagnostic_requested = bool(
+        os.environ.get("RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR", "").strip()
+    )
+    coarse_gemm_diagnostic_scopes = (
+        _initial_model_coarse_gemm_diagnostic_scopes(
+            processing_groups,
+            debug_iteration=base_kwargs.get("debug_iteration"),
+            current_size=(
+                base_kwargs.get("current_size")
+                if oversampling_order == 0
+                else _resolve_sparse_pass1_current_size(
+                    state,
+                    base_kwargs,
+                    options,
+                )
+            ),
+            n_classes=state.K,
+        )
+        if coarse_gemm_diagnostic_requested
+        else {}
+    )
+    if not coarse_gemm_diagnostic_scopes and coarse_gemm_diagnostic_requested:
+        raise ValueError(
+            "coarse GEMM InitialModel diagnostic has no non-empty particle group"
+        )
+
+    for processing_index, (
+        halfset_idx,
+        image_indices,
+        reconstruction_group_ids,
+    ) in enumerate(processing_groups):
         image_indices = np.asarray(image_indices, dtype=np.int64)
         if image_indices.size == 0:
             accumulators.extend(_empty_accumulator(state, k, int(halfset_idx)) for k in range(state.K))
@@ -1001,6 +1089,9 @@ def _run_sparse_pass2_initial_model_estep(
             # coarse scorer's image axis fixed so JAX reuses one executable
             # instead of compiling each tail mini-batch shape.
             pad_final_image_batch=True,
+            coarse_gemm_diagnostic_scope=coarse_gemm_diagnostic_scopes.get(
+                processing_index,
+            ),
         )
         (
             _sig_rot_any,
@@ -1011,6 +1102,13 @@ def _run_sparse_pass2_initial_model_estep(
             _full_stats,
         ) = sig_result
         coarse_selector_audit = _coarse_selector_audit_from_full_stats(_full_stats)
+        if (
+            _full_stats is not None
+            and "coarse_gaussian_gemm_aggregate_manifest_path" in _full_stats
+        ):
+            coarse_gemm_aggregate_manifest_path = _full_stats[
+                "coarse_gaussian_gemm_aggregate_manifest_path"
+            ]
         zero_oversampling = oversampling_order == 0
         k1_zero_oversampling = state.K == 1 and zero_oversampling
         pass1_time_s += time.time() - t0
@@ -1341,6 +1439,10 @@ def _run_sparse_pass2_initial_model_estep(
         if exact_local_runtime_policy_active and joint_halfset_stream
         else None
     )
+    if coarse_gemm_aggregate_manifest_path is not None:
+        meta["coarse_gaussian_gemm_aggregate_manifest_path"] = (
+            coarse_gemm_aggregate_manifest_path
+        )
     out = DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,
