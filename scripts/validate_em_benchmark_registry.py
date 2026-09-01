@@ -17,6 +17,27 @@ class RegistryValidationError(ValueError):
     """Raised when a benchmark registry record is malformed or inconsistent."""
 
 
+_SYNTHETIC_NEGATIVE_RECORD_TYPE = "synthetic_kclass_negative_campaign_collection"
+_SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS = {
+    "recovar.em_real_kclass_initialmodel_diagnostics.v1",
+}
+
+
+def _diagnostic_registry_route(diagnostic: dict[str, Any]) -> str:
+    """Route each diagnostic family to exactly one fail-closed validator."""
+
+    if diagnostic.get("record_type") == _SYNTHETIC_NEGATIVE_RECORD_TYPE:
+        return "synthetic_negative"
+    external_schema = diagnostic.get("schema")
+    if external_schema in _SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS:
+        return "separate"
+    raise RegistryValidationError(
+        "unrecognized diagnostic family: expected record_type "
+        f"{_SYNTHETIC_NEGATIVE_RECORD_TYPE!r} or one of the separately "
+        f"validated schemas {sorted(_SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS)!r}"
+    )
+
+
 def _json_path(parts: list[Any]) -> str:
     return ".".join(str(part) for part in parts) or "<record>"
 
@@ -848,12 +869,19 @@ def validate_registry(registry_root: Path, *, verify_files: bool = False) -> lis
             raise RegistryValidationError(f"duplicate campaign_id: {campaign_id}")
         campaign_ids.add(campaign_id)
 
-    diagnostic_paths = sorted(diagnostics_dir.glob("*.json"))
-    if not diagnostic_paths:
+    discovered_diagnostic_paths = sorted(diagnostics_dir.glob("*.json"))
+    if not discovered_diagnostic_paths:
         raise RegistryValidationError(f"no negative diagnostic records found under {diagnostics_dir}")
+    diagnostic_paths: list[Path] = []
     diagnostic_ids: set[str] = set()
-    for path in diagnostic_paths:
+    for path in discovered_diagnostic_paths:
         diagnostic = json.loads(path.read_text())
+        try:
+            route = _diagnostic_registry_route(diagnostic)
+        except RegistryValidationError as error:
+            raise RegistryValidationError(f"{path}:\n{error}") from error
+        if route == "separate":
+            continue
         try:
             validate_diagnostic(diagnostic, diagnostic_schema)
             if verify_files:
@@ -866,6 +894,11 @@ def validate_registry(registry_root: Path, *, verify_files: bool = False) -> lis
         if diagnostic_id in diagnostic_ids:
             raise RegistryValidationError(f"duplicate diagnostic_id: {diagnostic_id}")
         diagnostic_ids.add(diagnostic_id)
+        diagnostic_paths.append(path)
+    if not diagnostic_paths:
+        raise RegistryValidationError(
+            f"no synthetic negative diagnostic records found under {diagnostics_dir}"
+        )
     return [*entry_paths, *campaign_paths, *diagnostic_paths]
 
 

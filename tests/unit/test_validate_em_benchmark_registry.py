@@ -99,6 +99,21 @@ def test_checked_in_em_benchmark_registry_is_valid():
     assert classifications[27] == "UNRESOLVED_TRAJECTORY_FAILURE"
 
 
+def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
+    assert (
+        registry_validator._diagnostic_registry_route(NEGATIVE_DIAGNOSTIC)
+        == "synthetic_negative"
+    )
+    assert (
+        registry_validator._diagnostic_registry_route(
+            {"schema": "recovar.em_real_kclass_initialmodel_diagnostics.v1"}
+        )
+        == "separate"
+    )
+    with pytest.raises(RegistryValidationError, match="unrecognized diagnostic family"):
+        registry_validator._diagnostic_registry_route({"schema": "unknown.v1"})
+
+
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():
     assert NEGATIVE_DIAGNOSTIC["registry_disposition"] == "EXCLUDED_FROM_ACCEPTED_RESULTS"
     conclusion = NEGATIVE_DIAGNOSTIC["conclusion"]
