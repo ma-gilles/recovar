@@ -24,6 +24,8 @@ readonly BASELINE_SHA256=fcd9f03383ec42483016cf2b686adc998e61f1cc6fdf338b3a6713b
 readonly CUDA_TOOLKIT=/usr/local/cuda-12.6
 readonly CUOBJDUMP=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/cuda_binary_tools_12.6_login_20260901/cuobjdump
 readonly CUOBJDUMP_SHA256=f0299c666460f826a01444f29f3c5ff889765199fc68069e8756c69d4deb661b
+readonly NVDISASM=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/cuda_binary_tools_12.6_login_20260901/nvdisasm
+readonly NVDISASM_SHA256=534cbe6ba3f14130b1096eb063d3b415c7c36ec592f1ddcfaac736031a61fb30
 readonly CUDA_ARCH_FLAGS='-gencode arch=compute_90,code=sm_90'
 readonly FOCUSED_GPU_TEST=tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_prehalf_source_order_across_dispatchers
 
@@ -111,6 +113,8 @@ test -x "${PIXI_PY}"
 test -x "${NVCC}"
 test -x "${CUOBJDUMP}"
 test "$(sha256sum "${CUOBJDUMP}" | awk '{print $1}')" = "${CUOBJDUMP_SHA256}"
+test -x "${NVDISASM}"
+test "$(sha256sum "${NVDISASM}" | awk '{print $1}')" = "${NVDISASM_SHA256}"
 test -s "${BASELINE_BINARY}"
 test "$(sha256sum "${BASELINE_BINARY}" | awk '{print $1}')" = "${BASELINE_SHA256}"
 test "$(git -C "${REPO_ROOT}" rev-parse --show-toplevel)" = "${REPO_ROOT}"
@@ -152,10 +156,12 @@ printf '%s\n' "${CUDA_ARCH_FLAGS}" > "${PROVENANCE}/cuda_arch_flags.txt"
 printf '%s\n' "${baseline_stat_before}" > "${PROVENANCE}/baseline_stat.txt"
 sha256sum "${BASELINE_BINARY}" > "${PROVENANCE}/baseline_binary.sha256"
 sha256sum "${CUOBJDUMP}" > "${PROVENANCE}/cuobjdump.sha256"
+sha256sum "${NVDISASM}" > "${PROVENANCE}/nvdisasm.sha256"
 sha256sum "${PIXI_PY}" > "${PROVENANCE}/interpreter.sha256"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 "${NVCC}" --version > "${PROVENANCE}/nvcc_version.txt"
 "${CUOBJDUMP}" --version > "${PROVENANCE}/cuobjdump_version.txt"
+"${NVDISASM}" --version > "${PROVENANCE}/nvdisasm_version.txt"
 scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
 
 {
@@ -194,6 +200,7 @@ unset RECOVAR_DISABLE_CUDA RECOVAR_CUDA_LIB RECOVAR_ENABLE_CUSTOM_CUDA
 unset RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
+export NVDISASM_PATH=${NVDISASM}
 export CUDA_VISIBLE_DEVICES=${selected_gpu_uuid}
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${CANDIDATE_BINARY}
@@ -211,6 +218,7 @@ touch "${RUNTIME_ROOT}/SAFE_TO_DELETE"
 {
   printf 'EXPECTED_REPO_HEAD=%q\n' "${EXPECTED_REPO_HEAD}"
   printf 'TARGET_GPU_UUID=%q\n' "${TARGET_GPU_UUID}"
+  printf 'NVDISASM_PATH=%q\n' "${NVDISASM_PATH}"
   printf 'CUDA_VISIBLE_DEVICES=%q\n' "${CUDA_VISIBLE_DEVICES}"
   printf 'RECOVAR_CUDA_LIB=%q\n' "${RECOVAR_CUDA_LIB}"
   printf 'RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=%q\n' \
