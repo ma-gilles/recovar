@@ -6,6 +6,7 @@ from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from scripts import analyze_vdam_coarse_combined_true200 as analyzer
@@ -199,6 +200,209 @@ def test_serial_control_without_complete_path_peer_fails() -> None:
 def test_nonfinite_exact_state_never_creates_a_serial_witness() -> None:
     assert not analyzer._values_equal(np.asarray([np.nan]), np.asarray([np.nan]))
     assert not analyzer._values_equal(np.asarray([np.inf]), np.asarray([np.inf]))
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        {"outer": {"inner": [1.0, np.nan]}},
+        {"outer": (1.0, complex(np.inf, 0.0))},
+        np.asarray([{"inner": np.asarray([1.0, -np.inf])}], dtype=object),
+    ),
+)
+def test_nested_nonfinite_exact_state_fails_closed(value: object) -> None:
+    assert analyzer._has_nonfinite_numeric(value)
+    assert not analyzer._values_equal(value, value)
+
+
+def test_recursive_exact_state_retains_ordinary_string_semantics() -> None:
+    left = {"outer": ["particle@stack.mrcs", {"mode": "C1"}]}
+    assert analyzer._values_equal(left, {"outer": ["particle@stack.mrcs", {"mode": "C1"}]})
+    assert not analyzer._values_equal(left, {"outer": ["particle@stack.mrcs", {"mode": "c1"}]})
+
+
+def _minimal_particle_state_contract() -> dict[str, object]:
+    return {
+        "star_identity_columns": ["rlnImageName", "rlnRandomSubset"],
+        "star_numeric_groups": {},
+    }
+
+
+def test_particle_star_identity_is_canonical_and_strict() -> None:
+    table = pd.DataFrame(
+        {
+            "rlnImageName": ["000002@particles.mrcs", "000001@particles.mrcs"],
+            "rlnRandomSubset": [2.0, 1],
+        }
+    )
+    result = analyzer._particle_table_values(
+        table,
+        _minimal_particle_state_contract(),
+        "valid",
+    )
+    assert result["identity_columns"]["rlnImageName"].tolist() == [
+        "000001@particles.mrcs",
+        "000002@particles.mrcs",
+    ]
+    assert result["identity_columns"]["rlnRandomSubset"].tolist() == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("image_names", "random_subsets", "message"),
+    (
+        (["", "000002@particles.mrcs"], [1, 2], "empty or non-finite"),
+        ([None, "000002@particles.mrcs"], [1, 2], "empty or non-finite"),
+        (["same", "same"], [1, 2], "duplicate image identities"),
+        (["one", "two"], [1, np.nan], "non-finite"),
+        (["one", "two"], [1, 1.5], "not integral"),
+        (["one", "two"], [0, 2], "outside the RELION halfset domain"),
+        (["one", "two"], [1, 3], "outside the RELION halfset domain"),
+    ),
+)
+def test_particle_star_identity_corruption_fails_closed(
+    image_names: list[object],
+    random_subsets: list[object],
+    message: str,
+) -> None:
+    table = pd.DataFrame(
+        {"rlnImageName": image_names, "rlnRandomSubset": random_subsets}
+    )
+    with pytest.raises(analyzer.GateSetupError, match=message):
+        analyzer._particle_table_values(
+            table,
+            _minimal_particle_state_contract(),
+            "corrupt",
+        )
+
+
+def _selector_audit(*, workers: int, atomic: bool) -> dict[str, object]:
+    multistream = workers > 0
+    fused_calls = 3
+    return {
+        "score_mode": "gaussian",
+        "translation_count": 29,
+        "requested_fused": True,
+        "effective_fused": True,
+        "requested_workers": workers,
+        "effective_workers": workers,
+        "requested_atomic": atomic,
+        "effective_atomic": atomic,
+        "wrapper": (
+            "relion_coarse_diff2_projector_multistream_f32"
+            if multistream
+            else "relion_coarse_diff2_projector_f32"
+        ),
+        "target": (
+            "cuda_relion_coarse_diff2_projector_multistream_f32"
+            if multistream
+            else "cuda_relion_coarse_diff2_projector_f32"
+        ),
+        "counts": {
+            "fused_calls": fused_calls,
+            "actual_rows": 17,
+            "multistream_calls": fused_calls if multistream else 0,
+            "native_atomic_selected_calls": fused_calls if atomic else 0,
+        },
+    }
+
+
+def test_selector_proof_accepts_serial_control_and_combined_candidate() -> None:
+    control_audit = _selector_audit(workers=0, atomic=False)
+    candidate_audit = _selector_audit(workers=8, atomic=True)
+    control = {
+        "n_translations": 29,
+        "halfset_0_profile_summary": {"coarse_selector_audit": control_audit},
+        "halfset_1_profile_summary": {"coarse_selector_audit": control_audit},
+    }
+    candidate = {
+        "n_translations": 29,
+        "halfset_0_profile_summary": {"coarse_selector_audit": candidate_audit},
+        "halfset_1_profile_summary": {"coarse_selector_audit": candidate_audit},
+    }
+    control_rows = analyzer._validate_coarse_selector_profile_audits(
+        control,
+        label="control_serial_1",
+        iteration=1,
+        multistream_workers=0,
+        native_atomic_reduction=0,
+    )
+    candidate_rows = analyzer._validate_coarse_selector_profile_audits(
+        candidate,
+        label="combined_candidate_1",
+        iteration=1,
+        multistream_workers=8,
+        native_atomic_reduction=1,
+    )
+    assert control_rows[0]["audit"]["counts"]["fused_calls"] > 0
+    assert control_rows[0]["audit"]["counts"]["multistream_calls"] == 0
+    assert candidate_rows[0]["audit"]["counts"]["native_atomic_selected_calls"] > 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("requested_fused", False),
+        ("effective_workers", 0),
+        ("wrapper", "relion_coarse_diff2_projector_f32"),
+        ("target", "cuda_relion_coarse_diff2_projector_f32"),
+    ),
+)
+def test_selector_proof_rejects_requested_effective_or_target_mutation(
+    field: str,
+    value: object,
+) -> None:
+    audit = _selector_audit(workers=8, atomic=True)
+    audit[field] = value
+    metadata = {
+        "n_translations": 29,
+        "halfset_0_profile_summary": {"coarse_selector_audit": audit},
+        "halfset_1_profile_summary": {"coarse_selector_audit": audit},
+    }
+    with pytest.raises(analyzer.GateSetupError, match="coarse selector"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="combined_candidate_1",
+            iteration=42,
+            multistream_workers=8,
+            native_atomic_reduction=1,
+        )
+
+
+def test_selector_proof_validates_every_sealed_halfset_profile() -> None:
+    bad = _selector_audit(workers=8, atomic=True)
+    bad["counts"] = dict(bad["counts"], actual_rows=0)
+    metadata = {
+        "n_translations": 29,
+        "halfset_0_profile_summary": {
+            "coarse_selector_audit": _selector_audit(workers=8, atomic=True)
+        },
+        "halfset_1_profile_summary": {"coarse_selector_audit": bad},
+    }
+    with pytest.raises(analyzer.GateSetupError, match="halfset_1_profile_summary"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="combined_candidate_1",
+            iteration=200,
+            multistream_workers=8,
+            native_atomic_reduction=1,
+        )
+
+
+def test_selector_proof_rejects_missing_halfset_profile() -> None:
+    metadata = {
+        "n_translations": 29,
+        "halfset_0_profile_summary": {
+            "coarse_selector_audit": _selector_audit(workers=0, atomic=False)
+        },
+    }
+    with pytest.raises(analyzer.GateSetupError, match="halfset profile topology differs"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="control_serial_1",
+            iteration=1,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+        )
 
 
 def test_stable_tiny_map_noise_passes_its_joint_exact_witnesses() -> None:
@@ -715,6 +919,48 @@ def test_runtime_requires_material_wall_and_expectation_gain() -> None:
     assert not analyzer.classify_runtime(panel(failing_lane), LABELS, **kwargs)["candidate_pass"]
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ("gpu_uuids", "gpu_uuid_count", "peak_device_uuid"),
+)
+def test_arm_runtime_rejects_monitor_uuid_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    expected_uuid = "GPU-expected"
+    monitor = {
+        "sample_count": 2,
+        "gpu_count": 1,
+        "peak_memory_mib": 1024.0,
+        "gpu_uuids": [expected_uuid],
+        "gpu_uuid_count": 1,
+        "peak_device_uuid": expected_uuid,
+    }
+    if mutation == "gpu_uuids":
+        monitor[mutation] = ["GPU-other"]
+    elif mutation == "gpu_uuid_count":
+        monitor[mutation] = 2
+    else:
+        monitor[mutation] = "GPU-other"
+
+    def fake_load(path: Path, _label: str) -> dict[str, object]:
+        if path.name == "timing.json":
+            return {"external_wall_s": 10.0}
+        return {"vdam_iteration_profile_summary": {"expectation_time_s": 1.0}}
+
+    monkeypatch.setattr(analyzer, "_validate_runtime_artifact_manifest", lambda _root: "sealed")
+    monkeypatch.setattr(analyzer, "_load_json", fake_load)
+    monkeypatch.setattr(analyzer, "_read_gpu_monitor", lambda _path: monitor)
+    with pytest.raises(analyzer.GateSetupError, match="GPU monitor UUID evidence differs"):
+        analyzer._arm_runtime(
+            tmp_path,
+            "control_serial_1",
+            (0, 1),
+            expected_gpu_uuid=expected_uuid,
+        )
+
+
 def test_incomplete_hash_evidence_is_setup_failure(tmp_path: Path) -> None:
     artifact = tmp_path / "artifact.bin"
     artifact.write_bytes(b"sealed")
@@ -724,6 +970,40 @@ def test_incomplete_hash_evidence_is_setup_failure(tmp_path: Path) -> None:
     stale.write_text(f"{'0' * 64}  artifact.bin\n")
     with pytest.raises(analyzer.GateSetupError, match="stale or incomplete"):
         analyzer._validate_saved_manifest(stale, tmp_path, [artifact])
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "command.json",
+        "timing.json",
+        "gpu_monitor.csv",
+        "process.time",
+        "runner.stdout",
+        "runner.stderr",
+        "arm.json",
+        "science_environment.json",
+        "output/run_native_options.json",
+    ),
+)
+def test_runtime_artifact_manifest_fails_after_any_member_mutation(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    run_root = tmp_path / "arm"
+    expected = analyzer._expected_runtime_artifacts(run_root)
+    for path in expected:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"sealed:{path.relative_to(run_root)}\n")
+    manifest = run_root / "runtime_artifact_manifest.sha256"
+    manifest.write_text(analyzer._manifest_text(run_root, expected))
+    assert analyzer._validate_runtime_artifact_manifest(run_root) == hashlib.sha256(
+        manifest.read_bytes()
+    ).hexdigest()
+
+    (run_root / relative_path).write_text("mutated\n")
+    with pytest.raises(analyzer.GateSetupError, match="stale or incomplete"):
+        analyzer._validate_runtime_artifact_manifest(run_root)
 
 
 def test_launch_manifest_rehashes_every_input_and_fails_after_mutation(
@@ -738,17 +1018,51 @@ def test_launch_manifest_rehashes_every_input_and_fails_after_mutation(
     native.mkdir()
     source = repo / "source.py"
     source.write_text("sealed\n")
+    native_repeat = native / "repeat-01" / "vdam-gf46"
+    (native_repeat / "relion").mkdir(parents=True)
+    native_repeat_paths = {
+        "paired_gpu_uuid_sha256": native_repeat / "paired_gpu_uuid.json",
+        "run_provenance_sha256": native_repeat / "run_provenance.json",
+        "relion_timing_sha256": native_repeat / "relion" / "relion.timing.json",
+        "relion_command_sha256": native_repeat / "relion" / "relion_command.json",
+    }
+    for name, path in native_repeat_paths.items():
+        path.write_text(json.dumps({"sealed": name}) + "\n")
+    runtime_contract = {
+        "override_prefixes_rejected_unless_allowlisted": [
+            "RECOVAR_",
+            "VDAM_",
+            "JAX_",
+            "XLA_",
+            "CUDA_",
+            "NVIDIA_",
+            "CUBLAS_",
+            "TF_",
+        ],
+        "override_exact_names_rejected_unless_allowlisted": [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "PYTHONPATH",
+        ],
+        "launch_environment_allowlist": [],
+        "science_environment_allowlist": [],
+        "science_environment_capture_names": ["PATH"],
+    }
     acceptance = repo / "acceptance.json"
     acceptance.write_text(
         json.dumps(
             {
+                "schema": "recovar.vdam_coarse_combined_true200_acceptance.v2",
                 "source_contract": {"files": ["source.py"]},
-                "native_reference": {"physical_gpu_uuid": "GPU-sealed"},
-                "runtime_contract": {
-                    "override_prefixes_rejected_unless_allowlisted": ["RECOVAR_", "VDAM_", "JAX_"],
-                    "launch_environment_allowlist": [],
-                    "science_environment_allowlist": [],
+                "native_reference": {
+                    "physical_gpu_uuid": "GPU-sealed",
+                    "repeat_count": 1,
+                    **{
+                        name: [hashlib.sha256(path.read_bytes()).hexdigest()]
+                        for name, path in native_repeat_paths.items()
+                    },
                 },
+                "runtime_contract": runtime_contract,
             }
         )
     )
@@ -768,6 +1082,7 @@ def test_launch_manifest_rehashes_every_input_and_fails_after_mutation(
         "native_science_manifest": entry(native_manifest),
         "other": entry(other),
     }
+    files.update(resolver._native_repeat_file_entries(native, json.loads(acceptance.read_text())))
     source_sha, source_entries = resolver._source_manifest(repo, ["source.py"])
     payload = {
         "schema": resolver.SCHEMA,
@@ -780,15 +1095,17 @@ def test_launch_manifest_rehashes_every_input_and_fails_after_mutation(
         "target_gpu_uuid": "GPU-sealed",
         "files": files,
         "source_manifest": {"sha256": source_sha, "entries": source_entries},
-        "runtime_contract": json.loads(acceptance.read_text())["runtime_contract"],
+        "runtime_contract": runtime_contract,
         "sealed_override_environment": {},
     }
     manifest = tmp_path / "launch.json"
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
     monkeypatch.setattr(resolver, "_validate_repo", lambda *_args: None)
+    exact_names = set(runtime_contract["override_exact_names_rejected_unless_allowlisted"])
+    prefixes = tuple(runtime_contract["override_prefixes_rejected_unless_allowlisted"])
     for name in tuple(resolver.os.environ):
-        if name.startswith(("RECOVAR_", "VDAM_", "JAX_")):
+        if name.startswith(prefixes) or name in exact_names:
             monkeypatch.delenv(name, raising=False)
     assert resolver.validate_launch_manifest(manifest, digest) == payload
     source.write_text("mutated\n")
@@ -818,17 +1135,63 @@ def test_source_manifest_is_canonical_for_unsorted_input_and_rejects_duplicates(
         resolver._source_manifest(repo, ["a.py", "./a.py"])
 
 
-def test_override_environment_rejects_undeclared_recovar_vdam_and_jax_controls() -> None:
+@pytest.mark.parametrize(
+    ("contract_name", "relative_path"),
+    (
+        ("paired_gpu_uuid_sha256", "paired_gpu_uuid.json"),
+        ("run_provenance_sha256", "run_provenance.json"),
+        ("relion_timing_sha256", "relion/relion.timing.json"),
+        ("relion_command_sha256", "relion/relion_command.json"),
+    ),
+)
+def test_native_repeat_launch_pins_fail_after_mutation(
+    tmp_path: Path,
+    contract_name: str,
+    relative_path: str,
+) -> None:
+    native = tmp_path / "native"
+    repeat = native / "repeat-01" / "vdam-gf46"
+    relative_paths = (
+        "paired_gpu_uuid.json",
+        "run_provenance.json",
+        "relion/relion.timing.json",
+        "relion/relion_command.json",
+    )
+    paths = {}
+    for relative in relative_paths:
+        path = repeat / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"sealed:{relative}\n")
+        paths[relative] = path
+    acceptance = {
+        "native_reference": {
+            "repeat_count": 1,
+            "paired_gpu_uuid_sha256": [hashlib.sha256(paths[relative_paths[0]].read_bytes()).hexdigest()],
+            "run_provenance_sha256": [hashlib.sha256(paths[relative_paths[1]].read_bytes()).hexdigest()],
+            "relion_timing_sha256": [hashlib.sha256(paths[relative_paths[2]].read_bytes()).hexdigest()],
+            "relion_command_sha256": [hashlib.sha256(paths[relative_paths[3]].read_bytes()).hexdigest()],
+        }
+    }
+    assert len(resolver._native_repeat_file_entries(native, acceptance)) == 4
+    paths[relative_path].write_text("mutated\n")
+    with pytest.raises(resolver.LaunchResolutionError, match="hash differs"):
+        resolver._native_repeat_file_entries(native, acceptance)
+    assert contract_name in acceptance["native_reference"]
+
+
+def test_override_environment_rejects_all_declared_prefixes_and_exact_names() -> None:
     contract = json.loads(ACCEPTANCE.read_text())["runtime_contract"]
     observed = resolver._validate_override_environment(
         {
             "PATH": "/bin",
+            "CUDA_VISIBLE_DEVICES": "GPU-sealed",
             "VDAM_TRUE200_ROOT": "/sealed/output",
             "VDAM_TRUE200_RESUME": "0",
         },
         contract,
     )
     assert observed == {
+        "CUDA_VISIBLE_DEVICES": "GPU-sealed",
         "VDAM_TRUE200_RESUME": "0",
         "VDAM_TRUE200_ROOT": "/sealed/output",
     }
@@ -836,6 +1199,21 @@ def test_override_environment_rejects_undeclared_recovar_vdam_and_jax_controls()
         "RECOVAR_K1_UNDECLARED_OVERRIDE",
         "VDAM_UNDECLARED_OVERRIDE",
         "JAX_UNDECLARED_OVERRIDE",
+        "XLA_UNDECLARED_OVERRIDE",
+        "CUDA_UNDECLARED_OVERRIDE",
+        "NVIDIA_UNDECLARED_OVERRIDE",
+        "CUBLAS_UNDECLARED_OVERRIDE",
+        "TF_UNDECLARED_OVERRIDE",
+        "CUDA_TOOLKIT",
+        "RELION_CUDA_TOOLKIT",
+        "RELION_RUNTIME",
+        "MPI_ROOT",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "CONDA_PREFIX",
+        "VIRTUAL_ENV",
     ):
         with pytest.raises(resolver.LaunchResolutionError, match=name):
             resolver._validate_override_environment({name: "1"}, contract)
@@ -860,6 +1238,31 @@ def test_science_override_allowlist_is_explicit_and_does_not_admit_unknowns() ->
     with pytest.raises(resolver.LaunchResolutionError, match="RECOVAR_UNSEALED"):
         resolver._validate_override_environment(
             {"RECOVAR_UNSEALED": "1"}, contract, include_science=True
+        )
+
+
+def test_effective_science_environment_snapshot_is_complete_and_canonical() -> None:
+    contract = json.loads(ACCEPTANCE.read_text())["runtime_contract"]
+    environment = {
+        name: f"sealed:{name}"
+        for name in contract["science_environment_capture_names"]
+    }
+    environment.update(contract["fixed_science_environment"])
+    environment["VDAM_TRUE200_ROOT"] = "/sealed/output"
+    snapshot = resolver._science_environment_snapshot(environment, contract)
+    assert list(snapshot) == sorted(snapshot)
+    assert set(contract["science_environment_capture_names"]).issubset(snapshot)
+    assert snapshot["PATH"] == contract["fixed_science_environment"]["PATH"]
+    assert snapshot["VDAM_TRUE200_ROOT"] == "/sealed/output"
+
+    missing = dict(environment)
+    del missing["PATH"]
+    with pytest.raises(resolver.LaunchResolutionError, match="missing: PATH"):
+        resolver._science_environment_snapshot(missing, contract)
+    with pytest.raises(resolver.LaunchResolutionError, match="XLA_UNSEALED"):
+        resolver._science_environment_snapshot(
+            {**environment, "XLA_UNSEALED": "1"},
+            contract,
         )
 
 
@@ -910,6 +1313,7 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
         "EXPECTED_LAUNCH_MANIFEST_SHA256",
         '"${PIXI_PY}" "${RESOLVER}" validate',
         'vdam_select_target_gpu "${TARGET_GPU_UUID}" 0',
+        'vdam_assert_target_gpu_allocated "${TARGET_GPU_UUID}" "${initial_allocation_spec}"',
         'test "${selected_gpu_uuid}" = "$(jq -r \'.native_reference.physical_gpu_uuid\'',
         'test "$(sha256sum "${CUDA_BINARY}"',
         'test "$(sha256sum "${RELION_BIND_BINARY}"',
@@ -926,6 +1330,11 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     # verifies provenance, exact 804 topology/full hashes, options, timing,
     # profiles, and GPU-monitor evidence before the wrapper skips an arm.
     assert "VDAM_TRUE200_RESUME" in text
+    assert "initial_allocation_spec=${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}}" in text
+    assert "allocated_gpu_uuids.csv" in text
+    assert "visible_gpu_uuids.csv" in text
+    assert 'nvidia-smi -i "${selected_gpu_uuid}" -q' in text
+    assert "--query-gpu=timestamp,index,name,uuid,memory.used" in text
     assert "LC_ALL=C sort" in text
     assert 'ATTEMPT_PROVENANCE=${PROVENANCE}/attempts/${ATTEMPT_ID}' in text
     assert '"${ATTEMPT_PROVENANCE}/harness_failure.txt"' in text
@@ -944,15 +1353,26 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     assert 'control_serial_5 combined_candidate_5 combined_candidate_6 control_serial_6' in text
     assert "RUN_WORKERS=(0 8 8 0 8 0 0 8 0 8 8 0)" in text
     assert "RUN_ATOMIC=(0 1 1 0 1 0 0 1 0 1 1 0)" in text
-    assert 'RECOVAR_K1_COARSE_MULTISTREAM_WORKERS="${workers}"' in text
-    assert 'RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION="${native_atomic}"' in text
+    assert '"RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"' in text
+    assert '"RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=${native_atomic}"' in text
     assert "runtime_libraries.json" in text
     assert 'cmp "${PROVENANCE}/runtime_libraries.json"' in text
     assert "sealed_override_environment.json" in text
+    assert "science_environment.json" in text
+    assert "_science_environment_snapshot" in text
+    assert "runtime_artifact_manifest.sha256" in text
+    assert "output/run_native_options.json" in text
+    assert ".runtime_contract.fixed_science_environment.PATH" in text
+    assert ".runtime_contract.fixed_science_environment.LD_LIBRARY_PATH" in text
+    assert "${LD_LIBRARY_PATH:-}" not in text
+    assert "${CUDA_TOOLKIT:-" not in text
     assert 'mv "${ROOT}/${marker}" "${terminal_quarantine}/${marker}"' in text
     assert 'touch "${ROOT}/RUNS_COMPLETED"' not in text
 
     arm_complete = text.index('write_marker_once "${run_root}/SCIENCE_COMPLETED"')
+    runtime_artifact_seal = text.index('> "${run_root}/runtime_artifact_manifest.sha256"')
+    allocation_audit = text.index('vdam_assert_target_gpu_allocated "${TARGET_GPU_UUID}"')
+    gpu_select = text.index('vdam_select_target_gpu "${TARGET_GPU_UUID}" 0')
     runs_complete = text.index('write_marker_once "${ROOT}/RUNS_COMPLETED"')
     analysis = text.index("analysis_status=$?")
     setup_failed = text.index('write_marker_once "${ATTEMPT_PROVENANCE}/ANALYSIS_SETUP_FAILED"')
@@ -960,12 +1380,16 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     science_failed = text.index('write_marker_once "${ROOT}/SCIENCE_FAILED"')
     completed = text.index('write_marker_once "${ROOT}/COMPLETED"')
     terminal_exit = text.index('exit "${analysis_status}"')
-    assert arm_complete < runs_complete < analysis < setup_failed < sealed_hashes
+    assert allocation_audit < gpu_select
+    assert runtime_artifact_seal < arm_complete < runs_complete < analysis < setup_failed < sealed_hashes
     assert sealed_hashes < science_failed < completed < terminal_exit
 
 
 def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> None:
     contract = json.loads(ACCEPTANCE.read_text())
+    assert contract["schema"] == "recovar.vdam_coarse_combined_true200_acceptance.v2"
+    assert resolver.SCHEMA == "recovar.vdam_coarse_combined_true200_launch.v2"
+    assert analyzer.SCHEMA == "recovar.vdam_coarse_combined_true200_analysis.v2"
     panel = contract["panel"]
     assert len(panel["execution_order"]) == 12
     assert panel["coarse_multistream_workers"] == [0, 8, 8, 0, 8, 0, 0, 8, 0, 8, 8, 0]
@@ -989,7 +1413,18 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     assert all((repo / relative).is_file() for relative in source_files)
     scorecard = repo / "docs/math/vdam_k1_full_trajectory_expansion_v3.json"
     assert hashlib.sha256(scorecard.read_bytes()).hexdigest() == contract["case"]["scorecard_sha256"]
-    assert contract["qualified_candidate"]["production_head"] == "a928c2f58c44c709735bcf9a5e568f4d82b93f59"
+    assert (
+        contract["qualified_candidate"]["production_head"]
+        == "8a0be9c5d48ca755875e73595aca8eb5dcaa5410"
+    )
+    assert (
+        contract["qualified_candidate"]["relion_bind_sha256"]
+        == "9bbb1fb0ce6fa7ac816598ec521453515d163221642b916e5715bb2850798980"
+    )
+    assert (
+        contract["qualified_candidate"]["interpreter_sha256"]
+        == "b7684bebb1fa35e6b45105245b7779c07393a29b161e892a76bbc37a3caa7d85"
+    )
     assert (
         contract["trajectory"]["no_growth_primary_family_endpoints"] == THRESHOLDS["no_growth_primary_family_endpoints"]
     )
@@ -997,6 +1432,26 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     assert contract["numerical_acceptance_policy"]["map_must_match_same_exact_state_witness"] is True
     assert contract["trajectory"]["exact_state_first_iteration"] == 1
     assert contract["trajectory"]["exact_state_last_iteration"] == 200
+    native = contract["native_reference"]
+    for name in (
+        "paired_gpu_uuid_sha256",
+        "run_provenance_sha256",
+        "relion_timing_sha256",
+        "relion_command_sha256",
+    ):
+        assert len(native[name]) == native["repeat_count"] == 4
+        assert all(len(value) == 64 for value in native[name])
+    runtime_contract = contract["runtime_contract"]
+    assert set(("XLA_", "CUDA_", "NVIDIA_", "CUBLAS_", "TF_")).issubset(
+        runtime_contract["override_prefixes_rejected_unless_allowlisted"]
+    )
+    assert set(("LD_PRELOAD", "LD_LIBRARY_PATH", "PYTHONPATH")).issubset(
+        runtime_contract["override_exact_names_rejected_unless_allowlisted"]
+    )
+    assert "PATH" not in runtime_contract["override_exact_names_rejected_unless_allowlisted"]
+    assert set(runtime_contract["fixed_science_environment"]).issubset(
+        runtime_contract["science_environment_capture_names"]
+    )
     assert contract["runtime_contract"]["transitive_runtime_library_closure_claimed"] is False
     resources = contract["resource_estimate"]
     assert resources["estimated_science_gpu_hours"] > 12.0

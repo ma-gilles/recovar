@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-SCHEMA = "recovar.vdam_coarse_combined_true200_launch.v1"
+SCHEMA = "recovar.vdam_coarse_combined_true200_launch.v2"
 
 
 class LaunchResolutionError(RuntimeError):
@@ -113,17 +113,98 @@ def _validate_override_environment(
     """Reject inherited RECOVAR/VDAM/JAX controls outside the sealed allowlist."""
 
     prefixes = tuple(str(value) for value in runtime_contract["override_prefixes_rejected_unless_allowlisted"])
+    exact_names = tuple(
+        str(value) for value in runtime_contract["override_exact_names_rejected_unless_allowlisted"]
+    )
+    _require(
+        prefixes
+        and len(set(prefixes)) == len(prefixes)
+        and all(prefix and "\x00" not in prefix and "\n" not in prefix for prefix in prefixes),
+        "override-prefix contract is invalid",
+    )
+    _require(
+        len(set(exact_names)) == len(exact_names)
+        and all(name and "\x00" not in name and "\n" not in name for name in exact_names)
+        and "PATH" not in exact_names,
+        "exact-name override contract is invalid",
+    )
     allowlist = {str(value) for value in runtime_contract["launch_environment_allowlist"]}
     if include_science:
         allowlist.update(str(value) for value in runtime_contract["science_environment_allowlist"])
     observed = {
         str(name): str(value)
         for name, value in environment.items()
-        if str(name).startswith(prefixes)
+        if str(name).startswith(prefixes) or str(name) in exact_names
     }
+    _require(
+        all("\x00" not in name and "\n" not in name and "\x00" not in value and "\n" not in value for name, value in observed.items()),
+        "override environment contains a NUL or newline",
+    )
     undeclared = sorted(set(observed).difference(allowlist))
     _require(not undeclared, f"undeclared override environment variables: {', '.join(undeclared)}")
     return {name: observed[name] for name in sorted(observed)}
+
+
+def _science_environment_snapshot(
+    environment: dict[str, str],
+    runtime_contract: dict[str, Any],
+) -> dict[str, str]:
+    """Return the canonical, curated effective environment used by one arm."""
+
+    override_environment = _validate_override_environment(
+        environment,
+        runtime_contract,
+        include_science=True,
+    )
+    capture_names = tuple(str(value) for value in runtime_contract["science_environment_capture_names"])
+    _require(
+        capture_names
+        and len(set(capture_names)) == len(capture_names)
+        and all(name and "\x00" not in name and "\n" not in name for name in capture_names),
+        "science-environment capture contract is invalid",
+    )
+    missing = sorted(set(capture_names).difference(environment))
+    _require(not missing, f"effective science environment is missing: {', '.join(missing)}")
+    captured = {name: str(environment[name]) for name in capture_names}
+    captured.update(override_environment)
+    _require(
+        all("\x00" not in value and "\n" not in value for value in captured.values()),
+        "effective science environment contains a NUL or newline",
+    )
+    return {name: captured[name] for name in sorted(captured)}
+
+
+def _native_repeat_file_entries(
+    native_root: Path,
+    acceptance: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    contract = acceptance["native_reference"]
+    repeat_count = int(contract["repeat_count"])
+    definitions = (
+        ("paired_gpu_uuid", "paired_gpu_uuid.json", "paired_gpu_uuid_sha256"),
+        ("run_provenance", "run_provenance.json", "run_provenance_sha256"),
+        ("relion_timing", "relion/relion.timing.json", "relion_timing_sha256"),
+        ("relion_command", "relion/relion_command.json", "relion_command_sha256"),
+    )
+    for _, _, contract_name in definitions:
+        values = contract.get(contract_name)
+        _require(
+            isinstance(values, list)
+            and len(values) == repeat_count
+            and all(isinstance(value, str) and len(value) == 64 for value in values),
+            f"native repeat hash contract is invalid: {contract_name}",
+        )
+    entries = {}
+    for index in range(1, repeat_count + 1):
+        repeat = native_root / f"repeat-{index:02d}" / "vdam-gf46"
+        for label, relative, contract_name in definitions:
+            key = f"native_repeat_{index:02d}_{label}"
+            entries[key] = _file_entry(
+                repeat / relative,
+                key.replace("_", " "),
+                contract[contract_name][index - 1],
+            )
+    return entries
 
 
 def build_launch_manifest(
@@ -148,7 +229,7 @@ def build_launch_manifest(
     acceptance_path = repo / "scripts/vdam_coarse_combined_true200_acceptance.json"
     acceptance = _load_json(acceptance_path, "acceptance contract")
     _require(
-        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v1",
+        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v2",
         "unsupported acceptance contract",
     )
     production_head = str(acceptance["qualified_candidate"]["production_head"])
@@ -225,6 +306,7 @@ def build_launch_manifest(
         "gpu_selection_helper": _file_entry(gpu_selection_helper, "GPU selection helper"),
         "cusparse_library": _file_entry(cusparse_library, "LD_PRELOAD cuSPARSE library"),
     }
+    files.update(_native_repeat_file_entries(native, acceptance))
     _require(
         files["resolver"]["path"]
         == str((repo / "scripts/resolve_vdam_coarse_combined_true200_launch.py").resolve()),
@@ -288,8 +370,15 @@ def validate_launch_manifest(path: Path, expected_sha256: str) -> dict[str, Any]
         "native science manifest is outside the recorded native root",
     )
     acceptance = _load_json(Path(files["acceptance"]["path"]), "recorded acceptance contract")
+    _require(
+        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v2",
+        "recorded acceptance contract schema differs",
+    )
     _require(payload.get("runtime_contract") == acceptance["runtime_contract"], "runtime contract differs")
     _validate_override_environment(dict(os.environ), acceptance["runtime_contract"])
+    expected_native_entries = _native_repeat_file_entries(native, acceptance)
+    for label, expected_entry in expected_native_entries.items():
+        _require(files.get(label) == expected_entry, f"native repeat launch entry differs: {label}")
     source = payload.get("source_manifest")
     _require(isinstance(source, dict), "launch manifest has no source manifest")
     digest, entries = _source_manifest(repo, acceptance["source_contract"]["files"])

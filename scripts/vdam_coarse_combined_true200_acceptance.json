@@ -1,5 +1,5 @@
 {
-  "schema": "recovar.vdam_coarse_combined_true200_acceptance.v1",
+  "schema": "recovar.vdam_coarse_combined_true200_acceptance.v2",
   "purpose": "Qualify the mature default-off K=1 combined coarse candidate (8 multistream workers plus native atomic reduction) with a 6+6 blocked repeat panel over a complete 0--200 InitialModel trajectory without changing the frozen v3 score.",
   "numerical_acceptance_policy": {
     "statement": "Roundoff-scale map differences are acceptable without bitwise equality only when the combined implementation is mathematically equivalent, repeat-stable, unbiased and non-directional under the blocked repeat panel, non-growing through all declared phases and boundaries, has one joint exact complete-path serial witness across every metadata key and STAR identity column, stays within a sealed bounded map-noise tolerance of that same witness, preserves final FSC, FSC-AUC, resolution and scale within the serial-repeat policy, and provides the predeclared material runtime gain.",
@@ -23,10 +23,10 @@
     "gt_relion_mrc_sha256": "60fb352309c67b7d1585bf44f50afa376000641589e4f9f95744b45eb42ffd6f"
   },
   "qualified_candidate": {
-    "production_head": "a928c2f58c44c709735bcf9a5e568f4d82b93f59",
+    "production_head": "8a0be9c5d48ca755875e73595aca8eb5dcaa5410",
     "cuda_sha256": "fcd9f03383ec42483016cf2b686adc998e61f1cc6fdf338b3a6713bbc3554d56",
-    "relion_bind_sha256": "fcbb2a8356c2f7ee88e947fa92c9f5bfc41535ed0a2c6a9124a2fad781a63b83",
-    "interpreter_sha256": "f53a847f3fc2c11292c2680861e598531e7a09d8ae82052d61aef62c27aa2756"
+    "relion_bind_sha256": "9bbb1fb0ce6fa7ac816598ec521453515d163221642b916e5715bb2850798980",
+    "interpreter_sha256": "b7684bebb1fa35e6b45105245b7779c07393a29b161e892a76bbc37a3caa7d85"
   },
   "science_contract": {
     "command_builder": "scripts.run_vdam_relion_parity_case.build_recovar_command",
@@ -63,6 +63,8 @@
       "recovar/cuda/cuda_backproject.cu",
       "recovar/cuda_backproject.py",
       "recovar/em/dense_single_volume/helpers/significance.py",
+      "recovar/em/dense_single_volume/k_class.py",
+      "recovar/em/initial_model/dense_adapter.py",
       "recovar/em/initial_model/driver.py",
       "recovar/em/initial_model/iteration_loop.py",
       "scripts/analyze_em_k1_map_amplitude_trajectory.py",
@@ -74,7 +76,8 @@
       "scripts/run_vdam_relion_parity_case.py",
       "scripts/summarize_em_completion_bench.py",
       "scripts/vdam_coarse_combined_true200_acceptance.json",
-      "tests/unit/initial_model/test_vdam_coarse_combined_true200_analyzer.py"
+      "tests/unit/initial_model/test_vdam_coarse_combined_true200_analyzer.py",
+      "tests/unit/test_coarse_selector_audit.py"
     ]
   },
   "native_reference": {
@@ -83,6 +86,30 @@
     "relion_executable_sha256": "2d070d6456ae439c3890fcbd0f6e9c8e4e56bcc2ef79f55bfc58574e50f7a11b",
     "reference_map_manifest_sha256": "b33b1e959fd625e3ddb29caf88f75694c5c78b728689ed3d404f06d1c811ac16",
     "repeat_count": 4,
+    "paired_gpu_uuid_sha256": [
+      "8786e01b0802ebda595ee8f78cfc0eb0073d5296cfd96c66fff3db8fba30aef0",
+      "3a6806fe4f3688075dff562339b55548af836646740229b1df5a8918afbe9926",
+      "3a6806fe4f3688075dff562339b55548af836646740229b1df5a8918afbe9926",
+      "3a6806fe4f3688075dff562339b55548af836646740229b1df5a8918afbe9926"
+    ],
+    "run_provenance_sha256": [
+      "2ce36c8847e492b9b354b0d7b8d248f44cd20353820459cc3bc82739c89bd49c",
+      "ebaafaeee175bf5a22acb838463e3179962308077b561421233b2dbcba844ab3",
+      "d23f15aaed1e73567a3b8a4edeaa1f1f614aad16fa5277e0c48ee2f94243f08a",
+      "e3955fce21c042b7c2d30b16060178cbf50e820764660a7795971cff4d21ffe1"
+    ],
+    "relion_timing_sha256": [
+      "4ca4e54186b749ffa10cfa3eed86edeb3cfd373bc2b28c80a958ec345cae07cc",
+      "14312a60fb236a99454240bb2328ea98607c15c35755941e24f3bdd83641d30d",
+      "9ad9bcb375af190fb30e524bba7a9702b2d865942100fe01986934caef5d5fc5",
+      "660ac9d634bd5efd5956b91c2bd5fa1dad15c5d1dccd61ca824aded48f220350"
+    ],
+    "relion_command_sha256": [
+      "f69e5ec40a9d8e12795c2685c9bb0e52b71fbaf144f80a6ced07410eec1174e6",
+      "4c6bef2f7c085a08d8c412229d73a80c1f72bf1c1d6ea3ba20c0027a0c0416e4",
+      "a1bc587955441fe9ffc453192af7f00b61d9190375a50513a248fa54acbfcd94",
+      "a0cb9800de1be6e3182aae81c9f8b8008a3ae5eae8835cc72994e5e7f950dd89"
+    ],
     "trajectory_audit_sha256": [
       "8ea247c90a1ba064117f0cd79397b9e5f1ca5f16c2c80c69bc4eb35c38802a88",
       "c064885ce3f335d60ec8d8d77ea94f40d2350c22d0b5467ed95d7e4d1a9011f3",
@@ -184,6 +211,7 @@
   },
   "required_gates": {
     "artifact_and_provenance_complete": true,
+    "coarse_selector_execution_proven_every_postinit_halfset": true,
     "state_joint_exact_complete_path_serial_witness": true,
     "map_each_checkpoint_serial_leave_one_out_is_diagnostic_only": true,
     "whole_trajectory_centroid_over_pooled_run_rms_at_most": 1.0,
@@ -219,6 +247,7 @@
     "each_serial_control_requires_a_complete_path_serial_peer": true,
     "map_witness_is_restricted_to_the_joint_exact_state_witness_set": true,
     "material_end_to_end_runtime_advantage_required": true,
+    "coarse_selector_wrapper_target_and_counts_must_be_proven": true,
     "no_growth_failure_requires_exact_significance_and_empirical_materiality": true
   },
   "resource_estimate": {
@@ -239,8 +268,30 @@
     "estimated_output_gib": 45
   },
   "runtime_contract": {
-    "override_prefixes_rejected_unless_allowlisted": ["RECOVAR_", "VDAM_", "JAX_"],
+    "override_prefixes_rejected_unless_allowlisted": [
+      "RECOVAR_",
+      "VDAM_",
+      "JAX_",
+      "XLA_",
+      "CUDA_",
+      "NVIDIA_",
+      "CUBLAS_",
+      "TF_"
+    ],
+    "override_exact_names_rejected_unless_allowlisted": [
+      "CUDA_TOOLKIT",
+      "RELION_CUDA_TOOLKIT",
+      "RELION_RUNTIME",
+      "MPI_ROOT",
+      "LD_PRELOAD",
+      "LD_LIBRARY_PATH",
+      "PYTHONPATH",
+      "PYTHONHOME",
+      "CONDA_PREFIX",
+      "VIRTUAL_ENV"
+    ],
     "launch_environment_allowlist": [
+      "CUDA_VISIBLE_DEVICES",
       "VDAM_GF46_FIXTURE_DIR",
       "VDAM_NATIVE_REFERENCE_ROOT",
       "VDAM_TRUE200_LAUNCH_MANIFEST",
@@ -248,9 +299,13 @@
       "VDAM_TRUE200_ROOT"
     ],
     "science_environment_allowlist": [
+      "CUDA_VISIBLE_DEVICES",
       "JAX_COMPILATION_CACHE_DIR",
       "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
       "JAX_PLATFORMS",
+      "LD_LIBRARY_PATH",
+      "LD_PRELOAD",
+      "PYTHONPATH",
       "RECOVAR_CUDA_LIB",
       "RECOVAR_EM_RAW_IMAGE_CACHE",
       "RECOVAR_EXPECTED_REPO_ROOT",
@@ -259,9 +314,49 @@
       "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION",
       "RECOVAR_RELION_BIND_BUILD_DIR",
       "RECOVAR_SELECTED_GPU_UUID",
+      "VDAM_ALLOCATED_GPU_UUIDS_CSV",
       "VDAM_SELECTED_GPU_UUID",
-      "VDAM_VISIBLE_GPU_UUIDS_CSV"
+      "VDAM_VISIBLE_GPU_UUIDS_CSV",
+      "XLA_PYTHON_CLIENT_PREALLOCATE"
     ],
+    "science_environment_capture_names": [
+      "CUDA_VISIBLE_DEVICES",
+      "JAX_COMPILATION_CACHE_DIR",
+      "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
+      "JAX_PLATFORMS",
+      "LD_LIBRARY_PATH",
+      "LD_PRELOAD",
+      "PATH",
+      "PIXI_HOME",
+      "PYTHONNOUSERSITE",
+      "PYTHONPATH",
+      "PYTHONUNBUFFERED",
+      "RATTLER_CACHE_DIR",
+      "RECOVAR_CUDA_LIB",
+      "RECOVAR_EM_RAW_IMAGE_CACHE",
+      "RECOVAR_EXPECTED_REPO_ROOT",
+      "RECOVAR_INITIAL_MODEL_PROFILE",
+      "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS",
+      "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION",
+      "RECOVAR_RELION_BIND_BUILD_DIR",
+      "RECOVAR_SELECTED_GPU_UUID",
+      "TMPDIR",
+      "VDAM_ALLOCATED_GPU_UUIDS_CSV",
+      "VDAM_SELECTED_GPU_UUID",
+      "VDAM_VISIBLE_GPU_UUIDS_CSV",
+      "XLA_PYTHON_CLIENT_PREALLOCATE"
+    ],
+    "fixed_science_environment": {
+      "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": "0",
+      "JAX_PLATFORMS": "cuda,cpu",
+      "LD_LIBRARY_PATH": "/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717/system_dev_overlay/lib:/usr/local/openmpi/cuda-12.6/4.1.6/gcc/lib64:/usr/local/cuda-12.6/lib64:/usr/local/cuda-12.6/targets/x86_64-linux/lib:/usr/local/cuda-13.1/lib64:/usr/local/cuda-13.1/targets/x86_64-linux/lib",
+      "PATH": "/usr/local/cuda-13.1/bin:/usr/local/bin:/usr/bin:/bin",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONUNBUFFERED": "1",
+      "RECOVAR_EM_RAW_IMAGE_CACHE": "off",
+      "RECOVAR_INITIAL_MODEL_PROFILE": "1",
+      "XLA_PYTHON_CLIENT_PREALLOCATE": "false"
+    },
     "direct_runtime_artifacts_sha256_required": true,
     "transitive_runtime_library_closure_claimed": false,
     "closure_limitation": "The launch seal hashes the interpreter, RECOVAR CUDA extension, RELION binding, GPU-selection helper and LD_PRELOAD cuSPARSE library. Transitive libraries selected by the dynamic loader are recorded at runtime but are not predeclared as a complete closure."

@@ -16,6 +16,7 @@ import json
 import math
 import re
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -35,7 +36,7 @@ from scripts.summarize_em_completion_bench import (
     shell_fsc,
 )
 
-SCHEMA = "recovar.vdam_coarse_combined_true200_analysis.v1"
+SCHEMA = "recovar.vdam_coarse_combined_true200_analysis.v2"
 _ITERATION_ARTIFACT_RE = re.compile(
     r"^run_it(?P<iteration>\d{3})_(?P<suffix>class001\.mrc|data\.star|model\.star|recovar_meta\.json)$"
 )
@@ -781,12 +782,81 @@ def analyze_map_panel(
     )
 
 
-def _values_equal(left: Any, right: Any) -> bool:
-    left_array = np.asarray(left)
-    right_array = np.asarray(right)
-    for value in (left_array, right_array):
-        if np.issubdtype(value.dtype, np.number) and not np.all(np.isfinite(value)):
+def _has_nonfinite_numeric(value: Any) -> bool:
+    """Return whether any numeric leaf is NaN or infinite.
+
+    Exact-state metadata includes nested mappings, lists, and occasionally
+    object arrays.  Checking only the outer NumPy dtype lets a non-finite
+    numeric leaf inside an object container compare equal to itself, which can
+    manufacture an exact serial witness.  Recurse through every supported
+    container before performing exact equality.
+    """
+
+    if isinstance(value, Mapping):
+        return any(
+            _has_nonfinite_numeric(key) or _has_nonfinite_numeric(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, np.ndarray):
+        if value.dtype.fields is not None or value.dtype == object:
+            return any(_has_nonfinite_numeric(item) for item in value.reshape(-1).tolist())
+        if np.issubdtype(value.dtype, np.number):
+            return not bool(np.all(np.isfinite(value)))
+        return False
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_has_nonfinite_numeric(item) for item in value)
+    if isinstance(value, (np.number, int, float, complex)) and not isinstance(value, (bool, np.bool_)):
+        try:
+            return not bool(np.isfinite(value))
+        except TypeError:
             return False
+    return False
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    """Recursively compare exact state while rejecting every non-finite leaf."""
+
+    if _has_nonfinite_numeric(left) or _has_nonfinite_numeric(right):
+        return False
+    if left is None or right is None:
+        return left is right
+    if isinstance(left, (str, bytes, bool, np.bool_)) or isinstance(
+        right, (str, bytes, bool, np.bool_)
+    ):
+        try:
+            return bool(left == right)
+        except (TypeError, ValueError):
+            return False
+    if isinstance(left, Mapping) or isinstance(right, Mapping):
+        if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+            return False
+        if left.keys() != right.keys():
+            return False
+        return all(_values_equal(left[key], right[key]) for key in left)
+    try:
+        left_array = np.asarray(left)
+        right_array = np.asarray(right)
+    except (TypeError, ValueError):
+        try:
+            return bool(left == right)
+        except (TypeError, ValueError):
+            return False
+    if left_array.shape != right_array.shape:
+        return False
+    if left_array.dtype == object or right_array.dtype == object:
+        if left_array.ndim == 0:
+            try:
+                return bool(left == right)
+            except (TypeError, ValueError):
+                return False
+        return all(
+            _values_equal(left_item, right_item)
+            for left_item, right_item in zip(
+                left_array.reshape(-1).tolist(),
+                right_array.reshape(-1).tolist(),
+                strict=True,
+            )
+        )
     return bool(np.array_equal(left_array, right_array))
 
 
@@ -1098,24 +1168,154 @@ def classify_metadata_iteration(
     }
 
 
+_HALFSET_PROFILE_RE = re.compile(r"^halfset_(?P<halfset>\d+)_profile_summary$")
+
+
+def _validate_coarse_selector_profile_audits(
+    metadata: dict[str, Any],
+    *,
+    label: str,
+    iteration: int,
+    multistream_workers: int,
+    native_atomic_reduction: int,
+) -> list[dict[str, Any]]:
+    """Prove the configured coarse selector actually ran at one checkpoint."""
+
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _validate_coarse_selector_audit,
+    )
+
+    profile_keys = sorted(
+        key for key in metadata if _HALFSET_PROFILE_RE.fullmatch(str(key))
+    )
+    expected_profile_keys = [
+        "halfset_0_profile_summary",
+        "halfset_1_profile_summary",
+    ]
+    _require(
+        profile_keys == expected_profile_keys,
+        f"{label} iteration {iteration} halfset profile topology differs: "
+        f"expected={expected_profile_keys}, observed={profile_keys}",
+    )
+    multistream = int(multistream_workers) > 0
+    expected_wrapper = (
+        "relion_coarse_diff2_projector_multistream_f32"
+        if multistream
+        else "relion_coarse_diff2_projector_f32"
+    )
+    expected_target = (
+        "cuda_relion_coarse_diff2_projector_multistream_f32"
+        if multistream
+        else "cuda_relion_coarse_diff2_projector_f32"
+    )
+    expected_fields = {
+        "score_mode": "gaussian",
+        "requested_fused": True,
+        "effective_fused": True,
+        "requested_workers": int(multistream_workers),
+        "effective_workers": int(multistream_workers),
+        "requested_atomic": bool(native_atomic_reduction),
+        "effective_atomic": bool(native_atomic_reduction),
+        "wrapper": expected_wrapper,
+        "target": expected_target,
+    }
+    rows = []
+    for key in profile_keys:
+        profile = metadata[key]
+        _require(isinstance(profile, dict), f"{label} iteration {iteration} {key} is invalid")
+        try:
+            audit = _validate_coarse_selector_audit(profile.get("coarse_selector_audit"))
+        except (TypeError, ValueError) as exc:
+            raise GateSetupError(
+                f"{label} iteration {iteration} {key} coarse selector audit is invalid: {exc}"
+            ) from exc
+        mismatches = {
+            name: {"expected": expected, "observed": audit.get(name)}
+            for name, expected in expected_fields.items()
+            if audit.get(name) != expected
+        }
+        _require(
+            not mismatches,
+            f"{label} iteration {iteration} {key} coarse selector differs: {mismatches}",
+        )
+        _require(
+            audit["translation_count"] == int(metadata["n_translations"]),
+            f"{label} iteration {iteration} {key} selector translation count differs",
+        )
+        counts = audit["counts"]
+        _require(
+            counts["fused_calls"] > 0
+            and counts["actual_rows"] > 0
+            and counts["multistream_calls"]
+            == (counts["fused_calls"] if multistream else 0)
+            and counts["native_atomic_selected_calls"]
+            == (counts["fused_calls"] if native_atomic_reduction else 0),
+            f"{label} iteration {iteration} {key} selector execution counts are invalid",
+        )
+        match = _HALFSET_PROFILE_RE.fullmatch(key)
+        _require(match is not None, f"{label} iteration {iteration} profile key is invalid")
+        rows.append(
+            {
+                "label": label,
+                "iteration": int(iteration),
+                "halfset": int(match.group("halfset")),
+                "audit": audit,
+            }
+        )
+    return rows
+
+
 def _particle_table_values(table: Any, state_contract: dict[str, Any], label: str) -> dict[str, Any]:
     identity_columns = tuple(str(value) for value in state_contract["star_identity_columns"])
+    _require(
+        identity_columns == ("rlnImageName", "rlnRandomSubset"),
+        "particle STAR identity contract must be rlnImageName plus rlnRandomSubset",
+    )
     numeric_groups = state_contract["star_numeric_groups"]
     required = set(identity_columns)
     for columns in numeric_groups.values():
         required.update(str(value) for value in columns)
     missing = sorted(required.difference(table.columns))
     _require(not missing, f"{label} particle STAR is missing columns {missing}")
-    identities = table[identity_columns[0]].astype(str).to_numpy()
-    _require(len(set(identities.tolist())) == identities.size, f"{label} has duplicate image identities")
+    identity_series = table["rlnImageName"]
+    raw_identities = identity_series.to_numpy()
+    identities = np.asarray([str(value) for value in raw_identities], dtype=str)
+    _require(
+        not bool(identity_series.isna().any())
+        and not _has_nonfinite_numeric(raw_identities)
+        and all(value.strip() for value in identities),
+        f"{label} has an empty or non-finite image identity",
+    )
+    _require(
+        len(set(identities.tolist())) == identities.size,
+        f"{label} has duplicate image identities",
+    )
+    try:
+        random_subset_numeric = table["rlnRandomSubset"].astype(float).to_numpy(dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise GateSetupError(f"{label} rlnRandomSubset is not numeric") from exc
+    _require(
+        np.all(np.isfinite(random_subset_numeric)),
+        f"{label} rlnRandomSubset is non-finite",
+    )
+    _require(
+        np.all(random_subset_numeric == np.floor(random_subset_numeric)),
+        f"{label} rlnRandomSubset is not integral",
+    )
+    random_subsets = random_subset_numeric.astype(np.int64)
+    _require(
+        set(random_subsets.tolist()).issubset({1, 2}),
+        f"{label} rlnRandomSubset is outside the RELION halfset domain {{1, 2}}",
+    )
     order = np.argsort(identities, kind="stable")
     result: dict[str, Any] = {
         "identities": identities[order],
-        "identity_columns": {},
+        "identity_columns": {
+            "rlnImageName": identities[order],
+            "rlnRandomSubset": random_subsets[order],
+        },
         "numeric_groups": {},
     }
-    for column in identity_columns:
-        result["identity_columns"][column] = table[column].to_numpy()[order]
     for group, columns in numeric_groups.items():
         try:
             values = table[list(columns)].astype(float).to_numpy(dtype=np.float64)[order]
@@ -1662,6 +1862,135 @@ def _expected_iteration_artifacts(output: Path, iterations: Sequence[int], suffi
     return [output / f"run_it{int(iteration):03d}_{suffix}" for iteration in iterations for suffix in suffixes]
 
 
+def _expected_runtime_artifacts(run_root: Path) -> list[Path]:
+    """Files whose hashes make one completed arm immutable on resume."""
+
+    return [
+        run_root / "command.json",
+        run_root / "timing.json",
+        run_root / "gpu_monitor.csv",
+        run_root / "process.time",
+        run_root / "runner.stdout",
+        run_root / "runner.stderr",
+        run_root / "arm.json",
+        run_root / "science_environment.json",
+        run_root / "output" / "run_native_options.json",
+    ]
+
+
+def _validate_runtime_artifact_manifest(run_root: Path) -> str:
+    return _validate_saved_manifest(
+        run_root / "runtime_artifact_manifest.sha256",
+        run_root,
+        _expected_runtime_artifacts(run_root),
+    )
+
+
+def _validate_science_environment(
+    path: Path,
+    *,
+    root: Path,
+    run_root: Path,
+    label: str,
+    multistream_workers: int,
+    native_atomic_reduction: int,
+    arm: dict[str, Any],
+    expected: dict[str, Any],
+    runtime_contract: dict[str, Any],
+) -> dict[str, str]:
+    payload = _load_json(path, f"arm science environment for {label}")
+    _require(
+        payload.get("schema") == "recovar.vdam_coarse_combined_true200_science_environment.v2",
+        f"arm {label} science-environment schema differs",
+    )
+    _require(payload.get("label") == label, f"arm {label} science-environment label differs")
+    job_id = str(arm.get("job_id", ""))
+    _require(job_id.isdigit() and payload.get("job_id") == job_id, f"arm {label} job ID is invalid")
+    environment = payload.get("environment")
+    _require(
+        isinstance(environment, dict)
+        and all(isinstance(key, str) and isinstance(value, str) for key, value in environment.items()),
+        f"arm {label} science environment is not a string mapping",
+    )
+    try:
+        from scripts.resolve_vdam_coarse_combined_true200_launch import (
+            LaunchResolutionError,
+            _science_environment_snapshot,
+        )
+
+        canonical = _science_environment_snapshot(environment, runtime_contract)
+    except (LaunchResolutionError, KeyError, TypeError, ValueError) as exc:
+        raise GateSetupError(f"arm {label} science environment is invalid: {exc}") from exc
+    _require(canonical == environment, f"arm {label} science environment is incomplete or non-canonical")
+
+    fixed = runtime_contract.get("fixed_science_environment")
+    _require(isinstance(fixed, dict), "runtime contract has no fixed science environment")
+    attempt_runtime = root / "runtime" / "attempts" / job_id
+    required = {
+        **{str(key): str(value) for key, value in fixed.items()},
+        "CUDA_VISIBLE_DEVICES": str(expected["gpu_uuid"]),
+        "JAX_COMPILATION_CACHE_DIR": str((run_root / "jax_cache").resolve()),
+        "LD_PRELOAD": str(Path(expected["cusparse_path"]).resolve()),
+        "PIXI_HOME": str((attempt_runtime / "pixi_home").resolve()),
+        "PYTHONPATH": str(Path(expected["repo_root"]).resolve()),
+        "RATTLER_CACHE_DIR": str((attempt_runtime / "rattler_cache").resolve()),
+        "RECOVAR_CUDA_LIB": str(Path(expected["cuda_path"]).resolve()),
+        "RECOVAR_EXPECTED_REPO_ROOT": str(Path(expected["repo_root"]).resolve()),
+        "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": str(int(multistream_workers)),
+        "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": str(int(native_atomic_reduction)),
+        "RECOVAR_RELION_BIND_BUILD_DIR": str(Path(expected["relion_bind_path"]).resolve().parent),
+        "RECOVAR_SELECTED_GPU_UUID": str(expected["gpu_uuid"]),
+        "TMPDIR": str((run_root / "tmp").resolve()),
+        "VDAM_ALLOCATED_GPU_UUIDS_CSV": str(expected["gpu_uuid"]),
+        "VDAM_SELECTED_GPU_UUID": str(expected["gpu_uuid"]),
+        "VDAM_VISIBLE_GPU_UUIDS_CSV": str(expected["visible_gpu_uuids_csv"]),
+    }
+    mismatches = {
+        key: {"expected": value, "observed": environment.get(key)}
+        for key, value in required.items()
+        if environment.get(key) != value
+    }
+    _require(not mismatches, f"arm {label} effective science environment differs: {mismatches}")
+    visible_gpu_uuids = environment.get("VDAM_VISIBLE_GPU_UUIDS_CSV", "").split(",")
+    _require(
+        visible_gpu_uuids
+        and len(visible_gpu_uuids) == len(set(visible_gpu_uuids))
+        and all(value.startswith("GPU-") for value in visible_gpu_uuids)
+        and str(expected["gpu_uuid"]) in visible_gpu_uuids,
+        f"arm {label} visible GPU UUID evidence is invalid",
+    )
+    if "VDAM_TRUE200_ROOT" in environment:
+        _require(
+            Path(environment["VDAM_TRUE200_ROOT"]).resolve() == root.resolve(),
+            f"arm {label} VDAM_TRUE200_ROOT differs",
+        )
+    if "VDAM_TRUE200_RESUME" in environment:
+        _require(
+            environment["VDAM_TRUE200_RESUME"] in {"0", "1"},
+            f"arm {label} VDAM_TRUE200_RESUME is invalid",
+        )
+    if "VDAM_GF46_FIXTURE_DIR" in environment:
+        _require(
+            Path(environment["VDAM_GF46_FIXTURE_DIR"]).resolve()
+            == Path(expected["fixture_dir"]).resolve(),
+            f"arm {label} fixture environment differs",
+        )
+    if "VDAM_NATIVE_REFERENCE_ROOT" in environment:
+        _require(
+            Path(environment["VDAM_NATIVE_REFERENCE_ROOT"]).resolve()
+            == Path(expected["native_reference_root"]).resolve(),
+            f"arm {label} native-reference environment differs",
+        )
+    if "VDAM_TRUE200_LAUNCH_MANIFEST" in environment:
+        launch_manifest = Path(environment["VDAM_TRUE200_LAUNCH_MANIFEST"])
+        _require(
+            launch_manifest.is_file()
+            and _sha256(launch_manifest) == expected["launch_manifest_sha256"],
+            f"arm {label} external launch-manifest environment differs",
+        )
+    return environment
+
+
 def _validate_arm_artifacts(
     root: Path,
     label: str,
@@ -1671,14 +2000,16 @@ def _validate_arm_artifacts(
     suffixes: Sequence[str],
     *,
     expected: dict[str, Any],
+    runtime_contract: dict[str, Any],
 ) -> dict[str, Any]:
     run_root = root / "runs" / label
     output = run_root / "output"
     _require((run_root / "SCIENCE_COMPLETED").is_file(), f"arm {label} did not complete science")
     _require(output.is_dir(), f"arm {label} has no output directory")
+    runtime_manifest_sha = _validate_runtime_artifact_manifest(run_root)
     arm = _load_json(run_root / "arm.json", f"arm provenance for {label}")
     exact_fields = {
-        "schema": "recovar.vdam_coarse_combined_true200_arm.v1",
+        "schema": "recovar.vdam_coarse_combined_true200_arm.v2",
         "label": label,
         "multistream_workers": int(multistream_workers),
         "native_atomic_reduction": int(native_atomic_reduction),
@@ -1686,6 +2017,8 @@ def _validate_arm_artifacts(
         "production_candidate_head": expected["production_candidate_head"],
         "gpu_uuid": expected["gpu_uuid"],
         "node": expected["node"],
+        "allocated_gpu_uuids_csv": expected["allocated_gpu_uuids_csv"],
+        "visible_gpu_uuids_csv": expected["visible_gpu_uuids_csv"],
         "cuda_sha256": expected["cuda_sha256"],
         "relion_bind_sha256": expected["relion_bind_sha256"],
         "interpreter_sha256": expected["interpreter_sha256"],
@@ -1708,6 +2041,22 @@ def _validate_arm_artifacts(
     _require(Path(arm["output_dir"]).resolve() == output.resolve(), f"arm {label} output path differs")
     cache = Path(arm["jax_cache_dir"]).resolve()
     _require(cache == (run_root / "jax_cache").resolve(), f"arm {label} JAX cache path differs")
+    science_environment_path = run_root / "science_environment.json"
+    _require(
+        arm.get("science_environment_sha256") == _sha256(science_environment_path),
+        f"arm {label} science-environment hash differs",
+    )
+    science_environment = _validate_science_environment(
+        science_environment_path,
+        root=root,
+        run_root=run_root,
+        label=label,
+        multistream_workers=multistream_workers,
+        native_atomic_reduction=native_atomic_reduction,
+        arm=arm,
+        expected=expected,
+        runtime_contract=runtime_contract,
+    )
     expected_paths = _expected_iteration_artifacts(output, iterations, suffixes)
     expected_names = {path.name for path in expected_paths}
     observed_names = {
@@ -1727,6 +2076,9 @@ def _validate_arm_artifacts(
         "native_atomic_reduction": int(native_atomic_reduction),
         "arm_provenance_sha256": _sha256(run_root / "arm.json"),
         "artifact_manifest_sha256": manifest_sha,
+        "runtime_artifact_manifest_sha256": runtime_manifest_sha,
+        "science_environment_sha256": _sha256(science_environment_path),
+        "science_environment": science_environment,
         "artifact_count": len(expected_paths),
         "output_dir": str(output.resolve()),
         "jax_cache_dir": str(cache),
@@ -1852,6 +2204,78 @@ def _native_repeat_roots(native_root: Path, count: int) -> tuple[Path, ...]:
     return roots
 
 
+def _native_command_option(argv: Sequence[str], name: str, label: str) -> str:
+    indices = [index for index, value in enumerate(argv) if value == name]
+    _require(len(indices) == 1, f"{label} must contain exactly one {name}")
+    index = indices[0]
+    _require(index + 1 < len(argv), f"{label} has no value for {name}")
+    return str(argv[index + 1])
+
+
+def _validate_native_command(
+    path: Path,
+    *,
+    repeat: Path,
+    provenance: dict[str, Any],
+    acceptance: dict[str, Any],
+    index: int,
+) -> list[str]:
+    command = _load_json(path, f"native repeat {index} RELION command")
+    argv = command.get("argv")
+    _require(
+        isinstance(argv, list)
+        and len(argv) >= 2
+        and all(isinstance(value, str) and value and "\x00" not in value and "\n" not in value for value in argv),
+        f"native repeat {index} RELION command argv is invalid",
+    )
+    reference = provenance.get("relion_reference")
+    _require(isinstance(reference, dict), f"native repeat {index} has no RELION reference provenance")
+    _require(argv[0] == reference.get("executable"), f"native repeat {index} RELION command executable differs")
+    definition = acceptance["science_contract"]["definition"]
+    expected_options = {
+        "--o": str((repeat / "relion" / "run").resolve()),
+        "--iter": str(int(definition["nr_iter"])),
+        "--grad_write_iter": str(int(acceptance["science_contract"]["grad_write_iter"])),
+        "--K": str(int(definition["nr_classes"])),
+        "--sym": str(definition.get("symmetry", "C1")),
+        "--pad": str(int(definition["padding_factor"])),
+        "--particle_diameter": str(float(definition["particle_diameter_angstrom"])),
+        "--oversampling": str(int(definition["oversampling"])),
+        "--healpix_order": str(int(definition["healpix_order"])),
+        "--offset_range": str(int(definition["offset_range_px"])),
+        "--offset_step": str(int(definition["offset_step_px"])),
+        "--tau2_fudge": str(int(definition["tau2_fudge"])),
+        "--random_seed": str(int(definition["random_seed"])),
+        "--gpu": str(acceptance["science_contract"]["gpu_argument"]),
+    }
+    mismatches = {
+        option: {"expected": expected, "observed": _native_command_option(argv, option, f"native repeat {index}")}
+        for option, expected in expected_options.items()
+        if _native_command_option(argv, option, f"native repeat {index}") != expected
+    }
+    _require(not mismatches, f"native repeat {index} RELION command options differ: {mismatches}")
+    input_star = Path(_native_command_option(argv, "--i", f"native repeat {index}"))
+    _require(
+        input_star.is_file()
+        and _sha256(input_star) == acceptance["case"]["particle_star_sha256"],
+        f"native repeat {index} RELION command input STAR differs",
+    )
+    required_flags = {
+        "--grad",
+        "--denovo_3dref",
+        "--ctf",
+        "--flatten_solvent",
+        "--zero_mask",
+        "--dont_combine_weights_via_disc",
+        "--auto_sampling",
+    }
+    _require(
+        all(argv.count(flag) == 1 for flag in required_flags),
+        f"native repeat {index} RELION command flags differ",
+    )
+    return argv
+
+
 def _validate_native_reference(native_root: Path, acceptance: dict[str, Any]) -> dict[str, Any]:
     contract = acceptance["native_reference"]
     _require(native_root.is_dir(), f"native reference root is missing: {native_root}")
@@ -1862,7 +2286,22 @@ def _validate_native_reference(native_root: Path, acceptance: dict[str, Any]) ->
     )
     science = _load_json(science_manifest, "native science manifest")
     _require(science.get("status") == "science_complete", "native science manifest is not complete")
-    repeats = _native_repeat_roots(native_root, int(contract["repeat_count"]))
+    repeat_count = int(contract["repeat_count"])
+    repeats = _native_repeat_roots(native_root, repeat_count)
+    hash_contract_names = (
+        "paired_gpu_uuid_sha256",
+        "run_provenance_sha256",
+        "relion_timing_sha256",
+        "relion_command_sha256",
+    )
+    for name in hash_contract_names:
+        values = contract.get(name)
+        _require(
+            isinstance(values, list)
+            and len(values) == repeat_count
+            and all(isinstance(value, str) and len(value) == 64 for value in values),
+            f"native reference {name} contract is invalid",
+        )
     map_paths = [
         repeat / "relion" / f"run_it{iteration:03d}_class001.mrc" for repeat in repeats for iteration in range(201)
     ]
@@ -1882,19 +2321,42 @@ def _validate_native_reference(native_root: Path, acceptance: dict[str, Any]) ->
         audit_sha = _sha256(audit)
         _require(audit_sha == expected_audit_sha, f"native repeat {index} trajectory audit differs")
         audit_hashes.append(audit_sha)
-        gpu = _load_json(repeat / "paired_gpu_uuid.json", f"native repeat {index} GPU provenance")
+        paired_gpu_path = repeat / "paired_gpu_uuid.json"
+        run_provenance_path = repeat / "run_provenance.json"
+        timing_path = repeat / "relion" / "relion.timing.json"
+        command_path = repeat / "relion" / "relion_command.json"
+        sealed_paths = {
+            "paired_gpu_uuid_sha256": paired_gpu_path,
+            "run_provenance_sha256": run_provenance_path,
+            "relion_timing_sha256": timing_path,
+            "relion_command_sha256": command_path,
+        }
+        sealed_hashes = {}
+        for name, sealed_path in sealed_paths.items():
+            observed_sha = _sha256(sealed_path)
+            expected_sha = contract[name][index - 1]
+            _require(observed_sha == expected_sha, f"native repeat {index} {name} differs")
+            sealed_hashes[name] = observed_sha
+        gpu = _load_json(paired_gpu_path, f"native repeat {index} GPU provenance")
         gpu_values = [gpu.get(key) for key in ("physical_gpu_uuid", "relion_gpu_uuid", "recovar_gpu_uuid")]
         _require(
             len(set(gpu_values)) == 1 and gpu_values[0] == contract["physical_gpu_uuid"],
             f"native repeat {index} physical GPU differs",
         )
-        provenance = _load_json(repeat / "run_provenance.json", f"native repeat {index} provenance")
+        provenance = _load_json(run_provenance_path, f"native repeat {index} provenance")
         reference = provenance.get("relion_reference", {})
         _require(
             reference.get("executable_sha256") == contract["relion_executable_sha256"],
             f"native repeat {index} RELION executable differs",
         )
-        timing = _load_json(repeat / "relion" / "relion.timing.json", f"native repeat {index} timing")
+        _validate_native_command(
+            command_path,
+            repeat=repeat,
+            provenance=provenance,
+            acceptance=acceptance,
+            index=index,
+        )
+        timing = _load_json(timing_path, f"native repeat {index} timing")
         wall_s = float(timing.get("external_wall_s", math.nan))
         _require(math.isfinite(wall_s) and wall_s > 0.0, f"native repeat {index} runtime is invalid")
         relion_times.append(wall_s)
@@ -1903,9 +2365,7 @@ def _validate_native_reference(native_root: Path, acceptance: dict[str, Any]) ->
                 "repeat": index,
                 "root": str(repeat.resolve()),
                 "trajectory_audit_sha256": audit_sha,
-                "paired_gpu_uuid_sha256": _sha256(repeat / "paired_gpu_uuid.json"),
-                "run_provenance_sha256": _sha256(repeat / "run_provenance.json"),
-                "relion_timing_sha256": _sha256(repeat / "relion" / "relion.timing.json"),
+                **sealed_hashes,
                 "relion_wall_s": wall_s,
             }
         )
@@ -1921,8 +2381,15 @@ def _validate_native_reference(native_root: Path, acceptance: dict[str, Any]) ->
     }
 
 
-def _arm_runtime(root: Path, label: str, iterations: Sequence[int]) -> dict[str, Any]:
+def _arm_runtime(
+    root: Path,
+    label: str,
+    iterations: Sequence[int],
+    *,
+    expected_gpu_uuid: str,
+) -> dict[str, Any]:
     run_root = root / "runs" / label
+    runtime_manifest_sha = _validate_runtime_artifact_manifest(run_root)
     timing = _load_json(run_root / "timing.json", f"arm timing for {label}")
     wall_s = float(timing.get("external_wall_s", math.nan))
     _require(math.isfinite(wall_s) and wall_s > 0.0, f"arm {label} wall time is invalid")
@@ -1952,6 +2419,12 @@ def _arm_runtime(root: Path, label: str, iterations: Sequence[int]) -> dict[str,
         and float(peak) > 0.0,
         f"arm {label} GPU monitor is incomplete: {monitor}",
     )
+    _require(
+        monitor.get("gpu_uuids") == [expected_gpu_uuid]
+        and int(monitor.get("gpu_uuid_count", 0)) == 1
+        and monitor.get("peak_device_uuid") == expected_gpu_uuid,
+        f"arm {label} GPU monitor UUID evidence differs: {monitor}",
+    )
     return {
         "label": label,
         "end_to_end_wall_s": wall_s,
@@ -1959,7 +2432,11 @@ def _arm_runtime(root: Path, label: str, iterations: Sequence[int]) -> dict[str,
         "peak_gpu_memory_mib": float(peak),
         "timing_sha256": _sha256(run_root / "timing.json"),
         "gpu_monitor_sha256": _sha256(run_root / "gpu_monitor.csv"),
+        "runtime_artifact_manifest_sha256": runtime_manifest_sha,
         "gpu_monitor_sample_count": int(monitor["sample_count"]),
+        "gpu_uuids": monitor["gpu_uuids"],
+        "gpu_uuid_count": int(monitor["gpu_uuid_count"]),
+        "peak_device_uuid": monitor["peak_device_uuid"],
     }
 
 
@@ -1985,10 +2462,11 @@ def _validate_run_provenance(
     workers = acceptance["panel"]["coarse_multistream_workers"]
     atomic = acceptance["panel"]["coarse_native_atomic_reduction"]
     expected = {
-        "schema": "recovar.vdam_coarse_combined_true200_run.v1",
+        "schema": "recovar.vdam_coarse_combined_true200_run.v2",
         "git_head": run.get("git_head"),
         "production_candidate_head": acceptance["qualified_candidate"]["production_head"],
         "gpu_uuid": acceptance["native_reference"]["physical_gpu_uuid"],
+        "allocated_gpu_uuids_csv": acceptance["native_reference"]["physical_gpu_uuid"],
         "cuda_sha256": acceptance["qualified_candidate"]["cuda_sha256"],
         "relion_bind_sha256": acceptance["qualified_candidate"]["relion_bind_sha256"],
         "interpreter_sha256": acceptance["qualified_candidate"]["interpreter_sha256"],
@@ -2009,6 +2487,14 @@ def _validate_run_provenance(
         key: {"expected": value, "observed": run.get(key)} for key, value in expected.items() if run.get(key) != value
     }
     _require(not mismatches, f"run provenance differs from the sealed contract: {mismatches}")
+    visible_gpu_uuids = str(run.get("visible_gpu_uuids_csv", "")).split(",")
+    _require(
+        visible_gpu_uuids
+        and len(visible_gpu_uuids) == len(set(visible_gpu_uuids))
+        and all(value.startswith("GPU-") for value in visible_gpu_uuids)
+        and expected["gpu_uuid"] in visible_gpu_uuids,
+        "run visible-GPU UUID evidence is invalid",
+    )
     _require(
         run["git_head"] != acceptance["qualified_candidate"]["production_head"],
         "true-200 run must use a review overlay rather than mutate the production candidate",
@@ -2283,7 +2769,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
     scorecard_path = args.scorecard.resolve()
     acceptance = _load_json(acceptance_path, "acceptance contract")
     _require(
-        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v1",
+        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v2",
         "unsupported acceptance schema",
     )
     _require((root / "RUNS_COMPLETED").is_file(), "panel arms are not marked complete")
@@ -2332,6 +2818,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
                 iterations,
                 trajectory["required_artifact_suffixes"],
                 expected=arm_expected,
+                runtime_contract=acceptance["runtime_contract"],
             )
         )
         arms[-1]["validated_native_options"] = _validate_native_options(
@@ -2382,6 +2869,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
             for column in acceptance["state_contract"]["star_identity_columns"]
         }
     )
+    coarse_selector_audit_rows: list[dict[str, Any]] = []
     for iteration in state_iterations:
         metadata = [
             _load_json(
@@ -2397,6 +2885,22 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
             )
             for label in labels
         ]
+        for label, worker_count, atomic_mode, meta in zip(
+            labels,
+            workers,
+            atomic,
+            metadata,
+            strict=True,
+        ):
+            coarse_selector_audit_rows.extend(
+                _validate_coarse_selector_profile_audits(
+                    meta,
+                    label=label,
+                    iteration=iteration,
+                    multistream_workers=worker_count,
+                    native_atomic_reduction=atomic_mode,
+                )
+            )
         metadata_result = classify_metadata_iteration(metadata, labels, acceptance["state_contract"])
         particle_result = classify_particle_tables(tables, labels, acceptance["state_contract"])
         parsed_tables = [
@@ -2431,14 +2935,62 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
         exact_path_mismatches,
         labels,
     )
+    expected_selector_checkpoints = {
+        (label, iteration) for label in labels for iteration in state_iterations
+    }
+    observed_selector_checkpoints = {
+        (row["label"], row["iteration"]) for row in coarse_selector_audit_rows
+    }
+    _require(
+        observed_selector_checkpoints == expected_selector_checkpoints,
+        "coarse selector audits do not cover every arm and post-initialization checkpoint",
+    )
+    selector_by_arm = {}
+    for label in labels:
+        arm_rows = [row for row in coarse_selector_audit_rows if row["label"] == label]
+        _require(
+            len(arm_rows) == 2 * len(state_iterations)
+            and sorted({row["halfset"] for row in arm_rows}) == [0, 1],
+            f"{label} coarse selector halfset audit coverage differs",
+        )
+        selector_by_arm[label] = {
+            "checkpoint_count": len({row["iteration"] for row in arm_rows}),
+            "halfsets": sorted({row["halfset"] for row in arm_rows}),
+            "audit_count": len(arm_rows),
+            "total_fused_calls": sum(row["audit"]["counts"]["fused_calls"] for row in arm_rows),
+            "total_actual_rows": sum(row["audit"]["counts"]["actual_rows"] for row in arm_rows),
+            "total_multistream_calls": sum(
+                row["audit"]["counts"]["multistream_calls"] for row in arm_rows
+            ),
+            "total_native_atomic_selected_calls": sum(
+                row["audit"]["counts"]["native_atomic_selected_calls"] for row in arm_rows
+            ),
+        }
+    coarse_selector_execution = {
+        "policy": (
+            "every sealed post-initialization halfset profile must prove the requested and "
+            "effective selector, exact wrapper/target, and host-observed execution counts; "
+            "serial controls must use the serial fused wrapper with zero multistream/native-atomic counts"
+        ),
+        "checkpoint_count": len(state_iterations),
+        "audit_count": len(coarse_selector_audit_rows),
+        "by_arm": selector_by_arm,
+        "rows": coarse_selector_audit_rows,
+        "pass": True,
+    }
     state = {
         "iterations": state_rows,
         "continuous_panel": continuous_state,
         "joint_exact_complete_path_serial_witness": joint_exact_state,
+        "coarse_selector_execution": coarse_selector_execution,
         "checkpoint_exact_any_serial_diagnostic_only_pass": all(
             row["pass"] for row in state_rows
         ),
-        "pass": continuous_state["pass"] and joint_exact_state["pass"],
+        "pass": (
+            continuous_state["pass"]
+            and joint_exact_state["pass"]
+            and coarse_selector_execution["pass"]
+        ),
     }
     map_analysis = analyze_map_panel_from_loader(
         load_iteration_maps,
@@ -2458,7 +3010,15 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
         final_iteration=iterations[-1],
         gate_contract=gate_contract,
     )
-    runtime_rows = [_arm_runtime(root, label, iterations) for label in labels]
+    runtime_rows = [
+        _arm_runtime(
+            root,
+            label,
+            iterations,
+            expected_gpu_uuid=acceptance["native_reference"]["physical_gpu_uuid"],
+        )
+        for label in labels
+    ]
     runtime = classify_runtime(
         runtime_rows,
         labels,
@@ -2470,6 +3030,9 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
     )
     gates = {
         "artifact_and_provenance_complete": True,
+        "coarse_selector_executed_as_sealed_at_every_checkpoint": coarse_selector_execution[
+            "pass"
+        ],
         "state_joint_exact_path_and_continuous_panel": state["pass"],
         "whole_trajectory_unbiased_and_repeat_stable": all(
             map_analysis["gates"][key]

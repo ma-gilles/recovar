@@ -53,10 +53,6 @@ ANALYZER=$(jq -er '.files.analyzer.path' "${LAUNCH_MANIFEST}")
 HARNESS=$(jq -er '.files.harness.path' "${LAUNCH_MANIFEST}")
 RESOLVER=$(jq -er '.files.resolver.path' "${LAUNCH_MANIFEST}")
 SCORECARD=$(jq -er '.files.scorecard.path' "${LAUNCH_MANIFEST}")
-CUDA_TOOLKIT=${CUDA_TOOLKIT:-/usr/local/cuda-13.1}
-RELION_CUDA_TOOLKIT=${RELION_CUDA_TOOLKIT:-/usr/local/cuda-12.6}
-RELION_RUNTIME=${RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
-MPI_ROOT=${MPI_ROOT:-/usr/local/openmpi/cuda-12.6/4.1.6/gcc}
 monitor_pid=
 RESUME=${VDAM_TRUE200_RESUME:-0}
 case "${RESUME}" in
@@ -158,10 +154,16 @@ test "$(sha256sum "${SCORECARD}" | awk '{print $1}')" = \
   "$(jq -r '.case.scorecard_sha256' "${ACCEPTANCE}")"
 
 source "${GPU_SELECTION_HELPER}"
+initial_allocation_spec=${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}}
+vdam_assert_target_gpu_allocated "${TARGET_GPU_UUID}" "${initial_allocation_spec}"
 vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
 selected_gpu_uuid=${VDAM_SELECTED_GPU_UUID}
 test "${selected_gpu_uuid}" = "$(jq -r '.native_reference.physical_gpu_uuid' "${ACCEPTANCE}")"
-gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader | sed -n '1p' | sed 's/[[:space:]]*$//')
+test "${VDAM_ALLOCATED_GPU_UUIDS_CSV}" = "${selected_gpu_uuid}"
+printf '%s\n' "${initial_allocation_spec}" > "${ATTEMPT_PROVENANCE}/initial_allocation_spec.txt"
+printf '%s\n' "${VDAM_ALLOCATED_GPU_UUIDS_CSV}" > "${ATTEMPT_PROVENANCE}/allocated_gpu_uuids.csv"
+printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${ATTEMPT_PROVENANCE}/visible_gpu_uuids.csv"
+gpu_name=$(nvidia-smi -i "${selected_gpu_uuid}" --query-gpu=name --format=csv,noheader | sed -n '1p' | sed 's/[[:space:]]*$//')
 [[ "${gpu_name}" == *H100* ]]
 if [[ "${RESUME}" -eq 1 && ( -e "${ROOT}/SCIENCE_PASSED" || -e "${ROOT}/SCIENCE_FAILED" ) ]]; then
   terminal_quarantine=${ROOT}/failed_attempts/terminal-before-${SLURM_JOB_ID}
@@ -226,11 +228,18 @@ printf '%s\n' "${SLURM_JOB_ID}" > "${ATTEMPT_PROVENANCE}/slurm_job_id.txt"
 printf '%s\n' "${SLURMD_NODENAME:-$(hostname -s)}" > "${ATTEMPT_PROVENANCE}/node.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${ATTEMPT_PROVENANCE}/selected_gpu_uuid.txt"
 env | LC_ALL=C sort > "${ATTEMPT_PROVENANCE}/submission_environment.txt"
-nvidia-smi -q > "${ATTEMPT_PROVENANCE}/nvidia_smi.txt"
+nvidia-smi -i "${selected_gpu_uuid}" -q > "${ATTEMPT_PROVENANCE}/nvidia_smi.txt"
 
-unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV JAX_PLATFORM_NAME
-export PYTHONNOUSERSITE=1
-export PYTHONUNBUFFERED=1
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV JAX_PLATFORM_NAME \
+  CUDA_TOOLKIT RELION_CUDA_TOOLKIT RELION_RUNTIME MPI_ROOT LD_PRELOAD LD_LIBRARY_PATH
+export PATH
+PATH=$(jq -er '.runtime_contract.fixed_science_environment.PATH' "${ACCEPTANCE}")
+export LD_LIBRARY_PATH
+LD_LIBRARY_PATH=$(jq -er '.runtime_contract.fixed_science_environment.LD_LIBRARY_PATH' "${ACCEPTANCE}")
+export PYTHONNOUSERSITE
+PYTHONNOUSERSITE=$(jq -er '.runtime_contract.fixed_science_environment.PYTHONNOUSERSITE' "${ACCEPTANCE}")
+export PYTHONUNBUFFERED
+PYTHONUNBUFFERED=$(jq -er '.runtime_contract.fixed_science_environment.PYTHONUNBUFFERED' "${ACCEPTANCE}")
 ATTEMPT_RUNTIME=${RUNTIME}/attempts/${SLURM_JOB_ID}
 export TMPDIR=${ATTEMPT_RUNTIME}/tmp
 export PIXI_HOME=${ATTEMPT_RUNTIME}/pixi_home
@@ -238,16 +247,19 @@ export RATTLER_CACHE_DIR=${ATTEMPT_RUNTIME}/rattler_cache
 mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 touch "${ATTEMPT_RUNTIME}/SAFE_TO_DELETE"
 export CUDA_VISIBLE_DEVICES=${selected_gpu_uuid}
-export JAX_PLATFORMS=cuda,cpu
+export JAX_PLATFORMS
+JAX_PLATFORMS=$(jq -er '.runtime_contract.fixed_science_environment.JAX_PLATFORMS' "${ACCEPTANCE}")
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
 export RECOVAR_CUDA_LIB=${CUDA_BINARY}
 export RECOVAR_RELION_BIND_BUILD_DIR=${RELION_BIND_DIR}
-export RECOVAR_EM_RAW_IMAGE_CACHE=off
-export RECOVAR_INITIAL_MODEL_PROFILE=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
-export PATH=${CUDA_TOOLKIT}/bin:${PATH}
-export LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${RELION_CUDA_TOOLKIT}/lib64:${RELION_CUDA_TOOLKIT}/targets/x86_64-linux/lib:${CUDA_TOOLKIT}/lib64:${CUDA_TOOLKIT}/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}
+export RECOVAR_EM_RAW_IMAGE_CACHE
+RECOVAR_EM_RAW_IMAGE_CACHE=$(jq -er '.runtime_contract.fixed_science_environment.RECOVAR_EM_RAW_IMAGE_CACHE' "${ACCEPTANCE}")
+export RECOVAR_INITIAL_MODEL_PROFILE
+RECOVAR_INITIAL_MODEL_PROFILE=$(jq -er '.runtime_contract.fixed_science_environment.RECOVAR_INITIAL_MODEL_PROFILE' "${ACCEPTANCE}")
+export XLA_PYTHON_CLIENT_PREALLOCATE
+XLA_PYTHON_CLIENT_PREALLOCATE=$(jq -er '.runtime_contract.fixed_science_environment.XLA_PYTHON_CLIENT_PREALLOCATE' "${ACCEPTANCE}")
+export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS
+JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=$(jq -er '.runtime_contract.fixed_science_environment.JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS' "${ACCEPTANCE}")
 
 (
   cd "${REPO_ROOT}"
@@ -360,13 +372,14 @@ if [[ "${RESUME}" -eq 0 ]]; then
   "${SLURMD_NODENAME:-$(hostname -s)}" "${gpu_name}" "${SLURM_JOB_ID}" \
   "${EXPECTED_PRODUCTION_CANDIDATE_HEAD}" "${science_contract_sha256}" \
   "${PROVENANCE}/launch_manifest.json" "${EXPECTED_LAUNCH_MANIFEST_SHA256}" \
-  "${PROVENANCE}/runtime_libraries.json" <<'PY'
+  "${PROVENANCE}/runtime_libraries.json" "${VDAM_ALLOCATED_GPU_UUIDS_CSV}" \
+  "${VDAM_VISIBLE_GPU_UUIDS_CSV}" <<'PY'
 import hashlib, json, subprocess, sys
 from pathlib import Path
 
 (output, acceptance_path, manifest_path, repo, scorecard, fixture, native, cuda, bind,
  interpreter, cusparse, gpu, node, gpu_name, job_id, production, science_sha, launch_manifest,
- launch_manifest_sha, runtime_libraries) = sys.argv[1:]
+ launch_manifest_sha, runtime_libraries, allocated_gpu_uuids, visible_gpu_uuids) = sys.argv[1:]
 acceptance = json.load(open(acceptance_path, encoding="utf-8"))
 manifest = Path(manifest_path)
 source_files = [line.split("  ", 1)[1] for line in manifest.read_text().splitlines()]
@@ -377,7 +390,7 @@ def sha(path):
             digest.update(block)
     return digest.hexdigest()
 payload = {
-    "schema": "recovar.vdam_coarse_combined_true200_run.v1",
+    "schema": "recovar.vdam_coarse_combined_true200_run.v2",
     "classification": "sealed_default_off_true200_candidate_gate",
     "job_id": job_id,
     "repo_root": str(Path(repo).resolve()),
@@ -386,6 +399,8 @@ payload = {
     "node": node,
     "gpu_uuid": gpu,
     "gpu_name": gpu_name,
+    "allocated_gpu_uuids_csv": allocated_gpu_uuids,
+    "visible_gpu_uuids_csv": visible_gpu_uuids,
     "cuda_path": str(Path(cuda).resolve()),
     "cuda_sha256": sha(cuda),
     "relion_bind_path": str(Path(bind).resolve()),
@@ -471,12 +486,18 @@ iterations = tuple(range(201))
 artifact = _validate_arm_artifacts(
     root, label, workers, native_atomic, iterations,
     acceptance["trajectory"]["required_artifact_suffixes"], expected=expected,
+    runtime_contract=acceptance["runtime_contract"],
 )
 _validate_native_options(
     root / "runs" / label / "output/run_native_options.json",
     acceptance["science_contract"]["definition"],
 )
-runtime = _arm_runtime(root, label, iterations)
+runtime = _arm_runtime(
+    root,
+    label,
+    iterations,
+    expected_gpu_uuid=acceptance["native_reference"]["physical_gpu_uuid"],
+)
 print(json.dumps({"artifact": artifact, "runtime": runtime}, indent=2, sort_keys=True))
 PY
     ) > "${ATTEMPT_PROVENANCE}/${label}_validation.json"
@@ -512,8 +533,41 @@ for value in json.load(open(sys.argv[1], encoding="utf-8"))["argv"]:
     sys.stdout.buffer.write(str(value).encode() + b"\0")
 PY
   )
+  science_environment_args=(
+    "LD_PRELOAD=${CUSPARSE_LIBRARY}"
+    "PYTHONPATH=${REPO_ROOT}"
+    "TMPDIR=${tmp}"
+    "JAX_COMPILATION_CACHE_DIR=${cache}"
+    "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"
+    "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=${native_atomic}"
+  )
+  (
+    cd "${REPO_ROOT}"
+    env "${science_environment_args[@]}" "${PIXI_PY}" - \
+      "${run_root}/science_environment.json" "${ACCEPTANCE}" "${label}" "${SLURM_JOB_ID}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+from scripts.resolve_vdam_coarse_combined_true200_launch import _science_environment_snapshot
+
+target, acceptance_path, label, job_id = sys.argv[1:]
+acceptance = json.load(open(acceptance_path, encoding="utf-8"))
+payload = {
+    "schema": "recovar.vdam_coarse_combined_true200_science_environment.v2",
+    "label": label,
+    "job_id": job_id,
+    "environment": _science_environment_snapshot(
+        dict(os.environ), acceptance["runtime_contract"]
+    ),
+}
+Path(target).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+  )
   start_epoch=$(date +%s.%N)
-  nvidia-smi --query-gpu=timestamp,index,name,uuid,memory.used,memory.total,utilization.gpu \
+  nvidia-smi -i "${selected_gpu_uuid}" \
+    --query-gpu=timestamp,index,name,uuid,memory.used,memory.total,utilization.gpu \
     --format=csv -l 1 > "${run_root}/gpu_monitor.csv" &
   monitor_pid=$!
   trap - ERR
@@ -521,10 +575,7 @@ PY
   (
     cd "${REPO_ROOT}"
     /usr/bin/time -v -o "${run_root}/process.time" \
-      env LD_PRELOAD="${CUSPARSE_LIBRARY}" PYTHONPATH="${REPO_ROOT}" \
-      TMPDIR="${tmp}" JAX_COMPILATION_CACHE_DIR="${cache}" \
-      RECOVAR_K1_COARSE_MULTISTREAM_WORKERS="${workers}" \
-      RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION="${native_atomic}" \
+      env "${science_environment_args[@]}" \
       "${command[@]}"
   ) > "${run_root}/runner.stdout" 2> "${run_root}/runner.stderr"
   status=$?
@@ -562,22 +613,39 @@ open(sys.argv[1], "w", encoding="utf-8").write(json.dumps({
 }, indent=2, sort_keys=True) + "\n")
 PY
   "${PIXI_PY}" - "${run_root}/arm.json" "${PROVENANCE}/run.json" "${label}" "${workers}" \
-    "${native_atomic}" "${output}" "${cache}" <<'PY'
-import json, sys
+    "${native_atomic}" "${output}" "${cache}" "${run_root}/science_environment.json" \
+    "${SLURM_JOB_ID}" <<'PY'
+import hashlib, json, sys
 from pathlib import Path
-target, run_path, label, workers, native_atomic, output, cache = sys.argv[1:]
+target, run_path, label, workers, native_atomic, output, cache, science_environment, job_id = sys.argv[1:]
 run = json.load(open(run_path, encoding="utf-8"))
-keys = ("git_head", "production_candidate_head", "gpu_uuid", "node", "cuda_sha256",
+def sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+keys = ("git_head", "production_candidate_head", "gpu_uuid", "node",
+        "allocated_gpu_uuids_csv", "visible_gpu_uuids_csv", "cuda_sha256",
         "relion_bind_sha256", "interpreter_sha256", "cusparse_sha256", "scorecard_sha256",
         "acceptance_config_sha256", "analyzer_source_sha256", "science_contract_sha256")
 payload = {key: run[key] for key in keys}
-payload.update(schema="recovar.vdam_coarse_combined_true200_arm.v1", label=label,
+payload.update(schema="recovar.vdam_coarse_combined_true200_arm.v2", label=label,
+               job_id=job_id,
                multistream_workers=int(workers), native_atomic_reduction=int(native_atomic),
                output_dir=str(Path(output).resolve()),
                jax_cache_dir=str(Path(cache).resolve()), exit_status=0, fresh_process=True,
-               fresh_jax_cache=True, initial_model_profile=True)
+               fresh_jax_cache=True, initial_model_profile=True,
+               science_environment_sha256=sha256(science_environment))
 Path(target).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
+  (
+    cd "${run_root}"
+    printf '%s\n' \
+      command.json timing.json gpu_monitor.csv process.time runner.stdout runner.stderr \
+      arm.json science_environment.json output/run_native_options.json | \
+      LC_ALL=C sort | xargs sha256sum
+  ) > "${run_root}/runtime_artifact_manifest.sha256"
   write_marker_once "${run_root}/SCIENCE_COMPLETED" "job_id=${SLURM_JOB_ID}"
   test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = \
     "$(jq -r '.qualified_candidate.cuda_sha256' "${ACCEPTANCE}")"
