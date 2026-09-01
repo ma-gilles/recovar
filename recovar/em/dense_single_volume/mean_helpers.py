@@ -607,7 +607,8 @@ def _reconstruct_volume_eager(
         packed_half_bytes,
     )
     if accumulator_shape[0] > reconstruction_shape[0]:
-        stage_a_numerator = Ft_y
+        stage_a_numerator = None
+        stage_a_numerator_source = "device"
         if retained_device_numerator is not None:
             if tuple(retained_device_numerator.shape) != tuple(Ft_y.shape):
                 raise ValueError(
@@ -620,11 +621,27 @@ def _reconstruct_volume_eager(
                     f"{retained_device_numerator.dtype} != {Ft_y.dtype}"
                 )
             stage_a_numerator = retained_device_numerator
+            stage_a_numerator_source = "retained_join"
             logger.info(
                 "RELION Stage A reusing retained half-0 device numerator: shape=%s dtype=%s",
                 tuple(retained_device_numerator.shape),
                 retained_device_numerator.dtype,
             )
+        else:
+            # A NumPy argument passed directly to a donate_argnums JIT is first
+            # staged by dispatch, but that transient input cannot be donated.
+            # Materialise an explicit JAX array so half 2 can alias its 15-GiB
+            # Stage-A output into the staged numerator just as half 1 aliases
+            # the retained low-resolution-join buffer.
+            stage_a_numerator = jnp.asarray(Ft_y)
+            stage_a_numerator.block_until_ready()
+            if isinstance(Ft_y, np.ndarray):
+                stage_a_numerator_source = "staged_numpy"
+                logger.info(
+                    "RELION Stage A staging host numerator for donation: shape=%s dtype=%s",
+                    tuple(stage_a_numerator.shape),
+                    stage_a_numerator.dtype,
+                )
         wiener_half_device = relion_functions._post_process_from_filter_v2_donate_numerator(
             Ft_ctf,
             stage_a_numerator,
@@ -638,7 +655,17 @@ def _reconstruct_volume_eager(
         wiener_half_host = np.asarray(jax.device_get(wiener_half_device)).reshape(
             fourier_transform_utils.volume_shape_to_half_volume_shape(accumulator_shape),
         )
+        _delete_device_array(wiener_half_device)
+        _delete_device_array(stage_a_numerator)
+        logger.info(
+            "RELION Stage A released donated device numerator after host transfer: "
+            "source=%s output_deleted=%s numerator_deleted=%s",
+            stage_a_numerator_source,
+            _device_array_is_deleted(wiener_half_device),
+            _device_array_is_deleted(stage_a_numerator),
+        )
         del wiener_half_device
+        del stage_a_numerator
         gc.collect()
 
         fftw_half_host = _crop_relion_wiener_half_to_fftw_host(
@@ -736,6 +763,25 @@ def _reconstruct_volume_eager(
             inverse_transform_scale,
         )
     return result
+
+
+def _delete_device_array(value):
+    """Release a completed JAX buffer even when another dead handle survives."""
+
+    delete = getattr(value, "delete", None)
+    if callable(delete):
+        try:
+            delete()
+        except RuntimeError:
+            # Donation invalidates the input handle when the output aliases it.
+            pass
+
+
+def _device_array_is_deleted(value):
+    """Return JAX's deletion state when the device-array API exposes it."""
+
+    is_deleted = getattr(value, "is_deleted", None)
+    return bool(is_deleted()) if callable(is_deleted) else None
 
 
 def _finish_host_staged_reconstruction(result, *accumulators):
@@ -933,6 +979,13 @@ def _reconstruct_and_postprocess_means(
                 Ft_ctf_k_local,
                 Ft_y_k_local,
             )
+            if k == 0 and retained_Ft_y_0_device is not None:
+                # Stage A has copied its aliased output to the host and
+                # explicitly deleted the underlying device buffer. Drop this
+                # final local handle before half 2 stages its numerator.
+                retained_Ft_y_0_device = None
+                gc.collect()
+                logger.info("RELION Stage A released retained half-0 handle before half 2")
 
     for k in range(2):
         # Diagnostic: dump pre-mask Wiener output when env var set.

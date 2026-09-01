@@ -8107,6 +8107,9 @@ def _run_relion_iteration_loop(
             ),
             retained_Ft_y_0_device=retained_Ft_y_0_device,
         )
+        # The retained low-resolution-join numerator is consumed by half-0
+        # Stage A. Do not carry its invalidated Python handle into later work.
+        retained_Ft_y_0_device = None
 
         # RELION reconstructs the first-iteration CC maps with the untapered
         # updateSSNRarrays tau2.  Only afterwards does

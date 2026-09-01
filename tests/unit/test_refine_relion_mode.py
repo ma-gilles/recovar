@@ -13154,6 +13154,96 @@ class TestRelionModeSmokeTest:
             "reconstruction_shape=(4, 4, 4) packed_half_bytes=384"
         ) in caplog.text
 
+    def test_large_host_reconstruction_stages_numpy_numerator_for_donation(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        """Half 2 must see half 1 freed, then stage/delete its host numerator."""
+        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.reconstruction import relion_functions
+
+        volume_shape = (2, 2, 2)
+        accumulator_shape = (5, 5, 5)
+        half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+        host_ctf = np.ones(half_shape, dtype=np.float32)
+        host_numerator = np.ones(half_shape, dtype=np.complex64)
+        retained_numerator = jnp.ones(half_shape, dtype=jnp.complex64)
+        stage_inputs = []
+        stage_outputs = []
+        sentinel = jnp.asarray([7.0 + 0.0j], dtype=jnp.complex64)
+
+        def fake_stage(*args, **kwargs):
+            assert args[0] is host_ctf
+            if not stage_inputs:
+                assert args[1] is retained_numerator
+            else:
+                assert retained_numerator.is_deleted()
+                assert stage_outputs[0].is_deleted()
+                assert isinstance(args[1], mean_helpers_module.jax.Array)
+                assert not isinstance(args[1], np.ndarray)
+            assert not args[1].is_deleted()
+            assert kwargs["input_half_volume"] is True
+            assert kwargs["return_wiener_half_before_window"] is True
+            stage_inputs.append(args[1])
+            stage_outputs.append(jnp.ones(half_shape, dtype=jnp.complex64))
+            return stage_outputs[-1]
+
+        def fake_finish(value, *_args, **_kwargs):
+            assert isinstance(value, np.ndarray)
+            assert value.shape == (4, 4, 3)
+            return sentinel
+
+        monkeypatch.setattr(
+            relion_functions,
+            "_large_grid_postprocess_single_precision_enabled",
+            lambda _voxels: True,
+        )
+        monkeypatch.setattr(
+            relion_functions,
+            "_post_process_from_filter_v2_donate_numerator",
+            fake_stage,
+        )
+        monkeypatch.setattr(
+            relion_functions,
+            "_finish_large_relion_postprocess_from_fftw_half",
+            fake_finish,
+        )
+        caplog.set_level("INFO", logger=mean_helpers_module.__name__)
+
+        half0 = mean_helpers_module._reconstruct_volume_eager(
+            host_ctf,
+            host_numerator,
+            volume_shape,
+            2,
+            tau=np.ones(np.prod(volume_shape), dtype=np.float32),
+            tau2_fudge=1.0,
+            projection_padding_factor=1,
+            accumulator_volume_shape=accumulator_shape,
+            retained_device_numerator=retained_numerator,
+        )
+        half1 = mean_helpers_module._reconstruct_volume_eager(
+            host_ctf,
+            host_numerator,
+            volume_shape,
+            2,
+            tau=np.ones(np.prod(volume_shape), dtype=np.float32),
+            tau2_fudge=1.0,
+            projection_padding_factor=1,
+            accumulator_volume_shape=accumulator_shape,
+        )
+
+        assert half0 is sentinel
+        assert half1 is sentinel
+        assert len(stage_inputs) == len(stage_outputs) == 2
+        assert all(value.is_deleted() for value in stage_inputs)
+        assert all(value.is_deleted() for value in stage_outputs)
+        assert "RELION Stage A staging host numerator for donation" in caplog.text
+        assert (
+            "source=staged_numpy output_deleted=True numerator_deleted=True"
+            in caplog.text
+        )
+
     def test_large_host_reconstruction_padding_retains_device_window(self, monkeypatch):
         """The donating host gather is crop-only; Fourier padding stays on device."""
         from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
