@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -63,6 +64,26 @@ def test_late_profile_cache_audit_records_load_all_and_restores_method():
         "high_water_rss_delta_bytes"
     ]
     assert event["high_water_rss_delta_bytes"] >= 0
+    assert event["cached_shape"] == [3, 2, 2]
+    assert event["cached_dtype"] == "<f4"
+    assert event["cached_c_contiguous"] is True
+    assert event["cached_writeable"] is True
+    assert event["loader_topology"] == {
+        "mapped_rows": 0,
+        "mapped_files": [],
+        "mapped_file_count": 0,
+        "mapping_unique_index_count": 0,
+        "mapping_min_index": None,
+        "mapping_max_index": None,
+        "mapping_is_unique": True,
+        "mapping_is_contiguous_set": False,
+        "mapping_is_strictly_ascending": True,
+        "mapping_mrc_indices_sha256": hashlib.sha256(b"").hexdigest(),
+        "leaf_loader_count": 0,
+        "leaf_loaders": [],
+        "leaf_cached_before": [],
+        "leaf_cached_after": [],
+    }
 
 
 def test_late_profile_cache_audit_can_be_disabled():

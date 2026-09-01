@@ -48,6 +48,34 @@ def _normalize_selection_indices(indices, n_total: int, name: str) -> np.ndarray
     return normalize_indices(indices, n_total=int(n_total), name=name)
 
 
+def _permute_image_rows_in_place(images: np.ndarray, source_positions: np.ndarray) -> np.ndarray:
+    """Reorder image rows with one image-sized scratch buffer.
+
+    ``source_positions[j]`` names the row in the original array that belongs
+    at output row ``j``.  The caller guarantees that it is a permutation.
+    """
+    visited = np.zeros(len(source_positions), dtype=bool)
+    for start in range(len(source_positions)):
+        if visited[start]:
+            continue
+        source = int(source_positions[start])
+        if source == start:
+            visited[start] = True
+            continue
+
+        saved = images[start].copy()
+        current = start
+        while source != start:
+            images[current] = images[source]
+            visited[current] = True
+            current = source
+            source = int(source_positions[current])
+        images[current] = saved
+        visited[current] = True
+        del saved
+    return images
+
+
 # ---------------------------------------------------------------------------
 # Path resolution with fallbacks
 # ---------------------------------------------------------------------------
@@ -503,8 +531,6 @@ class MRCLoader(ImageLoader):
         has_duplicates = unique_idx.size != file_idx.size
         read_idx = unique_idx if has_duplicates else file_idx
 
-        read_output = np.empty((len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype)
-
         with nvtx.annotate(f"disk_read_{len(file_idx)}_images", color="cyan", domain=NVTX_DOMAIN_DATA_IO):
             sorted_order = np.argsort(read_idx)
             sorted_idx = read_idx[sorted_order]
@@ -513,8 +539,20 @@ class MRCLoader(ImageLoader):
             if is_sequential:
                 with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
                     data = self._read_contiguous(int(sorted_idx[0]), len(sorted_idx))
-                    read_output[sorted_order] = data
+                if has_duplicates:
+                    return data[inverse]
+
+                # ``data`` is in physical row order.  Metadata formats such
+                # as RELION STAR may list a complete contiguous stack in a
+                # different logical order.  Reorder that same allocation so
+                # a persistent cache does not need a second stack-sized
+                # workspace.
+                source_positions = read_idx.astype(np.int64, copy=False) - int(sorted_idx[0])
+                return _permute_image_rows_in_place(data, source_positions)
             else:
+                read_output = np.empty(
+                    (len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype
+                )
                 with nvtx.annotate("random_access_read", color="red", domain=NVTX_DOMAIN_DATA_IO):
                     with open(self._filepath, "rb") as f:
                         for i, idx in enumerate(read_idx):
@@ -669,17 +707,22 @@ class MultiMRCLoader(ImageLoader):
 
     def _load(self, indices: np.ndarray) -> np.ndarray:
         n_out = int(len(indices))
-        output = np.empty((n_out, self._image_size, self._image_size), dtype=self._dtype)
         if n_out == 0:
-            return output
+            return np.empty((0, self._image_size, self._image_size), dtype=self._dtype)
 
         subset = self._file_map.iloc[indices]
-        out_pos = np.arange(n_out, dtype=np.int32)
-        file_paths = subset["mrc_file"].to_numpy()
         mrc_indices = subset["mrc_index"].to_numpy(dtype=np.int64, copy=False)
+        if len(self._loaders) == 1:
+            # STAR/CS metadata commonly wraps one particle stack.  Delegate
+            # directly so the child loader's result becomes the caller's
+            # result instead of allocating and copying a second full array.
+            return next(iter(self._loaders.values()))._load(mrc_indices)
 
         # Group by file using numpy (avoids DataFrame groupby overhead).
+        file_paths = subset["mrc_file"].to_numpy()
         unique_paths, path_group = np.unique(file_paths, return_inverse=True)
+        output = np.empty((n_out, self._image_size, self._image_size), dtype=self._dtype)
+        out_pos = np.arange(n_out, dtype=np.int32)
         group_order = np.argsort(path_group, kind="stable")
         split_points = np.flatnonzero(np.diff(path_group[group_order])) + 1
         grouped_positions = np.split(group_order, split_points)

@@ -52,6 +52,7 @@ SCHEMA = "recovar.vdam_raw_cache_abba_analysis.v1"
 RUN_SCHEMA = "recovar.vdam_raw_cache_abba.v1"
 PROFILE_SCHEMA = "recovar.vdam_late_iteration_profile.v1"
 NSIGHT_SCHEMA = "recovar.vdam_nsys_sqlite_summary.v1"
+CACHE_ADMISSION_SCHEMA = "recovar.vdam_raw_cache_admission.v2"
 PROFILED_ITERATION = 181
 EXPECTED_CACHE_BYTES = 196_608_000
 EXPECTED_CACHE_IMAGES = 3_000
@@ -59,6 +60,10 @@ EXPECTED_SUBSET_SIZE = 1_000
 EXPECTED_IMAGE_SIZE = 128
 EXPECTED_CACHE_DTYPE = "<f4"
 EXPECTED_CACHE_MAX_GB = 16.0
+EXPECTED_CACHE_LOADER_TYPE = "recovar.data_io.image_loader.StarLoader"
+EXPECTED_CACHE_LEAF_LOADER_TYPE = "recovar.data_io.image_loader.MRCLoader"
+EXPECTED_CACHE_MAPPING_SHA256 = "e02b912acbce6b05645063e4f0d43fdcb294ed3680917de7ac7cf71cfa9974b2"
+EXPECTED_CACHE_LEAF_SELECTION_SHA256 = "e8c9ceaf5aacc63c25b4cdd8542592f9d58aff50e3e8fc6c55591d3d8f596562"
 EXPECTED_SCHEDULE = {
     "current_size": 128,
     "healpix_order": 3,
@@ -228,6 +233,7 @@ def _validate_command(
     except (OSError, ValueError) as exc:
         raise RawCacheSetupError(f"cannot parse command ledger for {label}: {exc}") from exc
     assignments = {
+        "RECOVAR_CACHE_DIR": "",
         "RECOVAR_EM_RAW_IMAGE_CACHE": mode,
         "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB": str(int(EXPECTED_CACHE_MAX_GB)),
         "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "8",
@@ -810,8 +816,9 @@ def _load_nsight(root: Path, label: str, mode: str) -> dict[str, Any]:
 
 def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
     _require(isinstance(event, dict), f"{label} cache event is invalid")
+    particle_stack = str(EXPECTED_PARTICLE_STACK)
     expected = {
-        "loader_type": "recovar.data_io.image_loader.MRCLoader",
+        "loader_type": EXPECTED_CACHE_LOADER_TYPE,
         "num_images": EXPECTED_CACHE_IMAGES,
         "image_size": EXPECTED_IMAGE_SIZE,
         "dtype": EXPECTED_CACHE_DTYPE,
@@ -819,6 +826,36 @@ def _validate_cache_event(event: Any, label: str) -> dict[str, Any]:
         "cached_before": False,
         "cached_after": True,
         "cached_nbytes": EXPECTED_CACHE_BYTES,
+        "cached_shape": [EXPECTED_CACHE_IMAGES, EXPECTED_IMAGE_SIZE, EXPECTED_IMAGE_SIZE],
+        "cached_dtype": EXPECTED_CACHE_DTYPE,
+        "cached_c_contiguous": True,
+        "cached_writeable": True,
+        "loader_topology": {
+            "mapped_rows": EXPECTED_CACHE_IMAGES,
+            "mapped_files": [particle_stack],
+            "mapped_file_count": 1,
+            "mapping_unique_index_count": EXPECTED_CACHE_IMAGES,
+            "mapping_min_index": 0,
+            "mapping_max_index": EXPECTED_CACHE_IMAGES - 1,
+            "mapping_is_unique": True,
+            "mapping_is_contiguous_set": True,
+            "mapping_is_strictly_ascending": False,
+            "mapping_mrc_indices_sha256": EXPECTED_CACHE_MAPPING_SHA256,
+            "leaf_loader_count": 1,
+            "leaf_loaders": [
+                {
+                    "path": particle_stack,
+                    "io_path": particle_stack,
+                    "loader_type": EXPECTED_CACHE_LEAF_LOADER_TYPE,
+                    "num_images": EXPECTED_CACHE_IMAGES,
+                    "image_size": EXPECTED_IMAGE_SIZE,
+                    "dtype": EXPECTED_CACHE_DTYPE,
+                    "selection_indices_sha256": EXPECTED_CACHE_LEAF_SELECTION_SHA256,
+                }
+            ],
+            "leaf_cached_before": [False],
+            "leaf_cached_after": [False],
+        },
     }
     mismatches = {key: (event.get(key), value) for key, value in expected.items() if event.get(key) != value}
     _require(not mismatches, f"{label} cache admission differs: {mismatches}")
@@ -1084,7 +1121,7 @@ def _load_arm(root: Path, spec: tuple[str, str, int]) -> dict[str, Any]:
     _require(admission_path.is_file(), f"{label} cache-admission ledger is missing")
     admission = _load_json(admission_path, f"{label} cache admission")
     expected_admission = {
-        "schema": "recovar.vdam_raw_cache_admission.v1",
+        "schema": CACHE_ADMISSION_SCHEMA,
         "label": label,
         "mode": mode,
         "max_gb": EXPECTED_CACHE_MAX_GB,

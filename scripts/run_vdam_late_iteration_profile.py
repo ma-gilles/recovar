@@ -264,6 +264,64 @@ def _effects_barrier() -> None:
         barrier()
 
 
+def _raw_image_cache_loader_topology(loader) -> dict[str, object]:
+    """Describe the concrete metadata wrapper and leaf loaders being cached."""
+    import numpy as np
+
+    file_map = getattr(loader, "_file_map", None)
+    mapped_files: list[str] = []
+    mapped_indices = np.empty(0, dtype="<i8")
+    if file_map is not None and {"mrc_file", "mrc_index"}.issubset(file_map.columns):
+        mapped_files = sorted({str(path) for path in file_map["mrc_file"].tolist()})
+        mapped_indices = np.asarray(file_map["mrc_index"], dtype="<i8")
+
+    unique_indices = np.unique(mapped_indices)
+    mapping_is_unique = bool(unique_indices.size == mapped_indices.size)
+    mapping_is_contiguous_set = bool(
+        mapping_is_unique
+        and unique_indices.size > 0
+        and int(unique_indices[-1]) - int(unique_indices[0]) + 1 == unique_indices.size
+    )
+    mapping_is_strictly_ascending = bool(
+        mapped_indices.size <= 1 or np.all(np.diff(mapped_indices) == 1)
+    )
+
+    raw_leaves = getattr(loader, "_loaders", {})
+    leaf_items = sorted(raw_leaves.items(), key=lambda item: str(item[0])) if isinstance(raw_leaves, dict) else []
+    leaf_loaders = []
+    leaf_cached = []
+    for path, leaf in leaf_items:
+        selection = np.asarray(getattr(leaf, "selection_indices", []), dtype="<i8")
+        leaf_loaders.append(
+            {
+                "path": str(path),
+                "io_path": str(getattr(leaf, "_filepath", "")),
+                "loader_type": f"{type(leaf).__module__}.{type(leaf).__qualname__}",
+                "num_images": int(getattr(leaf, "num_images")),
+                "image_size": int(getattr(leaf, "image_size")),
+                "dtype": np.dtype(getattr(leaf, "_dtype", np.float32)).str,
+                "selection_indices_sha256": hashlib.sha256(selection.tobytes(order="C")).hexdigest(),
+            }
+        )
+        leaf_cached.append(getattr(leaf, "_cached", None) is not None)
+
+    return {
+        "mapped_rows": int(mapped_indices.size),
+        "mapped_files": mapped_files,
+        "mapped_file_count": len(mapped_files),
+        "mapping_unique_index_count": int(unique_indices.size),
+        "mapping_min_index": int(unique_indices[0]) if unique_indices.size else None,
+        "mapping_max_index": int(unique_indices[-1]) if unique_indices.size else None,
+        "mapping_is_unique": mapping_is_unique,
+        "mapping_is_contiguous_set": mapping_is_contiguous_set,
+        "mapping_is_strictly_ascending": mapping_is_strictly_ascending,
+        "mapping_mrc_indices_sha256": hashlib.sha256(mapped_indices.tobytes(order="C")).hexdigest(),
+        "leaf_loader_count": len(leaf_loaders),
+        "leaf_loaders": leaf_loaders,
+        "leaf_cached": leaf_cached,
+    }
+
+
 @contextmanager
 def _capture_raw_image_cache_loads(
     enabled: bool,
@@ -286,12 +344,20 @@ def _capture_raw_image_cache_loads(
         num_images = int(getattr(loader, "num_images"))
         image_size = int(getattr(loader, "image_size"))
         dtype = np.dtype(getattr(loader, "_dtype", np.float32))
+        topology_before = _raw_image_cache_loader_topology(loader)
         resources_before = _process_resource_snapshot()
         started = time.perf_counter()
         result = original(loader)
         elapsed_s = float(time.perf_counter() - started)
         resources_after = _process_resource_snapshot()
         cached_after = getattr(loader, "_cached", None)
+        topology_after = _raw_image_cache_loader_topology(loader)
+        leaf_cached_before = topology_before.pop("leaf_cached")
+        leaf_cached_after = topology_after.pop("leaf_cached")
+        if topology_after != topology_before:
+            raise RuntimeError("raw-image cache loader topology changed while loading")
+        topology_before["leaf_cached_before"] = leaf_cached_before
+        topology_before["leaf_cached_after"] = leaf_cached_after
         rss_before = int(resources_before["current_rss_kb"]) * 1024
         rss_after = int(resources_after["current_rss_kb"]) * 1024
         hwm_before = int(resources_before["high_water_rss_kb"]) * 1024
@@ -306,6 +372,11 @@ def _capture_raw_image_cache_loads(
                 "cached_before": cached_before is not None,
                 "cached_after": cached_after is not None,
                 "cached_nbytes": int(getattr(cached_after, "nbytes", 0)),
+                "cached_shape": list(getattr(cached_after, "shape", ())),
+                "cached_dtype": np.dtype(getattr(cached_after, "dtype", dtype)).str,
+                "cached_c_contiguous": bool(getattr(getattr(cached_after, "flags", None), "c_contiguous", False)),
+                "cached_writeable": bool(getattr(getattr(cached_after, "flags", None), "writeable", False)),
+                "loader_topology": topology_before,
                 "elapsed_s": elapsed_s,
                 "current_rss_before_bytes": rss_before,
                 "current_rss_after_bytes": rss_after,

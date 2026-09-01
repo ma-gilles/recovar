@@ -144,8 +144,9 @@ def _resource_snapshot(*, hwm_kb: int) -> dict:
 def _cache_event() -> dict:
     rss_before = 1_000_000_000
     hwm_before = rss_before + 8 * 1024**2
+    particle_stack = str(analyzer.EXPECTED_PARTICLE_STACK)
     return {
-        "loader_type": "recovar.data_io.image_loader.MRCLoader",
+        "loader_type": analyzer.EXPECTED_CACHE_LOADER_TYPE,
         "num_images": 3000,
         "image_size": 128,
         "dtype": "<f4",
@@ -153,6 +154,36 @@ def _cache_event() -> dict:
         "cached_before": False,
         "cached_after": True,
         "cached_nbytes": analyzer.EXPECTED_CACHE_BYTES,
+        "cached_shape": [3000, 128, 128],
+        "cached_dtype": "<f4",
+        "cached_c_contiguous": True,
+        "cached_writeable": True,
+        "loader_topology": {
+            "mapped_rows": 3000,
+            "mapped_files": [particle_stack],
+            "mapped_file_count": 1,
+            "mapping_unique_index_count": 3000,
+            "mapping_min_index": 0,
+            "mapping_max_index": 2999,
+            "mapping_is_unique": True,
+            "mapping_is_contiguous_set": True,
+            "mapping_is_strictly_ascending": False,
+            "mapping_mrc_indices_sha256": analyzer.EXPECTED_CACHE_MAPPING_SHA256,
+            "leaf_loader_count": 1,
+            "leaf_loaders": [
+                {
+                    "path": particle_stack,
+                    "io_path": particle_stack,
+                    "loader_type": analyzer.EXPECTED_CACHE_LEAF_LOADER_TYPE,
+                    "num_images": 3000,
+                    "image_size": 128,
+                    "dtype": "<f4",
+                    "selection_indices_sha256": analyzer.EXPECTED_CACHE_LEAF_SELECTION_SHA256,
+                }
+            ],
+            "leaf_cached_before": [False],
+            "leaf_cached_after": [False],
+        },
         "elapsed_s": 0.20,
         "current_rss_before_bytes": rss_before,
         "current_rss_after_bytes": rss_before + analyzer.EXPECTED_CACHE_BYTES,
@@ -428,7 +459,8 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
         execution.append(f"{order}\t{label}\t{mode}\t16\t8\t0\t1\t{nsys_base.resolve()}\n")
         (provenance / f"{label}_command.sh").write_text(
             "nsys profile env "
-            f"RECOVAR_EM_RAW_IMAGE_CACHE={mode} RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB=16 "
+            f"RECOVAR_CACHE_DIR= RECOVAR_EM_RAW_IMAGE_CACHE={mode} "
+            "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB=16 "
             "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=8 "
             "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL=0 "
             "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=1 "
@@ -526,7 +558,7 @@ def _build_root(tmp_path: Path) -> tuple[Path, Path]:
         _write_json(
             run_root / "cache_admission.json",
             {
-                "schema": "recovar.vdam_raw_cache_admission.v1",
+                "schema": analyzer.CACHE_ADMISSION_SCHEMA,
                 "label": label,
                 "mode": mode,
                 "max_gb": 16.0,
@@ -855,6 +887,18 @@ def test_command_ledger_must_use_sealed_inputs_seed_and_output(tmp_path, option)
 
 
 @pytest.mark.unit
+def test_command_ledger_must_disable_external_mrc_staging_cache(tmp_path):
+    root, repo = _build_root(tmp_path)
+    command_path = root / "provenance" / "cache_auto_4_command.sh"
+    command_path.write_text(
+        command_path.read_text().replace("RECOVAR_CACHE_DIR= ", "RECOVAR_CACHE_DIR=/shared/cache ")
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="wrong RECOVAR_CACHE_DIR"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
 def test_profile_summary_must_bind_sealed_input_paths_and_digests(tmp_path):
     root, repo = _build_root(tmp_path)
     _rewrite_summary(
@@ -1064,6 +1108,22 @@ def test_preexisting_hwm_cannot_mask_excess_cache_admission_memory(tmp_path):
     [
         (
             lambda event: event.update(loader_type="wrong.Loader"),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"]["leaf_loaders"][0].update(loader_type="wrong.Loader"),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"]["leaf_loaders"][0].update(io_path="/shared/cache/stack.mrcs"),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"].update(mapping_mrc_indices_sha256="0" * 64),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"].update(leaf_cached_after=[True]),
             "cache admission differs",
         ),
         (

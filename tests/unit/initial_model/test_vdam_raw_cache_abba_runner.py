@@ -118,6 +118,8 @@ def test_runner_executes_exact_off_auto_auto_off_panel_without_force() -> None:
     assert "RUN_MODES=(off auto auto off auto off off auto)" in source
     assert '"RECOVAR_EM_RAW_IMAGE_CACHE=${mode}"' in source
     assert '"RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB=${RAW_IMAGE_CACHE_MAX_GB}"' in source
+    assert '"RECOVAR_CACHE_DIR="' in source
+    assert 'assert os.environ.get("RECOVAR_CACHE_DIR") == ""' in source
     assert "readonly RAW_IMAGE_CACHE_MAX_GB=16" in source
     assert "readonly RAW_IMAGE_CACHE_EXPECTED_BYTES=196608000" in source
     assert 'RECOVAR_EM_RAW_IMAGE_CACHE=force' not in source
@@ -130,8 +132,13 @@ def test_runner_executes_exact_off_auto_auto_off_panel_without_force() -> None:
     assert 'assert event["cached_before"] is False, event' in source
     assert 'assert event["cached_after"] is True, event' in source
     assert 'assert event["cached_nbytes"] == expected_bytes, event' in source
+    assert 'assert event["loader_type"] == "recovar.data_io.image_loader.StarLoader", event' in source
+    assert '"loader_type": "recovar.data_io.image_loader.MRCLoader"' in source
+    assert '"io_path": particle_stack' in source
+    assert '"mapping_mrc_indices_sha256": mapping_sha256' in source
+    assert '"leaf_cached_after": [False]' in source
     assert 'assert events == [], events' in source
-    assert '"schema": "recovar.vdam_raw_cache_admission.v1"' in source
+    assert '"schema": "recovar.vdam_raw_cache_admission.v2"' in source
 
 
 def test_runner_keeps_the_qualified_atomic_multistream_profile_fixed() -> None:

@@ -49,6 +49,8 @@ readonly EXPECTED_INPUT_MANIFEST_SHA256=de224471a690d1faaae4067217dbcc90b632269d
 readonly EXPECTED_PARTICLE_STACK_SHA256=804af933bd315f41f0159f62e93867cf852d70cb29f2f27a525fb2fc3eb68ad9
 readonly RAW_IMAGE_CACHE_MAX_GB=16
 readonly RAW_IMAGE_CACHE_EXPECTED_BYTES=196608000
+readonly EXPECTED_CACHE_MAPPING_SHA256=e02b912acbce6b05645063e4f0d43fdcb294ed3680917de7ac7cf71cfa9974b2
+readonly EXPECTED_CACHE_LEAF_SELECTION_SHA256=e8c9ceaf5aacc63c25b4cdd8542592f9d58aff50e3e8fc6c55591d3d8f596562
 readonly CHECKPOINT_ITERATION=180
 readonly PROFILED_ITERATION=181
 readonly NR_ITER_SCHEDULE=200
@@ -300,6 +302,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export JAX_LOG_COMPILES=1
 export TMPDIR=${RUNTIME}/tmp
+export RECOVAR_CACHE_DIR=
 export PIXI_HOME=${RUNTIME}/pixi_home
 export RATTLER_CACHE_DIR=${RUNTIME}/rattler_cache
 export PATH=${CUDA_TOOLKIT}/bin:${PATH}
@@ -333,6 +336,7 @@ assert cuda_backproject.cuda_available(), cuda_backproject.cuda_unavailable_erro
 assert Path(cuda_backproject._loaded_lib_path).resolve() == cuda
 assert callable(getattr(relion_bind_core, "vdam_rnd_unif_sequence", None))
 assert _em_raw_image_cache_mode() == "auto"
+assert os.environ.get("RECOVAR_CACHE_DIR") == ""
 assert_parity_ancestors()
 print("VDAM raw-cache ABBA runtime gate passed", jax.devices(), recovar.__file__)
 PY
@@ -361,6 +365,7 @@ for index in "${!RUN_LABELS[@]}"; do
     env
     -u RECOVAR_RELION_COARSE_CANONICAL_REDUCTION
     "LD_PRELOAD=${CUSPARSE_LIBRARY}"
+    "RECOVAR_CACHE_DIR="
     "RECOVAR_EM_RAW_IMAGE_CACHE=${mode}"
     "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB=${RAW_IMAGE_CACHE_MAX_GB}"
     RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=8
@@ -398,7 +403,9 @@ for index in "${!RUN_LABELS[@]}"; do
 
   "${PIXI_PY}" - "${run_root}/profile/profile_summary.json" \
     "${run_root}/cache_admission.json" "${label}" "${mode}" \
-    "${RAW_IMAGE_CACHE_MAX_GB}" "${RAW_IMAGE_CACHE_EXPECTED_BYTES}" <<'PY'
+    "${RAW_IMAGE_CACHE_MAX_GB}" "${RAW_IMAGE_CACHE_EXPECTED_BYTES}" \
+    "${PARTICLE_STACK}" "${EXPECTED_CACHE_MAPPING_SHA256}" \
+    "${EXPECTED_CACHE_LEAF_SELECTION_SHA256}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -406,7 +413,17 @@ from pathlib import Path
 if sys.flags.optimize != 0:
     raise RuntimeError("cache-admission validation requires Python assertions")
 
-summary_path, output_path, label, mode, max_gb, expected_bytes = sys.argv[1:]
+(
+    summary_path,
+    output_path,
+    label,
+    mode,
+    max_gb,
+    expected_bytes,
+    particle_stack,
+    mapping_sha256,
+    leaf_selection_sha256,
+) = sys.argv[1:]
 summary = json.loads(Path(summary_path).read_text())
 max_gb = float(max_gb)
 expected_bytes = int(expected_bytes)
@@ -423,13 +440,44 @@ for phase in ("cold", "warm"):
         assert mode == "auto", mode
         assert len(events) == 1, events
         event = events[0]
-        assert event["loader_type"] == "recovar.data_io.image_loader.MRCLoader", event
+        assert event["loader_type"] == "recovar.data_io.image_loader.StarLoader", event
         assert event["num_images"] == 3000, event
         assert event["image_size"] == 128, event
+        assert event["dtype"] == "<f4", event
         assert event["estimated_bytes"] == expected_bytes, event
         assert event["cached_before"] is False, event
         assert event["cached_after"] is True, event
         assert event["cached_nbytes"] == expected_bytes, event
+        assert event["cached_shape"] == [3000, 128, 128], event
+        assert event["cached_dtype"] == "<f4", event
+        assert event["cached_c_contiguous"] is True, event
+        assert event["cached_writeable"] is True, event
+        assert event["loader_topology"] == {
+            "mapped_rows": 3000,
+            "mapped_files": [particle_stack],
+            "mapped_file_count": 1,
+            "mapping_unique_index_count": 3000,
+            "mapping_min_index": 0,
+            "mapping_max_index": 2999,
+            "mapping_is_unique": True,
+            "mapping_is_contiguous_set": True,
+            "mapping_is_strictly_ascending": False,
+            "mapping_mrc_indices_sha256": mapping_sha256,
+            "leaf_loader_count": 1,
+            "leaf_loaders": [
+                {
+                    "path": particle_stack,
+                    "io_path": particle_stack,
+                    "loader_type": "recovar.data_io.image_loader.MRCLoader",
+                    "num_images": 3000,
+                    "image_size": 128,
+                    "dtype": "<f4",
+                    "selection_indices_sha256": leaf_selection_sha256,
+                }
+            ],
+            "leaf_cached_before": [False],
+            "leaf_cached_after": [False],
+        }, event
         assert float(event["elapsed_s"]) >= 0.0, event
         assert (
             event["current_rss_after_bytes"] - event["current_rss_before_bytes"]
@@ -455,7 +503,7 @@ for phase in ("cold", "warm"):
         "admitted": mode == "auto" and len(events) == 1,
     }
 payload = {
-    "schema": "recovar.vdam_raw_cache_admission.v1",
+    "schema": "recovar.vdam_raw_cache_admission.v2",
     "label": label,
     "mode": mode,
     "max_gb": max_gb,
