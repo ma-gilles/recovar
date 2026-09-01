@@ -17,6 +17,8 @@ from types import MappingProxyType
 import numpy as np
 
 from recovar.em.dense_single_volume.batch_planning import (
+    _fixed_capacity_plan_descriptor_fingerprint,
+    _FixedCapacityLocalGenerationToken,
     _FixedCapacityPhysicalOrder,
     _FixedCapacityWholeLocalPlan,
 )
@@ -87,6 +89,8 @@ class _FixedCapacityLocalOperands:
     ctf_params: np.ndarray
     metadata_by_name: Mapping[str, np.ndarray]
     physical_position_by_image_id: Mapping[int, int]
+    plan_fingerprint: str
+    plan_generation_token: _FixedCapacityLocalGenerationToken
 
 
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
@@ -197,6 +201,9 @@ def _assemble_fixed_capacity_local_operands_once(
         return None
     if not isinstance(expected_order, _FixedCapacityPhysicalOrder):
         raise ValueError("fixed-capacity operand assembly requires an independently sealed physical order")
+    current_fingerprint = _fixed_capacity_plan_descriptor_fingerprint(plan)
+    if current_fingerprint != plan.descriptor_fingerprint:
+        raise ValueError("fixed-capacity operand plan descriptors changed after sealing")
 
     requested_indices = expected_order.image_indices
     valid_image_count = int(plan.valid_image_count)
@@ -288,6 +295,8 @@ def _assemble_fixed_capacity_local_operands_once(
         ctf_params=ctf_params,
         metadata_by_name=MappingProxyType(packed_metadata),
         physical_position_by_image_id=physical_positions,
+        plan_fingerprint=current_fingerprint,
+        plan_generation_token=plan.generation_token,
     )
 
 

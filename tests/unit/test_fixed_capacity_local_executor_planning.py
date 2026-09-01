@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 
 import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.batch_planning import (
+    _fixed_capacity_plan_descriptor_fingerprint,
     _FixedCapacityLocalCall,
     _pack_fixed_capacity_local_candidate_rows,
     _pack_fixed_capacity_local_images,
@@ -115,6 +117,104 @@ def test_fixed_capacity_plan_preserves_call_particle_and_radix_chronology():
     np.testing.assert_array_equal(plan.call_radix_buckets, [4, 4, 8, 0, 0, 0])
     assert plan.logical_cutoff.shape == ()
     assert int(plan.logical_cutoff) == 70
+
+
+def test_fixed_capacity_plan_descriptors_are_snapshotted_read_only_and_fingerprinted():
+    plan = _plan()
+    same_plan = _plan()
+    changed_cutoff = _plan(logical_cutoff=71)
+
+    descriptor_arrays = (
+        "image_indices",
+        "row_offsets",
+        "call_valid_mask",
+        "call_image_offsets",
+        "call_row_offsets",
+        "call_valid_images",
+        "call_valid_rows",
+        "call_image_capacities",
+        "call_radix_buckets",
+        "logical_cutoff",
+    )
+    for field_name in descriptor_arrays:
+        assert getattr(plan, field_name).flags.writeable is False
+    assert plan.descriptor_fingerprint == _fixed_capacity_plan_descriptor_fingerprint(plan)
+    assert plan.descriptor_fingerprint == same_plan.descriptor_fingerprint
+    assert plan.descriptor_fingerprint != changed_cutoff.descriptor_fingerprint
+
+    source = plan.image_indices.copy()
+    snapshotted = replace(plan, image_indices=source)
+    source[:] = -1
+    np.testing.assert_array_equal(snapshotted.image_indices, plan.image_indices)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "wrong_dtype"),
+    (
+        ("image_indices", np.float64),
+        ("image_indices", np.int32),
+        ("row_offsets", np.float64),
+        ("row_offsets", np.int32),
+        ("call_valid_mask", np.int8),
+        ("call_image_offsets", np.float32),
+        ("call_image_offsets", np.int64),
+        ("call_row_offsets", np.int32),
+        ("call_valid_images", np.int64),
+        ("call_valid_rows", np.int32),
+        ("call_image_capacities", np.int64),
+        ("call_radix_buckets", np.int64),
+        ("logical_cutoff", np.int64),
+    ),
+)
+def test_fixed_capacity_plan_rejects_noncanonical_descriptor_dtypes(field_name, wrong_dtype):
+    plan = _plan()
+    wrong = np.asarray(getattr(plan, field_name)).astype(wrong_dtype)
+
+    with pytest.raises(ValueError, match=f"{field_name} must have canonical dtype"):
+        replace(plan, **{field_name: wrong})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "physical_image_capacity",
+        "physical_row_capacity",
+        "physical_call_capacity",
+        "logical_cutoff_capacity",
+        "valid_image_count",
+        "valid_row_count",
+        "valid_call_count",
+    ),
+)
+def test_fixed_capacity_plan_rejects_noninteger_scalar_descriptors(field_name):
+    plan = _plan()
+
+    with pytest.raises(ValueError, match=f"{field_name} must be an integer"):
+        replace(plan, **{field_name: float(getattr(plan, field_name))})
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "image_indices",
+        "row_offsets",
+        "call_valid_mask",
+        "call_image_offsets",
+        "call_row_offsets",
+        "call_valid_images",
+        "call_valid_rows",
+        "call_image_capacities",
+        "call_radix_buckets",
+        "logical_cutoff",
+    ),
+)
+def test_fixed_capacity_plan_rejects_noncanonical_descriptor_shapes(field_name):
+    plan = _plan()
+    source = np.asarray(getattr(plan, field_name))
+    wrong = np.asarray([source.item()], dtype=source.dtype) if source.ndim == 0 else source[:-1]
+
+    with pytest.raises(ValueError, match=f"{field_name} must have canonical shape"):
+        replace(plan, **{field_name: wrong})
 
 
 def test_fixed_capacity_packers_keep_real_rows_and_poison_only_inert_tails():

@@ -11,7 +11,9 @@ import numpy as np
 
 from recovar import utils
 from recovar.em.dense_single_volume.batch_planning import (
+    _fixed_capacity_plan_descriptor_fingerprint,
     _FixedCapacityLocalCall,
+    _FixedCapacityLocalGenerationToken,
     _FixedCapacityPhysicalOrder,
     _FixedCapacityWholeLocalPlan,
     _pack_fixed_capacity_local_candidate_rows,
@@ -194,6 +196,8 @@ class _FixedCapacityLocalHypothesisProgram:
     local_rotation_posterior_ids: np.ndarray | None
     local_sample_mask: np.ndarray | None
     mstep_rotations_fall_back_to_score: bool
+    plan_fingerprint: str
+    plan_generation_token: _FixedCapacityLocalGenerationToken
 
 
 def _fixed_capacity_calls_from_local_buckets(
@@ -286,6 +290,9 @@ def _validate_fixed_capacity_plan_matches_local_calls(
 
     if not isinstance(plan, _FixedCapacityWholeLocalPlan):
         raise ValueError("fixed-capacity hypothesis packing requires a fixed-capacity local plan")
+    current_fingerprint = _fixed_capacity_plan_descriptor_fingerprint(plan)
+    if current_fingerprint != plan.descriptor_fingerprint:
+        raise ValueError("fixed-capacity hypothesis plan descriptors changed after sealing")
 
     for field_name in (
         "physical_image_capacity",
@@ -688,6 +695,8 @@ def _pack_fixed_capacity_local_hypothesis_program(
         local_rotation_posterior_ids=local_rotation_posterior_ids,
         local_sample_mask=local_sample_mask,
         mstep_rotations_fall_back_to_score=not has_mstep_rotations,
+        plan_fingerprint=plan.descriptor_fingerprint,
+        plan_generation_token=plan.generation_token,
     )
 
 

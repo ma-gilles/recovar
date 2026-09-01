@@ -16,7 +16,9 @@ import logging
 import os
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from hashlib import sha256
+from numbers import Integral
 
 import numpy as np
 
@@ -118,6 +120,11 @@ class _FixedCapacityPhysicalOrder:
         object.__setattr__(self, "image_indices", sealed_indices)
 
 
+@dataclass(frozen=True, eq=False)
+class _FixedCapacityLocalGenerationToken:
+    """Opaque identity shared only by components from one planned generation."""
+
+
 @dataclass(frozen=True)
 class _FixedCapacityWholeLocalPlan:
     """Fixed-shape host descriptors for a future whole-local executor.
@@ -146,6 +153,118 @@ class _FixedCapacityWholeLocalPlan:
     call_image_capacities: np.ndarray
     call_radix_buckets: np.ndarray
     logical_cutoff: np.ndarray
+    generation_token: _FixedCapacityLocalGenerationToken = field(init=False, repr=False, compare=False)
+    descriptor_fingerprint: str = field(init=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "generation_token", _FixedCapacityLocalGenerationToken())
+        scalar_fields = (
+            "physical_image_capacity",
+            "physical_row_capacity",
+            "physical_call_capacity",
+            "logical_cutoff_capacity",
+            "valid_image_count",
+            "valid_row_count",
+            "valid_call_count",
+        )
+        for field_name in scalar_fields:
+            raw_value = getattr(self, field_name)
+            if isinstance(raw_value, (bool, np.bool_)) or not isinstance(raw_value, Integral):
+                raise ValueError(f"fixed-capacity plan {field_name} must be an integer")
+            object.__setattr__(self, field_name, int(raw_value))
+
+        if (
+            min(
+                self.physical_image_capacity,
+                self.physical_row_capacity,
+                self.physical_call_capacity,
+                self.logical_cutoff_capacity,
+            )
+            <= 0
+        ):
+            raise ValueError("fixed-capacity plan physical capacities must be positive")
+        if min(self.valid_image_count, self.valid_row_count, self.valid_call_count) <= 0:
+            raise ValueError("fixed-capacity plan valid counts must be positive")
+        if self.valid_image_count > self.physical_image_capacity:
+            raise ValueError("fixed-capacity plan image capacity overflow")
+        if self.valid_row_count > self.physical_row_capacity:
+            raise ValueError("fixed-capacity plan candidate-row capacity overflow")
+        if self.valid_call_count > self.physical_call_capacity:
+            raise ValueError("fixed-capacity plan call capacity overflow")
+
+        array_specs = {
+            "image_indices": (np.dtype(np.int64), (self.physical_image_capacity,)),
+            "row_offsets": (np.dtype(np.int64), (self.physical_image_capacity + 1,)),
+            "call_valid_mask": (np.dtype(np.bool_), (self.physical_call_capacity,)),
+            "call_image_offsets": (np.dtype(np.int32), (self.physical_call_capacity,)),
+            "call_row_offsets": (np.dtype(np.int64), (self.physical_call_capacity,)),
+            "call_valid_images": (np.dtype(np.int32), (self.physical_call_capacity,)),
+            "call_valid_rows": (np.dtype(np.int64), (self.physical_call_capacity,)),
+            "call_image_capacities": (np.dtype(np.int32), (self.physical_call_capacity,)),
+            "call_radix_buckets": (np.dtype(np.int32), (self.physical_call_capacity,)),
+            "logical_cutoff": (np.dtype(np.int32), ()),
+        }
+        for field_name, (expected_dtype, expected_shape) in array_specs.items():
+            raw_value = np.asarray(getattr(self, field_name))
+            if raw_value.dtype != expected_dtype:
+                raise ValueError(
+                    f"fixed-capacity plan {field_name} must have canonical dtype {expected_dtype}; "
+                    f"got {raw_value.dtype}",
+                )
+            if raw_value.shape != expected_shape:
+                raise ValueError(
+                    f"fixed-capacity plan {field_name} must have canonical shape {expected_shape}; "
+                    f"got {raw_value.shape}",
+                )
+            sealed_value = np.array(raw_value, copy=True, order="C")
+            sealed_value.setflags(write=False)
+            object.__setattr__(self, field_name, sealed_value)
+
+        logical_cutoff = int(self.logical_cutoff)
+        if logical_cutoff <= 0 or logical_cutoff > self.logical_cutoff_capacity:
+            raise ValueError("fixed-capacity plan logical cutoff must fit its capacity")
+        object.__setattr__(
+            self,
+            "descriptor_fingerprint",
+            _fixed_capacity_plan_descriptor_fingerprint(self),
+        )
+
+
+def _fixed_capacity_plan_descriptor_fingerprint(plan: _FixedCapacityWholeLocalPlan) -> str:
+    """Return a deterministic digest of every fixed-capacity plan descriptor."""
+
+    if not isinstance(plan, _FixedCapacityWholeLocalPlan):
+        raise ValueError("fixed-capacity descriptor fingerprint requires a fixed-capacity local plan")
+    digest = sha256(b"recovar.fixed-capacity-local-plan.v1\0")
+    for field_name in (
+        "physical_image_capacity",
+        "physical_row_capacity",
+        "physical_call_capacity",
+        "logical_cutoff_capacity",
+        "valid_image_count",
+        "valid_row_count",
+        "valid_call_count",
+    ):
+        digest.update(field_name.encode("ascii") + b"\0")
+        digest.update(np.asarray(int(getattr(plan, field_name)), dtype="<i8").tobytes())
+    for field_name in (
+        "image_indices",
+        "row_offsets",
+        "call_valid_mask",
+        "call_image_offsets",
+        "call_row_offsets",
+        "call_valid_images",
+        "call_valid_rows",
+        "call_image_capacities",
+        "call_radix_buckets",
+        "logical_cutoff",
+    ):
+        value = np.asarray(getattr(plan, field_name))
+        digest.update(field_name.encode("ascii") + b"\0")
+        digest.update(value.dtype.str.encode("ascii") + b"\0")
+        digest.update(np.asarray(value.shape, dtype="<i8").tobytes())
+        digest.update(np.ascontiguousarray(value).tobytes(order="C"))
+    return digest.hexdigest()
 
 
 def _seal_fixed_capacity_physical_order(image_indices) -> _FixedCapacityPhysicalOrder:

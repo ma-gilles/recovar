@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import inspect
+import logging
+import time
+import tracemalloc
 from dataclasses import replace
 
+import healpy as hp
 import numpy as np
 import pytest
 
@@ -16,9 +20,18 @@ from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
     _fixed_capacity_calls_from_local_buckets,
     _pack_fixed_capacity_local_hypothesis_program,
+    bucket_local_hypothesis_layout,
+    build_local_hypothesis_layout,
+    build_pass2_hypothesis_layout,
+)
+from recovar.em.sampling import (
+    build_local_search_grid_metadata,
+    rotation_grid_size,
 )
 
 pytestmark = pytest.mark.unit
+
+logger = logging.getLogger(__name__)
 
 
 def _bucket(
@@ -122,6 +135,62 @@ def _assert_bitwise_equal(actual, expected):
     assert actual.shape == expected.shape
     assert actual.dtype == expected.dtype
     assert actual.tobytes(order="C") == expected.tobytes(order="C")
+
+
+def _dynamic_plan_for_buckets(buckets):
+    expected_order = _seal_fixed_capacity_physical_order(
+        np.concatenate([bucket.image_indices for bucket in buckets]),
+    )
+    calls = _fixed_capacity_calls_from_local_buckets(buckets, expected_order=expected_order)
+    palette = {}
+    for bucket in buckets:
+        palette.setdefault(int(bucket.bucket_rotation_count), set()).add(int(bucket.bucket_image_count))
+    plan = _plan_fixed_capacity_whole_local(
+        calls,
+        expected_image_order=expected_order,
+        physical_image_capacity=sum(bucket.image_indices.size for bucket in buckets) + 2,
+        physical_row_capacity=sum(int(np.sum(bucket.actual_rotation_counts)) for bucket in buckets) + 7,
+        physical_call_capacity=len(buckets) + 2,
+        image_capacity_palette={radix: tuple(sorted(capacities)) for radix, capacities in palette.items()},
+        logical_cutoff=8,
+        logical_cutoff_capacity=16,
+        enabled=True,
+    )
+    return expected_order, plan
+
+
+def _assert_program_bitwise_matches_bucket_prefixes(program, buckets):
+    physical_image = 0
+    for bucket in buckets:
+        for local_image, count in enumerate(bucket.actual_rotation_counts.tolist()):
+            row_start = int(program.row_offsets[physical_image])
+            row_stop = int(program.row_offsets[physical_image + 1])
+            assert row_stop - row_start == count
+            for program_field, bucket_field in (
+                ("local_rotation_ids", "local_rotation_ids"),
+                ("local_rotations", "local_rotations"),
+                ("local_mstep_rotations", "local_mstep_rotations"),
+                ("local_rotation_log_prior", "local_rotation_log_prior"),
+            ):
+                _assert_bitwise_equal(
+                    getattr(program, program_field)[row_start:row_stop],
+                    getattr(bucket, bucket_field)[local_image, :count],
+                )
+            _assert_bitwise_equal(
+                program.translation_log_prior[physical_image],
+                bucket.translation_log_prior[local_image],
+            )
+            if bucket.local_rotation_posterior_ids is not None:
+                _assert_bitwise_equal(
+                    program.local_rotation_posterior_ids[row_start:row_stop],
+                    bucket.local_rotation_posterior_ids[local_image, :count],
+                )
+            if bucket.local_sample_mask is not None:
+                _assert_bitwise_equal(
+                    program.local_sample_mask[row_start:row_stop],
+                    bucket.local_sample_mask[local_image, :count],
+                )
+            physical_image += 1
 
 
 def test_fixed_capacity_hypothesis_packer_is_shared_default_off_and_inert():
@@ -314,30 +383,29 @@ def test_fixed_capacity_hypothesis_packer_rejects_mixed_optional_topology(field_
 )
 def test_fixed_capacity_hypothesis_packer_rejects_plan_bucket_mismatch_or_overflow(change, message):
     buckets, expected_order, plan = _sealed_program()
-    if change == "valid_counts":
-        plan = replace(plan, valid_row_count=19)
-    elif change == "image_indices":
-        image_indices = plan.image_indices.copy()
-        image_indices[:2] = image_indices[1::-1]
-        plan = replace(plan, image_indices=image_indices)
-    elif change == "row_offsets":
-        row_offsets = plan.row_offsets.copy()
-        row_offsets[2] += 1
-        plan = replace(plan, row_offsets=row_offsets)
-    elif change == "call_boundaries":
-        call_valid_images = plan.call_valid_images.copy()
-        call_valid_images[:2] = [1, 2]
-        plan = replace(plan, call_valid_images=call_valid_images)
-    elif change == "image_capacity":
-        plan = replace(plan, physical_image_capacity=4)
-    elif change == "row_capacity":
-        plan = replace(plan, physical_row_capacity=19)
-    elif change == "call_capacity":
-        plan = replace(plan, physical_call_capacity=2)
-    elif change == "noninteger_capacity":
-        plan = replace(plan, physical_row_capacity=32.5)
-
     with pytest.raises(ValueError, match=message):
+        if change == "valid_counts":
+            plan = replace(plan, valid_row_count=19)
+        elif change == "image_indices":
+            image_indices = plan.image_indices.copy()
+            image_indices[:2] = image_indices[1::-1]
+            plan = replace(plan, image_indices=image_indices)
+        elif change == "row_offsets":
+            row_offsets = plan.row_offsets.copy()
+            row_offsets[2] += 1
+            plan = replace(plan, row_offsets=row_offsets)
+        elif change == "call_boundaries":
+            call_valid_images = plan.call_valid_images.copy()
+            call_valid_images[:2] = [1, 2]
+            plan = replace(plan, call_valid_images=call_valid_images)
+        elif change == "image_capacity":
+            plan = replace(plan, physical_image_capacity=4)
+        elif change == "row_capacity":
+            plan = replace(plan, physical_row_capacity=19)
+        elif change == "call_capacity":
+            plan = replace(plan, physical_call_capacity=2)
+        elif change == "noninteger_capacity":
+            plan = replace(plan, physical_row_capacity=32.5)
         _pack_fixed_capacity_local_hypothesis_program(
             buckets,
             plan,
@@ -429,3 +497,111 @@ def test_fixed_capacity_hypothesis_packer_rejects_malformed_payloads(field_name,
             expected_order,
             enabled=True,
         )
+
+
+@pytest.mark.parametrize("producer", ("pass1", "pass2"))
+def test_fixed_capacity_hypothesis_packer_round_trips_real_pass_producers_bitwise(producer):
+    if producer == "pass1":
+        healpix_order = 0
+        n_pixels = hp.nside2npix(2**healpix_order)
+        n_psi = 6 * 2**healpix_order
+        tilt_rad, rot_rad = hp.pix2ang(2**healpix_order, np.arange(n_pixels))
+        grid_eulers = np.stack(
+            (
+                np.tile(np.rad2deg(rot_rad), n_psi),
+                np.tile(np.rad2deg(tilt_rad), n_psi),
+                np.repeat(np.arange(n_psi, dtype=np.float64) * (360.0 / n_psi), n_pixels),
+            ),
+            axis=1,
+        ).astype(np.float32)
+        layout = build_local_hypothesis_layout(
+            np.asarray([[0.0, 60.0, 0.0], [90.0, 45.0, 30.0]], dtype=np.float32),
+            None,
+            sigma_rot=np.deg2rad(30.0),
+            sigma_psi=np.deg2rad(30.0),
+            healpix_order=healpix_order,
+            translations=np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            prior_translations=np.zeros((2, 2), dtype=np.float32),
+            sigma_offset_angstrom=1.0,
+            offset_range_pixels=1.0,
+            voxel_size=1.0,
+            grid_metadata=build_local_search_grid_metadata(healpix_order, grid_eulers),
+        )
+    else:
+        layout = build_pass2_hypothesis_layout(
+            [np.asarray([0, 3], dtype=np.int32), np.asarray([2], dtype=np.int32)],
+            n_coarse_rotations=rotation_grid_size(0),
+            n_coarse_translations=2,
+            nside_level=0,
+            translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+            oversampling_order=0,
+            rotation_log_prior=np.arange(rotation_grid_size(0), dtype=np.float32),
+            translation_log_prior=np.asarray([0.0, -2.0], dtype=np.float32),
+        )
+
+    buckets = tuple(
+        bucket_local_hypothesis_layout(
+            layout,
+            image_batch_size=2,
+            rotation_block_size=8,
+            max_hypotheses_per_microbatch=64,
+            preserve_image_order=True,
+        )
+    )
+    expected_order, plan = _dynamic_plan_for_buckets(buckets)
+    program = _pack_fixed_capacity_local_hypothesis_program(
+        buckets,
+        plan,
+        expected_order,
+        enabled=True,
+    )
+
+    _assert_program_bitwise_matches_bucket_prefixes(program, buckets)
+    if producer == "pass1":
+        assert program.local_rotation_posterior_ids is None
+        assert program.local_sample_mask is None
+    else:
+        assert program.local_rotation_posterior_ids is not None
+        assert program.local_sample_mask is not None
+
+
+def test_fixed_capacity_host_packing_records_timing_and_peak_byte_diagnostics(record_property):
+    buckets, expected_order, plan = _sealed_program()
+    tracemalloc.start()
+    started_ns = time.perf_counter_ns()
+    program = _pack_fixed_capacity_local_hypothesis_program(
+        buckets,
+        plan,
+        expected_order,
+        enabled=True,
+    )
+    elapsed_ns = time.perf_counter_ns() - started_ns
+    _, traced_peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    packed_arrays = (
+        program.image_indices,
+        program.row_offsets,
+        program.valid_image_mask,
+        program.valid_candidate_row_mask,
+        program.local_rotation_ids,
+        program.local_rotations,
+        program.local_mstep_rotations,
+        program.local_rotation_log_prior,
+        program.translation_log_prior,
+        program.local_rotation_posterior_ids,
+        program.local_sample_mask,
+    )
+    packed_array_bytes = sum(value.nbytes for value in packed_arrays if value is not None)
+    record_property("host_pack_elapsed_ns", elapsed_ns)
+    record_property("host_pack_tracemalloc_peak_bytes", traced_peak_bytes)
+    record_property("host_pack_array_bytes", packed_array_bytes)
+    logger.info(
+        "fixed-capacity host pack diagnostic: elapsed_ns=%d traced_peak_bytes=%d packed_array_bytes=%d",
+        elapsed_ns,
+        traced_peak_bytes,
+        packed_array_bytes,
+    )
+
+    assert elapsed_ns > 0
+    assert traced_peak_bytes >= 0
+    assert packed_array_bytes > 0
