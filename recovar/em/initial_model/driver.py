@@ -83,6 +83,7 @@ class NativeInitialModelOptions:
     bootstrap_min_particles: int = 1000
     sigma2_min_particles: int = 1000
     padding_factor: int = 1
+    image_fourier_backend: str = "host_numpy"
     lazy: bool = True
     datadir: str | None = None
     strip_prefix: str | None = None
@@ -421,18 +422,33 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
     backend = getattr(source, "backend", source)
     if backend is None:
         return
-    image_mask = core_mask.relion_soft_image_mask(
-        int(dataset.grid_size),
-        float(dataset.voxel_size),
-        float(opts.particle_diameter),
-        float(opts.width_mask_edge_px),
-    )
-    if hasattr(backend, "image_mask"):
-        backend.image_mask = image_mask
-    if hasattr(backend, "mask"):
-        backend.mask = image_mask
-    if hasattr(backend, "image_mask_mode"):
-        backend.image_mask_mode = "relion_background_fill"
+    if hasattr(backend, "set_relion_image_mask"):
+        backend.set_relion_image_mask(
+            pixel_size=float(dataset.voxel_size),
+            particle_diameter_ang=float(opts.particle_diameter),
+            width_mask_edge_px=float(opts.width_mask_edge_px),
+        )
+    else:
+        image_mask = core_mask.relion_soft_image_mask(
+            int(dataset.grid_size),
+            float(dataset.voxel_size),
+            float(opts.particle_diameter),
+            float(opts.width_mask_edge_px),
+        )
+        if hasattr(backend, "image_mask"):
+            backend.image_mask = image_mask
+        if hasattr(backend, "mask"):
+            backend.mask = image_mask
+        if hasattr(backend, "image_mask_mode"):
+            backend.image_mask_mode = "relion_background_fill"
+
+    if hasattr(backend, "set_relion_fourier_backend"):
+        backend.set_relion_fourier_backend(opts.image_fourier_backend)
+    elif opts.image_fourier_backend != "host_numpy":
+        raise ValueError(
+            "InitialModel image_fourier_backend requires a compatible image backend; "
+            f"got {opts.image_fourier_backend!r}",
+        )
 
 
 def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: float) -> NativeSamplingState:

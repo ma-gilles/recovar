@@ -193,6 +193,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--random_perturbation", type=float, default=None)
     p.add_argument("--image_batch_size", type=int, default=500)
     p.add_argument("--rotation_block_size", type=int, default=5000)
+    p.add_argument(
+        "--image_fourier_backend",
+        choices=("auto", "host_numpy", "jax_gpu", "relion_cuda"),
+        default="auto",
+        help=(
+            "Image preprocessing backend. 'auto' selects the RELION CUDA path "
+            "for GPU runs and the host NumPy path otherwise."
+        ),
+    )
     p.add_argument("--bootstrap_min_particles", type=int, default=1000)
     p.add_argument("--sigma2_min_particles", type=int, default=1000)
     p.add_argument("--translation_sigma_angstrom", type=float, default=None)
@@ -257,6 +266,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         random_perturbation=args.random_perturbation,
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,
+        image_fourier_backend=(
+            "relion_cuda"
+            if args.image_fourier_backend == "auto" and bool(args.gpu_ids)
+            else "host_numpy"
+            if args.image_fourier_backend == "auto"
+            else args.image_fourier_backend
+        ),
         bootstrap_min_particles=args.bootstrap_min_particles,
         sigma2_min_particles=args.sigma2_min_particles,
         lazy=not args.eager_images,
