@@ -556,6 +556,9 @@ _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
 _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32 = (
     "cuda_relion_coarse_diff2_projector_f32"
 )
+_TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32 = (
+    "cuda_relion_coarse_diff2_projector_multistream_f32"
+)
 _TARGET_RELION_COARSE_DIFF2_PROJECTOR_LANES_F32 = (
     "cuda_relion_coarse_diff2_projector_lanes_f32"
 )
@@ -649,6 +652,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32,
         "RelionCoarseDiff2ProjectorF32",
+    ),
+    (
+        _TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32,
+        "RelionCoarseDiff2ProjectorMultistreamF32",
     ),
     (
         _TARGET_RELION_COARSE_DIFF2_PROJECTOR_LANES_F32,
@@ -2708,6 +2715,82 @@ def relion_coarse_diff2_projector_f32(
         weight,
         initial_diff2,
         full_to_compact,
+        current_size=np.int64(current_size),
+        physical_image_size=np.int64(physical_image_size),
+        model_max_r=np.int64(model_max_r),
+        canonical_reduction=np.int64(bool(canonical_reduction)),
+    )
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=(
+        "current_size",
+        "physical_image_size",
+        "model_max_r",
+        "canonical_reduction",
+    ),
+)
+def relion_coarse_diff2_projector_multistream_f32(
+    projector_full: jax.Array,
+    rotation_matrices: jax.Array,
+    images: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    *,
+    current_size: int,
+    physical_image_size: int,
+    model_max_r: int,
+    actual_batch_size: jax.Array,
+    canonical_reduction: bool = True,
+) -> jax.Array:
+    """Score physical particle rows over RELION's eight worker streams.
+
+    This dispatcher calls the same production coarse projector kernel as
+    :func:`relion_coarse_diff2_projector_f32`.  Only particle launch scheduling
+    differs: one shared projector texture feeds eight independent blocking
+    streams, and rows at or beyond ``actual_batch_size`` are initialized but
+    never scored.  The actual row count is a runtime scalar operand so different
+    final-batch occupancies at one physical shape reuse the same compilation.
+    """
+
+    if not canonical_reduction:
+        raise ValueError(
+            "RELION coarse multistream scoring requires canonical_reduction=True",
+        )
+    compact_rotations, out_type = _prepare_relion_coarse_diff2_projector_f32(
+        projector_full,
+        rotation_matrices,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=current_size,
+        physical_image_size=physical_image_size,
+        model_max_r=model_max_r,
+    )
+    actual_batch_size = jnp.asarray(actual_batch_size)
+    if actual_batch_size.shape != () or actual_batch_size.dtype != jnp.int32:
+        raise ValueError(
+            "actual_batch_size must be a scalar int32 runtime operand, got "
+            f"{actual_batch_size.shape} {actual_batch_size.dtype}",
+        )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        projector_full,
+        compact_rotations,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        actual_batch_size,
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),

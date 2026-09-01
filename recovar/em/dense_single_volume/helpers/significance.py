@@ -37,6 +37,7 @@ _K1_COARSE_FUSED_PROJECTOR_ENV = "RECOVAR_K1_COARSE_FUSED_PROJECTOR"
 _RELION_COARSE_CANONICAL_REDUCTION_ENV = (
     "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION"
 )
+_K1_COARSE_MULTISTREAM_WORKERS_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
@@ -244,6 +245,31 @@ def _relion_coarse_canonical_reduction_enabled(*, default: bool = False) -> bool
     raise ValueError(
         f"Unsupported {_RELION_COARSE_CANONICAL_REDUCTION_ENV}={token!r}",
     )
+
+
+def _k1_coarse_multistream_worker_count(*, default: int = 0) -> int:
+    """Return the default-off RELION coarse particle-stream count.
+
+    The first performance gate is deliberately restricted to the proven
+    GUI-default ``--j 8`` ownership topology.  Zero keeps the accepted
+    single-stream batch grid unchanged.
+    """
+
+    token = os.environ.get(
+        _K1_COARSE_MULTISTREAM_WORKERS_ENV,
+        str(int(default)),
+    ).strip()
+    try:
+        count = int(token)
+    except ValueError as error:
+        raise ValueError(
+            f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV} must be 0 or 8, got {token!r}",
+        ) from error
+    if count not in {0, 8}:
+        raise ValueError(
+            f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV} must be 0 or 8, got {token!r}",
+        )
+    return count
 
 
 def _k1_coarse_fused_projector_supports_padding(padding_factor: int) -> bool:
@@ -2262,6 +2288,25 @@ def _compute_k_class_significance_batched(
             f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV} requires "
             f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1",
         )
+    coarse_multistream_worker_count = _k1_coarse_multistream_worker_count()
+    coarse_multistream_enabled = (
+        coarse_multistream_worker_count > 0 and score_mode == "gaussian"
+    )
+    if coarse_multistream_enabled:
+        if n_classes != 1:
+            raise ValueError(
+                f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV}=8 currently supports K=1 only",
+            )
+        if not coarse_fused_projector_enabled:
+            raise ValueError(
+                f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV}=8 requires the accepted "
+                f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1 path",
+            )
+        if not coarse_canonical_reduction_enabled:
+            raise ValueError(
+                f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV}=8 requires "
+                f"{_RELION_COARSE_CANONICAL_REDUCTION_ENV}=1",
+            )
     if (
         coarse_fused_projector_requested
         and score_mode == "gaussian"
@@ -2490,6 +2535,12 @@ def _compute_k_class_significance_batched(
                         if _RELION_COARSE_CANONICAL_REDUCTION_ENV not in os.environ
                         else "environment override"
                     ),
+                )
+            if coarse_multistream_enabled:
+                logger.warning(
+                    "Opt-in shared K=1 coarse multistream dispatcher enabled: "
+                    "workers=%d actual image rows only",
+                    coarse_multistream_worker_count,
                 )
         if coarse_gaussian_native_texture_enabled:
             from recovar.em.dense_single_volume.helpers.projection import (
@@ -2741,7 +2792,18 @@ def _compute_k_class_significance_batched(
         if coarse_fused_projector_enabled:
             from recovar import cuda_backproject
 
-            diff2 = cuda_backproject.relion_coarse_diff2_projector_f32(
+            coarse_projector = (
+                cuda_backproject.relion_coarse_diff2_projector_multistream_f32
+                if coarse_multistream_enabled
+                else cuda_backproject.relion_coarse_diff2_projector_f32
+            )
+            coarse_projector_kwargs = {}
+            if coarse_multistream_enabled:
+                coarse_projector_kwargs["actual_batch_size"] = jnp.asarray(
+                    actual_batch_size,
+                    dtype=jnp.int32,
+                )
+            diff2 = coarse_projector(
                 coarse_gaussian_projector_full_by_class[class_index],
                 jnp.asarray(rots_b, dtype=jnp.float32),
                 jnp.asarray(coarse_gaussian_unshifted_corrected, dtype=jnp.complex64),
@@ -2753,6 +2815,7 @@ def _compute_k_class_significance_batched(
                 physical_image_size=int(image_shape[0]),
                 model_max_r=int(relion_projector_r_max),
                 canonical_reduction=coarse_canonical_reduction_enabled,
+                **coarse_projector_kwargs,
             )
             return -diff2
 

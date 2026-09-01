@@ -87,6 +87,81 @@ constexpr char kRelionVdamExactWavgKernel[] =
     "_Z16cuda_kernel_wavgILb1ELb1ELb0ELi256EEvPf18AccProjectorKernel"
     "jmS0_S0_S0_S0_S0_S0_S0_S0_S0_S0_mfff";
 
+// RELION's GUI-default InitialModel jobs use --j 8.  Both coarse scoring and
+// BPref replay use one blocking CUDA stream per worker.  Keep stream creation,
+// parent-stream dependency, synchronization, and cleanup in one shared helper
+// so the two paths cannot silently acquire different ownership semantics.
+constexpr int kRelionVdamWorkerStreams = 8;
+
+cudaError_t initialize_relion_vdam_worker_streams(
+    cudaStream_t parent_stream,
+    cudaStream_t worker_streams[kRelionVdamWorkerStreams],
+    cudaEvent_t* inputs_ready)
+{
+    cudaError_t error = cudaEventCreateWithFlags(
+        inputs_ready, cudaEventDisableTiming);
+    if (error != cudaSuccess) return error;
+    error = cudaEventRecord(*inputs_ready, parent_stream);
+    if (error != cudaSuccess) return error;
+    for (int worker = 0; worker < kRelionVdamWorkerStreams; ++worker)
+    {
+        // Ordinary blocking streams match RELION's per-worker class streams.
+        error = cudaStreamCreate(&worker_streams[worker]);
+        if (error != cudaSuccess) return error;
+        error = cudaStreamWaitEvent(
+            worker_streams[worker], *inputs_ready, 0);
+        if (error != cudaSuccess) return error;
+    }
+    return cudaSuccess;
+}
+
+cudaError_t synchronize_relion_vdam_worker_streams(
+    cudaStream_t worker_streams[kRelionVdamWorkerStreams])
+{
+    for (int worker = 0; worker < kRelionVdamWorkerStreams; ++worker)
+    {
+        const cudaError_t error = cudaStreamSynchronize(worker_streams[worker]);
+        if (error != cudaSuccess) return error;
+    }
+    return cudaSuccess;
+}
+
+template <typename LaunchParticle>
+cudaError_t dispatch_relion_vdam_round_robin_workers(
+    cudaStream_t worker_streams[kRelionVdamWorkerStreams],
+    int64_t particle_count,
+    LaunchParticle&& launch_particle)
+{
+    bool worker_started[kRelionVdamWorkerStreams] = {};
+    for (int64_t particle = 0; particle < particle_count; ++particle)
+    {
+        const int worker = static_cast<int>(
+            particle % kRelionVdamWorkerStreams);
+        // Match RELION's task distributor: a worker synchronizes its class
+        // stream before taking its next particle, while other workers remain
+        // independent.
+        if (worker_started[worker])
+        {
+            const cudaError_t error = cudaStreamSynchronize(
+                worker_streams[worker]);
+            if (error != cudaSuccess) return error;
+        }
+        const cudaError_t error = launch_particle(particle, worker);
+        if (error != cudaSuccess) return error;
+        worker_started[worker] = true;
+    }
+    return synchronize_relion_vdam_worker_streams(worker_streams);
+}
+
+void destroy_relion_vdam_worker_streams(
+    cudaStream_t worker_streams[kRelionVdamWorkerStreams],
+    cudaEvent_t inputs_ready)
+{
+    for (int worker = 0; worker < kRelionVdamWorkerStreams; ++worker)
+        if (worker_streams[worker]) cudaStreamDestroy(worker_streams[worker]);
+    if (inputs_ready) cudaEventDestroy(inputs_ready);
+}
+
 cudaError_t report_relion_vdam_driver_error(
     const char* operation,
     CUresult result)
@@ -5460,10 +5535,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
     cudaTextureObject_t texture_imag = 0;
-    // Frozen RELION GUI-default parity jobs run with --j 8.  RELION creates
-    // one class stream per OpenMP worker; --pool controls how many particles
-    // are read into the outer pool and does not set the worker-stream count.
-    constexpr int kRelionVdamWorkerStreams = 8;
+    // --pool controls how many particles are read into the outer pool and does
+    // not set the shared GUI-default worker-stream count above.
     cudaStream_t particle_streams[kRelionVdamWorkerStreams] = {};
     cudaEvent_t particle_inputs_ready = nullptr;
     int32_t* reconstruction_groups_host = nullptr;
@@ -6086,18 +6159,9 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         // stream and synchronizes that stream before requesting another task.
         // Keep setup on XLA's stream, then reproduce the one-in-flight task per
         // worker topology on ordinary (blocking) CUDA streams.
-        err = cudaEventCreateWithFlags(&particle_inputs_ready, cudaEventDisableTiming);
+        err = initialize_relion_vdam_worker_streams(
+            stream, particle_streams, &particle_inputs_ready);
         if (err != cudaSuccess) goto cleanup;
-        err = cudaEventRecord(particle_inputs_ready, stream);
-        if (err != cudaSuccess) goto cleanup;
-        for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
-        {
-            err = cudaStreamCreate(&particle_streams[lane]);
-            if (err != cudaSuccess) goto cleanup;
-            err = cudaStreamWaitEvent(
-                particle_streams[lane], particle_inputs_ready, 0);
-            if (err != cudaSuccess) goto cleanup;
-        }
 
         RelionVdamProjectorKernel projector{
             tex_x,
@@ -6984,11 +7048,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                 lane_started[lane] = true;
             }
         }
-        for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
-        {
-            err = cudaStreamSynchronize(particle_streams[lane]);
-            if (err != cudaSuccess) goto cleanup;
-        }
+        err = synchronize_relion_vdam_worker_streams(particle_streams);
+        if (err != cudaSuccess) goto cleanup;
         if (wavg_bpref_host_gap_trace_requested)
         {
             bool found = false;
@@ -7120,9 +7181,8 @@ cleanup:
                 cudaGraphDestroy(ordered_scatter_graphs[group]);
         std::free(ordered_scatter_graphs);
     }
-    for (int lane = 0; lane < kRelionVdamWorkerStreams; ++lane)
-        if (particle_streams[lane]) cudaStreamDestroy(particle_streams[lane]);
-    if (particle_inputs_ready) cudaEventDestroy(particle_inputs_ready);
+    destroy_relion_vdam_worker_streams(
+        particle_streams, particle_inputs_ready);
     if (reconstruction_groups_host) cudaFreeHost(reconstruction_groups_host);
     if (worker_lanes_host) cudaFreeHost(worker_lanes_host);
     if (particle_trace_ids_host) cudaFreeHost(particle_trace_ids_host);
@@ -8197,7 +8257,9 @@ cudaError_t launch_relion_coarse_diff2_projector_f32(
     int current_size,
     int projector_size,
     int model_max_r,
-    float projector_scale)
+    float projector_scale,
+    int actual_batch_size,
+    int worker_stream_count)
 {
     const int output_count = batch_size * rotation_count * translation_count;
     constexpr int initialize_block_size = 256;
@@ -8227,6 +8289,8 @@ cudaError_t launch_relion_coarse_diff2_projector_f32(
     cudaArray_t array_imag = nullptr;
     cudaTextureObject_t texture_real = 0;
     cudaTextureObject_t texture_imag = 0;
+    cudaStream_t worker_streams[kRelionVdamWorkerStreams] = {};
+    cudaEvent_t worker_inputs_ready = nullptr;
 
     err = cudaMalloc(reinterpret_cast<void**>(&real), voxel_count * sizeof(float));
     if (err != cudaSuccess) goto cleanup;
@@ -8294,7 +8358,7 @@ cudaError_t launch_relion_coarse_diff2_projector_f32(
         if (err != cudaSuccess) goto cleanup;
     }
 
-    {
+    if (worker_stream_count == 0) {
         const int main_rotation_count = (rotation_count / 128) * 128;
         if (main_rotation_count > 0) {
             const int blocks =
@@ -8332,9 +8396,79 @@ cudaError_t launch_relion_coarse_diff2_projector_f32(
             if (err != cudaSuccess) goto cleanup;
         }
         err = cudaStreamSynchronize(stream);
+    } else {
+        // This path changes only particle scheduling.  Texture ownership,
+        // projection, translation, lane arithmetic, canonical reduction, and
+        // class->rotation->translation output layout all remain in the shared
+        // production kernel above.  Synthetic padded image rows are initialized
+        // but are never scored.
+        err = initialize_relion_vdam_worker_streams(
+            stream, worker_streams, &worker_inputs_ready);
+        if (err != cudaSuccess) goto cleanup;
+        const int main_rotation_count = (rotation_count / 128) * 128;
+        const int tail_count = rotation_count - main_rotation_count;
+        const int64_t output_stride =
+            static_cast<int64_t>(rotation_count) * translation_count;
+        const int64_t lane_stride =
+            static_cast<int64_t>(rotation_count) *
+            kRelionCoarseDiff2BlockSize;
+        err = dispatch_relion_vdam_round_robin_workers(
+            worker_streams,
+            actual_batch_size,
+            [&](int64_t particle, int worker) -> cudaError_t {
+                const float2* particle_images =
+                    images + particle * compact_pixel_count;
+                const float* particle_weight =
+                    weight + particle * compact_pixel_count;
+                float* particle_output = output + particle * output_stride;
+                float* particle_lane_partials = lane_partials == nullptr
+                    ? nullptr
+                    : lane_partials + particle * lane_stride;
+                if (main_rotation_count > 0) {
+                    relion_coarse_diff2_projector_f32_kernel<
+                        kRelionCoarseEulersPerBlock,
+                        CAPTURE_LANES,
+                        CANONICAL_REDUCTION><<<
+                        main_rotation_count / kRelionCoarseEulersPerBlock,
+                        kRelionCoarseDiff2BlockSize,
+                        0,
+                        worker_streams[worker]>>>(
+                            texture_real, texture_imag, rotations,
+                            particle_images, translation_angles,
+                            particle_weight, full_to_compact, particle_output,
+                            particle_lane_partials,
+                            0, main_rotation_count, rotation_count, 1,
+                            translation_count, compact_pixel_count,
+                            current_size, tex_yinit, tex_zinit,
+                            score_max_r * score_max_r, projector_scale);
+                    cudaError_t launch_error = cudaGetLastError();
+                    if (launch_error != cudaSuccess) return launch_error;
+                }
+                if (tail_count > 0) {
+                    relion_coarse_diff2_projector_f32_kernel<
+                        1, CAPTURE_LANES, CANONICAL_REDUCTION><<<
+                        tail_count,
+                        kRelionCoarseDiff2BlockSize,
+                        0,
+                        worker_streams[worker]>>>(
+                            texture_real, texture_imag, rotations,
+                            particle_images, translation_angles,
+                            particle_weight, full_to_compact, particle_output,
+                            particle_lane_partials,
+                            main_rotation_count, tail_count, rotation_count, 1,
+                            translation_count, compact_pixel_count,
+                            current_size, tex_yinit, tex_zinit,
+                            score_max_r * score_max_r, projector_scale);
+                    const cudaError_t launch_error = cudaGetLastError();
+                    if (launch_error != cudaSuccess) return launch_error;
+                }
+                return cudaSuccess;
+            });
     }
 
 cleanup:
+    destroy_relion_vdam_worker_streams(
+        worker_streams, worker_inputs_ready);
     if (texture_real) cudaDestroyTextureObject(texture_real);
     if (texture_imag) cudaDestroyTextureObject(texture_imag);
     if (array_real) cudaFreeArray(array_real);
@@ -11081,8 +11215,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
-ffi::Error RelionCoarseDiff2ProjectorF32Impl(
-    cudaStream_t stream,
+ffi::Error ValidateRelionCoarseDiff2ProjectorF32Operands(
     int64_t current_size,
     int64_t physical_image_size,
     int64_t model_max_r,
@@ -11142,6 +11275,44 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
         return ffi::Error::InvalidArgument(
             "RelionCoarseDiff2ProjectorF32: inconsistent operand shapes or attributes");
 
+    return ffi::Error::Success();
+}
+
+ffi::Error RelionCoarseDiff2ProjectorF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    int64_t physical_image_size,
+    int64_t model_max_r,
+    int64_t canonical_reduction,
+    ffi::AnyBuffer projector_full,
+    ffi::AnyBuffer rotations,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    ffi::Error validation = ValidateRelionCoarseDiff2ProjectorF32Operands(
+        current_size,
+        physical_image_size,
+        model_max_r,
+        canonical_reduction,
+        projector_full,
+        rotations,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        output);
+    if (validation.failure()) return validation;
+
+    const auto projector_dims = projector_full.dimensions();
+    const auto rotation_dims = rotations.dimensions();
+    const auto image_dims = images.dimensions();
+    const auto angle_dims = translation_angles.dimensions();
+
     cudaError_t err;
     if (canonical_reduction) {
         err = launch_relion_coarse_diff2_projector_f32<false, true>(
@@ -11162,7 +11333,9 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
             current_size,
             projector_dims[0],
             model_max_r,
-            -static_cast<float>(physical_image_size * physical_image_size));
+            -static_cast<float>(physical_image_size * physical_image_size),
+            image_dims[0],
+            0);
     } else {
         err = launch_relion_coarse_diff2_projector_f32(
             stream,
@@ -11182,7 +11355,9 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
             current_size,
             projector_dims[0],
             model_max_r,
-            -static_cast<float>(physical_image_size * physical_image_size));
+            -static_cast<float>(physical_image_size * physical_image_size),
+            image_dims[0],
+            0);
     }
     if (err != cudaSuccess)
         return ffi::Error::Internal(
@@ -11198,6 +11373,120 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("physical_image_size")
         .Attr<int64_t>("model_max_r")
         .Attr<int64_t>("canonical_reduction")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    int64_t physical_image_size,
+    int64_t model_max_r,
+    int64_t canonical_reduction,
+    ffi::AnyBuffer projector_full,
+    ffi::AnyBuffer rotations,
+    ffi::AnyBuffer images,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer actual_batch_size,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    ffi::Error validation = ValidateRelionCoarseDiff2ProjectorF32Operands(
+        current_size,
+        physical_image_size,
+        model_max_r,
+        canonical_reduction,
+        projector_full,
+        rotations,
+        images,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        output);
+    if (validation.failure()) return validation;
+    if (canonical_reduction != 1)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2ProjectorMultistreamF32 requires canonical reduction");
+    if (actual_batch_size.element_type() != ffi::DataType::S32 ||
+        actual_batch_size.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2ProjectorMultistreamF32: actual_batch_size "
+            "must be a scalar S32 runtime operand");
+
+    // Keep final-batch occupancy out of the XLA compile identity.  This tiny
+    // same-stream scalar transfer is ordered after the producing computation;
+    // all heavy projector/image operands remain resident on device.
+    int32_t actual_batch_size_host = 0;
+    cudaError_t err = cudaMemcpyAsync(
+        &actual_batch_size_host,
+        actual_batch_size.untyped_data(),
+        sizeof(actual_batch_size_host),
+        cudaMemcpyDeviceToHost,
+        stream);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+
+    const auto projector_dims = projector_full.dimensions();
+    const auto rotation_dims = rotations.dimensions();
+    const auto image_dims = images.dimensions();
+    const auto angle_dims = translation_angles.dimensions();
+    if (actual_batch_size_host <= 0 ||
+        actual_batch_size_host > image_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2ProjectorMultistreamF32: actual_batch_size "
+            "must be within the physical image batch");
+
+    err = launch_relion_coarse_diff2_projector_f32<false, true>(
+        stream,
+        static_cast<const float2*>(projector_full.untyped_data()),
+        static_cast<const float*>(rotations.untyped_data()),
+        static_cast<const float2*>(images.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
+        static_cast<const int32_t*>(full_to_compact.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        nullptr,
+        image_dims[0],
+        rotation_dims[0],
+        angle_dims[0],
+        image_dims[1],
+        current_size,
+        projector_dims[0],
+        model_max_r,
+        -static_cast<float>(physical_image_size * physical_image_size),
+        actual_batch_size_host,
+        kRelionVdamWorkerStreams);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCoarseDiff2ProjectorMultistreamF32,
+    RelionCoarseDiff2ProjectorMultistreamF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Attr<int64_t>("physical_image_size")
+        .Attr<int64_t>("model_max_r")
+        .Attr<int64_t>("canonical_reduction")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -11276,7 +11565,9 @@ ffi::Error RelionCoarseDiff2ProjectorLanesF32Impl(
         current_size,
         projector_dims[0],
         model_max_r,
-        -static_cast<float>(physical_image_size * physical_image_size));
+        -static_cast<float>(physical_image_size * physical_image_size),
+        image_dims[0],
+        0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
