@@ -6189,6 +6189,126 @@ def test_k4_assembly_matches_float64_joint_posterior_and_all_class_pose_winners(
     np.testing.assert_array_equal(np.asarray(result.stats.rotation_posterior_sums), np.full(3, 10.0))
 
 
+def test_production_k4_firstiter_has_one_joint_winner_and_exact_mstep_mass(rng, monkeypatch):
+    """The production firstiter route must reconstruct each image in exactly one class."""
+
+    import copy
+
+    import recovar.em.dense_single_volume.k_class as k_class_module
+    from recovar.em.dense_single_volume.helpers import significance as significance_module
+
+    class SubsetMockDataset(MockDataset):
+        def subset(self, image_indices):
+            image_indices = np.asarray(image_indices, dtype=np.int64)
+            subset = copy.copy(self)
+            subset._images = self._images[image_indices].copy()
+            subset.CTF_params = self.CTF_params[image_indices].copy()
+            subset.rotation_matrices = self.rotation_matrices[image_indices].copy()
+            subset.translations = self.translations[image_indices].copy()
+            subset.n_images = int(image_indices.size)
+            subset.n_units = int(image_indices.size)
+            return subset
+
+    n_classes = 4
+    n_images = 7
+    expected_classes = np.asarray([0, 1, 1, 2, 3, 3, 3], dtype=np.int32)
+    expected_class_mass = np.bincount(expected_classes, minlength=n_classes).astype(np.float32)
+    coarse_hard = np.asarray(
+        [
+            [(class_idx + image_idx) % 4 for image_idx in range(n_images)]
+            for class_idx in range(n_classes)
+        ],
+        dtype=np.int32,
+    )
+    coarse_log_evidence = np.full((n_classes, n_images), -2.0, dtype=np.float64)
+    coarse_best_scores = np.full((n_classes, n_images), -20.0, dtype=np.float32)
+    for image_idx, class_idx in enumerate(expected_classes):
+        coarse_log_evidence[class_idx, image_idx] = 0.0
+        coarse_best_scores[class_idx, image_idx] = 20.0 + image_idx
+
+    score_calls = []
+
+    def fake_joint_coarse_score(*_args, **kwargs):
+        score_calls.append(kwargs)
+        np.testing.assert_array_equal(kwargs["class_log_priors"], np.zeros(n_classes, dtype=np.float64))
+        assert kwargs["score_mode"] == "normalized_cc"
+        assert kwargs["max_significants"] == 1
+        assert kwargs["return_class_best"] is True
+        return (
+            None,
+            None,
+            None,
+            expected_classes.copy(),
+            None,
+            {
+                "class_log_evidence_per_image": coarse_log_evidence.copy(),
+                "class_hard_assignments": coarse_hard.copy(),
+                "class_best_log_score_per_image": coarse_best_scores.copy(),
+                "class_assignments": expected_classes.copy(),
+            },
+        )
+
+    monkeypatch.setattr(
+        significance_module,
+        "_compute_k_class_significance_batched",
+        fake_joint_coarse_score,
+    )
+
+    dataset = SubsetMockDataset(n_images, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=145)
+    means = jnp.stack([mean * np.float32(1.0 + 0.05 * class_idx) for class_idx in range(n_classes)])
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(2, seed=146)
+    translations = np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32)
+
+    result = k_class_module.run_dense_k_class_em_adaptive(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        rotations,
+        translations,
+        np.arange(rotations.shape[0], dtype=np.int64),
+        np.arange(translations.shape[0], dtype=np.int64),
+        "linear_interp",
+        firstiter_cc_pass2_only_best_coarse=True,
+        coarse_healpix_order=0,
+        oversampling_order=0,
+        accumulate_noise=True,
+        relion_firstiter_score_mode="normalized_cc",
+        relion_firstiter_winner_take_all=True,
+        sparse_pass2=False,
+        image_batch_size=n_images,
+        rotation_block_size=rotations.shape[0],
+        score_with_masked_images=True,
+    )
+
+    assert len(score_calls) == 1
+    np.testing.assert_array_equal(np.asarray(result.class_assignments), expected_classes)
+    expected_poses = coarse_hard[expected_classes, np.arange(n_images)]
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), expected_poses)
+    np.testing.assert_array_equal(np.asarray(result.significant_counts), np.ones(n_images, dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(result.stats.max_posterior_per_image), np.ones(n_images))
+
+    finite_class_pose_support = np.stack(
+        [np.isfinite(np.asarray(stats.best_log_score_per_image)) for stats in result.per_class_stats],
+        axis=0,
+    )
+    np.testing.assert_array_equal(finite_class_pose_support.sum(axis=0), np.ones(n_images, dtype=np.int64))
+    np.testing.assert_array_equal(np.argmax(finite_class_pose_support, axis=0), expected_classes)
+    np.testing.assert_array_equal(np.asarray(result.class_mstep_posterior_sums), expected_class_mass)
+    assert result.noise_stats is not None
+    np.testing.assert_array_equal(
+        np.asarray([stats.sumw for stats in result.noise_stats], dtype=np.float32),
+        expected_class_mass,
+    )
+    assert result.aggregate_noise_stats is not None
+    assert result.aggregate_noise_stats.sumw == pytest.approx(float(n_images))
+
+
 def test_k4_assembly_rejects_missing_or_duplicated_class_rows():
     missing = _k4_assembly_inputs()
     missing["per_class_stats"] = missing["per_class_stats"][:-1]

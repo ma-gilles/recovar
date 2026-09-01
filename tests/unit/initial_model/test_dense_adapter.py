@@ -164,6 +164,65 @@ def test_arrays_to_accumulators_k4_compact_and_full_layouts_are_identical():
         np.testing.assert_array_equal(compact_accumulator.weight, full_accumulator.weight)
 
 
+def test_arrays_to_accumulators_k4_relion_frame_preserves_all_class_half_sentinels():
+    """Pin the eight K=4 pseudo-half outputs through RELION frame conversion."""
+
+    state = SimpleNamespace(K=4, ori_size=8, current_size=4)
+    source_shape = (state.ori_size,) * 3
+    source_coordinate = (2, 3, 5)
+    # current_size=4 gives a 7x7x4 cropped BPref slab.  The source crop starts
+    # at (1, 1, 4), then the projector-frame bridge reverses the first axis.
+    expected_coordinate = (5, 2, 1)
+    expected_shape = (7, 7, 4)
+    data_scale = -(state.ori_size**2)
+    weight_scale = state.ori_size**4
+    accumulators = []
+    sentinels = {}
+
+    for halfset_idx in range(2):
+        data_by_class = []
+        weight_by_class = []
+        for class_idx in range(state.K):
+            slot = 10 * halfset_idx + class_idx + 1
+            data_value = np.complex64(slot + 0.5j)
+            weight_value = np.float32(slot + 0.25)
+            data = np.zeros(source_shape, dtype=np.complex64)
+            weight = np.zeros(source_shape, dtype=np.float32)
+            data[source_coordinate] = data_value
+            weight[source_coordinate] = weight_value
+            data_by_class.append(data.reshape(-1))
+            weight_by_class.append(weight.reshape(-1))
+            sentinels[(halfset_idx, class_idx)] = (data_value, weight_value)
+
+        accumulators.extend(
+            _arrays_to_accumulators(
+                data_by_class,
+                weight_by_class,
+                state,
+                halfset_idx=halfset_idx,
+                relion_bpref_frame=True,
+                relion_projector_frame=True,
+                padding_factor=1,
+            )
+        )
+
+    assert [(value.halfset_idx, value.class_idx) for value in accumulators] == [
+        (halfset_idx, class_idx)
+        for halfset_idx in range(2)
+        for class_idx in range(state.K)
+    ]
+    for accumulator in accumulators:
+        identity = (accumulator.halfset_idx, accumulator.class_idx)
+        data_value, weight_value = sentinels[identity]
+        expected_data = np.zeros(expected_shape, dtype=np.complex128)
+        expected_weight = np.zeros(expected_shape, dtype=np.float64)
+        expected_data[expected_coordinate] = data_value * data_scale
+        expected_weight[expected_coordinate] = weight_value * weight_scale
+
+        np.testing.assert_array_equal(accumulator.data, expected_data)
+        np.testing.assert_array_equal(accumulator.weight, expected_weight)
+
+
 @pytest.mark.parametrize(
     ("data_class_count", "weight_class_count"),
     [(3, 4), (5, 4), (4, 3), (4, 5)],
