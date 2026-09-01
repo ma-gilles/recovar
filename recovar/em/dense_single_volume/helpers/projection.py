@@ -304,10 +304,23 @@ def _validate_centered_relion_projector_pixel_indices(
     rows = indices // full_x_half
     cols = indices - rows * full_x_half
     ky = rows - image_size // 2
-    projector_x_half = int(projector_output_size) // 2 + 1
-    min_ky = -(int(projector_output_size) // 2 - 1)
-    max_ky = int(projector_output_size) // 2
-    valid = (ky >= min_ky) & (ky <= max_ky) & (cols >= 0) & (cols < projector_x_half)
+    projector_size = int(projector_output_size)
+    projector_x_half = projector_size // 2 + 1
+    min_ky = -(projector_size // 2 - 1)
+    max_ky = projector_size // 2
+    if projector_size == image_size:
+        # In an even full-size centered image, row zero is the single stored
+        # Nyquist row: +N/2 and -N/2 are the same discrete frequency.  The
+        # texture gather below uses this positive-Nyquist convention too.
+        ky = np.where(rows == 0, max_ky, ky)
+    valid = (
+        (indices >= 0)
+        & (indices < image_size * full_x_half)
+        & (ky >= min_ky)
+        & (ky <= max_ky)
+        & (cols >= 0)
+        & (cols < projector_x_half)
+    )
     if not np.all(valid):
         bad = indices[~valid][:8].tolist()
         raise ValueError(

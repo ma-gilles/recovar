@@ -4001,6 +4001,71 @@ def test_texture_centered_crop_masks_current_image_disk():
     np.testing.assert_array_equal(got, expected)
 
 
+def test_texture_full_even_nyquist_indices_validate_and_match_full_scatter():
+    from recovar.em.dense_single_volume.helpers.projection import (
+        _texture_centered_crop_at_indices,
+        _texture_centered_crop_to_full,
+        _validate_centered_relion_projector_pixel_indices,
+    )
+
+    image_size = 8
+    crop_pixels = image_size * (image_size // 2 + 1)
+    crop = (
+        np.arange(crop_pixels, dtype=np.float32)
+        + 1j * np.arange(crop_pixels, dtype=np.float32)[::-1]
+    ).astype(np.complex64)[None]
+    nyquist_row_indices = np.arange(image_size // 2 + 1, dtype=np.int32)
+
+    _validate_centered_relion_projector_pixel_indices(
+        nyquist_row_indices,
+        image_shape=(image_size, image_size),
+        projector_output_size=image_size,
+    )
+    full = np.asarray(
+        _texture_centered_crop_to_full(
+            jnp.asarray(crop),
+            image_shape=(image_size, image_size),
+            projector_output_size=image_size,
+        )
+    )
+    direct = np.asarray(
+        _texture_centered_crop_at_indices(
+            jnp.asarray(crop),
+            jnp.asarray(nyquist_row_indices),
+            image_shape=(image_size, image_size),
+            projector_output_size=image_size,
+        )
+    )
+
+    np.testing.assert_array_equal(direct, full[:, nyquist_row_indices])
+
+
+def test_texture_cropped_projector_rejects_rows_outside_crop():
+    from recovar.em.dense_single_volume.helpers.projection import (
+        _validate_centered_relion_projector_pixel_indices,
+    )
+
+    with pytest.raises(ValueError, match=r"bad_indices=\[0, 5\]"):
+        _validate_centered_relion_projector_pixel_indices(
+            np.asarray([0, 5], dtype=np.int32),
+            image_shape=(8, 8),
+            projector_output_size=6,
+        )
+
+
+def test_texture_full_projector_rejects_out_of_bounds_flat_index():
+    from recovar.em.dense_single_volume.helpers.projection import (
+        _validate_centered_relion_projector_pixel_indices,
+    )
+
+    with pytest.raises(ValueError, match=r"bad_indices=\[40\]"):
+        _validate_centered_relion_projector_pixel_indices(
+            np.asarray([40], dtype=np.int32),
+            image_shape=(8, 8),
+            projector_output_size=8,
+        )
+
+
 @pytest.mark.parametrize(
     ("image_size", "crop_size"),
     [(8, 6), (8, 8)],
