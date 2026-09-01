@@ -94,10 +94,13 @@ each uses seeds 41001, 41002, and 41003. The four K-scaling sentinels use seeds
 | K scaling, Ribosembly | 2, 8, 16 | white 1 or 3 | uniform plus one head-heavy case | same grid/particles |
 | Family/K interaction | 2, 8 | radial1 3 | nonuniform/linear | IgG and Tomotwin |
 
-The existing 15-case launcher is the starting point, not sufficient evidence:
-most rows currently have one seed and only two rows exercise 50k/256.
+The runnable launcher now contains 29 cases. The original 15 medium/scale
+cases remain mandatory, and 14 bounded 3k-particle cases add the K=1 stress
+axes, exact batching controls, and independent seeds. This is substantially
+broader executable coverage, but a single completed seed is still not
+sufficient evidence and only two rows exercise 50k/256.
 
-### Existing runnable base panel
+### Runnable base panel
 
 The following exact `DEFAULT_CASES` from
 `scripts/run_em_kclass_robustness_matrix_slurm.py` remain mandatory; none is
@@ -120,12 +123,31 @@ replaced by the broader table above:
 | 13 | `tomotwin_k8_10k_g128_radial_noise3_kent_headheavy` | 2813 |
 | 14 | `igg_rl_k4_10k_g128_white_noise1_uniform` | 2814 |
 | 15 | `igg_rl_k4_10k_g128_radial_noise3_nonuniform_outliers_pct20` | 2815 |
+| 16 | `ribo_k4_3k_g128_white_noise10_uniform` | 2816 |
+| 17 | `ribo_k4_3k_g128_radial_noise3_noctf_uniform` | 2817 |
+| 18 | `ribo_k4_3k_g128_white_noise1_contrast_noise_scale` | 2818 |
+| 19 | `ribo_k4_3k_g128_white_noise1_image_offset` | 2819 |
+| 20 | `ribo_k4_3k_g128_radial_noise5_severe_outliers_pct50` | 2820 |
+| 21 | `ribo_k4_3k_g128_white_noise0p2_uniform` | 2821 |
+| 22 | `ribo_k4_3k_g128_white_noise0p2_kent_headheavy` | 2822 |
+| 23 | `ribo_k4_3k_g128_white_noise1_extreme_class_imbalance` | 2823 |
+| 24 | `ribo_k4_3k_g256_radial_noise3_highres` | 2824 |
+| 25 | `ribo_k4_3k_g128_white_noise1_batch50` | 2825 |
+| 26 | `ribo_k4_3k_g128_white_noise1_batch17` | 2825 |
+| 27 | `ribo_k4_3k_g128_white_noise1_rotation_block257` | 2825 |
+| 28 | `ribo_k4_3k_g128_white_noise1_seed3802` | 3802 |
+| 29 | `ribo_k4_3k_g128_white_noise1_seed4802` | 4802 |
 
 Run the entire panel with seed offsets 0, 10000, and 20000, using a distinct
 scratch root for each offset. The launcher already accepts `--seed-offset`, so
-these 45 executions are runnable without changing the scientific case
+these 87 executions are runnable without changing the scientific case
 definitions. What is not yet implemented is a checked-in wrapper that submits
 and aggregates all three repetitions as one registry-ready suite.
+
+Cases 25--27 deliberately share every simulator/refinement seed and scientific
+parameter. Only RECOVAR's image-batch or rotation-block boundary changes; the
+generated input hashes must therefore match before their output comparison is
+admitted as an invariance result.
 
 ## Tier 3: grid and particle scaling
 
@@ -203,12 +225,13 @@ shellwise curves, and a predeclared pass policy.
 
 ## Runnable now versus planned-only
 
-The current launcher can run the exact 15-case panel and can repeat it with
-`--seed-offset`. The following matrix pieces still need bounded launch/test
+The current launcher can run the exact 29-case panel, including the three
+batch/rotation-block invariance rows, and can repeat the full default panel
+with `--seed-offset`. The following matrix pieces still need bounded launch/test
 implementation before they are executable as a single suite:
 
 - an aggregator that binds the three seed-offset panels into registry records;
-- the fixed-state image-batch/rotation-block invariance grid;
+- the fixed-state 32--256-particle image-batch/rotation-block discriminator grid;
 - the added 5k/64, 50k/128, and 10k/256 scaling rows;
 - C4/D4/O/I1 K=4 symmetry trajectories and their generated symmetric GT;
 - fail-closed permutation/duplicate-map/controller-corruption fixtures beyond

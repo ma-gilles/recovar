@@ -13,15 +13,16 @@ The repository has substantial K-class implementation coverage:
 - fast parity integration in `tests/integration/test_em_parity_fast.py`;
 - a production-scale K=4 case in `tests/long_test/test_em_parity_long.py` and
   `scripts/run_em_parity_long_slurm.sh`;
-- `scripts/run_em_kclass_robustness_matrix_slurm.py`, whose 15 default cases
-  span K=2/4/8/16, four PDB families, white/radial noise, uniform/nonuniform/
-  Kent poses, class imbalance, contrast/noise scaling, outliers, and 128/256
-  grids; and
+- `scripts/run_em_kclass_robustness_matrix_slurm.py`, whose 29 default cases
+  span K=2/4/8/16, four PDB families, white/radial and low/very-high noise,
+  uniform/nonuniform/Kent/no-CTF poses, class imbalance, contrast/noise
+  scaling, offsets, 20%/50% outliers, 128/256 grids, three independent seeds,
+  and matched image-batch/rotation-block invariance controls; and
 - detailed K=4 causal and repeatability scorecards under `docs/math/`, plus
   the long historical log in `docs/math/em_parity_program.md`.
 
 These assets are useful, but they do not constitute one reproducible result
-ledger. The robustness matrix is mostly single-seed, the old completion
+ledger. Most medium/scale matrix rows remain single-seed, the old completion
 baseline locks mean correlation rather than the current FSC policy, and the
 historical scorecards do not uniformly bind source tree, all inputs, Slurm
 allocation, quality, and performance in one schema.
