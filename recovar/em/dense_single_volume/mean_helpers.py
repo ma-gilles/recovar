@@ -426,6 +426,71 @@ def _should_host_stage_large_relion_ifft(
     )
 
 
+def _pack_compact_full_accumulators_for_large_relion_ifft(
+    Ft_ctf,
+    Ft_y,
+    vol_shape,
+    padding_factor,
+    accumulator_volume_shape,
+    relion_functions,
+):
+    """Losslessly repack compact full accumulators before a giant padded iFFT.
+
+    The RELION x-half M-step keeps the historical RECOVAR full-volume public
+    contract on normal-sized accumulator grids. At large box sizes an early
+    iteration can therefore reach reconstruction with compact full Hermitian
+    arrays even though its padded inverse-FFT grid is giant. Repack only this
+    compact/full case so it can use the packed pre-iFFT host boundary without
+    changing the public M-step contract or the large-accumulator offload path.
+    """
+
+    accumulator_shape = (
+        tuple(3 * [int(vol_shape[0]) * int(padding_factor)])
+        if accumulator_volume_shape is None
+        else tuple(int(s) for s in accumulator_volume_shape)
+    )
+    reconstruction_shape = relion_functions._relion_reconstruction_padded_shape(
+        vol_shape,
+        padding_factor,
+    )
+    if accumulator_shape == reconstruction_shape:
+        return Ft_ctf, Ft_y
+
+    accumulator_voxels = int(np.prod(accumulator_shape))
+    reconstruction_voxels = int(np.prod(reconstruction_shape))
+    if relion_functions._large_grid_postprocess_single_precision_enabled(
+        accumulator_voxels,
+    ) or not relion_functions._large_grid_postprocess_single_precision_enabled(
+        reconstruction_voxels,
+    ):
+        return Ft_ctf, Ft_y
+
+    def _is_full(array):
+        return tuple(array.shape) == accumulator_shape or (
+            array.ndim == 1 and int(array.size) == accumulator_voxels
+        )
+
+    if not _is_full(Ft_ctf) or not _is_full(Ft_y):
+        return Ft_ctf, Ft_y
+
+    logger.info(
+        "RELION giant-iFFT compact full-to-half repack: accumulator_shape=%s "
+        "reconstruction_shape=%s",
+        accumulator_shape,
+        reconstruction_shape,
+    )
+    return (
+        fourier_transform_utils.full_volume_to_half_volume(
+            Ft_ctf,
+            accumulator_shape,
+        ).reshape(-1),
+        fourier_transform_utils.full_volume_to_half_volume(
+            Ft_y,
+            accumulator_shape,
+        ).reshape(-1),
+    )
+
+
 def _crop_relion_wiener_half_to_fftw_host(
     wiener_half,
     accumulator_shape,
@@ -476,6 +541,14 @@ def _reconstruct_volume_eager(
     """
     from recovar.reconstruction import relion_functions
 
+    Ft_ctf, Ft_y = _pack_compact_full_accumulators_for_large_relion_ifft(
+        Ft_ctf,
+        Ft_y,
+        vol_shape,
+        padding_factor,
+        accumulator_volume_shape,
+        relion_functions,
+    )
     postprocess_args = (Ft_ctf, Ft_y, vol_shape, padding_factor)
     postprocess_kwargs = dict(
         tau=tau,

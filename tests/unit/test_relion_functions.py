@@ -1491,6 +1491,149 @@ def test_compact_device_accumulator_runs_giant_split_and_normalization(monkeypat
     ) in caplog.text
 
 
+def test_compact_full_accumulator_repack_matches_historical_path(monkeypatch):
+    """The repack is exact and changes the historical result only at f32 roundoff."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", "auto")
+    monkeypatch.setenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", "200")
+    volume_shape = (4, 4, 4)
+    accumulator_shape = (5, 5, 5)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    rng = np.random.default_rng(20260901)
+    ft_ctf_half = rng.uniform(0.5, 1.5, half_shape).astype(np.float32)
+    ft_y_half = (
+        rng.standard_normal(half_shape) + 1j * rng.standard_normal(half_shape)
+    ).astype(np.complex64)
+    ft_ctf_full = ftu.half_volume_to_full_volume(
+        jnp.asarray(ft_ctf_half),
+        accumulator_shape,
+    ).reshape(-1)
+    ft_y_full = ftu.half_volume_to_full_volume(
+        jnp.asarray(ft_y_half),
+        accumulator_shape,
+    ).reshape(-1)
+    repacked_ctf, repacked_y = mean_helpers._pack_compact_full_accumulators_for_large_relion_ifft(
+        ft_ctf_full,
+        ft_y_full,
+        volume_shape,
+        2,
+        accumulator_shape,
+        rf,
+    )
+    np.testing.assert_array_equal(np.asarray(repacked_ctf), ft_ctf_half.reshape(-1))
+    np.testing.assert_array_equal(np.asarray(repacked_y), ft_y_half.reshape(-1))
+    tau = rng.uniform(0.5, 1.5, np.prod(volume_shape)).astype(np.float64)
+    common = dict(
+        tau=tau,
+        tau2_fudge=1.0,
+        minres_map=0,
+        current_size=2,
+        accumulator_volume_shape=accumulator_shape,
+        tau_is_1d=False,
+        preserve_output_precision=True,
+        relion_filter_scale=float(volume_shape[0] ** 4),
+    )
+
+    historical = np.asarray(
+        rf.post_process_from_filter_v2(
+            ft_ctf_full,
+            ft_y_full,
+            volume_shape,
+            2,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+            kernel_width=1,
+            gridding_padding_factor=1,
+            **common,
+        )
+    )
+    staged = np.asarray(
+        mean_helpers._reconstruct_volume_eager(
+            ft_ctf_full,
+            ft_y_full,
+            volume_shape,
+            2,
+            projection_padding_factor=1,
+            use_spherical_mask=True,
+            grid_correct=True,
+            **common,
+        )
+    )
+
+    assert staged.dtype == np.complex64
+    np.testing.assert_allclose(staged, historical, rtol=1e-6, atol=2e-7)
+
+
+def test_compact_full_device_accumulator_runs_giant_split_and_normalization(monkeypatch, caplog):
+    """The production full-layout compact accumulator must reach the giant-iFFT split."""
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume import mean_helpers
+
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_LARGE_GRID_SINGLE_PRECISION", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_POSTPROCESS_SINGLE_PRECISION_MIN_VOXELS", raising=False)
+    volume_shape = (2, 2, 2)
+    accumulator_shape = (3, 3, 3)
+    reconstruction_shape = (1600, 1600, 1600)
+    half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
+    ft_ctf_half = jnp.arange(np.prod(half_shape), dtype=jnp.float32).reshape(half_shape)
+    ft_y_half = ft_ctf_half.astype(jnp.complex64) * (1.0 + 2.0j)
+    ft_ctf_full = ftu.half_volume_to_full_volume(ft_ctf_half, accumulator_shape).reshape(-1)
+    ft_y_full = ftu.half_volume_to_full_volume(ft_y_half, accumulator_shape).reshape(-1)
+    events = []
+
+    def fake_stage(ft_ctf, ft_y, *_args, **kwargs):
+        events.append("stage")
+        np.testing.assert_array_equal(np.asarray(ft_ctf), np.asarray(ft_ctf_half).reshape(-1))
+        np.testing.assert_array_equal(np.asarray(ft_y), np.asarray(ft_y_half).reshape(-1))
+        assert kwargs["input_half_volume"] is True
+        assert kwargs["return_fftw_half_before_ifft"] is True
+        return jnp.ones((2, 2, 2), dtype=jnp.complex64)
+
+    def fake_finish(value, *_args, **_kwargs):
+        events.append("finish")
+        assert isinstance(value, np.ndarray)
+        return jnp.asarray([2.0 + 0.0j], dtype=jnp.complex64)
+
+    monkeypatch.setattr(
+        rf,
+        "_relion_reconstruction_padded_shape",
+        lambda *_args, **_kwargs: reconstruction_shape,
+    )
+    monkeypatch.setattr(rf, "post_process_from_filter_v2", fake_stage)
+    monkeypatch.setattr(
+        rf,
+        "_finish_large_relion_postprocess_from_fftw_half",
+        fake_finish,
+    )
+    caplog.set_level("INFO", logger=mean_helpers.__name__)
+
+    result = mean_helpers._reconstruct_volume_eager(
+        ft_ctf_full,
+        ft_y_full,
+        volume_shape,
+        2,
+        tau=jnp.ones(np.prod(volume_shape), dtype=jnp.float32),
+        tau2_fudge=1.0,
+        projection_padding_factor=1,
+        accumulator_volume_shape=accumulator_shape,
+    )
+
+    assert events == ["stage", "finish"]
+    expected = np.asarray(
+        [np.complex64(2.0 / np.prod(reconstruction_shape, dtype=np.int64))],
+    )
+    np.testing.assert_array_equal(np.asarray(result), expected)
+    assert "RELION giant-iFFT compact full-to-half repack" in caplog.text
+    assert "RELION split pre-IFFT host boundary" in caplog.text
+    assert "RELION large inverse-FFT normalization boundary" in caplog.text
+
+
 def test_large_device_accumulator_does_not_enter_host_staged_split(monkeypatch):
     """A large device accumulator must use the existing earlier host-offload path."""
 
