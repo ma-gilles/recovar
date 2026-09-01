@@ -22,7 +22,8 @@ readonly PRIMITIVE_TREE=95c4a7cd4c40878beb87380e43d7e310748586fe
 readonly BASELINE_BINARY=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_multistream_resources_129280420_20260831/libcuda_backproject.so
 readonly BASELINE_SHA256=fcd9f03383ec42483016cf2b686adc998e61f1cc6fdf338b3a6713bbc3554d56
 readonly CUDA_TOOLKIT=/usr/local/cuda-12.6
-readonly CUDA_BINARY_TOOLS_TOOLKIT=/usr/local/cuda-13.1
+readonly CUOBJDUMP=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/cuda_binary_tools_12.6_login_20260901/cuobjdump
+readonly CUOBJDUMP_SHA256=f0299c666460f826a01444f29f3c5ff889765199fc68069e8756c69d4deb661b
 readonly CUDA_ARCH_FLAGS='-gencode arch=compute_90,code=sm_90'
 readonly FOCUSED_GPU_TEST=tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_prehalf_source_order_across_dispatchers
 
@@ -30,7 +31,6 @@ REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/
 REPO_ROOT=$(realpath -e -- "${REPO_ROOT}")
 PIXI_PY=${REPO_ROOT}/.pixi/envs/default/bin/python
 NVCC=${CUDA_TOOLKIT}/bin/nvcc
-CUOBJDUMP=${CUDA_BINARY_TOOLS_TOOLKIT}/bin/cuobjdump
 RESULT_ROOT=${VDAM_PREHALF_RESULT_ROOT:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_prehalf_h100_${SLURM_JOB_ID}}
 RESULT_ROOT=$(realpath -m -- "${RESULT_ROOT}")
 PROVENANCE=${RESULT_ROOT}/provenance
@@ -110,6 +110,7 @@ esac
 test -x "${PIXI_PY}"
 test -x "${NVCC}"
 test -x "${CUOBJDUMP}"
+test "$(sha256sum "${CUOBJDUMP}" | awk '{print $1}')" = "${CUOBJDUMP_SHA256}"
 test -s "${BASELINE_BINARY}"
 test "$(sha256sum "${BASELINE_BINARY}" | awk '{print $1}')" = "${BASELINE_SHA256}"
 test "$(git -C "${REPO_ROOT}" rev-parse --show-toplevel)" = "${REPO_ROOT}"
@@ -150,6 +151,7 @@ printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/visible_gpu_uuids
 printf '%s\n' "${CUDA_ARCH_FLAGS}" > "${PROVENANCE}/cuda_arch_flags.txt"
 printf '%s\n' "${baseline_stat_before}" > "${PROVENANCE}/baseline_stat.txt"
 sha256sum "${BASELINE_BINARY}" > "${PROVENANCE}/baseline_binary.sha256"
+sha256sum "${CUOBJDUMP}" > "${PROVENANCE}/cuobjdump.sha256"
 sha256sum "${PIXI_PY}" > "${PROVENANCE}/interpreter.sha256"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 "${NVCC}" --version > "${PROVENANCE}/nvcc_version.txt"

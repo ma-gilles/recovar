@@ -30,8 +30,13 @@ def test_runner_builds_sm90_outside_repo_and_audits_frozen_binary() -> None:
     source = _source()
 
     assert "CUDA_TOOLKIT=/usr/local/cuda-12.6" in source
-    assert "CUDA_BINARY_TOOLS_TOOLKIT=/usr/local/cuda-13.1" in source
-    assert "CUOBJDUMP=${CUDA_BINARY_TOOLS_TOOLKIT}/bin/cuobjdump" in source
+    assert (
+        "CUOBJDUMP=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+        "cuda_binary_tools_12.6_login_20260901/cuobjdump" in source
+    )
+    assert "CUOBJDUMP_SHA256=f0299c666460f826a01444f29f3c5ff889765199fc68069e8756c69d4deb661b" in source
+    assert 'sha256sum "${CUOBJDUMP}"' in source
+    assert '"${PROVENANCE}/cuobjdump.sha256"' in source
     assert "CUDA_ARCH_FLAGS='-gencode arch=compute_90,code=sm_90'" in source
     assert "CANDIDATE_BINARY=${BUILD}/libcuda_backproject.so" in source
     assert "result root must be outside the repository" in source
