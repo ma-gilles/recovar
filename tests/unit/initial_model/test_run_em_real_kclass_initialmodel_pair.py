@@ -86,6 +86,11 @@ def test_default_contract_covers_emitted_iterations_and_flags_collapsed_classes(
     assert args.minimum_assignment_accuracy == 0.995
     assert args.minimum_class_fraction == 0.01
     assert args.reference_pair_report is None
+    assert args.image_batch_size == 500
+    assert args.image_fourier_backend == "relion_cuda"
+    recovar = runner.build_recovar_command(args, tmp_path / "recovar/run")
+    assert recovar[recovar.index("--image_batch_size") + 1] == "500"
+    assert recovar[recovar.index("--image_fourier_backend") + 1] == "relion_cuda"
 
 
 def test_explicit_legacy_iteration_zero_checkpoint_is_retained(tmp_path: Path):

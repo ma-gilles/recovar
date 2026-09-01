@@ -57,6 +57,8 @@ def test_pair_command_targets_current_runner_and_emitted_checkpoint_range(tmp_pa
     checkpoints = [int(command[index + 1]) for index, value in enumerate(command) if value == "--checkpoint"]
     assert checkpoints == list(range(1, 9))
     assert command[command.index("--minimum-class-fraction") + 1] == "0.01"
+    assert command[command.index("--image-batch-size") + 1] == "500"
+    assert command[command.index("--image-fourier-backend") + 1] == "relion_cuda"
 
 
 def test_explicit_legacy_iteration_zero_checkpoint_is_retained(tmp_path: Path):

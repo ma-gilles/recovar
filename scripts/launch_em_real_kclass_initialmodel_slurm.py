@@ -156,6 +156,8 @@ def build_pair_command(args: argparse.Namespace, spec: FixtureSpec, pair_root: P
         str(args.padding_factor),
         "--image-batch-size",
         str(args.image_batch_size),
+        "--image-fourier-backend",
+        args.image_fourier_backend,
         "--rotation-block-size",
         str(args.rotation_block_size),
         "--threads",
@@ -291,6 +293,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--offset-step", type=float, default=2.0)
     parser.add_argument("--padding-factor", type=int, default=1)
     parser.add_argument("--image-batch-size", type=int, default=500)
+    parser.add_argument(
+        "--image-fourier-backend",
+        choices=("host_numpy", "jax_gpu", "relion_cuda"),
+        default="relion_cuda",
+    )
     parser.add_argument("--rotation-block-size", type=int, default=5000)
     parser.add_argument("--minimum-fsc-auc", type=float, default=0.999)
     parser.add_argument("--minimum-assignment-accuracy", type=float, default=0.995)

@@ -259,7 +259,7 @@ shellwise curves, and a predeclared pass policy.
 
 The bounded 10k InitialModel precursor is now runnable for EMPIAR-10076 and
 EMPIAR-10345 through `scripts/launch_em_real_kclass_initialmodel_slurm.py`; see
-`real_kclass_initialmodel_pairs.md`. It checks iterations 0--8, class
+`real_kclass_initialmodel_pairs.md`. It checks iterations 1--8, class
 permutation, assignment agreement, collapse, source/input provenance, and
 matched one-GPU performance. Because InitialModel does not emit independently
 refined half maps, this precursor does not satisfy the native full-run

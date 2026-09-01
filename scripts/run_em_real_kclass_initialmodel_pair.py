@@ -360,6 +360,8 @@ def build_recovar_command(args: argparse.Namespace, output_prefix: Path) -> list
         str(args.padding_factor),
         "--image_batch_size",
         str(args.image_batch_size),
+        "--image_fourier_backend",
+        args.image_fourier_backend,
         "--rotation_block_size",
         str(args.rotation_block_size),
         "--j",
@@ -793,6 +795,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--offset-step", type=float, default=2.0)
     parser.add_argument("--padding-factor", type=int, default=1)
     parser.add_argument("--image-batch-size", type=int, default=500)
+    parser.add_argument(
+        "--image-fourier-backend",
+        choices=("host_numpy", "jax_gpu", "relion_cuda"),
+        default="relion_cuda",
+        help="Pin the image Fourier preprocessing implementation used by RECOVAR.",
+    )
     parser.add_argument("--rotation-block-size", type=int, default=5000)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--minimum-fsc-auc", type=float, default=0.999)
