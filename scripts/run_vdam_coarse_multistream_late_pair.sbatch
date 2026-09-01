@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vdam-coarse-atomic
+#SBATCH --job-name=vdam-coarse-crossed
 #SBATCH --account=gilles
 #SBATCH --partition=cryoem
 #SBATCH --qos=della-cryoem
@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=180G
 #SBATCH --time=00:35:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-coarse-atomic-%j.out
+#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-coarse-crossed-%j.out
 
 set -euo pipefail
 
@@ -55,7 +55,7 @@ RUNTIME=${ROOT}/runtime
 NSIGHT=${ROOT}/nsight
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 RELION_BIND_DIR=${RUNTIME}/relion_bind
-FOCUSED_TEST_NODE=tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope
+FOCUSED_TEST_NODE=tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_multistream_atomic_stays_in_lane_envelope
 SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
@@ -263,24 +263,28 @@ PY
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
 RUN_LABELS=(
-  canonical_1
-  atomic_1
-  atomic_2
-  canonical_2
+  canonical_serial_1
+  atomic_serial_1
+  atomic_multistream_1
+  canonical_multistream_1
+  canonical_multistream_2
+  atomic_multistream_2
+  atomic_serial_2
+  canonical_serial_2
 )
-RUN_WORKERS=(0 0 0 0)
-RUN_SINGLE_LANE=(0 0 0 0)
-RUN_CANONICAL=(1 0 0 1)
+RUN_WORKERS=(0 0 8 8 8 8 0 0)
+RUN_SINGLE_LANE=(0 0 0 0 0 0 0 0)
+RUN_NATIVE_ATOMIC=(0 1 1 0 0 1 1 0)
 test "${#RUN_LABELS[@]}" -eq "${#RUN_WORKERS[@]}"
 test "${#RUN_LABELS[@]}" -eq "${#RUN_SINGLE_LANE[@]}"
-test "${#RUN_LABELS[@]}" -eq "${#RUN_CANONICAL[@]}"
-printf 'order\tlabel\tworkers\tsingle_lane_canonical\tcanonical_reduction\tnsys_base\n' \
+test "${#RUN_LABELS[@]}" -eq "${#RUN_NATIVE_ATOMIC[@]}"
+printf 'order\tlabel\tworkers\tsingle_lane_canonical\tnative_atomic_reduction\tnsys_base\n' \
   > "${PROVENANCE}/execution_order.tsv"
 for index in "${!RUN_LABELS[@]}"; do
   label=${RUN_LABELS[index]}
   workers=${RUN_WORKERS[index]}
   single_lane=${RUN_SINGLE_LANE[index]}
-  canonical=${RUN_CANONICAL[index]}
+  native_atomic=${RUN_NATIVE_ATOMIC[index]}
   run_root=${ROOT}/runs/${label}
   cache_root=${run_root}/jax_cache
   nsys_base=${NSIGHT}/${label}_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
@@ -288,14 +292,15 @@ for index in "${!RUN_LABELS[@]}"; do
   touch "${cache_root}/SAFE_TO_DELETE"
   printf '%d\t%s\t%s\t%s\t%s\t%s\n' \
     "$((index + 1))" "${label}" "${workers}" "${single_lane}" \
-    "${canonical}" "${nsys_base}" \
+    "${native_atomic}" "${nsys_base}" \
     >> "${PROVENANCE}/execution_order.tsv"
   command=(
     env
+    -u RECOVAR_RELION_COARSE_CANONICAL_REDUCTION
     "LD_PRELOAD=${CUSPARSE_LIBRARY}"
     "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"
     "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL=${single_lane}"
-    "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION=${canonical}"
+    "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=${native_atomic}"
     "JAX_COMPILATION_CACHE_DIR=${cache_root}"
     "${PIXI_PY}" -m scripts.run_vdam_late_iteration_profile
     --checkpoint-optimiser "${CHECKPOINT}"
@@ -351,7 +356,7 @@ import sys
 from pathlib import Path
 
 payload = {
-    "schema": "recovar.vdam_coarse_atomic_late_pair.v1",
+    "schema": "recovar.vdam_coarse_atomic_multistream_crossed.v1",
     "classification": "diagnostic_performance_only",
     "job_id": sys.argv[2],
     "git_head": sys.argv[3],
@@ -363,18 +368,31 @@ payload = {
     "input_manifest_sha256": sys.argv[9],
     "qualified_gpu_gate_root": sys.argv[10],
     "execution_order": [
-        "canonical_1",
-        "atomic_1",
-        "atomic_2",
-        "canonical_2",
+        "canonical_serial_1",
+        "atomic_serial_1",
+        "atomic_multistream_1",
+        "canonical_multistream_1",
+        "canonical_multistream_2",
+        "atomic_multistream_2",
+        "atomic_serial_2",
+        "canonical_serial_2",
     ],
-    "coarse_multistream_workers": [0, 0, 0, 0],
-    "single_lane_canonical": [False, False, False, False],
-    "canonical_reduction": [True, False, False, True],
-    "focused_test_node": "tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope",
+    "coarse_multistream_workers": [0, 0, 8, 8, 8, 8, 0, 0],
+    "single_lane_canonical": [False] * 8,
+    "native_atomic_reduction": [False, True, True, False, False, True, True, False],
+    "focused_test_node": "tests/unit/test_cuda_relion_fine_diff2.py::test_relion_coarse_vdam_multistream_atomic_stays_in_lane_envelope",
     "raw_image_cache": "off",
     "exact_local_bucket_radix": 4,
     "exact_local_physical_order_chunk_size": 0,
+    "acceptance_rule": {
+        "mathematically_equivalent_reduction_required": True,
+        "numeric_delta_within_repeat_envelope_required": True,
+        "nondirectional_signed_delta_required": True,
+        "repeat_growth_forbidden": True,
+        "discrete_decisions_preserved_required": True,
+        "basin_preserved_required": True,
+        "material_end_to_end_runtime_win_required": True,
+    },
     "science_promotion_allowed": False,
 }
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
