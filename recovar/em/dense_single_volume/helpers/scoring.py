@@ -4,6 +4,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from .dtype_policy import DensePrecisionPolicy
 
@@ -349,6 +350,174 @@ def _e_step_block_scores_windowed(
     )
     residuals = cross + norms[..., None]
     return -0.5 * residuals
+
+
+@partial(
+    jax.jit,
+    static_argnames=("n_images", "n_trans", "image_shape", "volume_shape"),
+)
+def _relion_coarse_gaussian_gemm_scores_jit(
+    projected_reference,
+    projected_reference_abs2,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+    *,
+    n_images: int,
+    n_trans: int,
+    image_shape: tuple[int, int],
+    volume_shape: tuple[int, int, int],
+):
+    """Score exact RELION coarse operands with the mature half-spectrum GEMMs."""
+
+    active = jnp.arange(n_images, dtype=jnp.int32) < jnp.asarray(
+        actual_image_count,
+        dtype=jnp.int32,
+    )
+    shifted_corrected = jnp.where(
+        active[:, None, None],
+        shifted_corrected,
+        jnp.zeros((), dtype=shifted_corrected.dtype),
+    )
+    pixel_weight = jnp.where(
+        active[:, None],
+        pixel_weight,
+        jnp.zeros((), dtype=pixel_weight.dtype),
+    )
+    initial_diff2 = jnp.where(
+        active,
+        initial_diff2,
+        jnp.zeros((), dtype=initial_diff2.dtype),
+    )
+
+    # RELION's exact coarse operands store the image divided by its pixel
+    # correction separately from corr_img * half_weight.  Absorb that
+    # image-specific weight on the image side, then reuse the same two GEMMs
+    # as ordinary dense EM.  Candidate axes remain [image, rotation,
+    # translation]; only the pixel reduction topology changes.
+    weighted_shifted = shifted_corrected * pixel_weight[:, None, :]
+    model_scores = _e_step_block_scores_windowed(
+        weighted_shifted.reshape(n_images * n_trans, -1),
+        jnp.zeros((n_images, 1), dtype=pixel_weight.dtype),
+        pixel_weight,
+        projected_reference,
+        projected_reference_abs2,
+        jnp.ones((projected_reference.shape[-1],), dtype=pixel_weight.dtype),
+        n_images,
+        n_trans,
+        int(projected_reference.shape[-1]),
+        image_shape,
+        volume_shape,
+    )
+
+    # The mature dense score omits the pose-independent image term.  Restore
+    # it here because the exact RELION coarse FFI reports absolute diff2 and
+    # the public log-evidence path deliberately applies no later offset.
+    image_power = (
+        shifted_corrected.real * shifted_corrected.real
+        + shifted_corrected.imag * shifted_corrected.imag
+    )
+    image_diff2 = jnp.asarray(0.5, dtype=pixel_weight.dtype) * jnp.sum(
+        image_power * pixel_weight[:, None, :],
+        axis=-1,
+    )
+    scores = model_scores - image_diff2[:, None, :] - initial_diff2[:, None, None]
+    return jnp.where(
+        active[:, None, None],
+        scores,
+        jnp.zeros((), dtype=scores.dtype),
+    )
+
+
+def _relion_coarse_gaussian_gemm_scores(
+    projected_reference,
+    projected_reference_abs2,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+    *,
+    image_shape,
+    volume_shape,
+):
+    """Validate and score one projection-once coarse Gaussian macro batch.
+
+    The arithmetic is mathematically equivalent to RELION's
+    ``0.5 * weight * |reference - shifted_image|**2 + initial_diff2``.
+    It intentionally reuses :func:`_e_step_block_scores_windowed` so both EM
+    and InitialModel exercise the mature half-spectrum GEMMs instead of a
+    second VDAM scoring implementation.  The different parallel reduction
+    order remains qualification-only and is not selected by default.
+    """
+
+    projected_reference = jnp.asarray(projected_reference)
+    projected_reference_abs2 = jnp.asarray(projected_reference_abs2)
+    shifted_corrected = jnp.asarray(shifted_corrected)
+    pixel_weight = jnp.asarray(pixel_weight)
+    initial_diff2 = jnp.asarray(initial_diff2)
+    if projected_reference.ndim != 2 or shifted_corrected.ndim != 3:
+        raise ValueError(
+            "coarse GEMM macro expects projected_reference=(R,F) and "
+            f"shifted_corrected=(B,T,F), got {projected_reference.shape} and "
+            f"{shifted_corrected.shape}",
+        )
+    n_images, n_trans, n_pixels = map(int, shifted_corrected.shape)
+    expected_projection_shape = (int(projected_reference.shape[0]), n_pixels)
+    if tuple(projected_reference.shape) != expected_projection_shape:
+        raise ValueError(
+            "coarse GEMM projection and image pixels must match, got "
+            f"{projected_reference.shape} and {shifted_corrected.shape}",
+        )
+    if tuple(projected_reference_abs2.shape) != expected_projection_shape:
+        raise ValueError(
+            "coarse GEMM projection abs2 must match the projection, got "
+            f"{projected_reference_abs2.shape} and {projected_reference.shape}",
+        )
+    if tuple(pixel_weight.shape) != (n_images, n_pixels):
+        raise ValueError(
+            "coarse GEMM pixel_weight must have shape "
+            f"({n_images}, {n_pixels}), got {pixel_weight.shape}",
+        )
+    if tuple(initial_diff2.shape) != (n_images,):
+        raise ValueError(
+            "coarse GEMM initial_diff2 must have one value per image, got "
+            f"{initial_diff2.shape}",
+        )
+    if projected_reference.dtype != shifted_corrected.dtype:
+        raise TypeError(
+            "coarse GEMM projection and shifted images must share a complex "
+            f"dtype, got {projected_reference.dtype} and {shifted_corrected.dtype}",
+        )
+    expected_real_dtype = jnp.asarray(projected_reference.real).dtype
+    if (
+        projected_reference_abs2.dtype != expected_real_dtype
+        or pixel_weight.dtype != expected_real_dtype
+        or initial_diff2.dtype != expected_real_dtype
+    ):
+        raise TypeError(
+            "coarse GEMM abs2, pixel weights, and initial diff2 must use the "
+            f"projection's real dtype {expected_real_dtype}",
+        )
+    if not isinstance(actual_image_count, jax.core.Tracer):
+        actual_count = int(np.asarray(actual_image_count))
+        if actual_count < 0 or actual_count > n_images:
+            raise ValueError(
+                "coarse GEMM actual_image_count must be in "
+                f"[0, {n_images}], got {actual_count}",
+            )
+    return _relion_coarse_gaussian_gemm_scores_jit(
+        projected_reference,
+        projected_reference_abs2,
+        shifted_corrected,
+        pixel_weight,
+        initial_diff2,
+        actual_image_count,
+        n_images=n_images,
+        n_trans=n_trans,
+        image_shape=tuple(int(value) for value in image_shape),
+        volume_shape=tuple(int(value) for value in volume_shape),
+    )
 
 
 @partial(jax.jit, static_argnums=(5, 6, 7, 8))

@@ -19,6 +19,7 @@ from recovar.em.dense_single_volume.helpers.projection import compute_projection
 from recovar.em.dense_single_volume.helpers.scoring import (
     _e_step_block_scores,
     _e_step_block_scores_windowed,
+    _relion_coarse_gaussian_gemm_scores,
     _update_logsumexp,
 )
 from recovar.utils.nvtx_shim import nvtx
@@ -51,6 +52,7 @@ _COARSE_SELECTOR_WRAPPER_TARGETS = {
         "cuda_relion_coarse_diff2_projector_multistream_f32"
     ),
 }
+_COARSE_GAUSSIAN_GEMM_MACRO_ENV = "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO"
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
@@ -587,6 +589,28 @@ def _validate_coarse_selector_audit(audit: dict) -> dict:
     return normalized
 
 
+def _coarse_gaussian_gemm_macro_enabled(*, default: bool = False) -> bool:
+    """Whether one coarse projection feeds the shared multi-image GEMMs.
+
+    This changes only the parallel pixel-reduction topology, but that can move
+    float32 low bits.  Keep it default-off until the same-H100 trajectory and
+    end-to-end runtime gates establish stable numerical noise and a material
+    speedup.
+    """
+
+    token = os.environ.get(
+        _COARSE_GAUSSIAN_GEMM_MACRO_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_COARSE_GAUSSIAN_GEMM_MACRO_ENV}={token!r}",
+    )
+
+
 def _k1_coarse_fused_projector_supports_padding(padding_factor: int) -> bool:
     """Whether the fused CUDA projector implements this RELION padding."""
 
@@ -887,6 +911,38 @@ def _dense_projection_scale(image_shape) -> float:
     if scale is None:
         raise ValueError(f"Unsupported RECOVAR_DENSE_MEANS_SCALE={token!r}")
     return scale
+
+
+def _score_relion_coarse_gaussian_gemm_macro(
+    project_block_once,
+    class_index,
+    mean_for_proj,
+    rotations_block,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+    *,
+    image_shape,
+    volume_shape,
+):
+    """Project once, then score every physical image lane through shared GEMMs."""
+
+    projected_reference, projected_reference_abs2 = project_block_once(
+        class_index,
+        mean_for_proj,
+        rotations_block,
+    )
+    return _relion_coarse_gaussian_gemm_scores(
+        projected_reference,
+        projected_reference_abs2,
+        shifted_corrected,
+        pixel_weight,
+        initial_diff2,
+        actual_image_count,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+    )
 
 
 class ComplementSignificantSampleIndices(NamedTuple):
@@ -2727,6 +2783,26 @@ def _compute_k_class_significance_batched(
             f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1 and "
             f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV}=1",
         )
+    coarse_gaussian_gemm_macro_requested = _coarse_gaussian_gemm_macro_enabled()
+    coarse_gaussian_gemm_macro_enabled = bool(
+        coarse_gaussian_gemm_macro_requested and score_mode == "gaussian"
+    )
+    if coarse_gaussian_gemm_macro_enabled:
+        if not exact_coarse_operands_enabled:
+            raise ValueError(
+                f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1 requires "
+                f"{_K1_RELION_EXACT_COARSE_OPERANDS_ENV}=1",
+            )
+        if not coarse_fused_projector_enabled:
+            raise ValueError(
+                f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1 requires the accepted "
+                f"{_K1_COARSE_FUSED_PROJECTOR_ENV}=1 projection boundary",
+            )
+        if coarse_multistream_enabled:
+            raise ValueError(
+                f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1 conflicts with "
+                f"{_K1_COARSE_MULTISTREAM_WORKERS_ENV}=8",
+            )
     coarse_gaussian_native_texture_requested = (
         _k1_coarse_gaussian_native_texture_enabled(
             # Keep the fused texture scorer as an explicit diagnostic.  The
@@ -2954,6 +3030,15 @@ def _compute_k_class_significance_batched(
                     "Opt-in shared K=1 coarse multistream dispatcher enabled: "
                     "workers=%d actual image rows only",
                     coarse_multistream_worker_count,
+                )
+            if coarse_gaussian_gemm_macro_enabled:
+                logger.warning(
+                    "Opt-in shared coarse projection-once/GEMM macro enabled: "
+                    "classes=%d rotations=%d image_lanes=%d translations=%d",
+                    n_classes,
+                    n_rot,
+                    int(image_batch_size),
+                    n_trans,
                 )
         if coarse_gaussian_native_texture_enabled:
             from recovar.em.dense_single_volume.helpers.projection import (
@@ -3226,7 +3311,42 @@ def _compute_k_class_significance_batched(
         "prehalf_selected_calls": 0,
     }
 
+
+    def _project_coarse_gemm_block_once(class_index, mean_for_proj, rots_b):
+        del mean_for_proj
+        return _compute_relion_projector_projections_block(
+            relion_projector_half[class_index],
+            rots_b,
+            image_shape,
+            r_max=int(relion_projector_r_max),
+            padding_factor=int(projection_padding_factor),
+            centered_rows=True,
+            dense_scale=True,
+            projector_output_size=int(score_size),
+            pixel_indices=coarse_gaussian_score_indices,
+            relion_texture_interp=True,
+            # InitialModel scores RELION's complete square crop, including
+            # current-box corners that remain inside PPref's model radius.
+            mask_current_image_disk=False,
+        )
+
     def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+        if coarse_gaussian_gemm_macro_enabled:
+            return _score_relion_coarse_gaussian_gemm_macro(
+                _project_coarse_gemm_block_once,
+                class_index,
+                mean_for_proj,
+                rots_b,
+                jnp.asarray(
+                    coarse_gaussian_shifted_corrected,
+                    dtype=jnp.complex64,
+                ),
+                jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
+                jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
+                actual_batch_size,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+            )
         if coarse_fused_projector_enabled:
             from recovar import cuda_backproject
 
