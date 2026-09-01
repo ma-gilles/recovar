@@ -223,6 +223,14 @@ The native full run is admitted to the registry only with immutable inputs,
 commands/environment, source tree, Slurm allocation, logs, wall/HBM/RSS, mask,
 shellwise curves, and a predeclared pass policy.
 
+The bounded 10k InitialModel precursor is now runnable for EMPIAR-10076 and
+EMPIAR-10345 through `scripts/launch_em_real_kclass_initialmodel_slurm.py`; see
+`real_kclass_initialmodel_pairs.md`. It checks iterations 0--8, class
+permutation, assignment agreement, collapse, source/input provenance, and
+matched one-GPU performance. Because InitialModel does not emit independently
+refined half maps, this precursor does not satisfy the native full-run
+admission rule above.
+
 ## Runnable now versus planned-only
 
 The current launcher can run the exact 29-case panel, including the three
@@ -237,8 +245,9 @@ implementation before they are executable as a single suite:
 - fail-closed permutation/duplicate-map/controller-corruption fixtures beyond
   the existing evaluator unit tests;
 - the independent exactly generated 100k/256 release fixture; and
-- matched K=4 launchers for EMPIAR-10076 and EMPIAR-10345 (and optional
-  EMPIAR-10073).
+- matched Class3D/gold-standard-half-map K=4 launchers for EMPIAR-10076 and
+  EMPIAR-10345 (and optional EMPIAR-10073); the InitialModel-only diagnostic is
+  runnable but cannot replace this gate.
 
 These are deliberately documented as pending execution infrastructure, not as
 completed coverage.
