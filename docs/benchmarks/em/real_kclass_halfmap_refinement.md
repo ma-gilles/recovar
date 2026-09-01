@@ -1,9 +1,10 @@
 # Real-data K=4 independent-half refinement
 
-This is the runnable Tier-6 harness for genuine EMPIAR-10076 K=4 half-map
-evidence. It is execution infrastructure, not a completed benchmark result.
-No entry may be added to `entries/` until the Slurm run completes, the audit
-passes, and the resulting artifacts are sealed.
+This is a runnable, bounded component of the Tier-6 harness for genuine
+EMPIAR-10076 K=4 half-map evidence. It is execution infrastructure, not a
+completed benchmark result or the complete Tier-6 matrix. No entry may be
+added to `entries/` until the Slurm run completes, the audit passes, and the
+resulting artifacts are sealed.
 
 ## Why four processes are required
 
@@ -50,8 +51,9 @@ instrumented RELION executable have frozen SHA-256 values in the launcher.
 The executable, RELION base commit/tree, and exact tracked instrumentation
 diff are sealed separately; no build-system attestation cryptographically
 binds that executable to that source, and the report states this limitation.
-The exact 41-line tracked patch is copied into each run's `provenance/`
-directory and included in the in-job SHA-256 verification manifest.
+The exact tracked patch is copied into each run's `provenance/` directory and
+included in the in-job SHA-256 verification manifest; its content hash, rather
+than a presentation-dependent line count, is the identity.
 Every small input is rehashed while preparing the run. The particle stack is
 size-checked during preparation and fully rehashed inside the Slurm job before
 either engine starts.
@@ -75,14 +77,17 @@ Submission is an explicit separate action:
 pixi run python -m scripts.launch_em_real_kclass_halfmaps_slurm \
   --profile shared200-128 \
   --seed 42001 \
-  --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_shared200_seed42001_<commit>_20260901 \
+  --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_shared200_seed42001_<commit>_submitted_20260901 \
   --submit
 ```
 
 Immediately after each `sbatch`, the launcher records `scontrol show job -o`
 and requires exactly one requested GPU, a nonexclusive allocation, and exact
-`ReqTRES == AllocTRES` whenever Slurm has already allocated the job. If either
-new job fails this check, both newly submitted jobs are cancelled.
+`ReqTRES == AllocTRES` whenever Slurm has already allocated the job. At the
+start of both the setup job and the qualification job, it repeats the exact
+allocation check and seals the result before any build or science command. If
+either new job fails the submission-time check, both newly submitted jobs are
+cancelled; a job-start mismatch fails that job before work begins.
 
 Because roots are immutable, do not add `--submit` to an already prepared dry
 root. Prepare a new root. Run seeds 42001, 42002, and 42003 for the 128 pilot;
@@ -92,31 +97,44 @@ only after those are stable, run seeds 42001 and 42002 at 256.
 
 `scripts/audit_em_real_kclass_halfmaps.py` requires:
 
-- exact input order, split labels, disjointness, complete union, input hashes,
-  commands, clean source commit, nonexclusive one-GPU Slurm allocation, and a
-  single physical GPU UUID;
+- exact input order, split labels validated against the immutable origin STAR
+  and source-index array, disjointness, complete union, input hashes, commands,
+  clean source commit, exact setup and qualification nonexclusive one-GPU
+  allocations, and a single physical GPU UUID;
 - exactly four numbered classes from the last expected iteration in each
   independent process;
 - byte-identical RECOVAR same-process replicas, which are explicitly discarded
-  as non-half-map products, plus no byte-identical maps across the independent
+  as non-half-map products, no duplicate class maps within an engine/half, no
+  extra final RECOVAR class IDs, and no byte-identical maps across independent
   processes;
 - one proper rigid transform per four-class map set, fitted to a label-invariant
-  equal-weight ensemble, followed by Hungarian class matching to RELION half 1;
+  equal-weight ensemble, followed by a uniquely optimal Hungarian class match
+  to RELION half 1 with the exact best-to-second-best objective margin recorded;
 - one equal-weight, engine/half/class-symmetric common soft mask made from the
   nonnegative voxelwise RMS envelope of all 16 aligned unit-RMS maps, stored
   and hashed; and
 - assignments joined by `rlnImageName`, not row position, with per-class
   populations and significant-support summaries.
 
+The manifest freezes the fit shell, alignment search orders, interpolation,
+crossing rule, and every mask parameter. The hashed run script passes every
+one of these values explicitly to the auditor, so rerunning the audit with a
+post-hoc parameter change fails closed.
+
 For every matched class it writes shellwise masked and unmasked within-engine
 half-map FSC, cross-engine half-1/half-2/merged FSC, normalized FSC-AUC, and
-0.143/0.5 crossing resolutions. The acceptance curves use proper-rigid
+0.143/0.5 crossing diagnostics. The acceptance curves use proper-rigid
 registration because a shared global coordinate-frame drift is scientifically
 irrelevant; a single transform is shared by all four classes in each set.
 Raw frozen-frame curves are retained as unmasked diagnostics and cannot rescue
 an acceptance failure. A 0.143 crossing beyond the measured band is represented
 explicitly rather than converted into an apparent finite resolution; when only
 RELION remains beyond the band, the resolution comparison fails closed.
+
+The common-mask curves are ordinary, uncorrected masked FSC: the harness does
+not perform high-resolution noise substitution or phase-randomization
+correction. They are labeled as relative RECOVAR-versus-RELION diagnostics and
+must not be cited as absolute-resolution claims.
 
 The prospective real-data gate is the policy already frozen in
 `k4_validation_matrix.md`: RECOVAR common-mask 0.143 resolution may not trail
@@ -128,3 +146,10 @@ class may collapse.
 
 An audit failure remains a result to diagnose, but it is not admitted as an
 accepted registry entry. Masked FSC cannot rescue an unmasked failure.
+
+This bounded launcher currently reports hard-assignment agreement,
+populations, significant-support summaries, maps, FSC, and resources. It does
+not yet report Pmax or pose/translation agreement, and one completed seed is
+not a seed-stability result. Those metrics and the predeclared three-seed
+aggregate remain required before this harness can satisfy the full Tier-6
+admission checklist.

@@ -29,6 +29,8 @@ from recovar.utils import helpers
 from scripts.audit_em_real_kclass_halfmaps import (
     EXPECTED_THRESHOLDS,
     MANIFEST_SCHEMA,
+    expected_analysis_policy,
+    sha256_ints,
     sha256_strings,
 )
 from scripts.run_em_kclass_robustness_matrix_slurm import (
@@ -197,6 +199,14 @@ def _particle_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
     return payload["optics"].copy(), payload["particles"].copy()
 
 
+def _image_stack_index(value: str) -> int:
+    fields = str(value).split("@", 1)
+    _require(len(fields) == 2 and fields[0].isdigit(), f"invalid RELION image identity: {value}")
+    one_based = int(fields[0])
+    _require(one_based >= 1, f"RELION image identity is not one-based: {value}")
+    return one_based - 1
+
+
 def _selected_particles(profile: Profile, particles: pd.DataFrame) -> pd.DataFrame:
     names = particles["rlnImageName"].astype(str)
     _require(names.is_unique, "source rlnImageName identities are not unique")
@@ -242,9 +252,33 @@ def _prepare_references(root: Path, profile: Profile) -> tuple[list[Path], Path]
     return output_paths, star_path
 
 
-def _write_particle_inputs(root: Path, profile: Profile) -> tuple[list[dict[str, Any]], list[str]]:
+def _write_particle_inputs(
+    root: Path,
+    profile: Profile,
+) -> tuple[list[dict[str, Any]], list[str], list[int]]:
     optics, particles = _particle_tables()
     selected = _selected_particles(profile, particles)
+    source_indices_raw = np.load(SOURCE_FIXTURE / "source_indices.npy", allow_pickle=False)
+    _require(
+        source_indices_raw.ndim == 1
+        and np.issubdtype(source_indices_raw.dtype, np.integer)
+        and source_indices_raw.size == len(particles),
+        "immutable source indices do not match the source particle table",
+    )
+    source_indices = np.asarray(source_indices_raw, dtype=np.int64)
+    origin_image_indices = [_image_stack_index(str(value)) for value in particles["rlnImageName"]]
+    _require(
+        all(value >= 0 for value in origin_image_indices)
+        and len(origin_image_indices) == len(set(origin_image_indices)),
+        "source STAR has invalid or duplicate image-stack indices",
+    )
+    _require(
+        origin_image_indices == source_indices.tolist(),
+        "source STAR image-stack indices differ from immutable source-index order",
+    )
+    source_position = {
+        image_index: position for position, image_index in enumerate(origin_image_indices)
+    }
     source_apix = float(optics["rlnImagePixelSize"].iloc[0])
     source_grid = int(optics["rlnImageSize"].iloc[0])
     _require(source_grid == 256, "source fixture image grid changed")
@@ -255,6 +289,10 @@ def _write_particle_inputs(root: Path, profile: Profile) -> tuple[list[dict[str,
         f"{str(value).split('@', 1)[0]}@{stack_name}" for value in selected["rlnImageName"]
     ]
     selected_names = selected["rlnImageName"].astype(str).tolist()
+    selected_source_indices = [
+        int(source_indices[source_position[_image_stack_index(value)]])
+        for value in selected_names
+    ]
     selected_star = root / "data" / "selected_particles.star"
     selected_star.parent.mkdir(parents=True, exist_ok=True)
     starfile.write({"optics": optics, "particles": selected}, selected_star, overwrite=True)
@@ -285,7 +323,7 @@ def _write_particle_inputs(root: Path, profile: Profile) -> tuple[list[dict[str,
                 "recovar_intermediates_dir": str((recovar_dir / "intermediates").resolve()),
             }
         )
-    return halves, selected_names
+    return halves, selected_names, selected_source_indices
 
 
 def build_relion_command(
@@ -522,7 +560,19 @@ def render_run_script(
     seed: int,
     mpi_ranks: int,
     pool: int,
+    analysis_policy: Mapping[str, Any],
 ) -> str:
+    _require(
+        analysis_policy == expected_analysis_policy(profile.grid_size),
+        "run script analysis policy differs from the frozen profile policy",
+    )
+    alignment_policy = analysis_policy["alignment"]
+    fsc_policy = analysis_policy["fsc"]
+    mask_policy = analysis_policy["common_mask"]
+    refine_order_flags = "".join(
+        f"  --refine-healpix-order {int(value)} \\\n"
+        for value in alignment_policy["refine_healpix_orders"]
+    )
     cuda_lib = root / "build" / "cuda" / "libcuda_backproject.so"
     preamble = job_preamble(
         scratch_dir=root,
@@ -714,7 +764,18 @@ done
 
 "${{PIXI_PY}}" -m scripts.audit_em_real_kclass_halfmaps \
   --manifest "${{MANIFEST}}" \
-  --output-dir "${{ROOT}}/audit"
+  --output-dir "${{ROOT}}/audit" \
+  --fit-max-shell {int(alignment_policy["fit_max_shell"])} \
+  --crossing-consecutive-shells {int(fsc_policy["crossing_consecutive_shells"])} \
+  --phase-randomization-corrected {str(bool(fsc_policy["phase_randomization_corrected"])).lower()} \
+  --absolute-resolution-claim {str(bool(fsc_policy["absolute_resolution_claim"])).lower()} \
+  --coarse-healpix-order {int(alignment_policy["coarse_healpix_order"])} \
+{refine_order_flags}  --interpolation-order {int(alignment_policy["interpolation_order"])} \
+  --mask-threshold {q(str(mask_policy["threshold"]))} \
+  --mask-lowpass-sigma {int(mask_policy["lowpass_sigma"])} \
+  --mask-extend {int(mask_policy["extend"])} \
+  --mask-soft-edge {int(mask_policy["soft_edge"])} \
+  --mask-cleanup {str(bool(mask_policy["cleanup"])).lower()}
 """
 
 
@@ -779,8 +840,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     if profile.selection == "shared200":
         _verify_canonical(SHARED200_SELECTION)
     stack_hash = _verify_canonical(STACKS[profile.grid_size])
+    analysis_policy = expected_analysis_policy(profile.grid_size)
     reference_paths, reference_star = _prepare_references(root, profile)
-    halves, selected_names = _write_particle_inputs(root, profile)
+    halves, selected_names, selected_source_indices = _write_particle_inputs(root, profile)
 
     run_python = root / "venv" / "bin" / "python"
     for row in halves:
@@ -823,6 +885,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         cuda_module=args.cuda_module,
         relion_src_dir=args.relion_source_dir.resolve(),
         expected_commit=str(source["commit"]),
+        setup_allocation_record=root / "provenance" / "setup_slurm_allocation.json",
     )
     run_script = root / "jobs" / "run_k4_independent_halfmaps.sh"
     run_script.write_text(
@@ -839,6 +902,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             seed=args.seed,
             mpi_ranks=args.mpi_ranks,
             pool=args.pool,
+            analysis_policy=analysis_policy,
         )
     )
     run_script.chmod(0o755)
@@ -910,13 +974,31 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "final_all_data_after_max_iter": False,
         },
         "thresholds": EXPECTED_THRESHOLDS,
+        "analysis_policy": analysis_policy,
         "particle_selection": {
             "mode": profile.selection,
             "source_particles_star": str((root / "data" / "selected_particles.star").resolve()),
             "origin_particles_star": str((SOURCE_FIXTURE / "particles.star").resolve()),
+            "origin_particles_star_sha256": CANONICAL_HASHES[
+                str(SOURCE_FIXTURE / "particles.star")
+            ],
+            "source_indices_npy": str((SOURCE_FIXTURE / "source_indices.npy").resolve()),
+            "source_indices_sha256": CANONICAL_HASHES[
+                str(SOURCE_FIXTURE / "source_indices.npy")
+            ],
+            "selection_source_json": (
+                str(SHARED200_SELECTION.resolve()) if profile.selection == "shared200" else None
+            ),
+            "selection_source_sha256": (
+                CANONICAL_HASHES[str(SHARED200_SELECTION)]
+                if profile.selection == "shared200"
+                else None
+            ),
             "selected_particles_star": str((root / "data" / "selected_particles.star").resolve()),
             "selected_image_names": selected_names,
             "ordered_image_names_sha256": sha256_strings(selected_names),
+            "selected_source_indices": selected_source_indices,
+            "ordered_source_indices_sha256": sha256_ints(selected_source_indices),
         },
         "halves": halves,
         "input_artifacts": input_artifacts,
@@ -932,13 +1014,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "direct_rehash_max_bytes": 1_000_000_000,
             "input_sha256_manifest": str(inputs_sha.resolve()),
             "input_sha256_check_log": str((root / "provenance" / "input_sha256_check.txt").resolve()),
+            "setup_slurm_allocation_json": str(
+                (root / "provenance" / "setup_slurm_allocation.json").resolve()
+            ),
             "slurm_allocation_json": str((root / "provenance" / "slurm_allocation.json").resolve()),
             "setup_script": str(setup_script.resolve()),
             "setup_script_sha256": sha256_file(setup_script),
             "run_script": str(run_script.resolve()),
             "run_script_sha256": sha256_file(run_script),
             "setup_base_pixi_python": str(base_pixi_python()),
-            "runtime_root_policy": str(DEFAULT_RUNTIME_ROOT / "real_k4_halfmap_<profile>_<job_id>"),
+            "runtime_root_policy": str(root / "runtime" / "<engine>_half<half>_<job_id>"),
         },
         "claim_boundary": {
             "independent_halfmaps": True,

@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import itertools
 import json
 import math
 import re
@@ -31,8 +32,9 @@ from scripts.collect_em_k1_science_diagnostics import (
     fit_proper_rigid_transform,
 )
 
-SCHEMA = "recovar.em_real_kclass_independent_halfmap_audit.v1"
-MANIFEST_SCHEMA = "recovar.em_real_kclass_independent_halfmap_submission.v1"
+SCHEMA = "recovar.em_real_kclass_independent_halfmap_audit.v2"
+MANIFEST_SCHEMA = "recovar.em_real_kclass_independent_halfmap_submission.v2"
+ANALYSIS_POLICY_SCHEMA = "recovar.em_real_kclass_halfmap_analysis_policy.v1"
 N_CLASSES = 4
 EXPECTED_THRESHOLDS = {
     "fsc_threshold": 1.0 / 7.0,
@@ -75,6 +77,74 @@ def sha256_strings(values: Sequence[str]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def sha256_ints(values: Sequence[int]) -> str:
+    return sha256_strings([str(int(value)) for value in values])
+
+
+def expected_analysis_policy(grid_size: int) -> dict[str, Any]:
+    """Return the only accepted, manifest-frozen analysis policy."""
+
+    _require(grid_size // 2 - 1 >= 32, "analysis policy requires Fourier shell 32")
+    return {
+        "schema": ANALYSIS_POLICY_SCHEMA,
+        "alignment": {
+            "fit_max_shell": 32,
+            "coarse_healpix_order": 1,
+            "refine_healpix_orders": [2],
+            "interpolation_order": 1,
+        },
+        "fsc": {
+            "crossing_consecutive_shells": 3,
+            "phase_randomization_corrected": False,
+            "absolute_resolution_claim": False,
+        },
+        "common_mask": {
+            "construction": "nonnegative_voxelwise_rms_envelope",
+            "threshold": "auto",
+            "lowpass_sigma": max(2, int(math.ceil(grid_size / 128))),
+            "extend": max(1, int(math.ceil(grid_size / 32))),
+            "soft_edge": max(1, int(math.ceil(grid_size / 32))),
+            "cleanup": True,
+        },
+    }
+
+
+def validate_analysis_policy(
+    manifest: Mapping[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Reject post-hoc analysis choices and bind the CLI to the manifest."""
+
+    expected = expected_analysis_policy(int(manifest["config"]["grid_size"]))
+    _require(manifest.get("analysis_policy") == expected, "manifest analysis_policy changed")
+    observed = {
+        "schema": ANALYSIS_POLICY_SCHEMA,
+        "alignment": {
+            "fit_max_shell": int(args.fit_max_shell),
+            "coarse_healpix_order": int(args.coarse_healpix_order),
+            "refine_healpix_orders": [int(value) for value in args.refine_healpix_order],
+            "interpolation_order": int(args.interpolation_order),
+        },
+        "fsc": {
+            "crossing_consecutive_shells": int(args.crossing_consecutive_shells),
+            "phase_randomization_corrected": (
+                str(args.phase_randomization_corrected).lower() == "true"
+            ),
+            "absolute_resolution_claim": str(args.absolute_resolution_claim).lower() == "true",
+        },
+        "common_mask": {
+            "construction": "nonnegative_voxelwise_rms_envelope",
+            "threshold": str(args.mask_threshold),
+            "lowpass_sigma": int(args.mask_lowpass_sigma),
+            "extend": int(args.mask_extend),
+            "soft_edge": int(args.mask_soft_edge),
+            "cleanup": str(args.mask_cleanup).lower() == "true",
+        },
+    }
+    _require(observed == expected, "audit CLI analysis policy differs from frozen manifest policy")
+    return expected
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -110,24 +180,124 @@ def _column(table, name: str) -> np.ndarray:
     raise AuditError(f"particle table is missing {name}")
 
 
-def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate exact order, disjointness, union, and frozen subset labels."""
+def _image_stack_index(value: str) -> int:
+    fields = str(value).split("@", 1)
+    _require(len(fields) == 2 and fields[0].isdigit(), f"invalid RELION image identity: {value}")
+    one_based = int(fields[0])
+    _require(one_based >= 1, f"RELION image identity is not one-based: {value}")
+    return one_based - 1
 
-    selected = [str(value) for value in manifest["particle_selection"]["selected_image_names"]]
+
+def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate generated half STARs against immutable identities and labels."""
+
+    selection = manifest["particle_selection"]
+    selected = [str(value) for value in selection["selected_image_names"]]
     _require(len(selected) == len(set(selected)), "selected particle identities are not unique")
     _require(
-        sha256_strings(selected) == manifest["particle_selection"]["ordered_image_names_sha256"],
+        sha256_strings(selected) == selection["ordered_image_names_sha256"],
         "selected particle-order hash mismatch",
     )
-    source_star = Path(manifest["particle_selection"]["source_particles_star"])
-    _require(source_star.is_file(), f"missing frozen source particle STAR: {source_star}")
+
+    origin_star = Path(selection["origin_particles_star"])
+    source_indices_path = Path(selection["source_indices_npy"])
+    _require(origin_star.is_file(), f"missing immutable origin particle STAR: {origin_star}")
+    _require(source_indices_path.is_file(), f"missing immutable source indices: {source_indices_path}")
+    _require(
+        sha256_file(origin_star) == selection["origin_particles_star_sha256"],
+        "immutable origin particle STAR hash mismatch",
+    )
+    _require(
+        sha256_file(source_indices_path) == selection["source_indices_sha256"],
+        "immutable source-index hash mismatch",
+    )
+    origin_table = _particle_table(origin_star)
+    origin_names = [str(value) for value in _column(origin_table, "rlnImageName")]
+    origin_subsets = np.asarray(_column(origin_table, "rlnRandomSubset"), dtype=np.int64)
+    source_indices_raw = np.load(source_indices_path, allow_pickle=False)
+    _require(
+        source_indices_raw.ndim == 1 and np.issubdtype(source_indices_raw.dtype, np.integer),
+        "immutable source indices must be a one-dimensional integer array",
+    )
+    source_indices = np.asarray(source_indices_raw, dtype=np.int64)
+    _require(len(origin_names) == source_indices.size, "origin STAR/source-index lengths differ")
+    _require(len(origin_names) == len(set(origin_names)), "origin particle identities are not unique")
+    _require(len(set(source_indices.tolist())) == source_indices.size, "immutable source indices are not unique")
+    _require(np.all(source_indices >= 0), "immutable source indices contain negative values")
+    _require(np.all(np.isin(origin_subsets, (1, 2))), "origin STAR has invalid random-subset labels")
+    origin_stack_indices = [_image_stack_index(name) for name in origin_names]
+    _require(
+        len(origin_stack_indices) == len(set(origin_stack_indices)),
+        "origin STAR image-stack indices are not unique",
+    )
+    _require(
+        origin_stack_indices == source_indices.tolist(),
+        "origin STAR image-stack indices differ from immutable source-index order",
+    )
+    origin_position = {image_index: position for position, image_index in enumerate(origin_stack_indices)}
+
+    selected_stack_indices = [_image_stack_index(name) for name in selected]
+    _require(
+        len(selected_stack_indices) == len(set(selected_stack_indices)),
+        "selected image-stack indices are not unique",
+    )
+    _require(
+        set(selected_stack_indices).issubset(origin_position),
+        "selected identities are absent from immutable origin STAR",
+    )
+    selected_positions = [origin_position[index] for index in selected_stack_indices]
+    _require(selected_positions == sorted(selected_positions), "selected identities changed immutable origin order")
+    selection_mode = str(selection["mode"])
+    if selection_mode == "full10k":
+        _require(
+            selected_positions == list(range(len(origin_names))),
+            "full10k selection does not contain every immutable origin row",
+        )
+    elif selection_mode == "shared200":
+        selection_path = Path(selection["selection_source_json"])
+        _require(selection_path.is_file(), f"missing immutable selection JSON: {selection_path}")
+        _require(
+            sha256_file(selection_path) == selection["selection_source_sha256"],
+            "immutable selection JSON hash mismatch",
+        )
+        payload = json.loads(selection_path.read_text())
+        _require(payload.get("same_visited_particle_ids") is True, "shared200 selection was not admitted")
+        requested = {_image_stack_index(str(value)) for value in payload["visited_particle_ids"]}
+        expected_selected = [value for value in origin_stack_indices if value in requested]
+        _require(len(requested) == len(expected_selected), "shared200 identities are absent from origin STAR")
+        _require(
+            selected_stack_indices == expected_selected,
+            "selected identities differ from immutable shared200 selection",
+        )
+    else:
+        raise AuditError(f"unknown particle-selection mode: {selection_mode}")
+    expected_selected_source_indices = source_indices[selected_positions].tolist()
+    declared_selected_source_indices = [int(value) for value in selection["selected_source_indices"]]
+    _require(
+        declared_selected_source_indices == expected_selected_source_indices,
+        "selected source-index sequence changed",
+    )
+    _require(
+        sha256_ints(declared_selected_source_indices) == selection["ordered_source_indices_sha256"],
+        "selected source-index order hash mismatch",
+    )
+    expected_subsets = origin_subsets[selected_positions]
+
+    source_star = Path(selection["source_particles_star"])
+    _require(source_star.is_file(), f"missing generated selected particle STAR: {source_star}")
     source_table = _particle_table(source_star)
     source_names = [str(value) for value in _column(source_table, "rlnImageName")]
     source_subsets = np.asarray(_column(source_table, "rlnRandomSubset"), dtype=np.int64)
-    _require(len(source_names) == len(set(source_names)), "source particle identities are not unique")
-    _require(np.all(np.isin(source_subsets, (1, 2))), "source STAR has invalid random-subset labels")
-    subset_by_name = dict(zip(source_names, source_subsets, strict=True))
-    _require(set(selected).issubset(subset_by_name), "selected identities are absent from source STAR")
+    _require(source_names == selected, "generated selected STAR changed selected order or identities")
+    _require(
+        [_image_stack_index(name) for name in source_names] == selected_stack_indices,
+        "generated selected STAR changed image-stack indices",
+    )
+    _require(
+        np.array_equal(source_subsets, expected_subsets),
+        "generated selected STAR changed immutable random-subset labels",
+    )
+
     halves: list[list[str]] = []
     for expected_half, row in enumerate(manifest["halves"], start=1):
         _require(int(row["half"]) == expected_half, "manifest halves are not ordered 1,2")
@@ -146,10 +316,14 @@ def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
             np.array_equal(subsets, np.full(len(names), expected_half, dtype=np.int64)),
             f"half-{expected_half} STAR has wrong rlnRandomSubset labels",
         )
-        expected_names = [name for name in selected if subset_by_name[name] == expected_half]
+        expected_names = [
+            name
+            for name, immutable_subset in zip(selected, expected_subsets, strict=True)
+            if int(immutable_subset) == expected_half
+        ]
         _require(
             names == expected_names,
-            f"half-{expected_half} STAR does not preserve frozen selected-source order",
+            f"half-{expected_half} STAR does not preserve immutable selected-source order and labels",
         )
         halves.append(names)
     _require(set(halves[0]).isdisjoint(halves[1]), "particle halves overlap")
@@ -163,7 +337,14 @@ def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "half_order_sha256": [sha256_strings(values) for values in halves],
         "disjoint": True,
         "complete_union": True,
-        "source_particles_star": str(source_star.resolve()),
+        "generated_selected_particles_star": str(source_star.resolve()),
+        "origin_particles_star": str(origin_star.resolve()),
+        "origin_particles_star_sha256": sha256_file(origin_star),
+        "source_indices_npy": str(source_indices_path.resolve()),
+        "source_indices_sha256": sha256_file(source_indices_path),
+        "selected_source_indices_sha256": sha256_ints(declared_selected_source_indices),
+        "selection_mode": selection_mode,
+        "random_subset_label_source": "immutable origin particle STAR",
     }
 
 
@@ -253,17 +434,29 @@ def validate_commands(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return {"exact_match": True, "commands": rows}
 
 
-def validate_slurm_allocation(manifest: Mapping[str, Any]) -> dict[str, Any]:
-    path = Path(manifest["provenance"]["slurm_allocation_json"])
-    _require(path.is_file(), f"missing Slurm allocation record: {path}")
+def _validate_slurm_allocation_record(path: Path, *, role: str) -> dict[str, Any]:
+    _require(path.is_file(), f"missing {role} Slurm allocation record: {path}")
     row = json.loads(path.read_text())
-    _require(row.get("under_slurm") is True, "qualification was not executed under Slurm")
-    _require(row.get("ReqTRES") == row.get("AllocTRES"), "Slurm ReqTRES != AllocTRES")
-    _require(int(row.get("requested_gpus", -1)) == 1, "qualification did not request exactly one GPU")
-    _require(int(row.get("allocated_gpus", -1)) == 1, "qualification did not allocate exactly one GPU")
-    _require(row.get("OverSubscribe") == "OK", "qualification was exclusive")
-    _require(str(row.get("job_id", "")), "Slurm job ID is missing")
+    _require(row.get("under_slurm") is True, f"{role} was not executed under Slurm")
+    _require(row.get("ReqTRES") == row.get("AllocTRES"), f"{role} Slurm ReqTRES != AllocTRES")
+    _require(int(row.get("requested_gpus", -1)) == 1, f"{role} did not request exactly one GPU")
+    _require(int(row.get("allocated_gpus", -1)) == 1, f"{role} did not allocate exactly one GPU")
+    _require(row.get("OverSubscribe") == "OK", f"{role} was exclusive")
+    _require(str(row.get("job_id", "")), f"{role} Slurm job ID is missing")
     return {**row, "path": str(path.resolve()), "sha256": sha256_file(path), "valid": True}
+
+
+def validate_slurm_allocation(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    provenance = manifest["provenance"]
+    return {
+        "setup": _validate_slurm_allocation_record(
+            Path(provenance["setup_slurm_allocation_json"]), role="setup job"
+        ),
+        "qualification": _validate_slurm_allocation_record(
+            Path(provenance["slurm_allocation_json"]), role="qualification job"
+        ),
+        "both_valid": True,
+    }
 
 
 def _latest_relion_maps(directory: Path, expected_iteration: int) -> list[Path]:
@@ -302,6 +495,16 @@ def _latest_recovar_combined_maps(
         observed_iterations[-1] == expected_iteration,
         f"RECOVAR stopped at iteration {observed_iterations[-1]}, expected {expected_iteration}",
     )
+    expected_final_keys = {
+        (expected_iteration, replica, class_id)
+        for replica in (1, 2)
+        for class_id in range(1, N_CLASSES + 1)
+    }
+    observed_final_keys = {key for key in grouped if key[0] == expected_iteration}
+    _require(
+        observed_final_keys == expected_final_keys,
+        "RECOVAR final numbered class topology has missing or extra class IDs",
+    )
     representatives: list[Path] = []
     duplicates: list[dict[str, Any]] = []
     for class_id in range(1, N_CLASSES + 1):
@@ -335,6 +538,17 @@ def _reject_cross_process_duplicates(paths_by_half: Sequence[Sequence[Path]], *,
     _require(
         not overlap,
         f"{engine} selected half processes share byte-identical maps; refusing false independent-half claim: {overlap}",
+    )
+
+
+def _reject_within_process_duplicates(paths: Sequence[Path], *, engine: str, half: int) -> None:
+    by_hash: dict[str, list[str]] = {}
+    for path in paths:
+        by_hash.setdefault(sha256_file(path), []).append(path.name)
+    duplicates = {digest: names for digest, names in by_hash.items() if len(names) > 1}
+    _require(
+        not duplicates,
+        f"{engine} half {half} contains byte-identical class maps: {duplicates}",
     )
 
 
@@ -417,50 +631,89 @@ def _pairwise_auc(calculator: ShellFscCalculator, lhs: Sequence[np.ndarray], rhs
     return scores
 
 
-def _hungarian_to_anchor(scores: np.ndarray, *, label: str) -> list[int]:
+def _hungarian_to_anchor(scores: np.ndarray, *, label: str) -> tuple[list[int], dict[str, Any]]:
     values = np.asarray(scores, dtype=np.float64)
     _require(values.shape == (N_CLASSES, N_CLASSES) and np.all(np.isfinite(values)), f"invalid {label} matrix")
     source_rows, anchor_cols = linear_sum_assignment(-values)
     _require(np.array_equal(np.sort(anchor_cols), np.arange(N_CLASSES)), f"{label} does not cover anchors")
-    source_for_anchor = np.empty(N_CLASSES, dtype=np.int64)
+    scipy_source_for_anchor = np.empty(N_CLASSES, dtype=np.int64)
     for source, anchor in zip(source_rows, anchor_cols, strict=True):
-        source_for_anchor[anchor] = source
-    return source_for_anchor.tolist()
+        scipy_source_for_anchor[anchor] = source
+
+    candidates: list[tuple[float, tuple[int, ...]]] = []
+    anchors = np.arange(N_CLASSES, dtype=np.int64)
+    for source_for_anchor in itertools.permutations(range(N_CLASSES)):
+        objective = float(np.sum(values[np.asarray(source_for_anchor, dtype=np.int64), anchors]))
+        candidates.append((objective, source_for_anchor))
+    best_objective = max(objective for objective, _ in candidates)
+    exact_winners = [permutation for objective, permutation in candidates if objective == best_objective]
+    _require(
+        len(exact_winners) == 1,
+        f"{label} class assignment optimum is not unique: {len(exact_winners)} exact optima",
+    )
+    winner = exact_winners[0]
+    _require(
+        np.array_equal(scipy_source_for_anchor, np.asarray(winner, dtype=np.int64)),
+        f"{label} Hungarian assignment disagrees with exhaustive unique optimum",
+    )
+    second_objective = max(
+        objective for objective, permutation in candidates if permutation != winner
+    )
+    margin = best_objective - second_objective
+    _require(margin > 0.0, f"{label} class assignment has no positive optimum margin")
+    return list(winner), {
+        "objective": best_objective,
+        "second_best_objective": second_objective,
+        "objective_margin": margin,
+        "exact_optimum_count": 1,
+        "permutations_exhaustively_checked": math.factorial(N_CLASSES),
+    }
 
 
 def _align_set_to_anchor(
     maps: Sequence[np.ndarray],
     anchor: Sequence[np.ndarray],
     *,
-    fit_max_shell: int,
+    policy: Mapping[str, Any],
 ) -> tuple[list[np.ndarray], dict[str, Any]]:
     fit = fit_proper_rigid_transform(
         _ensemble(maps),
         _ensemble(anchor),
-        fit_max_shell=fit_max_shell,
-        coarse_healpix_order=1,
-        refine_healpix_orders=(2,),
-        interpolation_order=1,
+        fit_max_shell=int(policy["fit_max_shell"]),
+        coarse_healpix_order=int(policy["coarse_healpix_order"]),
+        refine_healpix_orders=tuple(int(value) for value in policy["refine_healpix_orders"]),
+        interpolation_order=int(policy["interpolation_order"]),
     )
     rotation = np.asarray(fit["rotation_matrix_recovar_to_relion"], dtype=np.float64)
     translation = np.asarray(fit["translation_recovar_to_relion_zyx"], dtype=np.float64)
-    aligned = [apply_proper_rigid_transform(volume, rotation, translation) for volume in maps]
+    aligned = [
+        apply_proper_rigid_transform(
+            volume,
+            rotation,
+            translation,
+            interpolation_order=int(policy["interpolation_order"]),
+        )
+        for volume in maps
+    ]
     return aligned, _jsonable(fit)
 
 
-def _common_mask(all_sets: Sequence[Sequence[np.ndarray]]) -> tuple[np.ndarray, dict[str, Any]]:
+def _common_mask(
+    all_sets: Sequence[Sequence[np.ndarray]],
+    *,
+    policy: Mapping[str, Any],
+) -> tuple[np.ndarray, dict[str, Any]]:
     normalized = np.stack([_unit_rms(volume) for maps in all_sets for volume in maps], axis=0)
     # A signed mean can cancel when heterogeneous classes contain opposite
     # contrast excursions.  The RMS envelope is engine/half/class symmetric,
     # nonnegative, and cannot erase support through sign cancellation.
     envelope = np.sqrt(np.mean(np.asarray(normalized, dtype=np.float64) ** 2, axis=0)).astype(np.float32)
-    box = int(envelope.shape[0])
     params = {
-        "threshold": "auto",
-        "lowpass_sigma": max(2, int(math.ceil(box / 128))),
-        "extend": max(1, int(math.ceil(box / 32))),
-        "soft_edge": max(1, int(math.ceil(box / 32))),
-        "cleanup": True,
+        "threshold": str(policy["threshold"]),
+        "lowpass_sigma": int(policy["lowpass_sigma"]),
+        "extend": int(policy["extend"]),
+        "soft_edge": int(policy["soft_edge"]),
+        "cleanup": bool(policy["cleanup"]),
     }
     mask = np.asarray(make_mask(envelope, **params), dtype=np.float32)
     _require(np.all(np.isfinite(mask)), "common mask contains non-finite values")
@@ -741,6 +994,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
     _require(int(manifest["config"]["K"]) == N_CLASSES, "audit requires exactly K=4")
     _require(manifest["config"]["symmetry"] == "C1", "frozen EMPIAR-10076 contract requires C1")
     _require(manifest.get("thresholds") == EXPECTED_THRESHOLDS, "prospective K=4 science thresholds changed")
+    analysis_policy = validate_analysis_policy(manifest, args)
     _require(bool(manifest["source"]["clean"]), "source worktree was not clean at launch")
     _require(GIT_SHA_RE.fullmatch(str(manifest["source"]["commit"])) is not None, "invalid source commit")
     input_audit = validate_input_artifacts(manifest)
@@ -764,6 +1018,8 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         )
         recovar_paths.append(representatives)
         replica_audits.append(replica_audit)
+        _reject_within_process_duplicates(relion_paths[-1], engine="RELION", half=int(row["half"]))
+        _reject_within_process_duplicates(representatives, engine="RECOVAR", half=int(row["half"]))
         assignment_raw.append(
             _read_assignments(
                 relion_dir,
@@ -791,8 +1047,11 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
     voxel_size = voxel_sizes[0]
     anchor = relion_sets[0][0]
     box_size = int(anchor[0].shape[0])
+    _require(box_size == int(manifest["config"]["grid_size"]), "map grid differs from frozen analysis grid")
     _require(all(volume.shape == anchor[0].shape for maps, _ in (*relion_sets, *recovar_sets) for volume in maps), "map shapes differ")
-    fit_max_shell = min(int(args.fit_max_shell), box_size // 2 - 1)
+    alignment_policy = analysis_policy["alignment"]
+    fit_max_shell = int(alignment_policy["fit_max_shell"])
+    _require(fit_max_shell <= box_size // 2 - 1, "frozen fit_max_shell exceeds measured Fourier band")
     _require(fit_max_shell >= 4, "map is too small for rigid alignment")
 
     raw_sets: dict[str, list[np.ndarray]] = {
@@ -814,21 +1073,41 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         ("recovar_half1", recovar_sets[0][0]),
         ("recovar_half2", recovar_sets[1][0]),
     ):
-        aligned[label], alignment[label] = _align_set_to_anchor(maps, anchor, fit_max_shell=fit_max_shell)
+        aligned[label], alignment[label] = _align_set_to_anchor(
+            maps,
+            anchor,
+            policy=alignment_policy,
+        )
     calculator = ShellFscCalculator(box_size)
+    mask, mask_metadata = _common_mask(
+        list(aligned.values()),
+        policy=analysis_policy["common_mask"],
+    )
     permutations: dict[str, list[int]] = {"relion_half1": list(range(N_CLASSES))}
     pairwise: dict[str, Any] = {}
+    permutation_optima: dict[str, Any] = {
+        "relion_half1": {
+            "identity_anchor": True,
+            "objective": None,
+            "second_best_objective": None,
+            "objective_margin": None,
+            "exact_optimum_count": 1,
+        }
+    }
     for label in ("relion_half2", "recovar_half1", "recovar_half2"):
-        matrix = _pairwise_auc(calculator, aligned[label], anchor)
+        matrix = _pairwise_auc(
+            calculator,
+            [volume * mask for volume in aligned[label]],
+            [volume * mask for volume in anchor],
+        )
         pairwise[label + "_to_relion_half1"] = matrix.tolist()
-        permutations[label] = _hungarian_to_anchor(matrix, label=label)
+        permutations[label], permutation_optima[label] = _hungarian_to_anchor(matrix, label=label)
 
     canonical: dict[str, list[np.ndarray]] = {}
     raw_canonical: dict[str, list[np.ndarray]] = {}
     for label, maps in aligned.items():
         canonical[label] = [maps[source_id] for source_id in permutations[label]]
         raw_canonical[label] = [raw_sets[label][source_id] for source_id in permutations[label]]
-    mask, mask_metadata = _common_mask(list(canonical.values()))
     curves: dict[str, np.ndarray] = {}
     classes: list[dict[str, Any]] = []
     for class_id in range(N_CLASSES):
@@ -874,7 +1153,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
                 key=key,
                 curves=curves,
                 voxel_size=voxel_size,
-                consecutive=int(args.crossing_consecutive_shells),
+                consecutive=int(analysis_policy["fsc"]["crossing_consecutive_shells"]),
             )
             if not metric_name.endswith("_raw"):
                 masked_key = f"class{class_id + 1:03d}_{metric_name}_common_masked"
@@ -885,7 +1164,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
                     key=masked_key,
                     curves=curves,
                     voxel_size=voxel_size,
-                    consecutive=int(args.crossing_consecutive_shells),
+                    consecutive=int(analysis_policy["fsc"]["crossing_consecutive_shells"]),
                 )
         classes.append(row)
 
@@ -948,6 +1227,12 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         "source": manifest["source"],
         "config": manifest["config"],
         "thresholds": manifest["thresholds"],
+        "analysis_policy": analysis_policy,
+        "analysis_policy_binding": {
+            "manifest_exact": True,
+            "cli_flags_exact": True,
+            "run_script_hashed": True,
+        },
         "provenance_audit": {
             "input_artifacts": input_audit,
             "launcher": launcher_audit,
@@ -966,7 +1251,9 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
                 "the second is discarded and never called an independent half map"
             ),
             "final_all_data_maps_used": False,
+            "within_process_duplicate_class_maps_rejected": True,
             "cross_process_duplicate_maps_rejected": True,
+            "extra_final_recovar_class_ids_rejected": True,
         },
         "recovar_internal_replica_audit": replica_audits,
         "alignment": {
@@ -981,9 +1268,11 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         },
         "class_matching": {
             "anchor": "relion_half1",
-            "metric": "unmasked normalized non-DC FSC-AUC after shared-set proper-rigid alignment",
+            "metric": "common-mask normalized non-DC FSC-AUC after shared-set proper-rigid alignment",
             "source_class_for_anchor": {label: [value + 1 for value in values] for label, values in permutations.items()},
             "pairwise_fsc_auc": pairwise,
+            "unique_exact_permutation_required": True,
+            "permutation_optima": permutation_optima,
         },
         "common_mask": {
             **mask_metadata,
@@ -991,6 +1280,10 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "sha256": sha256_file(mask_path),
             "applied_identically_to_all_engines_halves_classes": True,
             "construction_frame": "RELION-half1 anchor after one shared transform per four-class set",
+            "fsc_correction": "none",
+            "phase_randomization_corrected": False,
+            "scientific_role": "relative uncorrected common-mask diagnostic",
+            "absolute_resolution_claim": False,
         },
         "metric_policy": {
             "within_engine_halfmap": (
@@ -1000,6 +1293,8 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "cross_engine_primary": "proper-rigid registered curves after shared-set alignment",
             "diagnostics": "raw frozen-frame halfmap/cross-engine routes are retained unmasked and cannot rescue",
             "masked_can_rescue_unmasked": False,
+            "common_masked_fsc": "uncorrected relative diagnostic; no phase-randomization correction",
+            "absolute_resolution_claim": False,
         },
         "classes": classes,
         "assignments_and_support": assignment_rows,
@@ -1021,6 +1316,8 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         "limitations": [
             "This audit compares scientific half-map quality; it does not require the two independent halves to follow identical class trajectories.",
             "Class labels are matched independently to RELION half 1; a split/merge remains visible in per-class FSC and populations.",
+            "The common-mask FSC is uncorrected and is used only for matched relative diagnostics, not an absolute-resolution claim.",
+            "This bounded single-seed harness does not yet report Pmax, pose/translation agreement, or the required multi-seed consensus aggregate.",
             "A completed result must be admitted to the benchmark registry separately after Slurm/accounting and artifact sealing.",
         ],
     }
@@ -1031,8 +1328,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--fit-max-shell", type=int, default=32)
-    parser.add_argument("--crossing-consecutive-shells", type=int, default=3)
+    parser.add_argument("--fit-max-shell", type=int, required=True)
+    parser.add_argument("--crossing-consecutive-shells", type=int, required=True)
+    parser.add_argument(
+        "--phase-randomization-corrected",
+        choices=("true", "false"),
+        required=True,
+    )
+    parser.add_argument(
+        "--absolute-resolution-claim",
+        choices=("true", "false"),
+        required=True,
+    )
+    parser.add_argument("--coarse-healpix-order", type=int, required=True)
+    parser.add_argument("--refine-healpix-order", type=int, action="append", required=True)
+    parser.add_argument("--interpolation-order", type=int, required=True)
+    parser.add_argument("--mask-threshold", required=True)
+    parser.add_argument("--mask-lowpass-sigma", type=int, required=True)
+    parser.add_argument("--mask-extend", type=int, required=True)
+    parser.add_argument("--mask-soft-edge", type=int, required=True)
+    parser.add_argument("--mask-cleanup", choices=("true", "false"), required=True)
     return parser.parse_args(argv)
 
 

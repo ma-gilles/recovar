@@ -1571,9 +1571,26 @@ def write_setup_script(
     cuda_module: str,
     relion_src_dir: Path,
     expected_commit: str | None = None,
+    setup_allocation_record: Path | None = None,
 ) -> Path:
     expected_commit = expected_commit or git_text("rev-parse", "HEAD")
     script = jobs_dir / "em_kclass_matrix_setup.sh"
+    allocation_gate = ""
+    if setup_allocation_record is not None:
+        allocation_gate = f"""mkdir -p {q(setup_allocation_record.parent)}
+"${{BASE_PIXI_PY}}" - {q(setup_allocation_record)} <<'PY'
+import json
+import pathlib
+import sys
+
+from scripts.run_em_real_kclass_initialmodel_pair import _gpu_count_from_tres, _slurm_allocation
+
+row = _slurm_allocation()
+row["requested_gpus"] = _gpu_count_from_tres(row["ReqTRES"])
+row["allocated_gpus"] = _gpu_count_from_tres(row["AllocTRES"])
+pathlib.Path(sys.argv[1]).write_text(json.dumps(row, indent=2, sort_keys=True) + "\\n")
+PY
+"""
     text = f"""#!/usr/bin/env bash
 #SBATCH --job-name=em_kclass_setup
 #SBATCH --output={q(scratch_dir / "em_kclass_matrix_setup.out")}
@@ -1594,7 +1611,7 @@ if [[ ! -x "${{BASE_PIXI_PY}}" ]]; then
   exit 2
 fi
 export BASE_PIXI_PY
-flock {q(scratch_dir / "install-recovar.lock")} bash -lc '
+{allocation_gate}flock {q(scratch_dir / "install-recovar.lock")} bash -lc '
 set -euo pipefail
 rm -rf "${{RECOVAR_RELION_BIND_BUILD_DIR:?}}"
 rm -rf "${{EM_KCLASS_MATRIX_VENV:?}}"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -66,6 +67,7 @@ def test_rendered_job_is_nonexclusive_serial_one_gpu_and_audited(tmp_path: Path)
         seed=42001,
         mpi_ranks=3,
         pool=3,
+        analysis_policy=launcher.expected_analysis_policy(128),
     )
 
     assert "#SBATCH --gres=gpu:1" in text
@@ -75,7 +77,46 @@ def test_rendered_job_is_nonexclusive_serial_one_gpu_and_audited(tmp_path: Path)
     assert "ReqTRES" in text and "AllocTRES" in text
     assert "input_sha256_check.txt" in text
     assert "audit_em_real_kclass_halfmaps" in text
+    assert "--fit-max-shell 32" in text
+    assert "--crossing-consecutive-shells 3" in text
+    assert "--phase-randomization-corrected false" in text
+    assert "--absolute-resolution-claim false" in text
+    assert "--coarse-healpix-order 1" in text
+    assert "--refine-healpix-order 2" in text
+    assert "--interpolation-order 1" in text
+    assert "--mask-threshold auto" in text
+    assert "--mask-lowpass-sigma 2" in text
+    assert "--mask-extend 4" in text
+    assert "--mask-soft-edge 4" in text
+    assert "--mask-cleanup true" in text
     assert "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER" not in text
+
+
+def test_setup_job_records_and_validates_exact_allocation_before_build(tmp_path: Path) -> None:
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    record = tmp_path / "provenance" / "setup_slurm_allocation.json"
+
+    script = launcher.write_setup_script(
+        scratch_dir=tmp_path,
+        jobs_dir=jobs,
+        cuda_lib=tmp_path / "libcuda_backproject.so",
+        account="gilles",
+        partition="cryoem",
+        constraint="h100",
+        setup_gres="gpu:1",
+        cuda_module="cudatoolkit/12.8",
+        relion_src_dir=tmp_path / "relion_src",
+        setup_allocation_record=record,
+    )
+    text = script.read_text()
+
+    assert str(record) in text
+    assert "row = _slurm_allocation()" in text
+    assert 'row["requested_gpus"] = _gpu_count_from_tres(row["ReqTRES"])' in text
+    assert 'row["allocated_gpus"] = _gpu_count_from_tres(row["AllocTRES"])' in text
+    assert text.index("row = _slurm_allocation()") < text.index("flock")
+    assert "#SBATCH --exclusive" not in text
 
 
 def test_shared_selection_preserves_source_row_order(tmp_path: Path, monkeypatch) -> None:
@@ -101,6 +142,31 @@ def test_shared_selection_preserves_source_row_order(tmp_path: Path, monkeypatch
     selected = launcher._selected_particles(profile, particles)
 
     assert selected["rlnImageName"].tolist() == ["2@particles.256.mrcs", "4@particles.256.mrcs"]
+
+
+def test_particle_input_generation_carries_immutable_source_indices(tmp_path: Path, monkeypatch) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    np.save(fixture / "source_indices.npy", np.arange(4, dtype=np.int64))
+    stack = tmp_path / "particles.128.mrcs"
+    stack.write_bytes(b"stack")
+    optics = pd.DataFrame({"rlnImagePixelSize": [1.5], "rlnImageSize": [256]})
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": [f"{index}@particles.256.mrcs" for index in range(1, 5)],
+            "rlnRandomSubset": [1, 2, 1, 2],
+        }
+    )
+    monkeypatch.setattr(launcher, "SOURCE_FIXTURE", fixture)
+    monkeypatch.setattr(launcher, "STACKS", {128: stack})
+    monkeypatch.setattr(launcher, "_particle_tables", lambda: (optics.copy(), particles.copy()))
+    profile = launcher.Profile("tiny", 128, "full10k", 4, "00:10:00", "1G", 1)
+
+    halves, names, source_indices = launcher._write_particle_inputs(tmp_path / "run", profile)
+
+    assert names == [f"{index}@particles.128.mrcs" for index in range(1, 5)]
+    assert source_indices == [0, 1, 2, 3]
+    assert [row["particle_count"] for row in halves] == [2, 2]
 
 
 def test_cli_is_dry_run_unless_submit_is_explicit(tmp_path: Path) -> None:

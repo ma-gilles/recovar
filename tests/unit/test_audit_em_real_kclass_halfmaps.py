@@ -25,17 +25,31 @@ def _write_particles(path: Path, names: list[str], subsets: list[int], classes=N
 
 def _split_manifest(tmp_path: Path) -> dict:
     selected = [f"{index}@particles.mrcs" for index in range(1, 7)]
+    origin_names = [f"{index}@origin.mrcs" for index in range(1, 7)]
+    origin = tmp_path / "origin.star"
+    source_indices = tmp_path / "source_indices.npy"
     source = tmp_path / "selected.star"
     half1 = tmp_path / "half1.star"
     half2 = tmp_path / "half2.star"
+    _write_particles(origin, origin_names, [1, 2, 1, 2, 1, 2])
+    np.save(source_indices, np.arange(6, dtype=np.int64))
     _write_particles(source, selected, [1, 2, 1, 2, 1, 2])
     _write_particles(half1, selected[0::2], [1, 1, 1])
     _write_particles(half2, selected[1::2], [2, 2, 2])
     return {
         "particle_selection": {
+            "mode": "full10k",
             "selected_image_names": selected,
             "ordered_image_names_sha256": audit.sha256_strings(selected),
             "source_particles_star": str(source),
+            "origin_particles_star": str(origin),
+            "origin_particles_star_sha256": audit.sha256_file(origin),
+            "source_indices_npy": str(source_indices),
+            "source_indices_sha256": audit.sha256_file(source_indices),
+            "selected_source_indices": list(range(6)),
+            "ordered_source_indices_sha256": audit.sha256_ints(list(range(6))),
+            "selection_source_json": None,
+            "selection_source_sha256": None,
         },
         "halves": [
             {
@@ -69,7 +83,81 @@ def test_particle_split_rejects_reordered_half_even_if_sets_match(tmp_path: Path
     _write_particles(half1, names, [1, 1, 1])
     manifest["halves"][0]["ordered_image_names_sha256"] = audit.sha256_strings(names)
 
-    with pytest.raises(audit.AuditError, match="preserve frozen selected-source order"):
+    with pytest.raises(audit.AuditError, match="immutable selected-source order"):
+        audit.validate_particle_split(manifest)
+
+
+def test_particle_split_rejects_self_consistent_generated_relabel(tmp_path: Path) -> None:
+    manifest = _split_manifest(tmp_path)
+    selected = manifest["particle_selection"]["selected_image_names"]
+    _write_particles(
+        Path(manifest["particle_selection"]["source_particles_star"]),
+        selected,
+        [2, 1, 2, 1, 2, 1],
+    )
+
+    with pytest.raises(audit.AuditError, match="immutable random-subset labels"):
+        audit.validate_particle_split(manifest)
+
+
+def test_particle_split_rejects_changed_selected_source_index_sequence(tmp_path: Path) -> None:
+    manifest = _split_manifest(tmp_path)
+    manifest["particle_selection"]["selected_source_indices"][2] = 999
+    manifest["particle_selection"]["ordered_source_indices_sha256"] = audit.sha256_ints(
+        manifest["particle_selection"]["selected_source_indices"]
+    )
+
+    with pytest.raises(audit.AuditError, match="selected source-index sequence changed"):
+        audit.validate_particle_split(manifest)
+
+
+def test_particle_split_rejects_origin_source_index_order_disagreement(tmp_path: Path) -> None:
+    manifest = _split_manifest(tmp_path)
+    path = Path(manifest["particle_selection"]["source_indices_npy"])
+    np.save(path, np.asarray([0, 2, 1, 3, 4, 5], dtype=np.int64))
+    manifest["particle_selection"]["source_indices_sha256"] = audit.sha256_file(path)
+
+    with pytest.raises(audit.AuditError, match="differ from immutable source-index order"):
+        audit.validate_particle_split(manifest)
+
+
+def test_particle_split_binds_shared_selection_membership_in_origin_order(tmp_path: Path) -> None:
+    manifest = _split_manifest(tmp_path)
+    all_names = manifest["particle_selection"]["selected_image_names"]
+    selected = [all_names[index] for index in (0, 1, 4, 5)]
+    selection_path = tmp_path / "selection.json"
+    selection_path.write_text(
+        json.dumps(
+            {
+                "same_visited_particle_ids": True,
+                "visited_particle_ids": [all_names[index] for index in (5, 0, 4, 1)],
+            }
+        )
+        + "\n"
+    )
+    selection = manifest["particle_selection"]
+    selection.update(
+        {
+            "mode": "shared200",
+            "selection_source_json": str(selection_path),
+            "selection_source_sha256": audit.sha256_file(selection_path),
+            "selected_image_names": selected,
+            "ordered_image_names_sha256": audit.sha256_strings(selected),
+            "selected_source_indices": [0, 1, 4, 5],
+            "ordered_source_indices_sha256": audit.sha256_ints([0, 1, 4, 5]),
+        }
+    )
+    _write_particles(Path(selection["source_particles_star"]), selected, [1, 2, 1, 2])
+    _write_particles(Path(manifest["halves"][0]["particles_star"]), selected[0::2], [1, 1])
+    _write_particles(Path(manifest["halves"][1]["particles_star"]), selected[1::2], [2, 2])
+    for row, names in zip(manifest["halves"], (selected[0::2], selected[1::2]), strict=True):
+        row["particle_count"] = 2
+        row["ordered_image_names_sha256"] = audit.sha256_strings(names)
+
+    assert audit.validate_particle_split(manifest)["selection_mode"] == "shared200"
+    selection["selected_image_names"] = [all_names[index] for index in (0, 1, 2, 5)]
+    selection["ordered_image_names_sha256"] = audit.sha256_strings(selection["selected_image_names"])
+    with pytest.raises(audit.AuditError, match="differ from immutable shared200 selection"):
         audit.validate_particle_split(manifest)
 
 
@@ -98,6 +186,16 @@ def test_recovar_internal_kclass_half_labels_must_be_identical_replicas(tmp_path
         audit._latest_recovar_combined_maps(bad, 7)
 
 
+def test_recovar_final_topology_rejects_extra_class_ids(tmp_path: Path) -> None:
+    root = tmp_path / "extra"
+    _write_recovar_maps(root)
+    for replica in (1, 2):
+        (root / f"it007_half{replica}_class5_reg.mrc").write_bytes(b"extra")
+
+    with pytest.raises(audit.AuditError, match="missing or extra class IDs"):
+        audit._latest_recovar_combined_maps(root, 7)
+
+
 def test_cross_process_duplicate_maps_are_rejected(tmp_path: Path) -> None:
     first = [tmp_path / f"first-{index}" for index in range(4)]
     second = [tmp_path / f"second-{index}" for index in range(4)]
@@ -110,6 +208,97 @@ def test_cross_process_duplicate_maps_are_rejected(tmp_path: Path) -> None:
     second[2].write_bytes(first[1].read_bytes())
     with pytest.raises(audit.AuditError, match="false independent-half claim"):
         audit._reject_cross_process_duplicates([first, second], engine="test")
+
+
+def test_within_process_duplicate_class_maps_are_rejected(tmp_path: Path) -> None:
+    paths = [tmp_path / f"class-{index}.mrc" for index in range(4)]
+    for index, path in enumerate(paths):
+        path.write_bytes(f"class-{index}".encode())
+    audit._reject_within_process_duplicates(paths, engine="test", half=1)
+    paths[3].write_bytes(paths[0].read_bytes())
+
+    with pytest.raises(audit.AuditError, match="byte-identical class maps"):
+        audit._reject_within_process_duplicates(paths, engine="test", half=1)
+
+
+def test_class_matching_requires_unique_exact_optimum_and_records_margin() -> None:
+    scores = np.asarray(
+        [
+            [0.1, 0.2, 0.9, 0.3],
+            [0.8, 0.1, 0.2, 0.3],
+            [0.2, 0.3, 0.1, 0.95],
+            [0.2, 0.85, 0.1, 0.3],
+        ]
+    )
+
+    permutation, metadata = audit._hungarian_to_anchor(scores, label="known")
+
+    assert permutation == [1, 3, 0, 2]
+    assert metadata["exact_optimum_count"] == 1
+    assert metadata["objective_margin"] > 0.0
+    assert metadata["permutations_exhaustively_checked"] == 24
+
+    with pytest.raises(audit.AuditError, match="optimum is not unique"):
+        audit._hungarian_to_anchor(np.ones((4, 4)), label="tied")
+
+
+def _analysis_args(tmp_path: Path, *extra: str):
+    return audit._parse_args(
+        [
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--output-dir",
+            str(tmp_path / "audit"),
+            "--fit-max-shell",
+            "32",
+            "--crossing-consecutive-shells",
+            "3",
+            "--phase-randomization-corrected",
+            "false",
+            "--absolute-resolution-claim",
+            "false",
+            "--coarse-healpix-order",
+            "1",
+            "--refine-healpix-order",
+            "2",
+            "--interpolation-order",
+            "1",
+            "--mask-threshold",
+            "auto",
+            "--mask-lowpass-sigma",
+            "2",
+            "--mask-extend",
+            "4",
+            "--mask-soft-edge",
+            "4",
+            "--mask-cleanup",
+            "true",
+            *extra,
+        ]
+    )
+
+
+def test_analysis_policy_is_frozen_and_cli_bound(tmp_path: Path) -> None:
+    expected = audit.expected_analysis_policy(128)
+    manifest = {"config": {"grid_size": 128}, "analysis_policy": expected}
+
+    assert audit.validate_analysis_policy(manifest, _analysis_args(tmp_path)) == expected
+    changed_manifest = json.loads(json.dumps(manifest))
+    changed_manifest["analysis_policy"]["alignment"]["fit_max_shell"] = 31
+    with pytest.raises(audit.AuditError, match="manifest analysis_policy changed"):
+        audit.validate_analysis_policy(changed_manifest, _analysis_args(tmp_path))
+
+    changed_cli = _analysis_args(tmp_path)
+    changed_cli.fit_max_shell = 31
+    with pytest.raises(audit.AuditError, match="CLI analysis policy differs"):
+        audit.validate_analysis_policy(manifest, changed_cli)
+
+
+def test_analysis_policy_disclaims_corrected_or_absolute_masked_resolution() -> None:
+    fsc = audit.expected_analysis_policy(256)["fsc"]
+
+    assert fsc["phase_randomization_corrected"] is False
+    assert fsc["absolute_resolution_claim"] is False
 
 
 def _identity_curves(class_id: int) -> dict[str, np.ndarray]:
@@ -195,7 +384,10 @@ def test_common_mask_uses_nonnegative_rms_envelope_without_sign_cancellation(mon
     monkeypatch.setattr(audit, "make_mask", fake_make_mask)
     maps = [[source, -source, source, -source] for _ in range(4)]
 
-    mask, metadata = audit._common_mask(maps)
+    mask, metadata = audit._common_mask(
+        maps,
+        policy=audit.expected_analysis_policy(128)["common_mask"],
+    )
 
     assert np.all(captured["volume"] >= 0.0)
     assert np.max(captured["volume"]) > 0.0
@@ -267,3 +459,42 @@ def test_command_records_fail_closed(tmp_path: Path) -> None:
     command.write_text(json.dumps(["engine", "--K", "3"]) + "\n")
     with pytest.raises(audit.AuditError, match="command changed"):
         audit.validate_commands(manifest)
+
+
+def _write_slurm_record(path: Path, *, allocated_gpus: int = 1) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "under_slurm": True,
+                "job_id": path.stem,
+                "ReqTRES": "cpu=8,mem=64G,node=1,billing=8,gres/gpu=1",
+                "AllocTRES": "cpu=8,mem=64G,node=1,billing=8,gres/gpu=1",
+                "requested_gpus": 1,
+                "allocated_gpus": allocated_gpus,
+                "OverSubscribe": "OK",
+            }
+        )
+        + "\n"
+    )
+
+
+def test_setup_and_qualification_allocations_are_both_required(tmp_path: Path) -> None:
+    setup = tmp_path / "setup.json"
+    qualification = tmp_path / "qualification.json"
+    _write_slurm_record(setup)
+    _write_slurm_record(qualification)
+    manifest = {
+        "provenance": {
+            "setup_slurm_allocation_json": str(setup),
+            "slurm_allocation_json": str(qualification),
+        }
+    }
+
+    result = audit.validate_slurm_allocation(manifest)
+
+    assert result["both_valid"] is True
+    assert result["setup"]["valid"] is True
+    assert result["qualification"]["valid"] is True
+    _write_slurm_record(setup, allocated_gpus=2)
+    with pytest.raises(audit.AuditError, match="setup job did not allocate exactly one GPU"):
+        audit.validate_slurm_allocation(manifest)

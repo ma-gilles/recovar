@@ -11,7 +11,10 @@ The dry-by-default EMPIAR-10076 K=4 independent-half launcher and its
 prospective acceptance contract are documented in
 `real_kclass_halfmap_refinement.md`. This is runnable infrastructure only;
 until a completed run passes the audit and is sealed, it must not appear in
-`entries/` as accepted evidence.
+`entries/` as accepted evidence. The bounded launcher does not yet emit Pmax,
+pose/translation agreement, or the required multi-seed aggregate, and its
+common-mask FSC is explicitly an uncorrected relative diagnostic rather than
+an absolute-resolution claim.
 
 Single-run evidence lives in `entries/` and validates against
 `schema_v1.json`. Multi-case campaign scorecards live in `campaigns/` and

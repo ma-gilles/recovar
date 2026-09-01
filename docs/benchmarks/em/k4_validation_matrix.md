@@ -43,6 +43,11 @@ resolution; if only RELION remains beyond range, the comparison fails closed.
 These real-data thresholds are prospective and must not be retrofitted to
 existing runs.
 
+Unless a run explicitly records a phase-randomization/noise-substitution
+correction, its common-mask FSC and 0.143 crossing are uncorrected relative
+diagnostics, not absolute-resolution claims. The current EMPIAR-10076 bounded
+half-map harness records `absolute_resolution_claim=false` for this reason.
+
 ## Tier 0: fail-closed CPU controls
 
 These run in every EM PR and should finish in minutes.
@@ -297,6 +302,15 @@ K=4 processes per engine, one on each immutable random subset. The launcher is
 dry-run by default. Its presence does not count as completed evidence; the
 three-seed 128-grid pilots and subsequent native runs remain pending until
 their audited products are admitted to the registry.
+
+That launcher is deliberately narrower than the complete Tier-6 checklist:
+it reports maps, half-map/cross-engine FSC, populations, hard-assignment
+agreement, significant support, and resources for one invocation. Pmax,
+pose/translation agreement, and the validated multi-seed consensus aggregate
+are not yet emitted. A successful single run therefore establishes the
+independent-half infrastructure only; it cannot be described as complete
+Tier-6 evidence until those omitted metrics and seed-level requirements are
+added and admitted.
 
 ## Runnable now versus planned-only
 
