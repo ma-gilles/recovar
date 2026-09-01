@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
+from numbers import Integral
 
 import numpy as np
 
 from recovar import utils
 from recovar.em.dense_single_volume.batch_planning import (
+    _FixedCapacityLocalCall,
     _plan_consecutive_padded_batches,
 )
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
@@ -165,6 +168,80 @@ class LocalBucketSpec:
     local_rotation_posterior_ids: np.ndarray | None = None
     local_sample_mask: np.ndarray | None = None
     local_mstep_rotations: np.ndarray | None = None
+
+
+def _fixed_capacity_calls_from_local_buckets(
+    bucket_specs: Sequence[LocalBucketSpec],
+) -> tuple[_FixedCapacityLocalCall, ...]:
+    """Convert authoritative local buckets without changing their topology."""
+
+    bucket_specs = tuple(bucket_specs)
+    if not bucket_specs:
+        raise ValueError("fixed-capacity local bucket sequence cannot be empty")
+
+    calls = []
+    for bucket_index, bucket in enumerate(bucket_specs):
+        raw_image_indices = np.asarray(bucket.image_indices)
+        raw_row_counts = np.asarray(bucket.actual_rotation_counts)
+        if raw_image_indices.ndim != 1 or not np.issubdtype(raw_image_indices.dtype, np.integer):
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} image_indices must be a one-dimensional integer array",
+            )
+        if raw_row_counts.ndim != 1 or not np.issubdtype(raw_row_counts.dtype, np.integer):
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} actual_rotation_counts must be a one-dimensional integer array",
+            )
+
+        image_indices = raw_image_indices.astype(np.int64, copy=True)
+        row_counts = raw_row_counts.astype(np.int64, copy=True)
+        if image_indices.size == 0:
+            raise ValueError(f"fixed-capacity local bucket {bucket_index} cannot be empty")
+        if row_counts.shape != image_indices.shape:
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} row counts must match its real image axis",
+            )
+
+        for field_name, raw_value in (
+            ("bucket_image_count", bucket.bucket_image_count),
+            ("bucket_rotation_count", bucket.bucket_rotation_count),
+        ):
+            if isinstance(raw_value, (bool, np.bool_)) or not isinstance(raw_value, Integral):
+                raise ValueError(
+                    f"fixed-capacity local bucket {bucket_index} {field_name} must be an integer",
+                )
+        image_capacity = int(bucket.bucket_image_count)
+        radix_bucket = int(bucket.bucket_rotation_count)
+        if image_capacity < image_indices.size:
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} image capacity is smaller than its real image count",
+            )
+        if radix_bucket <= 0:
+            raise ValueError(f"fixed-capacity local bucket {bucket_index} radix must be positive")
+        if np.any(row_counts <= 0) or np.any(row_counts > radix_bucket):
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} row count is outside its radix",
+            )
+
+        rotation_mask = np.asarray(bucket.local_rotation_mask)
+        if rotation_mask.dtype != np.bool_ or rotation_mask.shape != (image_indices.size, radix_bucket):
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} rotation mask must match its real image/radix axes",
+            )
+        expected_mask = np.arange(radix_bucket, dtype=np.int64)[None, :] < row_counts[:, None]
+        if not np.array_equal(rotation_mask, expected_mask):
+            raise ValueError(
+                f"fixed-capacity local bucket {bucket_index} candidate membership must be a dense ordered prefix",
+            )
+
+        calls.append(
+            _FixedCapacityLocalCall(
+                image_indices=image_indices,
+                row_counts=row_counts,
+                radix_bucket=radix_bucket,
+                image_capacity=image_capacity,
+            )
+        )
+    return tuple(calls)
 
 
 def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, grid_metadata):

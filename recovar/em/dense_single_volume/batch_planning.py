@@ -86,11 +86,15 @@ class _FixedCapacityLocalCall:
     ``row_counts`` contains the number of real candidate rows for each image;
     ``radix_bucket`` is the existing rectangular rotation capacity.  This
     descriptor deliberately does not regroup images or choose a new radix.
+    ``image_capacity`` preserves an authoritative call's existing padded image
+    shape when provided; synthetic planner probes may leave it unset and use
+    the smallest fitting palette entry.
     """
 
     image_indices: np.ndarray
     row_counts: np.ndarray
     radix_bucket: int
+    image_capacity: int | None = None
 
 
 @dataclass(frozen=True)
@@ -157,9 +161,10 @@ def _plan_fixed_capacity_whole_local(
     This is a host-only seam for a default-off whole-local executor.  It never
     creates, splits, coalesces, or reorders calls.  The caller must provide the
     sealed physical image order and a stable image-capacity palette for each
-    existing radix bucket.  Full and tail calls map to the smallest fitting
-    palette capacity while their real image/candidate counts remain runtime
-    descriptors.
+    existing radix bucket.  Calls converted from authoritative local buckets
+    preserve their existing image capacity exactly; synthetic probes without
+    one map to the smallest fitting palette capacity.  Real image/candidate
+    counts remain runtime descriptors in either case.
 
     Returning ``None`` while disabled makes the seam inert for both mature EM
     and InitialModel.  Once enabled, every unsupported capacity or chronology
@@ -190,6 +195,8 @@ def _plan_fixed_capacity_whole_local(
         )
 
     calls = tuple(calls)
+    if not calls:
+        raise ValueError("fixed-capacity call program cannot be empty")
     if len(calls) > physical_call_capacity:
         raise ValueError(
             f"fixed-capacity call program overflow: valid={len(calls)}, capacity={physical_call_capacity}",
@@ -238,20 +245,34 @@ def _plan_fixed_capacity_whole_local(
             )
 
         valid_images = int(image_indices.size)
-        fitting_capacities = [capacity for capacity in palette[radix_bucket] if capacity >= valid_images]
-        if not fitting_capacities:
-            raise ValueError(
-                "fixed-capacity image palette overflow for radix bucket "
-                f"{radix_bucket}: valid={valid_images}, "
-                f"capacities={palette[radix_bucket]}",
-            )
+        if call.image_capacity is None:
+            fitting_capacities = [capacity for capacity in palette[radix_bucket] if capacity >= valid_images]
+            if not fitting_capacities:
+                raise ValueError(
+                    "fixed-capacity image palette overflow for radix bucket "
+                    f"{radix_bucket}: valid={valid_images}, "
+                    f"capacities={palette[radix_bucket]}",
+                )
+            image_capacity = fitting_capacities[0]
+        else:
+            image_capacity = int(call.image_capacity)
+            if image_capacity < valid_images:
+                raise ValueError(
+                    "fixed-capacity preserved image capacity is smaller than its valid image count: "
+                    f"capacity={image_capacity}, valid={valid_images}",
+                )
+            if image_capacity not in palette[radix_bucket]:
+                raise ValueError(
+                    "fixed-capacity palette does not contain the preserved image capacity for radix bucket "
+                    f"{radix_bucket}: preserved={image_capacity}, capacities={palette[radix_bucket]}",
+                )
         valid_rows = int(np.sum(row_counts, dtype=np.int64))
         call_valid_mask[call_index] = True
         call_image_offsets[call_index] = running_images
         call_row_offsets[call_index] = running_rows
         call_valid_images[call_index] = valid_images
         call_valid_rows[call_index] = valid_rows
-        call_image_capacities[call_index] = fitting_capacities[0]
+        call_image_capacities[call_index] = image_capacity
         call_radix_buckets[call_index] = radix_bucket
         image_parts.append(image_indices)
         row_count_parts.append(row_counts)

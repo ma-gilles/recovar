@@ -61,6 +61,21 @@ def test_fixed_capacity_whole_local_seam_is_shared_and_default_off():
     assert _plan(enabled=False) is None
 
 
+def test_fixed_capacity_plan_rejects_an_empty_call_program():
+    with pytest.raises(ValueError, match="call program cannot be empty"):
+        _plan_fixed_capacity_whole_local(
+            (),
+            expected_image_order=np.zeros(0, dtype=np.int32),
+            physical_image_capacity=1,
+            physical_row_capacity=1,
+            physical_call_capacity=1,
+            image_capacity_palette={4: (1,)},
+            logical_cutoff=1,
+            logical_cutoff_capacity=1,
+            enabled=True,
+        )
+
+
 def test_fixed_capacity_plan_preserves_call_particle_and_radix_chronology():
     plan = _plan()
 
