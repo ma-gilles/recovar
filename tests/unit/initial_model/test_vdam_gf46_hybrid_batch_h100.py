@@ -73,6 +73,8 @@ def test_runner_pins_source_and_builds_exact_h100_cuda_path() -> None:
         "--gres=gpu:h100:1",
         '[[ "${gpu_name}" == *H100* ]]',
         '"CUDA_ARCH=${CUDA_ARCH_FLAGS}"',
+        "EXPECTED_CUSPARSE_SHA256=58ffc54edb1d007f56a1718aaadcb30f45bbf662f43515920ea8ff094304bdbf",
+        "export LD_PRELOAD=${CUSPARSE_LIBRARY}",
         "RelionCoarseDiff2RectangularF32",
         "RelionCoarseDiff2RotationBlocksF32",
         "export JAX_ENABLE_X64=1",

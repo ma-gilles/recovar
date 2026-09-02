@@ -22,6 +22,8 @@ unset PYTHONOPTIMIZE
 
 readonly CUDA_TOOLKIT=/usr/local/cuda-12.6
 readonly CUDA_ARCH_FLAGS='-gencode arch=compute_90,code=sm_90'
+readonly CUSPARSE_LIBRARY=${CUDA_TOOLKIT}/lib64/libcusparse.so.12
+readonly EXPECTED_CUSPARSE_SHA256=58ffc54edb1d007f56a1718aaadcb30f45bbf662f43515920ea8ff094304bdbf
 REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
 REPO_ROOT=$(realpath -e -- "${REPO_ROOT}")
 RECOVAR_PIXI_PY=$(realpath -e -- "${RECOVAR_PIXI_PY}")
@@ -36,6 +38,9 @@ NVCC=${CUDA_TOOLKIT}/bin/nvcc
 [[ "${EXPECTED_SOURCE_MANIFEST_SHA256}" =~ ^[0-9a-f]{64}$ ]]
 test -x "${RECOVAR_PIXI_PY}"
 test -x "${NVCC}"
+test -s "${CUSPARSE_LIBRARY}"
+test "$(sha256sum "${CUSPARSE_LIBRARY}" | awk '{print $1}')" = \
+  "${EXPECTED_CUSPARSE_SHA256}"
 test "$(git -C "${REPO_ROOT}" rev-parse --show-toplevel)" = "${REPO_ROOT}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test "$(git -C "${REPO_ROOT}" rev-parse 'HEAD^{tree}')" = "${EXPECTED_REPO_TREE}"
@@ -96,6 +101,7 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export TMPDIR=${RUNTIME_ROOT}/tmp
 export PATH=${CUDA_TOOLKIT}/bin:${PATH}
 export LD_LIBRARY_PATH=${CUDA_TOOLKIT}/lib64:${CUDA_TOOLKIT}/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}
+export LD_PRELOAD=${CUSPARSE_LIBRARY}
 
 actual_source_manifest_sha256=$(
   cd "${REPO_ROOT}"
