@@ -39,6 +39,20 @@ CAMPAIGN = json.loads(
         / "k4-expanded14-3466e7a32-h100"
     ).with_suffix(".json").read_text()
 )
+K2_MULTISEED_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k2-ribosembly-three-seed-0d85b576b-h100"
+    ).with_suffix(".json").read_text()
+)
+K8_MULTISEED_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k8-ribosembly-three-seed-0d85b576b-h100"
+    ).with_suffix(".json").read_text()
+)
 C4_SYMMETRY_CAMPAIGN = json.loads(
     (
         REGISTRY_ROOT
@@ -127,12 +141,14 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-ribosembly-10k128-radial3-nonuniform-linear-0050dc54f-h100",
         "k4-ribosembly-10k128-radial3-nonuniform-outliers20-0050dc54f-h100",
         "k4-ribosembly-10k128-white1-uniform-0050dc54f-h100",
+        "k2-ribosembly-three-seed-0d85b576b-h100",
         "k4-c4-three-seed-c75cbfffc-h100",
         "k4-d4-three-seed-c75cbfffc-h100",
         "k4-exact-input-invariance-91e8a30f4-h100",
         "k4-expanded14-3466e7a32-h100",
         "k4-i1-three-seed-22efd8065-h100",
         "k4-o-three-seed-22efd8065-h100",
+        "k8-ribosembly-three-seed-0d85b576b-h100",
         "k4-noctf-collapse-cases30-35-36-h100",
     ]
     assert [case["case_id"] for case in CAMPAIGN["cases"]] == list(range(16, 30))
@@ -170,6 +186,32 @@ def test_exact_input_campaign_does_not_promote_gt_only_equivalence():
                 )
                 < 0.99
             )
+
+
+def test_k2_and_k8_multiseed_campaigns_preserve_science_distinction():
+    assert [case["case_id"] for case in K2_MULTISEED_CAMPAIGN["cases"]] == [
+        41001,
+        41002,
+        41003,
+    ]
+    assert [case["case_id"] for case in K8_MULTISEED_CAMPAIGN["cases"]] == [
+        41001,
+        41002,
+        41003,
+    ]
+    for case in K2_MULTISEED_CAMPAIGN["cases"]:
+        assert case["outcome"]["classification"] == "TRAJECTORY_EXACT"
+        assert case["quality"]["trajectory"]["status"] == "PASS"
+        assert case["quality"]["occupancy"]["status"] == "CLEAR"
+    for case in K8_MULTISEED_CAMPAIGN["cases"]:
+        assert case["outcome"]["classification"] == "SCIENCE_EQUIVALENT"
+        assert case["quality"]["trajectory"]["status"] == "FAIL"
+        assert case["outcome"]["science_status"] == "PASS"
+        assert case["quality"]["occupancy"]["status"] == "CLEAR"
+        assert min(
+            row["gt_fsc_auc_delta"]
+            for row in case["quality"]["final_classes"]
+        ) >= -0.002
 
 
 def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
