@@ -103,6 +103,74 @@ PIXI_PY="$(pixi run which python)"
 The command intentionally exits 1 while the strict scientific gate fails;
 the complete report is still written before that exit.
 
+## Coarse parent-count counterfactual
+
+The causal replay identifies different coarse parent sets, but it does not by
+itself distinguish a different significance cutoff/count from a different
+ordering of the coarse scores. Job `13330316` replayed the same frozen
+iteration-1 boundary and passively retained RECOVAR's already-computed coarse
+score cache for 12 mismatch probes and four exact controls. The capture is at
+coarse current size 20; the unchanged fine pass remains at current size 56.
+The job requested and received exactly one H100, eight CPUs, and 192 GB,
+without exclusivity. It completed in 6 minutes 11 seconds with a peak batch
+RSS of 8,051,016 KiB.
+
+For each particle, the counterfactual keeps every RECOVAR score and its stable
+class/rotation/translation order fixed, changing only the selected count to
+RELION's observed coarse-parent count. No global or per-class counterfactual
+landed on an equal-score boundary tie.
+
+| Support metric | Observed RECOVAR | RELION-count counterfactual |
+| --- | ---: | ---: |
+| Exact particle records, all 16 | 4/16 | 5/16 |
+| Exact mismatch probes, 12 only | 0/12 | 1/12 |
+| Aggregate particle Jaccard, all 16 | 0.558287 | 0.951790 |
+| Aggregate particle Jaccard, mismatch probes | 0.546957 | 0.949618 |
+| Exact particle/class records | 29/64 | 50/64 |
+| Aggregate particle/class Jaccard | 0.558287 | 0.958944 |
+
+Thus the parent-count difference explains most, but not all, of the support
+gap. The remaining disagreement is not a stable-sort artifact: 11 of 12
+mismatch particles remain nonexact without a boundary tie. Further causal
+work must compare the native and RECOVAR coarse score components/order; merely
+copying RELION's significant-parent count is not an acceptable fix.
+
+The authoritative report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_significance_probe_r5_24317e40c_20260901/analysis/coarse_score_support.json`
+(SHA-256
+`d137d59506a859e4b2ddec4c7afd13366645b131174c5f0ea24e58fa617879b2`).
+The exact Slurm launcher is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_significance_probe_r5_24317e40c_20260901/jobs/run_significance_probe.sbatch`
+(SHA-256
+`c70b446601b142ee36dfc09c57d4b0587240a13e1008406961396b4b1c87147c`).
+The analyzer joins three deliberately distinct identities: native particle
+ID, one-based stack image ID from the causal report, and zero-based row in the
+reordered 200-row STAR. The frozen STAR is an explicit analyzer input; integer
+equality across those domains is never assumed.
+
+Reproduce the report from the sealed captures with a fresh output filename:
+
+```bash
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+export PYTHONNOUSERSITE=1
+pixi run python -m scripts.analyze_em_real_k4_coarse_score_support \
+  --significance-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_significance_probe_r5_24317e40c_20260901/significance \
+  --causal-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901 \
+  --causal-report /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v6.json \
+  --data-star /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/inputs/particles_shared200.star \
+  --expected-indices 7,9,29,42,53,68,71,82,84,89,91,102,111,166,192,194 \
+  --exact-control-indices 82,84,91,102 \
+  --output-json /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_significance_probe_r5_24317e40c_20260901/analysis/coarse_score_support_replay.json
+```
+
+Probe jobs `13329542`, `13329814`, and `13329956` are harness-only failures:
+they used an incompatible current-size or iteration predicate and wrote no
+usable target capture. Job `13330159` completed and established that the
+diagnostic IDs are reduced-dataset row indices, but its integer targets had
+been mistaken for causal/native particle IDs; its science products are
+excluded from this result. The successful r5 join resolves causal IDs through
+the STAR's `rlnImageName` stack identity before reading any dump.
+
 ## Rejected native-BPref reconstruction counterfactual
 
 The coarse/support boundary above leaves open whether RECOVAR's ordinary
@@ -278,15 +346,18 @@ multi-iteration, multi-dataset K=4 half-map refinement evidence.
 
 ```bash
 pixi run ruff check \
+  scripts/analyze_em_real_k4_coarse_score_support.py \
   scripts/launch_em_real_k4_shared200_causal_replay_slurm.py \
   scripts/audit_em_real_k4_shared200_causal_replay.py \
   scripts/validate_relion_bpref_factor_capture.py \
   scripts/validate_relion_fine_score_capture.py \
   tests/unit/test_launch_em_real_k4_shared200_causal_replay_slurm.py \
+  tests/unit/test_analyze_em_real_k4_coarse_score_support.py \
   tests/unit/test_audit_em_real_k4_shared200_causal_replay.py \
   tests/unit/test_validate_relion_bpref_factor_capture.py \
   tests/unit/test_validate_relion_fine_score_capture.py
 pixi run pytest -q \
+  tests/unit/test_analyze_em_real_k4_coarse_score_support.py \
   tests/unit/test_launch_em_real_k4_shared200_causal_replay_slurm.py \
   tests/unit/test_audit_em_real_k4_shared200_causal_replay.py \
   tests/unit/test_validate_relion_bpref_factor_capture.py \
