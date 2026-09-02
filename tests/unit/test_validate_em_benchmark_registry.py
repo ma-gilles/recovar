@@ -109,6 +109,13 @@ NATIVE_SIGNFIX_CAUSAL_DIAGNOSTIC = json.loads(
         / "real-k4-native-signfix-causal-7136e5c8d-20260902"
     ).with_suffix(".json").read_text()
 )
+REAL_K4_MULTISEED_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "real-k4-pilot10k-multiseed-stability-7136e5c8d-20260902"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -208,6 +215,10 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
         registry_validator._diagnostic_registry_route(
             NATIVE_SIGNFIX_CAUSAL_DIAGNOSTIC
         )
+        == "separate"
+    )
+    assert (
+        registry_validator._diagnostic_registry_route(REAL_K4_MULTISEED_DIAGNOSTIC)
         == "separate"
     )
     with pytest.raises(RegistryValidationError, match="unrecognized diagnostic family"):
@@ -348,6 +359,35 @@ def test_native_signfix_causal_diagnostic_pins_effect_and_admission_boundary():
     assert focused_gate["exit_code"] == "0:0"
     assert focused_gate["requested_tres"] == focused_gate["allocated_tres"]
     assert focused_gate["tests_collected"] == focused_gate["tests_passed"] == 5
+
+
+def test_real_k4_multiseed_diagnostic_retains_failures_and_stochastic_boundary():
+    diagnostic = REAL_K4_MULTISEED_DIAGNOSTIC
+    assert diagnostic["admission_status"] == "DIAGNOSTIC_ONLY_PER_SEED_GATES_RETAINED"
+    assert diagnostic["accepted_result"] is False
+    assert diagnostic["status"] == "complete_prospective_science_gate_rejected"
+    assert diagnostic["source"]["commit"] == (
+        "7136e5c8d9d38875c118b0e257859aee35f27f5a"
+    )
+    assert diagnostic["seeds"] == [42001, 42002, 42003]
+    assert all(run["prospective_science_gate_accepted"] is False for run in diagnostic["runs"])
+    assert all(run["qualification_exit_code"] == "3:0" for run in diagnostic["runs"])
+    assert all(run["req_tres_equals_alloc_tres"] for run in diagnostic["runs"])
+
+    for half in diagnostic["assignment_stability"]:
+        assert half["same_seed_cross_engine"]["min"] > half["within_engine_cross_seed"]["max"]
+        assert half["separation"] is True
+
+    quality = diagnostic["masked_halfmap_quality"]
+    assert quality["paired_recovar_minus_relion_fsc_auc"]["median"] > -0.001
+    assert quality["paired_recovar_minus_relion_fsc_auc"]["min"] < -0.1
+    assert quality["per_class_mean_delta"]["3"] < -0.03
+
+    performance = diagnostic["performance_across_six_half_runs"]
+    assert performance["recovar"]["peak_hbm_mib"]["max"] < 34000
+    assert performance["relion"]["peak_hbm_mib"]["min"] > 79000
+    assert performance["recovar_to_relion_median_wall_ratio"] > 3
+    assert performance["recovar_to_relion_median_peak_hbm_ratio"] < 0.5
 
 
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():

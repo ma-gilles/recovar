@@ -9,12 +9,11 @@ has been sealed. Planned runs belong in `k4_validation_matrix.md`, not in
 
 The dry-by-default EMPIAR-10076 K=4 independent-half launcher and its
 prospective acceptance contract are documented in
-`real_kclass_halfmap_refinement.md`. This is runnable infrastructure only;
-until a completed run passes the audit and is sealed, it must not appear in
-`entries/` as accepted evidence. The bounded launcher does not yet emit Pmax,
-pose/translation agreement, or the required multi-seed aggregate, and its
-common-mask FSC is explicitly an uncorrected relative diagnostic rather than
-an absolute-resolution claim.
+`real_kclass_halfmap_refinement.md`. The sign-fixed three-seed 10k/128 pilot is
+complete and sealed as a rejected diagnostic; it must not appear in `entries/`
+as accepted evidence. The bounded launcher does not yet emit Pmax or
+pose/translation agreement, and its common-mask FSC is explicitly an
+uncorrected relative diagnostic rather than an absolute-resolution claim.
 
 Single-run evidence lives in `entries/` and validates against
 `schema_v1.json`. Multi-case campaign scorecards live in `campaigns/` and
@@ -217,8 +216,9 @@ class-resolved operand factorial that excludes the shifted image, correction,
 Euler bridge, and translation phase, together with the current-source
 rounded-shell repair that closes projected-reference and significant-support
 parity exactly on the bounded panel, is documented in
-`real_k4_native_coarse_operand_boundary_20260902.md`. Fine-score/posterior and
-independent-half trajectory gates remain pending.
+`real_k4_native_coarse_operand_boundary_20260902.md`. The first-iteration
+fine-score/posterior boundary and the rejected three-seed independent-half
+trajectory are documented in `real_kclass_halfmap_refinement.md`.
 
 ## Repeating the K-class robustness panel
 

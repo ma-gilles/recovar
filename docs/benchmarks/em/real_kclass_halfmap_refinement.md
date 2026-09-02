@@ -189,6 +189,77 @@ The preceding setup job `13346480` succeeded, but its dependent job
 dirty while this documentation was drafted. That immutable root is retained as
 a harness failure and is not a scientific attempt.
 
+## Three-seed 10k/128 outcome: stable sign, seed-sensitive classes
+
+All three fixed-commit runs completed both engines, both independent halves,
+all eight iterations, map alignment, assignment joining, and half-map analysis.
+The qualification jobs have Slurm state `FAILED` and exit code 3 because the
+auditor deliberately exits nonzero when a prospective science gate is
+rejected; this is not a compute crash or an incomplete report. Every job used
+one H100, 24 CPUs, and 64 GiB without `--exclusive`, with exact requested and
+allocated resources.
+
+The K-class sign fix removes the deterministic collapse. All final class
+populations are nonzero, all four-class map permutations are unique, and the
+best permutation is the identity for every engine and half. The strict
+prospective gate nevertheless rejects all three seeds. Same-seed hard-label
+agreement remains only 0.742--0.787 in half 1 and 0.757--0.768 in half 2, well
+below the frozen 0.99 threshold. Seed 42001 also has a real weak-class outlier:
+class 3 loses 0.1193 masked half-map FSC-AUC relative to RELION and has merged
+cross-engine FSC-AUC 0.8444. That result is retained and is not averaged away.
+
+| Seed | Assignment agreement h1 / h2 | Per-class masked half-map FSC-AUC delta, RECOVAR - RELION | Per-class merged cross-engine FSC-AUC | Prospective gate |
+| ---: | ---: | --- | --- | --- |
+| 42001 | 0.7840 / 0.7568 | `[-0.0268, -0.0028, -0.1193, +0.0017]` | `[0.9620, 0.9782, 0.8444, 0.9662]` | rejected |
+| 42002 | 0.7422 / 0.7590 | `[-0.0086, +0.0049, +0.0069, -0.0113]` | `[0.9606, 0.9800, 0.8519, 0.9641]` | rejected |
+| 42003 | 0.7870 / 0.7680 | `[+0.0151, -0.0030, +0.0135, +0.0022]` | `[0.9554, 0.9792, 0.9626, 0.9680]` | rejected |
+
+Across all 12 class/seed rows, the paired masked half-map FSC-AUC delta has
+median -0.00054, mean -0.01063, and range -0.11925 to +0.01512. The median
+merged cross-engine FSC-AUC is 0.96338. Class 3 is the only strongly unstable
+class: its paired delta has median +0.00694 but mean -0.03293 because of the
+seed-42001 outlier.
+
+A separate discriminator compares the same particles across seeds. For half
+1, within-engine cross-seed hard-label agreement spans 0.5300--0.5866, whereas
+same-seed RECOVAR-versus-RELION agreement spans 0.7422--0.7870. For half 2 the
+corresponding ranges are 0.5444--0.5906 and 0.7568--0.7680. Thus, in both
+halves, the weakest same-seed cross-engine agreement exceeds the strongest
+within-engine cross-seed agreement. This is evidence that much of the label
+difference reflects seed-sensitive K-class local optima shared by both engines,
+not a deterministic RECOVAR-only assignment defect. It does not rescue any
+failed map-quality threshold, prove native-grid parity, or justify choosing a
+favorable seed.
+
+The same-GPU serial resource measurements across the six half-runs are:
+
+| Engine | Wall time, median (range) | Peak HBM, median (range) | Host MaxRSS, median (range) |
+| --- | ---: | ---: | ---: |
+| RELION | 380.76 s (376.58--399.50) | 79,588 MiB (79,573--79,589) | 1,138,936 KiB (1,121,836--1,156,104) |
+| RECOVAR | 1,280.24 s (1,230.22--1,382.47) | 33,478 MiB (33,477--33,483) | 9,825,424 KiB (9,762,872--9,953,972) |
+
+RECOVAR is 3.36 times slower in this bounded profile but uses 42.1% of
+RELION's sampled peak HBM. These are formal same-hardware measurements for this
+profile, not an extrapolation to native resolution.
+
+The checked-in diagnostic is
+`docs/benchmarks/em/diagnostics/real-k4-pilot10k-multiseed-stability-7136e5c8d-20260902.json`.
+The complete aggregate report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/multiseed_stability.json`
+(SHA-256
+`80255e714145c0ab77b24b48a25b850055baa5f17a58482333fb402bb919947d`).
+Reproduce it from the three immutable per-seed audits with:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902
+pixi run python -m scripts.aggregate_em_real_kclass_halfmap_seeds \
+  --expected-seeds 42001,42002,42003 \
+  --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42001_7136e5c8d_20260902/audit/halfmap_audit.json \
+  --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42002_7136e5c8d_20260902/audit/halfmap_audit.json \
+  --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42003_7136e5c8d_20260902/audit/halfmap_audit.json \
+  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/multiseed_stability.reproduced.json
+```
+
 ## Reproduction
 
 The launcher is dry-run by default. Use a fresh root for every retry:
@@ -341,7 +412,8 @@ accepted registry entry. Masked FSC cannot rescue an unmasked failure.
 
 This bounded launcher currently reports hard-assignment agreement,
 populations, significant-support summaries, maps, FSC, and resources. It does
-not yet report Pmax or pose/translation agreement, and one completed seed is
-not a seed-stability result. Those metrics and the predeclared three-seed
-aggregate remain required before this harness can satisfy the full Tier-6
-admission checklist.
+not yet report Pmax or pose/translation agreement. The three-seed
+assignment-stability aggregate is now complete and checked in as a rejected
+diagnostic, but the frozen FSC and assignment thresholds remain unmet. The
+missing metrics plus a green 128-grid pilot remain required before native-grid
+execution can satisfy the full Tier-6 admission checklist.

@@ -1,0 +1,167 @@
+{
+  "schema": "recovar.em.real_kclass_halfmap_multiseed_stability.v1",
+  "admission_status": "DIAGNOSTIC_ONLY_PER_SEED_GATES_RETAINED",
+  "accepted_result": false,
+  "status": "complete_prospective_science_gate_rejected",
+  "dataset": "EMPIAR-10076",
+  "profile": "pilot10k-128",
+  "source": {
+    "branch": "codex/pr158-k4-native-signfix-20260902",
+    "commit": "7136e5c8d9d38875c118b0e257859aee35f27f5a",
+    "tree": "edc516858302eef208878b3ac03ceead548ff85a",
+    "clean": true
+  },
+  "configuration": {
+    "K": 4,
+    "particles": 10000,
+    "half_counts": [5000, 5000],
+    "grid_size": 128,
+    "max_iter": 8,
+    "symmetry": "C1",
+    "initial_lowpass_angstrom": 30,
+    "image_batch_size": 500,
+    "rotation_block_size": 8192,
+    "fourier_backend": "relion_cuda",
+    "same_particles_and_halves_for_every_seed": true,
+    "same_job_serial_within_each_seed": true,
+    "absolute_resolution_claim": false,
+    "phase_randomization_corrected": false
+  },
+  "seeds": [42001, 42002, 42003],
+  "input_identity": {
+    "particle_stack_sha256": "24c52006eeb6f778a2b1a447a4ff790af0d2c78b7b20366281f54ec82c8f9382",
+    "origin_particles_star_sha256": "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f",
+    "source_indices_sha256": "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d",
+    "selected_source_indices_sha256": "b9f66fd8cec9e377e3d5915fe6dbef35b98024f9d2baf9e705399bcd2701072b",
+    "selected_order_sha256": "e5601e28361d1d7959a6b97a8807bb558b8741c040e57a5fc9abbdf57217ccd8",
+    "half_order_sha256": [
+      "c94cd1fe143f76a083427305cf234c1fdc8910d456ced0704a4a74cb670daabe",
+      "8250001605cb01945df2d9cb813b91894899b2a0427dd95bf154b0c1f0ee178a"
+    ]
+  },
+  "runs": [
+    {
+      "seed": 42001,
+      "setup_job_id": 13348863,
+      "qualification_job_id": 13348864,
+      "qualification_state": "FAILED",
+      "qualification_exit_code": "3:0",
+      "qualification_elapsed": "00:58:39",
+      "requested_tres": "billing=24,cpu=24,gres/gpu=1,mem=64G,node=1",
+      "allocated_tres": "billing=24,cpu=24,gres/gpu=1,mem=64G,node=1",
+      "req_tres_equals_alloc_tres": true,
+      "prospective_science_gate_accepted": false,
+      "assignment_agreement_half1_half2": [0.784, 0.7568],
+      "relion_masked_halfmap_fsc_auc": [0.7615101034, 0.8476232392, 0.3923008316, 0.7643960866],
+      "recovar_masked_halfmap_fsc_auc": [0.7346653101, 0.8448099041, 0.2730477899, 0.7661248881],
+      "recovar_minus_relion_masked_halfmap_fsc_auc": [-0.0268447933, -0.0028133351, -0.1192530417, 0.0017288016],
+      "cross_merged_fsc_auc": [0.9619903793, 0.9781952167, 0.8444287492, 0.9662106773],
+      "audit": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42001_7136e5c8d_20260902/audit/halfmap_audit.json",
+        "sha256": "791624dfba3a7a656f7caa749976ebbce6762e0dd67d91bcc6591aa1d41f8878"
+      }
+    },
+    {
+      "seed": 42002,
+      "setup_job_id": 13348862,
+      "qualification_job_id": 13348865,
+      "qualification_state": "FAILED",
+      "qualification_exit_code": "3:0",
+      "qualification_elapsed": "00:56:47",
+      "requested_tres": "billing=24,cpu=24,gres/gpu=1,mem=64G,node=1",
+      "allocated_tres": "billing=24,cpu=24,gres/gpu=1,mem=64G,node=1",
+      "req_tres_equals_alloc_tres": true,
+      "prospective_science_gate_accepted": false,
+      "assignment_agreement_half1_half2": [0.7422, 0.759],
+      "relion_masked_halfmap_fsc_auc": [0.7715530384, 0.8709086977, 0.3443424383, 0.7825579127],
+      "recovar_masked_halfmap_fsc_auc": [0.7629047054, 0.8758128596, 0.351280137, 0.7712618276],
+      "recovar_minus_relion_masked_halfmap_fsc_auc": [-0.008648333, 0.0049041618, 0.0069376987, -0.0112960851],
+      "cross_merged_fsc_auc": [0.9605624182, 0.9799766327, 0.8519326727, 0.9641465499],
+      "audit": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42002_7136e5c8d_20260902/audit/halfmap_audit.json",
+        "sha256": "410237370b128ddd28c7e6c8a47802b54caf96ddfe99271e94d3ef27aa481a3d"
+      }
+    },
+    {
+      "seed": 42003,
+      "setup_job_id": 13348861,
+      "qualification_job_id": 13348866,
+      "qualification_state": "FAILED",
+      "qualification_exit_code": "3:0",
+      "qualification_elapsed": "00:57:14",
+      "requested_tres": "billing=24,cpu=24,gres/gpu=1,mem=64G,node=1",
+      "allocated_tres": "billing=24,cpu=24,gres/gpu=1,mem=64G,node=1",
+      "req_tres_equals_alloc_tres": true,
+      "prospective_science_gate_accepted": false,
+      "assignment_agreement_half1_half2": [0.787, 0.768],
+      "relion_masked_halfmap_fsc_auc": [0.6851361516, 0.8378798882, 0.509873102, 0.7324280653],
+      "recovar_masked_halfmap_fsc_auc": [0.7002611353, 0.8348312014, 0.5233932099, 0.7345861314],
+      "recovar_minus_relion_masked_halfmap_fsc_auc": [0.0151249837, -0.0030486868, 0.0135201079, 0.0021580661],
+      "cross_merged_fsc_auc": [0.9553981712, 0.9791900309, 0.9626143889, 0.9680300754],
+      "audit": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42003_7136e5c8d_20260902/audit/halfmap_audit.json",
+        "sha256": "076ceb00ac182ade7aa9d047d855516c1fbf8c3a8dede176810bcaef15d5324a"
+      }
+    }
+  ],
+  "assignment_stability": [
+    {
+      "half": 1,
+      "within_engine_cross_seed": {"min": 0.53, "median": 0.5644, "mean": 0.5605, "max": 0.5866},
+      "same_seed_cross_engine": {"min": 0.7422, "median": 0.784, "mean": 0.7710666667, "max": 0.787},
+      "separation": true
+    },
+    {
+      "half": 2,
+      "within_engine_cross_seed": {"min": 0.5444, "median": 0.5793, "mean": 0.5711666667, "max": 0.5906},
+      "same_seed_cross_engine": {"min": 0.7568, "median": 0.759, "mean": 0.7612666667, "max": 0.768},
+      "separation": true
+    }
+  ],
+  "masked_halfmap_quality": {
+    "row_count": 12,
+    "paired_recovar_minus_relion_fsc_auc": {
+      "min": -0.1192530417,
+      "median": -0.0005422668,
+      "mean": -0.0106275379,
+      "max": 0.0151249837
+    },
+    "cross_merged_fsc_auc": {
+      "min": 0.8444287492,
+      "median": 0.9633804694,
+      "mean": 0.9477229969,
+      "max": 0.9799766327
+    },
+    "per_class_mean_delta": {
+      "1": -0.0067893809,
+      "2": -0.0003192867,
+      "3": -0.032931745,
+      "4": -0.0024697392
+    }
+  },
+  "performance_across_six_half_runs": {
+    "relion": {
+      "wall_s": {"min": 376.5814766884, "median": 380.7631732225, "mean": 383.4237221877, "max": 399.5015876293},
+      "peak_hbm_mib": {"min": 79573, "median": 79588, "mean": 79584, "max": 79589},
+      "max_rss_kib": {"min": 1121836, "median": 1138936, "mean": 1138366.6667, "max": 1156104}
+    },
+    "recovar": {
+      "wall_s": {"min": 1230.2226572037, "median": 1280.2395340204, "mean": 1292.4459733566, "max": 1382.4693360329},
+      "peak_hbm_mib": {"min": 33477, "median": 33478, "mean": 33479, "max": 33483},
+      "max_rss_kib": {"min": 9762872, "median": 9825424, "mean": 9833272, "max": 9953972}
+    },
+    "recovar_to_relion_median_wall_ratio": 3.3622987307,
+    "recovar_to_relion_median_peak_hbm_ratio": 0.4206413027,
+    "performance_classification": "same-GPU serial resource measurement; all science gates retained"
+  },
+  "aggregate_report": {
+    "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/multiseed_stability.json",
+    "sha256": "80255e714145c0ab77b24b48a25b850055baa5f17a58482333fb402bb919947d"
+  },
+  "reproduction": {
+    "script": "scripts/aggregate_em_real_kclass_halfmap_seeds.py",
+    "expected_seeds": "42001,42002,42003",
+    "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902"
+  },
+  "disposition": "All three prospective per-seed gates remain rejected. The assignment discriminator shows seed-sensitive K-class local optima because the weakest same-seed RECOVAR-versus-RELION agreement exceeds the strongest within-engine cross-seed agreement in both halves. This evidence does not rescue the seed-42001 class-3 FSC outlier or admit native-grid execution."
+}

@@ -120,7 +120,16 @@ versus RELION's `0.0382`. Its iteration-2 per-class direct FSC-AUC values are
 `[0.9933, 0.9959, 0.9801, 0.9928]`; identity-label assignment agreement
 improves from `0.9146` to `0.9420`. This closes the sign boundary only.
 Three full independent-half seeds, jobs `13348864`--`13348866`, are the
-next trajectory gate.
+next trajectory gate. They subsequently completed without class collapse but
+all three were rejected by the predeclared real-data gate. Across 12
+class/seed rows the paired masked half-map FSC-AUC delta has median -0.00054,
+but seed 42001 class 3 is a -0.11925 outlier. In both particle halves, the
+weakest same-seed cross-engine hard-label agreement exceeds the strongest
+within-engine cross-seed agreement, showing a substantial shared
+seed-sensitive local-optimum component. This remains diagnostic rather than an
+accepted result; exact jobs, FSC, assignments, performance, hashes, and the
+reproduction command are in `real_kclass_halfmap_refinement.md` and
+`diagnostics/real-k4-pilot10k-multiseed-stability-7136e5c8d-20260902.json`.
 
 ## Tier 2: 10k/128 multi-seed synthetic trajectories
 
@@ -336,18 +345,21 @@ The independent-half EMPIAR-10076 refinement gate is now runnable through
 `real_kclass_halfmap_refinement.md`. RELION does not permit K>1 and
 `--split_random_halves` in one process, so the harness runs two independent
 K=4 processes per engine, one on each immutable random subset. The launcher is
-dry-run by default. Its presence does not count as completed evidence; the
-three-seed 128-grid pilots and subsequent native runs remain pending until
-their audited products are admitted to the registry.
+dry-run by default. The three-seed 128-grid sign-fixed pilot is now complete
+and checked in as a rejected diagnostic: classes remain occupied, but all
+seeds miss the prospective assignment gate and one class/seed misses the
+half-map quality gate substantially. Native execution therefore remains
+blocked by policy rather than by missing infrastructure.
 
 That launcher is deliberately narrower than the complete Tier-6 checklist:
 it reports maps, half-map/cross-engine FSC, populations, hard-assignment
-agreement, significant support, and resources for one invocation. Pmax,
-pose/translation agreement, and the validated multi-seed consensus aggregate
-are not yet emitted. A successful single run therefore establishes the
-independent-half infrastructure only; it cannot be described as complete
-Tier-6 evidence until those omitted metrics and seed-level requirements are
-added and admitted.
+agreement, significant support, and resources for one invocation. The
+validated three-seed hard-assignment aggregate is now emitted separately;
+Pmax, pose/translation agreement, and cross-seed map stability remain absent.
+The completed pilot therefore establishes the independent-half infrastructure
+and a stochastic-instability boundary only; it cannot be described as
+complete Tier-6 evidence until the omitted metrics and frozen per-seed gates
+pass.
 
 ## Runnable now versus planned-only
 
@@ -369,8 +381,8 @@ implementation:
   the existing evaluator unit tests;
 - the independent exactly generated 100k/256 release fixture; and
 - an independent-half K=4 launcher for EMPIAR-10345 (and optional
-  EMPIAR-10073); EMPIAR-10076 is runnable but not yet executed, and the
-  InitialModel-only diagnostic cannot replace this gate.
+  EMPIAR-10073); EMPIAR-10076 has a completed but rejected three-seed pilot,
+  and the InitialModel-only diagnostic cannot replace either real-data gate.
 
 These are deliberately documented as pending execution infrastructure, not as
 completed coverage.

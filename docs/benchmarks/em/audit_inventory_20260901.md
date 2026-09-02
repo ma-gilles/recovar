@@ -3,16 +3,16 @@
 This is the compact coverage index for the EM evidence checked into the pull
 request. It distinguishes accepted registry records, supporting calibration
 evidence, rejected diagnostics, and runnable but unfinished gates. It indexes
-only completed artifacts already present through the shared-200 causal-audit
-integration at RECOVAR commit `ceaee74ce`; live or later runs must be sealed
-separately before this inventory can promote them.
+completed artifacts through the sign-fixed EMPIAR-10076 three-seed
+independent-half diagnostic at RECOVAR commit `7136e5c8d`; live or later runs
+must be sealed separately before this inventory can promote them.
 
 The machine registry currently contains six single-run entries, six campaign
 records, and one synthetic negative diagnostic. The exact filenames are pinned
 by `tests/unit/test_validate_em_benchmark_registry.py`, while
 `scripts/validate_em_benchmark_registry.py` validates every accepted or
 synthetic-negative JSON and fails closed on an unknown diagnostic family.
-Three real-data diagnostic families are deliberately routed outside the
+Eight real-data diagnostic schemas are deliberately routed outside the
 accepted registry and are never counted as accepted results. The InitialModel
 and offset-prior ledgers have dedicated whole-ledger validators; the
 selected-fine record's missing equivalent validator is listed as an open
@@ -110,13 +110,15 @@ quality pair into a formal speed comparison.
 | `real_k4_native_coarse_operand_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-operands-b061776-20260902.json` | Historical three-repeat operand localization plus current-source rounded-shell/Euler replay; jobs 13334583--13334585, 13336787, 13336962, and 13337519 | Diagnostic PASS and bounded boundary closure: native projected references localized the old defect; commit `5f74755c2` then yields zero projected-reference/Euler error and exact support for 16/16 probes and 1,336/1,336 selected candidates. This is not a final K=4 refinement admission. | Replay state is bitwise repeatable; eight GPU-atomic maps have minimum FSC-AUC `0.999999997335` and maximum relative L2 `1.57406e-7`. Timings remain diagnostic, not an engine speed comparison. Job 13334206 remains rejected because synchronous capture perturbed production results. |
 | `real_kclass_halfmap_refinement.md`, first-iteration native score boundary | Passive native RELION coarse/fine scores and RECOVAR surfaces for 16 frozen EMPIAR-10076 particles; 1,069,056 coarse candidates; H100 job 13346151 | Diagnostic PASS: commit `4a91369a3` preserves only `run_it000` origins during the fresh Class3D global search. Winner classes, global poses, all per-class poses, fine parents/winners, and integer pre-shifts are exact across the panel. This closes the first-iteration score boundary, not final K=4 quality. | RECOVAR wall 80.4 s and peak HBM 33,423 MiB for the containing 5,000-particle iteration. Full-surface minimum correlation `0.999999999996`; worst fine-score absolute error `7.45e-8`. Sealed JSON SHA-256 `977d115f1593`. |
 | `diagnostics/real-k4-native-signfix-causal-7136e5c8d-20260902.json` | Seed-42001 two-iteration EMPIAR-10076 half-1 causal A/B after all three controls independently logged the same class-3 sign flip | Causal PASS: commit `7136e5c8d` restores class-3 iteration-1 FSC-AUC from -0.990489 to +0.990489 and iteration-2 occupancy from 0.0012 to 0.0368 versus RELION 0.0382. Iteration-2 class agreement is 0.942, so this is not a final K=4 admission. | H100 job 13348468 completed in 9m22s, exit 0, exact one-GPU allocation, peak HBM 33,465 MiB. Full JSON SHA-256 `25f3a772fc31`. |
-| `real_kclass_halfmap_refinement.md` | Independent-half refinement launcher/runbook | Runnable infrastructure only; no accepted completed pair | Pending. |
+| `diagnostics/real-k4-pilot10k-multiseed-stability-7136e5c8d-20260902.json` | Three seeds, two immutable 5,000-particle halves per seed, eight K=4 iterations per engine | All three prospective gates remain rejected. Median paired masked half-map FSC-AUC delta is -0.00054, but seed-42001 class 3 is -0.11925. Same-seed cross-engine labels are substantially closer than either engine is across seeds, establishing a seed-sensitive local-optimum boundary without rescuing the failures. | Same-H100 serial measurements across six halves: RECOVAR median 1,280.24 s / 33,478 MiB; RELION 380.76 s / 79,588 MiB. All jobs have exact requested/allocated resources. |
+| `real_kclass_halfmap_refinement.md` | Independent-half refinement launcher/runbook and full three-seed interpretation | Infrastructure complete for EMPIAR-10076; no accepted completed pair | Native-grid execution remains blocked by the rejected pilot gate. |
 
 InitialModel emits one class map rather than independently refined half maps,
-so none of these diagnostics can support final resolution. A real K=4
-admission still requires matched multi-seed independent-half refinement,
-Hungarian per-class FSC, stable populations, a common mask, and same-hardware
-performance after the quality gate passes.
+so those precursor diagnostics cannot support final resolution. The completed
+independent-half pilot supplies Hungarian per-class FSC, populations, a common
+mask, seed stability, and same-hardware performance, but it fails the frozen
+quality and assignment thresholds. It therefore remains outside real K=4
+admission.
 
 ## Remaining coverage gaps
 
@@ -129,10 +131,11 @@ performance after the quality gate passes.
 3. Finish and seal the RECOVAR EMPIAR-10202 arm before making any target-grid
    high-resolution or two-engine performance claim.
 4. The real K=4 firstiter score boundary and post-reconstruction sign boundary
-   are repaired at commits `4a91369a3` and `7136e5c8d`. Finish and audit
-   the active three-seed independent-half rerun before promoting any final
-   class quality, assignment, resolution, or speed claim. Existing bounded
-   diagnostic timing cannot be promoted to an engine speed claim.
+   are repaired at commits `4a91369a3` and `7136e5c8d`. The three-seed
+   independent-half rerun is complete but rejected: add Pmax,
+   pose/translation, and cross-seed map diagnostics, then localize the
+   seed-42001 weak-class outlier before considering a new frozen pilot. Do not
+   promote its results to native-grid acceptance.
 5. Add a dedicated whole-ledger validator for the selected-fine diagnostic or
    migrate it into a versioned diagnostic schema before relying on it as more
    than causal evidence.
