@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strictly audit a complete K=4 RECOVAR/RELION FSC trajectory.
+"""Strictly audit a complete K-class RECOVAR/RELION FSC trajectory.
 
 RECOVAR intermediate names are zero-based and use the production debug-dump
 spelling ``it000_half1_class1_reg.mrc`` (the class number is not padded).
@@ -36,8 +36,12 @@ from scripts.summarize_em_completion_bench import (  # noqa: E402, I001
 )
 
 
-SCHEMA = "em_k4_fsc_trajectory_audit_v2"
-N_CLASSES = 4
+K4_SCHEMA = "em_k4_fsc_trajectory_audit_v2"
+KCLASS_SCHEMA = "em_kclass_fsc_trajectory_audit_v1"
+DEFAULT_N_CLASSES = 4
+# Preserve imports used by older K=4-only tooling.
+SCHEMA = K4_SCHEMA
+N_CLASSES = DEFAULT_N_CLASSES
 RECOVAR_MAP_RE = re.compile(r"^it(\d{3})_half([12])_class(\d{1,3})_reg\.mrc$")
 RELION_MAP_RE = re.compile(r"^run_it(\d{3})_class(\d{3})\.mrc$")
 
@@ -79,14 +83,15 @@ def _fsc_auc(lhs: np.ndarray, rhs: np.ndarray) -> float:
     return float(normalized_fsc_auc(np.asarray(shell_fsc(lhs, rhs), dtype=np.float64)))
 
 
-def _hungarian_max(scores: np.ndarray, *, label: str) -> list[int]:
+def _hungarian_max(scores: np.ndarray, *, label: str, n_classes: int) -> list[int]:
     values = np.asarray(scores, dtype=np.float64)
-    if values.shape != (N_CLASSES, N_CLASSES):
-        raise AuditError(f"{label} score matrix has shape {values.shape}, expected {(N_CLASSES, N_CLASSES)}")
+    expected_shape = (n_classes, n_classes)
+    if values.shape != expected_shape:
+        raise AuditError(f"{label} score matrix has shape {values.shape}, expected {expected_shape}")
     if not np.isfinite(values).all():
         raise AuditError(f"{label} score matrix contains non-finite values")
     rows, cols = linear_sum_assignment(-values)
-    if not np.array_equal(rows, np.arange(N_CLASSES)):
+    if not np.array_equal(rows, np.arange(n_classes)):
         raise AuditError(f"{label} Hungarian assignment did not cover every class")
     return [int(value) for value in cols]
 
@@ -121,16 +126,18 @@ def _discover_relion_maps(directory: Path) -> dict[int, dict[int, Path]]:
     return grouped
 
 
-def _validate_recovar_topology(maps: dict[int, dict[int, dict[int, Path]]]) -> None:
+def _validate_recovar_topology(
+    maps: dict[int, dict[int, dict[int, Path]]], *, n_classes: int
+) -> None:
     if not maps:
-        raise AuditError("no RECOVAR numbered K=4 half maps found")
+        raise AuditError(f"no RECOVAR numbered K={n_classes} half maps found")
     iterations = sorted(maps)
     expected_iterations = list(range(len(iterations)))
     if iterations != expected_iterations:
         raise AuditError(
             f"RECOVAR iterations are not contiguous zero-based: found {iterations}, expected {expected_iterations}"
         )
-    expected_classes = set(range(1, N_CLASSES + 1))
+    expected_classes = set(range(1, n_classes + 1))
     incomplete: list[str] = []
     for iteration, halves in maps.items():
         if set(halves) != {1, 2}:
@@ -141,37 +148,41 @@ def _validate_recovar_topology(maps: dict[int, dict[int, dict[int, Path]]]) -> N
             if classes != expected_classes:
                 incomplete.append(f"it{iteration:03d} half{half} classes={sorted(classes)}")
     if incomplete:
-        raise AuditError(f"RECOVAR numbered K=4 topology is incomplete: {incomplete}")
+        raise AuditError(f"RECOVAR numbered K={n_classes} topology is incomplete: {incomplete}")
 
 
-def _validate_relion_topology(maps: dict[int, dict[int, Path]]) -> None:
+def _validate_relion_topology(maps: dict[int, dict[int, Path]], *, n_classes: int) -> None:
     if not maps:
-        raise AuditError("no RELION numbered Class3D K=4 full maps found")
+        raise AuditError(f"no RELION numbered Class3D K={n_classes} full maps found")
     iterations = sorted(maps)
     expected_iterations = list(range(1, len(iterations) + 1))
     if iterations != expected_iterations:
         raise AuditError(
             f"RELION iterations are not contiguous one-based: found {iterations}, expected {expected_iterations}"
         )
-    expected_classes = set(range(1, N_CLASSES + 1))
+    expected_classes = set(range(1, n_classes + 1))
     incomplete = [
         f"it{iteration:03d} classes={sorted(classes)}"
         for iteration, classes in maps.items()
         if set(classes) != expected_classes
     ]
     if incomplete:
-        raise AuditError(f"RELION numbered Class3D K=4 topology is incomplete: {incomplete}")
+        raise AuditError(
+            f"RELION numbered Class3D K={n_classes} topology is incomplete: {incomplete}"
+        )
 
 
 def _validate_numbered_topology(
     recovar_maps: dict[int, dict[int, dict[int, Path]]],
     relion_maps: dict[int, dict[int, Path]],
     refinement_results: Path,
+    *,
+    n_classes: int,
 ) -> list[tuple[int, int]]:
     rec_iterations = sorted(recovar_maps)
     rel_iterations = sorted(relion_maps)
-    _validate_recovar_topology(recovar_maps)
-    _validate_relion_topology(relion_maps)
+    _validate_recovar_topology(recovar_maps, n_classes=n_classes)
+    _validate_relion_topology(relion_maps, n_classes=n_classes)
     if len(rec_iterations) != len(rel_iterations):
         raise AuditError(
             f"numbered iteration count mismatch: RECOVAR={len(rec_iterations)} RELION={len(rel_iterations)}"
@@ -191,15 +202,17 @@ def _validate_numbered_topology(
 
 def _load_recovar_numbered_classes(
     paths: dict[int, dict[int, Path]],
+    *,
+    n_classes: int,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-    half1 = [_load_recovar_volume(paths[1][class_id]) for class_id in range(1, N_CLASSES + 1)]
-    half2 = [_load_recovar_volume(paths[2][class_id]) for class_id in range(1, N_CLASSES + 1)]
+    half1 = [_load_recovar_volume(paths[1][class_id]) for class_id in range(1, n_classes + 1)]
+    half2 = [_load_recovar_volume(paths[2][class_id]) for class_id in range(1, n_classes + 1)]
     merged = [0.5 * (lhs + rhs) for lhs, rhs in zip(half1, half2, strict=True)]
     return half1, half2, merged
 
 
-def _load_relion_numbered_classes(paths: dict[int, Path]) -> list[np.ndarray]:
-    return [_load_relion_volume(paths[class_id]) for class_id in range(1, N_CLASSES + 1)]
+def _load_relion_numbered_classes(paths: dict[int, Path], *, n_classes: int) -> list[np.ndarray]:
+    return [_load_relion_volume(paths[class_id]) for class_id in range(1, n_classes + 1)]
 
 
 def _assignment_score_matrix(lhs: list[np.ndarray], rhs: list[np.ndarray]) -> np.ndarray:
@@ -211,15 +224,17 @@ def _gt_pair_assignment(
     rel_merged: list[np.ndarray],
     rel_for_rec: list[int],
     gt: list[np.ndarray],
+    *,
+    n_classes: int,
 ) -> tuple[list[int], np.ndarray]:
-    scores = np.empty((N_CLASSES, N_CLASSES), dtype=np.float64)
-    for rec_id in range(N_CLASSES):
+    scores = np.empty((n_classes, n_classes), dtype=np.float64)
+    for rec_id in range(n_classes):
         rel_id = rel_for_rec[rec_id]
-        for gt_id in range(N_CLASSES):
+        for gt_id in range(n_classes):
             scores[rec_id, gt_id] = 0.5 * (
                 _fsc_auc(rec_merged[rec_id], gt[gt_id]) + _fsc_auc(rel_merged[rel_id], gt[gt_id])
             )
-    return _hungarian_max(scores, label="matched-pair-to-GT"), scores
+    return _hungarian_max(scores, label="matched-pair-to-GT", n_classes=n_classes), scores
 
 
 def _selected_class_metrics(
@@ -231,9 +246,10 @@ def _selected_class_metrics(
     rel_for_rec: list[int],
     gt_for_rec: list[int],
     shellwise: dict[str, np.ndarray],
+    n_classes: int,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for rec_id in range(N_CLASSES):
+    for rec_id in range(n_classes):
         rel_id = rel_for_rec[rec_id]
         gt_id = gt_for_rec[rec_id]
         cross = _map_metric(
@@ -299,6 +315,7 @@ def _class_agreement(
     fixture_particles_star: Path,
     recovar_iteration: int,
     rel_for_rec: list[int],
+    n_classes: int = DEFAULT_N_CLASSES,
 ) -> dict[str, Any]:
     key = f"class_assignments_by_image_iter_{recovar_iteration:03d}"
     if not fixture_particles_star.is_file():
@@ -328,7 +345,7 @@ def _class_agreement(
     if set(relion_by_name) != set(fixture_names):
         return {"status": "unavailable", "reason": "RELION and fixture image identity sets differ"}
     rel_ordered = np.asarray([relion_by_name[name] for name in fixture_names], dtype=np.int64)
-    valid = (rec >= 0) & (rec < N_CLASSES) & (rel_ordered >= 0) & (rel_ordered < N_CLASSES)
+    valid = (rec >= 0) & (rec < n_classes) & (rel_ordered >= 0) & (rel_ordered < n_classes)
     if not valid.all():
         return {"status": "unavailable", "reason": "class arrays contain missing or out-of-range class ids"}
     mapped = np.asarray(rel_for_rec, dtype=np.int64)[rec]
@@ -354,12 +371,19 @@ def _numbered_row(
     refinement_results: Path,
     relion_dir: Path,
     fixture_particles_star: Path,
+    n_classes: int,
 ) -> dict[str, Any]:
-    rec = _load_recovar_numbered_classes(rec_paths)
-    rel = _load_relion_numbered_classes(rel_paths)
+    rec = _load_recovar_numbered_classes(rec_paths, n_classes=n_classes)
+    rel = _load_relion_numbered_classes(rel_paths, n_classes=n_classes)
     score_matrix = _assignment_score_matrix(rec[2], rel)
-    rel_for_rec = _hungarian_max(score_matrix, label=f"it{rel_iteration:03d} RECOVAR-to-RELION")
-    gt_for_rec, gt_score_matrix = _gt_pair_assignment(rec[2], rel, rel_for_rec, gt)
+    rel_for_rec = _hungarian_max(
+        score_matrix,
+        label=f"it{rel_iteration:03d} RECOVAR-to-RELION",
+        n_classes=n_classes,
+    )
+    gt_for_rec, gt_score_matrix = _gt_pair_assignment(
+        rec[2], rel, rel_for_rec, gt, n_classes=n_classes
+    )
     return {
         "recovar_index": rec_iteration,
         "relion_iteration": rel_iteration,
@@ -375,6 +399,7 @@ def _numbered_row(
             rel_for_rec=rel_for_rec,
             gt_for_rec=gt_for_rec,
             shellwise=shellwise,
+            n_classes=n_classes,
         ),
         "class_agreement": _class_agreement(
             refinement_results=refinement_results,
@@ -382,25 +407,33 @@ def _numbered_row(
             fixture_particles_star=fixture_particles_star,
             recovar_iteration=rec_iteration,
             rel_for_rec=rel_for_rec,
+            n_classes=n_classes,
         ),
     }
 
 
-def _discover_final(directory: Path, pattern: re.Pattern[str], *, engine: str) -> dict[int, Path]:
+def _discover_final(
+    directory: Path,
+    pattern: re.Pattern[str],
+    *,
+    engine: str,
+    n_classes: int,
+) -> dict[int, Path]:
     found: dict[int, Path] = {}
     for path in directory.glob("*.mrc"):
         match = pattern.match(path.name)
         if match is not None:
             found[int(match.group(1))] = path
-    expected = set(range(1, N_CLASSES + 1))
+    expected = set(range(1, n_classes + 1))
     if set(found) != expected:
         raise AuditError(
-            f"{engine} final K=4 products are incomplete: classes={sorted(found)}, expected={sorted(expected)}"
+            f"{engine} final K={n_classes} products are incomplete: "
+            f"classes={sorted(found)}, expected={sorted(expected)}"
         )
     return found
 
 
-def _finalization_state(refinement_results: Path) -> dict[str, bool]:
+def _finalization_state(refinement_results: Path, *, n_classes: int) -> dict[str, bool]:
     with np.load(refinement_results, allow_pickle=False) as payload:
         required = ("convergence_has_converged", "final_all_data_ran")
         missing = [key for key in required if key not in payload.files]
@@ -409,7 +442,7 @@ def _finalization_state(refinement_results: Path) -> dict[str, bool]:
         state = {key: bool(np.asarray(payload[key]).item()) for key in required}
     if state["final_all_data_ran"]:
         raise AuditError(
-            "K=4 final-all-data products require a dedicated RELION comparator; "
+            f"K={n_classes} final-all-data products require a dedicated RELION comparator; "
             "the last-numbered Class3D comparator is valid only when final_all_data_ran=false"
         )
     return state
@@ -424,22 +457,32 @@ def _final_metrics(
     relion_iteration: int,
     gt: list[np.ndarray],
     shellwise: dict[str, np.ndarray],
+    n_classes: int,
 ) -> dict[str, Any]:
-    rec_paths = _discover_final(recovar_dir, re.compile(r"^final_class(\d{3})\.mrc$"), engine="RECOVAR")
-    rec = [_load_recovar_volume(rec_paths[class_id]) for class_id in range(1, N_CLASSES + 1)]
-    rec_last = _load_recovar_numbered_classes(recovar_last_paths)[2]
+    rec_paths = _discover_final(
+        recovar_dir,
+        re.compile(r"^final_class(\d{3})\.mrc$"),
+        engine="RECOVAR",
+        n_classes=n_classes,
+    )
+    rec = [_load_recovar_volume(rec_paths[class_id]) for class_id in range(1, n_classes + 1)]
+    rec_last = _load_recovar_numbered_classes(recovar_last_paths, n_classes=n_classes)[2]
     for class_id, (final_map, numbered_map) in enumerate(zip(rec, rec_last, strict=True), start=1):
         if not np.array_equal(final_map, numbered_map):
             raise AuditError(
                 f"RECOVAR final class {class_id} does not exactly match the last numbered "
                 f"half-average at iteration {recovar_iteration}"
             )
-    rel = _load_relion_numbered_classes(relion_last_paths)
+    rel = _load_relion_numbered_classes(relion_last_paths, n_classes=n_classes)
     score_matrix = _assignment_score_matrix(rec, rel)
-    rel_for_rec = _hungarian_max(score_matrix, label="final RECOVAR-to-RELION")
-    gt_for_rec, gt_score_matrix = _gt_pair_assignment(rec, rel, rel_for_rec, gt)
+    rel_for_rec = _hungarian_max(
+        score_matrix, label="final RECOVAR-to-RELION", n_classes=n_classes
+    )
+    gt_for_rec, gt_score_matrix = _gt_pair_assignment(
+        rec, rel, rel_for_rec, gt, n_classes=n_classes
+    )
     classes = []
-    for rec_id in range(N_CLASSES):
+    for rec_id in range(n_classes):
         rel_id, gt_id = rel_for_rec[rec_id], gt_for_rec[rec_id]
         cross = _map_metric(
             rec[rec_id],
@@ -514,7 +557,19 @@ def _apply_gates(
 
 
 def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+    n_classes = int(args.n_classes)
     case_root = args.case_root.resolve()
+    case_config = case_root / "case_config.json"
+    if case_config.is_file():
+        try:
+            configured_n_classes = int(json.loads(case_config.read_text())["n_classes"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AuditError(f"invalid n_classes in {case_config}: {exc}") from exc
+        if configured_n_classes != n_classes:
+            raise AuditError(
+                f"requested K={n_classes} disagrees with {case_config}: "
+                f"n_classes={configured_n_classes}"
+            )
     recovar_dir = (args.recovar_dir or case_root / "recovar").resolve()
     relion_dir = (args.relion_dir or case_root / "relion_ref").resolve()
     gt_dir = (args.gt_dir or case_root / "data").resolve()
@@ -524,17 +579,22 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         raise AuditError(f"missing RECOVAR intermediates directory: {intermediates}")
     if not relion_dir.is_dir():
         raise AuditError(f"missing RELION directory: {relion_dir}")
-    gt_paths = [gt_dir / f"reference_gt_class{class_id:03d}.mrc" for class_id in range(1, N_CLASSES + 1)]
+    gt_paths = [
+        gt_dir / f"reference_gt_class{class_id:03d}.mrc"
+        for class_id in range(1, n_classes + 1)
+    ]
     missing_gt = [str(path) for path in gt_paths if not path.is_file()]
     if missing_gt:
-        raise AuditError(f"missing K=4 GT maps: {missing_gt}")
+        raise AuditError(f"missing K={n_classes} GT maps: {missing_gt}")
     gt = [_load_recovar_volume(path) for path in gt_paths]
 
     rec_maps = _discover_recovar_maps(intermediates)
     rel_maps = _discover_relion_maps(relion_dir)
     refinement_results = recovar_dir / "refinement_results.npz"
-    pairs = _validate_numbered_topology(rec_maps, rel_maps, refinement_results)
-    finalization = _finalization_state(refinement_results)
+    pairs = _validate_numbered_topology(
+        rec_maps, rel_maps, refinement_results, n_classes=n_classes
+    )
+    finalization = _finalization_state(refinement_results, n_classes=n_classes)
     shellwise: dict[str, np.ndarray] = {}
     rows = [
         _numbered_row(
@@ -547,6 +607,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
             refinement_results=refinement_results,
             relion_dir=relion_dir,
             fixture_particles_star=fixture_particles_star,
+            n_classes=n_classes,
         )
         for rec_iteration, rel_iteration in pairs
     ]
@@ -559,6 +620,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         relion_iteration=final_rel_iteration,
         gt=gt,
         shellwise=shellwise,
+        n_classes=n_classes,
     )
     failures = _apply_gates(
         rows,
@@ -574,7 +636,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
     ]
     return (
         {
-            "schema": SCHEMA,
+            "schema": K4_SCHEMA if n_classes == DEFAULT_N_CLASSES else KCLASS_SCHEMA,
             "status": "pass" if not failures else "fail",
             "quality_metric_policy": "shellwise FSC and normalized FSC-AUC only; correlation is not computed",
             "paths": {
@@ -584,7 +646,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
                 "gt_dir": str(gt_dir),
                 "fixture_particles_star": str(fixture_particles_star),
             },
-            "n_classes": N_CLASSES,
+            "n_classes": n_classes,
             "numbered_map_policy": (
                 "each RECOVAR per-class map is the arithmetic mean of its two saved regularized half maps; "
                 "each RELION Class3D product is the corresponding one-based numbered full map"
@@ -615,8 +677,9 @@ def _fmt(value: Any) -> str:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    n_classes = int(report.get("n_classes", DEFAULT_N_CLASSES))
     lines = [
-        "# K=4 FSC trajectory audit",
+        f"# K={n_classes} FSC trajectory audit",
         "",
         f"Status: **{str(report['status']).upper()}**",
         "",
@@ -662,29 +725,35 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--relion-dir", type=Path)
     parser.add_argument("--gt-dir", type=Path)
     parser.add_argument("--fixture-particles-star", type=Path)
+    parser.add_argument("--n-classes", type=int, default=DEFAULT_N_CLASSES)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-markdown", type=Path)
     parser.add_argument("--output-shellwise-npz", type=Path)
     parser.add_argument("--min-cross-fsc-auc", type=float, default=0.995)
     parser.add_argument("--min-gt-delta", type=float, default=-0.002)
     parser.add_argument("--min-class-agreement", type=float, default=0.99)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.n_classes < 2:
+        parser.error("--n-classes must be at least 2")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     analysis_dir = args.case_root.resolve() / "trajectory_analysis"
-    output_json = (args.output_json or analysis_dir / "k4_fsc_trajectory.json").resolve()
-    output_markdown = (args.output_markdown or analysis_dir / "k4_fsc_trajectory.md").resolve()
-    output_npz = (args.output_shellwise_npz or analysis_dir / "k4_fsc_trajectory_shellwise.npz").resolve()
+    output_stem = "k4_fsc_trajectory" if args.n_classes == DEFAULT_N_CLASSES else f"k{args.n_classes}_fsc_trajectory"
+    output_json = (args.output_json or analysis_dir / f"{output_stem}.json").resolve()
+    output_markdown = (args.output_markdown or analysis_dir / f"{output_stem}.md").resolve()
+    output_npz = (args.output_shellwise_npz or analysis_dir / f"{output_stem}_shellwise.npz").resolve()
     for path in (output_json, output_markdown, output_npz):
         path.parent.mkdir(parents=True, exist_ok=True)
     try:
         report, shellwise = audit_case(args)
     except AuditError as exc:
         report = {
-            "schema": SCHEMA,
+            "schema": K4_SCHEMA if args.n_classes == DEFAULT_N_CLASSES else KCLASS_SCHEMA,
             "status": "error",
+            "n_classes": int(args.n_classes),
             "quality_metric_policy": "shellwise FSC and normalized FSC-AUC only; correlation is not computed",
             "failures": [str(exc)],
             "earliest_failure": str(exc),

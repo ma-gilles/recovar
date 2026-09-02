@@ -25,6 +25,23 @@ def test_script_path_invocation_resolves_repository_imports(tmp_path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "--case-root" in result.stdout
+    assert "--n-classes" in result.stdout
+
+
+def test_generic_script_path_invocation_resolves_repository_imports(tmp_path) -> None:
+    script = Path(__file__).resolve().parents[2] / "scripts" / "audit_kclass_fsc_trajectory.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--case-root" in result.stdout
+    assert "--n-classes" in result.stdout
 
 
 def _touch(path: Path) -> Path:
@@ -42,6 +59,7 @@ def _make_case(
     missing_numbered: tuple[str, int, int, int] | tuple[str, int, int] | None = None,
     missing_final_recovar_class: int | None = None,
     final_all_data_ran: bool = False,
+    n_classes: int = 4,
 ) -> tuple[Path, dict[Path, np.ndarray]]:
     case_root = tmp_path / "case"
     recovar_dir = case_root / "recovar"
@@ -49,10 +67,10 @@ def _make_case(
     relion_dir = case_root / "relion_ref"
     data_dir = case_root / "data"
     rng = np.random.default_rng(29)
-    gt = [rng.normal(size=(8, 8, 8)).astype(np.float64) for _ in range(4)]
+    gt = [rng.normal(size=(8, 8, 8)).astype(np.float64) for _ in range(n_classes)]
     # RELION classes contain GT classes [3, 1, 4, 2], so the correct
     # zero-based RECOVAR-to-RELION assignment is [1, 3, 0, 2].
-    relion_source = [2, 0, 3, 1]
+    relion_source = [2, 0, 3, 1] if n_classes == 4 else [*range(1, n_classes), 0]
     arrays: dict[Path, np.ndarray] = {}
 
     for class_id, volume in enumerate(gt, start=1):
@@ -122,6 +140,8 @@ def test_complete_k4_trajectory_matches_each_iteration_and_final_by_fsc_auc(tmp_
 
     assert status == 0
     assert report["status"] == "pass"
+    assert report["schema"] == "em_k4_fsc_trajectory_audit_v2"
+    assert report["n_classes"] == 4
     assert report["numbered_iteration_count"] == 2
     assert [row["recovar_index"] for row in report["numbered_iterations"]] == [0, 1]
     assert [row["relion_iteration"] for row in report["numbered_iterations"]] == [1, 2]
@@ -147,6 +167,68 @@ def test_complete_k4_trajectory_matches_each_iteration_and_final_by_fsc_auc(tmp_
     markdown = (tmp_path / "report.md").read_text()
     assert "Correlation was not computed" in markdown
     assert "REC class" in markdown
+
+
+@pytest.mark.unit
+def test_complete_k2_trajectory_uses_requested_class_count(tmp_path, monkeypatch):
+    case_root, _ = _make_case(tmp_path, monkeypatch, n_classes=2)
+
+    status, report, output_npz = _run(case_root, tmp_path, "--n-classes", "2")
+
+    assert status == 0
+    assert report["schema"] == "em_kclass_fsc_trajectory_audit_v1"
+    assert report["n_classes"] == 2
+    assert report["numbered_iterations"][0]["recovar_to_relion_assignment"] == [2, 1]
+    assert report["numbered_iterations"][0]["matched_pair_to_gt_assignment"] == [1, 2]
+    assert len(report["numbered_iterations"][0]["classes"]) == 2
+    assert report["final"]["recovar_to_relion_assignment"] == [2, 1]
+    with np.load(output_npz, allow_pickle=False) as curves:
+        assert "it001_rec001_rel002_cross" in curves.files
+        assert "final_rec002_rel001_cross" in curves.files
+        assert not any("rec003" in key for key in curves.files)
+    assert "# K=2 FSC trajectory audit" in (tmp_path / "report.md").read_text()
+
+
+@pytest.mark.unit
+def test_requested_class_count_must_match_case_config(tmp_path, monkeypatch):
+    case_root, _ = _make_case(tmp_path, monkeypatch, n_classes=2)
+    (case_root / "case_config.json").write_text(json.dumps({"n_classes": 8}))
+
+    status, report, output_npz = _run(case_root, tmp_path, "--n-classes", "2")
+
+    assert status == 2
+    assert report["status"] == "error"
+    assert "requested K=2 disagrees" in report["earliest_failure"]
+    assert "n_classes=8" in report["earliest_failure"]
+    with np.load(output_npz, allow_pickle=False) as curves:
+        assert curves.files == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("n_classes", [2, 8, 16])
+def test_hungarian_assignment_is_class_count_generic(n_classes):
+    expected = np.roll(np.arange(n_classes), 1)
+    scores = np.zeros((n_classes, n_classes), dtype=np.float64)
+    scores[np.arange(n_classes), expected] = 1.0
+
+    assignment = auditor._hungarian_max(
+        scores,
+        label=f"K={n_classes} synthetic permutation",
+        n_classes=n_classes,
+    )
+
+    assert assignment == expected.tolist()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("n_classes", [2, 8, 16])
+def test_requested_class_count_rejects_wrong_hungarian_shape(n_classes):
+    with pytest.raises(auditor.AuditError, match=rf"expected \({n_classes}, {n_classes}\)"):
+        auditor._hungarian_max(
+            np.eye(n_classes + 1),
+            label=f"K={n_classes} wrong shape",
+            n_classes=n_classes,
+        )
 
 
 @pytest.mark.unit

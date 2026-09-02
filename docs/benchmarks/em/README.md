@@ -274,6 +274,22 @@ The run root contains:
 - each case's class-population audit, commands, provenance, FSC metrics, and
   performance artifacts under its case directory.
 
+After a case completes, audit every numbered RECOVAR half-map average against
+the corresponding RELION Class3D map with the class-count-generic checker. For
+example, a K=8 case is checked with:
+
+```bash
+pixi run python scripts/audit_kclass_fsc_trajectory.py \
+  --case-root /absolute/path/to/completed/case \
+  --n-classes 8
+```
+
+The checker performs an independent Hungarian match at every iteration and
+gates each matched class on direct FSC-AUC, signed GT FSC-AUC delta, and class
+assignment agreement when the particle tables are available. K=4 remains the
+default for compatibility with the historical
+`scripts/audit_k4_fsc_trajectory.py` entry point and its sealed v2 records.
+
 The multi-seed aggregate is intentionally not a schema-v1 registry record and
 does not make a formal gate claim. It proves that exactly three frozen seeds
 were indexed without scientific-axis drift, preserves every per-seed failure
