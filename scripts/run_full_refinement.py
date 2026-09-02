@@ -1927,6 +1927,56 @@ def _replay_complete_initial_particle_state(n_classes, init_relion_iteration):
     return int(n_classes) == 1 and int(init_relion_iteration) == 0
 
 
+def _kclass_firstiter_translation_seed(
+    initial_override,
+    *,
+    n_classes,
+    init_relion_iteration,
+):
+    """Select only RELION's input origins for a fresh Class3D search.
+
+    RELION Class3D does not center its first global angular search on the
+    input orientations, but it does round and apply the input origins before
+    taking the image FFT.  Keep those two pieces of state independent: this
+    helper deliberately returns translations only and cannot expose the
+    orientations, normalization corrections, priors, or noise carried by the
+    broader replay override.
+    """
+
+    if int(n_classes) <= 1 or int(init_relion_iteration) != 0:
+        return None
+    if initial_override is None:
+        raise ValueError("fresh Class3D translation initialization is missing run_it000 state")
+    translations = initial_override.get("previous_best_translations")
+    if not isinstance(translations, (list, tuple)) or len(translations) != 2:
+        raise ValueError("fresh Class3D translation initialization requires two half arrays")
+
+    selected = []
+    for half_index, values in enumerate(translations, start=1):
+        if values is None:
+            raise ValueError(
+                "fresh Class3D translation initialization is missing "
+                f"half-{half_index} input origins"
+            )
+        array = np.asarray(values, dtype=np.float32)
+        if array.size == 0:
+            # A single all-data Class3D process owns an intentionally empty
+            # second accumulator. Generic replay extraction loses the
+            # trailing coordinate dimension when indexing that empty half.
+            array = np.empty((0, 2), dtype=np.float32)
+        if array.ndim != 2 or array.shape[1] != 2:
+            raise ValueError(
+                "fresh Class3D half-"
+                f"{half_index} input origins have shape {array.shape}; expected (N, 2)"
+            )
+        if not np.all(np.isfinite(array)):
+            raise ValueError(
+                f"fresh Class3D half-{half_index} input origins contain non-finite values"
+            )
+        selected.append(np.ascontiguousarray(array).copy())
+    return selected
+
+
 def _use_fresh_auto_refine_particle_order(
     args,
     frozen_boundary,
@@ -5201,6 +5251,8 @@ def main():
     # large pre-centering offsets on real data; omitting them makes iter-1
     # search around zero and changes the hard firstiter-CC winners even though
     # the starting reference and Pmax values appear to match.
+    kclass_firstiter_translations = None
+    kclass_firstiter_translation_path = None
     if args.relion_init_dir is not None and _replay_complete_initial_particle_state(
         args.n_classes,
         args.init_relion_iteration,
@@ -5248,10 +5300,38 @@ def main():
                 args.relion_init_dir,
             )
     elif args.relion_init_dir is not None and int(args.n_classes) > 1:
-        logger.info(
-            "STRICT-PARITY: Class3D first iteration uses a fresh global search; "
-            "not replaying run_it000 input poses/corrections",
-        )
+        if int(args.init_relion_iteration) == 0:
+            initial_overrides = _build_replay_iteration_overrides(
+                args.relion_init_dir,
+                half1_idx,
+                half2_idx,
+                0,
+                ds_voxel=ds.voxel_size,
+                ds_grid=ds.grid_size,
+                include_normcorr=False,
+                init_relion_iteration=0,
+                particle_names=our_names,
+                include_initial_state=True,
+                strict=True,
+            )
+            kclass_firstiter_translations = _kclass_firstiter_translation_seed(
+                initial_overrides[0],
+                n_classes=args.n_classes,
+                init_relion_iteration=args.init_relion_iteration,
+            )
+            kclass_firstiter_translation_path = (
+                Path(args.relion_init_dir).expanduser().resolve() / "run_it000_data.star"
+            )
+            logger.info(
+                "STRICT-PARITY: Class3D first iteration keeps run_it000 input "
+                "origins for FFT pre-shifting while orientations, corrections, "
+                "priors, and noise remain fresh",
+            )
+        else:
+            logger.info(
+                "STRICT-PARITY: Class3D restart does not consume fresh-run "
+                "run_it000 particle state",
+            )
 
     relion_projector_replay_slot = None
     relion_projector_source_manifest_sha256 = None
@@ -5461,6 +5541,22 @@ def main():
                 int(arr.shape[0])
                 for arr in init_previous_best_poses["previous_best_rotation_eulers"]
             ],
+        )
+    elif kclass_firstiter_translations is not None:
+        init_previous_best_poses = {
+            "iteration": "000_translation_only",
+            "previous_best_rotation_eulers": [None, None],
+            "previous_best_translations": kclass_firstiter_translations,
+        }
+        resolved_initial_pose_source = "relion_run_it000_translations"
+        initial_pose_source_path = kclass_firstiter_translation_path
+        initial_pose_source_sha256 = _sha256_file(initial_pose_source_path)
+        logger.info(
+            "Production fresh Class3D translation initialization: source=%s "
+            "sha256=%s half_sizes=%s (orientations intentionally unset)",
+            initial_pose_source_path,
+            initial_pose_source_sha256,
+            [int(arr.shape[0]) for arr in kclass_firstiter_translations],
         )
     elif use_input_star_pose_seed:
         input_pose_path = (Path(args.data_dir) / "particles.star").resolve()

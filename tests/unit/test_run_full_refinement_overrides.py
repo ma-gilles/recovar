@@ -41,6 +41,7 @@ from scripts.run_full_refinement import (
     _fixed_diagnostic_source_paths,
     _format_replay_mean_for_log,
     _k1_relion_live_initial_noise_enabled,
+    _kclass_firstiter_translation_seed,
     _load_final_manifest_replay,
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
@@ -137,6 +138,61 @@ def test_complete_initial_particle_state_is_autorefine_only():
     assert _replay_complete_initial_particle_state(1, 0)
     assert not _replay_complete_initial_particle_state(4, 0)
     assert not _replay_complete_initial_particle_state(1, 1)
+
+
+def test_fresh_kclass_selects_only_run_it000_translations():
+    half1 = np.asarray([[3.9, -0.34], [0.3, -0.34]], dtype=np.float64)
+    # Generic replay extraction currently collapses an empty all-data second
+    # accumulator to (0,); the translation selector restores (0, 2).
+    half2 = np.empty((0,), dtype=np.float64)
+    override = {
+        "previous_best_translations": [half1, half2],
+        "previous_best_rotation_eulers": [
+            np.ones((2, 3), dtype=np.float32),
+            np.empty((0, 3), dtype=np.float32),
+        ],
+        "image_corrections": [np.ones(2), np.empty(0)],
+        "noise_variance": [np.ones(4), np.ones(4)],
+    }
+
+    selected = _kclass_firstiter_translation_seed(
+        override,
+        n_classes=4,
+        init_relion_iteration=0,
+    )
+
+    assert len(selected) == 2
+    assert selected[0].dtype == np.float32
+    assert selected[0].flags.c_contiguous
+    np.testing.assert_array_equal(selected[0], half1.astype(np.float32))
+    assert selected[1].shape == (0, 2)
+    assert selected[0] is not half1
+
+
+def test_fresh_kclass_translation_seed_is_scoped_and_fails_closed():
+    override = {"previous_best_translations": [np.zeros((1, 2)), np.zeros((2, 2))]}
+    assert (
+        _kclass_firstiter_translation_seed(
+            override,
+            n_classes=1,
+            init_relion_iteration=0,
+        )
+        is None
+    )
+    assert (
+        _kclass_firstiter_translation_seed(
+            override,
+            n_classes=4,
+            init_relion_iteration=1,
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="missing half-2 input origins"):
+        _kclass_firstiter_translation_seed(
+            {"previous_best_translations": [np.zeros((1, 2)), None]},
+            n_classes=4,
+            init_relion_iteration=0,
+        )
 
 
 def test_fresh_auto_refine_particle_order_excludes_kclass_and_replays():
