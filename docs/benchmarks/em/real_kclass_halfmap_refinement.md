@@ -231,6 +231,33 @@ not a deterministic RECOVAR-only assignment defect. It does not rescue any
 failed map-quality threshold, prove native-grid parity, or justify choosing a
 favorable seed.
 
+A second, map-level discriminator reuses each audit's sealed proper-rigid
+per-set transform, merges the genuine particle halves, then registers each
+engine/seed map set to seed 42001 with one additional proper-rigid transform
+shared by all four classes. It fits no reflection, density sign, or scale. The
+metric is full unmasked non-DC FSC-AUC, so this is a relative map-stability
+test rather than an absolute-resolution claim.
+
+Across all 12 same-seed cross-engine class cells, FSC-AUC spans
+0.83517--0.96012 (median 0.93745). The 24 within-engine cross-seed class cells
+span 0.51403--0.87815 (median 0.81163). More decisively, the same-seed minimum
+exceeds the within-engine cross-seed maximum separately for every class:
+
+| Class | Same-seed RECOVAR--RELION minimum | Within-engine cross-seed maximum |
+| ---: | ---: | ---: |
+| 1 | 0.92532 | 0.83506 |
+| 2 | 0.95272 | 0.87815 |
+| 3 | 0.83517 | 0.64398 |
+| 4 | 0.93779 | 0.82966 |
+
+All best class permutations are the identity. Even weak class 3 is therefore
+far closer between engines under the same seed than it is between seeds within
+either engine. This supports taking the pilot result as a bounded win on the
+causal question: the remaining final-map spread is dominated by shared
+seed-sensitive local optima, not a deterministic RECOVAR-only weak-class bug.
+The original per-seed gates and the seed-42001 -0.1193 masked half-map FSC-AUC
+outlier remain recorded and rejected.
+
 The same-GPU serial resource measurements across the six half-runs are:
 
 | Engine | Wall time, median (range) | Peak HBM, median (range) | Host MaxRSS, median (range) |
@@ -259,6 +286,25 @@ pixi run python -m scripts.aggregate_em_real_kclass_halfmap_seeds \
   --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42003_7136e5c8d_20260902/audit/halfmap_audit.json \
   --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/multiseed_stability.reproduced.json
 ```
+
+Reproduce the map-level discriminator with:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902
+pixi run python -m scripts.analyze_em_real_kclass_multiseed_map_stability \
+  --expected-seeds 42001,42002,42003 \
+  --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42001_7136e5c8d_20260902/audit/halfmap_audit.json \
+  --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42002_7136e5c8d_20260902/audit/halfmap_audit.json \
+  --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42003_7136e5c8d_20260902/audit/halfmap_audit.json \
+  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.reproduced.json
+```
+
+The sealed map report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.json`
+(SHA-256
+`1afcc15f4ca42496ba8b202ecf6a4926a4bd7a6b21d7562f69e8e5a3ff1cc27e`).
+CPU analysis job `13353269` completed in 1m17s with exact requested and
+allocated four-CPU, 64-GiB resources and exit 0.
 
 ## Reproduction
 
@@ -410,10 +456,10 @@ frozen objective-margin thresholds above.
 An audit failure remains a result to diagnose, but it is not admitted as an
 accepted registry entry. Masked FSC cannot rescue an unmasked failure.
 
-This bounded launcher currently reports hard-assignment agreement,
-populations, significant-support summaries, maps, FSC, and resources. It does
-not yet report Pmax or pose/translation agreement. The three-seed
-assignment-stability aggregate is now complete and checked in as a rejected
-diagnostic, but the frozen FSC and assignment thresholds remain unmet. The
-missing metrics plus a green 128-grid pilot remain required before native-grid
-execution can satisfy the full Tier-6 admission checklist.
+This bounded launcher reports hard-assignment agreement, populations,
+significant-support summaries, maps, FSC, and resources; its retained
+particle-state audits also contain Pmax, pose, and translation trajectories.
+The three-seed assignment and final-map stability analyses are complete and
+checked in as rejected diagnostics, but the frozen FSC and assignment
+thresholds remain unmet. A green 128-grid pilot remains required before
+native-grid execution can satisfy the full Tier-6 admission checklist.

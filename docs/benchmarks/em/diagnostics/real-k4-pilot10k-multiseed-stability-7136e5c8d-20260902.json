@@ -118,6 +118,70 @@
       "separation": true
     }
   ],
+  "final_map_stability": {
+    "metric": "full_unmasked_non_dc_fsc_auc_after_proper_rigid_registration",
+    "one_transform_shared_by_all_four_classes": true,
+    "reflection_sign_and_scale_fit": false,
+    "absolute_resolution_claim": false,
+    "same_seed_cross_engine": {
+      "min": 0.8351709969,
+      "median": 0.9374540114,
+      "mean": 0.9183492005,
+      "max": 0.9601239399,
+      "matched_mean_per_seed": [0.9151177391, 0.9175507399, 0.9223791226]
+    },
+    "within_engine_cross_seed": {
+      "min": 0.5140279272,
+      "median": 0.8116267722,
+      "mean": 0.7627771444,
+      "max": 0.8781543826
+    },
+    "per_class": [
+      {
+        "class": 1,
+        "same_seed_cross_engine_min": 0.9253210593,
+        "within_engine_cross_seed_max": 0.8350595159,
+        "separation": true
+      },
+      {
+        "class": 2,
+        "same_seed_cross_engine_min": 0.9527209855,
+        "within_engine_cross_seed_max": 0.8781543826,
+        "separation": true
+      },
+      {
+        "class": 3,
+        "same_seed_cross_engine_min": 0.8351709969,
+        "within_engine_cross_seed_max": 0.6439771713,
+        "separation": true
+      },
+      {
+        "class": 4,
+        "same_seed_cross_engine_min": 0.9377870225,
+        "within_engine_cross_seed_max": 0.8296628921,
+        "separation": true
+      }
+    ],
+    "all_best_class_permutations_identity": true,
+    "same_seed_min_exceeds_within_engine_cross_seed_max_for_every_class": true,
+    "analysis_job": {
+      "job_id": 13353269,
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:01:17",
+      "requested_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "allocated_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "req_tres_equals_alloc_tres": true
+    },
+    "full_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.json",
+      "sha256": "1afcc15f4ca42496ba8b202ecf6a4926a4bd7a6b21d7562f69e8e5a3ff1cc27e"
+    },
+    "analysis_source": {
+      "script": "scripts/analyze_em_real_kclass_multiseed_map_stability.py",
+      "commit": "277e4303b4005c7210cc0f0c81a72aaa7e1b7aa6"
+    }
+  },
   "masked_halfmap_quality": {
     "row_count": 12,
     "paired_recovar_minus_relion_fsc_auc": {
@@ -163,5 +227,5 @@
     "expected_seeds": "42001,42002,42003",
     "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902"
   },
-  "disposition": "All three prospective per-seed gates remain rejected. The assignment discriminator shows seed-sensitive K-class local optima because the weakest same-seed RECOVAR-versus-RELION agreement exceeds the strongest within-engine cross-seed agreement in both halves. This evidence does not rescue the seed-42001 class-3 FSC outlier or admit native-grid execution."
+  "disposition": "All three prospective per-seed gates remain rejected. Both assignments and final maps show seed-sensitive K-class local optima: the weakest same-seed RECOVAR-versus-RELION agreement exceeds the strongest within-engine cross-seed agreement for both halves and every final-map class. This evidence does not rescue the seed-42001 class-3 FSC outlier or admit native-grid execution."
 }

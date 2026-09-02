@@ -131,6 +131,14 @@ accepted result; exact jobs, FSC, assignments, performance, hashes, and the
 reproduction command are in `real_kclass_halfmap_refinement.md` and
 `diagnostics/real-k4-pilot10k-multiseed-stability-7136e5c8d-20260902.json`.
 
+The final merged-map discriminator reaches the same conclusion independently:
+same-seed RECOVAR--RELION full unmasked FSC-AUC is 0.8352--0.9601 across all
+12 class cells, while within-engine cross-seed FSC-AUC is 0.5140--0.8782.
+For each of the four classes, the same-seed minimum exceeds the within-engine
+cross-seed maximum. All optimal class permutations are the identity. This
+closes the weak-class causal triage at pilot scale without changing any frozen
+admission decision.
+
 ## Tier 2: 10k/128 multi-seed synthetic trajectories
 
 Run five autonomous iterations per case. The first twelve rows are K=4 and
@@ -354,12 +362,12 @@ blocked by policy rather than by missing infrastructure.
 That launcher is deliberately narrower than the complete Tier-6 checklist:
 it reports maps, half-map/cross-engine FSC, populations, hard-assignment
 agreement, significant support, and resources for one invocation. The
-validated three-seed hard-assignment aggregate is now emitted separately;
-Pmax, pose/translation agreement, and cross-seed map stability remain absent.
-The completed pilot therefore establishes the independent-half infrastructure
-and a stochastic-instability boundary only; it cannot be described as
-complete Tier-6 evidence until the omitted metrics and frozen per-seed gates
-pass.
+validated three-seed hard-assignment aggregate and final-map cross-seed
+analysis are emitted separately. Particle-state audits also retain Pmax,
+pose, translation, and significant-support trajectories. The completed pilot
+therefore establishes the independent-half infrastructure and a shared
+stochastic-instability boundary, but it cannot be described as complete Tier-6
+evidence while the frozen per-seed quality and assignment gates remain red.
 
 ## Runnable now versus planned-only
 

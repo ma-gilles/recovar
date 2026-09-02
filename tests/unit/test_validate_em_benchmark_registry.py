@@ -378,6 +378,25 @@ def test_real_k4_multiseed_diagnostic_retains_failures_and_stochastic_boundary()
         assert half["same_seed_cross_engine"]["min"] > half["within_engine_cross_seed"]["max"]
         assert half["separation"] is True
 
+    map_stability = diagnostic["final_map_stability"]
+    assert map_stability["one_transform_shared_by_all_four_classes"] is True
+    assert map_stability["reflection_sign_and_scale_fit"] is False
+    assert map_stability["absolute_resolution_claim"] is False
+    assert map_stability["all_best_class_permutations_identity"] is True
+    assert map_stability[
+        "same_seed_min_exceeds_within_engine_cross_seed_max_for_every_class"
+    ]
+    assert map_stability["same_seed_cross_engine"]["min"] > 0.83
+    assert map_stability["within_engine_cross_seed"]["max"] < 0.88
+    assert all(
+        row["same_seed_cross_engine_min"] > row["within_engine_cross_seed_max"]
+        and row["separation"] is True
+        for row in map_stability["per_class"]
+    )
+    assert map_stability["analysis_job"]["state"] == "COMPLETED"
+    assert map_stability["analysis_job"]["exit_code"] == "0:0"
+    assert map_stability["analysis_job"]["req_tres_equals_alloc_tres"] is True
+
     quality = diagnostic["masked_halfmap_quality"]
     assert quality["paired_recovar_minus_relion_fsc_auc"]["median"] > -0.001
     assert quality["paired_recovar_minus_relion_fsc_auc"]["min"] < -0.1
