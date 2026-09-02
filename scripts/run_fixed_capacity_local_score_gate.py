@@ -55,7 +55,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 
 
-SCHEMA = "recovar.fixed_capacity_local_score_gate.v5"
+SCHEMA = "recovar.fixed_capacity_local_score_gate.v6"
 IMAGE_SHAPE = (8, 8)
 VOLUME_SHAPE = (8, 8, 8)
 IMAGE_SIZE = int(np.prod(IMAGE_SHAPE))
@@ -701,6 +701,62 @@ def _run_and_compare_whole_boundary(
     }
 
 
+def _run_and_compare_uniform_scan_boundary(
+    captures: tuple[_CapturedCall, ...],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """Replay uniform mature calls through one device-side scan boundary."""
+
+    if not captures:
+        raise RuntimeError("uniform-scan replay requires at least one captured call")
+    reference_static = captures[0].replay_static_arguments
+    initial_carry = tuple(
+        jnp.asarray(np.array(value, copy=True)) for value in captures[0].initial_carry
+    )
+    final_carry, stacked_call_outputs = (
+        local_big_jit.run_fixed_capacity_uniform_local_scan(
+            tuple(captured.prepared_call for captured in captures),
+            *initial_carry,
+            **reference_static,
+        )
+    )
+    final_carry = tuple(_to_host_array(value) for value in final_carry)
+    result_names = _BASE_RESULT_NAMES + ("debug_scores", "debug_probs")
+    output_digests: list[dict[str, str]] = []
+    for call_index, captured in enumerate(captures):
+        call_output = tuple(
+            _to_host_array(value[call_index]) for value in stacked_call_outputs
+        )
+        reconstructed = local_big_jit._reconstruct_fixed_capacity_score_only_result(
+            final_carry,
+            call_output,
+        )
+        if len(reconstructed) != len(result_names):
+            raise AssertionError(
+                f"{label} call {call_index} returned an unexpected topology: "
+                f"{len(reconstructed)} values"
+            )
+        digests = {}
+        for name, actual in zip(result_names, reconstructed, strict=True):
+            expected = captured.diagnostics[name]
+            _assert_array_exact(
+                f"{label} call {call_index:04d} {name}",
+                actual,
+                expected,
+            )
+            digests[name] = _array_digest(actual)
+        output_digests.append(digests)
+    return {
+        "label": label,
+        "passed": True,
+        "one_compiled_scan_boundary": True,
+        "call_count": len(captures),
+        "current_seam_exact": True,
+        "output_sha256_by_call": output_digests,
+    }
+
+
 def _block_tree(value) -> None:
     for leaf in jax.tree_util.tree_leaves(value):
         block_until_ready = getattr(leaf, "block_until_ready", None)
@@ -797,10 +853,26 @@ def run_mechanism_microbenchmark(
                 **static_options,
             )
 
+        def run_scan():
+            return local_big_jit.run_fixed_capacity_uniform_local_scan(
+                call_program,
+                *_fresh_carry(captures[0]),
+                **static_options,
+            )
+
+        def stack_individual_result(result):
+            carry, call_outputs = result
+            return carry, jax.tree_util.tree_map(
+                lambda *values: jnp.stack(values, axis=0),
+                *call_outputs,
+            )
+
         individual_first_s, individual_reference = _time_numeric_call(
             lambda: run_individual(synchronize_each_call=True)
         )
         whole_first_s, whole_reference = _time_numeric_call(run_whole)
+        scan_first_s, scan_reference = _time_numeric_call(run_scan)
+        stacked_individual_reference = stack_individual_result(individual_reference)
         for index, (actual, expected) in enumerate(
             zip(
                 jax.tree_util.tree_leaves(whole_reference),
@@ -813,17 +885,32 @@ def run_mechanism_microbenchmark(
                 _to_host_array(actual),
                 _to_host_array(expected),
             )
+        for index, (actual, expected) in enumerate(
+            zip(
+                jax.tree_util.tree_leaves(scan_reference),
+                jax.tree_util.tree_leaves(stacked_individual_reference),
+                strict=True,
+            )
+        ):
+            _assert_array_exact(
+                f"mechanism scan call-count {call_count} output leaf {index}",
+                _to_host_array(actual),
+                _to_host_array(expected),
+            )
 
         synchronized_samples = []
         enqueued_samples = []
         whole_samples = []
+        scan_samples = []
         for repeat in range(warm_repeats):
             if repeat % 2 == 0:
                 synchronized_s, _ = _time_numeric_call(
                     lambda: run_individual(synchronize_each_call=True)
                 )
                 whole_s, _ = _time_numeric_call(run_whole)
+                scan_s, _ = _time_numeric_call(run_scan)
             else:
+                scan_s, _ = _time_numeric_call(run_scan)
                 whole_s, _ = _time_numeric_call(run_whole)
                 synchronized_s, _ = _time_numeric_call(
                     lambda: run_individual(synchronize_each_call=True)
@@ -834,23 +921,32 @@ def run_mechanism_microbenchmark(
             synchronized_samples.append(synchronized_s)
             enqueued_samples.append(enqueued_s)
             whole_samples.append(whole_s)
+            scan_samples.append(scan_s)
         synchronized_median_s = float(np.median(synchronized_samples))
         enqueued_median_s = float(np.median(enqueued_samples))
         whole_median_s = float(np.median(whole_samples))
+        scan_median_s = float(np.median(scan_samples))
         rows.append(
             {
                 "call_count": call_count,
                 "individual_first_s": individual_first_s,
                 "whole_first_s": whole_first_s,
+                "scan_first_s": scan_first_s,
                 "individual_synchronized_warm_s": synchronized_samples,
                 "individual_enqueued_warm_s": enqueued_samples,
                 "whole_warm_s": whole_samples,
+                "scan_warm_s": scan_samples,
                 "individual_synchronized_median_s": synchronized_median_s,
                 "individual_enqueued_median_s": enqueued_median_s,
                 "whole_median_s": whole_median_s,
+                "scan_median_s": scan_median_s,
                 "speedup_vs_synchronized": synchronized_median_s / whole_median_s,
                 "speedup_vs_enqueued": enqueued_median_s / whole_median_s,
+                "scan_speedup_vs_synchronized": synchronized_median_s
+                / scan_median_s,
+                "scan_speedup_vs_enqueued": enqueued_median_s / scan_median_s,
                 "exact_outputs": True,
+                "scan_exact_outputs": True,
             }
         )
     return {
@@ -1061,6 +1157,7 @@ def run_gate(
     comparisons: list[dict[str, Any]] = []
     production_comparisons: list[dict[str, Any]] = []
     whole_boundary_comparisons: list[dict[str, Any]] = []
+    uniform_scan_comparisons: list[dict[str, Any]] = []
     donated_input_objects: list[object] = []
     for precision in ("float32", "float64"):
         # Alternate arm order after the first pair so repeat stability is not
@@ -1084,6 +1181,12 @@ def run_gate(
             _run_and_compare_whole_boundary(
                 fixed[0],
                 label=f"{precision}:mature-per-call-vs-fixed-one-boundary",
+            )
+        )
+        uniform_scan_comparisons.append(
+            _run_and_compare_uniform_scan_boundary(
+                fixed[0],
+                label=f"{precision}:mature-per-call-vs-fixed-uniform-scan",
             )
         )
         for call_index, (default_call, disabled_call, fixed_call) in enumerate(
@@ -1240,6 +1343,7 @@ def run_gate(
         "comparisons": comparisons,
         "production_comparisons": production_comparisons,
         "whole_boundary_comparisons": whole_boundary_comparisons,
+        "uniform_scan_comparisons": uniform_scan_comparisons,
         "diagnostics_npz": diagnostics_path.name,
         "diagnostics_sha256": hashlib.sha256(diagnostics_path.read_bytes()).hexdigest(),
     }

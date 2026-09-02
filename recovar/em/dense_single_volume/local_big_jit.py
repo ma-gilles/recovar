@@ -2191,6 +2191,146 @@ def _reconstruct_fixed_capacity_score_only_result(final_carry, call_output):
     )
 
 
+def _validate_uniform_fixed_capacity_call_program(call_program):
+    """Fail before tracing if a scan program changes pytree shape or leaf ABI."""
+
+    call_program = tuple(call_program)
+    if not call_program:
+        raise ValueError("fixed-capacity uniform scan requires at least one call")
+    if not all(
+        isinstance(call, _FixedCapacityPreparedLocalCall) for call in call_program
+    ):
+        raise ValueError("fixed-capacity uniform scan requires sealed prepared calls")
+    reference_structure = jax.tree_util.tree_structure(call_program[0])
+    reference_leaves = jax.tree_util.tree_leaves(call_program[0])
+    reference_abi = tuple(
+        (tuple(np.shape(value)), np.asarray(value).dtype.str)
+        for value in reference_leaves
+    )
+    for call_index, call in enumerate(call_program[1:], start=1):
+        if jax.tree_util.tree_structure(call) != reference_structure:
+            raise ValueError(
+                f"fixed-capacity uniform scan call {call_index} changed pytree structure"
+            )
+        call_abi = tuple(
+            (tuple(np.shape(value)), np.asarray(value).dtype.str)
+            for value in jax.tree_util.tree_leaves(call)
+        )
+        if call_abi != reference_abi:
+            raise ValueError(
+                f"fixed-capacity uniform scan call {call_index} changed leaf shape or dtype"
+            )
+    return call_program
+
+
+def _run_fixed_capacity_uniform_local_scan_program(
+    stacked_call_program,
+    carry,
+    static_options,
+    *,
+    numeric_call,
+):
+    """Run one uniform-shape call stack with a device-side chronological scan."""
+
+    options = dict(static_options)
+
+    def scan_step(current_carry, prepared_call):
+        result = numeric_call(
+            *prepared_call.leading_arguments,
+            *current_carry,
+            *prepared_call.trailing_arguments,
+            **options,
+        )
+        if len(result) < 12:
+            raise RuntimeError(
+                "mature local big-JIT returned fewer than twelve invariant outputs"
+            )
+        next_carry = tuple(result[:8]) + tuple(result[9:11])
+        next_carry = jax.lax.optimization_barrier(next_carry)
+        call_output = (result[8],) + tuple(result[11:])
+        return next_carry, call_output
+
+    return jax.lax.scan(scan_step, carry, stacked_call_program)
+
+
+@partial(
+    jax.jit,
+    donate_argnums=(1, 2),
+    static_argnames=("static_options",),
+)
+def _run_fixed_capacity_uniform_local_scan_jit(
+    call_program,
+    Ft_y,
+    Ft_ctf,
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    noise_scale_xa,
+    noise_scale_aa,
+    noise_sigma2_offset,
+    noise_sumw,
+    *,
+    static_options,
+):
+    stacked_call_program = jax.tree_util.tree_map(
+        lambda *values: jnp.stack(values, axis=0),
+        *call_program,
+    )
+    carry = (
+        Ft_y,
+        Ft_ctf,
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        noise_sigma2_offset,
+        noise_sumw,
+    )
+    return _run_fixed_capacity_uniform_local_scan_program(
+        stacked_call_program,
+        carry,
+        static_options,
+        numeric_call=run_local_bucket_big_jit.__wrapped__,
+    )
+
+
+def run_fixed_capacity_uniform_local_scan(
+    call_program,
+    Ft_y,
+    Ft_ctf,
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    noise_scale_xa,
+    noise_scale_aa,
+    noise_sigma2_offset,
+    noise_sumw,
+    **static_options,
+):
+    """Run uniform-shape mature calls through one device-side scan boundary."""
+
+    call_program = _validate_uniform_fixed_capacity_call_program(call_program)
+    canonical_options = _canonicalize_fixed_capacity_static_options(static_options)
+    return _run_fixed_capacity_uniform_local_scan_jit(
+        call_program,
+        Ft_y,
+        Ft_ctf,
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        noise_sigma2_offset,
+        noise_sumw,
+        static_options=canonical_options,
+    )
+
+
 @partial(
     jax.jit,
     donate_argnums=(1, 2),

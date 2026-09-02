@@ -34,7 +34,7 @@ RESULTS=${ROOT}/results
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 HARNESS_OUTPUT=${RESULTS}/harness
 HARNESS_RESULT=${HARNESS_OUTPUT}/gate_result.json
-HARNESS_SCHEMA=recovar.fixed_capacity_local_score_gate.v5
+HARNESS_SCHEMA=recovar.fixed_capacity_local_score_gate.v6
 FOCUSED_TEST=tests/unit/test_fixed_capacity_local_score_gate.py
 JOB_TMP_ROOT=/scratch/gpfs/GILLES/mg6942/tmp/${SLURM_JOB_ID}
 JOB_PIXI_HOME=/scratch/gpfs/GILLES/mg6942/pixi_home/${SLURM_JOB_ID}
@@ -242,6 +242,9 @@ assert all(row["exact_outputs"] for row in microbenchmark["rows"]), payload
 assert payload["whole_boundary_comparisons"], payload
 assert all(item["passed"] for item in payload["whole_boundary_comparisons"]), payload
 assert all(item["one_compiled_boundary"] for item in payload["whole_boundary_comparisons"]), payload
+assert payload["uniform_scan_comparisons"], payload
+assert all(item["passed"] for item in payload["uniform_scan_comparisons"]), payload
+assert all(item["one_compiled_scan_boundary"] for item in payload["uniform_scan_comparisons"]), payload
 assert payload["git_head"] == sys.argv[3], payload
 assert payload["gpu_uuid"] == sys.argv[4], payload
 PY

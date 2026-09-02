@@ -994,3 +994,88 @@ def test_whole_local_jit_reuses_mature_body_and_donates_only_volume_accumulators
     assert "optimization_barrier" in inspect.getsource(
         local_big_jit._run_fixed_capacity_whole_local_program
     )
+
+
+def test_uniform_local_scan_threads_carry_with_one_stacked_call_axis():
+    stacked_program = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(jnp.asarray([1, 2], dtype=jnp.int32),),
+        trailing_arguments=(jnp.asarray([101, 202], dtype=jnp.int32),),
+    )
+    initial_carry = tuple(jnp.asarray(value, dtype=jnp.int32) for value in range(10))
+
+    def fake_numeric_call(delta, *arguments, scale):
+        carry = arguments[:10]
+        tag = arguments[10]
+        increment = delta * scale
+        next_first_eight = tuple(value + increment for value in carry[:8])
+        next_last_two = tuple(value + increment for value in carry[8:])
+        return (
+            *next_first_eight,
+            delta * 100,
+            *next_last_two,
+            tag,
+            delta * 1000,
+        )
+
+    final_carry, stacked_outputs = (
+        local_big_jit._run_fixed_capacity_uniform_local_scan_program(
+            stacked_program,
+            initial_carry,
+            (("scale", 3),),
+            numeric_call=fake_numeric_call,
+        )
+    )
+
+    assert tuple(int(value) for value in final_carry) == tuple(
+        value + 9 for value in range(10)
+    )
+    assert tuple(np.asarray(value).tolist() for value in stacked_outputs) == (
+        [100, 200],
+        [101, 202],
+        [1000, 2000],
+    )
+
+
+def test_uniform_local_scan_fails_closed_on_structure_shape_or_dtype_changes():
+    call = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.zeros((2,), dtype=np.float32),),
+        trailing_arguments=(),
+    )
+    changed_structure = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.zeros((2,), dtype=np.float32), object()),
+        trailing_arguments=(),
+    )
+    changed_shape = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.zeros((3,), dtype=np.float32),),
+        trailing_arguments=(),
+    )
+    changed_dtype = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.zeros((2,), dtype=np.float64),),
+        trailing_arguments=(),
+    )
+
+    validated = local_big_jit._validate_uniform_fixed_capacity_call_program(
+        (call, call)
+    )
+    assert validated[0] is call and validated[1] is call
+    with pytest.raises(ValueError, match="pytree structure"):
+        local_big_jit._validate_uniform_fixed_capacity_call_program(
+            (call, changed_structure)
+        )
+    for changed in (changed_shape, changed_dtype):
+        with pytest.raises(ValueError, match="leaf shape or dtype"):
+            local_big_jit._validate_uniform_fixed_capacity_call_program(
+                (call, changed)
+            )
+
+
+def test_uniform_local_scan_reuses_mature_body_inside_lax_scan():
+    source = inspect.getsource(local_big_jit._run_fixed_capacity_uniform_local_scan_jit)
+    program_source = inspect.getsource(
+        local_big_jit._run_fixed_capacity_uniform_local_scan_program
+    )
+
+    assert "run_local_bucket_big_jit.__wrapped__" in source
+    assert "donate_argnums=(1, 2)" in source
+    assert "jax.lax.scan" in program_source
+    assert "optimization_barrier" in program_source

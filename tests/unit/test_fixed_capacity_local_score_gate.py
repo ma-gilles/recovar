@@ -165,6 +165,7 @@ def test_fixed_capacity_local_score_gate_is_exact_on_gpu(tmp_path):
         for item in payload["production_comparisons"]
     )
     assert all(item["passed"] for item in payload["whole_boundary_comparisons"])
+    assert all(item["passed"] for item in payload["uniform_scan_comparisons"])
     assert all(
         item["one_compiled_boundary"] and item["call_count"] == 2
         for item in payload["whole_boundary_comparisons"]
