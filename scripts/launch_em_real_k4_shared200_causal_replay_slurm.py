@@ -29,7 +29,8 @@ from recovar.data_io.starfile import read_star
 from recovar.em.sampling import read_relion_sampling_metadata
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v5"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_launch.v6"
+LEGACY_SCHEMAS = frozenset({"recovar.em_real_k4_shared200_causal_replay_launch.v5"})
 TARGET_SCHEMA = "recovar.em_real_k4_shared200_targets.v2"
 SHARED_SET_SCHEMA = "recovar.em_real_kclass_shared_visited_subset.v1"
 
@@ -89,7 +90,12 @@ class FrozenCase:
     particle_count: int = 200
     half1_particle_count: int = 93
     half2_particle_count: int = 107
+    # ``current_size`` is the frozen fresh-run target used to select this
+    # discriminator.  A continuation from iteration 0 legitimately chooses a
+    # different live target size; RECOVAR must replay that live controller
+    # state, not the fresh-run target's size.
     current_size: int = 56
+    replay_current_size: int = 46
     healpix_order: int = 1
     random_seed: int = 0
     random_perturbation: float = -0.07990610599517822
@@ -491,6 +497,8 @@ def _fixed_case_record() -> dict[str, Any]:
         "half1_particle_count": CASE.half1_particle_count,
         "half2_particle_count": CASE.half2_particle_count,
         "current_size": CASE.current_size,
+        "source_target_current_size": CASE.current_size,
+        "replay_current_size": CASE.replay_current_size,
         "healpix_order": CASE.healpix_order,
         "random_seed": CASE.random_seed,
         "random_perturbation": CASE.random_perturbation,
@@ -504,9 +512,14 @@ def _fixed_case_record() -> dict[str, Any]:
 
 def _validate_controller_state(control_pair_root: Path) -> dict[str, Any]:
     meta_path = control_pair_root / "recovar/run_it001_recovar_meta.json"
+    model_path = control_pair_root / "relion/run_it001_model.star"
     meta = json.loads(meta_path.read_text())
     checks = {
-        "current_size": int(meta.get("current_size", -1)) == CASE.current_size,
+        "source_recovar_current_size": int(meta.get("current_size", -1)) == CASE.current_size,
+        "source_relion_current_size": int(
+            float(_star_scalar(model_path.read_text(), "_rlnCurrentImageSize"))
+        )
+        == CASE.current_size,
         "healpix_order": int(meta.get("healpix_order", -1)) == CASE.healpix_order,
         "random_perturbation": float(meta.get("random_perturbation", np.nan)) == CASE.random_perturbation,
     }
@@ -515,6 +528,8 @@ def _validate_controller_state(control_pair_root: Path) -> dict[str, Any]:
         "checks": checks,
         "meta_path": str(meta_path.resolve()),
         "meta_sha256": _sha256(meta_path),
+        "model_path": str(model_path.resolve()),
+        "model_sha256": _sha256(model_path),
     }
 
 
@@ -717,7 +732,7 @@ def render_sbatch(args: argparse.Namespace, *, expected_head: str, manifest_path
         "-m",
         "scripts.run_k_class_parity",
         "--relion-dir",
-        str(pair / "relion"),
+        str(run_root / "native/control_a/output"),
         "--data-star",
         str(subset_star),
         "--prev-iter",
@@ -881,7 +896,9 @@ run_native_arm() {{
     > "${{arm_root}}/output/runner.stdout" 2> "${{arm_root}}/output/runner.stderr"
   for class_id in 001 002 003 004; do test -s "${{arm_root}}/output/run_it001_class${{class_id}}.mrc"; done
   test -s "${{arm_root}}/output/run_it001_data.star"
+  test -s "${{arm_root}}/output/run_it001_model.star"
   test -s "${{arm_root}}/output/run_it001_sampling.star"
+  test "$(awk '$1 == \"_rlnCurrentImageSize\" {{print int($2); exit}}' "${{arm_root}}/output/run_it001_model.star")" -eq {CASE.replay_current_size}
   test ! -e "${{arm_root}}/output/run_it002_optimiser.star"
   test "$(grep -Fxc {_quote(EXPECTED_CONTINUED_ITER0_MARKER)} "${{arm_root}}/output/runner.stdout")" -eq 1
   test "$(grep -Fxc {_quote(EXPECTED_STOP_AFTER_LIVE_ITER_MARKER)} "${{arm_root}}/output/runner.stdout")" -eq 1
@@ -906,13 +923,13 @@ export RECOVAR_EXPECTED_REPO_ROOT={_quote(REPO_ROOT)}
 export RECOVAR_SPARSE_KCLASS_FUSED=1
 export RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT=0
 export RECOVAR_PASS2_DUMP_ORIGINAL_INDICES="${{RECOVAR_LOCAL_ORIGINALS}}"
-export RECOVAR_PASS2_DUMP_CURRENT_SIZE={CASE.current_size}
+export RECOVAR_PASS2_DUMP_CURRENT_SIZE={CASE.replay_current_size}
 export RECOVAR_PASS2_DUMP_ITERATION=1
 export RECOVAR_PASS2_DUMP_DIR="${{ROOT}}/recovar/pass2"
 export RECOVAR_INITIAL_MODEL_ACCUM_DUMP_DIR="${{ROOT}}/recovar/accum"
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR="${{ROOT}}/recovar/contributions"
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=1
-export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE={CASE.current_size}
+export RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE={CASE.replay_current_size}
 export RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES="${{RECOVAR_LOCAL_ORIGINALS}}"
 export RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1
 export RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY={_quote(image_names_mapping)}
@@ -923,6 +940,7 @@ unset RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF
 unset RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET
 unset RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER RECOVAR_FINAL_ALL_DATA_GRID_CORRECT
 {recovar_text} > "${{ROOT}}/recovar/output/runner.stdout" 2> "${{ROOT}}/recovar/output/runner.stderr"
+{_quote(python)} -c "import json,pathlib; s=json.loads(pathlib.Path('${{ROOT}}/recovar/output/summary.json').read_text()); assert s['current_size']=={CASE.replay_current_size}; assert s['projection_padding_factor']==1; assert s['reconstruction_padding_factor']==1"
 test "$(find "${{ROOT}}/recovar/pass2" -maxdepth 1 -name '*.npz' | wc -l)" -eq 800
 # The current causal auditor consumes the complete pass-2 tables and final maps.
 # Contribution bundles are best-effort diagnostics and must not suppress a
@@ -966,9 +984,14 @@ def _expected_outputs(run_root: Path, *, native_smoke_only: bool) -> dict[str, A
 
 def validate_manifest(path: Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text())
-    _require(manifest.get("schema") == SCHEMA, "launch-manifest schema drift")
+    schema = manifest.get("schema")
+    _require(schema == SCHEMA or schema in LEGACY_SCHEMAS, "launch-manifest schema drift")
     _require(manifest.get("status") == "preflight_complete", "launch manifest is not sealed")
-    _require(manifest.get("fixed_case") == _fixed_case_record(), "frozen case changed")
+    expected_case = _fixed_case_record()
+    if schema in LEGACY_SCHEMAS:
+        expected_case.pop("source_target_current_size")
+        expected_case.pop("replay_current_size")
+    _require(manifest.get("fixed_case") == expected_case, "frozen case changed")
     _require(manifest.get("thresholds") == THRESHOLDS, "frozen thresholds changed")
     _require(Path(manifest.get("run_root", "")).resolve() == path.parent.resolve(), "manifest/run-root mismatch")
     _require(manifest.get("requested_resources", {}).get("exclusive") is False, "exclusive allocation is forbidden")

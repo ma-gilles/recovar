@@ -324,12 +324,16 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "RECOVAR_LOCAL_ORIGINALS=" in script
     assert "subset_local_indices_zero_based" in script
     assert 'RECOVAR_PASS2_DUMP_ORIGINAL_INDICES="${RECOVAR_LOCAL_ORIGINALS}"' in script
+    assert "RECOVAR_PASS2_DUMP_CURRENT_SIZE=46" in script
     assert 'RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES="${RECOVAR_LOCAL_ORIGINALS}"' in script
+    assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=46" in script
     assert "TARGET_ORIGINALS=" not in script
     assert "inputs/image_names_subset_local.npy" in script
     assert "unset RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF" in script
     assert "unset RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY RECOVAR_BPREF_CONTRIBUTION_STOP_AFTER_TARGET" in script
     assert "inputs/continuation/run_it000_optimiser_replay.star" in script
+    assert "native/control_a/output" in script
+    assert "_rlnCurrentImageSize" in script
     assert "pair/relion/run_it000_optimiser.star" not in script
     assert launcher.EXPECTED_CONTINUED_ITER0_MARKER in script
     assert launcher.EXPECTED_STOP_AFTER_LIVE_ITER_MARKER in script
@@ -448,7 +452,9 @@ def test_cli_is_dry_run_by_default(tmp_path):
     assert args.native_smoke_only is False
     assert args.relion_capture_source == launcher.DEFAULT_RELION_CAPTURE_SOURCE.resolve()
     assert args.relion_capture_binary == launcher.DEFAULT_RELION_CAPTURE_BINARY.resolve()
-    assert launcher.SCHEMA == "recovar.em_real_k4_shared200_causal_replay_launch.v5"
+    assert launcher.SCHEMA == "recovar.em_real_k4_shared200_causal_replay_launch.v6"
+    assert launcher.CASE.current_size == 56
+    assert launcher.CASE.replay_current_size == 46
     assert str(launcher.DEFAULT_RELION_CAPTURE_ROOT).endswith(
         "/relion_empty_support_capture_20260901"
     )

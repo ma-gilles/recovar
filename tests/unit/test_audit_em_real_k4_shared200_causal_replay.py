@@ -219,6 +219,16 @@ def test_load_recovar_allows_absent_empty_enrichment_but_rejects_partial(tmp_pat
         auditor._load_recovar(path, subset_local_index=3, class_id=2)
 
 
+def test_replay_current_size_supports_legacy_and_live_continuation_manifests():
+    assert auditor._replay_current_size({"fixed_case": {"current_size": 56}}) == 56
+    assert (
+        auditor._replay_current_size(
+            {"fixed_case": {"current_size": 56, "replay_current_size": 46}}
+        )
+        == 46
+    )
+
+
 def test_particle_mass_diagnostics_normalizes_once_across_every_class():
     joined = []
     for class_id, native, recovar, native_support, recovar_support in (

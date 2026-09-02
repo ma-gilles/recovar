@@ -435,10 +435,27 @@ def _score_key(path: Path) -> tuple[int, int]:
     return int(match["stack"]), int(match["class_"])
 
 
-def _pass2_key(path: Path, *, subset_local_to_stack: list[int]) -> tuple[int, int]:
+def _replay_current_size(manifest: dict[str, Any]) -> int:
+    """Resolve the replay size while retaining launch-v5 compatibility."""
+
+    fixed_case = manifest.get("fixed_case", {})
+    value = fixed_case.get("replay_current_size", fixed_case.get("current_size"))
+    _require(value is not None, "launch manifest lacks replay current size")
+    result = int(value)
+    _require(result > 0 and result % 2 == 0, f"invalid replay current size: {result}")
+    return result
+
+
+def _pass2_key(
+    path: Path,
+    *,
+    subset_local_to_stack: list[int],
+    expected_current_size: int | None = None,
+) -> tuple[int, int]:
     match = PASS2_NAME.fullmatch(path.name)
     _require(match is not None, f"unexpected RECOVAR pass-2 filename: {path.name}")
-    _require(int(match["size"]) == CASE.current_size, f"RECOVAR current-size filename drift: {path}")
+    current_size = CASE.current_size if expected_current_size is None else expected_current_size
+    _require(int(match["size"]) == current_size, f"RECOVAR current-size filename drift: {path}")
     subset_local_index = int(match["original"])
     _require(
         0 <= subset_local_index < len(subset_local_to_stack),
@@ -481,6 +498,7 @@ def discover_inventory(
     stacks: list[int],
     *,
     reference_assignments: dict[int, int],
+    expected_current_size: int | None = None,
 ) -> dict[str, Any]:
     expected = {(stack, class_id) for stack in stacks for class_id in range(1, CASE.K + 1)}
     factors: list[Path] = []
@@ -534,7 +552,11 @@ def discover_inventory(
         "scores": _exact_keyed_paths(scores, key=_score_key, expected=expected, label="fine-score"),
         "pass2": _exact_keyed_paths(
             pass2_paths,
-            key=lambda path: _pass2_key(path, subset_local_to_stack=stacks),
+            key=lambda path: _pass2_key(
+                path,
+                subset_local_to_stack=stacks,
+                expected_current_size=expected_current_size,
+            ),
             expected=expected,
             label="pass-2",
         ),
@@ -555,6 +577,7 @@ def _load_recovar(
     *,
     subset_local_index: int,
     class_id: int,
+    expected_current_size: int | None = None,
 ) -> dict[str, np.ndarray]:
     with np.load(path, allow_pickle=False) as archive:
         values = {name: np.asarray(archive[name]) for name in archive.files}
@@ -586,7 +609,8 @@ def _load_recovar(
         f"RECOVAR subset-local identity drift: {path}",
     )
     _require(int(values["class_index"]) == class_id - 1, f"RECOVAR class identity drift: {path}")
-    _require(int(values["current_size"]) == CASE.current_size, f"RECOVAR current size drift: {path}")
+    current_size = CASE.current_size if expected_current_size is None else expected_current_size
+    _require(int(values["current_size"]) == current_size, f"RECOVAR current size drift: {path}")
     return values
 
 
@@ -598,6 +622,7 @@ def _join_class(
     factor_path: Path,
     score_path: Path,
     pass2_path: Path,
+    expected_current_size: int | None = None,
 ) -> dict[str, Any]:
     factor = load_factor_capture(factor_path)
     score = load_fine_score_capture(score_path)
@@ -605,6 +630,7 @@ def _join_class(
         pass2_path,
         subset_local_index=subset_local_index,
         class_id=class_id,
+        expected_current_size=expected_current_size,
     )
     _require(factor.geometry_only, f"factor capture is not geometry-only: {factor_path}")
     _require(
@@ -1145,6 +1171,7 @@ def _parity_metrics(path: Path, stacks: list[int]) -> tuple[dict[str, Any], np.n
 
 def build_report(manifest_path: Path) -> dict[str, Any]:
     manifest = validate_manifest(manifest_path)
+    replay_current_size = _replay_current_size(manifest)
     run_root = Path(manifest["run_root"])
     targets = json.loads(Path(manifest["targets"]["path"]).read_text())
     _require(targets.get("schema") == TARGET_SCHEMA, "target schema drift")
@@ -1156,6 +1183,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         run_root,
         stacks,
         reference_assignments=frozen_assignments,
+        expected_current_size=replay_current_size,
     )
 
     raw = ErrorAccumulator()
@@ -1192,6 +1220,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
                 factor_path=inventory["factors"][key],
                 score_path=inventory["scores"][key],
                 pass2_path=inventory["pass2"][key],
+                expected_current_size=replay_current_size,
             )
             joined.append(item)
             exact_count += int(item["candidate_exact"])
