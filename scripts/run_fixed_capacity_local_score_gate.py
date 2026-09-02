@@ -35,7 +35,7 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume import local_big_jit, local_em_engine
 from recovar.em.dense_single_volume.batch_planning import (
     _plan_fixed_capacity_whole_local,
     _seal_fixed_capacity_physical_order,
@@ -54,7 +54,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 
 
-SCHEMA = "recovar.fixed_capacity_local_score_gate.v2"
+SCHEMA = "recovar.fixed_capacity_local_score_gate.v3"
 IMAGE_SHAPE = (8, 8)
 VOLUME_SHAPE = (8, 8, 8)
 IMAGE_SIZE = int(np.prod(IMAGE_SHAPE))
@@ -391,6 +391,9 @@ class _CapturedCall:
     inputs: dict[str, np.ndarray | None]
     static_arguments: dict[str, Any]
     donated_input_object_ids: dict[str, int]
+    prepared_call: Any
+    initial_carry: tuple[np.ndarray, ...]
+    replay_static_arguments: dict[str, Any]
 
 
 @contextmanager
@@ -431,6 +434,33 @@ def _capture_shared_numeric_call(
             and name not in {"return_debug_arrays", "return_debug_scores", "return_debug_operands"}
         }
         static_arguments["config_repr"] = repr(bound.arguments["config"])
+        replay_positional = []
+        for name, parameter in signature.parameters.items():
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY:
+                continue
+            value = bound.arguments[name]
+            if name == "config" or value is None:
+                replay_positional.append(value)
+            else:
+                replay_positional.append(_to_host_array(value))
+        prepared_call = local_big_jit._prepare_fixed_capacity_local_call(
+            *replay_positional
+        )
+        initial_carry = tuple(
+            _to_host_array(bound.arguments[name])
+            for name in (
+                "Ft_y",
+                "Ft_ctf",
+                "noise_wsum",
+                "noise_img_power",
+                "noise_a2",
+                "noise_xa",
+                "noise_scale_xa",
+                "noise_scale_aa",
+                "noise_sigma2_offset",
+                "noise_sumw",
+            )
+        )
         donated_input_object_ids = {}
         for name in CURRENT_DONATED_POSITIONAL_NAMES:
             value = bound.arguments[name]
@@ -443,6 +473,16 @@ def _capture_shared_numeric_call(
         diagnostic_kwargs["return_debug_arrays"] = True
         diagnostic_kwargs["return_debug_scores"] = True
         diagnostic_kwargs["return_debug_operands"] = False
+        replay_static_arguments = {
+            name: bound.arguments[name]
+            for name, parameter in signature.parameters.items()
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        }
+        replay_static_arguments.update(
+            return_debug_arrays=True,
+            return_debug_scores=True,
+            return_debug_operands=False,
+        )
         full_result = shared_numeric(*args, **diagnostic_kwargs)
         host_result = tuple(_to_host_array(value) for value in full_result)
         if len(host_result) != len(_BASE_RESULT_NAMES) + 2:
@@ -471,6 +511,9 @@ def _capture_shared_numeric_call(
                 inputs=input_values,
                 static_arguments=static_arguments,
                 donated_input_object_ids=donated_input_object_ids,
+                prepared_call=prepared_call,
+                initial_carry=initial_carry,
+                replay_static_arguments=replay_static_arguments,
             )
         )
         # The outer engine entered the non-diagnostic production topology and
@@ -579,6 +622,78 @@ def _run_captured_arm(
             f"got {len(captures)}"
         )
     return tuple(captures), outer
+
+
+def _run_and_compare_whole_boundary(
+    captures: tuple[_CapturedCall, ...],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """Replay captured mature calls through one compiled chronological boundary."""
+
+    if not captures:
+        raise RuntimeError("whole-boundary replay requires at least one captured call")
+    reference_static = captures[0].replay_static_arguments
+    for call_index, captured in enumerate(captures[1:], start=1):
+        if captured.replay_static_arguments != reference_static:
+            raise AssertionError(
+                f"{label} call {call_index} changed static options inside one program"
+            )
+    initial_carry = tuple(
+        jnp.asarray(np.array(value, copy=True)) for value in captures[0].initial_carry
+    )
+    final_carry, call_outputs = local_big_jit.run_fixed_capacity_whole_local(
+        tuple(captured.prepared_call for captured in captures),
+        *initial_carry,
+        **reference_static,
+    )
+    final_carry = tuple(_to_host_array(value) for value in final_carry)
+    call_outputs = tuple(
+        tuple(_to_host_array(value) for value in output) for output in call_outputs
+    )
+    if len(call_outputs) != len(captures):
+        raise AssertionError(
+            f"{label} whole boundary returned {len(call_outputs)} calls, "
+            f"expected {len(captures)}"
+        )
+
+    result_names = _BASE_RESULT_NAMES + ("debug_scores", "debug_probs")
+    output_digests: list[dict[str, str]] = []
+    for call_index, (captured, call_output) in enumerate(
+        zip(captures, call_outputs, strict=True)
+    ):
+        # This gate is score-only, so the ten state values are invariant across
+        # calls and the final carry reconstructs every mature result topology.
+        reconstructed = (
+            *final_carry[:8],
+            call_output[0],
+            *final_carry[8:],
+            call_output[1],
+            *call_output[2:],
+        )
+        if len(reconstructed) != len(result_names):
+            raise AssertionError(
+                f"{label} call {call_index} returned an unexpected topology: "
+                f"{len(reconstructed)} values"
+            )
+        digests = {}
+        for name, actual in zip(result_names, reconstructed, strict=True):
+            expected = captured.diagnostics[name]
+            _assert_array_exact(
+                f"{label} call {call_index:04d} {name}",
+                actual,
+                expected,
+            )
+            digests[name] = _array_digest(actual)
+        output_digests.append(digests)
+    return {
+        "label": label,
+        "passed": True,
+        "one_compiled_boundary": True,
+        "call_count": len(captures),
+        "current_seam_exact": True,
+        "output_sha256_by_call": output_digests,
+    }
 
 
 def _assert_array_exact(label: str, actual: np.ndarray, expected: np.ndarray) -> None:
@@ -779,6 +894,7 @@ def run_gate(
     snapshots: dict[str, tuple[tuple[_CapturedCall, ...], dict[str, np.ndarray]]] = {}
     comparisons: list[dict[str, Any]] = []
     production_comparisons: list[dict[str, Any]] = []
+    whole_boundary_comparisons: list[dict[str, Any]] = []
     donated_input_objects: list[object] = []
     for precision in ("float32", "float64"):
         # Alternate arm order after the first pair so repeat stability is not
@@ -798,6 +914,12 @@ def run_gate(
         default = snapshots[f"{precision}_default_0"]
         disabled = snapshots[f"{precision}_disabled_0"]
         fixed = snapshots[f"{precision}_fixed_0"]
+        whole_boundary_comparisons.append(
+            _run_and_compare_whole_boundary(
+                fixed[0],
+                label=f"{precision}:mature-per-call-vs-fixed-one-boundary",
+            )
+        )
         for call_index, (default_call, disabled_call, fixed_call) in enumerate(
             zip(default[0], disabled[0], fixed[0], strict=True)
         ):
@@ -938,6 +1060,7 @@ def run_gate(
         },
         "comparisons": comparisons,
         "production_comparisons": production_comparisons,
+        "whole_boundary_comparisons": whole_boundary_comparisons,
         "diagnostics_npz": diagnostics_path.name,
         "diagnostics_sha256": hashlib.sha256(diagnostics_path.read_bytes()).hexdigest(),
     }

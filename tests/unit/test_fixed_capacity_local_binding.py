@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from dataclasses import replace
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -883,4 +884,107 @@ def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_c
     assert "call_index=bucket_index" in source
     assert source.index("_fetch_and_validate_fixed_capacity_call_operands(") < source.index(
         "_invoke_local_bucket_big_jit(",
+    )
+
+
+def test_whole_local_call_preparation_removes_only_invariant_carry_positions():
+    positional, _ = local_big_jit._local_bucket_big_jit_signature_parts()
+    arguments = tuple(object() for _ in positional)
+
+    prepared = local_big_jit._prepare_fixed_capacity_local_call(*arguments)
+
+    assert prepared.leading_arguments == arguments[:7]
+    assert prepared.trailing_arguments == arguments[17:]
+    with pytest.raises(ValueError, match="every mature positional argument"):
+        local_big_jit._prepare_fixed_capacity_local_call(*arguments[:-1])
+
+
+def test_whole_local_program_threads_all_ten_state_values_in_call_order():
+    call_program = (
+        local_big_jit._FixedCapacityPreparedLocalCall(
+            leading_arguments=(jnp.asarray(1, dtype=jnp.int32),),
+            trailing_arguments=(jnp.asarray(101, dtype=jnp.int32),),
+        ),
+        local_big_jit._FixedCapacityPreparedLocalCall(
+            leading_arguments=(jnp.asarray(2, dtype=jnp.int32),),
+            trailing_arguments=(jnp.asarray(202, dtype=jnp.int32),),
+        ),
+    )
+    initial_carry = tuple(jnp.asarray(value, dtype=jnp.int32) for value in range(10))
+    received_carries = []
+
+    def fake_numeric_call(delta, *arguments, scale):
+        carry = arguments[:10]
+        tag = arguments[10]
+        received_carries.append(tuple(int(value) for value in carry))
+        increment = delta * scale
+        next_first_eight = tuple(value + increment for value in carry[:8])
+        next_last_two = tuple(value + increment for value in carry[8:])
+        return (
+            *next_first_eight,
+            delta * 100,
+            *next_last_two,
+            tag,
+            delta * 1000,
+        )
+
+    final_carry, call_outputs = local_big_jit._run_fixed_capacity_whole_local_program(
+        call_program,
+        initial_carry,
+        (("scale", 3),),
+        numeric_call=fake_numeric_call,
+    )
+
+    assert received_carries == [tuple(range(10)), tuple(value + 3 for value in range(10))]
+    assert tuple(int(value) for value in final_carry) == tuple(
+        value + 9 for value in range(10)
+    )
+    assert tuple(tuple(int(value) for value in output) for output in call_outputs) == (
+        (100, 101, 1000),
+        (200, 202, 2000),
+    )
+
+
+def test_whole_local_static_options_are_complete_hashable_and_fail_closed():
+    _, keyword_only = local_big_jit._local_bucket_big_jit_signature_parts()
+    required = {
+        parameter.name: False
+        for parameter in keyword_only
+        if parameter.default is inspect.Parameter.empty
+    }
+
+    canonical = local_big_jit._canonicalize_fixed_capacity_static_options(required)
+
+    assert tuple(name for name, _ in canonical) == tuple(
+        parameter.name for parameter in keyword_only
+    )
+    with pytest.raises(ValueError, match="unknown fixed-capacity"):
+        local_big_jit._canonicalize_fixed_capacity_static_options(
+            {**required, "not_a_mature_option": False}
+        )
+    missing = dict(required)
+    missing.pop(next(iter(missing)))
+    with pytest.raises(ValueError, match="missing fixed-capacity"):
+        local_big_jit._canonicalize_fixed_capacity_static_options(missing)
+    with pytest.raises(ValueError, match="recursively hashable"):
+        local_big_jit._canonicalize_fixed_capacity_static_options(
+            {**required, "mask_mode": []}
+        )
+
+
+def test_whole_local_public_boundary_rejects_empty_or_unsealed_programs_before_jit():
+    carry = tuple(jnp.asarray(0, dtype=jnp.float32) for _ in range(10))
+    with pytest.raises(ValueError, match="at least one call"):
+        local_big_jit.run_fixed_capacity_whole_local((), *carry)
+    with pytest.raises(ValueError, match="sealed prepared calls"):
+        local_big_jit.run_fixed_capacity_whole_local((((), ()),), *carry)
+
+
+def test_whole_local_jit_reuses_mature_body_and_donates_only_volume_accumulators():
+    source = inspect.getsource(local_big_jit._run_fixed_capacity_whole_local_jit)
+
+    assert "run_local_bucket_big_jit.__wrapped__" in source
+    assert "donate_argnums=(1, 2)" in source
+    assert "optimization_barrier" in inspect.getsource(
+        local_big_jit._run_fixed_capacity_whole_local_program
     )

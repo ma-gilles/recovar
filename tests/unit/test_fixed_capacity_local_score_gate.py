@@ -46,6 +46,9 @@ def _captured_call() -> score_gate._CapturedCall:
         },
         static_arguments={"score_only": True},
         donated_input_object_ids={"Ft_y": 1, "Ft_ctf": 2},
+        prepared_call=None,
+        initial_carry=(),
+        replay_static_arguments={},
     )
 
 
@@ -154,6 +157,11 @@ def test_fixed_capacity_local_score_gate_is_exact_on_gpu(tmp_path):
     assert payload["default_promotion_allowed"] is False
     assert all(item["passed"] for item in payload["comparisons"])
     assert all(item["passed"] for item in payload["production_comparisons"])
+    assert all(item["passed"] for item in payload["whole_boundary_comparisons"])
+    assert all(
+        item["one_compiled_boundary"] and item["call_count"] == 2
+        for item in payload["whole_boundary_comparisons"]
+    )
     assert all(
         value == 0.0
         for comparison in payload["comparisons"]

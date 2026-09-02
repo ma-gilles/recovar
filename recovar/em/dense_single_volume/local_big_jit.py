@@ -7,7 +7,9 @@ single unit.
 
 from __future__ import annotations
 
+import inspect
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -2025,4 +2027,231 @@ def run_local_bucket_big_jit(
         ctf2_over_nv_recon=ctf2_over_nv_recon,
         proj_for_noise=proj_for_noise,
         wavg_cutoff_triplet=debug_wavg_cutoff_triplet,
+    )
+
+
+class _FixedCapacityPreparedLocalCall(NamedTuple):
+    """One bucket invocation with the ten chronological carry values removed."""
+
+    leading_arguments: tuple[object, ...]
+    trailing_arguments: tuple[object, ...]
+
+
+_FIXED_CAPACITY_CARRY_START = 7
+_FIXED_CAPACITY_CARRY_STOP = 17
+
+
+def _local_bucket_big_jit_signature_parts():
+    parameters = tuple(inspect.signature(run_local_bucket_big_jit).parameters.values())
+    positional = tuple(
+        parameter
+        for parameter in parameters
+        if parameter.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    )
+    keyword_only = tuple(
+        parameter
+        for parameter in parameters
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    )
+    return positional, keyword_only
+
+
+def _prepare_fixed_capacity_local_call(*arguments) -> _FixedCapacityPreparedLocalCall:
+    """Remove mature per-call carry placeholders from one sealed invocation.
+
+    The resulting pytree contains only call-local operands.  The whole-local
+    executor inserts its chronological carry at the exact mature signature
+    positions before entering the existing numeric body.
+    """
+
+    positional, _ = _local_bucket_big_jit_signature_parts()
+    if len(arguments) != len(positional):
+        raise ValueError(
+            "fixed-capacity local call requires every mature positional argument: "
+            f"expected {len(positional)}, got {len(arguments)}"
+        )
+    carry_names = tuple(
+        parameter.name
+        for parameter in positional[
+            _FIXED_CAPACITY_CARRY_START:_FIXED_CAPACITY_CARRY_STOP
+        ]
+    )
+    if carry_names != (
+        "Ft_y",
+        "Ft_ctf",
+        "noise_wsum",
+        "noise_img_power",
+        "noise_a2",
+        "noise_xa",
+        "noise_scale_xa",
+        "noise_scale_aa",
+        "noise_sigma2_offset",
+        "noise_sumw",
+    ):
+        raise RuntimeError(
+            "mature local big-JIT carry topology changed; update the whole-local executor"
+        )
+    return _FixedCapacityPreparedLocalCall(
+        leading_arguments=tuple(arguments[:_FIXED_CAPACITY_CARRY_START]),
+        trailing_arguments=tuple(arguments[_FIXED_CAPACITY_CARRY_STOP:]),
+    )
+
+
+def _canonicalize_fixed_capacity_static_options(
+    static_options,
+) -> tuple[tuple[str, object], ...]:
+    """Return one complete, hashable option tuple in mature signature order."""
+
+    _, keyword_only = _local_bucket_big_jit_signature_parts()
+    known_names = {parameter.name for parameter in keyword_only}
+    unknown_names = sorted(set(static_options) - known_names)
+    if unknown_names:
+        raise ValueError(
+            "unknown fixed-capacity local static options: "
+            + ", ".join(unknown_names)
+        )
+    canonical = []
+    missing = []
+    for parameter in keyword_only:
+        if parameter.name in static_options:
+            value = static_options[parameter.name]
+        elif parameter.default is not inspect.Parameter.empty:
+            value = parameter.default
+        else:
+            missing.append(parameter.name)
+            continue
+        canonical.append((parameter.name, value))
+    if missing:
+        raise ValueError(
+            "missing fixed-capacity local static options: " + ", ".join(missing)
+        )
+    canonical = tuple(canonical)
+    try:
+        hash(canonical)
+    except TypeError as exc:
+        raise ValueError(
+            "fixed-capacity local static options must be recursively hashable"
+        ) from exc
+    return canonical
+
+
+def _run_fixed_capacity_whole_local_program(
+    call_program,
+    carry,
+    static_options,
+    *,
+    numeric_call,
+):
+    """Trace all sealed calls through one carry-preserving numeric program."""
+
+    options = dict(static_options)
+    call_outputs = []
+    for call_index, prepared_call in enumerate(call_program):
+        result = numeric_call(
+            *prepared_call.leading_arguments,
+            *carry,
+            *prepared_call.trailing_arguments,
+            **options,
+        )
+        if len(result) < 12:
+            raise RuntimeError(
+                "mature local big-JIT returned fewer than twelve invariant outputs"
+            )
+        # Inputs 7:17 and outputs 0:8,9:11 are the exact chronological state.
+        # bucket_norm_correction (8), batch_norm (11), and all posterior/debug
+        # products remain call-local and are returned without retaining a copy
+        # of either multi-GB reconstruction accumulator for every call.
+        carry = tuple(result[:8]) + tuple(result[9:11])
+        call_outputs.append((result[8],) + tuple(result[11:]))
+        if call_index + 1 < len(call_program):
+            carry = jax.lax.optimization_barrier(carry)
+    return carry, tuple(call_outputs)
+
+
+@partial(
+    jax.jit,
+    donate_argnums=(1, 2),
+    static_argnames=("static_options",),
+)
+def _run_fixed_capacity_whole_local_jit(
+    call_program,
+    Ft_y,
+    Ft_ctf,
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    noise_scale_xa,
+    noise_scale_aa,
+    noise_sigma2_offset,
+    noise_sumw,
+    *,
+    static_options,
+):
+    carry = (
+        Ft_y,
+        Ft_ctf,
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        noise_sigma2_offset,
+        noise_sumw,
+    )
+    return _run_fixed_capacity_whole_local_program(
+        call_program,
+        carry,
+        static_options,
+        numeric_call=run_local_bucket_big_jit.__wrapped__,
+    )
+
+
+def run_fixed_capacity_whole_local(
+    call_program,
+    Ft_y,
+    Ft_ctf,
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    noise_scale_xa,
+    noise_scale_aa,
+    noise_sigma2_offset,
+    noise_sumw,
+    **static_options,
+):
+    """Run a nonempty sealed local-call program behind one JAX boundary.
+
+    This shared primitive deliberately owns no EM or InitialModel policy.  It
+    only threads the mature bucket kernel's invariant state in chronological
+    order.  Call construction and production admission remain default-off
+    host concerns until the fixed-capacity correctness and speed gates pass.
+    """
+
+    call_program = tuple(call_program)
+    if not call_program:
+        raise ValueError("fixed-capacity whole-local execution requires at least one call")
+    if not all(
+        isinstance(call, _FixedCapacityPreparedLocalCall) for call in call_program
+    ):
+        raise ValueError(
+            "fixed-capacity whole-local execution requires sealed prepared calls"
+        )
+    canonical_options = _canonicalize_fixed_capacity_static_options(static_options)
+    return _run_fixed_capacity_whole_local_jit(
+        call_program,
+        Ft_y,
+        Ft_ctf,
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        noise_sigma2_offset,
+        noise_sumw,
+        static_options=canonical_options,
     )
