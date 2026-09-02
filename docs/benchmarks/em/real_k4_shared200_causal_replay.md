@@ -13,6 +13,83 @@ classes are stable. Its purpose is to determine whether the real K=4 gap is
 already present in candidate scores/posteriors/support, or first appears in
 the reconstruction/update boundary.
 
+## Current-source capped replay
+
+Job `13338468` repeated the complete shared-200 discriminator at source
+`6ac57e1c7965541b4a49f485ccf511c689879cb0`, after matching RELION's active
+gradient-controller pose cap. RELION serializes
+`_rlnMaximumSignificantPoses=-1`, but its 3-D gradient path actually limits
+the active set to `100 * K`, or 400 poses for this K=4 case. The RECOVAR replay
+now records all three values: saved argument `-1`, active cap `400`, and source
+`relion_gradient_runtime_default`.
+
+That controller correction closes essentially the entire measured E-step gap:
+
+| Metric | Uncapped replay | Capped replay |
+| --- | ---: | ---: |
+| Exact candidate records | 771/800 (0.96375) | 798/800 (0.9975) |
+| Centered raw-score relative L2 | not used for acceptance | 4.7393e-6 |
+| Centered score-with-prior relative L2 | not used for acceptance | 5.2029e-6 |
+| Joint posterior relative L2 | 8.3e-2 | 3.2830e-5 |
+| Significant-support Jaccard | nonexact | 0.999967922 |
+| Joint winner agreement | 1.0 | 1.0 |
+| Hard-class assignment agreement | 1.0 | 1.0 |
+| Pmax RMSE / maximum error | not retained here | 1.0269e-5 / 3.3110e-5 |
+
+Only two of 800 particle/class records differ, each by one marginal boundary
+candidate. The strict fixed gate remains red because it deliberately requires
+800/800 candidate identity, support Jaccard 1.0, and posterior row-sum error at
+most `1e-7`; the observed values are 798/800, `0.999967922`, and
+`7.2458e-6`. These are now the only admissible failures. They must remain
+visible until a matched full VDAM trajectory shows whether this boundary noise
+has any material consequence.
+
+The measured class-map FSC-AUC values
+`[0.683914, 0.929546, 0.740678, 0.788427]` are retained as diagnostic
+telemetry, but they are not a parity gate for this harness. The native arm is
+explicitly `_rlnDoGradientRefine=1` and executes RELION InitialModel
+gradient/VDAM, while `scripts.run_k_class_parity` produces a direct
+ordinary-EM reconstruction. Comparing those maps cannot establish or refute
+update-rule parity. Native control repeatability, passive-capture inertness,
+and native frozen-target replay remain admissible matched-rule checks and have
+minimum FSC-AUC `0.999999999286`, `0.999999999282`, and `0.999510174`,
+respectively.
+
+The RECOVAR replay took 98.70 s, including 79.61 s for its eight-bucket fine
+E+M pass. It staged 0.012 GiB of raw diff2 values and reduced active M-step
+rows to 2,888/124,800 (2.3%). The enclosing job took 8 minutes 14 seconds,
+with peak batch RSS 8,263,708 KiB. ReqTRES and AllocTRES were identical:
+`billing=15,cpu=8,gres/gpu=1,mem=192G,node=1`; no exclusive allocation was
+used. The job's exit `1:0` is the expected fail-closed audit result, not a
+crash.
+
+The update-rule-aware v7 report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_fine46_maxsig400_6ac57e1c7_20260902/analysis/causal_replay_report_v7_update_rule_audit.json`
+(SHA-256
+`22cac3ba5c752e436a9019d383a2e3cebae7831ecb4497c7597df8acb4d75f54`).
+Its post-hoc manifest is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_fine46_maxsig400_6ac57e1c7_20260902/launch_manifest_v7_posthoc.json`
+(SHA-256
+`cff7bb3fd2bb8404de7e75c354fe781d2f3ac85883664ccb625249f05b61ace6`).
+The science arrays are unchanged from job `13338468`; auditor commit
+`cc898f30e103eac17ff68e6b422c6203e6dd9946` only classifies the mixed-rule
+map comparison correctly.
+
+Reproduce the update-rule-aware report from the sealed products, choosing a
+new output filename because the auditor refuses to overwrite evidence:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_harness_integrate_20260901
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+export PYTHONNOUSERSITE=1
+pixi run python scripts/audit_em_real_k4_shared200_causal_replay.py \
+  --manifest /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_fine46_maxsig400_6ac57e1c7_20260902/launch_manifest_v7_posthoc.json \
+  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_fine46_maxsig400_6ac57e1c7_20260902/analysis/causal_replay_report_v7_reproduced.json
+```
+
+The command intentionally returns 1 while the three strict E-step gates above
+remain nonexact.
+
 The failure reported below is retained as historical localization evidence at
 source `24317e40c`; it is not the current-source coarse result. Commit
 `5f74755c2` repaired RELION's rounded projection-shell handling, and clean
@@ -78,7 +155,9 @@ The correctly framed RECOVAR-versus-RELION class-map FSC-AUC values are
 `[0.604141, 0.906911, 0.693999, 0.748018]`. Native repeatability and passive
 capture inertness are both at least `0.99999999928`, and native replay versus
 the frozen target is at least `0.999510`. Thus the maps are positively related
-and the capture is inert, but the cross-engine map gate of 0.999 still fails.
+and the capture is inert. The cross-engine value is diagnostic-only: this
+harness compares RELION gradient/VDAM maps with RECOVAR direct ordinary-EM
+maps, so its nominal 0.999 threshold is not an admissible parity gate.
 The earlier negative-map interpretation came from loading maps written with
 `write_relion_mrc` through the RECOVAR-frame loader a second time; it is not
 scientific evidence.
