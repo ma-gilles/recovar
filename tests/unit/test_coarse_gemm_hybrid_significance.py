@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -11,6 +13,23 @@ from recovar.em.dense_single_volume.helpers import significance
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     plan_coarse_gemm_certificate_topology,
 )
+
+
+def test_direct_and_hybrid_share_disk_masked_compact_projection_operands():
+    source = Path(significance.__file__).read_text()
+    helper_start = source.index("    def _project_relion_compact_score_rows(")
+    helper_stop = source.index("\n    def _project_block(", helper_start)
+    helper = source[helper_start:helper_stop]
+    direct_stop = source.index("\n    coarse_selector_execution =", helper_stop)
+    direct = source[helper_stop:direct_stop]
+    cache_start = source.index("    def _project_coarse_gemm_rows(", direct_stop)
+    cache_stop = source.index("\n    def _project_coarse_gemm_block_once(", cache_start)
+    cache = source[cache_start:cache_stop]
+
+    assert "mask_current_image_disk=True" in helper
+    assert "mask_current_image_disk=False" not in helper
+    assert "_project_relion_compact_score_rows(" in direct
+    assert "_project_relion_compact_score_rows(" in cache
 
 
 def test_coarse_gaussian_gemm_hybrid_is_default_off_and_fail_closed(monkeypatch):

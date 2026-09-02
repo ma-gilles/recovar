@@ -4873,6 +4873,44 @@ def _compute_k_class_significance_batched(
             projector_compact_indices = window_indices
     projector_returns_compact = projector_compact_indices is not None
 
+    def _project_relion_compact_score_rows(
+        class_index,
+        rots_b,
+        *,
+        return_abs2: bool,
+    ):
+        """Project the exact compact rows shared by direct and GEMM scoring."""
+
+        if not (
+            use_relion_projector
+            and coarse_texture_interp
+            and projector_returns_compact
+        ):
+            raise RuntimeError(
+                "compact RELION score-row projection requires the texture "
+                "projector and an explicit score-row table",
+            )
+        return _compute_relion_projector_projections_block(
+            relion_projector_half[class_index],
+            rots_b,
+            image_shape,
+            r_max=int(relion_projector_r_max),
+            padding_factor=int(projection_padding_factor),
+            return_abs2=return_abs2,
+            centered_rows=True,
+            dense_scale=True,
+            projector_output_size=int(score_size),
+            # Keep the already-host-resident table on the host so validation
+            # cannot materialize its JAX mirror once per score block.
+            pixel_indices=coarse_gaussian_score_indices_np,
+            relion_texture_interp=True,
+            # This is the mature rectangular/EM operand convention.  The
+            # certificate and selected rescore must consume the same zeros in
+            # current-image crop corners rather than silently rebuilding a
+            # different projection table.
+            mask_current_image_disk=True,
+        )
+
     def _project_block(class_index, mean_for_proj, rots_b):
         if use_relion_projector:
             projector_kwargs = {}
@@ -4881,17 +4919,28 @@ def _compute_k_class_significance_batched(
             if projector_returns_compact:
                 projector_kwargs["pixel_indices"] = projector_compact_indices
             if coarse_texture_interp:
-                proj_half_b, proj_abs2_half_b = _compute_relion_projector_projections_block(
-                    relion_projector_half[class_index],
-                    rots_b,
-                    image_shape,
-                    r_max=int(relion_projector_r_max),
-                    padding_factor=int(projection_padding_factor),
-                    centered_rows=True,
-                    dense_scale=True,
-                    relion_texture_interp=True,
-                    **projector_kwargs,
-                )
+                if projector_returns_compact:
+                    proj_half_b, proj_abs2_half_b = (
+                        _project_relion_compact_score_rows(
+                            class_index,
+                            rots_b,
+                            return_abs2=True,
+                        )
+                    )
+                else:
+                    proj_half_b, proj_abs2_half_b = (
+                        _compute_relion_projector_projections_block(
+                            relion_projector_half[class_index],
+                            rots_b,
+                            image_shape,
+                            r_max=int(relion_projector_r_max),
+                            padding_factor=int(projection_padding_factor),
+                            centered_rows=True,
+                            dense_scale=True,
+                            relion_texture_interp=True,
+                            **projector_kwargs,
+                        )
+                    )
             else:
                 proj_half_b = _project_relion_projector_manual(
                     relion_projector_half[class_index],
@@ -4926,24 +4975,10 @@ def _compute_k_class_significance_batched(
 
 
     def _project_coarse_gemm_rows(class_index, rots_b, *, return_abs2: bool):
-        return _compute_relion_projector_projections_block(
-            relion_projector_half[class_index],
+        return _project_relion_compact_score_rows(
+            class_index,
             rots_b,
-            image_shape,
-            r_max=int(relion_projector_r_max),
-            padding_factor=int(projection_padding_factor),
             return_abs2=return_abs2,
-            centered_rows=True,
-            dense_scale=True,
-            projector_output_size=int(score_size),
-            # Keep the already-host-resident index table on the host. Passing
-            # the JAX mirror here made projection validation call
-            # ``np.asarray`` on a device array before every block.
-            pixel_indices=coarse_gaussian_score_indices_np,
-            relion_texture_interp=True,
-            # InitialModel scores RELION's complete square crop, including
-            # current-box corners that remain inside PPref's model radius.
-            mask_current_image_disk=False,
         )
 
     def _project_coarse_gemm_block_once(class_index, mean_for_proj, rots_b):
