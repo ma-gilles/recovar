@@ -18,6 +18,7 @@ import inspect
 import json
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,7 +55,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 
 
-SCHEMA = "recovar.fixed_capacity_local_score_gate.v4"
+SCHEMA = "recovar.fixed_capacity_local_score_gate.v5"
 IMAGE_SHAPE = (8, 8)
 VOLUME_SHAPE = (8, 8, 8)
 IMAGE_SIZE = int(np.prod(IMAGE_SHAPE))
@@ -700,6 +701,166 @@ def _run_and_compare_whole_boundary(
     }
 
 
+def _block_tree(value) -> None:
+    for leaf in jax.tree_util.tree_leaves(value):
+        block_until_ready = getattr(leaf, "block_until_ready", None)
+        if block_until_ready is not None:
+            block_until_ready()
+
+
+def _clone_prepared_call(call):
+    def clone(value):
+        return np.array(value, copy=True) if isinstance(value, np.ndarray) else value
+
+    return local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=tuple(clone(value) for value in call.leading_arguments),
+        trailing_arguments=tuple(clone(value) for value in call.trailing_arguments),
+    )
+
+
+def _fresh_carry(captured: _CapturedCall):
+    return tuple(
+        jnp.asarray(np.array(value, copy=True)) for value in captured.initial_carry
+    )
+
+
+def _run_prepared_calls_individually(
+    call_program,
+    initial_carry,
+    static_options,
+    *,
+    synchronize_each_call: bool,
+):
+    carry = tuple(initial_carry)
+    call_outputs = []
+    for prepared_call in call_program:
+        result = local_big_jit.run_local_bucket_big_jit(
+            *prepared_call.leading_arguments,
+            *carry,
+            *prepared_call.trailing_arguments,
+            **static_options,
+        )
+        if synchronize_each_call:
+            _block_tree(result)
+        carry = tuple(result[:8]) + tuple(result[9:11])
+        call_outputs.append((result[8],) + tuple(result[11:]))
+    return carry, tuple(call_outputs)
+
+
+def _time_numeric_call(callable_):
+    started = time.perf_counter()
+    result = callable_()
+    _block_tree(result)
+    return time.perf_counter() - started, result
+
+
+def run_mechanism_microbenchmark(
+    captures: tuple[_CapturedCall, ...],
+    *,
+    call_counts=(2, 8, 16),
+    warm_repeats: int = 5,
+) -> dict[str, Any]:
+    """Measure launch-boundary scaling without making a production claim."""
+
+    if not captures:
+        raise ValueError("mechanism microbenchmark requires captured mature calls")
+    if warm_repeats < 3:
+        raise ValueError("mechanism microbenchmark requires at least three warm repeats")
+    static_options = dict(captures[0].replay_static_arguments)
+    static_options.update(
+        return_debug_arrays=False,
+        return_debug_scores=False,
+        return_debug_operands=False,
+    )
+    rows = []
+    for raw_call_count in call_counts:
+        call_count = int(raw_call_count)
+        if call_count <= 0:
+            raise ValueError("mechanism microbenchmark call counts must be positive")
+        call_program = tuple(
+            _clone_prepared_call(captures[index % len(captures)].prepared_call)
+            for index in range(call_count)
+        )
+
+        def run_individual(*, synchronize_each_call: bool):
+            return _run_prepared_calls_individually(
+                call_program,
+                _fresh_carry(captures[0]),
+                static_options,
+                synchronize_each_call=synchronize_each_call,
+            )
+
+        def run_whole():
+            return local_big_jit.run_fixed_capacity_whole_local(
+                call_program,
+                *_fresh_carry(captures[0]),
+                **static_options,
+            )
+
+        individual_first_s, individual_reference = _time_numeric_call(
+            lambda: run_individual(synchronize_each_call=True)
+        )
+        whole_first_s, whole_reference = _time_numeric_call(run_whole)
+        for index, (actual, expected) in enumerate(
+            zip(
+                jax.tree_util.tree_leaves(whole_reference),
+                jax.tree_util.tree_leaves(individual_reference),
+                strict=True,
+            )
+        ):
+            _assert_array_exact(
+                f"mechanism call-count {call_count} output leaf {index}",
+                _to_host_array(actual),
+                _to_host_array(expected),
+            )
+
+        synchronized_samples = []
+        enqueued_samples = []
+        whole_samples = []
+        for repeat in range(warm_repeats):
+            if repeat % 2 == 0:
+                synchronized_s, _ = _time_numeric_call(
+                    lambda: run_individual(synchronize_each_call=True)
+                )
+                whole_s, _ = _time_numeric_call(run_whole)
+            else:
+                whole_s, _ = _time_numeric_call(run_whole)
+                synchronized_s, _ = _time_numeric_call(
+                    lambda: run_individual(synchronize_each_call=True)
+                )
+            enqueued_s, _ = _time_numeric_call(
+                lambda: run_individual(synchronize_each_call=False)
+            )
+            synchronized_samples.append(synchronized_s)
+            enqueued_samples.append(enqueued_s)
+            whole_samples.append(whole_s)
+        synchronized_median_s = float(np.median(synchronized_samples))
+        enqueued_median_s = float(np.median(enqueued_samples))
+        whole_median_s = float(np.median(whole_samples))
+        rows.append(
+            {
+                "call_count": call_count,
+                "individual_first_s": individual_first_s,
+                "whole_first_s": whole_first_s,
+                "individual_synchronized_warm_s": synchronized_samples,
+                "individual_enqueued_warm_s": enqueued_samples,
+                "whole_warm_s": whole_samples,
+                "individual_synchronized_median_s": synchronized_median_s,
+                "individual_enqueued_median_s": enqueued_median_s,
+                "whole_median_s": whole_median_s,
+                "speedup_vs_synchronized": synchronized_median_s / whole_median_s,
+                "speedup_vs_enqueued": enqueued_median_s / whole_median_s,
+                "exact_outputs": True,
+            }
+        )
+    return {
+        "classification": "mechanism_only_not_production_speed_claim",
+        "call_counts": [int(value) for value in call_counts],
+        "warm_repeats": int(warm_repeats),
+        "rows": rows,
+    }
+
+
 def _assert_array_exact(label: str, actual: np.ndarray, expected: np.ndarray) -> None:
     if actual.dtype != expected.dtype:
         raise AssertionError(f"{label} dtype changed: {actual.dtype} vs {expected.dtype}")
@@ -888,6 +1049,7 @@ def run_gate(
     repeat_count: int = 2,
     git_head: str | None = None,
     gpu_uuid: str | None = None,
+    include_mechanism_microbenchmark: bool = False,
 ) -> dict[str, Any]:
     if repeat_count < 2:
         raise ValueError("repeat_count must be at least two")
@@ -1009,6 +1171,11 @@ def run_gate(
             )
         )
 
+    mechanism_microbenchmark = (
+        run_mechanism_microbenchmark(snapshots["float32_fixed_0"][0])
+        if include_mechanism_microbenchmark
+        else None
+    )
     diagnostics_path = output_dir / "diagnostics.npz"
     _save_diagnostics(diagnostics_path, snapshots)
     reference_calls = snapshots["float32_default_0"][0]
@@ -1046,6 +1213,7 @@ def run_gate(
         "speed_claim_allowed": False,
         "default_promotion_allowed": False,
         "production_whole_boundary_enabled": True,
+        "mechanism_microbenchmark": mechanism_microbenchmark,
         "repeat_count": int(repeat_count),
         "precision_lanes": ["float32", "float64"],
         "fixture": {
@@ -1088,6 +1256,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-repo-head")
     parser.add_argument("--expected-gpu-uuid")
     parser.add_argument("--require-gpu", action="store_true")
+    parser.add_argument("--run-mechanism-microbenchmark", action="store_true")
     return parser.parse_args()
 
 
@@ -1124,6 +1293,7 @@ def main() -> None:
         repeat_count=args.repeat_count,
         git_head=_git_head(repo_root),
         gpu_uuid=observed_gpu_uuid,
+        include_mechanism_microbenchmark=args.run_mechanism_microbenchmark,
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
 

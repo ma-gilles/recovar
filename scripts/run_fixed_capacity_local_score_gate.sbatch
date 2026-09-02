@@ -34,7 +34,7 @@ RESULTS=${ROOT}/results
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 HARNESS_OUTPUT=${RESULTS}/harness
 HARNESS_RESULT=${HARNESS_OUTPUT}/gate_result.json
-HARNESS_SCHEMA=recovar.fixed_capacity_local_score_gate.v4
+HARNESS_SCHEMA=recovar.fixed_capacity_local_score_gate.v5
 FOCUSED_TEST=tests/unit/test_fixed_capacity_local_score_gate.py
 JOB_TMP_ROOT=/scratch/gpfs/GILLES/mg6942/tmp/${SLURM_JOB_ID}
 JOB_PIXI_HOME=/scratch/gpfs/GILLES/mg6942/pixi_home/${SLURM_JOB_ID}
@@ -208,6 +208,7 @@ printf '%q ' "${PIXI_PY}" scripts/run_fixed_capacity_local_score_gate.py \
   --output-dir "${HARNESS_OUTPUT}" \
   --expected-repo-head "${EXPECTED_REPO_HEAD}" \
   --expected-gpu-uuid "${selected_gpu_uuid}" \
+  --run-mechanism-microbenchmark \
   > "${PROVENANCE}/harness_command.txt"
 printf '\n' >> "${PROVENANCE}/harness_command.txt"
 (
@@ -215,7 +216,8 @@ printf '\n' >> "${PROVENANCE}/harness_command.txt"
   "${PIXI_PY}" scripts/run_fixed_capacity_local_score_gate.py \
     --output-dir "${HARNESS_OUTPUT}" \
     --expected-repo-head "${EXPECTED_REPO_HEAD}" \
-    --expected-gpu-uuid "${selected_gpu_uuid}"
+    --expected-gpu-uuid "${selected_gpu_uuid}" \
+    --run-mechanism-microbenchmark
 ) > "${RESULTS}/harness.stdout" 2> "${RESULTS}/harness.stderr"
 harness_finished=$(date +%s.%N)
 test -s "${HARNESS_RESULT}"
@@ -233,6 +235,10 @@ assert payload["passed"] is True, payload
 assert payload["speed_claim_allowed"] is False, payload
 assert payload["default_promotion_allowed"] is False, payload
 assert payload["production_whole_boundary_enabled"] is True, payload
+microbenchmark = payload["mechanism_microbenchmark"]
+assert microbenchmark["classification"] == "mechanism_only_not_production_speed_claim", payload
+assert microbenchmark["rows"], payload
+assert all(row["exact_outputs"] for row in microbenchmark["rows"]), payload
 assert payload["whole_boundary_comparisons"], payload
 assert all(item["passed"] for item in payload["whole_boundary_comparisons"]), payload
 assert all(item["one_compiled_boundary"] for item in payload["whole_boundary_comparisons"]), payload

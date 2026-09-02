@@ -127,6 +127,7 @@ def test_slurm_runner_is_fail_closed_and_forbids_speed_or_default_claims():
         'vdam_select_target_gpu "${TARGET_GPU_UUID}" 0',
         'vdam_verify_selected_gpu "${selected_gpu_uuid}"',
         '--expected-gpu-uuid "${selected_gpu_uuid}"',
+        "--run-mechanism-microbenchmark",
         'assert payload["classification"] == "correctness_only"',
         'assert payload["speed_claim_allowed"] is False',
         'assert payload["default_promotion_allowed"] is False',
@@ -156,6 +157,7 @@ def test_fixed_capacity_local_score_gate_is_exact_on_gpu(tmp_path):
     assert payload["speed_claim_allowed"] is False
     assert payload["default_promotion_allowed"] is False
     assert payload["production_whole_boundary_enabled"] is True
+    assert payload["mechanism_microbenchmark"] is None
     assert all(item["passed"] for item in payload["comparisons"])
     assert all(item["passed"] for item in payload["production_comparisons"])
     assert any(
