@@ -70,6 +70,15 @@ def test_parse_indices_rejects_duplicates_and_empty_values():
         analyzer._parse_indices("")
 
 
+def test_parse_optional_indices_allows_empty_but_rejects_invalid_values():
+    assert analyzer._parse_optional_indices("") == ()
+    assert analyzer._parse_optional_indices("7,9") == (7, 9)
+    with pytest.raises(analyzer.AnalysisError, match="invalid"):
+        analyzer._parse_optional_indices("7,7")
+    with pytest.raises(analyzer.AnalysisError, match="invalid"):
+        analyzer._parse_optional_indices("-1")
+
+
 def test_dump_identity_uses_reduced_dataset_indices_not_stack_offsets():
     dumps = [
         {"original_index": 7, "stack_index_one_based": 126},

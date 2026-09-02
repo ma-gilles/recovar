@@ -53,6 +53,15 @@ def _parse_indices(value: str) -> tuple[int, ...]:
     return values
 
 
+def _parse_optional_indices(value: str) -> tuple[int, ...]:
+    values = tuple(int(item) for item in value.split(",") if item.strip())
+    _require(
+        len(values) == len(set(values)) and all(item >= 0 for item in values),
+        "indices are invalid",
+    )
+    return values
+
+
 def _support_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
     left = np.asarray(reference, dtype=bool).reshape(-1)
     right = np.asarray(candidate, dtype=bool).reshape(-1)
@@ -548,8 +557,10 @@ def build_report(
         "schema": SCHEMA,
         "status": "complete",
         "scientific_scope": (
-            "16 frozen EMPIAR-10076 shared-200 particles at K=4 iteration 1/coarse current-size 20; "
-            "12 mismatch probes plus four exact controls"
+            f"{len(expected_indices)} frozen EMPIAR-10076 shared-200 particles at K=4 "
+            "iteration 1/coarse current-size 20; "
+            f"{len(expected_indices) - len(exact_control_indices)} mismatch probes plus "
+            f"{len(exact_control_indices)} exact controls"
         ),
         "metric_policy": (
             "direct parent-set identities and stable score ranks; no correlation; native-count "
@@ -603,7 +614,7 @@ def main() -> None:
     parser.add_argument("--causal-report", type=Path, required=True)
     parser.add_argument("--data-star", type=Path, required=True)
     parser.add_argument("--expected-indices", required=True)
-    parser.add_argument("--exact-control-indices", required=True)
+    parser.add_argument("--exact-control-indices", default="")
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
     if args.output_json.exists():
@@ -614,7 +625,7 @@ def main() -> None:
         causal_report_path=args.causal_report,
         data_star_path=args.data_star,
         expected_indices=_parse_indices(args.expected_indices),
-        exact_control_indices=_parse_indices(args.exact_control_indices),
+        exact_control_indices=_parse_optional_indices(args.exact_control_indices),
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
