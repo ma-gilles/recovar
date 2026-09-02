@@ -27,7 +27,7 @@ from typing import Any, Iterator
 
 import numpy as np
 
-SCHEMA = "recovar.vdam_hybrid_same_state_transition.v1"
+SCHEMA = "recovar.vdam_hybrid_same_state_transition.v2"
 ARM_ORDER = ("direct_1", "hybrid_1", "hybrid_2", "direct_2")
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
@@ -229,16 +229,56 @@ def _meta_comparison(left: dict[str, Any], right: dict[str, Any]) -> dict[str, A
             if lhs.shape == rhs.shape == left_ids.shape:
                 mask = lhs != rhs
                 result[key]["mismatching_selected_particle_ids"] = left_ids[mask].tolist()
-    for key in sorted(set(left) | set(right)):
-        if "coarse_significance_support_audit" in key:
-            lhs = _json_ready(left.get(key))
-            rhs = _json_ready(right.get(key))
-            result[key] = {
-                "exact_equal": lhs == rhs,
-                "left_sha256": _sha256_bytes(json.dumps(lhs, sort_keys=True, separators=(",", ":")).encode()),
-                "right_sha256": _sha256_bytes(json.dumps(rhs, sort_keys=True, separators=(",", ":")).encode()),
-            }
     return result
+
+
+def _support_audits(meta: dict[str, Any]) -> dict[str, Any]:
+    """Return every support audit, including audits nested in profile summaries."""
+    result: dict[str, Any] = {}
+    for key, value in meta.items():
+        if "coarse_significance_support_audit" in key:
+            result[key] = _json_ready(value)
+        if isinstance(value, dict) and "coarse_significance_support_audit" in value:
+            result[f"{key}.coarse_significance_support_audit"] = _json_ready(
+                value["coarse_significance_support_audit"]
+            )
+    return result
+
+
+def _support_audit_comparison(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    lhs_audits = _support_audits(left)
+    rhs_audits = _support_audits(right)
+    entries: dict[str, Any] = {}
+    for key in sorted(set(lhs_audits) | set(rhs_audits)):
+        lhs = lhs_audits.get(key)
+        rhs = rhs_audits.get(key)
+        entries[key] = {
+            "exact_equal": lhs == rhs,
+            "left_present": key in lhs_audits,
+            "right_present": key in rhs_audits,
+            "left_sha256": (
+                _sha256_bytes(json.dumps(lhs, sort_keys=True, separators=(",", ":")).encode())
+                if key in lhs_audits
+                else None
+            ),
+            "right_sha256": (
+                _sha256_bytes(json.dumps(rhs, sort_keys=True, separators=(",", ":")).encode())
+                if key in rhs_audits
+                else None
+            ),
+            "left_aggregate_support_sha256": (
+                lhs.get("aggregate_support_sha256") if isinstance(lhs, dict) else None
+            ),
+            "right_aggregate_support_sha256": (
+                rhs.get("aggregate_support_sha256") if isinstance(rhs, dict) else None
+            ),
+        }
+    return {
+        "exact_equal": bool(entries) and all(entry["exact_equal"] for entry in entries.values()),
+        "left_count": len(lhs_audits),
+        "right_count": len(rhs_audits),
+        "entries": entries,
+    }
 
 
 def _capture_direct_checkpoint(
@@ -439,6 +479,7 @@ def _pair_report(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         "left": left["label"],
         "right": right["label"],
         "estep_meta": _meta_comparison(left["estep_meta"], right["estep_meta"]),
+        "support_audits": _support_audit_comparison(left["estep_meta"], right["estep_meta"]),
         "accumulators": _accumulator_comparison(left["accumulators"], right["accumulators"]),
         "particle_state": _dataclass_comparison(left["particle_state"], right["particle_state"]),
         "sampling_state": _dataclass_comparison(left["sampling_state"], right["sampling_state"]),

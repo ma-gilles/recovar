@@ -43,6 +43,44 @@ def test_same_state_array_comparison_reports_exact_and_particle_mismatches() -> 
     assert report["significant_counts"]["exact_equal"] is True
 
 
+def test_same_state_support_audit_comparison_finds_nested_profile_audits() -> None:
+    audit = {
+        "schema": "recovar.coarse_significance_support_audit.v2",
+        "aggregate_support_sha256": "abc123",
+        "n_images": 2,
+        "per_class_image_selected_counts": [[2, 1]],
+    }
+    left = {"halfset_0_profile_summary": {"coarse_significance_support_audit": audit}}
+    right = {"halfset_0_profile_summary": {"coarse_significance_support_audit": dict(audit)}}
+
+    comparison = runner._support_audit_comparison(left, right)
+
+    key = "halfset_0_profile_summary.coarse_significance_support_audit"
+    assert comparison["exact_equal"] is True
+    assert comparison["left_count"] == comparison["right_count"] == 1
+    assert comparison["entries"][key]["left_aggregate_support_sha256"] == "abc123"
+    assert comparison["entries"][key]["left_sha256"] == comparison["entries"][key]["right_sha256"]
+
+
+def test_same_state_support_audit_comparison_rejects_missing_or_changed_audit() -> None:
+    left = {
+        "halfset_0_profile_summary": {
+            "coarse_significance_support_audit": {"aggregate_support_sha256": "left"}
+        }
+    }
+    changed = {
+        "halfset_0_profile_summary": {
+            "coarse_significance_support_audit": {"aggregate_support_sha256": "right"}
+        }
+    }
+
+    assert runner._support_audit_comparison(left, changed)["exact_equal"] is False
+    missing = runner._support_audit_comparison(left, {})
+    assert missing["exact_equal"] is False
+    assert missing["left_count"] == 1
+    assert missing["right_count"] == 0
+
+
 def test_same_state_dataclass_manifest_is_value_stable_and_sensitive() -> None:
     left = TinyState(3, np.asarray([1.0, 2.0], dtype=np.float32))
     same = TinyState(3, np.asarray([1.0, 2.0], dtype=np.float32))

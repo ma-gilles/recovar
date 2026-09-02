@@ -37,7 +37,7 @@ def test_dashboard_keeps_frozen_and_secondary_tracks_separate(dashboard: str) ->
     for heading in (
         "## Frozen v3 K=1 scorecard",
         "## Non-scoring v2 expansion",
-        "## Correctness: current hybrid-GEMM blocker",
+        "## Correctness: current hybrid-GEMM boundary",
         "## Runtime and performance lanes",
         "### Retained or accepted for narrower use",
         "### Rejected or do not promote",
@@ -53,7 +53,7 @@ def test_dashboard_keeps_frozen_and_secondary_tracks_separate(dashboard: str) ->
 @pytest.mark.unit
 def test_dashboard_records_hybrid_evidence_without_score_inflation(dashboard: str) -> None:
     expected_facts = (
-        "roughly **4.5x faster**",
+        "**1.84x faster** over the complete 200-iteration",
         "Explicit componentwise `abs2`, job `13327200` | **NO GO**",
         "Full promoted operands / FP64, job `13327874` | **NO GO**",
         "Selected 16-rotation-block direct primitive, job `13328717` | **PRIMITIVE PASS**",
@@ -74,7 +74,10 @@ def test_dashboard_records_hybrid_evidence_without_score_inflation(dashboard: st
     for fact in expected_facts:
         assert fact in dashboard
 
-    assert "standalone GEMM arms changed downstream discrete state" in dashboard
+    assert "Standalone GEMM remains unsafe as the sole scorer" in dashboard
     assert "diagnostic-only and timing-ineligible" in dashboard
     assert "frozen correctness **2 / 20**" in dashboard
     assert "frozen runtime **0 / 20**" in dashboard
+    assert "Job `13358712` replayed that exact transition" in dashboard.replace("\n", " ")
+    assert "pass 2 is flat at `829.611 -> 834.388 s`" in dashboard
+    assert "Focused regression | **126 / 126 PASS**" in dashboard

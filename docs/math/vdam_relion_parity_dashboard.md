@@ -10,18 +10,19 @@
 | Signal | Status | Evidence / next decision |
 |---|---|---|
 | Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
-| Corrected GF46 checkpoint | **SEALED PASS — ONE TRANSITION** | Job `13344325`, frozen iteration `180 -> 181`, sealed all six H100 arms. Exact cutoff/discrete/STAR identities, pooled map/model repeat envelopes, exact-ID inclusive-tie proof, and the material runtime gate all pass. This qualifies one transition only; the full-trajectory/no-growth gate is next. |
+| Full GF46 trajectory | **COMPLETE — 1.84x FASTER, SCIENCE DIVERGES** | Job `13354357` completed iterations `0 -> 200`: wall `2826.410 -> 1538.248 s`, expectation `2734.236 -> 1445.572 s`, and peak RSS `17673 -> 17681 MiB`. The first direct/hybrid discrete split is iteration 35; an independent direct repeat first splits at iteration 76. This is diagnostic, not a correctness pass. |
+| Same-state iteration 35 | **EXACT DECISIONS / ATOMIC-SCALE CONTINUOUS NOISE** | Job `13358712` deep-copied one exact live iteration-34 state into an ABBA panel. Every particle/pose/translation/class/posterior/significance field and all 200 exact support-ID rows agree across direct and hybrid; aggregate support SHA-256 is identical. Cross-backend reconstruction deltas are the same scale as direct/direct and hybrid/hybrid atomic-repeat noise. |
 | Root cause closed | **SHARED EM/DIRECT OPERANDS** | The pre-fix hybrid cache used `mask_current_image_disk=False` while mature EM/direct used `True`. Commit `e9a8e8256` now routes both through one shared projection helper; the previous 405 pose-assignment mismatches fell to **0 / 1,000**. |
-| Speed result | **4.47x SEALED WARM SPEEDUP** | Job `13344325` clean ABBA wall median is `21.223620 -> 4.746491 s`; expectation is **4.97x** faster and pass 1 is **8.21x** faster. Two earlier complete panels measured **4.04x** and **4.38x**. Feature remains default-off pending trajectories. |
-| Numerical classification | **POOLED MAP/MODEL ENVELOPES PASS** | All 15 hybrid-repeat and 36 direct/hybrid map and model pairs are bounded by pooled direct repeats. Normalized metrics reuse the mature true-200 `4·eps32` floor; max-absolute and signed-bias limits remain empirical and control-derived. |
-| Support proof | **EXACT-ID NESTING PASS** | Every retained ID and row/aggregate hash was revalidated. The four audit supports are pairwise nested, their common core covers the exact RELION cutoff, and the only varying row is also variable between direct repeats. Same-size swaps or non-nested changes fail closed. |
-| Focused regression | **67 / 67 PASS** | Hybrid significance/support audit, selector propagation, InitialModel adapter, shared projection operands, and transition analyzer/harness tests pass. No broad RECOVAR suite was run. |
+| Performance decomposition | **PASS 1 FIXED; PASS 2 / SHAPE CHURN NEXT** | Across 200 iterations, coarse pass 1 improves `1787.367 -> 493.504 s` (**3.62x**), while pass 2 is flat at `829.611 -> 834.388 s`. About `413 s` lies above shape-local timing floors. The active implementation is the mature shared EM fixed-capacity local executor, currently wired only for call 0. |
+| Numerical classification | **NO HYBRID-SPECIFIC ERROR AT SAME STATE** | The full trajectory is sensitive to accumulated ordinary reconstruction perturbations. This explains the observed split but does not make the trajectory stable or release-ready; multi-basin stability remains a correctness requirement. |
+| Focused regression | **126 / 126 PASS** | Hybrid score/support, selector, InitialModel adapter, shared projection, transition analyzer/harness, and focused contracts pass. No broad RECOVAR suite was run. |
 
 ### Immediate queue
 
-1. Run the representative repeated full trajectory with joint state witnesses, map/model no-growth bounds, FSC/scale checks, and same-H100 runtime comparison.
-2. If no numerical drift grows through the trajectory, rerun the frozen K=1 full trajectories.
-3. Expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
+1. Generalize the shared EM fixed-capacity local view from call 0 to every sealed chronological call, with poison-tail and operand-identity tests.
+2. Put the mature local score/reconstruction loop behind one fixed-shape execution boundary and benchmark it on the same-state H100 gate.
+3. Remove the remaining coarse-pass shape/JIT churn, then rerun the representative trajectory and quantify basin stability rather than demanding impossible bitwise atomic identity.
+4. Expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
 
 ## At a glance
 
@@ -30,8 +31,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **GF46 ONE-TRANSITION PASS / TRAJECTORY OPEN** | Job `13344325` seals exact downstream discrete state and bounded pooled map/model numerics with an exact inclusive-tie proof. No-growth over a full trajectory is not yet established. |
-| Current performance work | **4.47x CHECKPOINT PASS / TRAJECTORY OPEN** | Three complete clean panels reproduce material speed; the sealed panel is **4.47x**. Frozen runtime stays 0/20 pending trajectory and RELION wall-time scoring. |
+| Current correctness work | **SAME-STATE EXACT / BASIN STABILITY OPEN** | Job `13358712` rules out a deterministic hybrid decision error at the first observed split. Full direct/hybrid trajectories still enter different basins, as direct repeats eventually do too. |
+| Current performance work | **1.84x FULL TRAJECTORY / PASS 2 ACTIVE** | Job `13354357` is a material end-to-end improvement with only `+8 MiB` peak RSS, but still misses RELION. Coarse pass 1 is 3.62x faster; shared local/pass 2 and compilation churn are now dominant. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
@@ -66,12 +67,19 @@ subtotal nor evidence that the v3 score is 8/35.
 ## Correctness: current hybrid-GEMM boundary
 
 The integrated shared-EM hybrid is **4.47x faster** in the sealed GF46
-one-transition comparison and passes exact state plus pooled map/model repeat
-envelopes. Standalone GEMM remains unsafe as the sole scorer: it changed
+one-transition comparison and **1.84x faster** over the complete 200-iteration
+trajectory. Standalone GEMM remains unsafe as the sole scorer: it changed
 downstream discrete state and escaped direct-repeat envelopes. The accepted
 design uses GEMM only to pre-screen, then direct-rescores every certified
 source block capable of changing RELION's float32 raw winner, offset,
-posterior, support, or selected state. Full-trajectory no-growth is still open.
+posterior, support, or selected state.
+
+The complete direct/hybrid run first differs discretely at iteration 35. Job
+`13358712` replayed that exact transition from one shared in-memory state and
+found no score, support, or downstream decision difference whatsoever. The
+remaining continuous differences match ordinary CUDA reconstruction-atomic
+repeat noise. The current blocker is therefore full-trajectory basin stability,
+not a known hybrid candidate omission.
 
 | Evidence | Status | Read / decision |
 |---|---|---|
@@ -150,13 +158,15 @@ release gate.
 
 ## Next gates
 
-1. Run the representative repeated full-trajectory direct/hybrid no-growth
-   gate with joint-state witnesses, map/model envelopes, FSC/scale checks,
-   selector/fallback telemetry, and same-H100 runtime.
-2. If the representative trajectory passes, run a multi-dataset basin gate.
-3. Then rerun the frozen K=1 trajectory suite and the expanded outlier,
+1. Complete and benchmark the shared fixed-capacity whole-local executor so
+   pass 2 no longer pays one heavily padded controller/JIT boundary per bucket.
+2. Add shape-stable coarse-certificate execution to remove schedule-wide
+   recompilation excess while retaining exact selected-block direct rescoring.
+3. Rerun the representative trajectory with basin-stability, FSC/scale,
+   selector/fallback, memory, and same-H100 runtime gates.
+4. Then rerun the frozen K=1 trajectory suite and the expanded outlier,
    pose/noise-distribution, scale, parameter, and long-trajectory matrix.
-4. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
+5. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
    scoring rerun updates the authoritative scorecard. Only then open K>1 and
    real-data gates as independent tracks.
 
@@ -178,6 +188,8 @@ release gate.
 | Shared projection cache | Source `43402732cb169ab5d91d90b10262a35ba99edae4`; job `13332001`; H100 `GPU-2ee3da91-970a-6714-84df-530aefe04a08`; result SHA-256 `576384429d01fbe2d86a81c13a7519c484490e5ac62bb8bc871387df653023c2`; [report](../perf/vdam_projection_cache_h100_13332001.md). |
 | Integrated hybrid H100 boundary | Source `b611aeff15004a07d6d2a1ec590bc5b97180cb5b`; job `13341618`; H100 `GPU-2ee3da91-970a-6714-84df-530aefe04a08`; artifact-manifest SHA-256 `fec2ec40f98057a428799a472ea36908725c24ed54041d21ceacd99cf0ef325a`; [report](../perf/vdam_gf46_hybrid_batch_h100_13341618.md). |
 | GF46 integrated-hybrid one-transition seal | Source `85c4b13bf5f7b975ea4504750fe8495556e6030c`; job `13344325`; H100 `GPU-75c2d200-95d1-ef57-fb52-1698386c756c`; report JSON SHA-256 `10649aa2916269335f7615d399c0a3388bf722a49a0223b6f2acc7a863535351`; [report](../perf/vdam_gf46_hybrid_transition_h100_13344325.md). |
+| GF46 integrated-hybrid full trajectory | Harness source `c5910f956db6c8a0706d91acfb78b456dbdce64f`, production candidate `e0c1d1746570e64bad3618b09a50be31b79ebe60`, job `13354357`, H100 `GPU-97adb339-219f-d72d-11c9-74dc92fcff8c`, source manifest SHA-256 `9f728182a2c963974697ca06f52db9804282cbe42714c0c1bc27f9c2c575f048`. |
+| GF46 same-state iteration-35 boundary | Source `2fc852da7a408d32dd0142fb177371de0407c552`, job `13358712`, H100 `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, report JSON SHA-256 `a3809404cf10f5c4dd473c3a09795189cc07c543fb3b7d9d89b8fc892c3e7153`; [report](../perf/vdam_hybrid_same_state_it35_h100_13358712.md). |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`
