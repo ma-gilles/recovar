@@ -394,6 +394,7 @@ set +e
 (
   cd "${REPO_ROOT}"
   env LD_PRELOAD="${CUSPARSE_LIBRARY}" JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu \
+    JAX_COMPILATION_CACHE_DIR= \
     "${RECOVAR_PIXI_PY}" -m scripts.analyze_vdam_gf46_hybrid_transition \
     --root "${ROOT}" --repo "${REPO_ROOT}" \
     --output-json "${ANALYSIS}/report.json" \
