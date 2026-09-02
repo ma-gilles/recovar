@@ -89,17 +89,18 @@ def test_current_shared_seam_rejects_discrete_decision_or_support_drift():
         )
 
 
-def test_fixture_is_one_authoritative_padded_call_with_a_default_off_selector():
+def test_fixture_has_two_authoritative_calls_with_a_default_off_selector():
     fixture = score_gate.build_gate_fixture()
     signature = inspect.signature(score_gate.local_em_engine.run_local_em_exact)
 
     np.testing.assert_array_equal(fixture.bucket_image_order, [1, 0, 2])
-    assert fixture.bucket_image_capacity == 4
+    assert fixture.bucket_image_capacity == 2
     assert fixture.bucket_radix == 16
-    assert fixture.fixed_bundle.plan.valid_call_count == 1
+    assert fixture.fixed_bundle.plan.valid_call_count == 2
+    assert fixture.fixed_bundle.plan.physical_call_capacity == 3
     assert fixture.fixed_bundle.plan.valid_image_count == 3
     assert fixture.fixed_bundle.plan.valid_row_count == 8
-    assert signature.parameters["_fixed_capacity_call0_enabled"].default is False
+    assert signature.parameters["_fixed_capacity_enabled"].default is False
 
 
 def test_gate_donation_contract_tracks_signature_positions_and_fresh_objects():

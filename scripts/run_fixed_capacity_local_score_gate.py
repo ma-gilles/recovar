@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E402, I001
-"""Sealed correctness gate for the default-off fixed-capacity local call-0 seam.
+"""Sealed correctness gate for the default-off fixed-capacity local-call seam.
 
 This gate intentionally makes no runtime or default-promotion claim.  The
 current seam substitutes byte-validated host operands immediately before the
@@ -54,7 +54,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 
 
-SCHEMA = "recovar.fixed_capacity_local_score_gate.v1"
+SCHEMA = "recovar.fixed_capacity_local_score_gate.v2"
 IMAGE_SHAPE = (8, 8)
 VOLUME_SHAPE = (8, 8, 8)
 IMAGE_SIZE = int(np.prod(IMAGE_SHAPE))
@@ -289,31 +289,47 @@ def build_gate_fixture() -> _GateFixture:
     )
     buckets = bucket_local_hypothesis_layout(
         local_layout,
-        image_batch_size=4,
+        image_batch_size=2,
         rotation_block_size=8,
         max_hypotheses_per_microbatch=64,
         exact_local_bucket_radix=2,
     )
-    if len(buckets) != 1:
-        raise RuntimeError(f"sealed score fixture must produce exactly one call, got {len(buckets)}")
-    bucket = buckets[0]
-    bucket_image_order = np.asarray(bucket.image_indices, dtype=np.int32)
+    if len(buckets) != 2:
+        raise RuntimeError(f"sealed score fixture must produce exactly two calls, got {len(buckets)}")
+    bucket_image_order = np.concatenate(
+        [np.asarray(bucket.image_indices, dtype=np.int32) for bucket in buckets]
+    )
     sealed_order = _seal_fixed_capacity_physical_order(bucket_image_order)
     calls = _fixed_capacity_calls_from_local_buckets(buckets, expected_order=sealed_order)
-    physical_image_capacity = int(bucket.bucket_image_count)
+    physical_image_capacity = 4
     physical_row_capacity = max(
         16,
-        int(sum(int(value) for value in bucket.actual_rotation_counts)),
+        int(
+            sum(
+                int(value)
+                for bucket in buckets
+                for value in bucket.actual_rotation_counts
+            )
+        ),
     )
+    image_capacity_palette: dict[int, tuple[int, ...]] = {}
+    for radix in sorted({int(bucket.bucket_rotation_count) for bucket in buckets}):
+        image_capacity_palette[radix] = tuple(
+            sorted(
+                {
+                    int(bucket.bucket_image_count)
+                    for bucket in buckets
+                    if int(bucket.bucket_rotation_count) == radix
+                }
+            )
+        )
     plan = _plan_fixed_capacity_whole_local(
         calls,
         expected_image_order=sealed_order,
         physical_image_capacity=physical_image_capacity,
         physical_row_capacity=physical_row_capacity,
-        physical_call_capacity=1,
-        image_capacity_palette={
-            int(bucket.bucket_rotation_count): (physical_image_capacity,),
-        },
+        physical_call_capacity=3,
+        image_capacity_palette=image_capacity_palette,
         logical_cutoff=6,
         logical_cutoff_capacity=16,
         enabled=True,
@@ -351,8 +367,8 @@ def build_gate_fixture() -> _GateFixture:
         image_pre_shifts=image_pre_shifts,
         fixed_bundle=fixed_bundle,
         bucket_image_order=bucket_image_order,
-        bucket_radix=int(bucket.bucket_rotation_count),
-        bucket_image_capacity=physical_image_capacity,
+        bucket_radix=max(int(bucket.bucket_rotation_count) for bucket in buckets),
+        bucket_image_capacity=max(int(bucket.bucket_image_count) for bucket in buckets),
     )
 
 
@@ -474,7 +490,7 @@ def _run_kwargs(fixture: _GateFixture, precision: str) -> dict[str, Any]:
         raise ValueError(f"unknown precision lane: {precision}")
     use_float64 = precision == "float64"
     return {
-        "image_batch_size": 4,
+        "image_batch_size": 2,
         "rotation_block_size": 8,
         "current_size": 6,
         "accumulate_noise": False,
@@ -506,15 +522,15 @@ def _run_outer(
         pass
     elif arm == "disabled":
         kwargs.update(
-            _fixed_capacity_call0_bundle=fixture.fixed_bundle,
-            _fixed_capacity_call0_enabled=False,
-            _fixed_capacity_call0_class_count=1,
+            _fixed_capacity_bundle=fixture.fixed_bundle,
+            _fixed_capacity_enabled=False,
+            _fixed_capacity_class_count=1,
         )
     elif arm == "fixed":
         kwargs.update(
-            _fixed_capacity_call0_bundle=fixture.fixed_bundle,
-            _fixed_capacity_call0_enabled=True,
-            _fixed_capacity_call0_class_count=1,
+            _fixed_capacity_bundle=fixture.fixed_bundle,
+            _fixed_capacity_enabled=True,
+            _fixed_capacity_class_count=1,
         )
     else:
         raise ValueError(f"unknown score-gate arm: {arm}")
@@ -552,13 +568,17 @@ def _run_captured_arm(
     arm: str,
     *,
     donated_input_objects: list[object] | None = None,
-) -> tuple[_CapturedCall, dict[str, np.ndarray]]:
+) -> tuple[tuple[_CapturedCall, ...], dict[str, np.ndarray]]:
     with _capture_shared_numeric_call(donated_input_objects) as captures:
         result = _run_outer(fixture, precision, arm)
         outer = _outer_snapshot(result)
-    if len(captures) != 1:
-        raise RuntimeError(f"{arm}/{precision} must invoke exactly one shared score call, got {len(captures)}")
-    return captures[0], outer
+    expected_call_count = int(fixture.fixed_bundle.plan.valid_call_count)
+    if len(captures) != expected_call_count:
+        raise RuntimeError(
+            f"{arm}/{precision} must invoke exactly {expected_call_count} shared score calls, "
+            f"got {len(captures)}"
+        )
+    return tuple(captures), outer
 
 
 def _assert_array_exact(label: str, actual: np.ndarray, expected: np.ndarray) -> None:
@@ -710,12 +730,15 @@ def compare_outer_snapshots(
 
 def _save_diagnostics(
     output_path: Path,
-    snapshots: dict[str, tuple[_CapturedCall, dict[str, np.ndarray]]],
+    snapshots: dict[str, tuple[tuple[_CapturedCall, ...], dict[str, np.ndarray]]],
 ) -> None:
     arrays: dict[str, np.ndarray] = {}
-    for arm_name, (captured, outer) in snapshots.items():
-        for field_name, value in captured.diagnostics.items():
-            arrays[f"{arm_name}__diagnostic__{field_name}"] = np.asarray(value)
+    for arm_name, (captured_calls, outer) in snapshots.items():
+        for call_index, captured in enumerate(captured_calls):
+            for field_name, value in captured.diagnostics.items():
+                arrays[
+                    f"{arm_name}__call{call_index:04d}__diagnostic__{field_name}"
+                ] = np.asarray(value)
         for field_name, value in outer.items():
             arrays[f"{arm_name}__outer__{field_name}"] = np.asarray(value)
     np.savez_compressed(output_path, **arrays)
@@ -753,7 +776,7 @@ def run_gate(
     output_dir.mkdir(parents=True, exist_ok=False)
     fixture = build_gate_fixture()
 
-    snapshots: dict[str, tuple[_CapturedCall, dict[str, np.ndarray]]] = {}
+    snapshots: dict[str, tuple[tuple[_CapturedCall, ...], dict[str, np.ndarray]]] = {}
     comparisons: list[dict[str, Any]] = []
     production_comparisons: list[dict[str, Any]] = []
     donated_input_objects: list[object] = []
@@ -775,22 +798,27 @@ def run_gate(
         default = snapshots[f"{precision}_default_0"]
         disabled = snapshots[f"{precision}_disabled_0"]
         fixed = snapshots[f"{precision}_fixed_0"]
-        comparisons.append(
-            compare_captured_calls(
-                disabled[0],
-                default[0],
-                label=f"{precision}:default-vs-disabled-selector",
-                require_exact_current_seam=True,
+        for call_index, (default_call, disabled_call, fixed_call) in enumerate(
+            zip(default[0], disabled[0], fixed[0], strict=True)
+        ):
+            comparisons.append(
+                compare_captured_calls(
+                    disabled_call,
+                    default_call,
+                    label=(
+                        f"{precision}:default-vs-disabled-selector:call-{call_index:04d}"
+                    ),
+                    require_exact_current_seam=True,
+                )
             )
-        )
-        comparisons.append(
-            compare_captured_calls(
-                fixed[0],
-                default[0],
-                label=f"{precision}:mature-vs-fixed",
-                require_exact_current_seam=True,
+            comparisons.append(
+                compare_captured_calls(
+                    fixed_call,
+                    default_call,
+                    label=f"{precision}:mature-vs-fixed:call-{call_index:04d}",
+                    require_exact_current_seam=True,
+                )
             )
-        )
         production_comparisons.append(
             compare_outer_snapshots(
                 disabled[1],
@@ -809,14 +837,17 @@ def run_gate(
             for arm in ("default", "fixed"):
                 repeated = snapshots[f"{precision}_{arm}_{repeat}"]
                 baseline = snapshots[f"{precision}_{arm}_0"]
-                comparisons.append(
-                    compare_captured_calls(
-                        repeated[0],
-                        baseline[0],
-                        label=f"{precision}:{arm}-repeat-{repeat}",
-                        require_exact_current_seam=True,
+                for call_index, (repeated_call, baseline_call) in enumerate(
+                    zip(repeated[0], baseline[0], strict=True)
+                ):
+                    comparisons.append(
+                        compare_captured_calls(
+                            repeated_call,
+                            baseline_call,
+                            label=f"{precision}:{arm}-repeat-{repeat}:call-{call_index:04d}",
+                            require_exact_current_seam=True,
+                        )
                     )
-                )
                 production_comparisons.append(
                     compare_outer_snapshots(
                         repeated[1],
@@ -848,8 +879,22 @@ def run_gate(
 
     diagnostics_path = output_dir / "diagnostics.npz"
     _save_diagnostics(diagnostics_path, snapshots)
-    active = snapshots["float32_default_0"][0].diagnostics["candidate_mask"]
-    significant = snapshots["float32_default_0"][0].diagnostics["n_significant_samples"]
+    reference_calls = snapshots["float32_default_0"][0]
+    active_candidate_count = int(
+        sum(np.sum(call.diagnostics["candidate_mask"]) for call in reference_calls)
+    )
+    active_significant_counts = np.concatenate(
+        [
+            np.asarray(call.diagnostics["n_significant_samples"])[
+                np.asarray(call.inputs["valid_image_mask"], dtype=bool)
+            ]
+            for call in reference_calls
+        ]
+    )
+    padded_significant_counts = [
+        np.asarray(call.diagnostics["n_significant_samples"]).tolist()
+        for call in reference_calls
+    ]
     payload = {
         "schema": SCHEMA,
         "classification": "correctness_only",
@@ -877,9 +922,11 @@ def run_gate(
             "bucket_image_order": fixture.bucket_image_order.tolist(),
             "bucket_image_capacity": fixture.bucket_image_capacity,
             "bucket_radix": fixture.bucket_radix,
-            "active_candidate_count": int(np.sum(active)),
-            "active_significant_counts": np.asarray(significant[: fixture.dataset.n_images]).tolist(),
-            "padded_significant_counts": np.asarray(significant).tolist(),
+            "valid_call_count": int(fixture.fixed_bundle.plan.valid_call_count),
+            "physical_call_capacity": int(fixture.fixed_bundle.plan.physical_call_capacity),
+            "active_candidate_count": active_candidate_count,
+            "active_significant_counts": active_significant_counts.tolist(),
+            "padded_significant_counts_by_call": padded_significant_counts,
         },
         "runtime": {
             "jax_backend": jax.default_backend(),

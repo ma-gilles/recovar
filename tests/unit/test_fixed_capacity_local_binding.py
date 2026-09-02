@@ -449,6 +449,48 @@ def test_fixed_capacity_materializes_every_active_call_in_sealed_chronology():
     )
 
 
+def test_fixed_capacity_nonzero_call_uses_shared_selection_fetch_and_padding_path():
+    _, _, _, bundle, _, image_pre_shifts = _call0_fixture()
+    mature_bucket = _bucket(
+        [1],
+        [1],
+        radix=2,
+        image_capacity=1,
+        include_optional=True,
+    )
+    view = local_em_engine._select_fixed_capacity_score_only_view(
+        bundle,
+        mature_bucket,
+        call_index=1,
+        n_classes=1,
+        class_log_prior=0.0,
+        image_pre_shifts=image_pre_shifts,
+        image_corrections=None,
+        scale_corrections=None,
+        score_only=True,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        accumulate_noise=False,
+        mstep_requested=False,
+        enabled=True,
+    )
+    raw, ctf, fetched_indices = local_em_engine._fetch_and_validate_fixed_capacity_call_operands(
+        _IndexedDataset(),
+        view,
+        mature_bucket,
+    )
+
+    padded = local_em_engine._pad_local_big_jit_image_axis(view.bucket, raw, ctf)
+    local_em_engine._validate_fixed_capacity_padded_call(view, *padded)
+
+    assert view.call_index == 1
+    np.testing.assert_array_equal(fetched_indices, [1])
+    _assert_bucket_arrays_equal(padded[0], mature_bucket)
+    np.testing.assert_array_equal(padded[1], _IndexedDataset().images[[1]])
+    np.testing.assert_array_equal(padded[2], _IndexedDataset().ctf_params[[1]])
+    np.testing.assert_array_equal(padded[3], [True])
+
+
 @pytest.mark.parametrize("call_index", (-1, 2, 3, 100))
 def test_fixed_capacity_call_materialization_rejects_inactive_or_out_of_range_calls(call_index):
     _, _, _, bundle, _, _ = _call0_fixture()
@@ -829,15 +871,16 @@ def test_local_em_caller_allocates_and_forwards_fresh_donated_accumulators_per_r
     assert positional_lines[7:9] == ["Ft_y", "Ft_ctf"]
 
 
-def test_fixed_capacity_call0_selector_is_private_default_off_and_uses_shared_mature_call():
+def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_call():
     signature = inspect.signature(local_em_engine.run_local_em_exact)
-    assert signature.parameters["_fixed_capacity_call0_enabled"].default is False
-    assert signature.parameters["_fixed_capacity_call0_bundle"].default is None
-    assert signature.parameters["_fixed_capacity_call0_class_count"].default is None
+    assert signature.parameters["_fixed_capacity_enabled"].default is False
+    assert signature.parameters["_fixed_capacity_bundle"].default is None
+    assert signature.parameters["_fixed_capacity_class_count"].default is None
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert source.count("_invoke_local_bucket_big_jit(") == 1
     assert "big_jit_result = run_local_bucket_big_jit(" not in source
-    assert "fixed_capacity_call0_enabled and not use_big_jit_buckets" in source
-    assert source.index("_fetch_and_validate_fixed_capacity_call0_operands(") < source.index(
+    assert "fixed_capacity_enabled and not use_big_jit_buckets" in source
+    assert "call_index=bucket_index" in source
+    assert source.index("_fetch_and_validate_fixed_capacity_call_operands(") < source.index(
         "_invoke_local_bucket_big_jit(",
     )
