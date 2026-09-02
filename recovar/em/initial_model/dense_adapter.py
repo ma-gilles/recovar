@@ -882,6 +882,7 @@ def _run_sparse_pass2_initial_model_estep(
     pass2_time_s = 0.0
     exact_local_runtime_policy_active = False
     coarse_gemm_aggregate_manifest_path = None
+    coarse_gemm_stream_aggregate_manifest_path = None
     n_significant_by_image: list[np.ndarray] = []
     use_exact_relion_projector = relion_projector_half_by_class is not None
     if use_exact_relion_projector and relion_projector_r_max is None:
@@ -975,6 +976,10 @@ def _run_sparse_pass2_initial_model_estep(
 
     coarse_gemm_diagnostic_requested = bool(
         os.environ.get("RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR", "").strip()
+        or os.environ.get(
+            "RECOVAR_COARSE_GAUSSIAN_GEMM_STREAM_DIAGNOSTIC_DIR",
+            "",
+        ).strip()
     )
     coarse_gemm_diagnostic_scopes = (
         _initial_model_coarse_gemm_diagnostic_scopes(
@@ -1108,6 +1113,13 @@ def _run_sparse_pass2_initial_model_estep(
         ):
             coarse_gemm_aggregate_manifest_path = _full_stats[
                 "coarse_gaussian_gemm_aggregate_manifest_path"
+            ]
+        if (
+            _full_stats is not None
+            and "coarse_gaussian_gemm_stream_aggregate_manifest_path" in _full_stats
+        ):
+            coarse_gemm_stream_aggregate_manifest_path = _full_stats[
+                "coarse_gaussian_gemm_stream_aggregate_manifest_path"
             ]
         zero_oversampling = oversampling_order == 0
         k1_zero_oversampling = state.K == 1 and zero_oversampling
@@ -1442,6 +1454,10 @@ def _run_sparse_pass2_initial_model_estep(
     if coarse_gemm_aggregate_manifest_path is not None:
         meta["coarse_gaussian_gemm_aggregate_manifest_path"] = (
             coarse_gemm_aggregate_manifest_path
+        )
+    if coarse_gemm_stream_aggregate_manifest_path is not None:
+        meta["coarse_gaussian_gemm_stream_aggregate_manifest_path"] = (
+            coarse_gemm_stream_aggregate_manifest_path
         )
     out = DenseInitialModelEstepResult(
         accumulators=accumulators,

@@ -16,6 +16,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
+    aggregate_coarse_gemm_streaming_summaries,
+    coarse_gemm_streaming_state_bytes,
+    initialize_coarse_gemm_streaming_state,
+    update_coarse_gemm_streaming_state,
+    write_coarse_gemm_streaming_summary,
+)
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.projection import compute_projections_block
 from recovar.em.dense_single_volume.helpers.scoring import (
@@ -65,6 +72,12 @@ _COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV = (
 )
 _COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_INDICES_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_ORIGINAL_INDICES"
+)
+_COARSE_GAUSSIAN_GEMM_STREAM_DIAGNOSTIC_DIR_ENV = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_STREAM_DIAGNOSTIC_DIR"
+)
+_COARSE_GAUSSIAN_GEMM_STREAM_TOPK_ENV = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_STREAM_TOPK"
 )
 _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
@@ -918,6 +931,48 @@ def _coarse_gaussian_gemm_diagnostic_request() -> tuple[str | None, set[int] | N
     return os.path.abspath(os.path.expanduser(directory)), {int(target) for target in targets}
 
 
+def _coarse_gaussian_gemm_streaming_diagnostic_request(
+    *,
+    max_significants: int,
+) -> tuple[str | None, int | None]:
+    """Resolve the all-particle bounded exact-rescore diagnostic.
+
+    The diagnostic retains ``topk + 1`` paired candidates per image (the extra
+    row certifies cutoff-tie and band coverage) and reduces error statistics
+    across every candidate block on device.  It never serializes a score cube.
+    """
+
+    directory = os.environ.get(
+        _COARSE_GAUSSIAN_GEMM_STREAM_DIAGNOSTIC_DIR_ENV,
+        "",
+    ).strip()
+    topk_token = os.environ.get(_COARSE_GAUSSIAN_GEMM_STREAM_TOPK_ENV, "").strip()
+    if not directory:
+        if topk_token:
+            raise ValueError(
+                f"{_COARSE_GAUSSIAN_GEMM_STREAM_TOPK_ENV} requires "
+                f"{_COARSE_GAUSSIAN_GEMM_STREAM_DIAGNOSTIC_DIR_ENV}",
+            )
+        return None, None
+    default_topk = max(
+        2048,
+        int(max_significants) + 64 if int(max_significants) > 0 else 2048,
+    )
+    try:
+        retained_topk = int(topk_token) if topk_token else default_topk
+    except ValueError as error:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_STREAM_TOPK_ENV} must be a positive integer, "
+            f"got {topk_token!r}",
+        ) from error
+    if retained_topk <= 0:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_STREAM_TOPK_ENV} must be a positive integer, "
+            f"got {retained_topk}",
+        )
+    return os.path.abspath(os.path.expanduser(directory)), retained_topk
+
+
 def _coarse_gaussian_gemm_scope_manifest_path(
     directory: str,
     scope: CoarseGaussianGemmDiagnosticScope,
@@ -1061,6 +1116,144 @@ def _seal_coarse_gaussian_gemm_diagnostic_scope(
         f"coarse_gemm_manifest_{scope.run_id}.json",
     )
     _write_json_exclusive(aggregate_path, aggregate_record)
+    return scope_path, aggregate_path
+
+
+def _coarse_gaussian_gemm_stream_scope_manifest_path(
+    directory: str,
+    scope: CoarseGaussianGemmDiagnosticScope,
+) -> str:
+    return os.path.join(
+        directory,
+        f"coarse_gemm_rescore_scope_{scope.run_id}_{scope.call_id}.json",
+    )
+
+
+def _seal_coarse_gaussian_gemm_streaming_scope(
+    directory: str,
+    *,
+    scope: CoarseGaussianGemmDiagnosticScope,
+    retained_topk: int,
+    artifact_paths: list[str],
+    original_indices: list[int],
+) -> tuple[str, str | None]:
+    """Seal compact all-particle summaries across explicit call scopes."""
+
+    particle_ids = [int(value) for value in original_indices]
+    if len(particle_ids) != len(set(particle_ids)):
+        raise RuntimeError(
+            "coarse GEMM streaming diagnostic captured a particle more than once "
+            f"inside call {scope.call_id}",
+        )
+    artifact_particle_ids = []
+    for artifact_path in artifact_paths:
+        if not os.path.isfile(artifact_path):
+            raise RuntimeError(
+                "coarse GEMM streaming diagnostic artifact is missing: "
+                f"{artifact_path}",
+            )
+        with np.load(artifact_path, allow_pickle=False) as artifact:
+            if (
+                artifact.get("schema", np.asarray("")).item()
+                != "recovar.coarse_gemm_streaming_rescore.v1"
+                or artifact.get("diagnostic_run_id", np.asarray("")).item()
+                != scope.run_id
+                or artifact.get("diagnostic_call_id", np.asarray("")).item()
+                != scope.call_id
+                or bool(artifact.get("stores_score_cube", np.asarray(True)).item())
+            ):
+                raise RuntimeError(
+                    "coarse GEMM streaming diagnostic artifact differs from its "
+                    f"scope contract: {artifact_path}",
+                )
+            artifact_particle_ids.extend(
+                int(value) for value in np.asarray(artifact["original_indices"])
+            )
+    if artifact_particle_ids != particle_ids:
+        raise RuntimeError(
+            "coarse GEMM streaming diagnostic artifacts do not cover the call's "
+            "particle stream in order",
+        )
+    record = {
+        "schema_version": 1,
+        "run_id": scope.run_id,
+        "call_id": scope.call_id,
+        "expected_call_ids": list(scope.expected_call_ids),
+        "retained_topk": int(retained_topk),
+        "particle_count": len(particle_ids),
+        "original_indices": particle_ids,
+        "artifact_paths": [os.path.basename(path) for path in artifact_paths],
+        "stores_score_cube": False,
+    }
+    scope_path = _coarse_gaussian_gemm_stream_scope_manifest_path(
+        directory,
+        scope,
+    )
+    _write_json_exclusive(scope_path, record)
+    if not scope.finalize:
+        return scope_path, None
+
+    scope_records = []
+    aggregate_particle_ids = []
+    for expected_call_id in scope.expected_call_ids:
+        expected_scope = scope._replace(
+            call_id=expected_call_id,
+            finalize=expected_call_id == scope.expected_call_ids[-1],
+        )
+        expected_path = _coarse_gaussian_gemm_stream_scope_manifest_path(
+            directory,
+            expected_scope,
+        )
+        if not os.path.isfile(expected_path):
+            raise RuntimeError(
+                "coarse GEMM streaming diagnostic aggregate is missing call "
+                f"{expected_call_id}: {expected_path}",
+            )
+        with open(expected_path, encoding="utf-8") as stream:
+            expected_record = json.load(stream)
+        if (
+            expected_record.get("run_id") != scope.run_id
+            or expected_record.get("call_id") != expected_call_id
+            or expected_record.get("expected_call_ids") != list(scope.expected_call_ids)
+            or expected_record.get("retained_topk") != int(retained_topk)
+            or expected_record.get("stores_score_cube") is not False
+        ):
+            raise RuntimeError(
+                "coarse GEMM streaming scope manifest does not match the "
+                f"aggregate contract: {expected_path}",
+            )
+        scope_records.append(expected_record)
+        aggregate_particle_ids.extend(
+            int(value) for value in expected_record["original_indices"]
+        )
+    if len(aggregate_particle_ids) != len(set(aggregate_particle_ids)):
+        raise RuntimeError(
+            "coarse GEMM streaming diagnostic captured duplicate particles "
+            "across call scopes",
+        )
+    aggregate_artifact_paths = [
+        os.path.join(directory, artifact_name)
+        for record in scope_records
+        for artifact_name in record["artifact_paths"]
+    ]
+    aggregate = {
+        "schema_version": 1,
+        "run_id": scope.run_id,
+        "expected_call_ids": list(scope.expected_call_ids),
+        "retained_topk": int(retained_topk),
+        "particle_count": len(aggregate_particle_ids),
+        "all_particles_captured_exactly_once": True,
+        "stores_score_cube": False,
+        "scope_records": scope_records,
+        "summary": aggregate_coarse_gemm_streaming_summaries(
+            aggregate_artifact_paths,
+        ),
+    }
+    aggregate_path = os.path.join(
+        directory,
+        f"coarse_gemm_rescore_manifest_{scope.run_id}.json",
+    )
+    _write_json_exclusive(aggregate_path, aggregate)
     return scope_path, aggregate_path
 
 
@@ -3417,25 +3610,30 @@ def _compute_k_class_significance_batched(
         coarse_gaussian_gemm_diagnostic_dir,
         coarse_gaussian_gemm_diagnostic_targets,
     ) = _coarse_gaussian_gemm_diagnostic_request()
+    (
+        coarse_gaussian_gemm_stream_diagnostic_dir,
+        coarse_gaussian_gemm_stream_topk,
+    ) = _coarse_gaussian_gemm_streaming_diagnostic_request(
+        max_significants=max_significants,
+    )
     coarse_gaussian_gemm_requested_targets = coarse_gaussian_gemm_diagnostic_targets
     coarse_gaussian_gemm_diagnostic_scope = None
     coarse_gaussian_gemm_diagnostic_selection_policy = None
-    if coarse_gaussian_gemm_diagnostic_dir is not None:
+    coarse_gaussian_gemm_any_diagnostic = bool(
+        coarse_gaussian_gemm_diagnostic_dir is not None
+        or coarse_gaussian_gemm_stream_diagnostic_dir is not None
+    )
+    if coarse_gaussian_gemm_any_diagnostic:
         if not coarse_gaussian_gemm_macro_enabled:
             raise ValueError(
-                f"{_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV} requires "
+                "coarse GEMM diagnostics require "
                 f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1",
             )
         if not collect_significance:
             raise ValueError(
-                f"{_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV} requires "
+                "coarse GEMM diagnostics require "
                 "collect_significance=True so exact support can be compared",
             )
-        logger.warning(
-            "coarse GEMM paired capture is requested; calls containing target "
-            "particles execute both direct and GEMM scorers, and the configured "
-            "run is excluded from runtime qualification"
-        )
         (
             coarse_gaussian_gemm_diagnostic_scope,
             explicitly_scoped_diagnostic,
@@ -3443,6 +3641,12 @@ def _compute_k_class_significance_batched(
             coarse_gemm_diagnostic_scope,
             debug_iteration=debug_iteration,
             current_size=current_size,
+        )
+    if coarse_gaussian_gemm_diagnostic_dir is not None:
+        logger.warning(
+            "coarse GEMM paired capture is requested; calls containing target "
+            "particles execute both direct and GEMM scorers, and the configured "
+            "run is excluded from runtime qualification"
         )
         if explicitly_scoped_diagnostic:
             available_original_indices = set(
@@ -3460,6 +3664,14 @@ def _compute_k_class_significance_batched(
             )
         else:
             coarse_gaussian_gemm_diagnostic_selection_policy = "strict_single_call"
+    if coarse_gaussian_gemm_stream_diagnostic_dir is not None:
+        logger.warning(
+            "coarse GEMM all-particle streaming exact-rescore diagnostic is "
+            "requested (topk=%d); every score block executes both scorers, only "
+            "bounded summaries are retained, and the run is excluded from "
+            "runtime qualification",
+            coarse_gaussian_gemm_stream_topk,
+        )
     if coarse_gaussian_gemm_macro_enabled and not exact_coarse_operands_enabled:
         raise ValueError(
             f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1 requires "
@@ -4009,6 +4221,7 @@ def _compute_k_class_significance_batched(
 
     coarse_gemm_diagnostic_positions = None
     coarse_gemm_direct_capture = {"scores": None}
+    coarse_gemm_stream_capture_control = {"enabled": False}
 
     def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
         if coarse_gaussian_gemm_macro_enabled:
@@ -4027,9 +4240,15 @@ def _compute_k_class_significance_batched(
                 actual_batch_size,
                 image_shape=image_shape,
                 volume_shape=volume_shape,
-                return_projected=coarse_gemm_diagnostic_positions is not None,
+                return_projected=bool(
+                    coarse_gemm_diagnostic_positions is not None
+                    or coarse_gemm_stream_capture_control["enabled"]
+                ),
             )
-            if coarse_gemm_diagnostic_positions is None:
+            if (
+                coarse_gemm_diagnostic_positions is None
+                and not coarse_gemm_stream_capture_control["enabled"]
+            ):
                 return score_result
 
             from recovar import cuda_backproject
@@ -4284,6 +4503,8 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_diagnostic_paths = []
     coarse_gaussian_gemm_diagnostic_found_targets = set()
     coarse_gaussian_gemm_diagnostic_target_counts = {}
+    coarse_gaussian_gemm_stream_paths = []
+    coarse_gaussian_gemm_stream_original_indices = []
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -4326,10 +4547,16 @@ def _compute_k_class_significance_batched(
                 target_size=int(image_batch_size),
             )
         batch_size = int(np.asarray(batch_data).shape[0])
+        local_indices_np = np.asarray(indices, dtype=np.int64)
+        batch_original_indices_np = None
+        if coarse_gaussian_gemm_stream_diagnostic_dir is not None:
+            batch_original_indices_np = _original_indices_for_local(
+                experiment_dataset,
+                local_indices_np,
+            )
         coarse_gemm_diagnostic_positions = None
         coarse_gemm_diagnostic_original_indices = None
         if coarse_gaussian_gemm_diagnostic_targets is not None:
-            local_indices_np = np.asarray(indices, dtype=np.int64)
             original_indices_np = _original_indices_for_local(
                 experiment_dataset,
                 local_indices_np,
@@ -4346,6 +4573,18 @@ def _compute_k_class_significance_batched(
             if positions.size:
                 coarse_gemm_diagnostic_positions = positions
                 coarse_gemm_diagnostic_original_indices = original_indices_np[positions]
+        coarse_gemm_stream_capture_control["enabled"] = bool(
+            coarse_gaussian_gemm_stream_diagnostic_dir is not None
+        )
+        coarse_gemm_stream_state = (
+            initialize_coarse_gemm_streaming_state(
+                batch_size,
+                coarse_gaussian_gemm_stream_topk,
+                score_dtype=jnp.float32,
+            )
+            if coarse_gemm_stream_capture_control["enabled"]
+            else None
+        )
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
@@ -4952,18 +5191,29 @@ def _compute_k_class_significance_batched(
                             r1,
                             batch_translation_log_prior,
                         )
+                        if coarse_gemm_stream_state is not None:
+                            coarse_gemm_stream_state = update_coarse_gemm_streaming_state(
+                                coarse_gemm_stream_state,
+                                direct_scores_for_diagnostic,
+                                scores,
+                                candidate_offset=(
+                                    class_index * n_rot * n_trans + r0 * n_trans
+                                ),
+                                actual_image_count=actual_batch_size,
+                            )
                         actual_rot = min(rotation_block_size, n_rot - r0)
                         target_rows = coarse_gemm_diagnostic_positions
-                        coarse_gemm_macro_with_prior_blocks[class_index].append(
-                            scores[target_rows, :actual_rot, :]
-                        )
-                        coarse_gemm_direct_with_prior_blocks[class_index].append(
-                            direct_scores_for_diagnostic[
-                                target_rows,
-                                :actual_rot,
-                                :,
-                            ]
-                        )
+                        if target_rows is not None:
+                            coarse_gemm_macro_with_prior_blocks[class_index].append(
+                                scores[target_rows, :actual_rot, :]
+                            )
+                            coarse_gemm_direct_with_prior_blocks[class_index].append(
+                                direct_scores_for_diagnostic[
+                                    target_rows,
+                                    :actual_rot,
+                                    :,
+                                ]
+                            )
                     if dump_target_with_prior_blocks_per_class is not None:
                         actual_rot = min(rotation_block_size, n_rot - r0)
                         dump_target_with_prior_blocks_per_class[class_index].append(
@@ -5043,6 +5293,12 @@ def _compute_k_class_significance_batched(
                 cached_class_score_blocks.append(cached_score_blocks)
             class_max_values.append(class_max)
             class_sum_values.append(class_sum)
+
+        # The second significance pass may recompute score blocks when the
+        # production cache is disabled.  The all-particle diagnostic is a
+        # first-pass online reduction; do not execute or count direct scores a
+        # second time merely because support probabilities need replay.
+        coarse_gemm_stream_capture_control["enabled"] = False
 
         if tree_rescore_enabled:
             best_scores_np = np.asarray(class_best_scores[0], dtype=np.float32)
@@ -5374,6 +5630,48 @@ def _compute_k_class_significance_batched(
                     coarse_gaussian_gemm_diagnostic_target_counts.get(target, 0) + 1
                 )
 
+        if coarse_gemm_stream_state is not None:
+            if (
+                batch_sig_mask_np is None
+                or batch_original_indices_np is None
+                or coarse_gaussian_gemm_diagnostic_scope is None
+            ):
+                raise RuntimeError(
+                    "coarse GEMM streaming diagnostic requires production support, "
+                    "particle identity, and a resolved call scope",
+                )
+            iteration_label = -1 if debug_iteration is None else int(debug_iteration)
+            size_label = -1 if current_size is None else int(current_size)
+            stream_path = os.path.join(
+                coarse_gaussian_gemm_stream_diagnostic_dir,
+                "coarse_gemm_rescore_"
+                f"{coarse_gaussian_gemm_diagnostic_scope.run_id}_"
+                f"{coarse_gaussian_gemm_diagnostic_scope.call_id}_"
+                f"it{iteration_label:04d}_cs{size_label:04d}_"
+                f"batch{start_idx:08d}_{end_idx:08d}.npz",
+            )
+            write_coarse_gemm_streaming_summary(
+                stream_path,
+                coarse_gemm_stream_state,
+                batch_sig_mask_np,
+                original_indices=batch_original_indices_np,
+                local_indices=local_indices_np,
+                actual_image_count=actual_batch_size,
+                padded_image_count=batch_size,
+                adaptive_fraction=adaptive_fraction,
+                max_significants=max_significants,
+                diagnostic_run_id=coarse_gaussian_gemm_diagnostic_scope.run_id,
+                diagnostic_call_id=coarse_gaussian_gemm_diagnostic_scope.call_id,
+                debug_iteration=debug_iteration,
+                current_size=current_size,
+                n_rotations=n_rot,
+                n_translations=n_trans,
+            )
+            coarse_gaussian_gemm_stream_paths.append(stream_path)
+            coarse_gaussian_gemm_stream_original_indices.extend(
+                int(value) for value in batch_original_indices_np
+            )
+
         hard_assignment[start_idx:end_idx] = np.asarray(
             best_argmax_batch[:actual_batch_size],
             dtype=np.int32,
@@ -5689,6 +5987,8 @@ def _compute_k_class_significance_batched(
     )
     coarse_gaussian_gemm_scope_manifest_path = None
     coarse_gaussian_gemm_aggregate_manifest_path = None
+    coarse_gaussian_gemm_stream_scope_manifest_path = None
+    coarse_gaussian_gemm_stream_aggregate_manifest_path = None
     if coarse_gaussian_gemm_diagnostic_targets is not None:
         missing_targets = (
             coarse_gaussian_gemm_diagnostic_targets
@@ -5712,6 +6012,23 @@ def _compute_k_class_significance_batched(
             captured_target_counts=coarse_gaussian_gemm_diagnostic_target_counts,
             artifact_paths=coarse_gaussian_gemm_diagnostic_paths,
         )
+    if coarse_gaussian_gemm_stream_diagnostic_dir is not None:
+        if len(coarse_gaussian_gemm_stream_original_indices) != n_images:
+            raise RuntimeError(
+                "coarse GEMM streaming diagnostic did not capture every particle "
+                f"in its call scope: {len(coarse_gaussian_gemm_stream_original_indices)} "
+                f"!= {n_images}",
+            )
+        (
+            coarse_gaussian_gemm_stream_scope_manifest_path,
+            coarse_gaussian_gemm_stream_aggregate_manifest_path,
+        ) = _seal_coarse_gaussian_gemm_streaming_scope(
+            coarse_gaussian_gemm_stream_diagnostic_dir,
+            scope=coarse_gaussian_gemm_diagnostic_scope,
+            retained_topk=coarse_gaussian_gemm_stream_topk,
+            artifact_paths=coarse_gaussian_gemm_stream_paths,
+            original_indices=coarse_gaussian_gemm_stream_original_indices,
+        )
     full_stats = {
         "normalization_log_z": normalization_log_z,
         "normalization_log_evidence": normalization_log_evidence,
@@ -5730,8 +6047,14 @@ def _compute_k_class_significance_batched(
             field: int(value)
             for field, value in coarse_gaussian_gemm_resource_estimate._asdict().items()
         }
-        paired_capture_requested = coarse_gaussian_gemm_diagnostic_dir is not None
-        paired_capture_active = bool(coarse_gaussian_gemm_diagnostic_targets)
+        paired_capture_requested = bool(
+            coarse_gaussian_gemm_diagnostic_dir is not None
+            or coarse_gaussian_gemm_stream_diagnostic_dir is not None
+        )
+        paired_capture_active = bool(
+            coarse_gaussian_gemm_diagnostic_targets
+            or coarse_gaussian_gemm_stream_diagnostic_dir is not None
+        )
         full_stats["coarse_gaussian_gemm_qualification"] = {
             "paired_capture_requested": paired_capture_requested,
             "paired_capture_active": paired_capture_active,
@@ -5761,6 +6084,28 @@ def _compute_k_class_significance_batched(
     if coarse_gaussian_gemm_aggregate_manifest_path is not None:
         full_stats["coarse_gaussian_gemm_aggregate_manifest_path"] = (
             coarse_gaussian_gemm_aggregate_manifest_path
+        )
+    if coarse_gaussian_gemm_stream_paths:
+        full_stats["coarse_gaussian_gemm_stream_diagnostic"] = {
+            "artifact_paths": tuple(coarse_gaussian_gemm_stream_paths),
+            "retained_topk": int(coarse_gaussian_gemm_stream_topk),
+            "persistent_state_bytes_at_requested_batch_size": (
+                coarse_gemm_streaming_state_bytes(
+                    int(image_batch_size),
+                    int(coarse_gaussian_gemm_stream_topk),
+                )
+            ),
+            "stores_score_cube": False,
+            "clean_timing_eligible": False,
+            "production_behavior_changed": False,
+        }
+    if coarse_gaussian_gemm_stream_scope_manifest_path is not None:
+        full_stats["coarse_gaussian_gemm_stream_scope_manifest_path"] = (
+            coarse_gaussian_gemm_stream_scope_manifest_path
+        )
+    if coarse_gaussian_gemm_stream_aggregate_manifest_path is not None:
+        full_stats["coarse_gaussian_gemm_stream_aggregate_manifest_path"] = (
+            coarse_gaussian_gemm_stream_aggregate_manifest_path
         )
     if relion_f32_sum_weight is not None:
         # RELION's oversampling-zero second pass deliberately reuses this

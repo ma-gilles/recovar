@@ -1153,6 +1153,15 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
         "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_ORIGINAL_INDICES",
         "0,1",
     )
+    stream_diagnostic_dir = tmp_path / "streaming_scores"
+    monkeypatch.setenv(
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_STREAM_DIAGNOSTIC_DIR",
+        str(stream_diagnostic_dir),
+    )
+    monkeypatch.setenv(
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_STREAM_TOPK",
+        "12",
+    )
 
     def direct_square_stub(projected, shifted, weight, initial, full_to_compact):
         del initial, full_to_compact
@@ -1280,6 +1289,39 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     aggregate = json.loads(aggregate_path.read_text())
     assert aggregate["all_requested_captured_exactly_once"] is True
     assert aggregate["captured_target_counts"] == {"0": 1, "1": 1}
+
+    stream_paths = sorted(stream_diagnostic_dir.glob("coarse_gemm_rescore_*.npz"))
+    assert len(stream_paths) == 2
+    stream_original_indices = []
+    for stream_path in stream_paths:
+        with np.load(stream_path, allow_pickle=False) as payload:
+            assert payload["schema"].item() == "recovar.coarse_gemm_streaming_rescore.v1"
+            assert payload["retained_topk"].item() == 12
+            assert payload["stores_score_cube"].item() is False
+            assert payload["production_behavior_changed"].item() is False
+            assert payload["winner_comparison_coverage"].all()
+            assert payload["winner_equal"].all()
+            assert payload["support_comparison_coverage"].all()
+            np.testing.assert_array_equal(payload["support_false_negative_count"], 0)
+            np.testing.assert_array_equal(payload["support_false_positive_count"], 0)
+            np.testing.assert_array_equal(payload["all_candidate_max_abs_delta"], 0.0)
+            assert payload[
+                "relion_nonzero_surface_error_safe_superset_coverage"
+            ].all()
+            stream_original_indices.extend(payload["original_indices"].tolist())
+    assert sorted(stream_original_indices) == [0, 1, 2]
+
+    stream_scope_paths = sorted(
+        stream_diagnostic_dir.glob("coarse_gemm_rescore_scope_*.json")
+    )
+    assert len(stream_scope_paths) == 2
+    stream_aggregate_path = (
+        stream_diagnostic_dir / f"coarse_gemm_rescore_manifest_{run_id}.json"
+    )
+    stream_aggregate = json.loads(stream_aggregate_path.read_text())
+    assert stream_aggregate["particle_count"] == 3
+    assert stream_aggregate["all_particles_captured_exactly_once"] is True
+    assert stream_aggregate["stores_score_cube"] is False
 
 
 @pytest.mark.parametrize(
