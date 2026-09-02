@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import struct
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -114,6 +115,36 @@ def test_partial_rotation_map_preserves_exact_union_topology():
     duplicate = rotations[[0, 0]]
     with pytest.raises(auditor.AuditError, match="duplicate exact matrices"):
         auditor._partial_rotation_map(duplicate, rotations[[1]])
+
+
+def test_map_metrics_loads_recovar_diagnostic_in_its_relion_disk_frame(monkeypatch, tmp_path):
+    monkeypatch.setattr(auditor, "CASE", SimpleNamespace(K=1))
+    recovar_path = tmp_path / "recovar/output/recovar_class001.mrc"
+    control_a = tmp_path / "native/control_a/output/run_it001_class001.mrc"
+    control_b = tmp_path / "native/control_b/output/run_it001_class001.mrc"
+    captured = tmp_path / "native/class1/output/run_it001_class001.mrc"
+    for path in (recovar_path, control_a, control_b, captured):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    frozen = tmp_path / "frozen.mrc"
+    frozen.touch()
+    relion_calls = []
+
+    def load_relion(path):
+        relion_calls.append(Path(path))
+        return np.ones((2, 2, 2), dtype=np.float32)
+
+    monkeypatch.setattr(auditor, "_load_relion_volume", load_relion)
+    monkeypatch.setattr(auditor, "_fsc_metric", lambda _left, _right: (1.0, [1.0]))
+
+    report = auditor._map_metrics(
+        tmp_path,
+        np.asarray([0], dtype=np.int64),
+        frozen_target_maps=[frozen],
+    )
+
+    assert report["minimum_cross_engine_fsc_auc"] == 1.0
+    assert recovar_path in relion_calls
 
 
 def test_load_recovar_allows_absent_empty_enrichment_but_rejects_partial(tmp_path):

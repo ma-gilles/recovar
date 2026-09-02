@@ -27,7 +27,6 @@ from scripts.launch_em_real_k4_shared200_causal_replay_slurm import (
     validate_manifest,
 )
 from scripts.summarize_em_completion_bench import (
-    _load_recovar_volume,
     _load_relion_volume,
     normalized_fsc_auc,
     shell_fsc,
@@ -35,7 +34,7 @@ from scripts.summarize_em_completion_bench import (
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v4"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v5"
 MAX_NATIVE_SCALAR_RELATIVE_RANGE = 5.0e-4
 RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS = frozenset(
     {"reconstruction_probs", "reconstruction_mask", "relion_raw_diff2"}
@@ -764,7 +763,13 @@ def _map_metrics(
     capture_inertness = []
     frozen_target = []
     for recovar_index, relion_index in enumerate(permutation):
-        recovar = _load_recovar_volume(run_root / f"recovar/output/recovar_class{recovar_index + 1:03d}.mrc")
+        # run_k_class_parity writes these diagnostics with write_relion_mrc so
+        # that RELION can consume them directly.  Their filename describes the
+        # producing engine, not the on-disk coordinate frame; load them with
+        # the RELION-frame reader to recover the original RECOVAR array.
+        recovar = _load_relion_volume(
+            run_root / f"recovar/output/recovar_class{recovar_index + 1:03d}.mrc"
+        )
         auc, curve = _fsc_metric(recovar, controls["a"][int(relion_index)])
         cross_engine.append(
             {
