@@ -592,8 +592,11 @@ def _memory_analysis_payload(stats: Any, proto_path: Path) -> dict[str, Any]:
     if not isinstance(proto, (bytes, bytearray, memoryview)):
         raise RuntimeError("serialized XLA buffer assignment is unavailable")
     proto_bytes = bytes(proto)
-    if not proto_bytes:
-        raise RuntimeError("serialized XLA buffer assignment is empty")
+    # PJRT exposes this field on every platform, but CUDA jaxlib 0.9.0.1
+    # currently returns an empty byte string.  Preserve that backend fact
+    # explicitly while retaining all required scalar memory fields and the
+    # optimized HLO/module texts; an empty optional serialization is not a
+    # scorer or memory-analysis failure.
     proto_path.write_bytes(proto_bytes)
     public_attributes = sorted(name for name in dir(stats) if not name.startswith("_"))
     public_attribute_values = {}
@@ -620,6 +623,7 @@ def _memory_analysis_payload(stats: Any, proto_path: Path) -> dict[str, Any]:
         "all_public_attribute_values": public_attribute_values,
         "scalar_fields": fields,
         "serialized_buffer_assignment": {
+            "available": bool(proto_bytes),
             "path": proto_path.name,
             "size_bytes": len(proto_bytes),
             "sha256": _sha256_bytes(proto_bytes),

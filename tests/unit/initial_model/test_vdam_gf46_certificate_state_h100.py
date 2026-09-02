@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -85,6 +86,28 @@ def test_memory_analysis_serializes_every_required_field_and_buffer_assignment(t
     assert payload["scalar_fields"] == {field: index + 1 for index, field in enumerate(MODULE.REQUIRED_MEMORY_FIELDS)}
     assert proto.read_bytes() == b"buffer-assignment"
     assert payload["serialized_buffer_assignment"]["size_bytes"] == len(b"buffer-assignment")
+    assert payload["serialized_buffer_assignment"]["available"] is True
+
+
+@pytest.mark.unit
+def test_memory_analysis_records_backend_empty_buffer_assignment(tmp_path: Path) -> None:
+    class FakeStats:
+        serialized_buffer_assignment_proto = b""
+
+    stats = FakeStats()
+    for index, field in enumerate(MODULE.REQUIRED_MEMORY_FIELDS):
+        setattr(stats, field, index + 1)
+    proto = tmp_path / "assignment.pb"
+
+    payload = MODULE._memory_analysis_payload(stats, proto)
+
+    assert proto.read_bytes() == b""
+    assert payload["serialized_buffer_assignment"] == {
+        "available": False,
+        "path": "assignment.pb",
+        "size_bytes": 0,
+        "sha256": hashlib.sha256(b"").hexdigest(),
+    }
 
 
 @pytest.mark.unit

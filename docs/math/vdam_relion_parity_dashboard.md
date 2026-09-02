@@ -5,6 +5,23 @@
 > cases are `vdam-gf44` and `vdam-gf45`. Diagnostics, performance primitives,
 > the legacy v2 expansion, K>1, and real data cannot change those scores.
 
+## Live engineering snapshot — 2026-09-02
+
+| Question | Current answer |
+|---|---|
+| What is working now? | The shared one-build C64 projection cache, certified FP64 interval/state update, immutable source16 topology, exact selected-block CUDA rescore, and full-logical-layout score assembler are integrated on the isolated development branch. The assembler deliberately preserves `[B,R*T]`; a regression proves compacting exact zero-posterior candidates changes the float32 scan result. |
+| What is being wired? | The first default-off K=1 production dispatch: cache once per significance call, certify all 4,608-row chunks, direct-rescore only the selected source16 blocks, then reuse the mature RELION float32 posterior unchanged. Any certificate, capacity, topology, or selected-output failure falls back for the whole padded batch to the mature full rectangular direct scorer on the same cache. |
+| What is the speed gate doing? | Full GF46 certificate geometry (`B=500`, `T=29`, `F=5100`, `Rblock=4608`) now lowers and compiles on the pinned H100. Job `13333741` contains exactly two StableHLO/pre-HLO dots and exactly two optimized cuBLAS GEMMs with `HIGHEST` operand precision. Runtime did not start because CUDA PJRT 0.9.0.1 returned an empty optional buffer-assignment protobuf; scalar XLA memory analysis and optimized modules are present. The harness now records that backend limitation explicitly and will rerun unchanged geometry. |
+| Any new parity failure? | **No.** The recent stops (`13333604`, `13333680`, `13333741`) are fail-fast harness issues—cgroup GPU ordinal remapping, a missing RECOVAR CPU control backend, and the optional empty PJRT protobuf—not trajectory/science failures. Each resolved runner issue has a focused regression test. |
+| What remains before trajectories? | Finish the default-off batch dispatch, pass selected-path and whole-batch-fallback tests, complete the full-shape H100 memory/runtime gate, then run a GF46 candidatewise coverage/runtime transition before spending on complete trajectories. |
+
+### Immediate queue
+
+1. Rerun the full-shape H100 certificate benchmark after the PJRT-empty-protobuf harness fix; report compile time, XLA peak/temp bytes, synchronized chunk time, and projected eight-chunk cost.
+2. Complete the K=1 hybrid significance dispatch without duplicating projector, direct scorer, prior, posterior, or log-evidence math from mature EM.
+3. Run focused H100 selected/fallback boundary tests, then a one-transition GF46 A/B for support, winner, state, memory, and wall time.
+4. Only after that gate is green, rerun the frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, and long trajectories. K>1 and real data remain separate later gates.
+
 ## At a glance
 
 | Track | Score or status | Current boundary |
@@ -12,8 +29,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **FOUNDATION PASS / NOT WIRED** | The default-off FP64 center now emits outward candidate intervals, compact raw/post block state, range/FTZ fail-close, and an immutable lookup-bound source16 rescore seam. The native source16 FP32/FTZ arithmetic is audited for all six built cubins; production integration and GPU candidatewise coverage remain open. |
-| Current performance work | **CACHE PRIMITIVE PASS** | A full 1.40 GiB GF46-shaped projection cache passed H100 allocation/alias/sentinel checks with uniform 4608-row chunks. The real projector, complete hybrid, and end-to-end runtime remain unqualified. |
+| Current correctness work | **COMPONENTS INTEGRATED / DISPATCH OPEN** | Certified interval/state, immutable topology, source16 exact rescore, and full-layout posterior assembly are integrated and focused-test green. Production batch dispatch and GPU candidatewise coverage remain open. |
+| Current performance work | **FULL GRAPH COMPILES / RUNTIME PENDING** | The 1.40 GiB GF46 projection cache passed H100 allocation/alias checks, and the full certificate chunk compiles to the expected two cuBLAS GEMMs. Synchronized execution and end-to-end hybrid runtime remain unqualified. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
