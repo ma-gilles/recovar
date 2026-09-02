@@ -114,6 +114,22 @@ def test_same_state_environment_is_restored_after_each_arm(monkeypatch) -> None:
     assert "RECOVAR_TEST_SAME_STATE_MISSING" not in runner.os.environ
 
 
+def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
+    assert runner._arm_order("hybrid") == runner.ARM_ORDER
+    assert runner._arm_order("flat_rows") == runner.FLAT_ROW_ARM_ORDER
+
+    control = runner._candidate_environment("flat_rows", enabled=False)
+    flat_rows = runner._candidate_environment("flat_rows", enabled=True)
+    hybrid = runner._candidate_environment("hybrid", enabled=True)
+
+    assert all(control[name] == "0" for name in runner.HYBRID_ENVIRONMENT)
+    assert control[runner.FLAT_ROW_ENVIRONMENT] == "0"
+    assert all(flat_rows[name] == "0" for name in runner.HYBRID_ENVIRONMENT)
+    assert flat_rows[runner.FLAT_ROW_ENVIRONMENT] == "1"
+    assert all(hybrid[name] == "1" for name in runner.HYBRID_ENVIRONMENT)
+    assert hybrid[runner.FLAT_ROW_ENVIRONMENT] == "0"
+
+
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     source = SCRIPT.read_text()
     sbatch = RUNNER.read_text()
@@ -124,7 +140,10 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "copy.deepcopy(checkpoint[\"sampling_state\"])" in source
     assert "did not start from the exact shared" in source
     assert "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS" in source
+    assert "--candidate-mode" in source
     assert "--constraint=h100" in sbatch
     assert "--checkpoint-iteration \"${CHECKPOINT_ITERATION}\"" in sbatch
     assert "direct_1,hybrid_1,hybrid_2,direct_2" in sbatch
+    assert "direct_1,flat_rows_1,flat_rows_2,direct_2" in sbatch
+    assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch

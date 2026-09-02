@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Compare direct and hybrid VDAM transitions from one exact live state.
+"""Compare direct and candidate VDAM transitions from one exact live state.
 
 The ordinary InitialModel artifacts intentionally omit the large VDAM
 gradient-moment state, so independently restarted trajectories cannot prove
 which implementation caused the first difference.  This diagnostic runs the
 direct implementation through a requested checkpoint, retains that exact
-in-memory state, and then executes a direct/hybrid/hybrid/direct (ABBA) panel
-for precisely one next iteration.  Every arm receives independent deep copies
-of the same model, particle, and sampling state.
+in-memory state, and then executes a direct/candidate/candidate/direct (ABBA)
+panel for precisely one next iteration. Every arm receives independent deep
+copies of the same model, particle, and sampling state.
 
 This is a diagnostic harness, not a production continuation interface.
 """
@@ -27,13 +27,16 @@ from typing import Any, Iterator
 
 import numpy as np
 
-SCHEMA = "recovar.vdam_hybrid_same_state_transition.v2"
+SCHEMA = "recovar.vdam_hybrid_same_state_transition.v3"
 ARM_ORDER = ("direct_1", "hybrid_1", "hybrid_2", "direct_2")
+FLAT_ROW_ARM_ORDER = ("direct_1", "flat_rows_1", "flat_rows_2", "direct_2")
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
 )
+FLAT_ROW_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
+CANDIDATE_MODES = ("hybrid", "flat_rows")
 META_ARRAY_KEYS = (
     "selected_particle_ids",
     "best_pose_rotation_ids",
@@ -54,7 +57,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--checkpoint-iteration", type=int, default=34)
     parser.add_argument("--image-batch-size", type=int, default=500)
+    parser.add_argument("--candidate-mode", choices=CANDIDATE_MODES, default="hybrid")
     return parser.parse_args(argv)
+
+
+def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
+    if candidate_mode == "hybrid":
+        return ARM_ORDER
+    if candidate_mode == "flat_rows":
+        return FLAT_ROW_ARM_ORDER
+    raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
+
+
+def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, str]:
+    values = {
+        **{name: "0" for name in HYBRID_ENVIRONMENT},
+        FLAT_ROW_ENVIRONMENT: "0",
+    }
+    if enabled:
+        if candidate_mode == "hybrid":
+            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+        elif candidate_mode == "flat_rows":
+            values[FLAT_ROW_ENVIRONMENT] = "1"
+        else:
+            raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
+    return values
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -339,7 +366,7 @@ def _capture_direct_checkpoint(
     try:
         with _temporary_environment(
             {
-                **{name: "0" for name in HYBRID_ENVIRONMENT},
+                **_candidate_environment("hybrid", enabled=False),
                 "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "0",
                 "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS": "0",
             }
@@ -372,7 +399,8 @@ def _run_transition_arm(
     checkpoint: dict[str, Any],
     *,
     label: str,
-    hybrid: bool,
+    candidate_mode: str,
+    candidate_enabled: bool,
     checkpoint_iteration: int,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
@@ -428,7 +456,7 @@ def _run_transition_arm(
     started = time.perf_counter()
     with _temporary_environment(
         {
-            **{name: "1" if hybrid else "0" for name in HYBRID_ENVIRONMENT},
+            **_candidate_environment(candidate_mode, enabled=candidate_enabled),
             "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "1",
             "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS": "1",
         }
@@ -462,7 +490,9 @@ def _run_transition_arm(
         raise RuntimeError(f"{label} did not capture its E-step boundary")
     return {
         "label": label,
-        "hybrid": bool(hybrid),
+        "candidate_mode": candidate_mode,
+        "candidate_enabled": bool(candidate_enabled),
+        "hybrid": bool(candidate_enabled and candidate_mode == "hybrid"),
         "wall_s": wall_s,
         "initial_state_manifest": initial_state_manifest,
         "initial_particle_state_manifest": initial_particle_state_manifest,
@@ -518,12 +548,14 @@ def main(argv: list[str] | None = None) -> int:
         "particle_state": _dataclass_manifest(checkpoint["particle_state"]),
         "sampling_state": _dataclass_manifest(checkpoint["sampling_state"]),
     }
+    arm_order = _arm_order(args.candidate_mode)
     arms: dict[str, dict[str, Any]] = {}
-    for label in ARM_ORDER:
+    for label in arm_order:
         arms[label] = _run_transition_arm(
             checkpoint,
             label=label,
-            hybrid=label.startswith("hybrid"),
+            candidate_mode=args.candidate_mode,
+            candidate_enabled=not label.startswith("direct"),
             checkpoint_iteration=args.checkpoint_iteration,
         )
 
@@ -537,13 +569,14 @@ def main(argv: list[str] | None = None) -> int:
             if arm[key]["manifest_sha256"] != expected:
                 raise RuntimeError(f"{label} did not start from the exact shared {key}")
 
+    candidate_1, candidate_2 = arm_order[1:3]
     pair_labels = (
-        ("direct_1", "direct_2"),
-        ("hybrid_1", "hybrid_2"),
-        ("direct_1", "hybrid_1"),
-        ("direct_1", "hybrid_2"),
-        ("direct_2", "hybrid_1"),
-        ("direct_2", "hybrid_2"),
+        (arm_order[0], arm_order[3]),
+        (candidate_1, candidate_2),
+        (arm_order[0], candidate_1),
+        (arm_order[0], candidate_2),
+        (arm_order[3], candidate_1),
+        (arm_order[3], candidate_2),
     )
     comparisons = {
         f"{left}__vs__{right}": _pair_report(arms[left], arms[right])
@@ -556,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
         payload = {
             "label": label,
             "hybrid": arm["hybrid"],
+            "candidate_mode": arm["candidate_mode"],
+            "candidate_enabled": arm["candidate_enabled"],
             "wall_s": arm["wall_s"],
             "initial_state_manifest": arm["initial_state_manifest"],
             "initial_particle_state_manifest": arm["initial_particle_state_manifest"],
@@ -571,6 +606,8 @@ def main(argv: list[str] | None = None) -> int:
         arm_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         arm_summaries[label] = {
             "hybrid": arm["hybrid"],
+            "candidate_mode": arm["candidate_mode"],
+            "candidate_enabled": arm["candidate_enabled"],
             "wall_s": arm["wall_s"],
             "artifact": str(arm_path.resolve()),
             "artifact_sha256": _sha256_bytes(arm_path.read_bytes()),
@@ -585,8 +622,9 @@ def main(argv: list[str] | None = None) -> int:
         "classification": "diagnostic_same_in_memory_state_one_transition_only",
         "checkpoint_iteration": int(args.checkpoint_iteration),
         "profiled_iteration": int(args.checkpoint_iteration) + 1,
+        "candidate_mode": args.candidate_mode,
         "frozen_nr_iter_schedule": frozen_nr_iter,
-        "arm_order": list(ARM_ORDER),
+        "arm_order": list(arm_order),
         "checkpoint_wall_s": checkpoint_wall_s,
         "checkpoint_manifest": checkpoint_manifest,
         "fixture_dir": str(fixture_dir),
@@ -599,7 +637,8 @@ def main(argv: list[str] | None = None) -> int:
             "particle_state_exact_for_every_arm": True,
             "sampling_state_exact_for_every_arm": True,
             "baseline_trajectory_backend": "direct",
-            "transition_panel": "direct/hybrid/hybrid/direct",
+            "candidate_backend": args.candidate_mode,
+            "transition_panel": f"direct/{args.candidate_mode}/{args.candidate_mode}/direct",
             "support_audit_ids_enabled_for_transition_arms": True,
         },
         "science_promotion_allowed": False,
@@ -612,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
                 "report": str(report_path.resolve()),
                 "report_sha256": _sha256_bytes(report_path.read_bytes()),
                 "checkpoint_wall_s": checkpoint_wall_s,
-                "arm_walls_s": {label: arms[label]["wall_s"] for label in ARM_ORDER},
+                "arm_walls_s": {label: arms[label]["wall_s"] for label in arm_order},
             },
             indent=2,
             sort_keys=True,
