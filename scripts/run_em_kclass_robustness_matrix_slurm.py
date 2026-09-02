@@ -2215,23 +2215,27 @@ for class_no in $(seq -f "%03g" 1 {case.n_classes}); do
   REL_ARGS+=(--volume "${{RELION_DIR}}/run_it${{ITER_PADDED}}_class${{class_no}}.mrc")
   GT_ARGS+=(--gt_volume "${{DATA_DIR}}/reference_gt_class${{class_no}}.mrc")
 done
-"${{PIXI_PY}}" -m scripts.evaluate_kclass_gt \\
+env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \\
+  "${{PIXI_PY}}" -m scripts.evaluate_kclass_gt \\
   "${{REC_ARGS[@]}}" \\
   "${{GT_ARGS[@]}}" \\
   --label RECOVAR \\
   --volume_frame recovar \\
   --gt_frame recovar \\
   --gt_align_healpix_order 2 \\
+  --pair_workers "${{SLURM_CPUS_PER_TASK:-1}}" \\
   {refine_orders_args} \\
   --output_json "${{CASE_ROOT}}/kclass_gt_fsc.json" \\
   2>&1 | tee "${{CASE_ROOT}}/evaluate_kclass_gt.log"
-"${{PIXI_PY}}" -m scripts.evaluate_kclass_gt \\
+env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \\
+  "${{PIXI_PY}}" -m scripts.evaluate_kclass_gt \\
   "${{REL_ARGS[@]}}" \\
   "${{GT_ARGS[@]}}" \\
   --label RELION \\
   --volume_frame relion \\
   --gt_frame recovar \\
   --gt_align_healpix_order 2 \\
+  --pair_workers "${{SLURM_CPUS_PER_TASK:-1}}" \\
   {refine_orders_args} \\
   --output_json "${{CASE_ROOT}}/relion_kclass_gt_fsc.json" \\
   2>&1 | tee "${{CASE_ROOT}}/relion_evaluate_kclass_gt.log"
