@@ -228,10 +228,11 @@ def _selected_particles(profile: Profile, particles: pd.DataFrame) -> pd.DataFra
     return selected.reset_index(drop=True)
 
 
-def _prepare_references(root: Path, profile: Profile) -> tuple[list[Path], Path]:
+def _prepare_references(root: Path, profile: Profile) -> tuple[list[Path], list[Path], Path]:
     reference_dir = root / "data" / "references"
     reference_dir.mkdir(parents=True)
-    output_paths: list[Path] = []
+    recovar_paths: list[Path] = []
+    relion_paths: list[Path] = []
     class_rows: list[dict[str, Any]] = []
     for class_id in range(1, 5):
         source = INITIAL_MAP_ROOT / f"run_it000_class{class_id:03d}.mrc"
@@ -248,13 +249,25 @@ def _prepare_references(root: Path, profile: Profile) -> tuple[list[Path], Path]
         else:
             voxel_size = float(voxel_array.reshape(-1)[0])
         voxel_size *= source_grid / profile.grid_size
-        output = reference_dir / f"reference_init_class{class_id:03d}_relion.mrc"
-        helpers.write_relion_mrc(output, volume, voxel_size=voxel_size)
-        output_paths.append(output)
-        class_rows.append({"rlnReferenceImage": str(output.resolve()), "rlnClassDistribution": 0.25})
+        recovar_output = reference_dir / f"reference_init_class{class_id:03d}.mrc"
+        relion_output = reference_dir / f"reference_init_class{class_id:03d}_relion.mrc"
+        # RECOVAR and RELION use different real-space coordinate frames.  Keep
+        # one explicitly encoded file for each consumer; passing the RELION
+        # file through ``run_full_refinement --init_class_volumes`` silently
+        # rotates/inverts every class reference before the first E-step.
+        helpers.write_mrc(recovar_output, volume, voxel_size=voxel_size)
+        helpers.write_relion_mrc(relion_output, volume, voxel_size=voxel_size)
+        recovar_paths.append(recovar_output)
+        relion_paths.append(relion_output)
+        class_rows.append(
+            {
+                "rlnReferenceImage": str(relion_output.resolve()),
+                "rlnClassDistribution": 0.25,
+            }
+        )
     star_path = reference_dir / "reference_init_classes_relion.star"
     starfile.write({"model_classes": pd.DataFrame(class_rows)}, star_path, overwrite=True)
-    return output_paths, star_path
+    return recovar_paths, relion_paths, star_path
 
 
 def _write_particle_inputs(
@@ -849,7 +862,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         _verify_canonical(SHARED200_SELECTION)
     stack_hash = _verify_canonical(STACKS[profile.grid_size])
     analysis_policy = expected_analysis_policy(profile.grid_size)
-    reference_paths, reference_star = _prepare_references(root, profile)
+    recovar_reference_paths, relion_reference_paths, reference_star = _prepare_references(root, profile)
     halves, selected_names, selected_source_indices = _write_particle_inputs(root, profile)
 
     run_python = root / "venv" / "bin" / "python"
@@ -867,7 +880,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         recovar_command = build_recovar_command(
             python=run_python,
             row=row,
-            initial_class_volumes=reference_paths,
+            initial_class_volumes=recovar_reference_paths,
             max_iter=args.max_iter,
             seed=args.seed,
             particle_diameter=args.particle_diameter,
@@ -928,7 +941,14 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             expected_hash=DEFAULT_RELION_TRACKED_DIFF_SHA256,
         ),
         *[_input_record(path, role=f"shared_initial_class{index:03d}_source", expected_hash=CANONICAL_HASHES[str(INITIAL_MAP_ROOT / f'run_it000_class{index:03d}.mrc')]) for index, path in enumerate([INITIAL_MAP_ROOT / f"run_it000_class{i:03d}.mrc" for i in range(1, 5)], start=1)],
-        *[_input_record(path, role=f"prepared_initial_class{index:03d}") for index, path in enumerate(reference_paths, start=1)],
+        *[
+            _input_record(path, role=f"prepared_recovar_initial_class{index:03d}")
+            for index, path in enumerate(recovar_reference_paths, start=1)
+        ],
+        *[
+            _input_record(path, role=f"prepared_relion_initial_class{index:03d}")
+            for index, path in enumerate(relion_reference_paths, start=1)
+        ],
         _input_record(reference_star, role="prepared_relion_reference_star"),
         _input_record(root / "data" / "selected_particles.star", role="frozen_selected_particles_star"),
     ]

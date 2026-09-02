@@ -58,6 +58,73 @@ def test_matched_commands_use_independent_all_data_k4_processes(tmp_path: Path) 
     )
 
 
+def test_prepared_references_keep_recovar_and_relion_coordinate_frames_separate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    for class_id in range(1, 5):
+        (source_dir / f"run_it000_class{class_id:03d}.mrc").touch()
+
+    volumes = {
+        class_id: np.full((4, 4, 4), class_id, dtype=np.float32)
+        for class_id in range(1, 5)
+    }
+    original_require = launcher._require
+    original_load_relion = launcher.helpers.load_relion_volume
+
+    def allow_tiny_source(condition: bool, message: str) -> None:
+        if message.startswith("canonical class ") and message.endswith(" grid changed"):
+            return
+        original_require(condition, message)
+
+    def load_relion(path: str, *, return_voxel_size: bool = False):
+        class_id = int(Path(path).stem[-3:])
+        result = volumes[class_id].copy()
+        return (result, np.asarray([2.0], dtype=np.float32)) if return_voxel_size else result
+
+    monkeypatch.setattr(launcher, "INITIAL_MAP_ROOT", source_dir)
+    monkeypatch.setattr(launcher, "_verify_canonical", lambda _path: "unused")
+    monkeypatch.setattr(launcher, "_require", allow_tiny_source)
+    monkeypatch.setattr(launcher.helpers, "load_relion_volume", load_relion)
+
+    profile = launcher.Profile("tiny", 4, "full10k", 4, "00:10:00", "1G", 1)
+    recovar_paths, relion_paths, star_path = launcher._prepare_references(tmp_path / "run", profile)
+
+    assert [path.name for path in recovar_paths] == [
+        f"reference_init_class{class_id:03d}.mrc" for class_id in range(1, 5)
+    ]
+    assert [path.name for path in relion_paths] == [
+        f"reference_init_class{class_id:03d}_relion.mrc" for class_id in range(1, 5)
+    ]
+    # Load each file through its intended consumer convention. Both must land
+    # on the same internal array, while the old bug (native-load the RELION
+    # file) is explicitly distinguishable.
+    from recovar.utils import helpers as recovar_helpers
+
+    for class_id, (recovar_path, relion_path) in enumerate(
+        zip(recovar_paths, relion_paths, strict=True),
+        start=1,
+    ):
+        native, native_voxel = recovar_helpers.load_mrc(recovar_path, return_voxel_size=True)
+        relion, relion_voxel = original_load_relion(
+            relion_path,
+            return_voxel_size=True,
+        )
+        wrong_frame = recovar_helpers.load_mrc(relion_path)
+        np.testing.assert_array_equal(native, volumes[class_id])
+        np.testing.assert_array_equal(relion, volumes[class_id])
+        np.testing.assert_array_equal(wrong_frame, -volumes[class_id])
+        assert float(native_voxel.x) == pytest.approx(2.0)
+        assert float(relion_voxel.x) == pytest.approx(2.0)
+
+    classes = starfile.read(star_path, always_dict=True)["model_classes"]
+    assert [Path(path).name for path in classes["rlnReferenceImage"]] == [
+        path.name for path in relion_paths
+    ]
+
+
 def test_rendered_job_is_nonexclusive_serial_one_gpu_and_audited(tmp_path: Path) -> None:
     rows = [_row(tmp_path, half) for half in (1, 2)]
     text = launcher.render_run_script(
