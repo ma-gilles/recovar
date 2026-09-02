@@ -9,17 +9,17 @@
 
 | Question | Current answer |
 |---|---|
-| What is working now? | **The first default-off K=1 production dispatch is integrated at `583c9ee47`.** It caches the C64 projections once, certifies every aligned chunk, publishes only exact source16 rescoring, preserves the full `[B,R*T]` posterior layout, and reuses the mature RELION float32 posterior. Any certificate/capacity/output failure uses one whole-batch rectangular direct fallback. Focused result: **202 passed**. |
-| What is being qualified? | H100 selected-path and forced-fallback execution at production geometry, followed by the frozen GF46 `180 -> 181` candidatewise support/winner/state/runtime A/B. The feature remains explicit opt-in and cannot change the frozen score before those gates pass. |
-| What is the speed gate doing? | **Full-shape H100 certificate pass.** Job `13340384` qualified exact GF46 geometry (`B=500`, `T=29`, `F=5100`, `Rblock=4608`) at `0.053900466 s` median per synchronized chunk, or `0.431203728 s` projected for all eight chunks. XLA peak is `4,338,930,856 B`; all outputs repeated byte-identically. The graph has exactly two high-precision cuBLAS GEMMs. |
-| Any new parity failure? | **No.** The preceding stops were fail-fast harness/setup issues, not trajectory/science failures. Job `13340384` supersedes them and completed every static, memory, execution, repeatability, and semantic gate. |
-| What remains before trajectories? | Pass the H100 selected/fallback memory and runtime gates, then pass one GF46 candidatewise transition. Only then spend on the frozen full trajectories. |
+| What is working now? | **The integrated default-off K=1 hybrid passed its full-shape H100 boundary at `b611aeff1`, job `13341618`.** At exact GF46 geometry it selected and published only exact source16 CUDA rescoring, preserved the full `[B,R*T]` layout, passed the mature RELION-f32 posterior, and physically exercised capacity-overflow fallback. Focused result: **206 / 206 passed**. |
+| What is being qualified? | **The real frozen GF46 `180 -> 181` transition is next:** direct versus hybrid candidate support, winner, particle state, map/model envelope, peak memory, and warm wall. The feature remains explicit opt-in and cannot change the frozen score before that gate passes. |
+| What is the speed gate doing? | **Selected/fallback H100 boundary PASS.** Job `13341618` measured a `0.471513 s` selected-score median plus `0.813419 s` for the mature posterior at `B=500,R=36864,T=29,F=5100`; only `0.0868056%` of candidates were exact-rescored. Device peak was `18.459 GiB`. End-to-end speed remains unqualified until the checkpoint A/B. |
+| Any new parity failure? | **No.** Job `13341559` stopped before hybrid execution because its runner did not preload cuSPARSE. Reusing the established pinned preload fixed the setup; superseding job `13341618` passed every selected, posterior, fallback, memory, repeatability, and provenance check. |
+| What remains before trajectories? | Pass one candidatewise and end-to-end GF46 checkpoint transition. Only then spend on the frozen full trajectories and broader stress matrix. |
 
 ### Immediate queue
 
-1. Run focused H100 selected/fallback boundary tests at production geometry and record peak memory, exact score source, selected fraction, repeatability, and wall time.
-2. Run a one-transition GF46 A/B for candidatewise support, winner, state, memory, and wall time.
-3. Only after that gate is green, rerun the frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, and long trajectories. K>1 and real data remain separate later gates.
+1. Run a one-transition GF46 direct/hybrid A/B for candidatewise support, winner, state, map/model envelope, memory, and warm wall time.
+2. If that gate is green, run the representative repeat/no-growth trajectory before spending on the complete frozen K=1 suite.
+3. Then rerun the frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, and long trajectories. K>1 and real data remain separate later gates.
 
 ## At a glance
 
@@ -28,8 +28,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **DEFAULT-OFF DISPATCH INTEGRATED / CPU GATE PASS** | Commit `583c9ee47`: 202 focused tests pass, including selected exact publication, one-call whole-batch fallback, invalid-output fallback, no double priors, two-pass table reuse, padded rows, and full-layout float32 posterior topology. H100 and real GF46 coverage remain open. |
-| Current performance work | **FULL-SHAPE CERTIFICATE PASS** | The 1.40 GiB GF46 projection cache passed H100 allocation/alias checks. Exact job `13340384` qualifies a 4,608-rotation certificate chunk at 53.90 ms median with 4.339 GB XLA peak; eight chunks project to 0.431 s. Selected-rescore and end-to-end hybrid runtime remain unqualified. |
+| Current correctness work | **INTEGRATED HYBRID H100 BOUNDARY PASS** | Commit `b611aeff1`, job `13341618`: 206 focused tests pass; exact selected publication, full-layout posterior, byte-identical repeats, and a physically executed whole-batch fallback all passed at unreduced GF46 shape. Real checkpoint coverage remains open. |
+| Current performance work | **HYBRID COMPONENT PASS / END-TO-END OPEN** | Selected score median `0.471513 s`; mature posterior `0.813419 s`; peak `18.459 GiB`; selected fraction `0.0868056%`. The frozen GF46 direct/hybrid transition is required before any runtime promotion. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
@@ -147,21 +147,17 @@ release gate.
 
 ## Next gates
 
-1. Wire the committed FP64 candidate interval scorer, compact per-source-block
-   maxima, immutable topology, 4608-row projection cache, and selected source16
-   primitive into one explicit default-off K=1 significance backend.
-2. Capture optimized HLO/backend configuration for both FP64 GEMMs, quantify
-   the fused scorer's transient cubes, and fail closed if the audited precision
-   or reduction contract is absent.
-3. On all 1,000 GF46 particles, prove conservative block coverage or trigger
-   full-direct fallback; direct-rescore the certified union with the qualified
-   job-`13328717` primitive and recompute RELION float32 offset/posterior/support.
-4. Require exact or repeat-envelope-safe one-transition decisions and maps
-   before measuring a paired same-H100 hybrid runtime. Report selector,
-   projection/packing, direct-rescore, and fallback costs separately.
-5. If the one-transition gate passes with a material end-to-end gain, run a
+1. On all 1,000 frozen GF46 iteration-181 particles, compare the integrated
+   hybrid against direct scoring for conservative block coverage, fallbacks,
+   exact candidate support/winners, particle state, and map/model envelopes.
+2. Measure direct/hybrid cold and warm wall on the same pinned H100, with
+   diagnostics disabled in timing arms and selector, projection/cache,
+   exact-rescore, posterior, and fallback costs reported separately.
+3. If that one-transition gate passes with a material end-to-end gain, run a
    representative repeat/no-growth trajectory and multi-dataset basin gate.
-6. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
+4. Then run the frozen K=1 trajectory suite and the expanded outlier,
+   pose/noise-distribution, scale, parameter, and long-trajectory matrix.
+5. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
    scoring rerun updates the authoritative scorecard. Only then open K>1 and
    real-data gates as independent tracks.
 
@@ -181,6 +177,7 @@ release gate.
 | Certified scorer/topology foundation | Commit `d810048f1`; focused scorer/topology `40 / 40`; combined scorer/selector/streaming/macro regression `87 / 87` before the topology-only seam, followed by the 40-test seam rerun. |
 | Native source16 FP32/FTZ audit | Commit `a0a9c248f`; audited library SHA-256 `92c3c098995ed89f32c4d258936363402c0f1c1d0945f9c452d79f9eb1b5dd9f`; artifact manifest SHA-256 `c7c7dac19cad2b117d130ae34a70cf4066a37231d15775c1ffe424ab6e158db1`; [report](vdam_coarse_source16_fp32_audit_20260902.md). |
 | Shared projection cache | Source `43402732cb169ab5d91d90b10262a35ba99edae4`; job `13332001`; H100 `GPU-2ee3da91-970a-6714-84df-530aefe04a08`; result SHA-256 `576384429d01fbe2d86a81c13a7519c484490e5ac62bb8bc871387df653023c2`; [report](../perf/vdam_projection_cache_h100_13332001.md). |
+| Integrated hybrid H100 boundary | Source `b611aeff15004a07d6d2a1ec590bc5b97180cb5b`; job `13341618`; H100 `GPU-2ee3da91-970a-6714-84df-530aefe04a08`; artifact-manifest SHA-256 `fec2ec40f98057a428799a472ea36908725c24ed54041d21ceacd99cf0ef325a`; [report](../perf/vdam_gf46_hybrid_batch_h100_13341618.md). |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`
