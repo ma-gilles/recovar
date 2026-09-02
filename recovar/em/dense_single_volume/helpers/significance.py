@@ -5,6 +5,7 @@ pairs per image without materializing the full weight matrix.
 Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refine.py``.
 """
 
+import hashlib
 import json
 import logging
 import operator
@@ -96,6 +97,9 @@ _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ALIAS_EVIDENCE_JOB = 13_332_001
 _COARSE_GAUSSIAN_GEMM_HYBRID_ENV = "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID"
 _COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY"
+)
+_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV = (
+    "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT"
 )
 _COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR"
@@ -700,6 +704,25 @@ def _coarse_gaussian_gemm_hybrid_enabled(*, default: bool = False) -> bool:
         return True
     raise ValueError(
         f"Unsupported {_COARSE_GAUSSIAN_GEMM_HYBRID_ENV}={token!r}",
+    )
+
+
+def _coarse_significance_support_audit_enabled(
+    *,
+    default: bool = False,
+) -> bool:
+    """Resolve exact, diagnostic-only coarse-support hashing."""
+
+    token = os.environ.get(
+        _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV}={token!r}",
     )
 
 
@@ -2316,6 +2339,95 @@ def significant_sample_ids(samples, total_size: int) -> np.ndarray:
         keep[excluded] = False
         return np.flatnonzero(keep).astype(np.int64, copy=False)
     return np.asarray(samples, dtype=np.int64).reshape(-1)
+
+
+def _build_coarse_significance_support_audit(
+    significant_sample_indices,
+    *,
+    samples_per_class: int,
+) -> dict:
+    """Hash every ordered class/image coarse support without changing it.
+
+    The canonical byte stream for one row is four little-endian int64 header
+    values ``(class, image, samples_per_class, selected_count)`` followed by
+    the strictly increasing selected sample IDs as little-endian int64. Each
+    length-prefixed row enters the aggregate digest in class-major/image-major
+    order. Per-row digests and counts make any mismatch localizable while the
+    aggregate digest provides a compact direct/hybrid equality gate.
+    """
+
+    try:
+        total_size = operator.index(samples_per_class)
+    except TypeError as error:
+        raise ValueError("samples_per_class must be an integer") from error
+    if total_size <= 0:
+        raise ValueError("samples_per_class must be positive")
+    if not isinstance(significant_sample_indices, (tuple, list)) or not significant_sample_indices:
+        raise ValueError("support audit requires at least one class")
+    n_images = None
+    aggregate = hashlib.sha256()
+    per_class_image_sha256: list[list[str]] = []
+    per_class_counts: list[list[int]] = []
+    for class_index, rows in enumerate(significant_sample_indices):
+        if not isinstance(rows, (tuple, list)):
+            raise TypeError("support audit class rows must be a sequence")
+        if n_images is None:
+            n_images = len(rows)
+            if n_images <= 0:
+                raise ValueError("support audit requires at least one image")
+        elif len(rows) != n_images:
+            raise ValueError("support audit classes must cover the same images")
+        row_digests = []
+        row_counts = []
+        for image_index, samples in enumerate(rows):
+            ids = np.asarray(
+                significant_sample_ids(samples, total_size),
+                dtype=np.int64,
+            ).reshape(-1)
+            if (
+                np.any(ids < 0)
+                or np.any(ids >= total_size)
+                or (ids.size > 1 and np.any(np.diff(ids) <= 0))
+            ):
+                raise ValueError(
+                    "support audit requires unique, strictly increasing in-range IDs",
+                )
+            header = np.asarray(
+                (class_index, image_index, total_size, ids.size),
+                dtype="<i8",
+            )
+            ids_le = np.ascontiguousarray(ids.astype("<i8", copy=False))
+            row_bytes = header.tobytes(order="C") + ids_le.tobytes(order="C")
+            row_digests.append(hashlib.sha256(row_bytes).hexdigest())
+            row_counts.append(int(ids.size))
+            aggregate.update(
+                np.asarray((len(row_bytes),), dtype="<u8").tobytes(order="C"),
+            )
+            aggregate.update(row_bytes)
+        per_class_image_sha256.append(row_digests)
+        per_class_counts.append(row_counts)
+
+    counts = np.ascontiguousarray(np.asarray(per_class_counts, dtype="<i8"))
+    return {
+        "schema": "recovar.coarse_significance_support_audit.v1",
+        "classification": "diagnostic_only",
+        "canonical_encoding": (
+            "class-major/image-major; uint64 row-byte-length; "
+            "int64-le header(class,image,total,count); int64-le sorted IDs"
+        ),
+        "n_classes": len(per_class_counts),
+        "n_images": int(n_images),
+        "samples_per_class": total_size,
+        "selected_count_sum": int(np.sum(counts, dtype=np.int64)),
+        "selected_count_min": int(np.min(counts)),
+        "selected_count_max": int(np.max(counts)),
+        "per_class_image_selected_counts": per_class_counts,
+        "per_class_image_selected_counts_sha256": hashlib.sha256(
+            counts.tobytes(order="C"),
+        ).hexdigest(),
+        "per_class_image_support_sha256": per_class_image_sha256,
+        "aggregate_support_sha256": aggregate.hexdigest(),
+    }
 
 
 def compact_significant_sample_indices_from_mask(mask) -> object:
@@ -7014,6 +7126,18 @@ def _compute_k_class_significance_batched(
     if coarse_gaussian_gemm_stream_aggregate_manifest_path is not None:
         full_stats["coarse_gaussian_gemm_stream_aggregate_manifest_path"] = (
             coarse_gaussian_gemm_stream_aggregate_manifest_path
+        )
+    if _coarse_significance_support_audit_enabled():
+        if significant_sample_indices is None:
+            raise RuntimeError(
+                f"{_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV}=1 requires "
+                "collect_significance=True",
+            )
+        full_stats["coarse_significance_support_audit"] = (
+            _build_coarse_significance_support_audit(
+                significant_sample_indices,
+                samples_per_class=n_rot * n_trans,
+            )
         )
     if relion_f32_sum_weight is not None:
         # RELION's oversampling-zero second pass deliberately reuses this

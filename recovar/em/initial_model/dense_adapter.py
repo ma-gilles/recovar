@@ -640,6 +640,7 @@ _SPARSE_PASS2_RESULT_FIELDS: tuple[tuple[str, type], ...] = (
     ("best_pose_rotations", np.float32),
     ("best_pose_translations", np.float32),
     ("best_pose_rotation_ids", np.int32),
+    ("significant_counts", np.int32),
 )
 
 

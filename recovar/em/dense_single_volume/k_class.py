@@ -101,6 +101,31 @@ def _with_coarse_selector_audit(result, audit: dict | None):
     return result._replace(profile_summary=profile_summary)
 
 
+def _with_coarse_significance_diagnostics(
+    result,
+    *,
+    selector_audit: dict | None,
+    support_audit: dict | None,
+    hybrid_stats: dict | None,
+):
+    """Propagate exact coarse-support and hybrid telemetry to InitialModel."""
+
+    result = _with_coarse_selector_audit(result, selector_audit)
+    additions = {
+        key: dict(value)
+        for key, value in (
+            ("coarse_significance_support_audit", support_audit),
+            ("coarse_gaussian_gemm_hybrid", hybrid_stats),
+        )
+        if value is not None
+    }
+    if not additions:
+        return result
+    profile_summary = dict(result.profile_summary or {})
+    profile_summary.update(additions)
+    return result._replace(profile_summary=profile_summary)
+
+
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     max_value = np.max(values, axis=axis, keepdims=True)
     # Guard against the all-(-inf) case which would otherwise propagate NaN
@@ -3158,6 +3183,8 @@ def run_dense_k_class_em_adaptive(
     coarse_class_assignments_for_override = None
     significant_counts_for_result = None
     coarse_selector_audit = None
+    coarse_significance_support_audit = None
+    coarse_gaussian_gemm_hybrid_stats = None
     pass1_t0 = time.time()
     if firstiter_cc_pass2_only_best_coarse:
         # RELION firstiter_cc branch: restrict pass-2 to children of each
@@ -3289,6 +3316,12 @@ def run_dense_k_class_em_adaptive(
         coarse_selector_audit = _coarse_selector_audit_from_full_stats(
             _full_coarse_stats
         )
+        coarse_significance_support_audit = _full_coarse_stats.get(
+            "coarse_significance_support_audit",
+        )
+        coarse_gaussian_gemm_hybrid_stats = _full_coarse_stats.get(
+            "coarse_gaussian_gemm_hybrid",
+        )
     pass1_s = time.time() - pass1_t0
 
     def _with_significant_counts(result: KClassEMResult) -> KClassEMResult:
@@ -3299,7 +3332,12 @@ def run_dense_k_class_em_adaptive(
                     dtype=jnp.int32,
                 ),
             )
-        return _with_coarse_selector_audit(result, coarse_selector_audit)
+        return _with_coarse_significance_diagnostics(
+            result,
+            selector_audit=coarse_selector_audit,
+            support_audit=coarse_significance_support_audit,
+            hybrid_stats=coarse_gaussian_gemm_hybrid_stats,
+        )
 
     mask_t0 = time.time()
     pass2_kwargs = dict(engine_kwargs)

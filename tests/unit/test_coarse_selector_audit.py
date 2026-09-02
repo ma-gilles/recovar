@@ -10,8 +10,12 @@ from recovar.em.dense_single_volume.helpers import significance
 from recovar.em.dense_single_volume.k_class import (
     _coarse_selector_audit_from_full_stats,
     _with_coarse_selector_audit,
+    _with_coarse_significance_diagnostics,
 )
-from recovar.em.initial_model.dense_adapter import _estep_meta
+from recovar.em.initial_model.dense_adapter import (
+    _estep_meta,
+    _sparse_pass2_estep_meta,
+)
 
 
 def _control_audit() -> dict:
@@ -190,6 +194,51 @@ def test_absent_audit_preserves_result_identity():
     result = _ProfileResult(profile_summary={"control": True})
 
     assert _with_coarse_selector_audit(result, None) is result
+
+
+def test_support_and_hybrid_diagnostics_propagate_without_losing_profile_fields():
+    result = _ProfileResult(profile_summary={"pass2_s": 1.25})
+    support = {
+        "schema": "recovar.coarse_significance_support_audit.v1",
+        "aggregate_support_sha256": "a" * 64,
+    }
+    hybrid = {
+        "enabled": True,
+        "selected_rescore_image_count": 500,
+        "fallback_image_count": 0,
+    }
+
+    sealed = _with_coarse_significance_diagnostics(
+        result,
+        selector_audit=None,
+        support_audit=support,
+        hybrid_stats=hybrid,
+    )
+    meta = _estep_meta({0: SimpleNamespace(profile_summary=sealed.profile_summary)})
+
+    assert sealed.profile_summary == {
+        "pass2_s": 1.25,
+        "coarse_significance_support_audit": support,
+        "coarse_gaussian_gemm_hybrid": hybrid,
+    }
+    assert meta["halfset_0_profile_summary"]["coarse_significance_support_audit"] == support
+    assert meta["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] == hybrid
+
+
+def test_initial_model_meta_retains_per_particle_coarse_cutoff_counts():
+    result = SimpleNamespace(
+        significant_counts=[17, 23],
+        stats=None,
+        profile_summary=None,
+    )
+
+    meta = _sparse_pass2_estep_meta(
+        {0: result},
+        {0: [11, 19]},
+    )
+
+    assert meta["selected_particle_ids"].tolist() == [11, 19]
+    assert meta["significant_counts"].tolist() == [17, 23]
 
 
 def test_host_counters_are_adjacent_to_the_selected_wrapper_invocation():

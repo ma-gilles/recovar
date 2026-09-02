@@ -31,6 +31,95 @@ def test_coarse_gaussian_gemm_hybrid_is_default_off_and_fail_closed(monkeypatch)
         significance._coarse_gaussian_gemm_hybrid_enabled()
 
 
+def test_coarse_significance_support_audit_is_strict_default_off(monkeypatch):
+    variable = "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._coarse_significance_support_audit_enabled()
+    assert significance._coarse_significance_support_audit_enabled(default=True)
+
+    for disabled in ("0", "false", "no", "off"):
+        monkeypatch.setenv(variable, disabled)
+        assert not significance._coarse_significance_support_audit_enabled(
+            default=True,
+        )
+    for enabled in ("1", "true", "yes", "on"):
+        monkeypatch.setenv(variable, enabled)
+        assert significance._coarse_significance_support_audit_enabled()
+
+    monkeypatch.setenv(variable, "automatic")
+    with pytest.raises(ValueError, match=variable):
+        significance._coarse_significance_support_audit_enabled()
+
+
+def test_coarse_significance_support_audit_is_exact_and_localizable():
+    supports = [
+        [
+            np.asarray([1, 3], dtype=np.int32),
+            significance.ComplementSignificantSampleIndices(
+                excluded_indices=np.asarray([0, 2], dtype=np.int32),
+                total_size=4,
+            ),
+        ],
+        [
+            None,
+            np.zeros(0, dtype=np.int32),
+        ],
+    ]
+
+    first = significance._build_coarse_significance_support_audit(
+        supports,
+        samples_per_class=4,
+    )
+    repeated = significance._build_coarse_significance_support_audit(
+        supports,
+        samples_per_class=4,
+    )
+
+    assert first == repeated
+    assert first["schema"] == "recovar.coarse_significance_support_audit.v1"
+    assert first["classification"] == "diagnostic_only"
+    assert first["n_classes"] == 2
+    assert first["n_images"] == 2
+    assert first["samples_per_class"] == 4
+    assert first["per_class_image_selected_counts"] == [[2, 2], [4, 0]]
+    assert first["selected_count_sum"] == 8
+    assert first["selected_count_min"] == 0
+    assert first["selected_count_max"] == 4
+    assert len(first["aggregate_support_sha256"]) == 64
+    assert all(
+        len(digest) == 64
+        for class_digests in first["per_class_image_support_sha256"]
+        for digest in class_digests
+    )
+
+    changed = significance._build_coarse_significance_support_audit(
+        [[np.asarray([1, 2]), supports[0][1]], supports[1]],
+        samples_per_class=4,
+    )
+    assert changed["aggregate_support_sha256"] != first["aggregate_support_sha256"]
+    assert (
+        changed["per_class_image_support_sha256"][0][1]
+        == first["per_class_image_support_sha256"][0][1]
+    )
+
+
+@pytest.mark.parametrize(
+    "supports",
+    [
+        [[np.asarray([2, 1], dtype=np.int32)]],
+        [[np.asarray([1, 1], dtype=np.int32)]],
+        [[np.asarray([-1], dtype=np.int32)]],
+        [[np.asarray([4], dtype=np.int32)]],
+    ],
+)
+def test_coarse_significance_support_audit_rejects_noncanonical_ids(supports):
+    with pytest.raises(ValueError, match="strictly increasing in-range"):
+        significance._build_coarse_significance_support_audit(
+            supports,
+            samples_per_class=4,
+        )
+
+
 @pytest.mark.parametrize("value", ["0", "-1", "1.5", "many"])
 def test_coarse_gaussian_gemm_hybrid_capacity_requires_positive_integer(
     monkeypatch,

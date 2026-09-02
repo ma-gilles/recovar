@@ -1324,6 +1324,7 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
         "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
         "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "1",
         "RECOVAR_SIGNIFICANCE_SCORE_CACHE": "0",
+        "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "1",
     }.items():
         monkeypatch.setenv(name, value)
 
@@ -1514,6 +1515,12 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
     assert hybrid_stats["selected_source16_block_count"] == 3
     assert hybrid_stats["selected_exact_candidate_fraction"] == 1.0
     assert hybrid_stats["fallback_reasons"] == {}
+    support_audit = result[5]["coarse_significance_support_audit"]
+    assert support_audit["n_classes"] == 1
+    assert support_audit["n_images"] == 3
+    assert support_audit["samples_per_class"] == 32
+    assert support_audit["per_class_image_selected_counts"] == [[1, 1, 1]]
+    assert len(support_audit["aggregate_support_sha256"]) == 64
 
 
 def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
