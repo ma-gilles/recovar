@@ -231,6 +231,7 @@ def _run_local_search_iteration(
     rotation_grid_mstep_rotations=None,
     generate_relion_mstep_rotations=False,
     symmetry: str = "C1",
+    batch_size_planner=None,
 ):
     """Run exact local search over image-specific rotation neighborhoods."""
     # Indirection through the iteration_loop module so test monkeypatches that
@@ -333,22 +334,48 @@ def _run_local_search_iteration(
             raise ValueError(
                 f"{EXACT_LOCAL_XHALF_BATCH_GUARD_ENV} must be 'full' or 'windowed', got {xhalf_guard_mode!r}"
             )
-    local_batch_plan = _il._estimate_relion_em_batch_sizes(
-        requested_image_batch_size=image_batch_size,
-        requested_rotation_block_size=rotation_block_size,
-        n_rot=max(1, local_rotation_count),
-        n_trans=max(1, int(np.asarray(local_layout.translation_grid).shape[0])),
-        image_shape=experiment_dataset.image_shape,
-        volume_shape=experiment_dataset.volume_shape,
-        padding_factor=max(int(projection_padding_factor), int(reconstruction_padding_factor), 1),
-        n_classes=local_kernel_classes,
-        current_size=local_batch_planning_current_size,
-        use_float64_scoring=use_float64_scoring,
-    )
+    local_n_trans = max(1, int(np.asarray(local_layout.translation_grid).shape[0]))
+    if batch_size_planner is None:
+        local_batch_plan = _il._estimate_relion_em_batch_sizes(
+            requested_image_batch_size=image_batch_size,
+            requested_rotation_block_size=rotation_block_size,
+            n_rot=max(1, local_rotation_count),
+            n_trans=local_n_trans,
+            image_shape=experiment_dataset.image_shape,
+            volume_shape=experiment_dataset.volume_shape,
+            padding_factor=max(int(projection_padding_factor), int(reconstruction_padding_factor), 1),
+            n_classes=local_kernel_classes,
+            current_size=local_batch_planning_current_size,
+            use_float64_scoring=use_float64_scoring,
+        )
+        planned_image_batch_size = local_batch_plan.image_batch_size
+        planned_rotation_block_size = local_batch_plan.rotation_block_size
+    else:
+        # The enclosing RELION loop may have qualified a compact K=1
+        # Projector/BPref lifetime and bound that policy into its planner.
+        # Reusing that callable here keeps the actual local rotation count
+        # without silently falling back to the obsolete full-cube estimate.
+        # Never grow beyond the already-approved outer local-search sizes.
+        planned_image_batch_size, planned_rotation_block_size = batch_size_planner(
+            max(1, local_rotation_count),
+            local_n_trans,
+            classes=local_kernel_classes,
+            image_shape_for_batch=experiment_dataset.image_shape,
+            current_size_for_batch=local_batch_planning_current_size,
+        )
+        planned_image_batch_size = min(
+            image_batch_size,
+            max(1, int(planned_image_batch_size)),
+        )
+        planned_rotation_block_size = min(
+            rotation_block_size,
+            max(1, int(planned_rotation_block_size)),
+        )
+        local_batch_plan = None
     if (
-        local_batch_plan.image_batch_size != image_batch_size
-        or local_batch_plan.rotation_block_size != rotation_block_size
-    ):
+        planned_image_batch_size != image_batch_size
+        or planned_rotation_block_size != rotation_block_size
+    ) and local_batch_plan is not None:
         logger.info(
             "Local search memory batch sizing: requested image_batch_size=%d rotation_block_size=%d; "
             "using image_batch_size=%d rotation_block_size=%d "
@@ -358,8 +385,8 @@ def _run_local_search_iteration(
             "gpu_used_est=%.2f GB)",
             requested_image_batch_size,
             requested_rotation_block_size,
-            local_batch_plan.image_batch_size,
-            local_batch_plan.rotation_block_size,
+            planned_image_batch_size,
+            planned_rotation_block_size,
             local_rotation_count,
             int(np.asarray(local_layout.translation_grid).shape[0]),
             local_n_classes,
@@ -373,8 +400,24 @@ def _run_local_search_iteration(
             local_batch_plan.usable_estimate_gb,
             local_batch_plan.gpu_used_estimate_gb,
         )
-    image_batch_size = local_batch_plan.image_batch_size
-    rotation_block_size = local_batch_plan.rotation_block_size
+    elif (
+        planned_image_batch_size != image_batch_size
+        or planned_rotation_block_size != rotation_block_size
+    ):
+        logger.info(
+            "Local search caller-qualified batch sizing: requested "
+            "image_batch_size=%d rotation_block_size=%d; using "
+            "image_batch_size=%d rotation_block_size=%d "
+            "(local_rot_max=%d n_trans=%d)",
+            requested_image_batch_size,
+            requested_rotation_block_size,
+            planned_image_batch_size,
+            planned_rotation_block_size,
+            local_rotation_count,
+            local_n_trans,
+        )
+    image_batch_size = planned_image_batch_size
+    rotation_block_size = planned_rotation_block_size
 
     if class_log_priors is not None:
         if return_reconstruction_sample_indices:

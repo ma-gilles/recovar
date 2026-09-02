@@ -3573,6 +3573,7 @@ def _score_half_local(
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
             relion_translation_angle_scale=relion_translation_angle_scale,
             symmetry=symmetry,
+            batch_size_planner=safe_batch_sizes,
         )
         parent_profile = parent_outputs[-1]
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
@@ -3801,6 +3802,7 @@ def _score_half_local(
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 relion_translation_angle_scale=relion_translation_angle_scale,
                 symmetry=symmetry,
+                batch_size_planner=safe_batch_sizes,
             )
         finally:
             os.environ.update(saved_local_debug_env)
@@ -3903,6 +3905,7 @@ def _score_half_local(
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
         symmetry=symmetry,
+        batch_size_planner=safe_batch_sizes,
     )
     _local_cursor = 0
     Ft_y_k, Ft_ctf_k, ha_k = local_outputs[_local_cursor : _local_cursor + 3]
@@ -6932,7 +6935,7 @@ def _run_relion_iteration_loop(
                         compact_decision.deferred_firstiter_bpref,
                         compact_decision.direct_peak_bytes / 1e9,
                     )
-            elif use_adaptive and not k_class_enabled:
+            elif (use_adaptive or use_local) and not k_class_enabled:
                 explicit_model_current_size = (
                     int(volume_shape[0])
                     if model_current_size_for_engine is None
@@ -7233,7 +7236,7 @@ def _run_relion_iteration_loop(
                     k_class_enabled=k_class_enabled,
                     collect_local_search_profile=collect_local_search_profile,
                     diagnostic_score_only=bool(debug.stop_after_local_search_score_only),
-                    safe_batch_sizes=_safe_batch_sizes,
+                    safe_batch_sizes=safe_batch_sizes_for_half,
                     class_assignments=class_assignments,
                     class_posterior_per_half=class_posterior_per_half,
                     class_full_posterior_per_half=class_full_posterior_per_half,

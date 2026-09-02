@@ -7,8 +7,8 @@ re-running the expensive parity fixtures.
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
 import inspect
+from dataclasses import fields, is_dataclass
 from types import SimpleNamespace
 
 import numpy as np
@@ -233,6 +233,25 @@ def test_k1_local_parent_probe_applies_relion_max_significants_cap():
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
     assert "apply_max_significants_to_support=False" in wrapper_source
     assert "max_significants=max_significants if apply_max_significants_to_support else -1" in wrapper_source
+
+
+def test_k1_local_search_reuses_the_outer_qualified_batch_planner():
+    loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    score_source = inspect.getsource(iteration_loop._score_half_local)
+    wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
+
+    assert "elif (use_adaptive or use_local) and not k_class_enabled:" in loop_source
+    local_dispatch = loop_source[
+        loop_source.index("if use_local:", loop_source.index("if experiment_datasets[k].n_units == 0")) :
+    ]
+    local_dispatch = local_dispatch[: local_dispatch.index("elif use_adaptive:")]
+    assert "safe_batch_sizes=safe_batch_sizes_for_half" in local_dispatch
+    assert "safe_batch_sizes=_safe_batch_sizes" not in local_dispatch
+    assert score_source.count("batch_size_planner=safe_batch_sizes") == 3
+    assert "if batch_size_planner is None:" in wrapper_source
+    assert "planned_image_batch_size, planned_rotation_block_size = batch_size_planner(" in wrapper_source
+    assert "planned_image_batch_size = min(" in wrapper_source
+    assert "planned_rotation_block_size = min(" in wrapper_source
 
 
 def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():

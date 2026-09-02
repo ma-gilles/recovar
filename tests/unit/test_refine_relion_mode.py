@@ -5090,7 +5090,8 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
     )
 
     assert captured["image_batch_size"] == 41
-    assert captured["rotation_block_size"] == 58
+    # The exact local engine has an intentional minimum tile of 64 rotations.
+    assert captured["rotation_block_size"] == 64
 
     monkeypatch.setenv("RECOVAR_LOCAL_XHALF_BATCH_GUARD", "full")
     iteration_loop_module._run_local_search_iteration(
@@ -5121,11 +5122,14 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
         pass2_layout=layout,
     )
 
-    assert captured["image_batch_size"] == 13
-    assert captured["rotation_block_size"] == 19
+    assert captured["image_batch_size"] == 27
+    assert captured["rotation_block_size"] == 38
 
 
-def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatch, rng):
+def test_run_local_search_iteration_plumbs_score_only_and_reuses_batch_planner(
+    monkeypatch,
+    rng,
+):
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
         n_global_rotations=3,
@@ -5140,6 +5144,11 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
         translation_log_priors=np.zeros((2, 2), dtype=np.float32),
     )
     captured = {}
+    planner_calls = []
+
+    def batch_size_planner(n_rot, n_trans, **kwargs):
+        planner_calls.append((n_rot, n_trans, kwargs))
+        return 1, 1
 
     def fake_run_local_em_exact(*args, **kwargs):
         _ = args
@@ -5184,8 +5193,22 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
         disable_adjoint_y=True,
         disable_adjoint_ctf=True,
         score_only=True,
+        batch_size_planner=batch_size_planner,
     )
 
+    assert planner_calls == [
+        (
+            2,
+            2,
+            {
+                "classes": 1,
+                "image_shape_for_batch": mock_dataset.image_shape,
+                "current_size_for_batch": 4,
+            },
+        )
+    ]
+    assert captured["image_batch_size"] == 1
+    assert captured["rotation_block_size"] == 1
     assert captured["score_only"] is True
     assert captured["disable_adjoint_y"] is True
     assert captured["disable_adjoint_ctf"] is True
