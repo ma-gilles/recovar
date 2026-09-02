@@ -163,6 +163,7 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket,
     score_local_bucket_abs2_weighted_on_demand,
 )
+from recovar.em.dense_single_volume.mean_helpers import compute_unregularized_halfmaps_and_align_signs
 from recovar.em.dense_single_volume.refinement_options import (
     AdaptiveOptions,
     EngineDebugOptions,
@@ -9720,6 +9721,40 @@ class TestRelionModeSmokeTest:
         aligned, flipped = _align_fourier_volume_sign_to_reference(vol, ref, (2, 1, 1))
         assert flipped is True
         np.testing.assert_allclose(aligned, ref)
+
+    def test_k_class_reconstruction_preserves_data_determined_volume_signs(self):
+        """A weak class must not be sign-flipped to resemble its previous reference."""
+        reconstructed = np.asarray(
+            [
+                [2.0 + 0.0j, -1.0 + 0.0j],
+                [1.0 + 0.0j, -2.0 + 0.0j],
+            ],
+            dtype=np.complex64,
+        )
+        previous = reconstructed.copy()
+        previous[1] *= -1.0
+        means = [jnp.asarray(reconstructed), jnp.asarray(reconstructed)]
+
+        result = compute_unregularized_halfmaps_and_align_signs(
+            means=means,
+            previous_means=[jnp.asarray(previous), jnp.asarray(previous)],
+            Ft_y_per_half=(None, None),
+            Ft_ctf_per_half=(None, None),
+            Ft_y_combined=None,
+            Ft_ctf_combined=None,
+            volume_shape=(2, 1, 1),
+            n_classes=2,
+            k_class_enabled=True,
+            tau2_fudge=1.0,
+            padding_factor=1,
+            projection_padding_factor=1,
+            minres_map=1,
+            need_unreg_means=False,
+        )
+
+        np.testing.assert_array_equal(np.asarray(result.aligned_means[0]), reconstructed)
+        np.testing.assert_array_equal(np.asarray(result.aligned_means[1]), reconstructed)
+        assert result.any_sign_flipped is False
 
     def test_compute_coarse_image_size_uses_particle_diameter(self):
         """RELION coarse_size should depend on particle diameter, not box size."""
