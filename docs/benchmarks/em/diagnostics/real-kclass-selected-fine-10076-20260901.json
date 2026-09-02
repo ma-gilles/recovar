@@ -1,6 +1,13 @@
 {
   "schema": "recovar.em.real_kclass_selected_fine_diagnostic.v1",
   "recorded_at": "2026-09-01T14:20:00-04:00",
+  "provenance_correction": {
+    "corrected_at": "2026-09-02T16:44:16-04:00",
+    "field": "artifacts.coarse_report.sha256",
+    "previous_value": "f03f2385c01a1b8f67e67215909a72db69dca95b95f468766f940861553a5722",
+    "corrected_value": "f03f2385971bc93403b10b8f75c94a421e237aa5c6b51c31b8297e0765a74586",
+    "basis": "The report and its independently written stdout copy are byte-identical and have this corrected SHA-256; both filesystem mtimes predate recorded_at. The original value retained only the correct eight-character prefix and was a transcription error."
+  },
   "admission_status": "DIAGNOSTIC_ONLY",
   "dataset": "EMPIAR-10076 frozen 10000-particle InitialModel fixture",
   "scope": {
@@ -42,7 +49,7 @@
     },
     "coarse_report": {
       "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_coarse_919119f82_20260901/audit/selected_coarse_report.json",
-      "sha256": "f03f2385c01a1b8f67e67215909a72db69dca95b95f468766f940861553a5722"
+      "sha256": "f03f2385971bc93403b10b8f75c94a421e237aa5c6b51c31b8297e0765a74586"
     },
     "fine_report": {
       "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/selected_fine_physical_report_v1.json",

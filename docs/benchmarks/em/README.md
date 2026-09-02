@@ -180,6 +180,23 @@ supporting, diagnostic, and pending coverage is indexed in
 K=1 performance fields are still missing rather than treating them as zero or
 equivalent.
 
+The historical selected-fine diagnostic also has a dedicated whole-ledger
+validator. It freezes its two particle identities, physical-coordinate join,
+support and prior boundaries, unavailable performance fields, rejected output
+directory, and strict non-admission claim. Use `--verify-files` only for the
+compact external-artifact checksum audit:
+
+```bash
+pixi run python scripts/validate_em_real_kclass_selected_fine.py
+pixi run python scripts/validate_em_real_kclass_selected_fine.py --verify-files
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_selected_fine.py
+```
+
+That audit exposed and corrected a pre-existing transcription error in the
+selected-coarse report hash. The ledger retains both values and the correction
+basis; the report and its independently written stdout copy are byte-identical
+and predate the original ledger.
+
 ## Sealing a new record
 
 1. Create an isolated run root with `SAFE_TO_DELETE`; record the clean source

@@ -13,10 +13,9 @@ by `tests/unit/test_validate_em_benchmark_registry.py`, while
 `scripts/validate_em_benchmark_registry.py` validates every accepted or
 synthetic-negative JSON and fails closed on an unknown diagnostic family.
 Eight real-data diagnostic schemas are deliberately routed outside the
-accepted registry and are never counted as accepted results. The InitialModel
-and offset-prior ledgers have dedicated whole-ledger validators; the
-selected-fine record's missing equivalent validator is listed as an open
-evidence gap below.
+accepted registry and are never counted as accepted results. The InitialModel,
+offset-prior, and historical selected-fine ledgers have dedicated whole-ledger
+validators.
 
 ## Accepted synthetic K=4 single-run entries
 
@@ -103,7 +102,7 @@ quality pair into a formal speed comparison.
 | --- | --- | --- | --- |
 | `diagnostics/real-kclass-initialmodel-20260901.json` | Three 10k-particle, eight-iteration C1 pairs over EMPIAR-10076 and 10345 | All three fail FSC/assignment; two also retain the class-2 collapse | Per-engine wall/HBM/RSS retained as diagnostics; formal ratios are null. |
 | `diagnostics/real-kclass-offset-prior-fullpairs-92438c285-20260901.json` | Two clean-source same-H100 pairs, one per dataset | Exact raw iteration-1 labels but failing post-update maps; the later shared-200 audit supersedes the earlier M-step-first interpretation by proving a pre-reconstruction candidate/score gap | Native wall/HBM/RSS retained; raw 31.59x and 26.90x RECOVAR/RELION wall ratios are diagnostic only. |
-| `diagnostics/real-kclass-selected-fine-10076-20260901.json` | Two-particle iteration-1 selected-fine capture made before `d1f2f9f93` | Historical support/prior discriminator only. Its large translation-prior delta is from the subsequently fixed InitialModel offset-prior arithmetic and is not a current-source causal boundary. | No final performance claim. This routed record does not yet have a standalone whole-ledger validator. |
+| `diagnostics/real-kclass-selected-fine-10076-20260901.json` | Two-particle iteration-1 selected-fine capture made before `d1f2f9f93` | Historical support/prior discriminator only. Its large translation-prior delta is from the subsequently fixed InitialModel offset-prior arithmetic and is not a current-source causal boundary. | No final performance claim. A dedicated validator freezes the strict claim boundary and compact artifact hashes. |
 | `real_k4_shared200_causal_replay.md` | Frozen 200-particle, four-class iteration-1 replay; source `24317e40c`, job 13322235 | Strict gate FAIL, but 199/200 hard assignments agree and correctly framed per-class map FSC-AUC is 0.604--0.907. Candidate topology/raw scores already differ before reconstruction. | Six native arms plus one RECOVAR arm are bundled, so the 469 s allocation is causal evidence, not a formal speed ratio. |
 | `real_k4_native_coarse_score_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-score-a32cccccb-20260902.json` | Native RELION and RECOVAR coarse surfaces for 16 frozen shared-200 probes, 1,069,056 candidates; job 13330906 | Diagnostic PASS: priors are excluded causally and the first material support difference is the raw likelihood/`diff2` surface. This is not a final K=4 quality admission. | Capture/control replay used one H100 for 35 s; timing is instrumentation qualification, not an engine speed comparison. |
 | `real_k4_native_coarse_component_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-components-8f9ebc9-20260902.json` | Paired native norm/cross components and RECOVAR full component surfaces for the same 16 probes; jobs 13332998 and 13332392 | Diagnostic PASS: a native cross-only swap restores 11/16 exact supports versus 5/16 for RECOVAR and 5/16 for a native-norm-only swap. The cross term is the dominant first likelihood component boundary. | One-H100 capture/replay timing is diagnostic only. The earlier in-kernel observer is retained as rejected evidence because it changed production results. |
@@ -141,10 +140,7 @@ admission.
    seed-42001 weak-class outlier and frozen gate failures, but do not spend more
    pilot effort treating it as a deterministic RECOVAR-only defect. Do not
    promote the result to native-grid acceptance.
-5. Add a dedicated whole-ledger validator for the selected-fine diagnostic or
-   migrate it into a versioned diagnostic schema before relying on it as more
-   than causal evidence.
-6. The runnable robustness matrix includes K=2, K=8, and K=16, but no accepted
+5. The runnable robustness matrix includes K=2, K=8, and K=16, but no accepted
    schema-v1 result for those K values is checked in. Do not generalize the K=4
    campaigns to them.
 
@@ -159,6 +155,8 @@ pixi run python scripts/validate_em_real_kclass_diagnostics.py
 pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_diagnostics.py
 pixi run python scripts/validate_em_real_kclass_offset_prior_fullpairs.py
 pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_offset_prior_fullpairs.py
+pixi run python scripts/validate_em_real_kclass_selected_fine.py
+pixi run pytest tests/unit/initial_model/test_validate_em_real_kclass_selected_fine.py
 pixi run python scripts/summarize_em_k1_realdata_science_equivalence.py --verify-calibrations --verify-masked-support --verify-target-partial --check-markdown
 ```
 
