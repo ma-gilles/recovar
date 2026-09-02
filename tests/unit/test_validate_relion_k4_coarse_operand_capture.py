@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import struct
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,17 @@ import numpy as np
 import pytest
 
 from scripts import validate_relion_k4_coarse_operand_capture as validator
+
+
+def test_direct_script_entrypoint_can_resolve_repository_imports() -> None:
+    result = subprocess.run(
+        [sys.executable, str(Path(validator.__file__).resolve()), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--capture-dir" in result.stdout
 
 
 def _bits(value: float) -> int:

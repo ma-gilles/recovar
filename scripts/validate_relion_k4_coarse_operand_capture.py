@@ -8,21 +8,21 @@ import hashlib
 import json
 import re
 import struct
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-try:
-    from scripts import validate_relion_coarse_component_capture as component_validator
-    from scripts import validate_relion_coarse_operand_capture as replay
-    from scripts import validate_relion_coarse_score_capture as score_validator
-except ModuleNotFoundError as exc:
-    if exc.name != "scripts":
-        raise
-    import validate_relion_coarse_component_capture as component_validator
-    import validate_relion_coarse_operand_capture as replay
-    import validate_relion_coarse_score_capture as score_validator
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from scripts import (  # noqa: E402
+    validate_relion_coarse_component_capture as component_validator,
+)
+from scripts import validate_relion_coarse_operand_capture as replay  # noqa: E402
+from scripts import validate_relion_coarse_score_capture as score_validator  # noqa: E402
 
 HEADER_MAGIC = b"RLNCROP1HEADER".ljust(16, b"\0")
 FOOTER_MAGIC = b"RLNCROP1FOOTER".ljust(16, b"\0")
