@@ -233,7 +233,7 @@ def test_relion_coarse_diff2_cuda_source_pins_production_topology():
         / "cuda_backproject.cu"
     ).read_text()
 
-    start = source.index("relion_coarse_diff2_rectangular_f32_kernel")
+    start = source.index("relion_coarse_diff2_rotation_block_f32")
     block = source[start : source.index("cudaError_t", start)]
     assert "kRelionCoarseDiff2BlockSize = 128" in source
     assert "kRelionCoarseEulersPerBlock = 16" in source
@@ -242,6 +242,9 @@ def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     assert "threadIdx.x / translation_count" in block
     assert "pixel_in_chunk += active_lanes" in block
     assert "atomicAdd(" in block
+    assert "relion_coarse_diff2_rectangular_f32_kernel" in block
+    assert "relion_coarse_diff2_rotation_blocks_f32_kernel" in block
+    assert block.count("relion_coarse_diff2_rotation_block_f32(") == 3
 
 
 def test_relion_coarse_normalized_cc_source_pins_native_tree_and_atomics():
@@ -1252,6 +1255,95 @@ def test_relion_coarse_diff2_rectangular_matches_atomic_envelope(
 
 
 @pytest.mark.gpu
+def test_relion_coarse_diff2_rotation_blocks_matches_atomic_envelope(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(41)
+    batch_size, rotation_count, translation_count = 2, 17, 29
+    compact_pixel_count, full_pixel_count = 67, 83
+    reference = (
+        rng.normal(0, 0.02, (rotation_count, compact_pixel_count))
+        + 1j * rng.normal(0, 0.02, (rotation_count, compact_pixel_count))
+    ).astype(np.complex64)
+    shifted = (
+        rng.normal(
+            0,
+            0.02,
+            (batch_size, translation_count, compact_pixel_count),
+        )
+        + 1j
+        * rng.normal(
+            0,
+            0.02,
+            (batch_size, translation_count, compact_pixel_count),
+        )
+    ).astype(np.complex64)
+    weight = rng.uniform(0, 150_000, (batch_size, compact_pixel_count)).astype(
+        np.float32
+    )
+    initial_diff2 = rng.uniform(10_000, 20_000, batch_size).astype(np.float32)
+    retained = np.sort(
+        rng.choice(full_pixel_count, compact_pixel_count, replace=False)
+    )
+    lookup = np.full(full_pixel_count, -1, dtype=np.int32)
+    lookup[retained] = np.arange(compact_pixel_count, dtype=np.int32)
+    rotation_block_ids = np.asarray(
+        [[1, 0, -1, 99, -2], [0, 1, -1, -2, 99]],
+        dtype=np.int32,
+    )
+
+    with jax.default_device(gpu_device):
+        actual = np.asarray(
+            cuda_backproject.relion_coarse_diff2_rotation_blocks_f32(
+                jnp.asarray(reference),
+                jnp.asarray(shifted),
+                jnp.asarray(weight),
+                jnp.asarray(initial_diff2),
+                jnp.asarray(rotation_block_ids),
+                jnp.asarray(lookup),
+            )
+        )
+
+    assert actual.shape == (batch_size, 5, 16, translation_count)
+    assert np.all(np.isposinf(actual[:, 2]))
+    assert np.all(np.isnan(actual[:, 3:]))
+    for batch, source_blocks in enumerate(((1, 0), (0, 1))):
+        for selected_block, source_block in enumerate(source_blocks):
+            for rotation_offset in range(16):
+                rotation = source_block * 16 + rotation_offset
+                if rotation >= rotation_count:
+                    assert np.all(
+                        np.isposinf(actual[batch, selected_block, rotation_offset])
+                    )
+                    continue
+                for translation in range(translation_count):
+                    possible = _coarse_production_results(
+                        reference[rotation],
+                        shifted[batch, translation],
+                        weight[batch],
+                        lookup,
+                        translation_count=translation_count,
+                        initial_diff2=initial_diff2[batch],
+                    )
+                    actual_bits = int(
+                        actual[
+                            batch,
+                            selected_block,
+                            rotation_offset,
+                            translation,
+                        ].view(np.uint32)
+                    )
+                    assert actual_bits in possible
+
+
+@pytest.mark.gpu
 def test_relion_coarse_vdam_projector_lane_capture_matches_atomic_envelope(
     monkeypatch,
     custom_cuda_lib,
@@ -2066,6 +2158,37 @@ def test_relion_coarse_diff2_fails_closed_without_gpu(monkeypatch):
             jnp.zeros((1, 29, 2), dtype=jnp.complex64),
             jnp.ones((1, 2), dtype=jnp.float32),
             jnp.zeros((1,), dtype=jnp.float32),
+            jnp.asarray([0, 1], dtype=jnp.int32),
+        )
+
+
+def test_relion_coarse_diff2_rotation_blocks_fails_closed_without_gpu(
+    monkeypatch,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_coarse_diff2_rotation_blocks_f32.__wrapped__(
+            jnp.zeros((1, 2), dtype=jnp.complex64),
+            jnp.zeros((1, 29, 2), dtype=jnp.complex64),
+            jnp.ones((1, 2), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.zeros((1, 1), dtype=jnp.int32),
+            jnp.asarray([0, 1], dtype=jnp.int32),
+        )
+
+
+def test_relion_coarse_diff2_rotation_blocks_rejects_noninteger_ids():
+    import recovar.cuda_backproject as cuda_backproject
+
+    with pytest.raises(TypeError, match="rotation_block_ids must be int32"):
+        cuda_backproject.relion_coarse_diff2_rotation_blocks_f32.__wrapped__(
+            jnp.zeros((1, 2), dtype=jnp.complex64),
+            jnp.zeros((1, 29, 2), dtype=jnp.complex64),
+            jnp.ones((1, 2), dtype=jnp.float32),
+            jnp.zeros((1,), dtype=jnp.float32),
+            jnp.zeros((1, 1), dtype=jnp.float32),
             jnp.asarray([0, 1], dtype=jnp.int32),
         )
 

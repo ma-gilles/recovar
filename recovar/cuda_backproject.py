@@ -558,6 +558,9 @@ _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF = (
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
 )
+_TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_F32 = (
+    "cuda_relion_coarse_diff2_rotation_blocks_f32"
+)
 _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32 = (
     "cuda_relion_coarse_diff2_projector_f32"
 )
@@ -653,6 +656,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
         "RelionCoarseDiff2RectangularF32",
+    ),
+    (
+        _TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_F32,
+        "RelionCoarseDiff2RotationBlocksF32",
     ),
     (
         _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32,
@@ -2414,6 +2421,99 @@ def relion_coarse_diff2_rectangular_f32(
         out_type,
         vmap_method="sequential",
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
+
+
+@jax.jit
+def relion_coarse_diff2_rotation_blocks_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    rotation_block_ids: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Rescore selected native RELION coarse-rotation blocks.
+
+    Shapes are ``reference=(R,N)``, ``shifted_image=(B,T,N)``,
+    ``weight=(B,N)``, ``initial_diff2=(B,)``,
+    ``rotation_block_ids=(B,Q)``, and ``full_to_compact=(F,)``. Each block ID
+    addresses the same aligned group of 16 rotations used by the rectangular
+    coarse scorer. The output has shape ``(B,Q,16,T)``. A negative or
+    out-of-range block ID other than the reserved ``-1`` padding value emits
+    ``NaN`` so callers fail closed; ``-1`` and rotations beyond a valid final
+    partial block are padded with ``+inf`` and cannot become selectable. A
+    partial final block intentionally follows the existing rectangular
+    16-register path; production promotion still requires a separately gated
+    one-Euler RELION-tail implementation.
+    """
+
+    if initial_diff2.dtype != jnp.float32:
+        raise TypeError(
+            f"initial_diff2 must be float32, got {initial_diff2.dtype}"
+        )
+    if rotation_block_ids.dtype != jnp.int32:
+        raise TypeError(
+            "rotation_block_ids must be int32, got "
+            f"{rotation_block_ids.dtype}"
+        )
+    if (
+        reference.ndim != 2
+        or shifted_image.ndim != 3
+        or weight.ndim != 2
+        or rotation_block_ids.ndim != 2
+    ):
+        raise ValueError(
+            "rotation-block coarse diff2 expects reference/weight/block IDs "
+            "at ranks 2/2/2 and shifted image at rank 3, got "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}, "
+            f"{rotation_block_ids.shape}"
+        )
+    if (
+        shifted_image.shape[0] != weight.shape[0]
+        or rotation_block_ids.shape[0] != shifted_image.shape[0]
+        or reference.shape[1] != shifted_image.shape[2]
+        or reference.shape[1] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[0] <= 0
+        or shifted_image.shape[1] <= 0
+        or shifted_image.shape[1] > 128
+        or rotation_block_ids.shape[1] <= 0
+        or initial_diff2.shape != (shifted_image.shape[0],)
+    ):
+        raise ValueError(
+            "rotation-block coarse diff2 operands have inconsistent shapes "
+            "or more than 128 translations: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}, "
+            f"{initial_diff2.shape}, {rotation_block_ids.shape}"
+        )
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    out_type = jax.ShapeDtypeStruct(
+        (
+            shifted_image.shape[0],
+            rotation_block_ids.shape[1],
+            16,
+            shifted_image.shape[1],
+        ),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        rotation_block_ids,
+        full_to_compact,
+    )
 
 
 @jax.jit
