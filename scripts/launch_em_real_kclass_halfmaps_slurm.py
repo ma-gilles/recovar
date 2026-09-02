@@ -777,11 +777,34 @@ run_recovar_half() {{
   if [[ "${{status}}" -ne 0 ]]; then return "${{status}}"; fi
 }}
 
+run_particle_state_audit_half() {{
+  local half="$1"
+  local iteration padded
+  local -a audit_command=(
+    "${{PIXI_PY}}" -m scripts.audit_em_particle_state_distribution
+    --recovar-results "${{ROOT}}/half${{half}}/recovar/refinement_results.npz"
+    --recovar-particles-star "${{ROOT}}/half${{half}}/data/particles.star"
+    --output-json "${{ROOT}}/audit/half${{half}}_particle_state.json"
+    --output-npz "${{ROOT}}/audit/half${{half}}_particle_state_arrays.npz"
+    --output-hash-manifest "${{ROOT}}/audit/half${{half}}_particle_state.sha256"
+  )
+  mkdir -p "${{ROOT}}/audit"
+  for ((iteration = 1; iteration <= {max_iter}; iteration++)); do
+    printf -v padded '%03d' "${{iteration}}"
+    audit_command+=(
+      --relion-star
+      "${{ROOT}}/half${{half}}/relion/run_it${{padded}}_data.star"
+    )
+  done
+  "${{audit_command[@]}}"
+}}
+
 for half in 1 2; do
   run_relion_half "${{half}}"
   test "$(capture_gpu_uuid)" = "${{PHYSICAL_GPU_UUID}}"
   run_recovar_half "${{half}}"
   test "$(capture_gpu_uuid)" = "${{PHYSICAL_GPU_UUID}}"
+  run_particle_state_audit_half "${{half}}"
 done
 
 "${{PIXI_PY}}" -m scripts.audit_em_real_kclass_halfmaps \

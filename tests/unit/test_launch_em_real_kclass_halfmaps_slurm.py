@@ -150,6 +150,15 @@ def test_rendered_job_is_nonexclusive_serial_one_gpu_and_audited(tmp_path: Path)
     assert "ReqTRES" in text and "AllocTRES" in text
     assert "input_sha256_check.txt" in text
     assert "audit_em_real_kclass_halfmaps" in text
+    assert "run_particle_state_audit_half" in text
+    assert "audit_em_particle_state_distribution" in text
+    assert 'half${half}_particle_state.json' in text
+    assert 'half${half}_particle_state_arrays.npz' in text
+    assert 'half${half}_particle_state.sha256' in text
+    assert 'iteration <= 8' in text
+    assert text.index('run_recovar_half "${half}"') < text.index(
+        'run_particle_state_audit_half "${half}"'
+    )
     assert "--fit-max-shell 32" in text
     assert "--crossing-consecutive-shells 3" in text
     assert "--phase-randomization-corrected false" in text
