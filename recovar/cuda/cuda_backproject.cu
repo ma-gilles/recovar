@@ -2667,6 +2667,9 @@ cudaError_t launch_relion_projector_half_texture_f32(
 {
     if (n_images == 0 || image_h == 0 || image_w == 0) return cudaSuccess;
     const int padded_max_r = projector_max_r * padding_factor;
+    const int image_max_r =
+        projector_max_r < image_h / 2 ? projector_max_r : image_h / 2;
+    const int padded_image_max_r = image_max_r * padding_factor;
     const int tex_x = padded_max_r + 2;
     const int tex_y = 2 * padded_max_r + 3;
     const int tex_z = 2 * padded_max_r + 3;
@@ -2699,7 +2702,7 @@ cudaError_t launch_relion_projector_half_texture_f32(
             tex_y_init,
             tex_z_init,
             padding_factor,
-            padded_max_r * padded_max_r);
+            padded_image_max_r * padded_image_max_r);
         err = cudaGetLastError();
         if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
     }
@@ -2726,6 +2729,9 @@ cudaError_t launch_relion_projector_persistent_half_texture_f32(
     if (!owner.texture.texture) return cudaErrorInvalidResourceHandle;
 
     const int padded_max_r = projector_max_r * padding_factor;
+    const int image_max_r =
+        projector_max_r < image_h / 2 ? projector_max_r : image_h / 2;
+    const int padded_image_max_r = image_max_r * padding_factor;
     const int tex_y_init = -(padded_max_r + 1);
     const int tex_z_init = -(padded_max_r + 1);
     const int64_t n_pixels = image_h * image_w;
@@ -2743,7 +2749,7 @@ cudaError_t launch_relion_projector_persistent_half_texture_f32(
         tex_y_init,
         tex_z_init,
         padding_factor,
-        padded_max_r * padded_max_r);
+        padded_image_max_r * padded_image_max_r);
     cudaError_t err = cudaGetLastError();
     if (err == cudaSuccess) err = cudaStreamSynchronize(stream);
     return err;
@@ -5684,6 +5690,9 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
 
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * padding_factor) + 0.5f));
+    const int image_max_r =
+        projector_max_r < current_size / 2 ? projector_max_r : current_size / 2;
+    const int padded_image_max_r = image_max_r * padding_factor;
     const int tex_x = padded_max_r + 2;
     const int tex_y = 2 * padded_max_r + 3;
     const int tex_z = 2 * padded_max_r + 3;
@@ -5713,7 +5722,7 @@ cudaError_t launch_relion_coarse_diff2_native_texture_rectangular_f32(
         const int64_t rotation_blocks =
             (rotation_count + kRelionCoarseEulersPerBlock - 1) /
             kRelionCoarseEulersPerBlock;
-        const int max_r2_padded = padded_max_r * padded_max_r;
+        const int max_r2_padded = padded_image_max_r * padded_image_max_r;
         constexpr int zero_block_size = 512;
         constexpr int add_block_size = 128;
         const int64_t zero_blocks =
@@ -5820,6 +5829,9 @@ cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
 
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * padding_factor) + 0.5f));
+    const int image_max_r =
+        projector_max_r < current_size / 2 ? projector_max_r : current_size / 2;
+    const int padded_image_max_r = image_max_r * padding_factor;
     const int tex_x = padded_max_r + 2;
     const int tex_y = 2 * padded_max_r + 3;
     const int tex_z = 2 * padded_max_r + 3;
@@ -5855,7 +5867,7 @@ cudaError_t launch_relion_coarse_normalized_cc_native_texture_pairs_f32(
             packed_pixel_count,
             current_size,
             padding_factor,
-            padded_max_r * padded_max_r,
+            padded_image_max_r * padded_image_max_r,
             tex_y_init,
             tex_z_init);
     err = cudaGetLastError();
@@ -6326,6 +6338,9 @@ cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
     cudaError_t err = cudaSuccess;
     const int padded_max_r = static_cast<int>(floorf(
         static_cast<float>(projector_max_r * padding_factor) + 0.5f));
+    const int image_max_r =
+        projector_max_r < current_size / 2 ? projector_max_r : current_size / 2;
+    const int padded_image_max_r = image_max_r * padding_factor;
     const int tex_x = padded_max_r + 2;
     const int tex_y = 2 * padded_max_r + 3;
     const int tex_z = 2 * padded_max_r + 3;
@@ -6357,7 +6372,7 @@ cudaError_t launch_relion_fine_diff2_native_texture_rectangular_f32(
         const int64_t zero_blocks =
             (hypotheses_per_particle + zero_block_size - 1) /
             zero_block_size;
-        const int max_r2_padded = padded_max_r * padded_max_r;
+        const int max_r2_padded = padded_image_max_r * padded_image_max_r;
         for (int64_t batch = 0; batch < batch_size; ++batch) {
             relion_coarse_diff2_zero_f32_kernel<<<
                 static_cast<unsigned int>(zero_blocks),

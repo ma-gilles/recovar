@@ -390,12 +390,10 @@ def _texture_centered_crop_to_full(
     crop_rows = jnp.arange(crop_size, dtype=jnp.int32)
     crop_ky = jnp.where(crop_rows == 0, crop_size // 2, crop_rows - crop_size // 2)
     crop_cols = jnp.arange(crop_size // 2 + 1, dtype=jnp.int32)
-    output_radius = crop_size // 2
-    output_disk = crop_ky[:, None] ** 2 + crop_cols[None, :] ** 2 <= output_radius**2
-    # RELION clips projections to min(PPref.mdlMaxR, image_half_width-1).
-    # The texture kernel already enforces the PPref/model sphere; apply the
-    # independent current-image disk here before embedding the crop.
-    crop = jnp.where(output_disk[None, :, :], crop, jnp.zeros((), dtype=crop.dtype))
+    # The CUDA kernel owns RELION's rotated, integer-truncated radius cutoff.
+    # Do not apply an exact 2-D disk here: Mresol includes rounded outer-shell
+    # pixels such as (ky, kx)=(N/2, 1), and native projection can retain them
+    # when float32 rotation arithmetic truncates the squared radius downward.
     if crop_size == image_size:
         return crop.reshape((projection_crop.shape[0], -1))
     # Row zero is the even-box Nyquist row (+N/2 == -N/2); remaining rows
@@ -441,9 +439,7 @@ def _texture_centered_crop_at_indices(
             ky + crop_size // 2,
         )
     crop_indices = crop_rows * crop_x_half + cols
-    selected = projection_crop.reshape((projection_crop.shape[0], -1))[:, crop_indices]
-    output_disk = ky * ky + cols * cols <= (crop_size // 2) ** 2
-    return jnp.where(output_disk[None, :], selected, jnp.zeros((), dtype=selected.dtype))
+    return projection_crop.reshape((projection_crop.shape[0], -1))[:, crop_indices]
 
 
 def _project_relion_projector_texture(

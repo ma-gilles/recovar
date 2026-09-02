@@ -3983,7 +3983,7 @@ def test_global_pass1_relion_projector_texture_defaults_to_texture(monkeypatch):
         significance._global_pass1_relion_projector_texture_enabled()
 
 
-def test_texture_centered_crop_masks_current_image_disk():
+def test_texture_centered_crop_preserves_kernel_owned_rounded_outer_shell():
     from recovar.em.dense_single_volume.helpers.projection import _texture_centered_crop_to_full
 
     crop = jnp.ones((1, 4 * 3), dtype=jnp.complex64)
@@ -3995,9 +3995,6 @@ def test_texture_centered_crop_masks_current_image_disk():
         )
     ).reshape(1, 4, 3)
     expected = np.ones((1, 4, 3), dtype=np.complex64)
-    expected[:, 0, 1:] = 0.0
-    expected[:, 1, 2] = 0.0
-    expected[:, 3, 2] = 0.0
     np.testing.assert_array_equal(got, expected)
 
 
@@ -4123,7 +4120,11 @@ def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
 
     def fake_texture(projector, rotations, image_shape, **kwargs):
         np.testing.assert_array_equal(np.asarray(kwargs.pop("pixel_indices")), np.asarray(requested))
-        assert kwargs == {"r_max": 1, "projector_output_size": 2}
+        assert kwargs == {
+            "r_max": 1,
+            "padding_factor": 1,
+            "projector_output_size": 2,
+        }
         return jnp.full((rotations.shape[0], requested.size), 3.0 + 2.0j, dtype=jnp.complex64)
 
     monkeypatch.setattr(projection_helpers, "_project_relion_projector_texture", fake_texture)

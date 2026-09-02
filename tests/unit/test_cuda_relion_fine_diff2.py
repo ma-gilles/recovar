@@ -401,6 +401,10 @@ def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
         assert "radius_squared >= 2147483648.0f" in projector_block
         assert "static_cast<int>(radius_squared)" in projector_block
 
+    assert source.count("padded_image_max_r * padded_image_max_r") >= 5
+    assert source.count("projector_max_r < current_size / 2") >= 3
+    assert source.count("projector_max_r < image_h / 2") >= 2
+
     launcher_start = source.index(
         "launch_relion_coarse_diff2_native_texture_rectangular_f32"
     )
@@ -898,6 +902,57 @@ def test_relion_coarse_diff2_rectangular_matches_atomic_envelope(
                     actual[batch, rotation, translation].view(np.uint32)
                 )
                 assert actual_bits in possible
+
+
+@pytest.mark.gpu
+def test_relion_half_texture_projection_uses_native_rotated_image_radius_cutoff(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    """The rounded outer shell must use RELION's float32/int cutoff."""
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    projector_max_r = 23
+    projector_size = 2 * projector_max_r + 3
+    projector = np.ones(
+        (projector_size, projector_size, projector_max_r + 2),
+        dtype=np.complex64,
+    )
+    # These two valid float32 rotations straddle RELION's integer-truncated
+    # cutoff for source (ky, kx)=(10, 1), whose exact radius squared is 101.
+    # They are frozen from the admitted EMPIAR-10076 K=4 native operand panel.
+    rotations = np.asarray(
+        [
+            [
+                [-0.60339195, -0.20407803, -0.7708893],
+                [0.3038262, -0.952619, 0.014376025],
+                [-0.7372976, -0.22554199, 0.6368069],
+            ],
+            [
+                [0.3366111, 0.59114784, -0.73296463],
+                [-0.88786924, 0.45852897, -0.037939373],
+                [0.31365776, 0.6635476, 0.6792079],
+            ],
+        ],
+        dtype=np.float32,
+    )
+
+    with jax.default_device(gpu_device):
+        projected = cuda_backproject.relion_projector_half_texture_f32(
+            jnp.asarray(projector),
+            jnp.asarray(rotations),
+            current_size=20,
+            padding_factor=1,
+            projector_max_r=projector_max_r,
+        )
+    projected = np.asarray(projected).reshape(2, 20, 11)
+    assert projected[0, 0, 1] != 0
+    assert projected[1, 0, 1] == 0
 
 
 @pytest.mark.gpu
