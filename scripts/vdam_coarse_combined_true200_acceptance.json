@@ -279,6 +279,8 @@
     "gpu_count": 1,
     "gpu_type": "H100 80GB",
     "host_memory_gb": 180,
+    "cpus_per_task": 15,
+    "relion_reference_threads": 8,
     "arm_count": 12,
     "historical_seconds_per_control_arm": 1740.0,
     "estimated_hybrid_speed_fraction": 0.5,

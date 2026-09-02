@@ -1586,6 +1586,7 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
         'vdam_select_target_gpu "${TARGET_GPU_UUID}" 0',
         'vdam_assert_target_gpu_allocated "${TARGET_GPU_UUID}" "${initial_allocation_spec}"',
         'test "${selected_gpu_uuid}" = "$(jq -r \'.native_reference.physical_gpu_uuid\'',
+        'test "${SLURM_CPUS_PER_TASK:-}" = "${EXPECTED_CPUS_PER_TASK}"',
         'test "$(sha256sum "${CUDA_BINARY}"',
         'test "$(sha256sum "${RELION_BIND_BINARY}"',
         'test "$(sha256sum "${PIXI_PY}"',
@@ -1601,6 +1602,7 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     # verifies provenance, exact 804 topology/full hashes, options, timing,
     # profiles, and GPU-monitor evidence before the wrapper skips an arm.
     assert "VDAM_TRUE200_RESUME" in text
+    assert "#SBATCH --cpus-per-task=15" in text
     assert 'if [[ "$#" -ne 5 ]]' in text
     assert "ROOT LAUNCH_MANIFEST LAUNCH_SHA256 RESUME SENTINEL" in text
     assert "initial_allocation_spec=${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}}" in text
@@ -1758,6 +1760,8 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     assert cache["destination_aliasing_assumed_for_admission"] is False
     assert contract["runtime_contract"]["transitive_runtime_library_closure_claimed"] is False
     resources = contract["resource_estimate"]
+    assert resources["cpus_per_task"] == 15
+    assert resources["relion_reference_threads"] == 8
     assert 0.0 < resources["estimated_science_gpu_hours"] < 12.0
     assert resources["estimated_total_allocation_hours"] > resources["estimated_science_gpu_hours"]
     assert resources["estimated_single_allocation_fit"]

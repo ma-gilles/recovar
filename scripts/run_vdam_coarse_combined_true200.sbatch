@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=15
 #SBATCH --mem=180G
 #SBATCH --time=12:00:00
 #SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-hybrid-true200-%j.out
@@ -65,6 +65,7 @@ ANALYZER=$(jq -er '.files.analyzer.path' "${LAUNCH_MANIFEST}")
 HARNESS=$(jq -er '.files.harness.path' "${LAUNCH_MANIFEST}")
 RESOLVER=$(jq -er '.files.resolver.path' "${LAUNCH_MANIFEST}")
 SCORECARD=$(jq -er '.files.scorecard.path' "${LAUNCH_MANIFEST}")
+EXPECTED_CPUS_PER_TASK=$(jq -er '.resource_estimate.cpus_per_task' "${ACCEPTANCE}")
 monitor_pid=
 RESUME=${VDAM_TRUE200_RESUME:-0}
 case "${RESUME}" in
@@ -153,6 +154,7 @@ test -s "${RELION_BIND_BINARY_OVERRIDE}"
 test -s "${GPU_SELECTION_HELPER}"
 test "$(sha256sum "${CUSPARSE_LIBRARY}" | awk '{print $1}')" = "${EXPECTED_CUSPARSE_SHA256}"
 test "${SLURMD_NODENAME:-$(hostname -s)}" = "${EXPECTED_NODE_NAME}"
+test "${SLURM_CPUS_PER_TASK:-}" = "${EXPECTED_CPUS_PER_TASK}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_OVERLAY_HEAD}"
 git -C "${REPO_ROOT}" merge-base --is-ancestor \
   "${EXPECTED_PRODUCTION_CANDIDATE_HEAD}" "${EXPECTED_OVERLAY_HEAD}"
@@ -494,13 +496,14 @@ if [[ "${RESUME}" -eq 0 ]]; then
   "${EXPECTED_PRODUCTION_CANDIDATE_HEAD}" "${science_contract_sha256}" \
   "${PROVENANCE}/launch_manifest.json" "${EXPECTED_LAUNCH_MANIFEST_SHA256}" \
   "${PROVENANCE}/runtime_libraries.json" "${VDAM_ALLOCATED_GPU_UUIDS_CSV}" \
-  "${VDAM_VISIBLE_GPU_UUIDS_CSV}" <<'PY'
+  "${VDAM_VISIBLE_GPU_UUIDS_CSV}" "${SLURM_CPUS_PER_TASK}" <<'PY'
 import hashlib, json, subprocess, sys
 from pathlib import Path
 
 (output, acceptance_path, manifest_path, repo, scorecard, fixture, native, cuda, bind,
  interpreter, cusparse, gpu, node, gpu_name, job_id, production, science_sha, launch_manifest,
- launch_manifest_sha, runtime_libraries, allocated_gpu_uuids, visible_gpu_uuids) = sys.argv[1:]
+ launch_manifest_sha, runtime_libraries, allocated_gpu_uuids, visible_gpu_uuids,
+ cpus_per_task) = sys.argv[1:]
 acceptance = json.load(open(acceptance_path, encoding="utf-8"))
 manifest = Path(manifest_path)
 source_files = [line.split("  ", 1)[1] for line in manifest.read_text().splitlines()]
@@ -522,6 +525,7 @@ payload = {
     "gpu_name": gpu_name,
     "allocated_gpu_uuids_csv": allocated_gpu_uuids,
     "visible_gpu_uuids_csv": visible_gpu_uuids,
+    "cpus_per_task": int(cpus_per_task),
     "cuda_path": str(Path(cuda).resolve()),
     "cuda_sha256": sha(cuda),
     "relion_bind_path": str(Path(bind).resolve()),
@@ -722,7 +726,7 @@ def sha256(path):
             digest.update(block)
     return digest.hexdigest()
 keys = ("git_head", "production_candidate_head", "gpu_uuid", "node",
-        "allocated_gpu_uuids_csv", "visible_gpu_uuids_csv", "cuda_sha256",
+        "allocated_gpu_uuids_csv", "visible_gpu_uuids_csv", "cpus_per_task", "cuda_sha256",
         "relion_bind_sha256", "interpreter_sha256", "cusparse_sha256", "scorecard_sha256",
         "acceptance_config_sha256", "analyzer_source_sha256", "science_contract_sha256")
 payload = {key: run[key] for key in keys}

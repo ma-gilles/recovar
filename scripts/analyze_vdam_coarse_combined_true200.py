@@ -2462,6 +2462,7 @@ def _validate_arm_artifacts(
         "node": expected["node"],
         "allocated_gpu_uuids_csv": expected["allocated_gpu_uuids_csv"],
         "visible_gpu_uuids_csv": expected["visible_gpu_uuids_csv"],
+        "cpus_per_task": _integer(expected.get("cpus_per_task"), "run CPUs per task"),
         "cuda_sha256": expected["cuda_sha256"],
         "relion_bind_sha256": expected["relion_bind_sha256"],
         "interpreter_sha256": expected["interpreter_sha256"],
@@ -2912,6 +2913,10 @@ def _validate_run_provenance(
         "production_candidate_head": acceptance["qualified_candidate"]["production_head"],
         "gpu_uuid": acceptance["native_reference"]["physical_gpu_uuid"],
         "allocated_gpu_uuids_csv": acceptance["native_reference"]["physical_gpu_uuid"],
+        "cpus_per_task": _integer(
+            acceptance["resource_estimate"].get("cpus_per_task"),
+            "contract CPUs per task",
+        ),
         "cuda_sha256": acceptance["qualified_candidate"]["cuda_sha256"],
         "relion_bind_sha256": acceptance["qualified_candidate"]["relion_bind_sha256"],
         "interpreter_sha256": acceptance["qualified_candidate"]["interpreter_sha256"],
