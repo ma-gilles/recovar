@@ -12,13 +12,18 @@ from recovar.em.dense_single_volume.helpers import projection_cache
 pytestmark = pytest.mark.unit
 
 
-def _gf46_plan(*, destination_alias_proven: bool, budget_bytes: int = 2 * 1024**3):
+def _gf46_plan(
+    *,
+    destination_alias_proven: bool,
+    budget_bytes: int = 2 * 1024**3,
+    requested_max_chunk_rows: int = 5_000,
+):
     return projection_cache.plan_projection_cache(
         table_count=1,
         row_count=36_864,
         pixel_count=5_100,
         cache_dtype=np.complex64,
-        requested_max_chunk_rows=5_000,
+        requested_max_chunk_rows=requested_max_chunk_rows,
         row_alignment=16,
         transient_specs=(
             projection_cache.ProjectionCacheTransientSpec(
@@ -46,6 +51,22 @@ def test_projection_cache_plan_records_exact_gf46_bytes_and_alignment():
     assert plan.predicted_peak_bytes == 2_039_992_320
     assert plan.admitted
     assert plan.admission_reason is None
+
+
+def test_projection_cache_plan_records_h100_qualified_uniform_gf46_chunks():
+    plan = _gf46_plan(
+        destination_alias_proven=True,
+        requested_max_chunk_rows=4_608,
+    )
+
+    assert 36_864 == 8 * plan.chunk_rows
+    assert plan.chunk_rows == 4_608
+    assert plan.chunk_count_per_table == 8
+    assert plan.retained_bytes == 1_504_051_200
+    assert plan.projection_block_bytes == 188_006_400
+    assert plan.additional_transient_bytes == 306_708_480
+    assert plan.predicted_peak_bytes == 1_998_766_080
+    assert plan.admitted
 
 
 def test_projection_cache_plan_is_conservative_until_destination_alias_is_proven():

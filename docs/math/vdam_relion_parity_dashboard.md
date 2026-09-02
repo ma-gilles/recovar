@@ -12,8 +12,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **BLOCKED** | GEMM is a fast pre-screen, not a safe scorer by itself; direct rescoring must certify both raw/pre-prior and posterior/support decisions. |
-| Current performance work | **DIAGNOSTIC** | Selected-block direct rescoring is qualified as a primitive, but no hybrid production path or end-to-end runtime result is accepted. |
+| Current correctness work | **FOUNDATION PASS / NOT WIRED** | The default-off FP64 center now emits outward candidate intervals, compact raw/post block state, range/FTZ fail-close, and an immutable lookup-bound source16 rescore seam. Production integration and GPU candidatewise coverage remain open. |
+| Current performance work | **CACHE PRIMITIVE PASS** | A full 1.40 GiB GF46-shaped projection cache passed H100 allocation/alias/sentinel checks with uniform 4608-row chunks. The real projector, complete hybrid, and end-to-end runtime remain unqualified. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
@@ -62,6 +62,7 @@ winner, offset, posterior, support, or selected state.
 | Dual raw/post streaming certificate at `6e4e0ae65cba3cd0f86febdfe319e747ced07d97` | **INTEGRATED** | v2 artifacts separately preserve pre-prior/raw-max and posterior/support state, enforce byte accounting, and fail closed when either certificate family is absent. |
 | All-1000 GF46 diagnostic, job `13329608` | **COMPLETE / NON-SCORING** | Exact H100 run completed in 69 s from clean source `6e4e0ae65cba3cd0f86febdfe319e747ced07d97`; diagnostic-only and timing-ineligible. |
 | All-1000 promoted-FP64 diagnostic, job `13330442` | **COMPLETE / NON-SCORING** | Worst observed score delta fell from `3.3125` to `1.5`, but the critical particle-1933 near tie and particle-636 support surplus remained; source-block topology was unchanged. |
+| Fused FP64 interval scorer and immutable topology seam, commit `d810048f1` | **FOCUSED CPU PASS** | Exact-rational stored-score enclosure, raw/post compact reduction, overflow/underflow fail-close, lookup ownership/tamper checks, and mature-EM GEMM reuse pass. Default-off; GPU lowering and candidatewise coverage are still gates. |
 
 ### All-1000 selector result: job `13329608`
 
@@ -99,6 +100,7 @@ before timing can authorize promotion.
 | Shared eight-stream coarse scheduler | `13279168`, `13279367` | Math accepted; performance hold below the runtime target. |
 | Native-atomic T=29 plus eight streams | `13281836`, `13283759` | One-iteration math/runtime pass; default off pending no-growth and trajectory gates. |
 | Selected-block direct rescore | `13328717` | Qualified primitive for the hybrid; not wired into production. |
+| Shared GF46 projection-cache builder | `13332001` | Full `(1,36864,5100)` complex64 destination, verified donation/zero XLA insert temporary, exact sentinels, no OOM. Uniform 4608 rows removes the tail executable. Infrastructure only. |
 
 ### Rejected or do not promote
 
@@ -128,11 +130,12 @@ release gate.
 
 ## Next gates
 
-1. Replace pair-only TopK retention with per-source-block maxima while keeping
-   the dual raw/pre-prior and posterior/support v2 certificate fail-closed.
-2. Compare outward-rounded FP32 and FP64 candidate intervals around the live
-   GEMM score; retain the arithmetic mode with the narrowest total hybrid wall
-   time, not merely the smallest observed score delta.
+1. Wire the committed FP64 candidate interval scorer, compact per-source-block
+   maxima, immutable topology, 4608-row projection cache, and selected source16
+   primitive into one explicit default-off K=1 significance backend.
+2. Capture optimized HLO/backend configuration for both FP64 GEMMs, quantify
+   the fused scorer's transient cubes, and fail closed if the audited precision
+   or reduction contract is absent.
 3. On all 1,000 GF46 particles, prove conservative block coverage or trigger
    full-direct fallback; direct-rescore the certified union with the qualified
    job-`13328717` primitive and recompute RELION float32 offset/posterior/support.
@@ -158,6 +161,8 @@ release gate.
 | Dual-certificate integration | Streaming base `0b574de9029c71de5e7ef3b14785c07f203d20f5`; pre-prior certificate `8b0d5bcacdda537337a4bae0f5b2ac242d796562`; runner `74d1eb60de5c3a437df232f7b60efa6b89db4d2f`; pinned head `6e4e0ae65cba3cd0f86febdfe319e747ced07d97`. |
 | All-1000 diagnostic | Job `13329608`; clean source `6e4e0ae65cba3cd0f86febdfe319e747ced07d97`; H100 `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`; identity certificate SHA-256 `3dfd92da58365c33388eea7071f1814be1561a5c7557615b52a9e263ce7e230f`; aggregate manifest SHA-256 `a78674eb7c342d16f624fe3d68b6a3c2ea868a6ca880a6c4f972d728f02a2a3c`. |
 | All-1000 promoted-FP64 diagnostic | Job `13330442`; clean source `2c1a9e299e40563f2f5058dce490231c39fb7a12`; H100 `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`; identity certificate SHA-256 `3a666ea737cedc2aabbaa033a1a226058004ae9983adeb4d3c05f1b95551d5ce`; aggregate manifest SHA-256 `faa883a1c6fa756adf679c7138c4b38e7135f8cc0aaac89c2d181b7d10f0a754`. |
+| Certified scorer/topology foundation | Commit `d810048f1`; focused scorer/topology `40 / 40`; combined scorer/selector/streaming/macro regression `87 / 87` before the topology-only seam, followed by the 40-test seam rerun. |
+| Shared projection cache | Source `43402732cb169ab5d91d90b10262a35ba99edae4`; job `13332001`; H100 `GPU-2ee3da91-970a-6714-84df-530aefe04a08`; result SHA-256 `576384429d01fbe2d86a81c13a7519c484490e5ac62bb8bc871387df653023c2`; [report](../perf/vdam_projection_cache_h100_13332001.md). |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`
@@ -168,6 +173,11 @@ and are marked `SAFE_TO_DELETE`.
 - `recovar/em/dense_single_volume/helpers/coarse_gemm_streaming.py:CoarseGemmStreamingState`
 - `recovar/em/dense_single_volume/helpers/coarse_gemm_streaming.py:summarize_coarse_gemm_streaming_state`
 - `recovar/em/dense_single_volume/helpers/coarse_gemm_streaming.py:aggregate_coarse_gemm_streaming_summaries`
+- `recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py:CoarseGemmCertificateTopology`
+- `recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py:coarse_gemm_direct_f32_ftz_envelope_and_range`
+- `recovar/em/dense_single_volume/helpers/projection_cache.py:build_projection_cache`
+- `recovar/em/dense_single_volume/helpers/scoring.py:_relion_coarse_gaussian_gemm_update_certificate_state`
+- `recovar/em/dense_single_volume/helpers/scoring.py:_relion_coarse_diff2_rotation_blocks_from_topology_f32`
 - `recovar/em/dense_single_volume/helpers/significance.py:_score_relion_coarse_gaussian_gemm_macro`
 - `recovar/em/dense_single_volume/helpers/significance.py:_seal_coarse_gaussian_gemm_streaming_scope`
 - `recovar/em/initial_model/dense_adapter.py:_initial_model_coarse_gemm_diagnostic_scopes`

@@ -502,12 +502,15 @@ default-off.
 ## Code references
 
 - `recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py`:
+  `CoarseGemmCertificateTopology`,
+  `validate_coarse_gemm_certificate_topology`,
   `certified_f64_expanded_score_gammas`,
   `coarse_gemm_expanded_score_eta_f64`,
   `coarse_gemm_direct_f32_ftz_envelope_and_range`, and
   `coarse_gemm_direct_score_intervals`
 - `recovar/em/dense_single_volume/helpers/scoring.py`:
   `_prepare_relion_coarse_gaussian_gemm_f64_image_batch` and
-  `_relion_coarse_gaussian_gemm_update_certificate_state`
+  `_relion_coarse_gaussian_gemm_update_certificate_state`, and
+  `_relion_coarse_diff2_rotation_blocks_from_topology_f32`
 - `recovar/cuda/cuda_backproject.cu`: `relion_fine_diff2_update_f32` and
   `relion_coarse_diff2_rotation_block_f32`
