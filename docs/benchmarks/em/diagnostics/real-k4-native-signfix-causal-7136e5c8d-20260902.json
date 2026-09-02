@@ -84,6 +84,17 @@
     "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_native_signfix_half1_seed42001_it2_7136e5c8d_20260902/analysis/k4_native_signfix_causal_report.json",
     "sha256": "25f3a772fc31d0fb630663e2f76407f89a174a9fe9aee21dd406f7e43a7a7ba8"
   },
+  "focused_h100_regression_gate": {
+    "job_id": 13349285,
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:01:21",
+    "requested_tres": "cpu=8,mem=64G,node=1,billing=8,gres/gpu=1",
+    "allocated_tres": "cpu=8,mem=64G,node=1,billing=8,gres/gpu=1",
+    "tests_collected": 5,
+    "tests_passed": 5,
+    "log": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_native_signfix_unit_gate_7136e5c8d_20260902/logs/qualification-13349285.out"
+  },
   "fixed_run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_native_signfix_half1_seed42001_it2_7136e5c8d_20260902",
   "control_run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_originfix_it8_r2_8cbebdecc_20260902",
   "disposition": "The sign boundary is closed. Final K=4 acceptance remains pending the three-seed independent-half FSC, assignment, population, and performance audit."

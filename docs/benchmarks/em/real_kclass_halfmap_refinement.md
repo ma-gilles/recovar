@@ -165,6 +165,14 @@ completed in 9m22s, exit 0, with exact requested/allocated one-H100, four-CPU,
 the exact argv, Slurm script, logs, HBM trace, and products are in the same
 immutable run root.
 
+Focused H100 regression job `13349285` independently exercises the retained
+K=1 sign-continuity path, the new K-class native-sign path, K-class shell-prior
+reconstruction, and both ordinary and adaptive K-class final-iteration routes.
+All five tests passed in 74.97 s (Slurm elapsed 1m21s) with exact requested and
+allocated one-H100, eight-CPU, 64-GiB resources. Its log and sealed launcher are
+under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_native_signfix_unit_gate_7136e5c8d_20260902`.
+
 The original eight-iteration controls are retained as negative evidence:
 seed 42001 jobs `13346676/13346677`, seed 42002 jobs
 `13346756/13346759`, and seed 42003 jobs `13346757/13346758`. Fresh

@@ -343,6 +343,12 @@ def test_native_signfix_causal_diagnostic_pins_effect_and_admission_boundary():
     assert min(iteration_2["fixed_direct_fsc_auc"]) > 0.98
     assert iteration_2["class_assignment_agreement"]["fixed"] < 0.99
 
+    focused_gate = diagnostic["focused_h100_regression_gate"]
+    assert focused_gate["state"] == "COMPLETED"
+    assert focused_gate["exit_code"] == "0:0"
+    assert focused_gate["requested_tres"] == focused_gate["allocated_tres"]
+    assert focused_gate["tests_collected"] == focused_gate["tests_passed"] == 5
+
 
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():
     assert NEGATIVE_DIAGNOSTIC["registry_disposition"] == "EXCLUDED_FROM_ACCEPTED_RESULTS"
