@@ -10,18 +10,18 @@
 | Signal | Status | Evidence / next decision |
 |---|---|---|
 | Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
-| Corrected GF46 checkpoint | **SEALED DIAGNOSTIC FAIL / HARNESS BOUNDARY LOCALIZED** | Job `13343577`, frozen iteration `180 -> 181`, sealed all six arms. Cutoff/discrete/STAR/model identities are exact. Its v2 analyzer could not prove that the one support difference was a nested inclusive tie from hashes alone, and rejected map scale drift `2.21e-11` against a near-zero empirical `1.75e-11` bound. Exact-ID and mature numerical-floor corrections are now focused-test green; a superseding seal is next. |
+| Corrected GF46 checkpoint | **SEALED PASS — ONE TRANSITION** | Job `13344325`, frozen iteration `180 -> 181`, sealed all six H100 arms. Exact cutoff/discrete/STAR identities, pooled map/model repeat envelopes, exact-ID inclusive-tie proof, and the material runtime gate all pass. This qualifies one transition only; the full-trajectory/no-growth gate is next. |
 | Root cause closed | **SHARED EM/DIRECT OPERANDS** | The pre-fix hybrid cache used `mask_current_image_disk=False` while mature EM/direct used `True`. Commit `e9a8e8256` now routes both through one shared projection helper; the previous 405 pose-assignment mismatches fell to **0 / 1,000**. |
-| Speed result | **4.04x–4.38x REPRODUCED WARM SPEEDUP** | Clean audit-off ABBA wall medians were `21.267882 -> 4.852816 s` in `13343052` and `21.384448 -> 5.297722 s` in `13343577`. The latest pass 1 is **8.22x** faster; feature remains default-off pending the corrected seal and trajectories. |
-| Numerical classification | **EXACT STATE; FP32-SCALE CONTINUOUS DELTAS** | Job `13343577` has exact persisted cutoff/discrete/STAR/model identity. The only map rejection was norm-scale drift `2.21e-11`, orders below float32 resolution; relative L2/max-absolute/signed-bias passed. The corrected analyzer reuses the mature true-200 `4·eps32` normalized floor but retains control-derived max-absolute and signed-bias gates. |
-| Support proof | **HASH-ONLY → EXACT-ID NESTING** | Diagnostic support is only ~5,900 IDs. The v2 audit now retains those exact IDs, revalidates every row/aggregate hash, and requires every observed support to be pairwise nested with a common core at least as large as RELION's exact cutoff rank. Same-size swaps or non-nested changes still fail closed. |
+| Speed result | **4.47x SEALED WARM SPEEDUP** | Job `13344325` clean ABBA wall median is `21.223620 -> 4.746491 s`; expectation is **4.97x** faster and pass 1 is **8.21x** faster. Two earlier complete panels measured **4.04x** and **4.38x**. Feature remains default-off pending trajectories. |
+| Numerical classification | **POOLED MAP/MODEL ENVELOPES PASS** | All 15 hybrid-repeat and 36 direct/hybrid map and model pairs are bounded by pooled direct repeats. Normalized metrics reuse the mature true-200 `4·eps32` floor; max-absolute and signed-bias limits remain empirical and control-derived. |
+| Support proof | **EXACT-ID NESTING PASS** | Every retained ID and row/aggregate hash was revalidated. The four audit supports are pairwise nested, their common core covers the exact RELION cutoff, and the only varying row is also variable between direct repeats. Same-size swaps or non-nested changes fail closed. |
 | Focused regression | **67 / 67 PASS** | Hybrid significance/support audit, selector propagation, InitialModel adapter, shared projection operands, and transition analyzer/harness tests pass. No broad RECOVAR suite was run. |
 
 ### Immediate queue
 
-1. Rerun the same pinned GF46 direct/hybrid audit plus clean ABBA with exact support IDs and the mature normalized numerical floor; require a sealed PASS.
-2. If the sealed rerun reproduces this boundary, run the representative repeat/no-growth trajectory.
-3. Then rerun frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
+1. Run the representative repeated full trajectory with joint state witnesses, map/model no-growth bounds, FSC/scale checks, and same-H100 runtime comparison.
+2. If no numerical drift grows through the trajectory, rerun the frozen K=1 full trajectories.
+3. Expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
 
 ## At a glance
 
@@ -30,8 +30,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **EXACT-ID CHECKPOINT SEAL OPEN** | Job `13343577` sealed a diagnostic FAIL with exact downstream state; its two rejected conditions are now represented by exact nested-set proof and the pre-existing mature numerical floor. |
-| Current performance work | **4.04x–4.38x CHECKPOINT SIGNAL / SEAL OPEN** | Two complete clean ABBA panels reproduce material speed. Frozen runtime stays 0/20 pending a passing seal and trajectory scoring. |
+| Current correctness work | **GF46 ONE-TRANSITION PASS / TRAJECTORY OPEN** | Job `13344325` seals exact downstream discrete state and bounded pooled map/model numerics with an exact inclusive-tie proof. No-growth over a full trajectory is not yet established. |
+| Current performance work | **4.47x CHECKPOINT PASS / TRAJECTORY OPEN** | Three complete clean panels reproduce material speed; the sealed panel is **4.47x**. Frozen runtime stays 0/20 pending trajectory and RELION wall-time scoring. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
@@ -63,14 +63,15 @@ release denominator.
 The v2 result is retained for historical regression coverage. It is neither a
 subtotal nor evidence that the v3 score is 8/35.
 
-## Correctness: current hybrid-GEMM blocker
+## Correctness: current hybrid-GEMM boundary
 
-The expanded shared-EM GEMM path is roughly **4.5x faster** in the sealed GF46
-one-transition coarse comparisons, but it is unsafe as the sole scorer:
-standalone GEMM arms changed downstream discrete state and escaped the direct
-repeat map/model envelopes. A valid hybrid must use GEMM only to pre-screen,
-then direct-rescore every source block capable of changing RELION's float32 raw
-winner, offset, posterior, support, or selected state.
+The integrated shared-EM hybrid is **4.47x faster** in the sealed GF46
+one-transition comparison and passes exact state plus pooled map/model repeat
+envelopes. Standalone GEMM remains unsafe as the sole scorer: it changed
+downstream discrete state and escaped direct-repeat envelopes. The accepted
+design uses GEMM only to pre-screen, then direct-rescores every certified
+source block capable of changing RELION's float32 raw winner, offset,
+posterior, support, or selected state. Full-trajectory no-growth is still open.
 
 | Evidence | Status | Read / decision |
 |---|---|---|
@@ -149,17 +150,13 @@ release gate.
 
 ## Next gates
 
-1. On all 1,000 frozen GF46 iteration-181 particles, compare the integrated
-   hybrid against direct scoring for conservative block coverage, fallbacks,
-   exact candidate support/winners, particle state, and map/model envelopes.
-2. Measure direct/hybrid cold and warm wall on the same pinned H100, with
-   diagnostics disabled in timing arms and selector, projection/cache,
-   exact-rescore, posterior, and fallback costs reported separately.
-3. If that one-transition gate passes with a material end-to-end gain, run a
-   representative repeat/no-growth trajectory and multi-dataset basin gate.
-4. Then run the frozen K=1 trajectory suite and the expanded outlier,
+1. Run the representative repeated full-trajectory direct/hybrid no-growth
+   gate with joint-state witnesses, map/model envelopes, FSC/scale checks,
+   selector/fallback telemetry, and same-H100 runtime.
+2. If the representative trajectory passes, run a multi-dataset basin gate.
+3. Then rerun the frozen K=1 trajectory suite and the expanded outlier,
    pose/noise-distribution, scale, parameter, and long-trajectory matrix.
-5. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
+4. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
    scoring rerun updates the authoritative scorecard. Only then open K>1 and
    real-data gates as independent tracks.
 
@@ -180,6 +177,7 @@ release gate.
 | Native source16 FP32/FTZ audit | Commit `a0a9c248f`; audited library SHA-256 `92c3c098995ed89f32c4d258936363402c0f1c1d0945f9c452d79f9eb1b5dd9f`; artifact manifest SHA-256 `c7c7dac19cad2b117d130ae34a70cf4066a37231d15775c1ffe424ab6e158db1`; [report](vdam_coarse_source16_fp32_audit_20260902.md). |
 | Shared projection cache | Source `43402732cb169ab5d91d90b10262a35ba99edae4`; job `13332001`; H100 `GPU-2ee3da91-970a-6714-84df-530aefe04a08`; result SHA-256 `576384429d01fbe2d86a81c13a7519c484490e5ac62bb8bc871387df653023c2`; [report](../perf/vdam_projection_cache_h100_13332001.md). |
 | Integrated hybrid H100 boundary | Source `b611aeff15004a07d6d2a1ec590bc5b97180cb5b`; job `13341618`; H100 `GPU-2ee3da91-970a-6714-84df-530aefe04a08`; artifact-manifest SHA-256 `fec2ec40f98057a428799a472ea36908725c24ed54041d21ceacd99cf0ef325a`; [report](../perf/vdam_gf46_hybrid_batch_h100_13341618.md). |
+| GF46 integrated-hybrid one-transition seal | Source `85c4b13bf5f7b975ea4504750fe8495556e6030c`; job `13344325`; H100 `GPU-75c2d200-95d1-ef57-fb52-1698386c756c`; report JSON SHA-256 `10649aa2916269335f7615d399c0a3388bf722a49a0223b6f2acc7a863535351`; [report](../perf/vdam_gf46_hybrid_transition_h100_13344325.md). |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`
