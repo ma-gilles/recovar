@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create or validate the sealed launch manifest for the VDAM combined-coarse true-200 gate."""
+"""Create or validate the sealed VDAM certified-hybrid true-200 launch manifest."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-SCHEMA = "recovar.vdam_coarse_combined_true200_launch.v2"
+SCHEMA = "recovar.vdam_coarse_combined_true200_launch.v3"
 
 
 class LaunchResolutionError(RuntimeError):
@@ -229,7 +229,7 @@ def build_launch_manifest(
     acceptance_path = repo / "scripts/vdam_coarse_combined_true200_acceptance.json"
     acceptance = _load_json(acceptance_path, "acceptance contract")
     _require(
-        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v2",
+        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v3",
         "unsupported acceptance contract",
     )
     production_head = str(acceptance["qualified_candidate"]["production_head"])
@@ -371,7 +371,7 @@ def validate_launch_manifest(path: Path, expected_sha256: str) -> dict[str, Any]
     )
     acceptance = _load_json(Path(files["acceptance"]["path"]), "recorded acceptance contract")
     _require(
-        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v2",
+        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v3",
         "recorded acceptance contract schema differs",
     )
     _require(payload.get("runtime_contract") == acceptance["runtime_contract"], "runtime contract differs")

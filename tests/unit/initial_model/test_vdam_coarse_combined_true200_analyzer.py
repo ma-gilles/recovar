@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from argparse import Namespace
@@ -314,6 +315,185 @@ def _joint_stream_metadata(audit: dict[str, object]) -> dict[str, object]:
         "joint_halfset_particle_stream": True,
         "halfset_0_profile_summary": {"coarse_selector_audit": audit},
     }
+
+
+def _inactive_selector_audit() -> dict[str, object]:
+    audit = _selector_audit(workers=0, atomic=False)
+    audit.update(
+        requested_fused=False,
+        effective_fused=False,
+        wrapper=None,
+        target=None,
+        counts={
+            "fused_calls": 0,
+            "actual_rows": 0,
+            "multistream_calls": 0,
+            "native_atomic_selected_calls": 0,
+        },
+    )
+    return audit
+
+
+def _hybrid_stats(
+    *,
+    selected_images: int = 1_000,
+    fallback_images: int = 0,
+    rotation_count: int = 36_864,
+) -> dict[str, object]:
+    selected_batches = 6 if selected_images else 0
+    fallback_batches = 6 - selected_batches
+    selected_candidates = selected_images * 16 * 29
+    full_candidates = selected_images * rotation_count * 29
+    return {
+        "enabled": True,
+        "default_enabled": False,
+        "published_score_source": "exact_relion_source16_or_full_rectangular",
+        "expanded_gemm_scores_published": False,
+        "whole_batch_fail_closed_fallback": True,
+        "batch_count": 6,
+        "selected_rescore_batch_count": selected_batches,
+        "fallback_batch_count": fallback_batches,
+        "selected_rescore_image_count": selected_images,
+        "fallback_image_count": fallback_images,
+        "selected_source16_block_count": selected_images,
+        "selected_exact_candidate_count": selected_candidates,
+        "full_candidate_count_for_selected_images": full_candidates,
+        "selected_exact_candidate_fraction": (
+            selected_candidates / full_candidates if selected_images else None
+        ),
+        "max_selected_blocks_per_image": 1 if selected_images else 0,
+        "selected_block_capacity": 64,
+        "certificate_chunk_rows": 4_608,
+        "certificate_chunk_count_per_batch": (rotation_count + 4_607) // 4_608,
+        "topology_full_to_compact_sha256": "a" * 64,
+        "fallback_reasons": ({"capacity_overflow": fallback_batches} if fallback_batches else {}),
+    }
+
+
+def _direct_or_hybrid_metadata(*, hybrid: bool) -> dict[str, object]:
+    metadata = _joint_stream_metadata(_inactive_selector_audit())
+    metadata["selected_particle_ids"] = list(range(1_000))
+    if hybrid:
+        metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] = _hybrid_stats()
+    return metadata
+
+
+def test_direct_hybrid_profile_proof_accepts_exact_score_accounting() -> None:
+    direct_rows = analyzer._validate_coarse_selector_profile_audits(
+        _direct_or_hybrid_metadata(hybrid=False),
+        label="control_serial_1",
+        iteration=181,
+        multistream_workers=0,
+        native_atomic_reduction=0,
+        coarse_gemm_hybrid=0,
+    )
+    hybrid_rows = analyzer._validate_coarse_selector_profile_audits(
+        _direct_or_hybrid_metadata(hybrid=True),
+        label="combined_candidate_1",
+        iteration=181,
+        multistream_workers=0,
+        native_atomic_reduction=0,
+        coarse_gemm_hybrid=1,
+    )
+    assert direct_rows[0]["hybrid"] is None
+    assert hybrid_rows[0]["hybrid"]["published_score_source"] == (
+        "exact_relion_source16_or_full_rectangular"
+    )
+    assert hybrid_rows[0]["hybrid"]["selected_rescore_image_count"] == 1_000
+    assert hybrid_rows[0]["hybrid"]["inferred_rotation_count"] == 36_864
+
+
+def test_hybrid_profile_proof_accepts_accounted_full_direct_fallback() -> None:
+    metadata = _direct_or_hybrid_metadata(hybrid=True)
+    metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] = (
+        _hybrid_stats(selected_images=0, fallback_images=1_000)
+    )
+    rows = analyzer._validate_coarse_selector_profile_audits(
+        metadata,
+        label="combined_candidate_1",
+        iteration=181,
+        multistream_workers=0,
+        native_atomic_reduction=0,
+        coarse_gemm_hybrid=1,
+    )
+    assert rows[0]["hybrid"]["selected_rescore_image_count"] == 0
+    assert rows[0]["hybrid"]["fallback_image_count"] == 1_000
+    assert rows[0]["hybrid"]["fallback_reasons"] == {"capacity_overflow": 6}
+    assert rows[0]["hybrid"]["inferred_rotation_count"] is None
+
+
+def test_completed_hybrid_arm_proves_every_checkpoint_and_maximum_cache_shape(
+    tmp_path: Path,
+) -> None:
+    label = "combined_candidate_1"
+    output = tmp_path / "runs" / label / "output"
+    output.mkdir(parents=True)
+    for iteration, rotation_count in ((1, 36_864), (2, 294_912)):
+        metadata = _direct_or_hybrid_metadata(hybrid=True)
+        metadata["current_size"] = 100 if iteration == 1 else 128
+        metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] = (
+            _hybrid_stats(rotation_count=rotation_count)
+        )
+        (output / f"run_it{iteration:03d}_recovar_meta.json").write_text(
+            json.dumps(metadata)
+        )
+    result = analyzer._validate_arm_coarse_hybrid_execution(
+        tmp_path,
+        label,
+        multistream_workers=0,
+        native_atomic_reduction=0,
+        coarse_gemm_hybrid=1,
+        iterations=(1, 2),
+        cache_contract={
+            "maximum_declared_rotation_count": 294_912,
+            "maximum_declared_compact_pixel_count": 8_320,
+        },
+    )
+    assert result["checkpoint_count"] == 2
+    assert result["maximum_inferred_rotation_count"] == 294_912
+    assert result["maximum_compact_pixel_count"] == 8_320
+    assert result["total_fallback_image_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("expanded_gemm_scores_published", True, "hybrid contract differs"),
+        ("selected_block_capacity", 63, "hybrid contract differs"),
+        ("fallback_image_count", 1, "hybrid image accounting differs"),
+        ("selected_exact_candidate_fraction", 0.5, "selected-rescore accounting differs"),
+        ("certificate_chunk_count_per_batch", 7, "selected-rescore accounting differs"),
+        ("topology_full_to_compact_sha256", "bad", "topology digest is invalid"),
+    ),
+)
+def test_direct_hybrid_profile_proof_rejects_unsafe_telemetry(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    metadata = _direct_or_hybrid_metadata(hybrid=True)
+    metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"][field] = value
+    with pytest.raises(analyzer.GateSetupError, match=message):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="combined_candidate_1",
+            iteration=181,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+            coarse_gemm_hybrid=1,
+        )
+
+
+def test_direct_profile_rejects_hybrid_telemetry() -> None:
+    with pytest.raises(analyzer.GateSetupError, match="direct control published hybrid telemetry"):
+        analyzer._validate_coarse_selector_profile_audits(
+            _direct_or_hybrid_metadata(hybrid=True),
+            label="control_serial_1",
+            iteration=181,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+            coarse_gemm_hybrid=0,
+        )
 
 
 def test_selector_proof_accepts_serial_control_and_combined_candidate() -> None:
@@ -1137,7 +1317,7 @@ def test_launch_manifest_rehashes_every_input_and_fails_after_mutation(
     acceptance.write_text(
         json.dumps(
             {
-                "schema": "recovar.vdam_coarse_combined_true200_acceptance.v2",
+                "schema": "recovar.vdam_coarse_combined_true200_acceptance.v3",
                 "source_contract": {"files": ["source.py"]},
                 "native_reference": {
                     "physical_gpu_uuid": "GPU-sealed",
@@ -1308,6 +1488,9 @@ def test_science_override_allowlist_is_explicit_and_does_not_admit_unknowns() ->
     contract = json.loads(ACCEPTANCE.read_text())["runtime_contract"]
     observed = resolver._validate_override_environment(
         {
+            "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID": "1",
+            "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
+            "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "1",
             "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "8",
             "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "1",
             "JAX_COMPILATION_CACHE_DIR": "/sealed/cache",
@@ -1316,6 +1499,9 @@ def test_science_override_allowlist_is_explicit_and_does_not_admit_unknowns() ->
         include_science=True,
     )
     assert set(observed) == {
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
         "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS",
         "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION",
         "JAX_COMPILATION_CACHE_DIR",
@@ -1429,6 +1615,7 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     assert "completed_prefix=1" in text
     assert 'test "${completed_prefix}" -eq 1' in text
     assert "_validate_arm_artifacts" in text
+    assert "_validate_arm_coarse_hybrid_execution" in text
     assert "_validate_native_options" in text
     assert "_arm_runtime" in text
     assert 'if [[ -f "${run_root}/SCIENCE_COMPLETED" ]]' in text
@@ -1436,10 +1623,18 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     assert "rm -rf" not in text
     assert "rm -f" not in text
     assert 'control_serial_5 combined_candidate_5 combined_candidate_6 control_serial_6' in text
-    assert "RUN_WORKERS=(0 8 8 0 8 0 0 8 0 8 8 0)" in text
-    assert "RUN_ATOMIC=(0 1 1 0 1 0 0 1 0 1 1 0)" in text
+    assert "RUN_WORKERS=(0 0 0 0 0 0 0 0 0 0 0 0)" in text
+    assert "RUN_ATOMIC=(0 0 0 0 0 0 0 0 0 0 0 0)" in text
+    assert "RUN_HYBRID=(0 1 1 0 1 0 0 1 0 1 1 0)" in text
     assert '"RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"' in text
     assert '"RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=${native_atomic}"' in text
+    assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID=${hybrid}"' in text
+    assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=${hybrid}"' in text
+    assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=${hybrid}"' in text
+    assert "FIXED_SCIENCE_ENVIRONMENT_ARGS" in text
+    assert "VDAM_TRUE200_SENTINEL" in text
+    assert 'write_marker_once "${ROOT}/SENTINEL_PASSED"' in text
+    assert 'validate_completed_arm "${label}"' in text
     assert "runtime_libraries.json" in text
     assert 'cmp "${PROVENANCE}/runtime_libraries.json"' in text
     assert "sealed_override_environment.json" in text
@@ -1463,7 +1658,7 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     setup_failed = text.index('write_marker_once "${ATTEMPT_PROVENANCE}/ANALYSIS_SETUP_FAILED"')
     sealed_hashes = text.index('> "${ATTEMPT_PROVENANCE}/sealed_analysis.sha256"')
     science_failed = text.index('write_marker_once "${ROOT}/SCIENCE_FAILED"')
-    completed = text.index('write_marker_once "${ROOT}/COMPLETED"')
+    completed = text.rindex('write_marker_once "${ROOT}/COMPLETED"')
     terminal_exit = text.index('exit "${analysis_status}"')
     assert allocation_audit < gpu_select
     assert runtime_artifact_seal < arm_complete < runs_complete < analysis < setup_failed < sealed_hashes
@@ -1472,13 +1667,15 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
 
 def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> None:
     contract = json.loads(ACCEPTANCE.read_text())
-    assert contract["schema"] == "recovar.vdam_coarse_combined_true200_acceptance.v2"
-    assert resolver.SCHEMA == "recovar.vdam_coarse_combined_true200_launch.v2"
-    assert analyzer.SCHEMA == "recovar.vdam_coarse_combined_true200_analysis.v2"
+    assert contract["schema"] == "recovar.vdam_coarse_combined_true200_acceptance.v3"
+    assert resolver.SCHEMA == "recovar.vdam_coarse_combined_true200_launch.v3"
+    assert analyzer.SCHEMA == "recovar.vdam_coarse_combined_true200_analysis.v3"
     panel = contract["panel"]
     assert len(panel["execution_order"]) == 12
-    assert panel["coarse_multistream_workers"] == [0, 8, 8, 0, 8, 0, 0, 8, 0, 8, 8, 0]
-    assert panel["coarse_native_atomic_reduction"] == [0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0]
+    assert panel["coarse_multistream_workers"] == [0] * 12
+    assert panel["coarse_native_atomic_reduction"] == [0] * 12
+    assert panel["coarse_gemm_hybrid"] == [0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0]
+    assert panel["sentinel_prefix_arm_count"] == 2
     assert panel["blocked_assignment_count"] == 216
     assert analyzer._balanced_assignments(BLOCKS).__len__() == 216
     assert panel["complement_pair_minimum_one_sided_p"] < 0.05
@@ -1500,7 +1697,7 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     assert hashlib.sha256(scorecard.read_bytes()).hexdigest() == contract["case"]["scorecard_sha256"]
     assert (
         contract["qualified_candidate"]["production_head"]
-        == "8a0be9c5d48ca755875e73595aca8eb5dcaa5410"
+        == "e0c1d1746570e64bad3618b09a50be31b79ebe60"
     )
     assert (
         contract["qualified_candidate"]["relion_bind_sha256"]
@@ -1508,7 +1705,7 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     )
     assert (
         contract["qualified_candidate"]["interpreter_sha256"]
-        == "b7684bebb1fa35e6b45105245b7779c07393a29b161e892a76bbc37a3caa7d85"
+        == "1e43e23601e6369d52fd56b0405882463297c9ba6ad5238b460da90db6771b9c"
     )
     assert (
         contract["trajectory"]["no_growth_primary_family_endpoints"] == THRESHOLDS["no_growth_primary_family_endpoints"]
@@ -1519,7 +1716,7 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     assert "halfset_ids" in exact_state_keys
     assert "joint_halfset_particle_stream" in exact_state_keys
     assert (
-        contract["required_gates"]["coarse_selector_execution_proven_every_postinit_joint_stream"]
+        contract["required_gates"]["coarse_hybrid_execution_proven_every_postinit_joint_stream"]
         is True
     )
     assert contract["trajectory"]["exact_state_first_iteration"] == 1
@@ -1544,10 +1741,97 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     assert set(runtime_contract["fixed_science_environment"]).issubset(
         runtime_contract["science_environment_capture_names"]
     )
+    for name in (
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
+    ):
+        assert name in runtime_contract["science_environment_capture_names"]
+    cache = contract["science_contract"]["hybrid_projection_cache_contract"]
+    assert cache["budget_gib"] == 40.0
+    assert cache["maximum_retained_cache_gib"] == pytest.approx(18.28125)
+    assert cache["maximum_conservative_peak_gib"] == pytest.approx(37.1337890625)
+    assert cache["maximum_conservative_peak_gib"] < cache["budget_gib"]
+    assert cache["destination_aliasing_assumed_for_admission"] is False
     assert contract["runtime_contract"]["transitive_runtime_library_closure_claimed"] is False
     resources = contract["resource_estimate"]
-    assert resources["estimated_science_gpu_hours"] > 12.0
+    assert 0.0 < resources["estimated_science_gpu_hours"] < 12.0
     assert resources["estimated_total_allocation_hours"] > resources["estimated_science_gpu_hours"]
-    assert not resources["estimated_single_allocation_fit"]
-    assert resources["minimum_expected_allocations"] == 2
-    assert resources["expected_allocation_count"].startswith("at least two")
+    assert resources["estimated_single_allocation_fit"]
+    assert resources["minimum_expected_allocations"] == 1
+    assert resources["expected_allocation_count"].startswith("one")
+
+
+def test_direct_hybrid_panel_contract_matches_labels_and_blocks() -> None:
+    panel = json.loads(ACCEPTANCE.read_text())["panel"]
+    labels, workers, atomic, hybrid, blocks = analyzer._validate_direct_hybrid_panel(
+        panel
+    )
+    assert labels == LABELS
+    assert workers == atomic == (0,) * 12
+    assert hybrid == (0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0)
+    assert blocks == BLOCKS
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("label_mode", "modes do not match their arm labels"),
+        ("legacy_worker", "must disable legacy multistream and atomic modes"),
+        ("sentinel", "sentinel must contain one direct arm"),
+        ("duplicate_block_arm", "permutation blocks do not partition the arms"),
+        ("unbalanced_block", "permutation block 0 is not balanced"),
+    ),
+)
+def test_direct_hybrid_panel_contract_rejects_assignment_corruption(
+    mutation: str,
+    message: str,
+) -> None:
+    panel = copy.deepcopy(json.loads(ACCEPTANCE.read_text())["panel"])
+    if mutation == "label_mode":
+        panel["coarse_gemm_hybrid"][0] = 1
+    elif mutation == "legacy_worker":
+        panel["coarse_multistream_workers"][1] = 8
+    elif mutation == "sentinel":
+        panel["sentinel_prefix_arm_count"] = 3
+    elif mutation == "duplicate_block_arm":
+        panel["whole_trajectory_permutation_blocks"][2][3] = "control_serial_5"
+    elif mutation == "unbalanced_block":
+        panel["whole_trajectory_permutation_blocks"][0] = [
+            "control_serial_1",
+            "control_serial_2",
+            "control_serial_3",
+            "combined_candidate_1",
+        ]
+    else:  # pragma: no cover - the parameter table is closed above
+        raise AssertionError(mutation)
+    with pytest.raises(analyzer.GateSetupError, match=message):
+        analyzer._validate_direct_hybrid_panel(panel)
+
+
+def test_maximum_declared_projection_cache_plan_fits_without_alias_assumption() -> None:
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _plan_coarse_gaussian_gemm_projection_cache,
+    )
+
+    cache = json.loads(ACCEPTANCE.read_text())["science_contract"][
+        "hybrid_projection_cache_contract"
+    ]
+    gib = 2**30
+    plan = _plan_coarse_gaussian_gemm_projection_cache(
+        n_rotations=cache["maximum_declared_rotation_count"],
+        compact_pixel_count=cache["maximum_declared_compact_pixel_count"],
+        image_shape=(128, 128),
+        budget_bytes=int(cache["budget_gib"] * gib),
+    )
+    assert plan.cache_shape == (1, 294_912, 8_320)
+    assert plan.chunk_rows == 4_608
+    assert plan.chunk_count_per_table == 64
+    assert plan.retained_bytes / gib == pytest.approx(
+        cache["maximum_retained_cache_gib"]
+    )
+    assert plan.predicted_peak_bytes / gib == pytest.approx(
+        cache["maximum_conservative_peak_gib"]
+    )
+    assert plan.destination_alias_proven is False
+    assert plan.admitted

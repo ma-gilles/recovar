@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze the sealed replicated VDAM mature combined-coarse 0--200 gate.
+"""Analyze the sealed replicated VDAM certified-hybrid 0--200 gate.
 
 Scientific map quality is evaluated only with the mature EM shellwise FSC and
 FSC-AUC helpers.  This module adds replicated-panel statistics, serial
@@ -36,10 +36,11 @@ from scripts.summarize_em_completion_bench import (
     shell_fsc,
 )
 
-SCHEMA = "recovar.vdam_coarse_combined_true200_analysis.v2"
+SCHEMA = "recovar.vdam_coarse_combined_true200_analysis.v3"
 _ITERATION_ARTIFACT_RE = re.compile(
     r"^run_it(?P<iteration>\d{3})_(?P<suffix>class001\.mrc|data\.star|model\.star|recovar_meta\.json)$"
 )
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class GateSetupError(RuntimeError):
@@ -604,6 +605,97 @@ def _panel_indices(labels: Sequence[str]) -> tuple[tuple[int, ...], tuple[int, .
     _require(len(serial) == len(lanes) and len(serial) >= 3, "true-200 panel requires balanced replicated arms")
     _require(len(serial) + len(lanes) == len(labels), "true-200 panel contains an unknown arm label")
     return serial, lanes
+
+
+def _validate_direct_hybrid_panel(
+    panel: Any,
+) -> tuple[
+    tuple[str, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[tuple[int, ...], ...],
+]:
+    """Validate the sealed 6+6 direct/hybrid assignment and block topology."""
+
+    _require(isinstance(panel, dict), "direct/hybrid panel contract is missing")
+    raw_labels = panel.get("execution_order")
+    _require(
+        isinstance(raw_labels, list)
+        and all(isinstance(value, str) and value for value in raw_labels),
+        "direct/hybrid panel labels are invalid",
+    )
+    labels = tuple(raw_labels)
+    _require(len(set(labels)) == len(labels), "direct/hybrid panel repeats an arm label")
+    serial, lanes = _panel_indices(labels)
+    _require(len(serial) == len(lanes) == 6, "true-200 panel must contain six arms per mode")
+
+    def integer_modes(name: str) -> tuple[int, ...]:
+        values = panel.get(name)
+        _require(
+            isinstance(values, list) and len(values) == len(labels),
+            f"direct/hybrid panel {name} topology differs",
+        )
+        return tuple(_integer(value, f"direct/hybrid panel {name}") for value in values)
+
+    workers = integer_modes("coarse_multistream_workers")
+    atomic = integer_modes("coarse_native_atomic_reduction")
+    hybrid = integer_modes("coarse_gemm_hybrid")
+    _require(
+        all(value == 0 for value in (*workers, *atomic)),
+        "direct/hybrid panel must disable legacy multistream and atomic modes",
+    )
+    expected_hybrid = tuple(1 if index in lanes else 0 for index in range(len(labels)))
+    _require(
+        hybrid == expected_hybrid,
+        "direct/hybrid panel modes do not match their arm labels",
+    )
+
+    sentinel_count = _integer(
+        panel.get("sentinel_prefix_arm_count"),
+        "direct/hybrid sentinel prefix arm count",
+    )
+    _require(
+        sentinel_count == 2 and hybrid[:sentinel_count] == (0, 1),
+        "direct/hybrid sentinel must contain one direct arm followed by one hybrid arm",
+    )
+
+    raw_blocks = panel.get("whole_trajectory_permutation_blocks")
+    _require(
+        isinstance(raw_blocks, list) and raw_blocks,
+        "direct/hybrid permutation blocks are missing",
+    )
+    blocks: list[tuple[int, ...]] = []
+    flattened_labels: list[str] = []
+    for block_index, raw_block in enumerate(raw_blocks):
+        _require(
+            isinstance(raw_block, list)
+            and len(raw_block) == 4
+            and all(isinstance(value, str) and value in labels for value in raw_block),
+            f"direct/hybrid permutation block {block_index} is invalid",
+        )
+        flattened_labels.extend(raw_block)
+        indices = tuple(labels.index(value) for value in raw_block)
+        _require(
+            sum(hybrid[index] for index in indices) == 2,
+            f"direct/hybrid permutation block {block_index} is not balanced",
+        )
+        blocks.append(indices)
+    _require(
+        len(flattened_labels) == len(labels)
+        and len(set(flattened_labels)) == len(labels)
+        and set(flattened_labels) == set(labels),
+        "direct/hybrid permutation blocks do not partition the arms",
+    )
+    expected_assignment_count = _integer(
+        panel.get("blocked_assignment_count"),
+        "direct/hybrid blocked assignment count",
+    )
+    _require(
+        len(_balanced_assignments(blocks)) == expected_assignment_count,
+        "direct/hybrid blocked assignment count differs",
+    )
+    return labels, workers, atomic, hybrid, tuple(blocks)
 
 
 def analyze_map_panel_from_loader(
@@ -1195,6 +1287,148 @@ def _coarse_translation_count(metadata: dict[str, Any], label: str) -> int:
     return fine_count // children_per_parent
 
 
+def _validate_coarse_gemm_hybrid_profile(
+    stats: Any,
+    *,
+    label: str,
+    expected_image_count: int,
+    translation_count: int,
+) -> dict[str, Any]:
+    """Validate exact-score and fail-closed accounting for one hybrid profile."""
+
+    _require(isinstance(stats, dict), f"{label} hybrid telemetry is missing")
+    validated = dict(stats)
+    expected = {
+        "enabled": True,
+        "default_enabled": False,
+        "published_score_source": "exact_relion_source16_or_full_rectangular",
+        "expanded_gemm_scores_published": False,
+        "whole_batch_fail_closed_fallback": True,
+        "selected_block_capacity": 64,
+    }
+    mismatches = {
+        key: {"expected": value, "observed": stats.get(key)}
+        for key, value in expected.items()
+        if stats.get(key) != value
+    }
+    _require(not mismatches, f"{label} hybrid contract differs: {mismatches}")
+    integer_keys = (
+        "batch_count",
+        "selected_rescore_batch_count",
+        "fallback_batch_count",
+        "selected_rescore_image_count",
+        "fallback_image_count",
+        "selected_source16_block_count",
+        "selected_exact_candidate_count",
+        "full_candidate_count_for_selected_images",
+        "max_selected_blocks_per_image",
+        "certificate_chunk_rows",
+        "certificate_chunk_count_per_batch",
+    )
+    _require(
+        all(
+            isinstance(stats.get(key), int)
+            and not isinstance(stats[key], bool)
+            and stats[key] >= 0
+            for key in integer_keys
+        ),
+        f"{label} hybrid counters are invalid",
+    )
+    _require(
+        stats["batch_count"] > 0
+        and stats["selected_rescore_batch_count"] + stats["fallback_batch_count"]
+        == stats["batch_count"],
+        f"{label} hybrid batch accounting differs",
+    )
+    _require(
+        expected_image_count > 0
+        and stats["selected_rescore_image_count"] + stats["fallback_image_count"]
+        == expected_image_count,
+        f"{label} hybrid image accounting differs",
+    )
+    _require(
+        stats["certificate_chunk_rows"] > 0
+        and stats["certificate_chunk_rows"] % 16 == 0
+        and stats["certificate_chunk_count_per_batch"] > 0,
+        f"{label} hybrid certificate chunk topology differs",
+    )
+    _require(
+        0 <= stats["max_selected_blocks_per_image"] <= stats["selected_block_capacity"],
+        f"{label} hybrid selected-block capacity accounting differs",
+    )
+    reasons = stats.get("fallback_reasons")
+    _require(
+        isinstance(reasons, dict)
+        and all(
+            isinstance(key, str)
+            and key
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value > 0
+            for key, value in reasons.items()
+        )
+        and sum(reasons.values()) == stats["fallback_batch_count"],
+        f"{label} hybrid fallback reasons differ",
+    )
+    selected_images = stats["selected_rescore_image_count"]
+    selected_fraction = stats.get("selected_exact_candidate_fraction")
+    if selected_images:
+        selected_blocks = stats["selected_source16_block_count"]
+        selected_candidates = stats["selected_exact_candidate_count"]
+        full_candidates = stats["full_candidate_count_for_selected_images"]
+        max_selected_blocks = stats["max_selected_blocks_per_image"]
+        _require(
+            full_candidates % (selected_images * translation_count) == 0,
+            f"{label} hybrid full-candidate geometry differs",
+        )
+        inferred_rotation_count = full_candidates // (
+            selected_images * translation_count
+        )
+        expected_selected_candidates = (
+            selected_blocks * 16 * translation_count
+        )
+        expected_chunk_count = (
+            inferred_rotation_count + stats["certificate_chunk_rows"] - 1
+        ) // stats["certificate_chunk_rows"]
+        expected_fraction = selected_candidates / full_candidates
+        _require(
+            inferred_rotation_count > 0
+            and selected_blocks >= selected_images
+            and 1 <= max_selected_blocks <= stats["selected_block_capacity"]
+            and selected_blocks <= selected_images * max_selected_blocks
+            and selected_candidates == expected_selected_candidates
+            and full_candidates >= selected_candidates
+            and stats["certificate_chunk_count_per_batch"]
+            == expected_chunk_count
+            and isinstance(selected_fraction, (int, float))
+            and not isinstance(selected_fraction, bool)
+            and math.isfinite(float(selected_fraction))
+            and math.isclose(
+                float(selected_fraction),
+                expected_fraction,
+                rel_tol=1e-15,
+                abs_tol=0.0,
+            ),
+            f"{label} hybrid selected-rescore accounting differs",
+        )
+        validated["inferred_rotation_count"] = inferred_rotation_count
+    else:
+        _require(
+            stats["selected_source16_block_count"] == 0
+            and stats["selected_exact_candidate_count"] == 0
+            and stats["full_candidate_count_for_selected_images"] == 0
+            and selected_fraction is None,
+            f"{label} all-fallback hybrid accounting differs",
+        )
+        validated["inferred_rotation_count"] = None
+    _require(
+        isinstance(stats.get("topology_full_to_compact_sha256"), str)
+        and bool(_SHA256_RE.fullmatch(stats["topology_full_to_compact_sha256"])),
+        f"{label} hybrid topology digest is invalid",
+    )
+    return validated
+
+
 def _validate_coarse_selector_profile_audits(
     metadata: dict[str, Any],
     *,
@@ -1202,8 +1436,9 @@ def _validate_coarse_selector_profile_audits(
     iteration: int,
     multistream_workers: int,
     native_atomic_reduction: int,
+    coarse_gemm_hybrid: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Prove the configured coarse selector ran for one joint-halfset checkpoint."""
+    """Prove the sealed direct, legacy selector, or certified hybrid path ran."""
 
     from recovar.em.dense_single_volume.helpers.significance import (
         _validate_coarse_selector_audit,
@@ -1226,27 +1461,47 @@ def _validate_coarse_selector_profile_audits(
         f"expected={expected_profile_keys}, observed={profile_keys}",
     )
     multistream = int(multistream_workers) > 0
-    expected_wrapper = (
-        "relion_coarse_diff2_projector_multistream_f32"
-        if multistream
-        else "relion_coarse_diff2_projector_f32"
-    )
-    expected_target = (
-        "cuda_relion_coarse_diff2_projector_multistream_f32"
-        if multistream
-        else "cuda_relion_coarse_diff2_projector_f32"
-    )
-    expected_fields = {
-        "score_mode": "gaussian",
-        "requested_fused": True,
-        "effective_fused": True,
-        "requested_workers": int(multistream_workers),
-        "effective_workers": int(multistream_workers),
-        "requested_atomic": bool(native_atomic_reduction),
-        "effective_atomic": bool(native_atomic_reduction),
-        "wrapper": expected_wrapper,
-        "target": expected_target,
-    }
+    hybrid_contract = coarse_gemm_hybrid is not None
+    if hybrid_contract:
+        _require(
+            int(coarse_gemm_hybrid) in (0, 1)
+            and int(multistream_workers) == 0
+            and int(native_atomic_reduction) == 0,
+            f"{label} direct/hybrid lane contract is invalid",
+        )
+        expected_fields = {
+            "score_mode": "gaussian",
+            "requested_fused": False,
+            "effective_fused": False,
+            "requested_workers": 0,
+            "effective_workers": 0,
+            "requested_atomic": False,
+            "effective_atomic": False,
+            "wrapper": None,
+            "target": None,
+        }
+    else:
+        expected_wrapper = (
+            "relion_coarse_diff2_projector_multistream_f32"
+            if multistream
+            else "relion_coarse_diff2_projector_f32"
+        )
+        expected_target = (
+            "cuda_relion_coarse_diff2_projector_multistream_f32"
+            if multistream
+            else "cuda_relion_coarse_diff2_projector_f32"
+        )
+        expected_fields = {
+            "score_mode": "gaussian",
+            "requested_fused": True,
+            "effective_fused": True,
+            "requested_workers": int(multistream_workers),
+            "effective_workers": int(multistream_workers),
+            "requested_atomic": bool(native_atomic_reduction),
+            "effective_atomic": bool(native_atomic_reduction),
+            "wrapper": expected_wrapper,
+            "target": expected_target,
+        }
     rows = []
     for key in profile_keys:
         profile = metadata[key]
@@ -1271,15 +1526,48 @@ def _validate_coarse_selector_profile_audits(
             f"{label} iteration {iteration} {key} selector translation count differs",
         )
         counts = audit["counts"]
-        _require(
-            counts["fused_calls"] > 0
-            and counts["actual_rows"] > 0
-            and counts["multistream_calls"]
-            == (counts["fused_calls"] if multistream else 0)
-            and counts["native_atomic_selected_calls"]
-            == (counts["fused_calls"] if native_atomic_reduction else 0),
-            f"{label} iteration {iteration} {key} selector execution counts are invalid",
-        )
+        if hybrid_contract:
+            _require(
+                all(
+                    counts[name] == 0
+                    for name in (
+                        "fused_calls",
+                        "actual_rows",
+                        "multistream_calls",
+                        "native_atomic_selected_calls",
+                    )
+                ),
+                f"{label} iteration {iteration} {key} direct selector counts are invalid",
+            )
+            selected_particle_ids = metadata.get("selected_particle_ids")
+            _require(
+                isinstance(selected_particle_ids, list) and selected_particle_ids,
+                f"{label} iteration {iteration} selected-particle topology is invalid",
+            )
+            hybrid_stats = profile.get("coarse_gaussian_gemm_hybrid")
+            if int(coarse_gemm_hybrid):
+                hybrid_stats = _validate_coarse_gemm_hybrid_profile(
+                    hybrid_stats,
+                    label=f"{label} iteration {iteration} {key}",
+                    expected_image_count=len(selected_particle_ids),
+                    translation_count=translations,
+                )
+            else:
+                _require(
+                    hybrid_stats is None,
+                    f"{label} iteration {iteration} {key} direct control published hybrid telemetry",
+                )
+        else:
+            _require(
+                counts["fused_calls"] > 0
+                and counts["actual_rows"] > 0
+                and counts["multistream_calls"]
+                == (counts["fused_calls"] if multistream else 0)
+                and counts["native_atomic_selected_calls"]
+                == (counts["fused_calls"] if native_atomic_reduction else 0),
+                f"{label} iteration {iteration} {key} selector execution counts are invalid",
+            )
+            hybrid_stats = None
         match = _HALFSET_PROFILE_RE.fullmatch(key)
         _require(match is not None, f"{label} iteration {iteration} profile key is invalid")
         rows.append(
@@ -1290,9 +1578,121 @@ def _validate_coarse_selector_profile_audits(
                 "joint_halfset_ids": [0, 1],
                 "joint_halfset_particle_stream": True,
                 "audit": audit,
+                "coarse_gemm_hybrid": None if coarse_gemm_hybrid is None else int(coarse_gemm_hybrid),
+                "hybrid": hybrid_stats,
             }
         )
     return rows
+
+
+def _validate_arm_coarse_hybrid_execution(
+    root: Path,
+    label: str,
+    multistream_workers: int,
+    native_atomic_reduction: int,
+    coarse_gemm_hybrid: int,
+    iterations: Sequence[int],
+    *,
+    cache_contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate every saved coarse profile for one completed direct/hybrid arm."""
+
+    rows: list[dict[str, Any]] = []
+    current_sizes: dict[int, int] = {}
+    for iteration in iterations:
+        metadata = _load_json(
+            root / "runs" / label / "output" / f"run_it{int(iteration):03d}_recovar_meta.json",
+            f"{label} iteration {iteration} metadata",
+        )
+        current_sizes[int(iteration)] = _integer(
+            metadata.get("current_size"),
+            f"{label} iteration {iteration} current_size",
+        )
+        rows.extend(
+            _validate_coarse_selector_profile_audits(
+                metadata,
+                label=label,
+                iteration=int(iteration),
+                multistream_workers=multistream_workers,
+                native_atomic_reduction=native_atomic_reduction,
+                coarse_gemm_hybrid=coarse_gemm_hybrid,
+            )
+        )
+    expected_iterations = tuple(int(value) for value in iterations)
+    _require(expected_iterations, f"{label} has no coarse-profile checkpoints")
+    _require(
+        len(rows) == len(expected_iterations)
+        and tuple(row["iteration"] for row in rows) == expected_iterations,
+        f"{label} coarse-profile checkpoint coverage differs",
+    )
+
+    hybrid_rows = [row["hybrid"] for row in rows if row["hybrid"] is not None]
+    if int(coarse_gemm_hybrid):
+        _require(
+            len(hybrid_rows) == len(rows),
+            f"{label} did not publish hybrid telemetry at every checkpoint",
+        )
+        inferred_rows = [
+            (row["iteration"], row["hybrid"]["inferred_rotation_count"])
+            for row in rows
+            if row["hybrid"]["inferred_rotation_count"] is not None
+        ]
+        _require(inferred_rows, f"{label} never executed certified selected rescoring")
+        maximum_rotation_count = max(value for _, value in inferred_rows)
+        maximum_declared_rotation_count = _integer(
+            cache_contract.get("maximum_declared_rotation_count"),
+            "maximum declared hybrid rotation count",
+        )
+        _require(
+            maximum_rotation_count == maximum_declared_rotation_count,
+            f"{label} did not exercise the maximum declared hybrid rotation count",
+        )
+        maximum_rotation_iterations = {
+            iteration
+            for iteration, rotation_count in inferred_rows
+            if rotation_count == maximum_rotation_count
+        }
+        maximum_current_size = max(
+            current_sizes[iteration] for iteration in maximum_rotation_iterations
+        )
+        maximum_compact_pixel_count = maximum_current_size * (
+            maximum_current_size // 2 + 1
+        )
+        _require(
+            maximum_compact_pixel_count
+            == _integer(
+                cache_contract.get("maximum_declared_compact_pixel_count"),
+                "maximum declared hybrid compact pixel count",
+            ),
+            f"{label} did not exercise the maximum declared hybrid compact-pixel count",
+        )
+    else:
+        _require(not hybrid_rows, f"{label} direct control published hybrid telemetry")
+        maximum_rotation_count = None
+        maximum_compact_pixel_count = None
+
+    fallback_reasons: dict[str, int] = {}
+    for stats in hybrid_rows:
+        for reason, count in stats["fallback_reasons"].items():
+            fallback_reasons[reason] = fallback_reasons.get(reason, 0) + count
+    return {
+        "label": label,
+        "checkpoint_count": len(rows),
+        "coarse_gemm_hybrid": int(coarse_gemm_hybrid),
+        "maximum_inferred_rotation_count": maximum_rotation_count,
+        "maximum_compact_pixel_count": maximum_compact_pixel_count,
+        "total_hybrid_batch_count": sum(
+            stats["batch_count"] for stats in hybrid_rows
+        ),
+        "total_selected_rescore_image_count": sum(
+            stats["selected_rescore_image_count"] for stats in hybrid_rows
+        ),
+        "total_fallback_image_count": sum(
+            stats["fallback_image_count"] for stats in hybrid_rows
+        ),
+        "fallback_reasons": dict(sorted(fallback_reasons.items())),
+        "pass": True,
+    }
 
 
 def _particle_table_values(table: Any, state_contract: dict[str, Any], label: str) -> dict[str, Any]:
@@ -1924,13 +2324,14 @@ def _validate_science_environment(
     label: str,
     multistream_workers: int,
     native_atomic_reduction: int,
+    coarse_gemm_hybrid: int,
     arm: dict[str, Any],
     expected: dict[str, Any],
     runtime_contract: dict[str, Any],
 ) -> dict[str, str]:
     payload = _load_json(path, f"arm science environment for {label}")
     _require(
-        payload.get("schema") == "recovar.vdam_coarse_combined_true200_science_environment.v2",
+        payload.get("schema") == "recovar.vdam_coarse_combined_true200_science_environment.v3",
         f"arm {label} science-environment schema differs",
     )
     _require(payload.get("label") == label, f"arm {label} science-environment label differs")
@@ -1965,6 +2366,9 @@ def _validate_science_environment(
         "PYTHONPATH": str(Path(expected["repo_root"]).resolve()),
         "RATTLER_CACHE_DIR": str((attempt_runtime / "rattler_cache").resolve()),
         "RECOVAR_CUDA_LIB": str(Path(expected["cuda_path"]).resolve()),
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID": str(int(coarse_gemm_hybrid)),
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": str(int(coarse_gemm_hybrid)),
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": str(int(coarse_gemm_hybrid)),
         "RECOVAR_EXPECTED_REPO_ROOT": str(Path(expected["repo_root"]).resolve()),
         "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": str(int(multistream_workers)),
         "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": str(int(native_atomic_reduction)),
@@ -2026,23 +2430,27 @@ def _validate_arm_artifacts(
     label: str,
     multistream_workers: int,
     native_atomic_reduction: int,
+    coarse_gemm_hybrid: int,
     iterations: Sequence[int],
     suffixes: Sequence[str],
     *,
     expected: dict[str, Any],
     runtime_contract: dict[str, Any],
+    require_completion_marker: bool = True,
 ) -> dict[str, Any]:
     run_root = root / "runs" / label
     output = run_root / "output"
-    _require((run_root / "SCIENCE_COMPLETED").is_file(), f"arm {label} did not complete science")
+    if require_completion_marker:
+        _require((run_root / "SCIENCE_COMPLETED").is_file(), f"arm {label} did not complete science")
     _require(output.is_dir(), f"arm {label} has no output directory")
     runtime_manifest_sha = _validate_runtime_artifact_manifest(run_root)
     arm = _load_json(run_root / "arm.json", f"arm provenance for {label}")
     exact_fields = {
-        "schema": "recovar.vdam_coarse_combined_true200_arm.v2",
+        "schema": "recovar.vdam_coarse_combined_true200_arm.v3",
         "label": label,
         "multistream_workers": int(multistream_workers),
         "native_atomic_reduction": int(native_atomic_reduction),
+        "coarse_gemm_hybrid": int(coarse_gemm_hybrid),
         "git_head": expected["git_head"],
         "production_candidate_head": expected["production_candidate_head"],
         "gpu_uuid": expected["gpu_uuid"],
@@ -2083,6 +2491,7 @@ def _validate_arm_artifacts(
         label=label,
         multistream_workers=multistream_workers,
         native_atomic_reduction=native_atomic_reduction,
+        coarse_gemm_hybrid=coarse_gemm_hybrid,
         arm=arm,
         expected=expected,
         runtime_contract=runtime_contract,
@@ -2104,6 +2513,7 @@ def _validate_arm_artifacts(
         "label": label,
         "multistream_workers": int(multistream_workers),
         "native_atomic_reduction": int(native_atomic_reduction),
+        "coarse_gemm_hybrid": int(coarse_gemm_hybrid),
         "arm_provenance_sha256": _sha256(run_root / "arm.json"),
         "artifact_manifest_sha256": manifest_sha,
         "runtime_artifact_manifest_sha256": runtime_manifest_sha,
@@ -2488,11 +2898,11 @@ def _validate_run_provenance(
     provenance_dir = root / "provenance"
     run_path = provenance_dir / "run.json"
     run = _load_json(run_path, "true-200 run provenance")
-    labels = acceptance["panel"]["execution_order"]
-    workers = acceptance["panel"]["coarse_multistream_workers"]
-    atomic = acceptance["panel"]["coarse_native_atomic_reduction"]
+    labels, workers, atomic, hybrid, _ = _validate_direct_hybrid_panel(
+        acceptance.get("panel")
+    )
     expected = {
-        "schema": "recovar.vdam_coarse_combined_true200_run.v2",
+        "schema": "recovar.vdam_coarse_combined_true200_run.v3",
         "git_head": run.get("git_head"),
         "production_candidate_head": acceptance["qualified_candidate"]["production_head"],
         "gpu_uuid": acceptance["native_reference"]["physical_gpu_uuid"],
@@ -2503,14 +2913,12 @@ def _validate_run_provenance(
         "scorecard_sha256": acceptance["case"]["scorecard_sha256"],
         "acceptance_config_sha256": _sha256(acceptance_path),
         "analyzer_source_sha256": _sha256(Path(__file__).resolve()),
-        "execution_order": labels,
-        "coarse_multistream_workers": workers,
-        "coarse_native_atomic_reduction": atomic,
+        "execution_order": list(labels),
+        "coarse_multistream_workers": list(workers),
+        "coarse_native_atomic_reduction": list(atomic),
+        "coarse_gemm_hybrid": list(hybrid),
         "fresh_process_and_jax_cache_per_arm": True,
-        "only_configuration_delta": (
-            "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=0/8 + "
-            "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=0/1"
-        ),
+        "only_configuration_delta": acceptance["science_contract"]["only_configuration_delta"],
         "initial_model_profile": True,
     }
     mismatches = {
@@ -2736,7 +3144,7 @@ def _markdown(report: dict[str, Any]) -> str:
     gates = report["gates"]
     runtime = report["runtime"]
     lines = [
-        "# VDAM mature combined coarse: sealed true-200 gate",
+        "# VDAM certified GEMM/direct-rescore hybrid: sealed true-200 gate",
         "",
         f"Decision: **{report['decision']['classification']}**",
         "",
@@ -2768,7 +3176,7 @@ def _markdown(report: dict[str, Any]) -> str:
             f"(program target <= {program['program_target_at_most']:.3f}x; "
             f"{'PASS' if program['pass'] else 'FAIL'}).",
             "",
-            "A science PASS qualifies only the mature default-off combined candidate; "
+            "A science PASS qualifies only the default-off certified GEMM/direct-rescore hybrid; "
             "it does not enable the path by default or alter the frozen v3 correctness score.",
             "",
         ]
@@ -2799,7 +3207,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
     scorecard_path = args.scorecard.resolve()
     acceptance = _load_json(acceptance_path, "acceptance contract")
     _require(
-        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v2",
+        acceptance.get("schema") == "recovar.vdam_coarse_combined_true200_acceptance.v3",
         "unsupported acceptance schema",
     )
     _require((root / "RUNS_COMPLETED").is_file(), "panel arms are not marked complete")
@@ -2830,21 +3238,28 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
         state_iterations == iterations[1:],
         "exact state checkpoints must cover every post-initialization iteration",
     )
-    labels = tuple(acceptance["panel"]["execution_order"])
-    workers = tuple(int(value) for value in acceptance["panel"]["coarse_multistream_workers"])
-    atomic = tuple(int(value) for value in acceptance["panel"]["coarse_native_atomic_reduction"])
+    labels, workers, atomic, hybrid, block_indices = _validate_direct_hybrid_panel(
+        acceptance.get("panel")
+    )
     arm_expected = {
         **run,
         "production_candidate_head": acceptance["qualified_candidate"]["production_head"],
     }
     arms = []
-    for label, worker_count, atomic_mode in zip(labels, workers, atomic, strict=True):
+    for label, worker_count, atomic_mode, hybrid_mode in zip(
+        labels,
+        workers,
+        atomic,
+        hybrid,
+        strict=True,
+    ):
         arms.append(
             _validate_arm_artifacts(
                 root,
                 label,
                 worker_count,
                 atomic_mode,
+                hybrid_mode,
                 iterations,
                 trajectory["required_artifact_suffixes"],
                 expected=arm_expected,
@@ -2856,10 +3271,6 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
             definition,
         )
 
-    block_indices = tuple(
-        tuple(labels.index(label) for label in block)
-        for block in acceptance["panel"]["whole_trajectory_permutation_blocks"]
-    )
     gate_contract = acceptance["required_gates"]
     map_thresholds = {
         "phase_segments": trajectory["phase_segments"],
@@ -2915,10 +3326,11 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
             )
             for label in labels
         ]
-        for label, worker_count, atomic_mode, meta in zip(
+        for label, worker_count, atomic_mode, hybrid_mode, meta in zip(
             labels,
             workers,
             atomic,
+            hybrid,
             metadata,
             strict=True,
         ):
@@ -2929,6 +3341,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
                     iteration=iteration,
                     multistream_workers=worker_count,
                     native_atomic_reduction=atomic_mode,
+                    coarse_gemm_hybrid=hybrid_mode,
                 )
             )
         metadata_result = classify_metadata_iteration(metadata, labels, acceptance["state_contract"])
@@ -2999,12 +3412,26 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
             "total_native_atomic_selected_calls": sum(
                 row["audit"]["counts"]["native_atomic_selected_calls"] for row in arm_rows
             ),
+            "coarse_gemm_hybrid": int(hybrid[labels.index(label)]),
+            "total_hybrid_batches": sum(
+                row["hybrid"]["batch_count"] for row in arm_rows if row["hybrid"] is not None
+            ),
+            "total_hybrid_selected_images": sum(
+                row["hybrid"]["selected_rescore_image_count"]
+                for row in arm_rows
+                if row["hybrid"] is not None
+            ),
+            "total_hybrid_fallback_images": sum(
+                row["hybrid"]["fallback_image_count"]
+                for row in arm_rows
+                if row["hybrid"] is not None
+            ),
         }
     coarse_selector_execution = {
         "policy": (
-            "every sealed post-initialization joint-halfset profile must prove the requested "
-            "and effective selector, exact wrapper/target, and host-observed execution counts; "
-            "serial controls must use the serial fused wrapper with zero multistream/native-atomic counts"
+            "every sealed post-initialization joint-halfset profile must prove the mature direct "
+            "selector is inactive; hybrid arms must additionally prove exact-source16/full-rectangular "
+            "score publication and complete selected/fallback image and batch accounting"
         ),
         "checkpoint_count": len(state_iterations),
         "audit_count": len(coarse_selector_audit_rows),
@@ -3016,7 +3443,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
         "iterations": state_rows,
         "continuous_panel": continuous_state,
         "joint_exact_complete_path_serial_witness": joint_exact_state,
-        "coarse_selector_execution": coarse_selector_execution,
+        "coarse_hybrid_execution": coarse_selector_execution,
         "checkpoint_exact_any_serial_diagnostic_only_pass": all(
             row["pass"] for row in state_rows
         ),
@@ -3064,7 +3491,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
     )
     gates = {
         "artifact_and_provenance_complete": True,
-        "coarse_selector_executed_as_sealed_at_every_checkpoint": coarse_selector_execution[
+        "coarse_hybrid_executed_as_sealed_at_every_checkpoint": coarse_selector_execution[
             "pass"
         ],
         "state_joint_exact_path_and_continuous_panel": state["pass"],

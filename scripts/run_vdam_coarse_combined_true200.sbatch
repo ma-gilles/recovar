@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vdam-combined-true200
+#SBATCH --job-name=vdam-hybrid-true200
 #SBATCH --account=gilles
 #SBATCH --partition=cryoem
 #SBATCH --qos=della-cryoem
@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=180G
 #SBATCH --time=12:00:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-combined-true200-%j.out
+#SBATCH --output=/scratch/gpfs/GILLES/mg6942/slurmo/vdam-hybrid-true200-%j.out
 
 set -euo pipefail
 
@@ -59,6 +59,15 @@ case "${RESUME}" in
   0|1) ;;
   *) echo "VDAM_TRUE200_RESUME must be 0 or 1" >&2; exit 2 ;;
 esac
+SENTINEL=${VDAM_TRUE200_SENTINEL:-0}
+case "${SENTINEL}" in
+  0|1) ;;
+  *) echo "VDAM_TRUE200_SENTINEL must be 0 or 1" >&2; exit 2 ;;
+esac
+if [[ "${SENTINEL}" -eq 1 && "${RESUME}" -eq 1 ]]; then
+  echo "the two-arm sentinel must use a fresh result root" >&2
+  exit 2
+fi
 
 mapfile -t SOURCE_FILES < <(
   jq -er '.source_contract.files[]' "${ACCEPTANCE}" | LC_ALL=C sort
@@ -260,10 +269,15 @@ export XLA_PYTHON_CLIENT_PREALLOCATE
 XLA_PYTHON_CLIENT_PREALLOCATE=$(jq -er '.runtime_contract.fixed_science_environment.XLA_PYTHON_CLIENT_PREALLOCATE' "${ACCEPTANCE}")
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=$(jq -er '.runtime_contract.fixed_science_environment.JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS' "${ACCEPTANCE}")
+mapfile -t FIXED_SCIENCE_ENVIRONMENT_ARGS < <(
+  jq -er '.runtime_contract.fixed_science_environment | to_entries | sort_by(.key)[] | "\(.key)=\(.value)"' \
+    "${ACCEPTANCE}"
+)
+test "${#FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" -gt 0
 
 (
   cd "${REPO_ROOT}"
-  env PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" - "${ACCEPTANCE}" \
+  env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" - "${ACCEPTANCE}" \
     "${ATTEMPT_PROVENANCE}/sealed_override_environment.json" <<'PY'
 import json
 import os
@@ -281,7 +295,8 @@ PY
 
 (
   cd "${REPO_ROOT}"
-  env LD_PRELOAD="${CUSPARSE_LIBRARY}" PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" - <<'PY'
+  env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" LD_PRELOAD="${CUSPARSE_LIBRARY}" \
+    PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" - <<'PY'
 import pathlib
 import jax
 import recovar
@@ -356,14 +371,108 @@ RUN_LABELS=(
   combined_candidate_3 control_serial_3 control_serial_4 combined_candidate_4
   control_serial_5 combined_candidate_5 combined_candidate_6 control_serial_6
 )
-RUN_WORKERS=(0 8 8 0 8 0 0 8 0 8 8 0)
-RUN_ATOMIC=(0 1 1 0 1 0 0 1 0 1 1 0)
+RUN_WORKERS=(0 0 0 0 0 0 0 0 0 0 0 0)
+RUN_ATOMIC=(0 0 0 0 0 0 0 0 0 0 0 0)
+RUN_HYBRID=(0 1 1 0 1 0 0 1 0 1 1 0)
 test "$(jq -c '.panel.execution_order' "${ACCEPTANCE}")" = \
   "$(printf '%s\n' "${RUN_LABELS[@]}" | jq -R . | jq -sc .)"
 test "$(jq -c '.panel.coarse_multistream_workers' "${ACCEPTANCE}")" = \
   "$(printf '%s\n' "${RUN_WORKERS[@]}" | jq -R 'tonumber' | jq -sc .)"
 test "$(jq -c '.panel.coarse_native_atomic_reduction' "${ACCEPTANCE}")" = \
   "$(printf '%s\n' "${RUN_ATOMIC[@]}" | jq -R 'tonumber' | jq -sc .)"
+test "$(jq -c '.panel.coarse_gemm_hybrid' "${ACCEPTANCE}")" = \
+  "$(printf '%s\n' "${RUN_HYBRID[@]}" | jq -R 'tonumber' | jq -sc .)"
+RUN_LIMIT=${#RUN_LABELS[@]}
+if [[ "${SENTINEL}" -eq 1 ]]; then
+  RUN_LIMIT=$(jq -er '.panel.sentinel_prefix_arm_count' "${ACCEPTANCE}")
+  test "${RUN_LIMIT}" -eq 2
+  test "${RUN_HYBRID[0]}" -eq 0
+  test "${RUN_HYBRID[1]}" -eq 1
+fi
+
+validate_completed_arm() {
+  local label=$1
+  local workers=$2
+  local native_atomic=$3
+  local hybrid=$4
+  local require_marker=$5
+  (
+    cd "${REPO_ROOT}"
+    env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" PYTHONPATH="${REPO_ROOT}" \
+      "${PIXI_PY}" - "${ROOT}" "${ACCEPTANCE}" "${label}" "${workers}" \
+      "${native_atomic}" "${hybrid}" "${require_marker}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from scripts.analyze_vdam_coarse_combined_true200 import (
+    _arm_runtime,
+    _load_json,
+    _validate_arm_artifacts,
+    _validate_arm_coarse_hybrid_execution,
+    _validate_native_options,
+)
+
+root, acceptance_path = Path(sys.argv[1]), Path(sys.argv[2])
+label = sys.argv[3]
+workers, native_atomic, hybrid, require_marker = map(int, sys.argv[4:8])
+acceptance = _load_json(acceptance_path, "acceptance contract")
+run = _load_json(root / "provenance/run.json", "run provenance")
+expected = {
+    **run,
+    "production_candidate_head": acceptance["qualified_candidate"]["production_head"],
+}
+trajectory = acceptance["trajectory"]
+iterations = tuple(
+    range(int(trajectory["first_iteration"]), int(trajectory["last_iteration"]) + 1)
+)
+artifact = _validate_arm_artifacts(
+    root,
+    label,
+    workers,
+    native_atomic,
+    hybrid,
+    iterations,
+    trajectory["required_artifact_suffixes"],
+    expected=expected,
+    runtime_contract=acceptance["runtime_contract"],
+    require_completion_marker=bool(require_marker),
+)
+_validate_native_options(
+    root / "runs" / label / "output/run_native_options.json",
+    acceptance["science_contract"]["definition"],
+)
+coarse_execution = _validate_arm_coarse_hybrid_execution(
+    root,
+    label,
+    workers,
+    native_atomic,
+    hybrid,
+    iterations[1:],
+    cache_contract=acceptance["science_contract"][
+        "hybrid_projection_cache_contract"
+    ],
+)
+runtime = _arm_runtime(
+    root,
+    label,
+    iterations,
+    expected_gpu_uuid=acceptance["native_reference"]["physical_gpu_uuid"],
+)
+print(
+    json.dumps(
+        {
+            "artifact": artifact,
+            "coarse_hybrid_execution": coarse_execution,
+            "runtime": runtime,
+        },
+        indent=2,
+        sort_keys=True,
+    )
+)
+PY
+  ) > "${ATTEMPT_PROVENANCE}/${label}_validation.json"
+}
 
 if [[ "${RESUME}" -eq 0 ]]; then
   "${PIXI_PY}" - "${PROVENANCE}/run.json" "${ACCEPTANCE}" "${PROVENANCE}/source_manifest.sha256" \
@@ -390,7 +499,7 @@ def sha(path):
             digest.update(block)
     return digest.hexdigest()
 payload = {
-    "schema": "recovar.vdam_coarse_combined_true200_run.v2",
+    "schema": "recovar.vdam_coarse_combined_true200_run.v3",
     "classification": "sealed_default_off_true200_candidate_gate",
     "job_id": job_id,
     "repo_root": str(Path(repo).resolve()),
@@ -429,11 +538,9 @@ payload = {
     "execution_order": acceptance["panel"]["execution_order"],
     "coarse_multistream_workers": acceptance["panel"]["coarse_multistream_workers"],
     "coarse_native_atomic_reduction": acceptance["panel"]["coarse_native_atomic_reduction"],
+    "coarse_gemm_hybrid": acceptance["panel"]["coarse_gemm_hybrid"],
     "fresh_process_and_jax_cache_per_arm": True,
-    "only_configuration_delta": (
-        "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=0/8 + "
-        "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=0/1"
-    ),
+    "only_configuration_delta": acceptance["science_contract"]["only_configuration_delta"],
     "initial_model_profile": True,
 }
 Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -441,7 +548,8 @@ PY
 else
   (
     cd "${REPO_ROOT}"
-    env PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" - "${ROOT}" "${ACCEPTANCE}" "${SCORECARD}" <<'PY'
+    env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" PYTHONPATH="${REPO_ROOT}" \
+      "${PIXI_PY}" - "${ROOT}" "${ACCEPTANCE}" "${SCORECARD}" <<'PY'
 import sys
 from pathlib import Path
 from scripts.analyze_vdam_coarse_combined_true200 import _load_json, _validate_run_provenance
@@ -457,9 +565,13 @@ fi
 completed_prefix=1
 
 for index in "${!RUN_LABELS[@]}"; do
+  if [[ "${index}" -ge "${RUN_LIMIT}" ]]; then
+    break
+  fi
   label=${RUN_LABELS[index]}
   workers=${RUN_WORKERS[index]}
   native_atomic=${RUN_ATOMIC[index]}
+  hybrid=${RUN_HYBRID[index]}
   run_root=${ROOT}/runs/${label}
   output=${run_root}/output
   cache=${run_root}/jax_cache
@@ -467,40 +579,7 @@ for index in "${!RUN_LABELS[@]}"; do
   if [[ -f "${run_root}/SCIENCE_COMPLETED" ]]; then
     test "${RESUME}" -eq 1
     test "${completed_prefix}" -eq 1
-    (
-      cd "${REPO_ROOT}"
-      env PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" - "${ROOT}" "${ACCEPTANCE}" \
-        "${label}" "${workers}" "${native_atomic}" <<'PY'
-import json, sys
-from pathlib import Path
-from scripts.analyze_vdam_coarse_combined_true200 import (
-    _arm_runtime, _load_json, _validate_arm_artifacts, _validate_native_options,
-)
-
-root, acceptance_path, label = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-workers, native_atomic = int(sys.argv[4]), int(sys.argv[5])
-acceptance = _load_json(acceptance_path, "acceptance contract")
-run = _load_json(root / "provenance/run.json", "run provenance")
-expected = {**run, "production_candidate_head": acceptance["qualified_candidate"]["production_head"]}
-iterations = tuple(range(201))
-artifact = _validate_arm_artifacts(
-    root, label, workers, native_atomic, iterations,
-    acceptance["trajectory"]["required_artifact_suffixes"], expected=expected,
-    runtime_contract=acceptance["runtime_contract"],
-)
-_validate_native_options(
-    root / "runs" / label / "output/run_native_options.json",
-    acceptance["science_contract"]["definition"],
-)
-runtime = _arm_runtime(
-    root,
-    label,
-    iterations,
-    expected_gpu_uuid=acceptance["native_reference"]["physical_gpu_uuid"],
-)
-print(json.dumps({"artifact": artifact, "runtime": runtime}, indent=2, sort_keys=True))
-PY
-    ) > "${ATTEMPT_PROVENANCE}/${label}_validation.json"
+    validate_completed_arm "${label}" "${workers}" "${native_atomic}" "${hybrid}" 1
     continue
   fi
   completed_prefix=0
@@ -534,10 +613,14 @@ for value in json.load(open(sys.argv[1], encoding="utf-8"))["argv"]:
 PY
   )
   science_environment_args=(
+    "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}"
     "LD_PRELOAD=${CUSPARSE_LIBRARY}"
     "PYTHONPATH=${REPO_ROOT}"
     "TMPDIR=${tmp}"
     "JAX_COMPILATION_CACHE_DIR=${cache}"
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID=${hybrid}"
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=${hybrid}"
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=${hybrid}"
     "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"
     "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=${native_atomic}"
   )
@@ -555,7 +638,7 @@ from scripts.resolve_vdam_coarse_combined_true200_launch import _science_environ
 target, acceptance_path, label, job_id = sys.argv[1:]
 acceptance = json.load(open(acceptance_path, encoding="utf-8"))
 payload = {
-    "schema": "recovar.vdam_coarse_combined_true200_science_environment.v2",
+    "schema": "recovar.vdam_coarse_combined_true200_science_environment.v3",
     "label": label,
     "job_id": job_id,
     "environment": _science_environment_snapshot(
@@ -613,11 +696,12 @@ open(sys.argv[1], "w", encoding="utf-8").write(json.dumps({
 }, indent=2, sort_keys=True) + "\n")
 PY
   "${PIXI_PY}" - "${run_root}/arm.json" "${PROVENANCE}/run.json" "${label}" "${workers}" \
-    "${native_atomic}" "${output}" "${cache}" "${run_root}/science_environment.json" \
+    "${native_atomic}" "${hybrid}" "${output}" "${cache}" "${run_root}/science_environment.json" \
     "${SLURM_JOB_ID}" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
-target, run_path, label, workers, native_atomic, output, cache, science_environment, job_id = sys.argv[1:]
+(target, run_path, label, workers, native_atomic, hybrid, output, cache,
+ science_environment, job_id) = sys.argv[1:]
 run = json.load(open(run_path, encoding="utf-8"))
 def sha256(path):
     digest = hashlib.sha256()
@@ -630,9 +714,10 @@ keys = ("git_head", "production_candidate_head", "gpu_uuid", "node",
         "relion_bind_sha256", "interpreter_sha256", "cusparse_sha256", "scorecard_sha256",
         "acceptance_config_sha256", "analyzer_source_sha256", "science_contract_sha256")
 payload = {key: run[key] for key in keys}
-payload.update(schema="recovar.vdam_coarse_combined_true200_arm.v2", label=label,
+payload.update(schema="recovar.vdam_coarse_combined_true200_arm.v3", label=label,
                job_id=job_id,
                multistream_workers=int(workers), native_atomic_reduction=int(native_atomic),
+               coarse_gemm_hybrid=int(hybrid),
                output_dir=str(Path(output).resolve()),
                jax_cache_dir=str(Path(cache).resolve()), exit_status=0, fresh_process=True,
                fresh_jax_cache=True, initial_model_profile=True,
@@ -646,12 +731,35 @@ PY
       arm.json science_environment.json output/run_native_options.json | \
       LC_ALL=C sort | xargs sha256sum
   ) > "${run_root}/runtime_artifact_manifest.sha256"
+  validate_completed_arm "${label}" "${workers}" "${native_atomic}" "${hybrid}" 0
   write_marker_once "${run_root}/SCIENCE_COMPLETED" "job_id=${SLURM_JOB_ID}"
   test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = \
     "$(jq -r '.qualified_candidate.cuda_sha256' "${ACCEPTANCE}")"
   test "$(sha256sum "${CUSPARSE_LIBRARY}" | awk '{print $1}')" = "${EXPECTED_CUSPARSE_SHA256}"
   vdam_verify_selected_gpu "${selected_gpu_uuid}"
 done
+
+if [[ "${SENTINEL}" -eq 1 ]]; then
+  test "$(find "${ROOT}/runs" -mindepth 2 -maxdepth 2 -name SCIENCE_COMPLETED -type f | wc -l)" \
+    -eq "${RUN_LIMIT}"
+  (
+    cd "${REPO_ROOT}"
+    sha256sum "${SOURCE_FILES[@]}"
+  ) > "${ATTEMPT_PROVENANCE}/source_manifest.final.sha256"
+  cmp "${PROVENANCE}/source_manifest.sha256" \
+    "${ATTEMPT_PROVENANCE}/source_manifest.final.sha256"
+  test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_OVERLAY_HEAD}"
+  test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1)"
+  test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = \
+    "$(jq -r '.qualified_candidate.cuda_sha256' "${ACCEPTANCE}")"
+  test "$(sha256sum "${CUSPARSE_LIBRARY}" | awk '{print $1}')" = \
+    "${EXPECTED_CUSPARSE_SHA256}"
+  vdam_verify_selected_gpu "${selected_gpu_uuid}"
+  write_marker_once "${ROOT}/SENTINEL_PASSED" \
+    "job_id=${SLURM_JOB_ID} arms=${RUN_LIMIT} classification=non_scoring_setup_sentinel"
+  write_marker_once "${ROOT}/COMPLETED" "job_id=${SLURM_JOB_ID} status=sentinel"
+  exit 0
+fi
 
 if [[ ! -e "${ROOT}/RUNS_COMPLETED" ]]; then
   write_marker_once "${ROOT}/RUNS_COMPLETED" "job_id=${SLURM_JOB_ID}"
@@ -670,7 +778,8 @@ trap - ERR
 set +e
 (
   cd "${REPO_ROOT}"
-  env PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" "${ANALYZER}" \
+  env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" PYTHONPATH="${REPO_ROOT}" \
+    "${PIXI_PY}" "${ANALYZER}" \
     --root "${ROOT}" \
     --acceptance "${ACCEPTANCE}" \
     --scorecard "${SCORECARD}" \
