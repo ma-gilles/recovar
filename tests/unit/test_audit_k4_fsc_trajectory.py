@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,7 @@ def test_script_path_invocation_resolves_repository_imports(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     assert "--case-root" in result.stdout
     assert "--n-classes" in result.stdout
+    assert "--pair-workers" in result.stdout
 
 
 def test_generic_script_path_invocation_resolves_repository_imports(tmp_path) -> None:
@@ -187,6 +189,89 @@ def test_complete_k2_trajectory_uses_requested_class_count(tmp_path, monkeypatch
         assert "final_rec002_rel001_cross" in curves.files
         assert not any("rec003" in key for key in curves.files)
     assert "# K=2 FSC trajectory audit" in (tmp_path / "report.md").read_text()
+
+
+@pytest.mark.unit
+def test_pair_workers_default_to_serial_and_must_be_positive(tmp_path):
+    args = auditor._parse_args(["--case-root", str(tmp_path)])
+
+    assert args.pair_workers == 1
+    with pytest.raises(SystemExit) as exc_info:
+        auditor._parse_args(["--case-root", str(tmp_path), "--pair-workers", "0"])
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.unit
+def test_parallel_pair_scores_preserve_row_major_order_after_out_of_order_completion(monkeypatch):
+    lhs = [np.asarray([row], dtype=np.float64) for row in range(2)]
+    rhs = [np.asarray([column], dtype=np.float64) for column in range(2)]
+    all_pairs_started = threading.Barrier(4)
+    later_pair_completed = threading.Event()
+    completion_order: list[int] = []
+    completion_lock = threading.Lock()
+
+    def fake_fsc_auc(left: np.ndarray, right: np.ndarray) -> float:
+        pair_index = int(left[0]) * 2 + int(right[0])
+        all_pairs_started.wait(timeout=5.0)
+        if pair_index == 3:
+            with completion_lock:
+                completion_order.append(pair_index)
+            later_pair_completed.set()
+        else:
+            if pair_index == 0:
+                assert later_pair_completed.wait(timeout=5.0)
+            with completion_lock:
+                completion_order.append(pair_index)
+        return float(pair_index) + 0.25
+
+    monkeypatch.setattr(auditor, "_fsc_auc", fake_fsc_auc)
+
+    scores = auditor._assignment_score_matrix(lhs, rhs, pair_workers=4)
+
+    assert completion_order.index(3) < completion_order.index(0)
+    np.testing.assert_array_equal(scores, [[0.25, 1.25], [2.25, 3.25]])
+
+
+@pytest.mark.unit
+def test_serial_and_parallel_audits_emit_identical_payloads(tmp_path, monkeypatch):
+    case_root, _ = _make_case(
+        tmp_path,
+        monkeypatch,
+        recovar_indices=(0,),
+        relion_iterations=(1,),
+        n_classes=2,
+    )
+    serial_dir = tmp_path / "serial"
+    parallel_dir = tmp_path / "parallel"
+
+    serial_status, serial_report, serial_npz = _run(
+        case_root,
+        serial_dir,
+        "--n-classes",
+        "2",
+        "--pair-workers",
+        "1",
+    )
+    parallel_status, parallel_report, parallel_npz = _run(
+        case_root,
+        parallel_dir,
+        "--n-classes",
+        "2",
+        "--pair-workers",
+        "4",
+    )
+
+    assert serial_status == parallel_status == 0
+    assert parallel_report == serial_report
+    assert (parallel_dir / "report.json").read_bytes() == (serial_dir / "report.json").read_bytes()
+    assert (parallel_dir / "report.md").read_bytes() == (serial_dir / "report.md").read_bytes()
+    with (
+        np.load(serial_npz, allow_pickle=False) as serial_shellwise,
+        np.load(parallel_npz, allow_pickle=False) as parallel_shellwise,
+    ):
+        assert parallel_shellwise.files == serial_shellwise.files
+        for key in serial_shellwise.files:
+            np.testing.assert_array_equal(parallel_shellwise[key], serial_shellwise[key])
 
 
 @pytest.mark.unit

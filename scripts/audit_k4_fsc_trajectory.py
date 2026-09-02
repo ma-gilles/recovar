@@ -14,12 +14,13 @@ normalized FSC-AUC; correlation is intentionally not computed.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import math
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -215,8 +216,45 @@ def _load_relion_numbered_classes(paths: dict[int, Path], *, n_classes: int) -> 
     return [_load_relion_volume(paths[class_id]) for class_id in range(1, n_classes + 1)]
 
 
-def _assignment_score_matrix(lhs: list[np.ndarray], rhs: list[np.ndarray]) -> np.ndarray:
-    return np.asarray([[_fsc_auc(a, b) for b in rhs] for a in lhs], dtype=np.float64)
+def _ordered_pair_score_matrix(
+    n_rows: int,
+    n_columns: int,
+    score_pair: Callable[[int, int], float],
+    *,
+    pair_workers: int,
+) -> np.ndarray:
+    """Evaluate independent pair scores while preserving row-major result order."""
+    pair_workers = int(pair_workers)
+    if pair_workers < 1:
+        raise ValueError(f"pair_workers must be positive, got {pair_workers}")
+    pair_order = [(row, column) for row in range(n_rows) for column in range(n_columns)]
+
+    def evaluate(pair: tuple[int, int]) -> float:
+        return float(score_pair(*pair))
+
+    worker_count = min(pair_workers, len(pair_order))
+    if worker_count <= 1:
+        scores = map(evaluate, pair_order)
+        return np.asarray(list(scores), dtype=np.float64).reshape(n_rows, n_columns)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        # Executor.map yields in input order even when later pairs finish first.
+        scores = executor.map(evaluate, pair_order)
+        return np.asarray(list(scores), dtype=np.float64).reshape(n_rows, n_columns)
+
+
+def _assignment_score_matrix(
+    lhs: list[np.ndarray],
+    rhs: list[np.ndarray],
+    *,
+    pair_workers: int = 1,
+) -> np.ndarray:
+    return _ordered_pair_score_matrix(
+        len(lhs),
+        len(rhs),
+        lambda row, column: _fsc_auc(lhs[row], rhs[column]),
+        pair_workers=pair_workers,
+    )
 
 
 def _gt_pair_assignment(
@@ -226,14 +264,18 @@ def _gt_pair_assignment(
     gt: list[np.ndarray],
     *,
     n_classes: int,
+    pair_workers: int = 1,
 ) -> tuple[list[int], np.ndarray]:
-    scores = np.empty((n_classes, n_classes), dtype=np.float64)
-    for rec_id in range(n_classes):
+    def score_pair(rec_id: int, gt_id: int) -> float:
         rel_id = rel_for_rec[rec_id]
-        for gt_id in range(n_classes):
-            scores[rec_id, gt_id] = 0.5 * (
-                _fsc_auc(rec_merged[rec_id], gt[gt_id]) + _fsc_auc(rel_merged[rel_id], gt[gt_id])
-            )
+        return 0.5 * (_fsc_auc(rec_merged[rec_id], gt[gt_id]) + _fsc_auc(rel_merged[rel_id], gt[gt_id]))
+
+    scores = _ordered_pair_score_matrix(
+        n_classes,
+        n_classes,
+        score_pair,
+        pair_workers=pair_workers,
+    )
     return _hungarian_max(scores, label="matched-pair-to-GT", n_classes=n_classes), scores
 
 
@@ -372,17 +414,23 @@ def _numbered_row(
     relion_dir: Path,
     fixture_particles_star: Path,
     n_classes: int,
+    pair_workers: int,
 ) -> dict[str, Any]:
     rec = _load_recovar_numbered_classes(rec_paths, n_classes=n_classes)
     rel = _load_relion_numbered_classes(rel_paths, n_classes=n_classes)
-    score_matrix = _assignment_score_matrix(rec[2], rel)
+    score_matrix = _assignment_score_matrix(rec[2], rel, pair_workers=pair_workers)
     rel_for_rec = _hungarian_max(
         score_matrix,
         label=f"it{rel_iteration:03d} RECOVAR-to-RELION",
         n_classes=n_classes,
     )
     gt_for_rec, gt_score_matrix = _gt_pair_assignment(
-        rec[2], rel, rel_for_rec, gt, n_classes=n_classes
+        rec[2],
+        rel,
+        rel_for_rec,
+        gt,
+        n_classes=n_classes,
+        pair_workers=pair_workers,
     )
     return {
         "recovar_index": rec_iteration,
@@ -458,6 +506,7 @@ def _final_metrics(
     gt: list[np.ndarray],
     shellwise: dict[str, np.ndarray],
     n_classes: int,
+    pair_workers: int,
 ) -> dict[str, Any]:
     rec_paths = _discover_final(
         recovar_dir,
@@ -474,12 +523,17 @@ def _final_metrics(
                 f"half-average at iteration {recovar_iteration}"
             )
     rel = _load_relion_numbered_classes(relion_last_paths, n_classes=n_classes)
-    score_matrix = _assignment_score_matrix(rec, rel)
+    score_matrix = _assignment_score_matrix(rec, rel, pair_workers=pair_workers)
     rel_for_rec = _hungarian_max(
         score_matrix, label="final RECOVAR-to-RELION", n_classes=n_classes
     )
     gt_for_rec, gt_score_matrix = _gt_pair_assignment(
-        rec, rel, rel_for_rec, gt, n_classes=n_classes
+        rec,
+        rel,
+        rel_for_rec,
+        gt,
+        n_classes=n_classes,
+        pair_workers=pair_workers,
     )
     classes = []
     for rec_id in range(n_classes):
@@ -558,6 +612,9 @@ def _apply_gates(
 
 def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     n_classes = int(args.n_classes)
+    pair_workers = int(getattr(args, "pair_workers", 1))
+    if pair_workers < 1:
+        raise ValueError(f"pair_workers must be positive, got {pair_workers}")
     case_root = args.case_root.resolve()
     case_config = case_root / "case_config.json"
     if case_config.is_file():
@@ -608,6 +665,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
             relion_dir=relion_dir,
             fixture_particles_star=fixture_particles_star,
             n_classes=n_classes,
+            pair_workers=pair_workers,
         )
         for rec_iteration, rel_iteration in pairs
     ]
@@ -621,6 +679,7 @@ def audit_case(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.n
         gt=gt,
         shellwise=shellwise,
         n_classes=n_classes,
+        pair_workers=pair_workers,
     )
     failures = _apply_gates(
         rows,
@@ -732,9 +791,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--min-cross-fsc-auc", type=float, default=0.995)
     parser.add_argument("--min-gt-delta", type=float, default=-0.002)
     parser.add_argument("--min-class-agreement", type=float, default=0.99)
+    parser.add_argument(
+        "--pair-workers",
+        type=int,
+        default=1,
+        help=(
+            "Number of independent K^2 FSC pairs to evaluate concurrently. "
+            "Results retain deterministic row-major order; the default of 1 "
+            "preserves the historical serial execution path."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.n_classes < 2:
         parser.error("--n-classes must be at least 2")
+    if args.pair_workers < 1:
+        parser.error("--pair-workers must be positive")
     return args
 
 
