@@ -28,6 +28,10 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.flat_local_rows import (
+    build_pool_flat_local_row_plan,
+    encode_flat_local_row_plan,
+)
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     centered_half_indices_to_fftw_half_indices,
     make_fourier_window_spec,
@@ -2985,6 +2989,61 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
     return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, padded_batch_size
 
 
+def _plan_flat_local_row_capacities(
+    bucket_specs,
+    *,
+    rotation_block_size: int,
+    exact_local_bucket_radix: int,
+) -> dict[tuple[int, int], int]:
+    """Choose one packed-row shape for every existing dense bucket ABI."""
+
+    capacities: dict[tuple[int, int], int] = {}
+    for bucket in bucket_specs:
+        physical_image_count = int(np.asarray(bucket.image_indices).shape[0])
+        dense_batch_size = max(
+            physical_image_count,
+            int(getattr(bucket, "bucket_image_count", physical_image_count)),
+        )
+        dense_rotation_count = int(bucket.bucket_rotation_count)
+        plan = build_pool_flat_local_row_plan(
+            np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
+            dense_rotation_count,
+            pool_size=3,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=exact_local_bucket_radix,
+            dense_batch_size=dense_batch_size,
+        )
+        key = (dense_batch_size, dense_rotation_count)
+        capacities[key] = max(capacities.get(key, 0), int(plan.packed_row_count))
+    return capacities
+
+
+def _build_flat_local_row_argument(
+    bucket: LocalBucketSpec,
+    capacities: dict[tuple[int, int], int],
+    *,
+    dense_batch_size: int,
+    rotation_block_size: int,
+    exact_local_bucket_radix: int,
+) -> np.ndarray:
+    """Materialize one source-ordered packed plan at its shared static shape."""
+
+    dense_rotation_count = int(bucket.bucket_rotation_count)
+    key = (int(dense_batch_size), dense_rotation_count)
+    if key not in capacities:
+        raise ValueError(f"flat local row capacity is missing dense bucket ABI {key}")
+    plan = build_pool_flat_local_row_plan(
+        np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
+        dense_rotation_count,
+        pool_size=3,
+        rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
+        packed_row_count=int(capacities[key]),
+        dense_batch_size=int(dense_batch_size),
+    )
+    return encode_flat_local_row_plan(plan)
+
+
 _FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA = "image_pre_shifts"
 
 
@@ -4163,6 +4222,7 @@ def run_local_em_exact(
     _fixed_capacity_enabled: bool = False,
     _fixed_capacity_class_count: int | None = None,
     _fixed_capacity_whole_boundary_enabled: bool = False,
+    _flat_local_rows_enabled: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -4172,6 +4232,7 @@ def run_local_em_exact(
     fixed_capacity_whole_boundary_enabled = bool(
         _fixed_capacity_whole_boundary_enabled
     )
+    flat_local_rows_enabled = bool(_flat_local_rows_enabled)
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -4192,6 +4253,10 @@ def run_local_em_exact(
     relion_exact_score_translation = bool(relion_exact_score_translation)
     relion_exact_bpref_operands = bool(relion_exact_bpref_operands)
     relion_exact_fine_diff2 = bool(relion_exact_fine_diff2)
+    if flat_local_rows_enabled and not relion_exact_fine_diff2:
+        raise ValueError(
+            "flat local rows require exact RELION fine diff2"
+        )
     if relion_wavg_sequential_cuda is not None:
         relion_wavg_sequential_cuda = bool(relion_wavg_sequential_cuda)
     preserve_bpref_particle_order = bool(preserve_bpref_particle_order)
@@ -4636,6 +4701,7 @@ def run_local_em_exact(
     chunk_planned_padded_image_counts = []
     chunk_local_rotations = []
     chunk_padded_rotations = []
+    chunk_flat_score_rows = []
     chunk_planned_padded_rotations = []
     chunk_unique_rotations = []
     chunk_nonzero_posterior_rows = []
@@ -4645,6 +4711,7 @@ def run_local_em_exact(
     local_total_hypotheses = 0
     total_significant_samples = 0
     total_reconstruction_rows = 0
+    total_flat_score_rows = 0
     reconstruction_sample_indices_by_image = (
         [np.zeros(0, dtype=np.int64) for _ in range(n_images)] if return_reconstruction_sample_indices else None
     )
@@ -4815,6 +4882,15 @@ def run_local_em_exact(
             raise ValueError(
                 "fixed-capacity score-only execution requires every authoritative local call"
             )
+    flat_local_row_capacities = (
+        _plan_flat_local_row_capacities(
+            bucket_specs,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+        )
+        if flat_local_rows_enabled
+        else {}
+    )
     if bucket_specs:
         bucket_rotation_counts = np.asarray(
             [int(bucket.bucket_rotation_count) for bucket in bucket_specs],
@@ -5026,6 +5102,8 @@ def run_local_em_exact(
         raise ValueError(
             "fixed-capacity score-only execution requires the mature local big-JIT bucket path",
         )
+    if flat_local_rows_enabled and not use_big_jit_buckets:
+        raise ValueError("flat local rows require the mature local big-JIT bucket path")
     if relion_exact_fine_diff2 and not use_big_jit_buckets:
         raise ValueError("exact RELION fine diff2 requires the local big-JIT bucket path")
     mean_for_proj_big_jit = mean_for_proj
@@ -5371,6 +5449,8 @@ def run_local_em_exact(
                 f"fixed-capacity call {fixed_capacity_call_view.call_index} did not reach "
                 "the mature local big-JIT bucket path"
             )
+        if flat_local_rows_enabled and not execute_big_jit_bucket:
+            raise ValueError("flat local rows did not reach the mature local big-JIT bucket path")
         if collect_profile_stats:
             executed_padded_image_count = (
                 max(
@@ -5386,6 +5466,20 @@ def run_local_em_exact(
             chunk_padded_image_counts.append(executed_padded_image_count)
             chunk_padded_rotations.append(executed_padded_rotations)
             total_padded_rotations += executed_padded_rotations
+            flat_score_rows = (
+                int(
+                    flat_local_row_capacities[
+                        (
+                            int(executed_padded_image_count),
+                            int(bucket.bucket_rotation_count),
+                        )
+                    ]
+                )
+                if flat_local_rows_enabled
+                else executed_padded_rotations
+            )
+            chunk_flat_score_rows.append(flat_score_rows)
+            total_flat_score_rows += flat_score_rows
 
         if execute_big_jit_bucket:
             if batch_data is None:
@@ -5650,8 +5744,21 @@ def run_local_em_exact(
                 )
             )
             return_big_jit_debug_operands = bool(debug_score_dump_operands and score_debug_bucket_matches)
+            if flat_local_rows_enabled and score_only and return_big_jit_debug_operands:
+                raise ValueError("flat local rows do not yet support dense projection operand dumps")
             if return_big_jit_debug_arrays:
                 big_jit_debug_bucket_count += 1
+            flat_local_row_argument = (
+                _build_flat_local_row_argument(
+                    unpadded_bucket,
+                    flat_local_row_capacities,
+                    dense_batch_size=batch_size,
+                    rotation_block_size=rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                )
+                if flat_local_rows_enabled
+                else np.zeros((1, 3), dtype=np.int32)
+            )
             big_jit_arguments = (
                 jnp.asarray(batch_data),
                 jnp.asarray(ctf_params),
@@ -5701,6 +5808,7 @@ def run_local_em_exact(
                 jnp.asarray(bucket.local_rotation_ids, dtype=jnp.int32),
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(_local_mstep_rotations(bucket)),
+                jnp.asarray(flat_local_row_argument, dtype=jnp.int32),
                 local_rotation_log_prior_arg,
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),
@@ -5741,6 +5849,7 @@ def run_local_em_exact(
                 projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
                 relion_exact_bpref_operands=relion_exact_bpref_operands,
                 relion_exact_fine_diff2=relion_exact_fine_diff2,
+                use_flat_local_rows=flat_local_rows_enabled,
                 relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
                 relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
                 relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
@@ -8669,6 +8778,8 @@ def run_local_em_exact(
         ),
         "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
         "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
+        "flat_local_rows_enabled": np.asarray(flat_local_rows_enabled),
+        "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
         "chunk_planned_padded_rotations": np.asarray(
             chunk_planned_padded_rotations,
             dtype=np.int32,
@@ -8679,6 +8790,7 @@ def run_local_em_exact(
         "chunk_significant_samples": np.asarray(chunk_significant_samples, dtype=np.int32),
         "sum_union_rows": np.int64(total_local_rotations),
         "sum_padded_rows": np.int64(total_padded_rotations),
+        "sum_flat_score_rows": np.int64(total_flat_score_rows),
         "sum_planned_padded_rows": np.int64(total_planned_padded_rotations),
         "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
         "sum_reconstruction_rows": np.int64(total_reconstruction_rows),
@@ -8710,6 +8822,11 @@ def run_local_em_exact(
         "sparse_adjoint_chunk_count": np.int64(sparse_adjoint_chunk_count),
         "local_pad_fraction": np.float64(
             0.0 if total_padded_rotations == 0 else 1.0 - total_local_rotations / total_padded_rotations
+        ),
+        "flat_score_row_reduction_fraction": np.float64(
+            0.0
+            if total_padded_rotations == 0
+            else 1.0 - total_flat_score_rows / total_padded_rotations
         ),
         "n_windowed": np.int32(n_windowed),
     }

@@ -25,6 +25,21 @@ class FlatLocalRowPlan:
     packed_row_count: int
 
 
+def encode_flat_local_row_plan(plan: FlatLocalRowPlan) -> np.ndarray:
+    """Encode row/image/presence metadata as one JAX-friendly int32 array."""
+
+    if not isinstance(plan, FlatLocalRowPlan):
+        raise TypeError("flat local row encoding requires a FlatLocalRowPlan")
+    return np.stack(
+        (
+            plan.image_indices,
+            plan.rotation_rows,
+            plan.present_mask.astype(np.int32),
+        ),
+        axis=1,
+    ).astype(np.int32, copy=False)
+
+
 def build_pool_flat_local_row_plan(
     rotation_counts,
     dense_rotation_count: int,

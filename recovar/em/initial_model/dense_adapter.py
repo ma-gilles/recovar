@@ -70,6 +70,7 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
+_FLAT_LOCAL_ROWS_ENV = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
 _COMPACT_SPARSE_PASS2_ENV = "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
@@ -108,6 +109,13 @@ def _exact_relion_fine_diff2_enabled() -> bool:
     """Use RELION's CUDA fine-score arithmetic unless explicitly disabled."""
 
     setting = os.environ.get(_EXACT_RELION_FINE_DIFF2_ENV, "1").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _flat_local_rows_enabled() -> bool:
+    """Enable the packed-row exact scorer for controlled InitialModel A/B runs."""
+
+    setting = os.environ.get(_FLAT_LOCAL_ROWS_ENV, "0").strip().lower()
     return setting not in {"0", "false", "no", "off"}
 
 
@@ -1393,6 +1401,9 @@ def _run_sparse_pass2_initial_model_estep(
                     ),
                     relion_exact_fine_diff2=use_exact_fine_diff2,
                     relion_exact_score_translation=use_exact_fine_diff2,
+                    _flat_local_rows_enabled=bool(
+                        use_exact_fine_diff2 and _flat_local_rows_enabled()
+                    ),
                     relion_wavg_sequential_cuda=(
                         bool(config.relion_wavg_sequential_cuda)
                         if use_exact_local_relion_operands

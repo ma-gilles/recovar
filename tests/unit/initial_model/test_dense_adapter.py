@@ -928,6 +928,7 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
 def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch):
     calls = {}
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", raising=False)
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
 
@@ -1017,6 +1018,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
             "preserve_bpref_particle_order"
         ]
         calls["local_relion_exact_fine_diff2"] = kwargs["relion_exact_fine_diff2"]
+        calls["local_flat_local_rows"] = kwargs["_flat_local_rows_enabled"]
         calls["local_relion_exact_score_translation"] = kwargs[
             "relion_exact_score_translation"
         ]
@@ -1173,6 +1175,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_relion_exact_bpref_operands"] is True
     assert calls["local_preserve_bpref_particle_order"] is False
     assert calls["local_relion_exact_fine_diff2"] is True
+    assert calls["local_flat_local_rows"] is False
     assert calls["local_relion_exact_score_translation"] is True
     assert calls["local_relion_wavg_sequential_cuda"] is True
     assert calls["local_exact_local_bucket_radix"] == 4
@@ -1196,6 +1199,19 @@ def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
     for value in ("0", "false", "NO", "Off"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", value)
         assert _exact_relion_fine_diff2_enabled() is False
+
+
+def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
+    from recovar.em.initial_model.dense_adapter import _flat_local_rows_enabled
+
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
+    assert _flat_local_rows_enabled() is False
+    for value in ("1", "true", "YES", "On"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", value)
+        assert _flat_local_rows_enabled() is True
+    for value in ("0", "false", "NO", "Off"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", value)
+        assert _flat_local_rows_enabled() is False
 
 
 def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch):

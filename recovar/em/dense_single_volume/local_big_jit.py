@@ -22,6 +22,7 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
     batch_adjoint_slice_volume_maybe_windowed as _batch_adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.flat_local_rows import scatter_flat_local_rows
 from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     half_image_phase_factors,
@@ -880,6 +881,7 @@ def _project_local_half_spectrum(
         "projection_mask_current_image_disk",
         "relion_exact_bpref_operands",
         "relion_exact_fine_diff2",
+        "use_flat_local_rows",
         "relion_wavg_sequential_cuda",
         "relion_cuda_preprocess_radius",
         "relion_cuda_preprocess_cosine_width",
@@ -961,6 +963,7 @@ def run_local_bucket_big_jit(
     local_rotation_ids_for_projection_cache,
     local_rotations,
     local_mstep_rotations,
+    flat_local_row_plan,
     rotation_log_prior,
     translation_log_prior,
     rotation_mask,
@@ -1000,6 +1003,7 @@ def run_local_bucket_big_jit(
     projection_mask_current_image_disk: bool = True,
     relion_exact_bpref_operands: bool = False,
     relion_exact_fine_diff2: bool = False,
+    use_flat_local_rows: bool = False,
     relion_wavg_sequential_cuda: bool | None = None,
     relion_cuda_preprocess_radius: float = 0.0,
     relion_cuda_preprocess_cosine_width: float = 0.0,
@@ -1054,6 +1058,25 @@ def run_local_bucket_big_jit(
         or return_deferred_mstep_inputs
     ):
         raise ValueError("score_only local big-JIT requires disabled adjoints, no noise, and no M-step outputs")
+    flat_local_row_plan = jnp.asarray(flat_local_row_plan)
+    if use_flat_local_rows:
+        if not relion_exact_fine_diff2:
+            raise ValueError(
+                "flat local rows require exact RELION fine diff2"
+            )
+        if score_only and return_debug_operands:
+            raise ValueError(
+                "flat local rows do not yet support dense projection operand dumps"
+            )
+        if (
+            flat_local_row_plan.dtype != jnp.int32
+            or flat_local_row_plan.ndim != 2
+            or flat_local_row_plan.shape[0] <= 0
+            or flat_local_row_plan.shape[1] != 3
+        ):
+            raise ValueError(
+                "flat local row plan must be a nonempty int32 array with shape (rows, 3)"
+            )
     if return_deferred_mstep_inputs and (
         return_mstep_tensors
         or accumulate_noise
@@ -1329,14 +1352,42 @@ def run_local_bucket_big_jit(
                 shifted_noise = shifted_half_with_dc
             ctf2_over_nv_recon = ctf2_over_nv_recon_half_with_dc
 
-    flat_rotations = local_rotations.reshape(local_rotations.shape[0] * local_rotations.shape[1], 3, 3)
-    flat_mstep_rotations = local_mstep_rotations.reshape(
-        local_mstep_rotations.shape[0] * local_mstep_rotations.shape[1],
-        3,
-        3,
-    )
+    packed_score_only_projection = bool(use_flat_local_rows and score_only)
+    if use_flat_local_rows:
+        flat_row_image_ids = flat_local_row_plan[:, 0]
+        flat_row_rotation_rows = flat_local_row_plan[:, 1]
+        flat_row_present_mask = flat_local_row_plan[:, 2] != 0
+    else:
+        flat_row_image_ids = jnp.zeros((1,), dtype=jnp.int32)
+        flat_row_rotation_rows = jnp.zeros((1,), dtype=jnp.int32)
+        flat_row_present_mask = jnp.ones((1,), dtype=bool)
+    if packed_score_only_projection:
+        flat_rotations = local_rotations[
+            flat_row_image_ids,
+            flat_row_rotation_rows,
+        ]
+        flat_mstep_rotations = local_mstep_rotations[
+            flat_row_image_ids,
+            flat_row_rotation_rows,
+        ]
+    else:
+        flat_rotations = local_rotations.reshape(
+            local_rotations.shape[0] * local_rotations.shape[1], 3, 3
+        )
+        flat_mstep_rotations = local_mstep_rotations.reshape(
+            local_mstep_rotations.shape[0] * local_mstep_rotations.shape[1],
+            3,
+            3,
+        )
     if use_relion_projection_cache:
-        safe_rotation_ids = jnp.maximum(local_rotation_ids_for_projection_cache.reshape(-1), 0)
+        if packed_score_only_projection:
+            selected_rotation_ids = local_rotation_ids_for_projection_cache[
+                flat_row_image_ids,
+                flat_row_rotation_rows,
+            ]
+        else:
+            selected_rotation_ids = local_rotation_ids_for_projection_cache.reshape(-1)
+        safe_rotation_ids = jnp.maximum(selected_rotation_ids, 0)
         cache_rows = relion_projection_cache_id_map[safe_rotation_ids]
         proj_half_flat = relion_projection_cache[cache_rows]
     else:
@@ -1360,16 +1411,16 @@ def run_local_bucket_big_jit(
         )
     if use_window:
         if use_compact_relion_projector_projection:
-            proj_half = proj_half_flat[:, projection_score_take_indices].reshape(
-                batch_size,
-                local_rotations.shape[1],
-                projection_score_take_indices.shape[0],
-            )
+            score_projection_rows = proj_half_flat[:, projection_score_take_indices]
         else:
-            proj_half = proj_half_flat[:, window_indices].reshape(
+            score_projection_rows = proj_half_flat[:, window_indices]
+        if packed_score_only_projection:
+            proj_half = score_projection_rows
+        else:
+            proj_half = score_projection_rows.reshape(
                 batch_size,
                 local_rotations.shape[1],
-                window_indices.shape[0],
+                score_projection_rows.shape[1],
             )
         if not score_only:
             if use_compact_relion_projector_projection:
@@ -1391,14 +1442,20 @@ def run_local_bucket_big_jit(
                         recon_window_indices.shape[0],
                     )
     else:
-        proj_half = proj_half_flat.reshape(batch_size, local_rotations.shape[1], -1)
+        if packed_score_only_projection:
+            proj_half = proj_half_flat
+        else:
+            proj_half = proj_half_flat.reshape(batch_size, local_rotations.shape[1], -1)
         if not score_only:
             if return_deferred_mstep_inputs and not accumulate_noise and not return_debug_operands:
                 proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
             else:
                 proj_for_noise = proj_half
 
-    proj_weighted = proj_half * score_half_weights[None, None, :]
+    if packed_score_only_projection:
+        proj_weighted = proj_half * score_half_weights[None, :]
+    else:
+        proj_weighted = proj_half * score_half_weights[None, None, :]
 
     direct_scores = None
     if relion_exact_fine_diff2:
@@ -1419,15 +1476,43 @@ def run_local_bucket_big_jit(
             image_shape=image_shape,
             current_size=norm_current_size,
         )
-        direct_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
-            jnp.asarray(proj_half, dtype=jnp.complex64),
-            corrected_score,
-            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-            direct_weight,
-            jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
-            direct_highres,
-            current_size=norm_current_size,
-        )
+        if use_flat_local_rows:
+            flat_score_projection = (
+                proj_half
+                if packed_score_only_projection
+                else proj_half[flat_row_image_ids, flat_row_rotation_rows]
+            )
+            direct_diff2_flat = (
+                cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
+                    jnp.asarray(flat_score_projection, dtype=jnp.complex64),
+                    flat_row_image_ids,
+                    corrected_score,
+                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                    direct_weight,
+                    jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
+                    direct_highres,
+                    current_size=norm_current_size,
+                )
+            )
+            direct_diff2 = scatter_flat_local_rows(
+                direct_diff2_flat,
+                flat_row_image_ids,
+                flat_row_rotation_rows,
+                flat_row_present_mask,
+                batch_size=batch_size,
+                dense_rotation_count=int(local_rotations.shape[1]),
+                fill_value=jnp.inf,
+            )
+        else:
+            direct_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+                jnp.asarray(proj_half, dtype=jnp.complex64),
+                corrected_score,
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                direct_weight,
+                jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
+                direct_highres,
+                current_size=norm_current_size,
+            )
         direct_candidate_mask = rotation_mask[:, :, None]
         if sample_mask is not None:
             direct_candidate_mask = direct_candidate_mask & sample_mask
