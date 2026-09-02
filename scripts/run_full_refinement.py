@@ -758,7 +758,7 @@ def _load_relion_mask_params(optimiser_star_path):
 
 
 def _load_relion_max_significants(optimiser_star_path):
-    """Extract RELION's maximum-significant-poses setting from an optimiser STAR."""
+    """Extract RELION's saved maximum-significant-poses argument."""
     text = Path(optimiser_star_path).read_text(errors="ignore")
 
     match = re.search(r"rlnMaximumSignificantPoses\s+(-?[0-9]+)", text)
@@ -3112,8 +3112,12 @@ def main():
         "--max_significants",
         type=int,
         default=None,
-        help="Max significant samples per image. Use <=0 for RELION-style uncapped mode. "
-        "If omitted, read _rlnMaximumSignificantPoses from the optimiser STAR.",
+        help=(
+            "Active maximum significant samples per image. Use <=0 for an "
+            "uncapped diagnostic. If omitted, resolve RELION's runtime value "
+            "from the optimiser STAR; in 3-D gradient mode a saved -1 means "
+            "100 times the class count."
+        ),
     )
     parser.add_argument(
         "--tau2_fudge",
@@ -4389,12 +4393,14 @@ def main():
         fixed_diagnostic_source_paths=fixed_diagnostic_source_paths,
     )
     relion_firstiter_ini_high_angstrom = None
+    relion_optimiser_metadata = None
     if optimiser_star is not None:
         from recovar.em.sampling import read_relion_optimiser_metadata
 
-        expected_accuracy_do_ctf_correction = read_relion_optimiser_metadata(
-            optimiser_star,
-        ).get("do_correct_ctf")
+        relion_optimiser_metadata = read_relion_optimiser_metadata(optimiser_star)
+        expected_accuracy_do_ctf_correction = relion_optimiser_metadata.get(
+            "do_correct_ctf"
+        )
         if expected_accuracy_do_ctf_correction is not None:
             expected_accuracy_do_ctf_correction = bool(expected_accuracy_do_ctf_correction)
             logger.info(
@@ -4424,17 +4430,58 @@ def main():
             "for the post-iter1 ini_high low-pass",
             relion_firstiter_ini_high_angstrom,
         )
-    if args.max_significants is None and optimiser_star is not None:
-        relion_max_significants = _load_relion_max_significants(optimiser_star)
-        if relion_max_significants is not None:
-            args.max_significants = relion_max_significants
-            logger.info(
-                "Using RELION max_significants from %s: %d",
-                optimiser_star,
-                args.max_significants,
+    max_significants_resolution = None
+    if optimiser_star is not None and relion_optimiser_metadata is not None:
+        from recovar.em.sampling import resolve_relion_runtime_max_significants
+
+        optimiser_max_significants = relion_optimiser_metadata.get(
+            "maximum_significants_arg"
+        )
+        if optimiser_max_significants is None:
+            optimiser_max_significants = _load_relion_max_significants(optimiser_star)
+            relion_optimiser_metadata = dict(relion_optimiser_metadata)
+            relion_optimiser_metadata["maximum_significants_arg"] = (
+                optimiser_max_significants
             )
+        max_significants_resolution = resolve_relion_runtime_max_significants(
+            override=args.max_significants,
+            optimiser_metadata=relion_optimiser_metadata,
+            target_iteration=int(args.init_relion_iteration) + 1,
+            do_firstiter_cc=bool(args.firstiter_cc),
+            n_classes=int(args.n_classes),
+            reference_dimension=3,
+        )
+        args.max_significants = int(
+            max_significants_resolution["active_max_significants"]
+        )
+        logger.info(
+            "RELION max_significants: saved_arg=%s active=%d source=%s "
+            "do_grad=%s (from %s)",
+            max_significants_resolution["maximum_significants_argument"],
+            args.max_significants,
+            max_significants_resolution["source"],
+            max_significants_resolution["do_grad"],
+            optimiser_star,
+        )
     if args.max_significants is None:
         args.max_significants = 500
+        max_significants_resolution = {
+            "maximum_significants_argument": None,
+            "active_max_significants": 500,
+            "source": "recovar_default",
+            "gradient_refine": False,
+            "do_grad": False,
+            "target_iteration": int(args.init_relion_iteration) + 1,
+        }
+    elif max_significants_resolution is None:
+        max_significants_resolution = {
+            "maximum_significants_argument": None,
+            "active_max_significants": int(args.max_significants),
+            "source": "cli_override",
+            "gradient_refine": False,
+            "do_grad": False,
+            "target_iteration": int(args.init_relion_iteration) + 1,
+        }
 
     # ---- Load initial volume ----
     # CANONICAL recovar idiom for loading a volume: load_mrc + get_dft3.
@@ -5699,6 +5746,7 @@ def main():
             "auto_local_healpix_order": int(args.auto_local_healpix_order),
             "adaptive_oversampling": int(args.adaptive_oversampling),
             "max_significants": int(args.max_significants),
+            "max_significants_resolution": max_significants_resolution,
             "diagnostic_single_half": bool(args.diagnostic_single_half),
             "setup_phase_seconds": setup_phase_seconds,
             "local_profile_rows": local_profile_rows,
@@ -5781,6 +5829,17 @@ def main():
         "voxel_size": ds.voxel_size,
         "adaptive_oversampling": args.adaptive_oversampling,
         "max_significants": args.max_significants,
+        "max_significants_argument": (
+            np.nan
+            if max_significants_resolution["maximum_significants_argument"] is None
+            else int(max_significants_resolution["maximum_significants_argument"])
+        ),
+        "max_significants_source": np.asarray(
+            str(max_significants_resolution["source"])
+        ),
+        "max_significants_do_grad": np.bool_(
+            bool(max_significants_resolution["do_grad"])
+        ),
         "offset_sigma_angstrom": args.offset_sigma_angstrom,
         "tau2_fudge": np.float64(effective_tau2_fudge),
         "tau2_fudge_source": np.asarray(tau2_fudge_source),
@@ -6375,6 +6434,7 @@ def main():
             "auto_local_healpix_order": int(args.auto_local_healpix_order),
             "adaptive_oversampling": int(args.adaptive_oversampling),
             "max_significants": int(args.max_significants),
+            "max_significants_resolution": max_significants_resolution,
             "setup_phase_seconds": setup_phase_seconds,
             "local_profile_rows": local_profile_rows,
             "global_profile_rows": global_profile_rows,

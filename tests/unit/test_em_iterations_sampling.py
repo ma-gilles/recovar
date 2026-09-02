@@ -72,6 +72,8 @@ def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
             [
                 "_rlnOverallAccuracyRotations 1.030",
                 "_rlnOverallAccuracyTranslationsAngst 1.649",
+                "_rlnCurrentIteration 0",
+                "_rlnNumberOfIterations 8",
                 "_rlnHasConverged 0",
                 "_rlnNumberOfIterWithoutResolutionGain 1",
                 "_rlnChangesOptimalOrientations 0.25",
@@ -79,6 +81,11 @@ def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
                 "_rlnSmallestChangesOrientations 0.5405",
                 "_rlnSmallestChangesOffsets 0.4216",
                 "_rlnDoCorrectCtf 1",
+                "_rlnDoGradientRefine 1",
+                "_rlnDoStochasticGradientDescent 0",
+                "_rlnGradEmIters 0",
+                "_rlnGradHasConverged 0",
+                "_rlnMaximumSignificantPoses -1",
                 "",
             ]
         )
@@ -88,6 +95,8 @@ def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
 
     assert meta["overall_accuracy_rotations"] == pytest.approx(1.030)
     assert meta["overall_accuracy_translations_angst"] == pytest.approx(1.649)
+    assert meta["current_iteration"] == 0
+    assert meta["number_iterations"] == 8
     assert meta["has_converged"] == 0
     assert meta["number_iter_without_resolution_gain"] == 1
     assert meta["changes_optimal_orientations"] == pytest.approx(0.25)
@@ -95,6 +104,64 @@ def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
     assert meta["smallest_changes_orientations"] == pytest.approx(0.5405)
     assert meta["smallest_changes_offsets"] == pytest.approx(0.4216)
     assert meta["do_correct_ctf"] == 1
+    assert meta["gradient_refine"] == 1
+    assert meta["do_grad"] == 0
+    assert meta["grad_em_iters"] == 0
+    assert meta["grad_has_converged"] == 0
+    assert meta["maximum_significants_arg"] == -1
+
+
+def test_relion_gradient_runtime_max_significants_uses_3d_per_class_cap():
+    do_grad = em_sampling.relion_do_grad_for_iteration(
+        gradient_refine=True,
+        has_converged=False,
+        iteration=1,
+        number_iterations=8,
+        grad_em_iters=0,
+        do_firstiter_cc=False,
+        grad_has_converged=False,
+    )
+
+    assert do_grad is True
+    assert (
+        em_sampling.relion_active_max_significants(
+            -1,
+            do_grad=do_grad,
+            n_classes=4,
+            reference_dimension=3,
+        )
+        == 400
+    )
+
+
+def test_relion_runtime_max_significants_preserves_argument_and_firstiter_cc():
+    assert (
+        em_sampling.relion_active_max_significants(
+            37,
+            do_grad=True,
+            n_classes=4,
+            reference_dimension=3,
+        )
+        == 37
+    )
+    assert (
+        em_sampling.relion_active_max_significants(
+            -1,
+            do_grad=False,
+            n_classes=4,
+            reference_dimension=3,
+        )
+        == -1
+    )
+    assert not em_sampling.relion_do_grad_for_iteration(
+        gradient_refine=True,
+        has_converged=False,
+        iteration=1,
+        number_iterations=8,
+        grad_em_iters=0,
+        do_firstiter_cc=True,
+        grad_has_converged=False,
+    )
 
 
 def test_translations_to_indices_maps_centered_integer_offsets():

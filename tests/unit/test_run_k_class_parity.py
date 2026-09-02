@@ -94,6 +94,57 @@ def test_k_class_replay_star_precision_is_explicitly_rounded():
     assert source == "star-rounded"
 
 
+def test_k_class_replay_resolves_saved_gradient_sentinel_to_active_k4_cap():
+    from scripts.run_k_class_parity import _resolve_replay_max_significants
+
+    resolved = _resolve_replay_max_significants(
+        override=None,
+        optimiser_metadata={
+            "gradient_refine": 1,
+            "has_converged": 0,
+            "number_iterations": 8,
+            "grad_em_iters": 0,
+            "grad_has_converged": 0,
+            "maximum_significants_arg": -1,
+        },
+        target_iteration=1,
+        do_firstiter_cc=False,
+        n_classes=4,
+    )
+
+    assert resolved == {
+        "maximum_significants_argument": -1,
+        "active_max_significants": 400,
+        "source": "relion_gradient_runtime_default",
+        "gradient_refine": True,
+        "do_grad": True,
+        "target_iteration": 1,
+    }
+
+
+def test_k_class_replay_max_significants_override_can_force_uncapped():
+    from scripts.run_k_class_parity import _resolve_replay_max_significants
+
+    resolved = _resolve_replay_max_significants(
+        override=-1,
+        optimiser_metadata={
+            "gradient_refine": 1,
+            "has_converged": 0,
+            "number_iterations": 8,
+            "grad_em_iters": 0,
+            "grad_has_converged": 0,
+            "maximum_significants_arg": -1,
+        },
+        target_iteration=1,
+        do_firstiter_cc=False,
+        n_classes=4,
+    )
+
+    assert resolved["active_max_significants"] == -1
+    assert resolved["source"] == "cli_override"
+    assert resolved["do_grad"] is True
+
+
 def test_k_class_replay_inherits_relion_model_padding_factor():
     from scripts.run_k_class_parity import _resolve_relion_padding_factor
 

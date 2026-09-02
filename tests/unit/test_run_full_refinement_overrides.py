@@ -1210,6 +1210,14 @@ def test_parse_relion_cli_ini_high_is_none_when_absent_or_disabled():
     assert _parse_relion_cli_ini_high("# --i particles.star --firstiter_cc --ini_high -1 --ctf\n") is None
 
 
+def test_full_refinement_uses_active_relion_max_significants_not_saved_sentinel():
+    source = RUN_FULL_REFINEMENT.read_text()
+
+    assert "resolve_relion_runtime_max_significants" in source
+    assert 'max_significants_resolution["active_max_significants"]' in source
+    assert '"max_significants_resolution": max_significants_resolution' in source
+
+
 def test_firstiter_cc_passes_relion_cli_ini_high_to_refinement_loop():
     """RELION ``--firstiter_cc`` and ``--ini_high`` are distinct knobs.
 
