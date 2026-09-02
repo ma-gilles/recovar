@@ -34,7 +34,7 @@ RESULTS=${ROOT}/results
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 HARNESS_OUTPUT=${RESULTS}/harness
 HARNESS_RESULT=${HARNESS_OUTPUT}/gate_result.json
-HARNESS_SCHEMA=recovar.fixed_capacity_local_score_gate.v6
+HARNESS_SCHEMA=recovar.fixed_capacity_local_score_gate.v7
 FOCUSED_TEST=tests/unit/test_fixed_capacity_local_score_gate.py
 JOB_TMP_ROOT=/scratch/gpfs/GILLES/mg6942/tmp/${SLURM_JOB_ID}
 JOB_PIXI_HOME=/scratch/gpfs/GILLES/mg6942/pixi_home/${SLURM_JOB_ID}
@@ -235,6 +235,7 @@ assert payload["passed"] is True, payload
 assert payload["speed_claim_allowed"] is False, payload
 assert payload["default_promotion_allowed"] is False, payload
 assert payload["production_whole_boundary_enabled"] is True, payload
+assert payload["production_executor"] == "chronological_uniform_scan_segments", payload
 microbenchmark = payload["mechanism_microbenchmark"]
 assert microbenchmark["classification"] == "mechanism_only_not_production_speed_claim", payload
 assert microbenchmark["rows"], payload

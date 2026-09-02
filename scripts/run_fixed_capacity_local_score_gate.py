@@ -55,7 +55,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 
 
-SCHEMA = "recovar.fixed_capacity_local_score_gate.v6"
+SCHEMA = "recovar.fixed_capacity_local_score_gate.v7"
 IMAGE_SHAPE = (8, 8)
 VOLUME_SHAPE = (8, 8, 8)
 IMAGE_SIZE = int(np.prod(IMAGE_SHAPE))
@@ -1316,6 +1316,7 @@ def run_gate(
         "speed_claim_allowed": False,
         "default_promotion_allowed": False,
         "production_whole_boundary_enabled": True,
+        "production_executor": "chronological_uniform_scan_segments",
         "mechanism_microbenchmark": mechanism_microbenchmark,
         "repeat_count": int(repeat_count),
         "precision_lanes": ["float32", "float64"],

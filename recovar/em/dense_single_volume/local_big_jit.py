@@ -2201,26 +2201,50 @@ def _validate_uniform_fixed_capacity_call_program(call_program):
         isinstance(call, _FixedCapacityPreparedLocalCall) for call in call_program
     ):
         raise ValueError("fixed-capacity uniform scan requires sealed prepared calls")
-    reference_structure = jax.tree_util.tree_structure(call_program[0])
-    reference_leaves = jax.tree_util.tree_leaves(call_program[0])
-    reference_abi = tuple(
-        (tuple(np.shape(value)), np.asarray(value).dtype.str)
-        for value in reference_leaves
+    reference_structure, reference_abi = _fixed_capacity_prepared_call_abi(
+        call_program[0]
     )
     for call_index, call in enumerate(call_program[1:], start=1):
-        if jax.tree_util.tree_structure(call) != reference_structure:
+        call_structure, call_abi = _fixed_capacity_prepared_call_abi(call)
+        if call_structure != reference_structure:
             raise ValueError(
                 f"fixed-capacity uniform scan call {call_index} changed pytree structure"
             )
-        call_abi = tuple(
-            (tuple(np.shape(value)), np.asarray(value).dtype.str)
-            for value in jax.tree_util.tree_leaves(call)
-        )
         if call_abi != reference_abi:
             raise ValueError(
                 f"fixed-capacity uniform scan call {call_index} changed leaf shape or dtype"
             )
     return call_program
+
+
+def _fixed_capacity_prepared_call_abi(call):
+    if not isinstance(call, _FixedCapacityPreparedLocalCall):
+        raise ValueError("fixed-capacity call ABI requires a sealed prepared call")
+    structure = jax.tree_util.tree_structure(call)
+    abi = tuple(
+        (tuple(np.shape(value)), np.asarray(value).dtype.str)
+        for value in jax.tree_util.tree_leaves(call)
+    )
+    return structure, abi
+
+
+def _partition_uniform_fixed_capacity_calls(call_program):
+    """Partition only at chronological shape/dtype ABI transitions."""
+
+    call_program = tuple(call_program)
+    if not call_program:
+        raise ValueError("fixed-capacity segmented execution requires at least one call")
+    segments = []
+    segment_start = 0
+    prior_abi = _fixed_capacity_prepared_call_abi(call_program[0])
+    for call_index, call in enumerate(call_program[1:], start=1):
+        call_abi = _fixed_capacity_prepared_call_abi(call)
+        if call_abi != prior_abi:
+            segments.append(call_program[segment_start:call_index])
+            segment_start = call_index
+            prior_abi = call_abi
+    segments.append(call_program[segment_start:])
+    return tuple(segments)
 
 
 def _run_fixed_capacity_uniform_local_scan_program(
@@ -2329,6 +2353,49 @@ def run_fixed_capacity_uniform_local_scan(
         noise_sumw,
         static_options=canonical_options,
     )
+
+
+def run_fixed_capacity_segmented_local_scan(
+    call_program,
+    Ft_y,
+    Ft_ctf,
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    noise_scale_xa,
+    noise_scale_aa,
+    noise_sigma2_offset,
+    noise_sumw,
+    **static_options,
+):
+    """Run chronological uniform-shape segments without cloning kernel bodies."""
+
+    segments = _partition_uniform_fixed_capacity_calls(call_program)
+    carry = (
+        Ft_y,
+        Ft_ctf,
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        noise_sigma2_offset,
+        noise_sumw,
+    )
+    call_outputs = []
+    for segment in segments:
+        carry, stacked_outputs = run_fixed_capacity_uniform_local_scan(
+            segment,
+            *carry,
+            **static_options,
+        )
+        call_outputs.extend(
+            tuple(value[call_index] for value in stacked_outputs)
+            for call_index in range(len(segment))
+        )
+    return carry, tuple(call_outputs)
 
 
 @partial(

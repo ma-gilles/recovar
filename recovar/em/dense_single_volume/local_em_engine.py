@@ -109,9 +109,10 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.em.dense_single_volume.local_big_jit import (
     _noise_image_power_shells_and_per_image,
+    _partition_uniform_fixed_capacity_calls,
     _prepare_fixed_capacity_local_call,
     _reconstruct_fixed_capacity_score_only_result,
-    run_fixed_capacity_whole_local,
+    run_fixed_capacity_segmented_local_scan,
     run_local_bucket_big_jit,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
@@ -5795,10 +5796,21 @@ def run_local_em_exact(
                 if bucket_index + 1 < len(bucket_specs):
                     continue
                 fixed_capacity_whole_execution_t0 = time.time()
-                final_carry, whole_call_outputs = run_fixed_capacity_whole_local(
-                    fixed_capacity_whole_call_program,
-                    *fixed_capacity_whole_initial_carry,
-                    **fixed_capacity_whole_static_options,
+                fixed_capacity_segments = _partition_uniform_fixed_capacity_calls(
+                    fixed_capacity_whole_call_program
+                )
+                logger.info(
+                    "Exact local fixed-capacity score executor: calls=%d "
+                    "uniform_scan_segments=%d",
+                    len(fixed_capacity_whole_call_program),
+                    len(fixed_capacity_segments),
+                )
+                final_carry, whole_call_outputs = (
+                    run_fixed_capacity_segmented_local_scan(
+                        fixed_capacity_whole_call_program,
+                        *fixed_capacity_whole_initial_carry,
+                        **fixed_capacity_whole_static_options,
+                    )
                 )
                 Ft_y, Ft_ctf = final_carry[:2]
                 if return_profile:

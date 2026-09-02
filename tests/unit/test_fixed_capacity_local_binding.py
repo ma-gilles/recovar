@@ -1079,3 +1079,37 @@ def test_uniform_local_scan_reuses_mature_body_inside_lax_scan():
     assert "donate_argnums=(1, 2)" in source
     assert "jax.lax.scan" in program_source
     assert "optimization_barrier" in program_source
+
+
+def test_segmented_local_scan_partitions_only_at_chronological_abi_transitions():
+    call_a0 = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.zeros((2,), dtype=np.float32),),
+        trailing_arguments=(),
+    )
+    call_a1 = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.ones((2,), dtype=np.float32),),
+        trailing_arguments=(),
+    )
+    call_b = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.zeros((3,), dtype=np.float32),),
+        trailing_arguments=(),
+    )
+    call_a2 = local_big_jit._FixedCapacityPreparedLocalCall(
+        leading_arguments=(np.full((2,), 2, dtype=np.float32),),
+        trailing_arguments=(),
+    )
+
+    segments = local_big_jit._partition_uniform_fixed_capacity_calls(
+        (call_a0, call_a1, call_b, call_a2)
+    )
+
+    assert tuple(len(segment) for segment in segments) == (2, 1, 1)
+    flattened = tuple(call for segment in segments for call in segment)
+    assert all(
+        actual is expected
+        for actual, expected in zip(
+            flattened,
+            (call_a0, call_a1, call_b, call_a2),
+            strict=True,
+        )
+    )

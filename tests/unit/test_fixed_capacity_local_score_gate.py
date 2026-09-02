@@ -157,6 +157,7 @@ def test_fixed_capacity_local_score_gate_is_exact_on_gpu(tmp_path):
     assert payload["speed_claim_allowed"] is False
     assert payload["default_promotion_allowed"] is False
     assert payload["production_whole_boundary_enabled"] is True
+    assert payload["production_executor"] == "chronological_uniform_scan_segments"
     assert payload["mechanism_microbenchmark"] is None
     assert all(item["passed"] for item in payload["comparisons"])
     assert all(item["passed"] for item in payload["production_comparisons"])
