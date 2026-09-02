@@ -1,0 +1,90 @@
+{
+  "schema": "recovar.em_real_k4_native_signfix_causal_diagnostic.v1",
+  "admission_status": "DIAGNOSTIC_ONLY",
+  "accepted_result": false,
+  "status": "causal_pass_trajectory_pending",
+  "dataset": "EMPIAR-10076",
+  "scope": "pilot10k-128 external half 1, seed 42001, first two Class3D iterations",
+  "affected_class": 3,
+  "recovar_commit": "7136e5c8d9d38875c118b0e257859aee35f27f5a",
+  "control_recovar_commit": "8cbebdecc41d6f9f16681fb3ceedce6576348fd1",
+  "slurm": {
+    "job_id": 13348468,
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:09:22",
+    "requested_tres": "cpu=4,mem=128G,node=1,billing=10,gres/gpu=1",
+    "allocated_tres": "cpu=4,mem=128G,node=1,billing=10,gres/gpu=1",
+    "node": "della-h19g1",
+    "peak_hbm_mib": 33465,
+    "req_tres_equals_alloc_tres": true,
+    "formal_engine_performance_result": false
+  },
+  "iteration_1": {
+    "control_direct_fsc_auc": [
+      0.9955094448943199,
+      0.9964218278077377,
+      -0.9904886981387141,
+      0.9950245053876755
+    ],
+    "fixed_direct_fsc_auc": [
+      0.9955094511409629,
+      0.9964218311716261,
+      0.9904886984934127,
+      0.9950245035806001
+    ],
+    "fixed_vs_sign_corrected_control_fsc_auc": [
+      0.9999999991446427,
+      0.9999999989426547,
+      0.9999999997068267,
+      0.9999999994687702
+    ],
+    "class_assignment_agreement": {
+      "control": 0.9922,
+      "fixed": 0.9922
+    }
+  },
+  "iteration_2": {
+    "control_direct_fsc_auc": [
+      0.9918079192338368,
+      0.994875721371737,
+      -0.09384717639301889,
+      0.9918054633389357
+    ],
+    "fixed_direct_fsc_auc": [
+      0.9932965635819229,
+      0.9958547123807122,
+      0.9801318763067814,
+      0.9928345260295593
+    ],
+    "control_class_weights": [
+      0.3331009042755013,
+      0.38858974295965465,
+      0.001160633912733556,
+      0.2771487188521105
+    ],
+    "fixed_class_weights": [
+      0.3203356650991489,
+      0.3765778323796859,
+      0.03680054424940017,
+      0.26628595827176504
+    ],
+    "relion_class_weights": [
+      0.318867,
+      0.372402,
+      0.038241,
+      0.27049
+    ],
+    "class_assignment_agreement": {
+      "control": 0.9146,
+      "fixed": 0.942
+    }
+  },
+  "source_report": {
+    "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_native_signfix_half1_seed42001_it2_7136e5c8d_20260902/analysis/k4_native_signfix_causal_report.json",
+    "sha256": "25f3a772fc31d0fb630663e2f76407f89a174a9fe9aee21dd406f7e43a7a7ba8"
+  },
+  "fixed_run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_native_signfix_half1_seed42001_it2_7136e5c8d_20260902",
+  "control_run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_originfix_it8_r2_8cbebdecc_20260902",
+  "disposition": "The sign boundary is closed. Final K=4 acceptance remains pending the three-seed independent-half FSC, assignment, population, and performance audit."
+}

@@ -102,6 +102,13 @@ NATIVE_COARSE_OPERAND_DIAGNOSTIC = json.loads(
         / "real-k4-native-coarse-operands-b061776-20260902"
     ).with_suffix(".json").read_text()
 )
+NATIVE_SIGNFIX_CAUSAL_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "real-k4-native-signfix-causal-7136e5c8d-20260902"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -194,6 +201,12 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
     assert (
         registry_validator._diagnostic_registry_route(
             NATIVE_COARSE_OPERAND_DIAGNOSTIC
+        )
+        == "separate"
+    )
+    assert (
+        registry_validator._diagnostic_registry_route(
+            NATIVE_SIGNFIX_CAUSAL_DIAGNOSTIC
         )
         == "separate"
     )
@@ -305,6 +318,30 @@ def test_native_coarse_operand_diagnostic_pins_factorial_and_repeatability_bound
     assert resolved["repeatability"]["parity_arrays_bitwise"]
     assert resolved["repeatability"]["map_fsc_auc_minimum"] > 0.999999
     assert resolved["repeatability"]["map_relative_l2_maximum"] < 1e-5
+
+
+def test_native_signfix_causal_diagnostic_pins_effect_and_admission_boundary():
+    diagnostic = NATIVE_SIGNFIX_CAUSAL_DIAGNOSTIC
+    assert diagnostic["admission_status"] == "DIAGNOSTIC_ONLY"
+    assert diagnostic["accepted_result"] is False
+    assert diagnostic["status"] == "causal_pass_trajectory_pending"
+    assert diagnostic["slurm"]["req_tres_equals_alloc_tres"] is True
+    assert diagnostic["slurm"]["formal_engine_performance_result"] is False
+
+    iteration_1 = diagnostic["iteration_1"]
+    assert iteration_1["control_direct_fsc_auc"][2] < -0.99
+    assert iteration_1["fixed_direct_fsc_auc"][2] > 0.99
+    assert min(iteration_1["fixed_vs_sign_corrected_control_fsc_auc"]) > 0.999999
+
+    iteration_2 = diagnostic["iteration_2"]
+    assert iteration_2["control_class_weights"][2] < 0.002
+    assert iteration_2["fixed_class_weights"][2] > 0.03
+    assert abs(
+        iteration_2["fixed_class_weights"][2]
+        - iteration_2["relion_class_weights"][2]
+    ) < 0.005
+    assert min(iteration_2["fixed_direct_fsc_auc"]) > 0.98
+    assert iteration_2["class_assignment_agreement"]["fixed"] < 0.99
 
 
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():

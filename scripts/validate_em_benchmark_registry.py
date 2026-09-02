@@ -23,6 +23,7 @@ _SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS = {
     "recovar.em_real_k4_native_coarse_component_diagnostic.v1",
     "recovar.em_real_k4_native_coarse_operand_diagnostic.v1",
     "recovar.em_real_k4_native_coarse_score_diagnostic.v1",
+    "recovar.em_real_k4_native_signfix_causal_diagnostic.v1",
     "recovar.em_real_kclass_initialmodel_diagnostics.v1",
     "recovar.em_real_kclass_offset_prior_fullpairs.v1",
 }

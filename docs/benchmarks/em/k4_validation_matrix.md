@@ -110,6 +110,18 @@ sealed report and rerun command are documented in
 `real_kclass_halfmap_refinement.md`. This covers one coarse/fine size and one
 batch/block setting; the complete batch/block grid remains required.
 
+The subsequent three-seed 10k/128 controls exposed a post-M-step defect rather
+than a score-boundary regression: a previous-reference overlap heuristic
+sign-inverted weak class 3 after iteration 1 in all three seeds. Commit
+`7136e5c8d` removes that invalid K-class sign choice. Causal H100 job
+`13348468` changes class-3 iteration-1 FSC-AUC from `-0.990489` to
+`+0.990489` and restores iteration-2 occupancy from `0.0012` to `0.0368`
+versus RELION's `0.0382`. Its iteration-2 per-class direct FSC-AUC values are
+`[0.9933, 0.9959, 0.9801, 0.9928]`; identity-label assignment agreement
+improves from `0.9146` to `0.9420`. This closes the sign boundary only.
+Three full independent-half seeds, jobs `13348864`--`13348866`, are the
+next trajectory gate.
+
 ## Tier 2: 10k/128 multi-seed synthetic trajectories
 
 Run five autonomous iterations per case. The first twelve rows are K=4 and

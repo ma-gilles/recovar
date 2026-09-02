@@ -125,14 +125,61 @@ pixi run python -m scripts.analyze_em_real_k4_firstiter_cc_boundary \
   --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_firstiter_originfix_panel16_4a91369a3_20260902/analysis/firstiter_cc_boundary.reproduced.json
 ```
 
-The next trajectory-level gate is the 10,000-particle, two-independent-half,
-eight-iteration `pilot10k-128` run at source commit `8cbebdecc`: setup job
-`13346676`, qualification job `13346677`, output root
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_originfix_it8_r2_8cbebdecc_20260902`.
-The preceding setup job `13346480` succeeded, but its dependent job `13346481`
-failed before science because the source worktree was transiently dirty while
-this documentation was drafted. That immutable root is retained as a harness
-failure and is not a scientific attempt.
+## Post-reconstruction K-class sign boundary
+
+The first full `pilot10k-128` controls exposed a separate deterministic
+second-iteration defect after the firstiter score boundary had closed. In all
+three seeds, RECOVAR logged `Aligned shared class-3 volume sign to the previous
+reference` after iteration 1. The heuristic compared each centered
+reconstruction to its previous class reference and multiplied the
+reconstruction by -1 when their overlap was negative. This is not a valid
+Class3D ambiguity: the image and CTF convention determines the density sign,
+and previous-reference overlap is unreliable for a weak class.
+
+For seed 42001, the native iteration-1 class-3 reconstruction has normalized
+FSC-AUC `+0.990488698` against RELION. The heuristic changed it to
+`-0.990488698`, after which iteration-2 class-3 occupancy collapsed to
+`0.0011606` rather than RELION's `0.038241`. The same explicit class-3
+flip and collapse occurred in seeds 42002 and 42003.
+
+Commit `7136e5c8d` preserves the data-determined sign for every K-class
+reconstruction while retaining the already-qualified legacy K=1 continuity
+path. The focused unit discriminator fails on the old behavior and passes
+after the fix. The two-iteration H100 causal rerun, job `13348468`, then gave:
+
+| Iteration | Quantity | Broken control | Fixed RECOVAR | RELION |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | class-3 direct FSC-AUC | -0.990489 | 0.990489 | reference |
+| 2 | class-3 occupancy | 0.001161 | 0.036801 | 0.038241 |
+| 2 | four-class occupancy | [0.3331, 0.3886, 0.0012, 0.2771] | [0.3203, 0.3766, 0.0368, 0.2663] | [0.3189, 0.3724, 0.0382, 0.2705] |
+| 2 | direct per-class FSC-AUC | [0.9918, 0.9949, -0.0938, 0.9918] | [0.9933, 0.9959, 0.9801, 0.9928] | reference |
+| 2 | identity-label assignment agreement | 0.9146 | 0.9420 | reference |
+
+The causal gate is a pass, not a final trajectory admission: iteration-2
+assignment agreement remains below the prospective 0.99 final gate. The job
+completed in 9m22s, exit 0, with exact requested/allocated one-H100, four-CPU,
+128-GiB resources and peak sampled HBM 33,465 MiB. Its full JSON is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_native_signfix_half1_seed42001_it2_7136e5c8d_20260902/analysis/k4_native_signfix_causal_report.json`
+(SHA-256
+`25f3a772fc31d0fb630663e2f76407f89a174a9fe9aee21dd406f7e43a7a7ba8`);
+the exact argv, Slurm script, logs, HBM trace, and products are in the same
+immutable run root.
+
+The original eight-iteration controls are retained as negative evidence:
+seed 42001 jobs `13346676/13346677`, seed 42002 jobs
+`13346756/13346759`, and seed 42003 jobs `13346757/13346758`. Fresh
+fixed-commit three-seed independent-half runs are setup/qualification jobs
+`13348863/13348864`, `13348862/13348865`, and
+`13348861/13348866`, respectively. Their roots are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42001_7136e5c8d_20260902`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42002_7136e5c8d_20260902`; and
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42003_7136e5c8d_20260902`.
+
+The preceding setup job `13346480` succeeded, but its dependent job
+`13346481` failed before science because the source worktree was transiently
+dirty while this documentation was drafted. That immutable root is retained as
+a harness failure and is not a scientific attempt.
 
 ## Reproduction
 
