@@ -69,6 +69,32 @@ def fmt(val, w=12, prec=4):
     return f"{str(val):>{w}s}"
 
 
+def relion_star_round_double(value):
+    """Round a double exactly as RELION's MetaDataTable STAR writer does.
+
+    This mirrors ``metadata_table.cpp``: positive values get six fractional
+    digits and negative values get five so the formatted field remains 12
+    characters wide.  Very small nonzero and very large values use scientific
+    notation.
+    """
+
+    value = float(value)
+    magnitude = abs(value)
+    scientific = (0.0 < magnitude < 0.001) or magnitude > 100000.0
+    precision = 5 if value < 0.0 else 6
+    format_code = "e" if scientific else "f"
+    return float(f"{value:12.{precision}{format_code}}")
+
+
+def relion_star_round_scaled(value, scale):
+    """Round a scaled RECOVAR value in RELION-native units, then rescale it."""
+
+    if value is None:
+        return None
+    native_value = float(value) / float(scale)
+    return relion_star_round_double(native_value) * float(scale)
+
+
 def color_diff(a, b, tol=0.01):
     """Return color code based on relative difference."""
     if a is None or b is None:
@@ -501,11 +527,30 @@ def fraction_within(arr, thresholds):
     return {float(thr): float(np.mean(arr <= thr)) for thr in thresholds}
 
 
-def load_saved_gt_metrics(recovar_dir, it):
-    path = recovar_dir / f"gt_comparison_iter{it:03d}.npz"
+def _load_current_npz_artifact(path, refinement_results_path, *, label):
+    """Ignore cached diagnostics that predate the refinement they describe."""
     if not path.exists():
         return None
+    if refinement_results_path.exists() and path.stat().st_mtime_ns < refinement_results_path.stat().st_mtime_ns:
+        logger.warning(
+            "Ignoring stale %s %s (older than %s)",
+            label,
+            path,
+            refinement_results_path,
+        )
+        return None
     return np.load(path, allow_pickle=False)
+
+
+def load_saved_gt_metrics(recovar_dir, it, refinement_results_path=None):
+    path = recovar_dir / f"gt_comparison_iter{it:03d}.npz"
+    if refinement_results_path is None:
+        refinement_results_path = recovar_dir / "refinement_results.npz"
+    return _load_current_npz_artifact(
+        path,
+        refinement_results_path,
+        label="GT-comparison artifact",
+    )
 
 
 def print_metric_block(prefix, pose_npz, metric_specs):
@@ -551,7 +596,8 @@ def main():
     relion_dir = Path(args.relion_dir)
     recovar_dir = Path(args.recovar_dir)
 
-    recovar = load_recovar(recovar_dir / "refinement_results.npz")
+    refinement_results_path = recovar_dir / "refinement_results.npz"
+    recovar = load_recovar(refinement_results_path)
     if recovar is None:
         logger.error("Missing %s/refinement_results.npz", recovar_dir)
         return 1
@@ -709,8 +755,8 @@ def main():
             print(f"\n  {BOLD}per-shell (first {args.shells} shells; R=RELION half1, V=recoVar):{RESET}")
             header = (
                 f"    {'shell':>4s}  {'res_Å':>6s}  "
-                f"{'tau2_R':>10s} {'tau2_V':>10s}  "
-                f"{'sig2_R':>10s} {'sig2_V':>10s}  "
+                f"{'tau2_R':>10s} {'tau2_V':>10s} {'tau2_Vstar':>10s}  "
+                f"{'sig2_R':>10s} {'sig2_V':>10s} {'sig2_Vstar':>10s}  "
                 f"{'FSC_R':>7s} {'FSC_V':>7s}  "
                 f"{'SSNR_R':>9s} {'SSNR_V':>9s}"
             )
@@ -730,28 +776,38 @@ def main():
                 r = float(res[s]) if res is not None else None
                 tr = float(tau2_r[s]) * n4 * particle_scale if tau2_r is not None else None
                 tv = float(tau2_v[s]) if tau2_v is not None and s < len(tau2_v) else None
+                tv_star = relion_star_round_scaled(tv, n4 * particle_scale)
                 sr = float(sigma2_r[s]) * n4 * particle_scale if sigma2_r is not None and s < len(sigma2_r) else None
                 sv = float(sigma2_v[s]) if sigma2_v is not None and s < len(sigma2_v) else None
+                sv_star = relion_star_round_scaled(sv, n4 * particle_scale)
                 f1 = float(fsc_r[s]) if fsc_r is not None else None
                 f2 = float(fsc_v[s]) if fsc_v is not None and s < len(fsc_v) else None
                 ssr = float(ssnr_r[s]) if ssnr_r is not None and s < len(ssnr_r) else None
                 ssv = float(ssnr_v[s]) if ssnr_v is not None and s < len(ssnr_v) else None
                 tcol = color_diff(tr, tv, tol=args.tol)
+                tstar_col = color_diff(tr, tv_star, tol=args.tol)
                 scol = color_diff(sr, sv, tol=args.tol)
+                sstar_col = color_diff(sr, sv_star, tol=args.tol)
                 fcol = color_diff(f1, f2, tol=args.tol)
                 sscol = color_diff(ssr, ssv, tol=args.tol)
                 print(
                     f"    {s:>4d}  {fmt(r, 6, prec=1):>6s}  "
-                    f"{fmt(tr, 10):>10s} {tcol}{fmt(tv, 10):>10s}{RESET}  "
-                    f"{fmt(sr, 10):>10s} {scol}{fmt(sv, 10):>10s}{RESET}  "
+                    f"{fmt(tr, 10):>10s} {tcol}{fmt(tv, 10):>10s}{RESET} "
+                    f"{tstar_col}{fmt(tv_star, 10):>10s}{RESET}  "
+                    f"{fmt(sr, 10):>10s} {scol}{fmt(sv, 10):>10s}{RESET} "
+                    f"{sstar_col}{fmt(sv_star, 10):>10s}{RESET}  "
                     f"{fmt(f1, 7, prec=3):>7s} {fcol}{fmt(f2, 7, prec=3):>7s}{RESET}  "
                     f"{fmt(ssr, 9, prec=3):>9s} {sscol}{fmt(ssv, 9, prec=3):>9s}{RESET}"
                 )
 
         if recovar_iter_index >= 0:
             pose_path = recovar_dir / f"pose_comparison_iter{recovar_iter_index:03d}.npz"
-            if pose_path.exists():
-                pose = np.load(pose_path, allow_pickle=False)
+            pose = _load_current_npz_artifact(
+                pose_path,
+                refinement_results_path,
+                label="pose-comparison artifact",
+            )
+            if pose is not None:
                 print(f"\n  {BOLD}pose refinement metrics:{RESET}")
                 pose_specs = [
                     ("angular_error_deg", "full_angle_°", [5, 10, 20]),
@@ -772,7 +828,11 @@ def main():
                     print(f"\n  {BOLD}pose accuracy vs GT:{RESET}")
                     print_metric_block("", pose, gt_pose_specs)
 
-            gt_metrics = load_saved_gt_metrics(recovar_dir, recovar_iter_index)
+            gt_metrics = load_saved_gt_metrics(
+                recovar_dir,
+                recovar_iter_index,
+                refinement_results_path,
+            )
             if gt_metrics is not None:
                 print(f"\n  {BOLD}map quality vs GT:{RESET}")
                 print(f"    {'series':<18s} {'corr_vs_gt':>12s} {'FSC<0.5':>10s} {'FSC<0.143':>10s}")
