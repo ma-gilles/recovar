@@ -65,6 +65,13 @@ def _active_audit(*, workers: int = 0, atomic: bool = False) -> dict:
     }
 
 
+def _prehalf_audit(*, workers: int = 8) -> dict:
+    audit = _active_audit(workers=workers, atomic=True)
+    audit.update(requested_prehalf=True, effective_prehalf=True)
+    audit["counts"] = dict(audit["counts"], prehalf_selected_calls=3)
+    return audit
+
+
 def test_default_selector_control_remains_inactive(monkeypatch):
     monkeypatch.delenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", raising=False)
     monkeypatch.delenv("RECOVAR_K1_COARSE_MULTISTREAM_WORKERS", raising=False)
@@ -72,10 +79,12 @@ def test_default_selector_control_remains_inactive(monkeypatch):
         "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION",
         raising=False,
     )
+    monkeypatch.delenv("RECOVAR_K1_COARSE_PREHALF_WEIGHT", raising=False)
 
     assert not significance._k1_coarse_fused_projector_enabled()
     assert significance._k1_coarse_multistream_worker_count() == 0
     assert not significance._k1_coarse_native_atomic_reduction_enabled()
+    assert not significance._k1_coarse_prehalf_weight_enabled()
     assert significance._validate_coarse_selector_audit(_control_audit()) == (
         _control_audit()
     )
@@ -85,6 +94,41 @@ def test_active_multistream_native_atomic_audit_is_accepted():
     audit = _active_audit(workers=8, atomic=True)
 
     assert significance._validate_coarse_selector_audit(audit) == audit
+
+
+def test_active_prehalf_audit_is_accepted_and_requires_atomic_execution():
+    audit = _prehalf_audit()
+    assert significance._validate_coarse_selector_audit(audit) == audit
+
+    no_atomic = _prehalf_audit()
+    no_atomic["effective_atomic"] = False
+    no_atomic["counts"]["native_atomic_selected_calls"] = 0
+    with pytest.raises(ValueError, match="prehalf weight requires native-atomic"):
+        significance._validate_coarse_selector_audit(no_atomic)
+
+
+def test_active_prehalf_audit_rejects_a_noop_call_count():
+    audit = _prehalf_audit()
+    audit["counts"]["prehalf_selected_calls"] = 0
+    with pytest.raises(ValueError, match="prehalf call count"):
+        significance._validate_coarse_selector_audit(audit)
+
+
+@pytest.mark.parametrize("missing_field", ["requested_prehalf", "effective_prehalf"])
+def test_prehalf_audit_requires_paired_selector_fields(missing_field):
+    audit = _prehalf_audit()
+    del audit[missing_field]
+
+    with pytest.raises(ValueError, match="requested/effective prehalf together"):
+        significance._validate_coarse_selector_audit(audit)
+
+
+def test_prehalf_audit_requires_the_execution_counter():
+    audit = _prehalf_audit()
+    del audit["counts"]["prehalf_selected_calls"]
+
+    with pytest.raises(ValueError, match="prehalf_selected_calls"):
+        significance._validate_coarse_selector_audit(audit)
 
 
 def test_effective_selector_rejects_noop_zero_call_count():
@@ -165,6 +209,14 @@ def test_host_counters_are_adjacent_to_the_selected_wrapper_invocation():
     assert 'coarse_selector_execution["multistream_calls"] += 1' in invocation_audit
     assert (
         'coarse_selector_execution["native_atomic_selected_calls"] += 1'
+        in invocation_audit
+    )
+    assert (
+        'coarse_selector_execution["prehalf_selected_calls"] += 1'
+        in invocation_audit
+    )
+    assert (
+        'coarse_projector_kwargs["prehalf_weight"] = coarse_prehalf_weight_enabled'
         in invocation_audit
     )
     assert '"coarse_selector_audit": coarse_selector_audit' in source

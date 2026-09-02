@@ -492,7 +492,8 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
     assert "relion_coarse_diff2_projector_f32" in production
     assert "native_texture" not in production.lower()
     assert "projector_lanes" not in production.lower()
-    assert "prehalf_weight" not in significance_source
+    assert 'coarse_projector_kwargs["prehalf_weight"]' in production
+    assert "coarse_prehalf_weight_enabled" in production
 
 
 def test_relion_coarse_prehalf_api_defaults_are_static_and_forwarded():
@@ -589,6 +590,22 @@ def test_k1_coarse_native_atomic_reduction_is_default_off_and_fail_closed(
     monkeypatch.setenv(variable, "invalid")
     with pytest.raises(ValueError, match=variable):
         significance._k1_coarse_native_atomic_reduction_enabled()
+
+
+def test_k1_coarse_prehalf_weight_is_default_off_and_fail_closed(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    variable = "RECOVAR_K1_COARSE_PREHALF_WEIGHT"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._k1_coarse_prehalf_weight_enabled()
+    assert significance._k1_coarse_prehalf_weight_enabled(default=True)
+    monkeypatch.setenv(variable, "1")
+    assert significance._k1_coarse_prehalf_weight_enabled()
+    monkeypatch.setenv(variable, "0")
+    assert not significance._k1_coarse_prehalf_weight_enabled(default=True)
+    monkeypatch.setenv(variable, "invalid")
+    with pytest.raises(ValueError, match=variable):
+        significance._k1_coarse_prehalf_weight_enabled()
 
 
 @pytest.mark.parametrize(

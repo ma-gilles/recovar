@@ -43,6 +43,7 @@ _K1_COARSE_SINGLE_LANE_CANONICAL_ENV = (
 _K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV = (
     "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION"
 )
+_K1_COARSE_PREHALF_WEIGHT_ENV = "RECOVAR_K1_COARSE_PREHALF_WEIGHT"
 _K1_COARSE_MULTISTREAM_WORKERS_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
 _COARSE_SELECTOR_WRAPPER_TARGETS = {
     "relion_coarse_diff2_projector_f32": "cuda_relion_coarse_diff2_projector_f32",
@@ -338,6 +339,29 @@ def _k1_coarse_native_atomic_reduction_selected(
     )
 
 
+def _k1_coarse_prehalf_weight_enabled(*, default: bool = False) -> bool:
+    """Whether coarse pixel weights are halved once before rotation FMAs.
+
+    RELION stores ``corr_img / 2`` in shared memory once per pixel.  The
+    historical RECOVAR kernel instead multiplied every rotation contribution
+    by ``0.5``.  The specialization is mathematically equivalent, but changes
+    float32 operation order and is therefore opt-in until its trajectory gate
+    is complete.
+    """
+
+    token = os.environ.get(
+        _K1_COARSE_PREHALF_WEIGHT_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_COARSE_PREHALF_WEIGHT_ENV}={token!r}",
+    )
+
+
 def _k1_coarse_multistream_worker_count(*, default: int = 0) -> int:
     """Return the default-off RELION coarse particle-stream count.
 
@@ -422,12 +446,20 @@ def _validate_coarse_selector_audit(audit: dict) -> dict:
             "coarse selector audit requested/effective workers must be 0 or 8"
         )
 
+    prehalf_fields = {"requested_prehalf", "effective_prehalf"}
+    present_prehalf_fields = prehalf_fields.intersection(audit)
+    if present_prehalf_fields and present_prehalf_fields != prehalf_fields:
+        raise ValueError(
+            "coarse selector audit must provide requested/effective prehalf together"
+        )
+
     normalized_booleans = {}
     for name in (
         "requested_fused",
         "effective_fused",
         "requested_atomic",
         "effective_atomic",
+        *(sorted(prehalf_fields) if present_prehalf_fields else ()),
     ):
         value = audit[name]
         if not isinstance(value, (bool, np.bool_)):
@@ -437,16 +469,22 @@ def _validate_coarse_selector_audit(audit: dict) -> dict:
     effective_fused = normalized_booleans["effective_fused"]
     requested_atomic = normalized_booleans["requested_atomic"]
     effective_atomic = normalized_booleans["effective_atomic"]
+    requested_prehalf = normalized_booleans.get("requested_prehalf", False)
+    effective_prehalf = normalized_booleans.get("effective_prehalf", False)
     if effective_fused and not requested_fused:
         raise ValueError("effective fused coarse selector was not requested")
     if effective_workers and requested_workers != effective_workers:
         raise ValueError("effective coarse workers do not match the request")
     if effective_atomic and not requested_atomic:
         raise ValueError("effective native-atomic coarse reduction was not requested")
+    if effective_prehalf and not requested_prehalf:
+        raise ValueError("effective coarse prehalf weight was not requested")
     if effective_workers and not effective_fused:
         raise ValueError("effective coarse workers require the fused selector")
     if effective_atomic and not effective_fused:
         raise ValueError("effective native-atomic reduction requires the fused selector")
+    if effective_prehalf and not effective_atomic:
+        raise ValueError("effective coarse prehalf weight requires native-atomic reduction")
     if effective_fused and score_mode != "gaussian":
         raise ValueError("the fused coarse selector is Gaussian-only")
     if effective_workers and score_mode != "gaussian":
@@ -467,6 +505,8 @@ def _validate_coarse_selector_audit(audit: dict) -> dict:
         "multistream_calls",
         "native_atomic_selected_calls",
     }
+    if present_prehalf_fields:
+        required_counts.add("prehalf_selected_calls")
     missing_counts = sorted(required_counts.difference(counts))
     if missing_counts:
         raise ValueError(
@@ -496,6 +536,7 @@ def _validate_coarse_selector_audit(audit: dict) -> dict:
     actual_rows = normalized_counts["actual_rows"]
     multistream_calls = normalized_counts["multistream_calls"]
     native_atomic_calls = normalized_counts["native_atomic_selected_calls"]
+    prehalf_calls = normalized_counts.get("prehalf_selected_calls", 0)
     if effective_fused:
         expected_wrapper = (
             "relion_coarse_diff2_projector_multistream_f32"
@@ -524,11 +565,18 @@ def _validate_coarse_selector_audit(audit: dict) -> dict:
             raise ValueError(
                 "coarse selector native-atomic call count does not match the effective reduction"
             )
+        expected_prehalf_calls = fused_calls if effective_prehalf else 0
+        if prehalf_calls != expected_prehalf_calls:
+            raise ValueError(
+                "coarse selector prehalf call count does not match the effective specialization"
+            )
     else:
         if wrapper is not None or target is not None:
             raise ValueError("inactive coarse selector must not report a wrapper/target")
-        if effective_workers or effective_atomic:
-            raise ValueError("inactive coarse selector cannot report effective workers/atomic")
+        if effective_workers or effective_atomic or effective_prehalf:
+            raise ValueError(
+                "inactive coarse selector cannot report effective workers/atomic/prehalf"
+            )
         if any(normalized_counts.values()):
             raise ValueError("inactive coarse selector must report zero execution counts")
 
@@ -2595,6 +2643,15 @@ def _compute_k_class_significance_batched(
             "translations; retaining the configured canonical reduction",
             n_trans,
         )
+    coarse_prehalf_weight_requested = _k1_coarse_prehalf_weight_enabled()
+    coarse_prehalf_weight_enabled = bool(
+        coarse_prehalf_weight_requested and coarse_native_atomic_reduction_enabled
+    )
+    if coarse_prehalf_weight_requested and not coarse_prehalf_weight_enabled:
+        raise ValueError(
+            f"{_K1_COARSE_PREHALF_WEIGHT_ENV}=1 requires the effective "
+            f"{_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV}=1 K=1 Gaussian T=29 path",
+        )
     coarse_single_lane_canonical_requested = (
         _k1_coarse_single_lane_canonical_enabled()
     )
@@ -2880,6 +2937,12 @@ def _compute_k_class_significance_batched(
                     "translations=%d",
                     n_trans,
                 )
+            if coarse_prehalf_weight_enabled:
+                logger.warning(
+                    "Opt-in RELION source-ordered coarse prehalf weight enabled: "
+                    "translations=%d",
+                    n_trans,
+                )
             if coarse_single_lane_canonical_enabled:
                 logger.warning(
                     "Opt-in RELION coarse single-lane canonical specialization "
@@ -3160,6 +3223,7 @@ def _compute_k_class_significance_batched(
         "actual_rows": 0,
         "multistream_calls": 0,
         "native_atomic_selected_calls": 0,
+        "prehalf_selected_calls": 0,
     }
 
     def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
@@ -3198,6 +3262,9 @@ def _compute_k_class_significance_batched(
                 coarse_selector_execution["multistream_calls"] += 1
             if coarse_native_atomic_reduction_enabled:
                 coarse_selector_execution["native_atomic_selected_calls"] += 1
+            if coarse_prehalf_weight_enabled:
+                coarse_selector_execution["prehalf_selected_calls"] += 1
+            coarse_projector_kwargs["prehalf_weight"] = coarse_prehalf_weight_enabled
             diff2 = coarse_projector(
                 coarse_gaussian_projector_full_by_class[class_index],
                 jnp.asarray(rots_b, dtype=jnp.float32),
@@ -4555,6 +4622,8 @@ def _compute_k_class_significance_batched(
             ),
             "requested_atomic": bool(coarse_native_atomic_reduction_requested),
             "effective_atomic": bool(coarse_native_atomic_reduction_enabled),
+            "requested_prehalf": bool(coarse_prehalf_weight_requested),
+            "effective_prehalf": bool(coarse_prehalf_weight_enabled),
             "wrapper": coarse_selector_execution["wrapper"],
             "target": coarse_selector_execution["target"],
             "counts": {
@@ -4565,6 +4634,9 @@ def _compute_k_class_significance_batched(
                 ),
                 "native_atomic_selected_calls": int(
                     coarse_selector_execution["native_atomic_selected_calls"]
+                ),
+                "prehalf_selected_calls": int(
+                    coarse_selector_execution["prehalf_selected_calls"]
                 ),
             },
         }
