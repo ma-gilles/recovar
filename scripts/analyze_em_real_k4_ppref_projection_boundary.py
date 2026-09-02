@@ -108,30 +108,44 @@ def compare_source_map_panels(
 
 def classify(
     *,
-    texture_vs_native_l2: float,
-    texture_vs_recovar_l2: float,
+    native_eulers_texture_vs_native_l2: float,
+    recovar_eulers_texture_vs_native_l2: float,
+    recovar_eulers_texture_vs_recovar_l2: float,
     native_vs_recovar_l2: float,
 ) -> str:
     """Classify which side of the frozen PPref projection boundary differs."""
 
-    values = (texture_vs_native_l2, texture_vs_recovar_l2, native_vs_recovar_l2)
+    values = (
+        native_eulers_texture_vs_native_l2,
+        recovar_eulers_texture_vs_native_l2,
+        recovar_eulers_texture_vs_recovar_l2,
+        native_vs_recovar_l2,
+    )
     _require(all(np.isfinite(value) and value >= 0 for value in values), "invalid error")
     if native_vs_recovar_l2 < MATERIAL_RELATIVE_L2_FLOOR:
         return "captured_projected_reference_difference_is_not_material"
     if (
-        texture_vs_recovar_l2 <= MATCH_RELATIVE_L2_CEILING
-        and texture_vs_native_l2
+        native_eulers_texture_vs_native_l2 < MATERIAL_RELATIVE_L2_FLOOR
+        and recovar_eulers_texture_vs_native_l2 >= MATERIAL_RELATIVE_L2_FLOOR
+        and recovar_eulers_texture_vs_native_l2
         >= SEPARATION_RATIO_FLOOR
-        * max(texture_vs_recovar_l2, np.finfo(np.float64).tiny)
+        * max(native_eulers_texture_vs_native_l2, np.finfo(np.float64).tiny)
+    ):
+        return "recovar_euler_values_trigger_material_projection_shell_boundary_difference"
+    if (
+        recovar_eulers_texture_vs_recovar_l2 <= MATCH_RELATIVE_L2_CEILING
+        and recovar_eulers_texture_vs_native_l2
+        >= SEPARATION_RATIO_FLOOR
+        * max(recovar_eulers_texture_vs_recovar_l2, np.finfo(np.float64).tiny)
     ):
         return "native_vs_recovar_texture_projection_is_first_material_ppref_downstream_difference"
     if (
-        texture_vs_native_l2 <= MATCH_RELATIVE_L2_CEILING
-        and texture_vs_recovar_l2
+        native_eulers_texture_vs_native_l2 <= MATCH_RELATIVE_L2_CEILING
+        and recovar_eulers_texture_vs_recovar_l2
         >= SEPARATION_RATIO_FLOOR
-        * max(texture_vs_native_l2, np.finfo(np.float64).tiny)
+        * max(native_eulers_texture_vs_native_l2, np.finfo(np.float64).tiny)
     ):
-        return "recovar_projected_reference_wiring_differs_after_matching_texture_primitive"
+        return "recovar_projected_reference_wiring_differs_after_matching_native_ppref_and_eulers"
     return "ppref_projection_boundary_is_mixed_or_unresolved"
 
 
@@ -158,7 +172,7 @@ def _native_reference_panel(
     capture_dir: Path,
     recovar: dict[str, Any],
     full_image_size: int,
-) -> tuple[np.ndarray, dict[str, Any], list[Any]]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any], list[Any]]:
     operand_paths = sorted(capture_dir.glob("*.coarse-operands-v1.bin"))
     operands = [load_artifact(path) for path in operand_paths]
     by_key = {(item.part_id, item.class_one_based): item for item in operands}
@@ -185,6 +199,7 @@ def _native_reference_panel(
     )
 
     references = []
+    native_rotations = None
     maximum_euler_error = 0.0
     first_part = part_ids[0]
     for class_one_based in range(1, 5):
@@ -207,6 +222,13 @@ def _native_reference_panel(
             n_psi=n_psi,
         )
         eulers = reference_artifact.euler_matrices[order].transpose(0, 2, 1)
+        if native_rotations is None:
+            native_rotations = np.asarray(eulers, dtype=np.float32)
+        else:
+            _require(
+                np.array_equal(native_rotations, eulers),
+                f"native Euler matrices differ for class {class_one_based}",
+            )
         maximum_euler_error = max(
             maximum_euler_error,
             float(np.max(np.abs(eulers - recovar["rotations"]))),
@@ -220,8 +242,10 @@ def _native_reference_panel(
         )
         references.append(np.asarray(native, dtype=np.complex64))
     _require(maximum_euler_error <= EULER_MAX_ABS_CEILING, "Euler mapping exceeds gate")
+    _require(native_rotations is not None, "native Euler panel is empty")
     return (
         np.stack(references),
+        native_rotations,
         {
             "particle_count": len(part_ids),
             "class_count": 4,
@@ -305,10 +329,12 @@ def analyze(
     _require(capture_dir.parent in admitted_roots, "operand capture is not repeatability-admitted")
 
     recovar, recovar_records = _common_recovar_panel(significance_dir)
-    native_references, native_topology, native_operands = _native_reference_panel(
+    native_references, native_rotations, native_topology, native_operands = (
+        _native_reference_panel(
         capture_dir=capture_dir,
         recovar=recovar,
         full_image_size=full_image_size,
+        )
     )
     recovar_references = np.asarray(recovar["references"], dtype=np.complex64)
 
@@ -330,25 +356,29 @@ def analyze(
         for field in ("current_size", "shape_zyx", "r_max", "padding_factor"):
             _require(metadata[field] == ppref_metadata[0][field], f"PPref {field} differs")
 
-    texture_references = []
-    for ppref in pprefs:
-        projected, _ = compute_relion_projector_projections_block(
-            jnp.asarray(ppref),
-            jnp.asarray(recovar["rotations"], dtype=jnp.float32),
-            (full_image_size, full_image_size),
-            r_max=int(ppref_metadata[0]["r_max"]),
-            padding_factor=int(ppref_metadata[0]["padding_factor"]),
-            return_abs2=False,
-            centered_rows=True,
-            dense_scale=True,
-            projector_output_size=int(recovar["current_size"]),
-            pixel_indices=jnp.asarray(recovar["window_indices"], dtype=jnp.int32),
-            relion_texture_interp=True,
-        )
-        texture_references.append(
-            np.asarray(jax.block_until_ready(projected), dtype=np.complex64)
-        )
-    texture_references = np.stack(texture_references)
+    def project_pprefs(rotation_panel: np.ndarray) -> np.ndarray:
+        texture_references = []
+        for ppref in pprefs:
+            projected, _ = compute_relion_projector_projections_block(
+                jnp.asarray(ppref),
+                jnp.asarray(rotation_panel, dtype=jnp.float32),
+                (full_image_size, full_image_size),
+                r_max=int(ppref_metadata[0]["r_max"]),
+                padding_factor=int(ppref_metadata[0]["padding_factor"]),
+                return_abs2=False,
+                centered_rows=True,
+                dense_scale=True,
+                projector_output_size=int(recovar["current_size"]),
+                pixel_indices=jnp.asarray(recovar["window_indices"], dtype=jnp.int32),
+                relion_texture_interp=True,
+            )
+            texture_references.append(
+                np.asarray(jax.block_until_ready(projected), dtype=np.complex64)
+            )
+        return np.stack(texture_references)
+
+    texture_with_recovar_eulers = project_pprefs(recovar["rotations"])
+    texture_with_native_eulers = project_pprefs(native_rotations)
 
     class_records = []
     for model in range(4):
@@ -357,10 +387,16 @@ def analyze(
                 "model_zero_based": model,
                 "comparisons": {
                     "recovar_texture_of_native_ppref_vs_native_capture": _array_comparison(
-                        texture_references[model], native_references[model]
+                        texture_with_recovar_eulers[model], native_references[model]
                     ),
                     "recovar_texture_of_native_ppref_vs_recovar_capture": _array_comparison(
-                        texture_references[model], recovar_references[model]
+                        texture_with_recovar_eulers[model], recovar_references[model]
+                    ),
+                    "recovar_texture_native_eulers_vs_native_capture": _array_comparison(
+                        texture_with_native_eulers[model], native_references[model]
+                    ),
+                    "recovar_texture_native_eulers_vs_recovar_capture": _array_comparison(
+                        texture_with_native_eulers[model], recovar_references[model]
                     ),
                     "native_capture_vs_recovar_capture": _array_comparison(
                         native_references[model], recovar_references[model]
@@ -372,16 +408,23 @@ def analyze(
     def maximum_relative_l2(field: str) -> float:
         return max(float(record["comparisons"][field]["relative_l2"]) for record in class_records)
 
-    texture_vs_native_l2 = maximum_relative_l2(
+    recovar_eulers_texture_vs_native_l2 = maximum_relative_l2(
         "recovar_texture_of_native_ppref_vs_native_capture"
     )
-    texture_vs_recovar_l2 = maximum_relative_l2(
+    recovar_eulers_texture_vs_recovar_l2 = maximum_relative_l2(
         "recovar_texture_of_native_ppref_vs_recovar_capture"
+    )
+    native_eulers_texture_vs_native_l2 = maximum_relative_l2(
+        "recovar_texture_native_eulers_vs_native_capture"
+    )
+    native_eulers_texture_vs_recovar_l2 = maximum_relative_l2(
+        "recovar_texture_native_eulers_vs_recovar_capture"
     )
     native_vs_recovar_l2 = maximum_relative_l2("native_capture_vs_recovar_capture")
     classification = classify(
-        texture_vs_native_l2=texture_vs_native_l2,
-        texture_vs_recovar_l2=texture_vs_recovar_l2,
+        native_eulers_texture_vs_native_l2=native_eulers_texture_vs_native_l2,
+        recovar_eulers_texture_vs_native_l2=recovar_eulers_texture_vs_native_l2,
+        recovar_eulers_texture_vs_recovar_l2=recovar_eulers_texture_vs_recovar_l2,
         native_vs_recovar_l2=native_vs_recovar_l2,
     )
     return {
@@ -406,10 +449,16 @@ def analyze(
             "rotation_count": int(recovar["n_rotations"]),
             "projection_pixel_count": int(recovar["window_indices"].size),
             "recovar_texture_of_native_ppref_vs_native_capture_max_relative_l2": (
-                texture_vs_native_l2
+                recovar_eulers_texture_vs_native_l2
             ),
             "recovar_texture_of_native_ppref_vs_recovar_capture_max_relative_l2": (
-                texture_vs_recovar_l2
+                recovar_eulers_texture_vs_recovar_l2
+            ),
+            "recovar_texture_native_eulers_vs_native_capture_max_relative_l2": (
+                native_eulers_texture_vs_native_l2
+            ),
+            "recovar_texture_native_eulers_vs_recovar_capture_max_relative_l2": (
+                native_eulers_texture_vs_recovar_l2
             ),
             "native_capture_vs_recovar_capture_max_relative_l2": native_vs_recovar_l2,
         },

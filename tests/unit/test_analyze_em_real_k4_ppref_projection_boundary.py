@@ -13,8 +13,9 @@ pytestmark = pytest.mark.unit
 
 def test_classify_texture_projection_boundary() -> None:
     assert analysis.classify(
-        texture_vs_native_l2=6.0e-3,
-        texture_vs_recovar_l2=1.0e-9,
+        native_eulers_texture_vs_native_l2=6.0e-3,
+        recovar_eulers_texture_vs_native_l2=6.0e-3,
+        recovar_eulers_texture_vs_recovar_l2=1.0e-9,
         native_vs_recovar_l2=6.0e-3,
     ) == (
         "native_vs_recovar_texture_projection_is_first_material_ppref_downstream_difference"
@@ -23,21 +24,33 @@ def test_classify_texture_projection_boundary() -> None:
 
 def test_classify_recovar_wiring_boundary() -> None:
     assert analysis.classify(
-        texture_vs_native_l2=1.0e-9,
-        texture_vs_recovar_l2=6.0e-3,
+        native_eulers_texture_vs_native_l2=1.0e-9,
+        recovar_eulers_texture_vs_native_l2=1.0e-9,
+        recovar_eulers_texture_vs_recovar_l2=6.0e-3,
         native_vs_recovar_l2=6.0e-3,
-    ) == "recovar_projected_reference_wiring_differs_after_matching_texture_primitive"
+    ) == "recovar_projected_reference_wiring_differs_after_matching_native_ppref_and_eulers"
+
+
+def test_classify_euler_shell_boundary() -> None:
+    assert analysis.classify(
+        native_eulers_texture_vs_native_l2=2.0e-6,
+        recovar_eulers_texture_vs_native_l2=6.0e-3,
+        recovar_eulers_texture_vs_recovar_l2=5.0e-3,
+        native_vs_recovar_l2=6.0e-3,
+    ) == "recovar_euler_values_trigger_material_projection_shell_boundary_difference"
 
 
 def test_classify_nonmaterial_and_mixed() -> None:
     assert analysis.classify(
-        texture_vs_native_l2=1.0e-8,
-        texture_vs_recovar_l2=1.0e-8,
+        native_eulers_texture_vs_native_l2=1.0e-8,
+        recovar_eulers_texture_vs_native_l2=1.0e-8,
+        recovar_eulers_texture_vs_recovar_l2=1.0e-8,
         native_vs_recovar_l2=1.0e-8,
     ) == "captured_projected_reference_difference_is_not_material"
     assert analysis.classify(
-        texture_vs_native_l2=3.0e-3,
-        texture_vs_recovar_l2=2.0e-3,
+        native_eulers_texture_vs_native_l2=3.0e-3,
+        recovar_eulers_texture_vs_native_l2=3.0e-3,
+        recovar_eulers_texture_vs_recovar_l2=2.0e-3,
         native_vs_recovar_l2=6.0e-3,
     ) == "ppref_projection_boundary_is_mixed_or_unresolved"
 
