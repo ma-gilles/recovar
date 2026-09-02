@@ -61,6 +61,7 @@ winner, offset, posterior, support, or selected state.
 | Selected 16-rotation-block direct primitive, job `13328717` | **PRIMITIVE PASS** | CPU contract checks plus full-rectangular and selected-block H100 atomic-envelope checks passed. Default remains off; this is the direct-rescore building block, not a production selector. |
 | Dual raw/post streaming certificate at `6e4e0ae65cba3cd0f86febdfe319e747ced07d97` | **INTEGRATED** | v2 artifacts separately preserve pre-prior/raw-max and posterior/support state, enforce byte accounting, and fail closed when either certificate family is absent. |
 | All-1000 GF46 diagnostic, job `13329608` | **COMPLETE / NON-SCORING** | Exact H100 run completed in 69 s from clean source `6e4e0ae65cba3cd0f86febdfe319e747ced07d97`; diagnostic-only and timing-ineligible. |
+| All-1000 promoted-FP64 diagnostic, job `13330442` | **COMPLETE / NON-SCORING** | Worst observed score delta fell from `3.3125` to `1.5`, but the critical particle-1933 near tie and particle-636 support surplus remained; source-block topology was unchanged. |
 
 ### All-1000 selector result: job `13329608`
 
@@ -74,6 +75,13 @@ winner, offset, posterior, support, or selected state.
 
 Score impact: **none**. The run does not change frozen correctness **2 / 20**,
 frozen runtime **0 / 20**, production defaults, or trajectory qualification.
+
+Promoted FP64 does not make standalone GEMM safe.  Job `13330442` paired all
+1,069,056,000 finite candidates again: RMS delta fell to `0.03593`, signed
+mean to `-0.00058`, and pair-TopK coverage rose only from 727 to 732 particles.
+Every covered posterior union still used at most six source-16 blocks.  FP64
+is retained only as a potentially tighter center for the formal interval
+certificate; exact selected-block direct rescoring remains mandatory.
 
 ## Runtime and performance lanes
 
@@ -122,15 +130,18 @@ release gate.
 
 1. Replace pair-only TopK retention with per-source-block maxima while keeping
    the dual raw/pre-prior and posterior/support v2 certificate fail-closed.
-2. On all 1,000 GF46 particles, prove conservative block coverage or trigger
+2. Compare outward-rounded FP32 and FP64 candidate intervals around the live
+   GEMM score; retain the arithmetic mode with the narrowest total hybrid wall
+   time, not merely the smallest observed score delta.
+3. On all 1,000 GF46 particles, prove conservative block coverage or trigger
    full-direct fallback; direct-rescore the certified union with the qualified
    job-`13328717` primitive and recompute RELION float32 offset/posterior/support.
-3. Require exact or repeat-envelope-safe one-transition decisions and maps
+4. Require exact or repeat-envelope-safe one-transition decisions and maps
    before measuring a paired same-H100 hybrid runtime. Report selector,
    projection/packing, direct-rescore, and fallback costs separately.
-4. If the one-transition gate passes with a material end-to-end gain, run a
+5. If the one-transition gate passes with a material end-to-end gain, run a
    representative repeat/no-growth trajectory and multi-dataset basin gate.
-5. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
+6. Keep frozen v3 at 2/20 and runtime at 0/20 unless a separately reviewed
    scoring rerun updates the authoritative scorecard. Only then open K>1 and
    real-data gates as independent tracks.
 
@@ -146,6 +157,7 @@ release gate.
 | Selected-block primitive | Source `695a629fa70ee951734d98728bb3daffcc53bd88`; job `13328717`; report commit `56f2ee1e892925421fa2d807379062158f6eb1e3`. |
 | Dual-certificate integration | Streaming base `0b574de9029c71de5e7ef3b14785c07f203d20f5`; pre-prior certificate `8b0d5bcacdda537337a4bae0f5b2ac242d796562`; runner `74d1eb60de5c3a437df232f7b60efa6b89db4d2f`; pinned head `6e4e0ae65cba3cd0f86febdfe319e747ced07d97`. |
 | All-1000 diagnostic | Job `13329608`; clean source `6e4e0ae65cba3cd0f86febdfe319e747ced07d97`; H100 `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`; identity certificate SHA-256 `3dfd92da58365c33388eea7071f1814be1561a5c7557615b52a9e263ce7e230f`; aggregate manifest SHA-256 `a78674eb7c342d16f624fe3d68b6a3c2ea868a6ca880a6c4f972d728f02a2a3c`. |
+| All-1000 promoted-FP64 diagnostic | Job `13330442`; clean source `2c1a9e299e40563f2f5058dce490231c39fb7a12`; H100 `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`; identity certificate SHA-256 `3a666ea737cedc2aabbaa033a1a226058004ae9983adeb4d3c05f1b95551d5ce`; aggregate manifest SHA-256 `faa883a1c6fa756adf679c7138c4b38e7135f8cc0aaac89c2d181b7d10f0a754`. |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`

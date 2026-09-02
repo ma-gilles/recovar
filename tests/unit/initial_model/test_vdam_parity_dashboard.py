@@ -59,6 +59,7 @@ def test_dashboard_records_hybrid_evidence_without_score_inflation(dashboard: st
         "Selected 16-rotation-block direct primitive, job `13328717` | **PRIMITIVE PASS**",
         "Dual raw/post streaming certificate at `6e4e0ae65cba3cd0f86febdfe319e747ced07d97` | **INTEGRATED**",
         "All-1000 GF46 diagnostic, job `13329608` | **COMPLETE / NON-SCORING**",
+        "All-1000 promoted-FP64 diagnostic, job `13330442` | **COMPLETE / NON-SCORING**",
         "**1,000 / 1,000** particles over **1,069,056,000** finite pairs",
         "`Emax=3.3125`, RMS `0.05108`, signed mean `+0.00789`",
         "Winner mismatch **1 / 1,000** (`particle 1933`, tiny margins)",
@@ -66,6 +67,8 @@ def test_dashboard_records_hybrid_evidence_without_score_inflation(dashboard: st
         "**727 / 1,000** covered",
         "median / p95 / max = `6 / 6 / 6`",
         "The next selector is **per-source-block maxima**",
+        "Worst observed score delta fell from `3.3125` to `1.5`",
+        "pair-TopK coverage rose only from 727 to 732 particles",
         "Score impact: **none**.",
     )
     for fact in expected_facts:
