@@ -3,9 +3,9 @@
 This is the compact coverage index for the EM evidence checked into the pull
 request. It distinguishes accepted registry records, supporting calibration
 evidence, rejected diagnostics, and runnable but unfinished gates. It indexes
-only completed artifacts already present at RECOVAR commit `c1529f96d`; live
-or later runs must be sealed separately before this inventory can promote
-them.
+only completed artifacts already present through the shared-200 causal-audit
+integration at RECOVAR commit `ceaee74ce`; live or later runs must be sealed
+separately before this inventory can promote them.
 
 The machine registry currently contains six single-run entries, six campaign
 records, and one synthetic negative diagnostic. The exact filenames are pinned
@@ -102,9 +102,9 @@ quality pair into a formal speed comparison.
 | Evidence | Scope | Quality disposition | Performance disposition |
 | --- | --- | --- | --- |
 | `diagnostics/real-kclass-initialmodel-20260901.json` | Three 10k-particle, eight-iteration C1 pairs over EMPIAR-10076 and 10345 | All three fail FSC/assignment; two also retain the class-2 collapse | Per-engine wall/HBM/RSS retained as diagnostics; formal ratios are null. |
-| `diagnostics/real-kclass-offset-prior-fullpairs-92438c285-20260901.json` | Two clean-source same-H100 pairs, one per dataset | Both fail from the iteration-1 M-step map boundary despite exact raw iteration-1 labels | Native wall/HBM/RSS retained; raw 31.59x and 26.90x RECOVAR/RELION wall ratios are diagnostic only. |
-| `diagnostics/real-kclass-selected-fine-10076-20260901.json` | Two-particle iteration-1 selected-fine capture | Causal support/prior discriminator only; no map or half-map admission | No final performance claim. This routed record does not yet have a standalone whole-ledger validator. |
-| `real_k4_shared200_causal_replay.md` | Frozen 200-particle, four-class iteration-1 replay harness | Runnable acceptance contract; no terminal accepted record checked in at this commit | Pending. |
+| `diagnostics/real-kclass-offset-prior-fullpairs-92438c285-20260901.json` | Two clean-source same-H100 pairs, one per dataset | Exact raw iteration-1 labels but failing post-update maps; the later shared-200 audit supersedes the earlier M-step-first interpretation by proving a pre-reconstruction candidate/score gap | Native wall/HBM/RSS retained; raw 31.59x and 26.90x RECOVAR/RELION wall ratios are diagnostic only. |
+| `diagnostics/real-kclass-selected-fine-10076-20260901.json` | Two-particle iteration-1 selected-fine capture made before `d1f2f9f93` | Historical support/prior discriminator only. Its large translation-prior delta is from the subsequently fixed InitialModel offset-prior arithmetic and is not a current-source causal boundary. | No final performance claim. This routed record does not yet have a standalone whole-ledger validator. |
+| `real_k4_shared200_causal_replay.md` | Frozen 200-particle, four-class iteration-1 replay; source `24317e40c`, job 13322235 | Strict gate FAIL, but 199/200 hard assignments agree and correctly framed per-class map FSC-AUC is 0.604--0.907. Candidate topology/raw scores already differ before reconstruction. | Six native arms plus one RECOVAR arm are bundled, so the 469 s allocation is causal evidence, not a formal speed ratio. |
 | `real_kclass_halfmap_refinement.md` | Independent-half refinement launcher/runbook | Runnable infrastructure only; no accepted completed pair | Pending. |
 
 InitialModel emits one class map rather than independently refined half maps,
@@ -123,9 +123,11 @@ performance after the quality gate passes.
    unless a new frozen gate passes.
 3. Finish and seal the RECOVAR EMPIAR-10202 arm before making any target-grid
    high-resolution or two-engine performance claim.
-4. Repair the first real K=4 M-step divergence, then rerun the shared-200 gate
-   and a full independent-half, multi-seed refinement. Existing diagnostic
-   timing cannot be promoted after a scientific failure.
+4. Trace and repair the real K=4 pass-2 candidate-topology/raw-score divergence,
+   then rerun the shared-200 gate and a full independent-half, multi-seed
+   refinement. The completed causal replay rules out an M-step-only first
+   failure. Existing diagnostic timing cannot be promoted after a scientific
+   failure.
 5. Add a dedicated whole-ledger validator for the selected-fine diagnostic or
    migrate it into a versioned diagnostic schema before relying on it as more
    than causal evidence.

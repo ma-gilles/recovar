@@ -14,25 +14,30 @@ import argparse
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import numpy as np
 
-from recovar.data_io.starfile import read_star
-from scripts.launch_em_real_k4_shared200_causal_replay_slurm import (
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from recovar.data_io.starfile import read_star  # noqa: E402
+from scripts.launch_em_real_k4_shared200_causal_replay_slurm import (  # noqa: E402
     CASE,
     TARGET_SCHEMA,
     validate_manifest,
 )
-from scripts.summarize_em_completion_bench import (
+from scripts.summarize_em_completion_bench import (  # noqa: E402
     _load_relion_volume,
     normalized_fsc_auc,
     shell_fsc,
 )
-from scripts.validate_relion_bpref_factor_capture import load_factor_capture
-from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture  # noqa: E402
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture  # noqa: E402
 
 SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v5"
 MAX_NATIVE_SCALAR_RELATIVE_RANGE = 5.0e-4

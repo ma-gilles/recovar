@@ -176,15 +176,15 @@ reported 31.5% map-Hungarian assignment value. The raw-label agreement remains
 100%. In 10076 the map permutation happens to be the identity, so both values
 are 100% at iteration 1.
 
-The scientific conclusion is therefore narrow but useful. The class-label
-component of iteration 1 agrees, while the maps written after its M-step
-already fail FSC. At iteration 2 the hard assignments diverge to 54.5% and
-27.0%, respectively. The first observed material map divergence is at the
-iteration-1 post-E-step/reconstruction boundary, not a harmless final global
-rotation and not merely a late label permutation. The next discriminator is
-the shared-200-particle M-step: compare per-class posterior mass and BPref
-numerator/denominator accumulator norms and shells before gridding, followed
-by reconstructed maps and tau2.
+The scientific conclusion from these two runs alone is narrow: the class-label
+component of iteration 1 agrees, while the first artifacts they compare after
+that point—the updated maps—fail FSC. At iteration 2 the hard assignments
+diverge to 54.5% and 27.0%, respectively. These runs localize the gap only to
+the interval between the iteration-1 E-step inputs and post-update maps; they
+do not prove that the M-step is the first divergent operation. The later
+shared-200 causal replay captures that interval and finds candidate-topology,
+raw-score, posterior, and support differences before reconstruction. It
+therefore supersedes the earlier M-step-first interpretation.
 
 The complete compact record, including every absolute run/report/log path,
 input and artifact SHA-256, terminal `sacct` fields, source tree, FSC,
@@ -273,7 +273,8 @@ trajectory gap. The next causal discriminator must capture the shared
 200-particle iteration-1 boundary before reconstruction, beginning with the
 initial model/tau2/noise state and then coarse/fine scores and winners.
 
-That selected boundary is now sealed for two deterministic 10076 particles.
+The historical selected boundary below is sealed for two deterministic 10076
+particles.
 The coarse audit first found exact joint winners but nonidentical significance
 support: 53 tuples for source row 114 (stack 1598) and 70 for source row 132
 (stack 1839). Exact-local GPU capture job 13310825 then wrote every requested
@@ -301,7 +302,15 @@ translation-prior differences. This rules out common-candidate projector/raw
 score arithmetic as the explanation for these two final fine splits, but does
 not yet assign the support/prior difference to one source expression.
 
-The compact checked-in record is
+Both selected captures predate commit `d1f2f9f93`, which fixed the
+InitialModel mixed-unit offset-prior arithmetic. In particular, the large
+translation-prior differences in this table are evidence for that fixed bug,
+not a current-source causal localization. The geometry join and artifact
+contract remain useful, but current conclusions must use the later
+shared-200 v5 report documented in
+`docs/benchmarks/em/real_k4_shared200_causal_replay.md`.
+
+The compact checked-in historical record is
 `docs/benchmarks/em/diagnostics/real-kclass-selected-fine-10076-20260901.json`.
 The full report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_selected_fine_local_e05c63a33_20260901/audit/selected_fine_physical_report_v1.json`

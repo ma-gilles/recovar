@@ -13,6 +13,79 @@ classes are stable. Its purpose is to determine whether the real K=4 gap is
 already present in candidate scores/posteriors/support, or first appears in
 the reconstruction/update boundary.
 
+## Completed diagnostic
+
+Job `13322235` ran the six native RELION control/capture arms and the RECOVAR
+shared-200 replay from immutable RECOVAR source
+`24317e40cc4b0b19406f75c917857c03869a9372`. ReqTRES and AllocTRES were both
+`billing=15,cpu=8,gres/gpu=1,mem=192G,node=1`; the elapsed time was 469 s on
+`della-h19g1`. The outer job exited `1:0` because its wrapper still required an
+optional contribution dump after every scientific arm had completed. The v5
+post-hoc auditor removes that stale assertion and consumes the complete sealed
+capture set: 800 native fine-score records, 800 native BPref factor records,
+800 RECOVAR pass-2 records, and six native data STAR files.
+
+The strict parity gate fails before reconstruction:
+
+| Metric | Result |
+| --- | ---: |
+| Hard-class assignment agreement | 0.995 (199/200) |
+| Minimum class fraction | 0.070 |
+| Candidate tuple-set exact fraction | 0.5725 |
+| Centered raw / combined score relative L2 | 0.018354 / 0.018491 |
+| Joint posterior relative L2 | 0.250740 |
+| Posterior row-sum maximum error | 8.812e-6 |
+| Significant-support Jaccard | 0.882688 |
+| Joint winner agreement | 0.890 |
+| Pmax RMSE / maximum error | 0.051736 / 0.458229 |
+
+There are 249 native empty-support records, including six for which RECOVAR
+retains nonempty support. Across all 800 particle/class records, 395 have
+different rotation counts; the exact union contains 768 native-only and 4,216
+RECOVAR-only rotation rows. This is a real fine candidate/topology and score
+difference, not an M-step-only failure. The capture does not distinguish
+whether the first upstream cause is coarse significance or fine expansion.
+
+The correctly framed RECOVAR-versus-RELION class-map FSC-AUC values are
+`[0.604141, 0.906911, 0.693999, 0.748018]`. Native repeatability and passive
+capture inertness are both at least `0.99999999928`, and native replay versus
+the frozen target is at least `0.999510`. Thus the maps are positively related
+and the capture is inert, but the cross-engine map gate of 0.999 still fails.
+The earlier negative-map interpretation came from loading maps written with
+`write_relion_mrc` through the RECOVAR-frame loader a second time; it is not
+scientific evidence.
+
+The authoritative report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v5.json`
+(SHA-256
+`7c6921cac7bf879be7319a7427b51deea9d37c193a47ab36d4811995b949e8a1`).
+It was produced by auditor commit
+`9e67f24c1a5a1471b1d827f0e649ac73b88c0642`, integrated here as
+`ceaee74ce`. The launch manifest is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/launch_manifest.json`
+(SHA-256
+`d30c978f933f76af430d2df9da74e571c6633965917e3b5e43795021de2f929e`).
+The retained v4 report at `analysis/causal_replay_report.json` has SHA-256
+`6c7ac1d0e3229e8257429d02ebec5c1fbdca2d3c2ade4a80754dcc3669d19edc`
+and is explicitly superseded because of the map-frame loader error.
+Replaying the integrated auditor produced a byte-identical report at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v5_integrated_ceaee74ce.json`.
+
+Reproduce that post-hoc report from the sealed GPU products with a fresh
+output filename:
+
+```bash
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
+export PYTHONNOUSERSITE=1
+PIXI_PY="$(pixi run which python)"
+"${PIXI_PY}" scripts/audit_em_real_k4_shared200_causal_replay.py \
+  --manifest /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/launch_manifest.json \
+  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v5_replay.json
+```
+
+The command intentionally exits 1 while the strict scientific gate fails;
+the complete report is still written before that exit.
+
 ## Frozen case
 
 - Dataset: EMPIAR-10076 frozen 10,000-particle fixture.
@@ -112,12 +185,15 @@ each native capture type. Fine-score v1 marks it with header flag word 32 bit
 candidate payload. BPref v2 marks it with header flag word 54 bit 0, retains
 the exact rotation geometry when RELION constructed it (`header[20] ==
 header[46]`), retains the full translation grid, and has zero candidate,
-hypothesis, pixel, summary, and term counts. The audit accepts this sentinel
-only when both native files agree and RECOVAR has an empty candidate mask,
-posterior, and reconstruction support. Its empty-set candidate equality and
-support Jaccard are defined as 1.0; an unflagged zero-rotation record, unknown
-flag, inconsistent geometry, nonzero RECOVAR mass, or mismatched sentinel
-fails closed.
+hypothesis, pixel, summary, and term counts. The two native sentinels must
+agree. A native-empty/RECOVAR-empty record receives empty-set candidate
+equality and support Jaccard 1.0. A native-empty/RECOVAR-nonempty record is
+retained as asymmetric topology and contributes to the ordinary candidate,
+posterior, and support errors rather than being discarded or rejected before
+measurement. Missing RECOVAR reconstruction enrichment is permitted only for
+a truly empty candidate/posterior record; partial enrichment, an unflagged
+zero-rotation record, unknown flag, inconsistent geometry, or mismatched
+native sentinels fails closed.
 
 Scores use centered, scale-sensitive errors solely to remove a class-table
 additive offset. Posterior and Pmax comparisons are not centered or fitted.
