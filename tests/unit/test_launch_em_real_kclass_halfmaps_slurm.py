@@ -96,6 +96,8 @@ def test_rendered_job_is_nonexclusive_serial_one_gpu_and_audited(tmp_path: Path)
     assert "--mask-soft-edge 4" in text
     assert "--mask-cleanup true" in text
     assert "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER" not in text
+    assert 'export TMPDIR="${RUNTIME_ROOT}/relion_half${half}"' in text
+    assert '${ROOT}/runtime' not in text
 
 
 def test_setup_job_records_and_validates_exact_allocation_before_build(tmp_path: Path) -> None:

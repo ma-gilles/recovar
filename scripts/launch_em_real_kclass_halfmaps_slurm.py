@@ -724,7 +724,7 @@ run_relion_half() {{
     module load {q(relion_module)}
     set -u
     export RELION_DISPATCH_LOG="${{output_dir}}/dispatch.tsv"
-    export TMPDIR="${{ROOT}}/runtime/relion_half${{half}}_${{SLURM_JOB_ID}}"
+    export TMPDIR="${{RUNTIME_ROOT}}/relion_half${{half}}"
     mkdir -p "${{TMPDIR}}"
     cd "${{data_dir}}"
     /usr/bin/time -v -o "${{output_dir}}/time.txt" "${{command_ref[@]}}"
@@ -826,7 +826,6 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     (root / "jobs").mkdir()
     (root / "provenance").mkdir()
     (root / "build" / "cuda").mkdir(parents=True)
-    (root / "runtime").mkdir()
     relion_diff_artifact = root / "provenance" / "relion_source_tracked.diff"
     relion_diff_artifact.write_bytes(
         subprocess.check_output(
@@ -1035,7 +1034,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "run_script": str(run_script.resolve()),
             "run_script_sha256": sha256_file(run_script),
             "setup_base_pixi_python": str(base_pixi_python()),
-            "runtime_root_policy": str(root / "runtime" / "<engine>_half<half>_<job_id>"),
+            "runtime_root_policy": str(
+                DEFAULT_RUNTIME_ROOT
+                / f"real_k4_halfmap_{profile.name}_seed{args.seed}_<job_id>"
+            ),
+            "relion_tmpdir_policy": "<runtime_root>/relion_half<half>",
         },
         "claim_boundary": {
             "independent_halfmaps": True,
