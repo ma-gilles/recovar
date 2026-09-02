@@ -55,8 +55,11 @@
     "only_configuration_delta": "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID=0/1 + RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=0/1 + RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=0/1",
     "hybrid_projection_cache_contract": {
       "budget_gib": 40.0,
-      "maximum_declared_rotation_count": 294912,
-      "maximum_declared_compact_pixel_count": 8320,
+      "maximum_admitted_rotation_count": 294912,
+      "maximum_admitted_compact_pixel_count": 8320,
+      "maximum_exercised_fine_rotation_count": 294912,
+      "maximum_exercised_coarse_rotation_count": 36864,
+      "maximum_exercised_compact_pixel_count": 8320,
       "maximum_retained_cache_gib": 18.28125,
       "maximum_conservative_peak_gib": 37.1337890625,
       "destination_aliasing_assumed_for_admission": false

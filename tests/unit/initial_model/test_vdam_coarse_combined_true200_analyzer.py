@@ -309,6 +309,7 @@ def _selector_audit(*, workers: int, atomic: bool) -> dict[str, object]:
 
 def _joint_stream_metadata(audit: dict[str, object]) -> dict[str, object]:
     return {
+        "n_rotations": 294_912,
         "n_translations": 116,
         "oversampling": 1,
         "halfset_ids": [0, 1],
@@ -428,11 +429,15 @@ def test_completed_hybrid_arm_proves_every_checkpoint_and_maximum_cache_shape(
     label = "combined_candidate_1"
     output = tmp_path / "runs" / label / "output"
     output.mkdir(parents=True)
-    for iteration, rotation_count in ((1, 36_864), (2, 294_912)):
+    for iteration, coarse_rotation_count, fine_rotation_count in (
+        (1, 4_608, 36_864),
+        (2, 36_864, 294_912),
+    ):
         metadata = _direct_or_hybrid_metadata(hybrid=True)
         metadata["current_size"] = 100 if iteration == 1 else 128
+        metadata["n_rotations"] = fine_rotation_count
         metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] = (
-            _hybrid_stats(rotation_count=rotation_count)
+            _hybrid_stats(rotation_count=coarse_rotation_count)
         )
         (output / f"run_it{iteration:03d}_recovar_meta.json").write_text(
             json.dumps(metadata)
@@ -445,14 +450,50 @@ def test_completed_hybrid_arm_proves_every_checkpoint_and_maximum_cache_shape(
         coarse_gemm_hybrid=1,
         iterations=(1, 2),
         cache_contract={
-            "maximum_declared_rotation_count": 294_912,
-            "maximum_declared_compact_pixel_count": 8_320,
+            "maximum_exercised_fine_rotation_count": 294_912,
+            "maximum_exercised_coarse_rotation_count": 36_864,
+            "maximum_exercised_compact_pixel_count": 8_320,
         },
     )
     assert result["checkpoint_count"] == 2
-    assert result["maximum_inferred_rotation_count"] == 294_912
+    assert result["maximum_metadata_fine_rotation_count"] == 294_912
+    assert result["maximum_metadata_coarse_rotation_count"] == 36_864
+    assert result["maximum_inferred_rotation_count"] == 36_864
     assert result["maximum_compact_pixel_count"] == 8_320
     assert result["total_fallback_image_count"] == 0
+
+
+def test_completed_hybrid_arm_rejects_coarse_grid_inconsistent_with_oversampling(
+    tmp_path: Path,
+) -> None:
+    label = "combined_candidate_1"
+    output = tmp_path / "runs" / label / "output"
+    output.mkdir(parents=True)
+    metadata = _direct_or_hybrid_metadata(hybrid=True)
+    metadata["current_size"] = 128
+    metadata["n_rotations"] = 294_912
+    metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] = (
+        _hybrid_stats(rotation_count=4_608)
+    )
+    (output / "run_it001_recovar_meta.json").write_text(json.dumps(metadata))
+
+    with pytest.raises(
+        analyzer.GateSetupError,
+        match="inferred hybrid coarse rotation count differs from the oversampled metadata grid",
+    ):
+        analyzer._validate_arm_coarse_hybrid_execution(
+            tmp_path,
+            label,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+            coarse_gemm_hybrid=1,
+            iterations=(1,),
+            cache_contract={
+                "maximum_exercised_fine_rotation_count": 294_912,
+                "maximum_exercised_coarse_rotation_count": 36_864,
+                "maximum_exercised_compact_pixel_count": 8_320,
+            },
+        )
 
 
 @pytest.mark.parametrize(
@@ -1757,6 +1798,11 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
         assert name in runtime_contract["science_environment_capture_names"]
     cache = contract["science_contract"]["hybrid_projection_cache_contract"]
     assert cache["budget_gib"] == 40.0
+    assert cache["maximum_admitted_rotation_count"] == 294_912
+    assert cache["maximum_admitted_compact_pixel_count"] == 8_320
+    assert cache["maximum_exercised_fine_rotation_count"] == 294_912
+    assert cache["maximum_exercised_coarse_rotation_count"] == 36_864
+    assert cache["maximum_exercised_compact_pixel_count"] == 8_320
     assert cache["maximum_retained_cache_gib"] == pytest.approx(18.28125)
     assert cache["maximum_conservative_peak_gib"] == pytest.approx(37.1337890625)
     assert cache["maximum_conservative_peak_gib"] < cache["budget_gib"]
@@ -1829,8 +1875,8 @@ def test_maximum_declared_projection_cache_plan_fits_without_alias_assumption() 
     ]
     gib = 2**30
     plan = _plan_coarse_gaussian_gemm_projection_cache(
-        n_rotations=cache["maximum_declared_rotation_count"],
-        compact_pixel_count=cache["maximum_declared_compact_pixel_count"],
+        n_rotations=cache["maximum_admitted_rotation_count"],
+        compact_pixel_count=cache["maximum_admitted_compact_pixel_count"],
         image_shape=(128, 128),
         budget_bytes=int(cache["budget_gib"] * gib),
     )

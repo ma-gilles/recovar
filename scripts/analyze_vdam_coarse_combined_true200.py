@@ -1287,6 +1287,22 @@ def _coarse_translation_count(metadata: dict[str, Any], label: str) -> int:
     return fine_count // children_per_parent
 
 
+def _coarse_rotation_count(metadata: dict[str, Any], label: str) -> int:
+    """Recover the pass-1 angular grid from the serialized fine sampling plan."""
+
+    fine_count = _integer(metadata.get("n_rotations"), f"{label} n_rotations")
+    oversampling = _integer(metadata.get("oversampling"), f"{label} oversampling")
+    _require(fine_count > 0, f"{label} n_rotations must be positive")
+    _require(oversampling >= 0, f"{label} oversampling must be non-negative")
+    _require(oversampling <= 8, f"{label} oversampling is implausibly large")
+    children_per_parent = 8**oversampling
+    _require(
+        fine_count % children_per_parent == 0,
+        f"{label} fine rotation count is not divisible by its oversampling factor",
+    )
+    return fine_count // children_per_parent
+
+
 def _validate_coarse_gemm_hybrid_profile(
     stats: Any,
     *,
@@ -1599,6 +1615,8 @@ def _validate_arm_coarse_hybrid_execution(
 
     rows: list[dict[str, Any]] = []
     current_sizes: dict[int, int] = {}
+    fine_rotation_counts: dict[int, int] = {}
+    coarse_rotation_counts: dict[int, int] = {}
     for iteration in iterations:
         metadata = _load_json(
             root / "runs" / label / "output" / f"run_it{int(iteration):03d}_recovar_meta.json",
@@ -1607,6 +1625,14 @@ def _validate_arm_coarse_hybrid_execution(
         current_sizes[int(iteration)] = _integer(
             metadata.get("current_size"),
             f"{label} iteration {iteration} current_size",
+        )
+        fine_rotation_counts[int(iteration)] = _integer(
+            metadata.get("n_rotations"),
+            f"{label} iteration {iteration} n_rotations",
+        )
+        coarse_rotation_counts[int(iteration)] = _coarse_rotation_count(
+            metadata,
+            f"{label} iteration {iteration}",
         )
         rows.extend(
             _validate_coarse_selector_profile_audits(
@@ -1626,6 +1652,44 @@ def _validate_arm_coarse_hybrid_execution(
         f"{label} coarse-profile checkpoint coverage differs",
     )
 
+    maximum_fine_rotation_count = max(fine_rotation_counts.values())
+    maximum_metadata_coarse_rotation_count = max(coarse_rotation_counts.values())
+    _require(
+        maximum_fine_rotation_count
+        == _integer(
+            cache_contract.get("maximum_exercised_fine_rotation_count"),
+            "maximum exercised fine rotation count",
+        ),
+        f"{label} did not exercise the maximum declared fine rotation count",
+    )
+    _require(
+        maximum_metadata_coarse_rotation_count
+        == _integer(
+            cache_contract.get("maximum_exercised_coarse_rotation_count"),
+            "maximum exercised coarse rotation count",
+        ),
+        f"{label} did not exercise the maximum declared coarse rotation count",
+    )
+    maximum_rotation_iterations = {
+        iteration
+        for iteration, rotation_count in coarse_rotation_counts.items()
+        if rotation_count == maximum_metadata_coarse_rotation_count
+    }
+    maximum_current_size = max(
+        current_sizes[iteration] for iteration in maximum_rotation_iterations
+    )
+    maximum_compact_pixel_count = maximum_current_size * (
+        maximum_current_size // 2 + 1
+    )
+    _require(
+        maximum_compact_pixel_count
+        == _integer(
+            cache_contract.get("maximum_exercised_compact_pixel_count"),
+            "maximum exercised hybrid compact pixel count",
+        ),
+        f"{label} did not exercise the maximum declared hybrid compact-pixel count",
+    )
+
     hybrid_rows = [row["hybrid"] for row in rows if row["hybrid"] is not None]
     if int(coarse_gemm_hybrid):
         _require(
@@ -1638,38 +1702,20 @@ def _validate_arm_coarse_hybrid_execution(
             if row["hybrid"]["inferred_rotation_count"] is not None
         ]
         _require(inferred_rows, f"{label} never executed certified selected rescoring")
+        for iteration, inferred_rotation_count in inferred_rows:
+            _require(
+                inferred_rotation_count == coarse_rotation_counts[iteration],
+                f"{label} iteration {iteration} inferred hybrid coarse rotation count "
+                "differs from the oversampled metadata grid",
+            )
         maximum_rotation_count = max(value for _, value in inferred_rows)
-        maximum_declared_rotation_count = _integer(
-            cache_contract.get("maximum_declared_rotation_count"),
-            "maximum declared hybrid rotation count",
-        )
         _require(
-            maximum_rotation_count == maximum_declared_rotation_count,
-            f"{label} did not exercise the maximum declared hybrid rotation count",
-        )
-        maximum_rotation_iterations = {
-            iteration
-            for iteration, rotation_count in inferred_rows
-            if rotation_count == maximum_rotation_count
-        }
-        maximum_current_size = max(
-            current_sizes[iteration] for iteration in maximum_rotation_iterations
-        )
-        maximum_compact_pixel_count = maximum_current_size * (
-            maximum_current_size // 2 + 1
-        )
-        _require(
-            maximum_compact_pixel_count
-            == _integer(
-                cache_contract.get("maximum_declared_compact_pixel_count"),
-                "maximum declared hybrid compact pixel count",
-            ),
-            f"{label} did not exercise the maximum declared hybrid compact-pixel count",
+            maximum_rotation_count == maximum_metadata_coarse_rotation_count,
+            f"{label} did not execute selected rescoring at the maximum coarse rotation count",
         )
     else:
         _require(not hybrid_rows, f"{label} direct control published hybrid telemetry")
         maximum_rotation_count = None
-        maximum_compact_pixel_count = None
 
     fallback_reasons: dict[str, int] = {}
     for stats in hybrid_rows:
@@ -1679,6 +1725,8 @@ def _validate_arm_coarse_hybrid_execution(
         "label": label,
         "checkpoint_count": len(rows),
         "coarse_gemm_hybrid": int(coarse_gemm_hybrid),
+        "maximum_metadata_fine_rotation_count": maximum_fine_rotation_count,
+        "maximum_metadata_coarse_rotation_count": maximum_metadata_coarse_rotation_count,
         "maximum_inferred_rotation_count": maximum_rotation_count,
         "maximum_compact_pixel_count": maximum_compact_pixel_count,
         "total_hybrid_batch_count": sum(
