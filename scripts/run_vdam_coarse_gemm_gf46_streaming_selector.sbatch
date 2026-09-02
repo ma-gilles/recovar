@@ -23,7 +23,7 @@ unset PYTHONOPTIMIZE
 : "${PIXI_PY_OVERRIDE:?pin the qualified RECOVAR pixi interpreter}"
 
 readonly REQUIRED_INTEGRATION_COMMIT=56f2ee1e892925421fa2d807379062158f6eb1e3
-readonly REQUIRED_PRE_PRIOR_V2_COMMIT=b2ea3dd14
+readonly REQUIRED_PRE_PRIOR_V2_COMMIT=8b0d5bcacdda537337a4bae0f5b2ac242d796562
 readonly QUALIFIED_GPU_GATE_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_rotation_blocks_h100_695a629fa_20260901
 readonly QUALIFIED_GATE_HEAD=695a629fa70ee951734d98728bb3daffcc53bd88
 readonly QUALIFIED_GATE_TREE=04a3ca49be3547cc8329d6c27c7b1aa2acf30c3e

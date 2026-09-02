@@ -32,6 +32,10 @@ def test_streaming_runner_pins_clean_committed_head_tree_and_exact_h100() -> Non
     assert ': "${EXPECTED_REPO_TREE:?pin the committed streaming-diagnostic tree}"' in source
     assert ': "${EXPECTED_SOURCE_MANIFEST_SHA256:?pin the compact source manifest}"' in source
     assert ': "${PIXI_PY_OVERRIDE:?pin the qualified RECOVAR pixi interpreter}"' in source
+    assert (
+        "readonly REQUIRED_PRE_PRIOR_V2_COMMIT="
+        "8b0d5bcacdda537337a4bae0f5b2ac242d796562"
+    ) in source
     assert "#SBATCH --nodelist=della-h21g4" in source
     assert "readonly TARGET_NODE=della-h21g4" in source
     assert "readonly TARGET_GPU_UUID=GPU-099c0d77-bb85-f2e9-f628-148b733c9176" in source
