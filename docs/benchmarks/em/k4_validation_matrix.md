@@ -93,9 +93,22 @@ EMPIAR-10076 shared-200 panel. Commit `5f74755c2` matches native projected
 references and Euler matrices exactly, and job `13337519` matches all
 1,336/1,336 selected coarse candidates over 16 probes. Replay configuration
 and 11 state arrays are exact; the minimum eight-map repeat FSC-AUC is
-`0.999999997335`. This covers one coarse size and one batch/block setting only;
-the fine-pass/posterior boundary and the complete batch/block grid remain
-required.
+`0.999999997335`.
+
+The subsequent passive native firstiter-CC capture closes the full score
+surface on a 16-particle, all-class panel. RELION keeps the rounded input
+origins when it resets Class3D orientations for the fresh global search;
+RECOVAR had incorrectly reset both. Translation-only initialization at commit
+`4a91369a3` preserves those origins without exposing the input orientations,
+normalization corrections, priors, or noise. H100 job `13346151` then matches
+16/16 global coarse poses, 64/64 per-class coarse poses, 16/16 fine parents and
+winners, and all 16 integer pre-shifts. Across 1,069,056 coarse candidates the
+minimum score correlation is `0.999999999996`; the maximum centered relative
+L2 error is `2.83e-6`, and the maximum fine-score absolute error is
+`7.45e-8`. The fail-closed analyzer and unit tests are commit `8cbebdecc`; the
+sealed report and rerun command are documented in
+`real_kclass_halfmap_refinement.md`. This covers one coarse/fine size and one
+batch/block setting; the complete batch/block grid remains required.
 
 ## Tier 2: 10k/128 multi-seed synthetic trajectories
 

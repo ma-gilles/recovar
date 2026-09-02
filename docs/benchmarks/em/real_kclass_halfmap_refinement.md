@@ -71,6 +71,69 @@ Every small input is rehashed while preparing the run. The particle stack is
 size-checked during preparation and fully rehashed inside the Slurm job before
 either engine starts.
 
+## First-iteration native score boundary
+
+The first material real-data K=4 disagreement was a particle-state handoff,
+not a projection or score-arithmetic error. RELION Class3D discards input
+orientations for its fresh global angular search, but still rounds each
+`run_it000_data.star` origin and applies that integer pre-shift before the image
+FFT. RECOVAR previously treated the complete pose as one indivisible state and
+discarded both orientation and translation for K greater than one.
+
+Commit `4a91369a3` loads only the two origin coordinates through
+`ReplayState.init_previous_best_translations`. It deliberately supplies
+`[None, None]` for the previous Euler angles and does not replay normalization,
+scale, direction-prior, or noise state. The empty second accumulator used by an
+independent all-data Class3D process is normalized to shape `(0, 2)` and has a
+dedicated regression test.
+
+The discriminator uses 16 frozen EMPIAR-10076 particles spanning all four
+classes, same-class pose disagreements, and every observed class-confusion
+direction. Native RELION pass-0/pass-1 float32 scores are passive captures from
+the control-qualified binary; RECOVAR records the entire corresponding coarse
+surface and sparse fine support. H100 job `13346151` completed in 2m19s with
+one GPU, 8 CPUs, 96 GiB, exact requested/allocated resources, and exit 0. Its
+result is:
+
+- 16/16 winner classes and 16/16 global coarse poses equal;
+- 64/64 per-class coarse best poses equal;
+- 16/16 fine parents and 16/16 fine winners equal;
+- 16/16 integer pre-shifts equal RELION's half-away-from-zero rounding;
+- minimum full-surface correlation `0.999999999996` over 1,069,056 candidates;
+- maximum centered coarse relative L2 error `2.83e-6`; and
+- maximum absolute fine-score error `7.45e-8`.
+
+The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_firstiter_originfix_panel16_4a91369a3_20260902/analysis/firstiter_cc_boundary.json`
+(SHA-256
+`977d115f1593a789f4c877645791a8658a9d645e8fb94996f54f2d81686d2e1a`).
+The shape-only first attempt, job `13346011`, failed before scoring because the
+empty second accumulator arrived as `(0,)`; it is retained as harness audit
+history and contributes no scientific result.
+
+Reproduce the sealed comparison from the retained captures with:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_reference_frame_fix_8b5a024ce_20260902
+pixi run python -m scripts.analyze_em_real_k4_firstiter_cc_boundary \
+  --panel /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_firstiter_cc_panel16_framefix_1ec0835_20260902/inputs/panel16.json \
+  --native-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_firstiter_cc_panel16_framefix_1ec0835_20260902/native/capture/capture \
+  --recovar-coarse-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_firstiter_originfix_panel16_4a91369a3_20260902/coarse \
+  --recovar-fine-dir /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_firstiter_originfix_panel16_4a91369a3_20260902/pass2 \
+  --input-data-star /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_framefix_it1_1ac24b9ef_20260902/half1/relion/run_it000_data.star \
+  --voxel-size 3.275 \
+  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_firstiter_originfix_panel16_4a91369a3_20260902/analysis/firstiter_cc_boundary.reproduced.json
+```
+
+The next trajectory-level gate is the 10,000-particle, two-independent-half,
+eight-iteration `pilot10k-128` run at source commit `8cbebdecc`: setup job
+`13346676`, qualification job `13346677`, output root
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_originfix_it8_r2_8cbebdecc_20260902`.
+The preceding setup job `13346480` succeeded, but its dependent job `13346481`
+failed before science because the source worktree was transiently dirty while
+this documentation was drafted. That immutable root is retained as a harness
+failure and is not a scientific attempt.
+
 ## Reproduction
 
 The launcher is dry-run by default. Use a fresh root for every retry:
