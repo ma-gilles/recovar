@@ -13,7 +13,12 @@ from pathlib import Path
 
 import numpy as np
 
-from scripts import validate_relion_coarse_score_capture as score_validator
+try:
+    from scripts import validate_relion_coarse_score_capture as score_validator
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    import validate_relion_coarse_score_capture as score_validator
 
 HEADER_MAGIC = b"RLNCRCP1HEADER".ljust(16, b"\0")
 FOOTER_MAGIC = b"RLNCRCP1FOOTER".ljust(16, b"\0")

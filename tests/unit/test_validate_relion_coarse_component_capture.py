@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import struct
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from scripts import validate_relion_coarse_component_capture as validator
 from scripts import validate_relion_coarse_score_capture as score_validator
+
+
+def test_component_validator_supports_direct_script_entrypoint(tmp_path):
+    script = Path(validator.__file__).resolve()
+
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--expected-stacks EXPECTED_STACKS" in completed.stdout
 
 
 def _bits(value: np.float32) -> int:
