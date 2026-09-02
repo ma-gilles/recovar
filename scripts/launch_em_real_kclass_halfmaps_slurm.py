@@ -67,7 +67,7 @@ CANONICAL_HASHES = {
     str(SOURCE_FIXTURE / "fixture_manifest.json"): "762645e0d77c53bb9ce61701e1fd0d03868021c494f84b73a281b39d753d9750",
     str(SHARED200_SELECTION): "581157ff693aac6f5853d335d9cd0c59aa3fc11e60f54b325feb692ff05a9bd7",
     str(STACKS[128]): "24c52006eeb6f778a2b1a447a4ff790af0d2c78b7b20366281f54ec82c8f9382",
-    str(STACKS[256]): "70d0c3849123ac11a905547d4909ba8aee9f6a7e02043fa4bb5d6bd6bf6b9d03",
+    str(STACKS[256]): "70d0c19995221491d27c9323f21c40df27e153bdf1e783bc78c4d38fe41a9c09",
     str(INITIAL_MAP_ROOT / "run_it000_class001.mrc"): "36c6b856c4a7718a52d7fbec1bc6d58619c7355ab4d1f1589e0ec352fec7303d",
     str(INITIAL_MAP_ROOT / "run_it000_class002.mrc"): "5601d3bbc4e1e12aa62b24365cc9d2493b76cf3b69c50dc5a3f08834969eb26f",
     str(INITIAL_MAP_ROOT / "run_it000_class003.mrc"): "dd405a82bac91e9361e62129a47daf2e49e07ea5a92ab73a19ede7735d377201",
@@ -179,9 +179,15 @@ def _verify_canonical(path: Path) -> str:
     expected = CANONICAL_HASHES.get(str(resolved)) or CANONICAL_HASHES.get(str(path))
     _require(expected is not None, f"no frozen checksum is declared for {resolved}")
     _require(resolved.is_file(), f"missing canonical artifact: {resolved}")
-    if resolved.stat().st_size <= 1_000_000_000:
-        observed = sha256_file(resolved)
-        _require(observed == expected, f"canonical checksum changed: {resolved}")
+    # Preparation is the provenance boundary.  Deferring a large-stack hash
+    # until the allocated job starts can waste a GPU allocation on an input
+    # that was never eligible to run.  The 34.6 GB native 10076 stack hashes
+    # in well under a minute on Della, so verify every canonical artifact here.
+    observed = sha256_file(resolved)
+    _require(
+        observed == expected,
+        f"canonical checksum changed: {resolved}; expected={expected} observed={observed}",
+    )
     return expected
 
 

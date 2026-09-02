@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,39 @@ def _row(tmp_path: Path, half: int) -> dict:
         "relion_command": ["mpirun", "-n", "3", "relion_refine_mpi", "--K", "4"],
         "recovar_command": ["python", "-m", "scripts.run_full_refinement", "--n_classes", "4"],
     }
+
+
+def test_verify_canonical_rehashes_large_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = (tmp_path / "large-stack.mrcs").resolve()
+    artifact.write_bytes(b"sealed stack")
+    expected = "a" * 64
+    original_stat = Path.stat
+
+    def report_large_size(path: Path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if path == artifact:
+            fields = list(result)
+            fields[6] = 1_000_000_001
+            return os.stat_result(fields)
+        return result
+
+    calls: list[Path] = []
+
+    def mismatched_hash(path: Path) -> str:
+        calls.append(path)
+        return "b" * 64
+
+    monkeypatch.setattr(launcher, "CANONICAL_HASHES", {str(artifact): expected})
+    monkeypatch.setattr(Path, "stat", report_large_size)
+    monkeypatch.setattr(launcher, "sha256_file", mismatched_hash)
+
+    with pytest.raises(launcher.LaunchError, match="canonical checksum changed"):
+        launcher._verify_canonical(artifact)
+
+    assert calls == [artifact]
 
 
 def test_matched_commands_use_independent_all_data_k4_processes(tmp_path: Path) -> None:
