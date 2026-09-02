@@ -378,6 +378,7 @@ payload = {
     "nr_iter_schedule": 200,
     "random_seed": 29,
     "image_batch_size": 500,
+    "effective_significance_image_batch_size": 187,
     "selected_particle_ids_int64_sha256": "c0199226ec7aa92f74a2fd66660e597fe44d73155db20f026b278840992a90be",
     "material_warm_wall_ratio": 0.90,
     "support_audit_timing_eligible": False,

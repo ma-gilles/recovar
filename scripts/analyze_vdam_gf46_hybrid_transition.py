@@ -280,6 +280,7 @@ def _validate_provenance(root: Path, repo: Path) -> tuple[dict[str, Any], dict[s
         "nr_iter_schedule": 200,
         "random_seed": 29,
         "image_batch_size": 500,
+        "effective_significance_image_batch_size": 187,
         "selected_particle_ids_int64_sha256": EXPECTED_SELECTED_IDS_INT64_SHA256,
         "input_manifest_sha256": EXPECTED_INPUT_MANIFEST_SHA256,
         "particle_stack_sha256": EXPECTED_PARTICLE_STACK_SHA256,
@@ -474,8 +475,8 @@ def _validated_hybrid(metadata: dict[str, Any], label: str) -> dict[str, Any]:
         "full_candidate_count_for_selected_images", "max_selected_blocks_per_image",
     )
     _require(all(isinstance(stats.get(key), int) and stats[key] >= 0 for key in integer_keys), f"{label} hybrid counters are invalid")
-    _require(stats["batch_count"] == 2, f"{label} hybrid batch count differs")
-    _require(stats["selected_rescore_batch_count"] + stats["fallback_batch_count"] == 2, f"{label} hybrid batch accounting differs")
+    _require(stats["batch_count"] == 6, f"{label} hybrid batch count differs")
+    _require(stats["selected_rescore_batch_count"] + stats["fallback_batch_count"] == 6, f"{label} hybrid batch accounting differs")
     _require(stats["selected_rescore_image_count"] + stats["fallback_image_count"] == 1_000, f"{label} hybrid image accounting differs")
     reasons = stats.get("fallback_reasons")
     _require(isinstance(reasons, dict) and all(isinstance(key, str) and isinstance(value, int) and value > 0 for key, value in reasons.items()), f"{label} fallback reasons differ")
