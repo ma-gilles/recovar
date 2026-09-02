@@ -283,6 +283,13 @@ EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM = 512
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM"
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP"
+# Limit only the fused per-bucket program.  Exact neighborhoods remain intact;
+# buckets above this optional ceiling use the existing split projection/score/
+# M-step route instead.  Zero or unset preserves the historical unbounded
+# behavior while a high-resolution run is being qualified.
+EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV = (
+    "RECOVAR_EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS"
+)
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
@@ -599,6 +606,13 @@ def _optional_nonnegative_int_env(name: str) -> int | None:
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _exact_local_big_jit_max_bucket_rotations() -> int | None:
+    value = _optional_nonnegative_int_env(
+        EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV
+    )
+    return None if value in {None, 0} else int(value)
 
 
 def _optional_nonnegative_float_env(name: str, default: float) -> float:
@@ -2466,6 +2480,9 @@ def run_local_em_exact(
     big_jit_bucket_count = 0
     sparse_big_jit_bucket_count = 0
     big_jit_debug_bucket_count = 0
+    big_jit_wide_bucket_split_count = 0
+    big_jit_wide_bucket_max_rotations = 0
+    big_jit_max_bucket_rotations = _exact_local_big_jit_max_bucket_rotations()
     sparse_adjoint_chunk_count = 0
     sparse_adjoint_target_rows = _optional_nonnegative_int_env(EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV) or 0
     total_local_rotations = int(local_layout.total_local_rotations)
@@ -3067,6 +3084,25 @@ def run_local_em_exact(
             use_big_jit_buckets
             and not (debug_score_dump_force_split and debug_score_dump_bucket_matches)
         )
+        wide_bucket_split = bool(
+            use_big_jit_buckets_for_bucket
+            and big_jit_max_bucket_rotations is not None
+            and int(bucket.bucket_rotation_count) > big_jit_max_bucket_rotations
+        )
+        if wide_bucket_split:
+            big_jit_wide_bucket_split_count += 1
+            big_jit_wide_bucket_max_rotations = max(
+                big_jit_wide_bucket_max_rotations,
+                int(bucket.bucket_rotation_count),
+            )
+            logger.info(
+                "Exact local wide bucket using split route: images=%d "
+                "bucket_rot=%d big_jit_max_bucket_rotations=%d",
+                int(batch_size),
+                int(bucket.bucket_rotation_count),
+                int(big_jit_max_bucket_rotations),
+            )
+            use_big_jit_buckets_for_bucket = False
         need_local_recon_projection_for_bucket = bool(
             need_local_recon_projection
             or (
@@ -5431,6 +5467,15 @@ def run_local_em_exact(
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "sparse_big_jit_bucket_count": np.int32(sparse_big_jit_bucket_count),
         "big_jit_debug_bucket_count": np.int32(big_jit_debug_bucket_count),
+        "big_jit_max_bucket_rotations": np.int32(
+            -1 if big_jit_max_bucket_rotations is None else big_jit_max_bucket_rotations
+        ),
+        "big_jit_wide_bucket_split_count": np.int32(
+            big_jit_wide_bucket_split_count
+        ),
+        "big_jit_wide_bucket_max_rotations": np.int32(
+            big_jit_wide_bucket_max_rotations
+        ),
         "score_only": np.asarray(score_only),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "defer_local_noise_projection": np.asarray(defer_local_noise_projection),

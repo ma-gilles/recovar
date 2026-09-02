@@ -117,6 +117,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
     EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
+    EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV,
     EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
@@ -129,6 +130,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
     _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_reconstruction_pack_indices,
+    _exact_local_big_jit_max_bucket_rotations,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
     _exact_local_score_only_preprocess_image_batch_size,
@@ -8546,6 +8548,21 @@ def test_local_exact_relion_translation_rejects_float64_scoring():
         )
 
 
+def test_exact_local_big_jit_max_bucket_rotations_env(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, raising=False)
+    assert _exact_local_big_jit_max_bucket_rotations() is None
+
+    monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, "0")
+    assert _exact_local_big_jit_max_bucket_rotations() is None
+
+    monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, "256")
+    assert _exact_local_big_jit_max_bucket_rotations() == 256
+
+    monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, "-1")
+    with pytest.raises(ValueError, match="must be a non-negative integer"):
+        _exact_local_big_jit_max_bucket_rotations()
+
+
 def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monkeypatch, rng):
     from recovar.core.relion_project import centered_full_to_relion_half
 
@@ -8598,6 +8615,7 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     )
 
     monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, raising=False)
     big = run_local_em_exact(
         dataset,
         mean,
@@ -8608,7 +8626,9 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
         **common_kwargs,
     )
 
-    monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
+    # The padded bucket has eight rotations.  Route only that wide static
+    # shape through the split path, as in the high-resolution tail fallback.
+    monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, "7")
     split = run_local_em_exact(
         dataset,
         mean,
@@ -8623,6 +8643,10 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
+    assert int(profile_big["big_jit_wide_bucket_split_count"]) == 0
+    assert int(profile_split["big_jit_max_bucket_rotations"]) == 7
+    assert int(profile_split["big_jit_wide_bucket_split_count"]) == 1
+    assert int(profile_split["big_jit_wide_bucket_max_rotations"]) == 8
     assert profile_big["projection_mode"].item() == "relion_projector"
     assert profile_split["projection_mode"].item() == "relion_projector"
     np.testing.assert_array_equal(hard_big, hard_split)
