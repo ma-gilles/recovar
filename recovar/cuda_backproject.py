@@ -585,6 +585,9 @@ _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_fused_translate_rectangular_f32"
 )
+_TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_FLAT_ROWS_F32 = (
+    "cuda_relion_fine_diff2_fused_translate_flat_rows_f32"
+)
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
 _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32 = (
     "cuda_relion_powerclass_spectrum_highres_f32"
@@ -692,6 +695,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32,
         "RelionFineDiff2FusedTranslateRectangularF32",
+    ),
+    (
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_FLAT_ROWS_F32,
+        "RelionFineDiff2FusedTranslateFlatRowsF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
     (
@@ -3393,6 +3400,120 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
         vmap_method="sequential",
     )(
         reference,
+        image,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        current_size=current_size,
+    )
+
+
+@functools.partial(jax.jit, static_argnames=("current_size",))
+def relion_fine_diff2_fused_translate_flat_rows_f32(
+    reference: jax.Array,
+    row_image_ids: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    initial_diff2: jax.Array | None = None,
+    *,
+    current_size: int,
+) -> jax.Array:
+    """Evaluate source-ordered flat rotation rows with RELION fine arithmetic.
+
+    ``reference`` is ``(Q,N)`` and ``row_image_ids`` maps every packed row to
+    one of the ``B`` image/weight rows. The CUDA implementation shares the
+    rectangular scorer's translation, pixel traversal, binary32 update, and
+    256-lane reduction body; only the row-to-image address calculation differs.
+    The output shape is ``(Q,T)``.
+    """
+
+    reference = jnp.asarray(reference)
+    row_image_ids = jnp.asarray(row_image_ids)
+    image = jnp.asarray(image)
+    translation_angles = jnp.asarray(translation_angles)
+    weight = jnp.asarray(weight)
+    full_to_compact = jnp.asarray(full_to_compact)
+    if reference.dtype != jnp.complex64 or image.dtype != jnp.complex64:
+        raise TypeError(
+            "flat-row RELION fine diff2 reference/image must be complex64, got "
+            f"{reference.dtype} and {image.dtype}"
+        )
+    if row_image_ids.dtype != jnp.int32:
+        raise TypeError(
+            "flat-row RELION fine diff2 row_image_ids must be int32, got "
+            f"{row_image_ids.dtype}"
+        )
+    if translation_angles.dtype != jnp.float32 or weight.dtype != jnp.float32:
+        raise TypeError(
+            "flat-row RELION fine diff2 angles/weight must be float32, got "
+            f"{translation_angles.dtype} and {weight.dtype}"
+        )
+    if full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            "flat-row RELION fine diff2 lookup must be int32, got "
+            f"{full_to_compact.dtype}"
+        )
+    if (
+        reference.ndim != 2
+        or row_image_ids.shape != (reference.shape[0],)
+        or image.ndim != 2
+        or translation_angles.ndim != 2
+        or translation_angles.shape[1] != 2
+        or weight.shape != image.shape
+        or reference.shape[1] != image.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or image.shape[0] <= 0
+        or translation_angles.shape[0] <= 0
+    ):
+        raise ValueError(
+            "flat-row RELION fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {row_image_ids.shape}, {image.shape}, "
+            f"{translation_angles.shape}, {weight.shape}, {full_to_compact.shape}"
+        )
+    if initial_diff2 is None:
+        initial_diff2 = jnp.zeros((image.shape[0],), dtype=jnp.float32)
+    else:
+        initial_diff2 = jnp.asarray(initial_diff2)
+    if initial_diff2.dtype != jnp.float32 or initial_diff2.shape != (
+        image.shape[0],
+    ):
+        raise ValueError(
+            "flat-row RELION fine diff2 initial_diff2 must be float32 with shape "
+            f"({image.shape[0]},), got {initial_diff2.shape} {initial_diff2.dtype}"
+        )
+    current_size = int(current_size)
+    expected_full_pixels = current_size * (current_size // 2 + 1)
+    if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
+        raise ValueError(
+            "flat-row RELION fine diff2 lookup does not match current_size: "
+            f"current_size={current_size}, lookup={full_to_compact.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(
+            "flat-row fused RELION fine diff2 requires a JAX GPU backend"
+        )
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "flat-row fused RELION fine diff2 was explicitly requested but "
+            "custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_FLAT_ROWS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        row_image_ids,
         image,
         translation_angles,
         weight,

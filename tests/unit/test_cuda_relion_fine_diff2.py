@@ -201,7 +201,11 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
 
     assert "constexpr int kRelionFineDiff2TranslationCapacity = 7;" in source
     assert "constexpr int kRelionFineDiff2Ref3dJobChunk = 4;" in source
-    assert "relion_fine_diff2_fused_translate_rectangular_f32_kernel" in source
+    assert "template <bool FlatRows>" in source
+    assert "relion_fine_diff2_fused_translate_rows_f32_kernel" in source
+    assert "relion_fine_diff2_fused_translate_rows_f32_kernel<false>" in source
+    assert "relion_fine_diff2_fused_translate_rows_f32_kernel<true>" in source
+    assert "row_image_ids[row]" in source
     assert "relion_score_translate_f32(" in source
     assert "translation_offset * kRelionFineDiff2BlockSize" in source
     assert "lane_sums[lane_index] = relion_fine_diff2_update_f32(" in source

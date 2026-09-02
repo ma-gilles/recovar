@@ -9444,17 +9444,20 @@ void relion_fine_diff2_pairs_f32_kernel(
     if (threadIdx.x == 0) output[hypothesis] = lane_sums[0];
 }
 
+template <bool FlatRows>
 __global__ __launch_bounds__(kRelionFineDiff2BlockSize)
-void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
+void relion_fine_diff2_fused_translate_rows_f32_kernel(
     const float2* reference,
     const float2* image,
     const float* translation_angles,
     const float* weight,
     const float* initial_diff2,
+    const int32_t* row_image_ids,
     const int32_t* full_to_compact,
     float* output,
     int64_t batch_size,
     int64_t rotation_count,
+    int64_t row_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
     int64_t full_pixel_count,
@@ -9464,11 +9467,13 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
         (translation_count + kRelionFineDiff2Ref3dJobChunk - 1) /
         kRelionFineDiff2Ref3dJobChunk;
     const int64_t flat_block = static_cast<int64_t>(blockIdx.x);
-    const int64_t batch_rotation = flat_block / translation_chunks;
+    const int64_t row = flat_block / translation_chunks;
     const int64_t translation_chunk = flat_block % translation_chunks;
-    const int64_t batch = batch_rotation / rotation_count;
-    const int64_t rotation = batch_rotation % rotation_count;
-    if (batch >= batch_size) return;
+    if (row >= row_count) return;
+    const int64_t batch = FlatRows
+        ? static_cast<int64_t>(row_image_ids[row])
+        : row / rotation_count;
+    if (batch < 0 || batch >= batch_size) return;
 
     const int64_t translation_start =
         translation_chunk * kRelionFineDiff2Ref3dJobChunk;
@@ -9498,8 +9503,7 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
                 int y = static_cast<int>(full_pixel / current_half_width);
                 if (y > current_size / 2) y -= current_size;
                 const int64_t reference_index =
-                    (batch * rotation_count + rotation) * compact_pixel_count +
-                    compact_pixel;
+                    row * compact_pixel_count + compact_pixel;
                 const int64_t image_index =
                     batch * compact_pixel_count + compact_pixel;
                 const int64_t weight_index =
@@ -9545,8 +9549,7 @@ void relion_fine_diff2_fused_translate_rectangular_f32_kernel(
     }
     if (threadIdx.x < translation_in_chunk) {
         const int64_t translation = translation_start + threadIdx.x;
-        const int64_t output_index =
-            (batch * rotation_count + rotation) * translation_count + translation;
+        const int64_t output_index = row * translation_count + translation;
         output[output_index] = __fadd_rn(
             lane_sums[threadIdx.x * kRelionFineDiff2BlockSize],
             initial_diff2[batch]);
@@ -9726,7 +9729,7 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
     const int64_t total_blocks =
         batch_size * rotation_count * translation_chunks;
     if (total_blocks == 0) return cudaSuccess;
-    relion_fine_diff2_fused_translate_rectangular_f32_kernel<<<
+    relion_fine_diff2_fused_translate_rows_f32_kernel<false><<<
         static_cast<unsigned int>(total_blocks),
         kRelionFineDiff2BlockSize,
         0,
@@ -9736,10 +9739,57 @@ cudaError_t launch_relion_fine_diff2_fused_translate_rectangular_f32(
             translation_angles,
             weight,
             initial_diff2,
+            nullptr,
             full_to_compact,
             output,
             batch_size,
             rotation_count,
+            batch_size * rotation_count,
+            translation_count,
+            compact_pixel_count,
+            full_pixel_count,
+            current_size);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_fine_diff2_fused_translate_flat_rows_f32(
+    cudaStream_t stream,
+    const float2* reference,
+    const float2* image,
+    const float* translation_angles,
+    const float* weight,
+    const float* initial_diff2,
+    const int32_t* row_image_ids,
+    const int32_t* full_to_compact,
+    float* output,
+    int64_t batch_size,
+    int64_t row_count,
+    int64_t translation_count,
+    int64_t compact_pixel_count,
+    int64_t full_pixel_count,
+    int current_size)
+{
+    const int64_t translation_chunks =
+        (translation_count + kRelionFineDiff2Ref3dJobChunk - 1) /
+        kRelionFineDiff2Ref3dJobChunk;
+    const int64_t total_blocks = row_count * translation_chunks;
+    if (total_blocks == 0) return cudaSuccess;
+    relion_fine_diff2_fused_translate_rows_f32_kernel<true><<<
+        static_cast<unsigned int>(total_blocks),
+        kRelionFineDiff2BlockSize,
+        0,
+        stream>>>(
+            reference,
+            image,
+            translation_angles,
+            weight,
+            initial_diff2,
+            row_image_ids,
+            full_to_compact,
+            output,
+            batch_size,
+            0,
+            row_count,
             translation_count,
             compact_pixel_count,
             full_pixel_count,
@@ -12604,6 +12654,107 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionFineDiff2FusedTranslateFlatRowsF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer row_image_ids,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (reference.element_type() != ffi::DataType::C64 ||
+        image.element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateFlatRowsF32: reference/image must be C64");
+    if (row_image_ids.element_type() != ffi::DataType::S32 ||
+        full_to_compact.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateFlatRowsF32: row ids/lookup must be S32");
+    if (translation_angles.element_type() != ffi::DataType::F32 ||
+        weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateFlatRowsF32: angles/weight/initial/output must be F32");
+    if (current_size <= 0 || current_size > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateFlatRowsF32: invalid current_size");
+
+    const auto reference_dims = reference.dimensions();
+    const auto row_image_dims = row_image_ids.dimensions();
+    const auto image_dims = image.dimensions();
+    const auto translation_dims = translation_angles.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
+    const auto lookup_dims = full_to_compact.dimensions();
+    const auto output_dims = output->dimensions();
+    const int64_t expected_full_pixels =
+        current_size * (current_size / 2 + 1);
+    if (reference_dims.size() != 2 || row_image_dims.size() != 1 ||
+        image_dims.size() != 2 || translation_dims.size() != 2 ||
+        translation_dims[1] != 2 || weight_dims.size() != 2 ||
+        initial_dims.size() != 1 || lookup_dims.size() != 1 ||
+        output_dims.size() != 2 || reference_dims[0] <= 0 ||
+        reference_dims[1] <= 0 || row_image_dims[0] != reference_dims[0] ||
+        image_dims[0] <= 0 || image_dims[1] != reference_dims[1] ||
+        translation_dims[0] <= 0 || weight_dims[0] != image_dims[0] ||
+        weight_dims[1] != reference_dims[1] ||
+        initial_dims[0] != image_dims[0] ||
+        lookup_dims[0] != expected_full_pixels ||
+        output_dims[0] != reference_dims[0] ||
+        output_dims[1] != translation_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateFlatRowsF32: inconsistent operand shapes");
+
+    const int64_t translation_chunks =
+        (translation_dims[0] + kRelionFineDiff2Ref3dJobChunk - 1) /
+        kRelionFineDiff2Ref3dJobChunk;
+    const int64_t total_blocks = reference_dims[0] * translation_chunks;
+    if (total_blocks > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateFlatRowsF32: block count exceeds CUDA grid");
+    cudaError_t err = launch_relion_fine_diff2_fused_translate_flat_rows_f32(
+        stream,
+        reinterpret_cast<const float2*>(reference.untyped_data()),
+        reinterpret_cast<const float2*>(image.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
+        static_cast<const int32_t*>(row_image_ids.untyped_data()),
+        static_cast<const int32_t*>(full_to_compact.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        image_dims[0],
+        reference_dims[0],
+        translation_dims[0],
+        reference_dims[1],
+        lookup_dims[0],
+        static_cast<int>(current_size));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2FusedTranslateFlatRowsF32,
+    RelionFineDiff2FusedTranslateFlatRowsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
