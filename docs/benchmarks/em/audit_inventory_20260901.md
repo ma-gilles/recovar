@@ -107,7 +107,7 @@ quality pair into a formal speed comparison.
 | `real_k4_shared200_causal_replay.md` | Frozen 200-particle, four-class iteration-1 replay; source `24317e40c`, job 13322235 | Strict gate FAIL, but 199/200 hard assignments agree and correctly framed per-class map FSC-AUC is 0.604--0.907. Candidate topology/raw scores already differ before reconstruction. | Six native arms plus one RECOVAR arm are bundled, so the 469 s allocation is causal evidence, not a formal speed ratio. |
 | `real_k4_native_coarse_score_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-score-a32cccccb-20260902.json` | Native RELION and RECOVAR coarse surfaces for 16 frozen shared-200 probes, 1,069,056 candidates; job 13330906 | Diagnostic PASS: priors are excluded causally and the first material support difference is the raw likelihood/`diff2` surface. This is not a final K=4 quality admission. | Capture/control replay used one H100 for 35 s; timing is instrumentation qualification, not an engine speed comparison. |
 | `real_k4_native_coarse_component_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-components-8f9ebc9-20260902.json` | Paired native norm/cross components and RECOVAR full component surfaces for the same 16 probes; jobs 13332998 and 13332392 | Diagnostic PASS: a native cross-only swap restores 11/16 exact supports versus 5/16 for RECOVAR and 5/16 for a native-norm-only swap. The cross term is the dominant first likelihood component boundary. | One-H100 capture/replay timing is diagnostic only. The earlier in-kernel observer is retained as rejected evidence because it changed production results. |
-| `real_k4_native_coarse_operand_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-operands-b061776-20260902.json` | Three independent paired RELION control/capture repeats for projected references, shifted images, corrections, Euler matrices, and translation phases over the same 16 probes; jobs 13334583--13334585 | Diagnostic PASS: native projected references alone restore 16/16 exact supports and leave `1.171e-9` of centered score-residual energy; shifted-image-only and correction-only swaps remain at 5/16. The projected reference is the first material operand boundary. | All three observers preserve exact iteration-1 decisions and class maps above FSC-AUC 0.999999; bounded one-H100 timings are diagnostic only. Job 13334206 is rejected because synchronous per-class copies perturbed kernel scheduling and production results. |
+| `real_k4_native_coarse_operand_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-operands-b061776-20260902.json` | Historical three-repeat operand localization plus current-source rounded-shell/Euler replay; jobs 13334583--13334585, 13336787, 13336962, and 13337519 | Diagnostic PASS and bounded boundary closure: native projected references localized the old defect; commit `5f74755c2` then yields zero projected-reference/Euler error and exact support for 16/16 probes and 1,336/1,336 selected candidates. This is not a final K=4 refinement admission. | Replay state is bitwise repeatable; eight GPU-atomic maps have minimum FSC-AUC `0.999999997335` and maximum relative L2 `1.57406e-7`. Timings remain diagnostic, not an engine speed comparison. Job 13334206 remains rejected because synchronous capture perturbed production results. |
 | `real_kclass_halfmap_refinement.md` | Independent-half refinement launcher/runbook | Runnable infrastructure only; no accepted completed pair | Pending. |
 
 InitialModel emits one class map rather than independently refined half maps,
@@ -126,14 +126,12 @@ performance after the quality gate passes.
    unless a new frozen gate passes.
 3. Finish and seal the RECOVAR EMPIAR-10202 arm before making any target-grid
    high-resolution or two-engine performance claim.
-4. Trace and repair the real K=4 projected-reference divergence, then
-   rerun the shared-200 gate and a full independent-half, multi-seed refinement.
-   Exact score swaps exclude the priors; a three-repeat operand factorial now
-   excludes shifted images, corrections, Euler matrices, and translation
-   phases at this boundary. Replacing only the projected reference restores
-   16/16 exact supports and removes all but `1.171e-9` of the centered score
-   residual energy. Existing diagnostic timing cannot be promoted after a
-   scientific failure.
+4. The real K=4 coarse projected-reference divergence is repaired at commit
+   `5f74755c2`: current-source replay has zero projected-reference/Euler error
+   and exact significant support for 16/16 probes and 1,336/1,336 candidates.
+   Localize the matched fine-score/posterior boundary next, then run the full
+   independent-half, multi-seed refinement. Existing bounded diagnostic timing
+   cannot be promoted to an engine speed claim.
 5. Add a dedicated whole-ledger validator for the selected-fine diagnostic or
    migrate it into a versioned diagnostic schema before relying on it as more
    than causal evidence.

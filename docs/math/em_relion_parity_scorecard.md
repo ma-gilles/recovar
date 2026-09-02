@@ -504,6 +504,34 @@ source-effect JSON SHA-256 is
 `0ff52feb98f4e2e7104c7414a7bdce68f36ccb9baba6ae96ac57609c90407cf8`.
 All persistent science and audit manifests replay exactly.
 
+### Real-data K=4 shared-200 coarse closure
+
+The frozen EMPIAR-10076 shared-200 causal chain now closes the current-source
+coarse projected-reference and significance boundary. The historical operand
+factorial localized the first material mismatch to the projected reference.
+Commit `5f74755c2` corrects the five RELION texture launchers to use RELION's
+rounded image cutoff while retaining padded PPref texture geometry; commit
+`52c490a99` uses the native CUDA Euler construction in the replay; and commit
+`3dee7fc24` infers projection/reconstruction padding from the RELION model.
+
+Clean H100 job `13337519` at source
+`b34b1ecdad7af248aa348c0d45ea85a03f0105a9` has zero projected-reference and
+Euler error over four classes, 576 rotations, and 171 Fourier pixels. The
+coarse support is exact for 16/16 probes and 1,336/1,336 selected candidates,
+with no cutoff ties. Against the explicit-padding replay, all 11 parity arrays
+are bitwise equal. The eight GPU-atomic maps have minimum FSC-AUC
+`0.9999999973353219` and maximum relative L2
+`1.5740537626557708e-7` under predeclared `0.999999` and `1e-5` gates.
+
+The authoritative coarse report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/analysis/native_coarse_operand_boundary_after_fix.json`
+(SHA-256
+`3746663a5ece085ac23b5f01d8952466c66496722b8b69826479cf379ad9dbba`).
+This is a bounded iteration-1 boundary closure, not a final real-data K=4
+quality or performance admission. The next exact discriminator is the matched
+fine-score/posterior boundary, followed by independent-half multi-seed
+refinement.
+
 ## K=4 physical-GPU trajectory diagnostic
 
 This diagnostic is not part of the frozen K=1 denominator.  It compares two

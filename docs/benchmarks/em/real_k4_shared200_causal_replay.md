@@ -13,6 +13,18 @@ classes are stable. Its purpose is to determine whether the real K=4 gap is
 already present in candidate scores/posteriors/support, or first appears in
 the reconstruction/update boundary.
 
+The failure reported below is retained as historical localization evidence at
+source `24317e40c`; it is not the current-source coarse result. Commit
+`5f74755c2` repaired RELION's rounded projection-shell handling, and clean
+current-source replay job `13337519` now matches all 1,336/1,336 selected
+coarse candidates over the 16 frozen probes with projected-reference and Euler
+errors exactly zero. Its 11 replay state arrays are bitwise repeatable, while
+the eight atomic reconstruction maps have FSC-AUC at least
+`0.999999997335`. See
+`real_k4_native_coarse_operand_boundary_20260902.md` for the sealed reports and
+claim boundary. Fine-score/posterior parity and a complete independent-half
+trajectory remain open.
+
 ## Completed diagnostic
 
 Job `13322235` ran the six native RELION control/capture arms and the RECOVAR

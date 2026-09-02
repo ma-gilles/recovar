@@ -289,6 +289,23 @@ def test_native_coarse_operand_diagnostic_pins_factorial_and_repeatability_bound
     assert swaps["boundary_tie_records"] == 0
     assert diagnostic["rejected_synchronous_capture"]["accepted_evidence"] is False
 
+    resolved = diagnostic["resolved_projection_boundary"]
+    assert resolved["status"] == "PASS"
+    assert resolved["classification"] == (
+        "k4_coarse_projected_reference_and_significant_support_match_native"
+    )
+    assert resolved["allocation"]["req_tres_equal_alloc_tres"]
+    assert resolved["allocation"]["formal_engine_performance_result"] is False
+    assert resolved["exact_boundary"]["projected_reference_max_relative_l2"] == 0
+    assert resolved["exact_boundary"]["euler_max_abs"] == 0
+    assert resolved["exact_boundary"]["exact_probe_records"] == 16
+    assert resolved["exact_boundary"]["selected_candidate_intersection"] == 1336
+    assert resolved["exact_boundary"]["selected_candidate_union"] == 1336
+    assert resolved["repeatability"]["parity_array_count"] == 11
+    assert resolved["repeatability"]["parity_arrays_bitwise"]
+    assert resolved["repeatability"]["map_fsc_auc_minimum"] > 0.999999
+    assert resolved["repeatability"]["map_relative_l2_maximum"] < 1e-5
+
 
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():
     assert NEGATIVE_DIAGNOSTIC["registry_disposition"] == "EXCLUDED_FROM_ACCEPTED_RESULTS"

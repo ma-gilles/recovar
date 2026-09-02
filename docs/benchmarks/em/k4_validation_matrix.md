@@ -88,6 +88,15 @@ fixed; otherwise the predeclared numerical tolerance and downstream FSC gate
 both apply. Each discriminator records wall time and peak HBM so an exactness
 fix cannot silently reintroduce rectangular K-class allocation.
 
+The first real-data fixed-state subgate is now closed on the frozen
+EMPIAR-10076 shared-200 panel. Commit `5f74755c2` matches native projected
+references and Euler matrices exactly, and job `13337519` matches all
+1,336/1,336 selected coarse candidates over 16 probes. Replay configuration
+and 11 state arrays are exact; the minimum eight-map repeat FSC-AUC is
+`0.999999997335`. This covers one coarse size and one batch/block setting only;
+the fine-pass/posterior boundary and the complete batch/block grid remain
+required.
+
 ## Tier 2: 10k/128 multi-seed synthetic trajectories
 
 Run five autonomous iterations per case. The first twelve rows are K=4 and
@@ -327,7 +336,9 @@ accepted evidence, while cases 30, 35, and 36 are excluded RELION-collapse
 diagnostics. The following matrix pieces still need bounded launch/test
 implementation:
 
-- the fixed-state 32--256-particle image-batch/rotation-block discriminator grid;
+- the fixed-state 32--256-particle image-batch/rotation-block discriminator
+  grid beyond the admitted shared-200 coarse boundary, including matched fine
+  score/posterior captures;
 - the added 5k/64, 50k/128, and 10k/256 scaling rows;
 - fail-closed permutation/duplicate-map/controller-corruption fixtures beyond
   the existing evaluator unit tests;

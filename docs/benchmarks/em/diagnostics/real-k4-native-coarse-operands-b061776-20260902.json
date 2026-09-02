@@ -114,6 +114,76 @@
     "all_native_operands": {"exact_records": 16, "records": 16, "jaccard": 1.0},
     "boundary_tie_records": 0
   },
+  "resolved_projection_boundary": {
+    "status": "PASS",
+    "classification": "k4_coarse_projected_reference_and_significant_support_match_native",
+    "claim_scope": "Bounded EMPIAR-10076 shared-200 K=4 iteration-1 coarse boundary; not final refinement, resolution, or formal performance evidence.",
+    "production_fix_commit": "5f74755c2",
+    "qualified_source_commit": "b34b1ecdad7af248aa348c0d45ea85a03f0105a9",
+    "cuda_gate_job": "13336787",
+    "native_euler_gate_job": "13336962",
+    "clean_replay_job": "13337519",
+    "allocation": {
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "requested_gpus": 1,
+      "allocated_gpus": 1,
+      "cpus": 8,
+      "memory_gb": 32,
+      "elapsed_seconds": 201,
+      "max_rss_kib": 8107444,
+      "req_tres_equal_alloc_tres": true,
+      "exclusive": false,
+      "formal_engine_performance_result": false
+    },
+    "geometry": {
+      "classes": 4,
+      "rotations": 576,
+      "projection_pixels": 171,
+      "ppref_current_size": 46,
+      "projection_current_size": 20,
+      "projection_padding_factor": 1,
+      "padding_factor_source": "relion_model"
+    },
+    "exact_boundary": {
+      "projected_reference_max_relative_l2": 0.0,
+      "euler_max_abs": 0.0,
+      "exact_probe_records": 16,
+      "probe_records": 16,
+      "selected_candidate_intersection": 1336,
+      "selected_candidate_union": 1336,
+      "significant_support_jaccard": 1.0,
+      "boundary_tie_records": 0
+    },
+    "repeatability": {
+      "configuration_exact": true,
+      "parity_array_count": 11,
+      "parity_arrays_bitwise": true,
+      "map_count": 8,
+      "map_bitwise_count": 0,
+      "map_fsc_auc_minimum": 0.9999999973353219,
+      "map_relative_l2_maximum": 1.5740537626557708e-7,
+      "map_max_abs_maximum": 7.450580596923828e-9,
+      "metric_policy": "Configuration and parity arrays must be exact; GPU-atomic maps require FSC-AUC >= 0.999999 and relative L2 <= 1e-5."
+    },
+    "artifacts": {
+      "projected_reference_boundary": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/analysis/ppref_projection_boundary.json",
+        "sha256": "e4cd20c2b78c4b1dd478e455bb5e33fb3f847b31ba10db6d7b5a21d6e4b79f1f"
+      },
+      "coarse_operand_boundary_after_fix": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/analysis/native_coarse_operand_boundary_after_fix.json",
+        "sha256": "3746663a5ece085ac23b5f01d8952466c66496722b8b69826479cf379ad9dbba"
+      },
+      "repeatability_gate": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/analysis/inferred_padding_repeatability_v1.json",
+        "sha256": "aeb5ab3799a6d6974054b5318ab6699df56d500171fa909ccc012bba34e4eafc"
+      },
+      "summary": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/output/summary.json",
+        "sha256": "aedd0c6e692545a1e3e7260465989a22ece4d092a2ef925bddc3370ada129c08"
+      }
+    }
+  },
   "rejected_synchronous_capture": {
     "accepted_evidence": false,
     "job_id": "13334206",
@@ -142,5 +212,5 @@
       "sha256": "d137d59506a859e4b2ddec4c7afd13366645b131174c5f0ea24e58fa617879b2"
     }
   },
-  "strict_claim_boundary": "This three-repeat, 16-particle, iteration-1 diagnostic localizes the first material K=4 coarse likelihood operand difference to the projected reference. It does not distinguish source Projector::data construction from interpolation arithmetic and is not a final real-data K=4 refinement, resolution, or formal performance result."
+  "strict_claim_boundary": "The historical three-repeat diagnostic localizes the old K=4 coarse likelihood defect to the projected reference. The current-source rounded-shell/native-Euler replay closes projected-reference and significant-support parity on the same bounded iteration-1 panel. Neither result is a final real-data K=4 refinement, resolution, or formal performance result."
 }

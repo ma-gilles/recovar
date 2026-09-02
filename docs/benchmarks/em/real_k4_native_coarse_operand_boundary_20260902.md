@@ -6,10 +6,10 @@ references, shifted images, correction arrays, Euler matrices, and translation
 phases for the same 12 mismatch probes and four exact controls over all four
 classes, 576 rotations, and 29 translations.
 
-## Outcome
+## Historical localization outcome
 
-The projected reference is the first material coarse-likelihood operand
-difference.
+At source commit `24317e40c`, the projected reference was the first material
+coarse-likelihood operand difference.
 
 | Stable top-RELION-count surface | Exact particles | Support Jaccard | Fraction of baseline centered score energy remaining |
 | --- | ---: | ---: | ---: |
@@ -27,6 +27,63 @@ agree to `1.49e-8`. These counterfactuals exclude the shifted image, correction,
 Euler bridge, and translation phase at this boundary. They do not yet
 distinguish a Projector::data construction difference from texture
 interpolation arithmetic.
+
+## Current-source closure
+
+The historical boundary is closed on current source. The production defect
+was a radius mismatch in the RELION texture projection launch: texture storage
+correctly retained the padded PPref geometry, but the image-space projection
+cutoff also used that radius instead of RELION's rounded image cutoff
+`min(projector_max_r, current_size / 2)`. Commit `5f74755c2` applies the image
+cutoff to all five texture launchers while leaving the texture geometry
+unchanged. It also removes the redundant exact axis-aligned postmask, which
+was not RELION's rounded radial support.
+
+The H100 CUDA build/gate job `13336787` passed all four focused GPU tests. An
+exact native-Euler discriminator (job `13336962`) then compared four classes,
+576 rotations, and 171 Fourier pixels and found byte-identical projected
+references: maximum relative L2 and maximum absolute error were both zero.
+Using host-reconstructed Euler matrices instead would have changed 466
+outer-shell values despite a matrix maximum difference of only `3.87e-7`, so
+the replay now uses RELION's native CUDA Euler construction as part of the
+qualified path.
+
+Clean replay job `13337519` ran immutable commit
+`b34b1ecdad7af248aa348c0d45ea85a03f0105a9` and inferred both projection and
+reconstruction padding factor 1 directly from the RELION model. It requested
+and received one H100, eight CPUs, and 32 GB without exclusivity, completed in
+201 s, and reached peak batch RSS 8,107,444 KiB. The result closes the complete
+coarse support boundary:
+
+| Current-source gate | Result |
+| --- | ---: |
+| Projected-reference relative L2, maximum | `0` |
+| Euler matrix maximum absolute error | `0` |
+| Exact probe records | 16/16 |
+| Exact selected candidates | 1,336/1,336 |
+| Aggregate significant-support Jaccard | `1.0` |
+| Equal-score cutoff ties | 0 |
+
+The inferred-padding replay is independently repeatable against the explicit
+padding replay: all 11 parity arrays are bitwise equal. The eight reconstructed
+maps are not bitwise equal because the GPU atomic accumulation schedule is not
+fixed, but their minimum FSC-AUC is `0.999999997335` and maximum relative L2 is
+`1.57406e-7`, both inside the predeclared `0.999999` and `1e-5` gates.
+
+The authoritative current-source reports are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/analysis/ppref_projection_boundary.json`
+  (SHA-256 `e4cd20c2b78c4b1dd478e455bb5e33fb3f847b31ba10db6d7b5a21d6e4b79f1f`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/analysis/native_coarse_operand_boundary_after_fix.json`
+  (SHA-256 `3746663a5ece085ac23b5f01d8952466c66496722b8b69826479cf379ad9dbba`);
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_inferred_padding_r3_b34b1ecda_20260902/analysis/inferred_padding_repeatability_v1.json`
+  (SHA-256 `aeb5ab3799a6d6974054b5318ab6699df56d500171fa909ccc012bba34e4eafc`).
+
+This admits the bounded iteration-1 coarse projected-reference and
+significant-support boundary only. It does not admit a final real-data K=4
+refinement, resolution, or engine performance result; the next causal gate is
+the matched fine-score/posterior boundary, followed by independent-half
+multi-seed trajectories.
 
 ## Three-repeat observer qualification
 
