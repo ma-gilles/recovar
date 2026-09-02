@@ -355,6 +355,25 @@ def test_fixed_scorecard_is_valid_and_markdown_is_fresh() -> None:
         "resolution_angstrom": 2.122559,
     }
     assert target["partial_engine_results"]["recovar"] == {"status": "pending"}
+    interim = target["interim_iteration11_diagnostic"]
+    assert interim["verification_status"] == "frozen_not_replayed"
+    assert interim["role"] == "diagnostic_only"
+    assert interim["can_score_case"] is False
+    assert interim["same_iteration_resolutions"]["raw_unmasked"] == {
+        "acceptance_role": "mandatory_unmasked_diagnostic",
+        "recovar_angstrom": 2.521599769592285,
+        "relion_angstrom": 2.521599769592285,
+        "recovar_crossing_shell": 250,
+        "relion_crossing_shell": 250,
+        "crossing_shell_equal": True,
+        "absolute_delta_angstrom": 0.0,
+    }
+    assert interim["resolved_band_curve_comparison"]["raw_unmasked"]["rmse"] == pytest.approx(
+        0.004644811423150191
+    )
+    assert interim["resolved_band_curve_comparison"]["raw_unmasked"][
+        "normalized_auc_absolute_delta"
+    ] == pytest.approx(0.00026045161290322305)
     assert MODULE.DEFAULT_MARKDOWN.read_text() == MODULE.render_markdown(report)
 
 
@@ -373,6 +392,15 @@ def test_partial_relion_result_cannot_score_pending_recovar_case() -> None:
         "pending": 1,
         "invalid": 0,
     }
+
+
+def test_interim_iteration11_diagnostic_cannot_score_pending_case() -> None:
+    scorecard = MODULE.load_and_validate_scorecard()
+    target_spec = _target(scorecard)
+    target_spec["interim_iteration11_diagnostic"]["can_score_case"] = True
+
+    with pytest.raises(ValueError, match="interim result became scoring evidence"):
+        MODULE._validate_target_interim_iteration11_diagnostic(target_spec)
 
 
 @pytest.mark.parametrize(

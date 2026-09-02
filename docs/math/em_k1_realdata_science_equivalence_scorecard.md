@@ -125,6 +125,33 @@ Matched harness manifest SHA-256: `5764c09af9db73ac7523db7cf34e1422449e158fb40e8
 Postprocess result-manifest SHA-256: `de865eba64a3d8a9c7693af5e356cbece72572630bbb184462841f8517f2899d`.
 Common mask SHA-256: `dcc3fd17e7f728b3164416f695b257fef5fceeca7c2a4ba04ea6d82c9a933b17`.
 
+### Non-scoring matched iteration-11 checkpoint
+
+The interrupted RECOVAR trajectory completed iteration 11 before a CUDA
+out-of-memory failure in iteration 12. This checkpoint cannot score the
+case, but RELION iteration 11 was postprocessed with the identical mask,
+executable, and FSC convention. The same-iteration resolution crossings
+are identical:
+
+| FSC | RECOVAR (A; shell) | RELION (A; shell) | Resolved-band RMSE | Resolved-band AUC delta |
+| --- | ---: | ---: | ---: | ---: |
+| Raw unmasked | 2.521600; 250 | 2.521600; 250 | 0.004645 | 0.000260 |
+| Corrected masked (supporting only) | 2.541935; 248 | 2.541935; 248 | 0.011651 | 0.001028 |
+
+The raw comparison uses shells 1--249, ending immediately before the
+shared three-shell-sustained crossing. The corrected-masked comparison
+uses its own shells 1--247 band. This is strong evidence that RECOVAR had
+already reached RELION's same-iteration half-map quality, but terminal
+equivalence and the <=3.0-A gate remain pending until an uninterrupted
+trajectory produces sealed final half maps.
+
+RECOVAR checkpoint/postprocess jobs: `13339556` / `13355910`. Matched RELION iteration-11
+postprocess job: `13356820`. The replacement
+full run was captured as `running` in job `13356985` at subject commit `6e414838463e`.
+
+Matched iteration-11 summary SHA-256: `cb60a01c3e293817c39b745d3e42d8e2c47f440d231001983ccc2e7577250704`.
+Resolved curve comparison SHA-256: `1bb1bf853d9e7403a49fa3771017773ff26ef178b22258f4d26ffb420f6ccf2e`.
+
 ## Fixed scoring case
 
 Equivalence and absolute high-resolution achievement are reported
@@ -168,8 +195,8 @@ analysis complete.
 ## Reproduction and artifact replay
 
 From the repository root, this command re-hashes and replays every completed
-10073/10345/10097 unmasked and masked artifact, verifies the partial RELION
-10202 result, and checks that this generated Markdown is fresh:
+10073/10345/10097 unmasked and masked artifact, verifies the partial and
+matched-iteration 10202 records, and checks that this generated Markdown is fresh:
 
 ```bash
 pixi run python scripts/summarize_em_k1_realdata_science_equivalence.py --verify-calibrations --verify-masked-support --verify-target-partial --check-markdown

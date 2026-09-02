@@ -89,6 +89,22 @@ TARGET_RELION_UNMASKED_RESOLUTION_ANGSTROM = 2.511554
 TARGET_RELION_CORRECTED_MASKED_RESOLUTION_ANGSTROM = 2.122559
 TARGET_RELION_REFINEMENT_JOB_ID = 13217551
 TARGET_RELION_POSTPROCESS_JOB_ID = 13254149
+TARGET_INTERIM_REPORTED_ITERATION = 11
+TARGET_INTERIM_RECOVAR_SOURCE_COMMIT = "4ea288467debbcba97cfaee6d2742ebc66c637f0"
+TARGET_INTERIM_RECOVAR_TRAJECTORY_JOB_ID = 13339556
+TARGET_INTERIM_RECOVAR_POSTPROCESS_JOB_ID = 13355910
+TARGET_INTERIM_RELION_POSTPROCESS_JOB_ID = 13356820
+TARGET_INTERIM_RAW_RESOLUTION_ANGSTROM = 2.521599769592285
+TARGET_INTERIM_CORRECTED_MASKED_RESOLUTION_ANGSTROM = 2.541935251605126
+TARGET_INTERIM_ARTIFACT_KEYS = (
+    "recovar_partial_summary",
+    "recovar_postprocess_star",
+    "matched_relion_summary",
+    "matched_relion_curve_comparison",
+    "matched_relion_postprocess_star",
+    "matched_relion_job_script",
+    "matched_relion_scontrol",
+)
 TARGET_PARTIAL_ENGINE_IDS = ("relion", "recovar")
 TARGET_RELION_PARTIAL_ARTIFACT_KEYS = (
     "refinement_stdout",
@@ -503,6 +519,103 @@ def _validate_target_partial_engine_results(case: Mapping[str, Any]) -> None:
         _validate_frozen_artifact(artifact, f"target RELION {name}")
 
 
+def _validate_target_interim_iteration11_diagnostic(case: Mapping[str, Any]) -> None:
+    """Validate the non-scoring matched-iteration high-resolution checkpoint."""
+
+    diagnostic = case.get("interim_iteration11_diagnostic", {})
+    _require(diagnostic.get("role") == "diagnostic_only", "target interim role changed")
+    _require(diagnostic.get("can_score_case") is False, "target interim result became scoring evidence")
+    _require(
+        diagnostic.get("reported_iteration") == TARGET_INTERIM_REPORTED_ITERATION,
+        "target interim iteration changed",
+    )
+
+    recovar = diagnostic.get("recovar", {})
+    _require(
+        recovar.get("source_commit") == TARGET_INTERIM_RECOVAR_SOURCE_COMMIT,
+        "target interim RECOVAR source changed",
+    )
+    _require(
+        recovar.get("trajectory_job_id") == TARGET_INTERIM_RECOVAR_TRAJECTORY_JOB_ID,
+        "target interim RECOVAR trajectory job changed",
+    )
+    _require(
+        recovar.get("postprocess_job_id") == TARGET_INTERIM_RECOVAR_POSTPROCESS_JOB_ID,
+        "target interim RECOVAR postprocess job changed",
+    )
+    _require(
+        recovar.get("last_complete_iteration") == TARGET_INTERIM_REPORTED_ITERATION,
+        "target interim RECOVAR checkpoint changed",
+    )
+    _require(
+        recovar.get("trajectory_terminal_state") == "FAILED_CUDA_OOM_DURING_ITERATION_12",
+        "target interim RECOVAR terminal state changed",
+    )
+
+    relion = diagnostic.get("relion", {})
+    _require(
+        relion.get("source_refinement_job_id") == TARGET_RELION_REFINEMENT_JOB_ID,
+        "target interim RELION source job changed",
+    )
+    _require(
+        relion.get("postprocess_job_id") == TARGET_INTERIM_RELION_POSTPROCESS_JOB_ID,
+        "target interim RELION postprocess job changed",
+    )
+    _require(relion.get("state") == "COMPLETED", "target interim RELION postprocess did not complete")
+    _require(relion.get("exit_code") == "0:0", "target interim RELION postprocess exit code changed")
+    _require(
+        relion.get("requested_tres") == relion.get("allocated_tres"),
+        "target interim RELION allocation changed",
+    )
+
+    resolutions = diagnostic.get("same_iteration_resolutions", {})
+    _require(set(resolutions) == {"raw_unmasked", "corrected_masked"}, "target interim resolution set changed")
+    expected_resolutions = {
+        "raw_unmasked": TARGET_INTERIM_RAW_RESOLUTION_ANGSTROM,
+        "corrected_masked": TARGET_INTERIM_CORRECTED_MASKED_RESOLUTION_ANGSTROM,
+    }
+    for name, expected in expected_resolutions.items():
+        result = resolutions[name]
+        _require(float(result.get("recovar_angstrom", float("nan"))) == expected, f"target interim {name} RECOVAR resolution changed")
+        _require(float(result.get("relion_angstrom", float("nan"))) == expected, f"target interim {name} RELION resolution changed")
+        _require(float(result.get("absolute_delta_angstrom", float("nan"))) == 0.0, f"target interim {name} resolution delta changed")
+        _require(result.get("crossing_shell_equal") is True, f"target interim {name} crossing changed")
+    _require(
+        resolutions["raw_unmasked"].get("acceptance_role") == "mandatory_unmasked_diagnostic",
+        "target interim raw role changed",
+    )
+    _require(
+        resolutions["corrected_masked"].get("acceptance_role") == "supporting_only",
+        "target interim masked role changed",
+    )
+
+    curves = diagnostic.get("resolved_band_curve_comparison", {})
+    _require(set(curves) == {"raw_unmasked", "corrected_masked"}, "target interim curve set changed")
+    raw = curves["raw_unmasked"]
+    masked = curves["corrected_masked"]
+    _require(raw.get("first_shell") == 1 and raw.get("last_shell") == 249, "target interim raw band changed")
+    _require(masked.get("first_shell") == 1 and masked.get("last_shell") == 247, "target interim masked band changed")
+    for name, result in curves.items():
+        rmse = _finite_float(result.get("rmse"), f"target interim {name} RMSE")
+        auc_delta = _finite_float(result.get("normalized_auc_absolute_delta"), f"target interim {name} AUC delta")
+        _require(rmse <= EXPECTED_THRESHOLDS["half_curve_rmse_max"], f"target interim {name} RMSE no longer passes")
+        _require(
+            auc_delta <= EXPECTED_THRESHOLDS["half_band_auc_abs_delta_max"],
+            f"target interim {name} AUC delta no longer passes",
+        )
+
+    replacement = diagnostic.get("replacement_full_run", {})
+    _require(replacement.get("subject_commit") == case.get("expected_subject_commit"), "target replacement subject changed")
+    _require(replacement.get("job_id") == 13356985, "target replacement job changed")
+    _require(replacement.get("status_at_capture") == "RUNNING", "target replacement capture status changed")
+    _require(Path(replacement.get("run_root", "")).is_absolute(), "target replacement run root is not absolute")
+
+    artifacts = diagnostic.get("artifacts", {})
+    _require(tuple(artifacts) == TARGET_INTERIM_ARTIFACT_KEYS, "target interim artifact set changed")
+    for name, artifact in artifacts.items():
+        _validate_frozen_artifact(artifact, f"target interim {name}")
+
+
 def _validate_reproduction_contract(reproduction: Mapping[str, Any]) -> None:
     """Validate exact recorded producer references and the repository replay command."""
 
@@ -612,6 +725,69 @@ def replay_target_partial_engine_results(case: Mapping[str, Any]) -> dict[str, A
         "relion": dict(relion),
         "recovar": dict(partial["recovar"]),
     }
+
+
+def replay_target_interim_iteration11_diagnostic(case: Mapping[str, Any]) -> dict[str, Any]:
+    """Re-hash the non-scoring matched iteration-11 checkpoint evidence."""
+
+    _validate_target_interim_iteration11_diagnostic(case)
+    diagnostic = case["interim_iteration11_diagnostic"]
+    for name, artifact in diagnostic["artifacts"].items():
+        path = Path(artifact["path"])
+        _require(path.is_file(), f"missing target interim {name}: {path}")
+        _require(sha256_file(path) == artifact["sha256"], f"target interim {name} SHA-256 changed")
+
+    relion_summary = json.loads(Path(diagnostic["artifacts"]["matched_relion_summary"]["path"]).read_text())
+    _require(
+        relion_summary.get("schema") == "recovar.em.10202.relion_it011_matched_fsc.v1",
+        "target interim RELION summary schema changed",
+    )
+    _require(relion_summary.get("status") == "PASS", "target interim RELION summary no longer passes")
+    _require(
+        relion_summary.get("reported_iteration") == TARGET_INTERIM_REPORTED_ITERATION,
+        "target interim RELION summary iteration changed",
+    )
+    relion_resolutions = relion_summary.get("relion_it011_resolutions_angstrom", {})
+    _require(
+        float(relion_resolutions.get("raw_unmasked_fsc", {}).get("resolution", float("nan")))
+        == TARGET_INTERIM_RAW_RESOLUTION_ANGSTROM,
+        "target interim RELION summary raw resolution changed",
+    )
+    _require(
+        float(relion_resolutions.get("corrected_masked_fsc", {}).get("resolution", float("nan")))
+        == TARGET_INTERIM_CORRECTED_MASKED_RESOLUTION_ANGSTROM,
+        "target interim RELION summary masked resolution changed",
+    )
+    crossing_comparison = relion_summary.get("comparison_to_recovar_it011_crossings", {})
+    _require(crossing_comparison.get("raw_crossing_shell_equal") is True, "target interim raw crossing diverged")
+    _require(
+        crossing_comparison.get("corrected_masked_crossing_shell_equal") is True,
+        "target interim masked crossing diverged",
+    )
+
+    curve_summary = json.loads(
+        Path(diagnostic["artifacts"]["matched_relion_curve_comparison"]["path"]).read_text()
+    )
+    _require(
+        curve_summary.get("schema") == "recovar.em.fsc_curve_comparison.v1",
+        "target interim curve summary schema changed",
+    )
+    curve_pairs = {
+        "raw_unmasked": curve_summary.get("raw_unmasked_fsc", {}).get("shared_resolved_band", {}),
+        "corrected_masked": curve_summary.get("corrected_masked_fsc", {}).get("shared_resolved_band", {}),
+    }
+    for name, observed in curve_pairs.items():
+        expected = diagnostic["resolved_band_curve_comparison"][name]
+        _require(
+            float(observed.get("rmse", float("nan"))) == float(expected["rmse"]),
+            f"target interim {name} replay RMSE changed",
+        )
+        _require(
+            float(observed.get("normalized_auc_absolute_delta", float("nan")))
+            == float(expected["normalized_auc_absolute_delta"]),
+            f"target interim {name} replay AUC delta changed",
+        )
+    return {"verification_status": "verified", **diagnostic}
 
 
 def _validate_calibration_route_contract(
@@ -921,6 +1097,7 @@ def load_and_validate_scorecard(path: Path = DEFAULT_SCORECARD) -> dict[str, Any
         "target pending-contract list is stale",
     )
     _validate_target_partial_engine_results(target)
+    _validate_target_interim_iteration11_diagnostic(target)
     _validate_reproduction_contract(scorecard.get("reproduction", {}))
     for case_id in CALIBRATION_CASE_IDS:
         case = by_id[case_id]
@@ -1919,6 +2096,10 @@ def _frozen_case_rows(scorecard: Mapping[str, Any]) -> list[dict[str, Any]]:
                         "relion": dict(relion_partial),
                         "recovar": dict(partial["recovar"]),
                     },
+                    "interim_iteration11_diagnostic": {
+                        "verification_status": "frozen_not_replayed",
+                        **dict(case["interim_iteration11_diagnostic"]),
+                    },
                 }
             )
     return rows
@@ -1945,10 +2126,14 @@ def build_report(
         by_id[TARGET_CASE_ID]["partial_engine_results"] = replay_target_partial_engine_results(
             case_defs[TARGET_CASE_ID]
         )
+        by_id[TARGET_CASE_ID]["interim_iteration11_diagnostic"] = replay_target_interim_iteration11_diagnostic(
+            case_defs[TARGET_CASE_ID]
+        )
     for evidence_path in evidence_paths:
         scored = score_case_evidence(scorecard, evidence_path)
         if scored["id"] == TARGET_CASE_ID:
             scored["partial_engine_results"] = by_id[TARGET_CASE_ID]["partial_engine_results"]
+            scored["interim_iteration11_diagnostic"] = by_id[TARGET_CASE_ID]["interim_iteration11_diagnostic"]
         by_id[scored["id"]] = scored
     rows = [by_id[case["id"]] for case in scorecard["cases"]]
 
@@ -2166,6 +2351,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     masked_reproduction = reproduction["masked"]
     if target["status"] == "pending":
         partial = target["partial_engine_results"]
+        interim = target["interim_iteration11_diagnostic"]
         partial_relion = partial["relion"]
         partial_recovar = partial["recovar"]
         partial_jobs = partial_relion["jobs"]
@@ -2197,6 +2383,42 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"Matched harness manifest SHA-256: `{partial_artifacts['launch_manifest']['sha256']}`.",
                 f"Postprocess result-manifest SHA-256: `{partial_artifacts['postprocess_result_manifest']['sha256']}`.",
                 f"Common mask SHA-256: `{partial_artifacts['common_mask']['sha256']}`.",
+                "",
+                "### Non-scoring matched iteration-11 checkpoint",
+                "",
+                "The interrupted RECOVAR trajectory completed iteration 11 before a CUDA",
+                "out-of-memory failure in iteration 12. This checkpoint cannot score the",
+                "case, but RELION iteration 11 was postprocessed with the identical mask,",
+                "executable, and FSC convention. The same-iteration resolution crossings",
+                "are identical:",
+                "",
+                "| FSC | RECOVAR (A; shell) | RELION (A; shell) | Resolved-band RMSE | Resolved-band AUC delta |",
+                "| --- | ---: | ---: | ---: | ---: |",
+                f"| Raw unmasked | {_fmt(interim['same_iteration_resolutions']['raw_unmasked']['recovar_angstrom'])}; 250 | "
+                f"{_fmt(interim['same_iteration_resolutions']['raw_unmasked']['relion_angstrom'])}; 250 | "
+                f"{_fmt(interim['resolved_band_curve_comparison']['raw_unmasked']['rmse'])} | "
+                f"{_fmt(interim['resolved_band_curve_comparison']['raw_unmasked']['normalized_auc_absolute_delta'])} |",
+                f"| Corrected masked (supporting only) | {_fmt(interim['same_iteration_resolutions']['corrected_masked']['recovar_angstrom'])}; 248 | "
+                f"{_fmt(interim['same_iteration_resolutions']['corrected_masked']['relion_angstrom'])}; 248 | "
+                f"{_fmt(interim['resolved_band_curve_comparison']['corrected_masked']['rmse'])} | "
+                f"{_fmt(interim['resolved_band_curve_comparison']['corrected_masked']['normalized_auc_absolute_delta'])} |",
+                "",
+                "The raw comparison uses shells 1--249, ending immediately before the",
+                "shared three-shell-sustained crossing. The corrected-masked comparison",
+                "uses its own shells 1--247 band. This is strong evidence that RECOVAR had",
+                "already reached RELION's same-iteration half-map quality, but terminal",
+                "equivalence and the <=3.0-A gate remain pending until an uninterrupted",
+                "trajectory produces sealed final half maps.",
+                "",
+                f"RECOVAR checkpoint/postprocess jobs: `{interim['recovar']['trajectory_job_id']}` / "
+                f"`{interim['recovar']['postprocess_job_id']}`. Matched RELION iteration-11",
+                f"postprocess job: `{interim['relion']['postprocess_job_id']}`. The replacement",
+                f"full run was captured as `{interim['replacement_full_run']['status_at_capture'].lower()}` in job "
+                f"`{interim['replacement_full_run']['job_id']}` at subject commit "
+                f"`{interim['replacement_full_run']['subject_commit'][:12]}`.",
+                "",
+                f"Matched iteration-11 summary SHA-256: `{interim['artifacts']['matched_relion_summary']['sha256']}`.",
+                f"Resolved curve comparison SHA-256: `{interim['artifacts']['matched_relion_curve_comparison']['sha256']}`.",
             ]
         )
     elif target["status"] in {"pass", "fail"}:
@@ -2305,8 +2527,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "## Reproduction and artifact replay",
             "",
             "From the repository root, this command re-hashes and replays every completed",
-            "10073/10345/10097 unmasked and masked artifact, verifies the partial RELION",
-            "10202 result, and checks that this generated Markdown is fresh:",
+            "10073/10345/10097 unmasked and masked artifact, verifies the partial and",
+            "matched-iteration 10202 records, and checks that this generated Markdown is fresh:",
             "",
             "```bash",
             reproduction["artifact_replay_command"],
