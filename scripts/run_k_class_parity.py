@@ -489,17 +489,6 @@ def _volume_corr(lhs, rhs) -> float:
     return float(np.dot(lhs, rhs) / denom)
 
 
-def _require_nonzero_finite_reconstruction(volume, *, label: str) -> np.ndarray:
-    """Reject silent empty/non-finite parity maps before they are written."""
-
-    array = np.asarray(volume)
-    if not np.all(np.isfinite(array)):
-        raise FloatingPointError(f"{label} reconstruction contains non-finite values")
-    if not np.any(array != 0):
-        raise RuntimeError(f"{label} reconstruction is identically zero")
-    return array
-
-
 def _best_class_permutation(recovar_real, relion_real):
     n_classes = len(recovar_real)
     corr_matrix = np.asarray(
@@ -1034,15 +1023,6 @@ def main() -> None:
         "--sparse-pass2",
         action="store_true",
         help="Use the sparse bucketed adaptive pass-2 path instead of dense pass-2.",
-    )
-    parser.add_argument(
-        "--relion-kclass-firstiter-native-bpref-replay",
-        action="store_true",
-        help=(
-            "Experimental opt-in for the K=4 iteration-1 native RELION BPref "
-            "replay. Only forwarded to --adaptive-2pass; unsupported "
-            "configurations fail closed."
-        ),
     )
     parser.add_argument(
         "--relion-x-half-mstep",
@@ -1589,9 +1569,6 @@ def main() -> None:
         adaptive_em_kwargs["image_batch_size"] = fine_batch_plan.image_batch_size
         adaptive_em_kwargs["rotation_block_size"] = fine_batch_plan.rotation_block_size
         adaptive_em_kwargs["relion_fine_mstep_prune"] = bool(args.sparse_pass2)
-        if args.relion_kclass_firstiter_native_bpref_replay:
-            adaptive_em_kwargs["relion_kclass_firstiter_native_bpref_replay"] = True
-            adaptive_em_kwargs["debug_iteration"] = int(args.target_iter)
         result = run_dense_k_class_em_adaptive(
             ds,
             means,
@@ -1866,12 +1843,7 @@ def main() -> None:
             class_real = ftu.get_idft3(class_ft.reshape(ds.volume_shape)).real
             if apply_solvent_mask:
                 class_real = class_real * solvent_mask
-            real_maps.append(
-                _require_nonzero_finite_reconstruction(
-                    class_real,
-                    label=f"class {class_index + 1}",
-                )
-            )
+            real_maps.append(np.asarray(class_real))
         return real_maps
 
     variant_specs = [

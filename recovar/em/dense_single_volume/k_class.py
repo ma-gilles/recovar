@@ -974,14 +974,6 @@ def _run_sparse_k_class_adaptive_pass2(
         ),
         symmetry_label=base_engine_kwargs.get("symmetry_label", "C1"),
     )
-    native_bpref_replay_requested = bool(
-        base_engine_kwargs.get("relion_kclass_firstiter_native_bpref_replay", False)
-    )
-    if native_bpref_replay_requested:
-        common["relion_kclass_firstiter_native_bpref_replay"] = True
-        common["initial_model_iteration"] = base_engine_kwargs.get(
-            "initial_model_iteration"
-        )
     preserve_bpref_particle_order = _apply_bpref_particle_order_policy(
         common,
         base_engine_kwargs,
@@ -1017,10 +1009,6 @@ def _run_sparse_k_class_adaptive_pass2(
         return class_common
 
     use_fused_pass2 = _use_fused_sparse_k_class_pass2(n_classes)
-    if native_bpref_replay_requested and not use_fused_pass2:
-        raise RuntimeError(
-            "K-class firstiter native BPref replay requires fused sparse pass 2"
-        )
     if preserve_bpref_particle_order and use_fused_pass2:
         raise RuntimeError(
             "RELION BPref particle-order preservation requires the K=1 single-class sparse path"
@@ -3405,8 +3393,6 @@ def run_dense_k_class_em_adaptive(
     if pass2_use_float64_projections is not None:
         pass2_kwargs["use_float64_projections"] = bool(pass2_use_float64_projections)
     pass2_kwargs["relion_fine_mstep_prune"] = bool(relion_fine_mstep_prune)
-    if bool(pass2_kwargs.get("relion_kclass_firstiter_native_bpref_replay", False)):
-        pass2_kwargs["initial_model_iteration"] = debug_iteration
     # Build a per-particle, per-class fine-grid mask from the coarse significance.
     pass2_kwargs.pop("rotation_translation_mask", None)
     sparse_pass2_requested = bool(pass2_kwargs.pop("sparse_pass2", False))

@@ -1183,7 +1183,6 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
             "--translation_sigma_angstrom",
             "6.5",
             "--no_iter_artifacts",
-            "--relion-kclass-firstiter-native-bpref-replay",
         ]
     )
 
@@ -1203,7 +1202,6 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.translation_sigma_angstrom == 6.5
     assert opts.image_fourier_backend == "host_numpy"
     assert opts.write_iter_artifacts is False
-    assert opts.relion_kclass_firstiter_native_bpref_replay is True
     assert "recovar InitialModel complete: out/initial_model.mrc" in capsys.readouterr().out
 
 
@@ -1219,4 +1217,3 @@ def test_cli_gpu_auto_selects_relion_cuda_image_backend(monkeypatch):
 
     assert run_ab_initio.main(["--i", "particles.star", "--gpu", "0", "--nr_iter", "1"]) == 0
     assert calls["opts"].image_fourier_backend == "relion_cuda"
-    assert calls["opts"].relion_kclass_firstiter_native_bpref_replay is False

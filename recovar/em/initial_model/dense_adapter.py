@@ -840,12 +840,6 @@ def _run_sparse_pass2_initial_model_estep(
                 debug_iteration=group_kwargs.get("debug_iteration"),
                 relion_projector_half=relion_projector_half_by_class,
                 relion_projector_r_max=relion_projector_r_max,
-                relion_kclass_firstiter_native_bpref_replay=bool(
-                    group_kwargs.get(
-                        "relion_kclass_firstiter_native_bpref_replay",
-                        False,
-                    )
-                ),
             )
         _maybe_stop_after_initial_model_local_score_dump(
             debug_iteration=group_kwargs.get("debug_iteration"),

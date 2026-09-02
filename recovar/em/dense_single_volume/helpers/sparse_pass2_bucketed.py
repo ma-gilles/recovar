@@ -272,9 +272,6 @@ _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
 _RELION_EXACT_BPREF_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"
 _RELION_FIRSTITER_FUSED_BPREF_ENV = "RECOVAR_K1_RELION_FIRSTITER_FUSED_BPREF"
-_KCLASS_FIRSTITER_NATIVE_BPREF_MAX_HOST_BYTES_ENV = (
-    "RECOVAR_KCLASS_FIRSTITER_NATIVE_BPREF_MAX_HOST_BYTES"
-)
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _BPREF_CONTRIBUTION_DUMP_CLASS_ENV = "RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS"
 _BPREF_CONTRIBUTION_STOP_AFTER_TARGET_ENV = (
@@ -339,7 +336,6 @@ _DEFAULT_PASS2_GROUP_PROGRESS_CHUNKS = 1000
 _DEFAULT_PASS2_GROUP_PROGRESS_SECONDS = 300
 _DEFAULT_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER = 4
 _DEFAULT_KCLASS_RAW_HOST_STAGING_MAX_BYTES = 8 * 1024**3
-_DEFAULT_KCLASS_FIRSTITER_NATIVE_BPREF_MAX_HOST_BYTES = 32 * 1024**3
 
 _native_mstep_dump_counter = 0
 _bpref_contribution_dump_counter = 0
@@ -853,36 +849,6 @@ class DeferredFirstiterBPrefBatch(NamedTuple):
     actual_counts: np.ndarray
     particle_half_local_indices: np.ndarray
     particle_original_indices: np.ndarray
-
-
-class KClassNativeBPrefParticleOperands(NamedTuple):
-    """Exact raw BPref rows staged once for one InitialModel particle."""
-
-    half_local_index: int
-    original_index: int
-    raw_image: np.ndarray
-    raw_ctf: np.ndarray
-
-
-class KClassNativeBPrefOperandStore(NamedTuple):
-    """Shared raw operands for an entire pseudo-half K-class replay."""
-
-    by_half_local_index: dict[int, KClassNativeBPrefParticleOperands]
-    raw_minvsigma2: np.ndarray
-
-
-class KClassNativeBPrefContribution(NamedTuple):
-    """One particle/class posterior retained without bucket padding."""
-
-    class_index: int
-    half_local_index: int
-    original_index: int
-    rotations: np.ndarray
-    n_translations: int
-    dense_posterior: np.ndarray | None
-    pair_posterior: np.ndarray | None
-    pair_rotation_row: np.ndarray | None
-    pair_translation_index: np.ndarray | None
 
 
 class SparseKClassCompactPairPlanStats(NamedTuple):
@@ -3181,39 +3147,6 @@ def _relion_firstiter_fused_bpref_enabled(
             "iteration-1 winner-take-all x-half path"
         )
     return bool(requested and supported)
-
-
-def _kclass_firstiter_native_bpref_replay_enabled(
-    *,
-    requested: bool,
-    n_classes: int,
-    initial_model_iteration: int | None,
-    use_relion_x_half_mstep: bool,
-    use_exact_relion_gaussian: bool,
-    use_float64_scoring: bool,
-    device_signature_requested: bool,
-    current_size: int | None,
-) -> bool:
-    """Fail closed around the opt-in K=4 InitialModel native BPref replay."""
-
-    if not requested:
-        return False
-    requirements = {
-        "exactly four classes": int(n_classes) == 4,
-        "InitialModel iteration 1": initial_model_iteration is not None
-        and int(initial_model_iteration) == 1,
-        "RELION x-half M-step": bool(use_relion_x_half_mstep),
-        "exact RELION float32 Gaussian scoring": bool(use_exact_relion_gaussian)
-        and not bool(use_float64_scoring),
-        "inactive BPref device diagnostics": not bool(device_signature_requested),
-        "positive current_size": current_size is not None and int(current_size) > 0,
-    }
-    missing = [name for name, satisfied in requirements.items() if not satisfied]
-    if missing:
-        raise ValueError(
-            "K-class firstiter native BPref replay requires " + ", ".join(missing)
-        )
-    return True
 
 
 def _relion_firstiter_bpref_overlap_bytes(
@@ -6502,243 +6435,6 @@ def _host_snapshot(value) -> np.ndarray:
     return np.array(jax.device_get(value), copy=True)
 
 
-def _stage_kclass_native_bpref_raw_operands(
-    store: KClassNativeBPrefOperandStore | None,
-    *,
-    raw_images,
-    raw_ctf,
-    raw_minvsigma2,
-    particle_half_local_indices,
-    particle_original_indices,
-) -> KClassNativeBPrefOperandStore:
-    """Stage each raw image/CTF once and share one inverse-noise row."""
-
-    raw_images_host = _host_snapshot(raw_images)
-    raw_ctf_host = _host_snapshot(raw_ctf)
-    raw_minvsigma2_host = _host_snapshot(raw_minvsigma2)
-    if raw_images_host.ndim != 2 or raw_images_host.shape != raw_ctf_host.shape:
-        raise ValueError("K-class native BPref image/CTF rows must be aligned")
-    if raw_minvsigma2_host.shape != (int(raw_images_host.shape[1]),):
-        raise ValueError("K-class native BPref inverse-noise row is not pixel-aligned")
-    local_indices = np.asarray(particle_half_local_indices, dtype=np.int64).reshape(-1)
-    original_indices = np.asarray(particle_original_indices, dtype=np.int64).reshape(-1)
-    if local_indices.shape != original_indices.shape or local_indices.shape != (
-        int(raw_images_host.shape[0]),
-    ):
-        raise ValueError("K-class native BPref particle identities do not match raw rows")
-    if np.unique(local_indices).size != local_indices.size:
-        raise ValueError("K-class native BPref raw staging contains duplicate local indices")
-    if np.unique(original_indices).size != original_indices.size:
-        raise ValueError("K-class native BPref raw staging contains duplicate original indices")
-
-    if store is None:
-        by_local: dict[int, KClassNativeBPrefParticleOperands] = {}
-        store_noise = raw_minvsigma2_host
-    else:
-        by_local = store.by_half_local_index
-        store_noise = store.raw_minvsigma2
-        if (
-            store_noise.dtype != raw_minvsigma2_host.dtype
-            or store_noise.shape != raw_minvsigma2_host.shape
-            or not np.array_equal(store_noise, raw_minvsigma2_host)
-        ):
-            raise ValueError("K-class native BPref inverse-noise changed across buckets")
-    existing_original = {row.original_index for row in by_local.values()}
-    for row_index, (local_index, original_index) in enumerate(
-        zip(local_indices.tolist(), original_indices.tolist(), strict=True)
-    ):
-        if local_index in by_local or original_index in existing_original:
-            raise ValueError("K-class native BPref raw operands were staged more than once")
-        by_local[int(local_index)] = KClassNativeBPrefParticleOperands(
-            half_local_index=int(local_index),
-            original_index=int(original_index),
-            raw_image=raw_images_host[row_index],
-            raw_ctf=raw_ctf_host[row_index],
-        )
-        existing_original.add(int(original_index))
-    return KClassNativeBPrefOperandStore(by_local, store_noise)
-
-
-def _stage_kclass_native_bpref_contribution(
-    *,
-    class_index: int,
-    half_local_index: int,
-    original_index: int,
-    posterior,
-    rotations,
-    actual_rotation_count: int,
-    n_translations: int,
-    pair_rotation_row=None,
-    pair_translation_index=None,
-    pair_mask=None,
-) -> KClassNativeBPrefContribution:
-    """Retain one particle/class posterior with no bucket-padding slots."""
-
-    actual_rotation_count = int(actual_rotation_count)
-    n_translations = int(n_translations)
-    if actual_rotation_count <= 0 or n_translations <= 0:
-        raise ValueError("K-class native BPref contributions require positive dimensions")
-    rotations_host = _host_snapshot(rotations)
-    if rotations_host.ndim != 3 or rotations_host.shape[1:] != (3, 3):
-        raise ValueError("K-class native BPref rotations must have shape (R, 3, 3)")
-    if actual_rotation_count > int(rotations_host.shape[0]):
-        raise ValueError("K-class native BPref actual rotation count exceeds staged rows")
-    rotations_host = np.array(rotations_host[:actual_rotation_count], copy=True)
-    posterior_host = _host_snapshot(posterior)
-
-    compact = pair_rotation_row is not None or pair_translation_index is not None or pair_mask is not None
-    if compact:
-        if pair_rotation_row is None or pair_translation_index is None or pair_mask is None:
-            raise ValueError("compact K-class native BPref staging requires all pair arrays")
-        rotation_rows = np.asarray(jax.device_get(pair_rotation_row), dtype=np.int64).reshape(-1)
-        translation_indices = np.asarray(
-            jax.device_get(pair_translation_index), dtype=np.int64
-        ).reshape(-1)
-        mask = np.asarray(jax.device_get(pair_mask), dtype=bool).reshape(-1)
-        posterior_host = posterior_host.reshape(-1)
-        if not (
-            posterior_host.shape == rotation_rows.shape == translation_indices.shape == mask.shape
-        ):
-            raise ValueError("compact K-class native BPref pair arrays are not aligned")
-        if np.any(posterior_host[~mask] != 0):
-            raise ValueError("compact K-class native BPref padding carries posterior mass")
-        posterior_host = np.array(posterior_host[mask], copy=True)
-        rotation_rows = np.array(rotation_rows[mask], copy=True)
-        translation_indices = np.array(translation_indices[mask], copy=True)
-        if np.any(rotation_rows < 0) or np.any(rotation_rows >= actual_rotation_count):
-            raise ValueError("compact K-class native BPref rotation row is outside actual support")
-        if np.any(translation_indices < 0) or np.any(translation_indices >= n_translations):
-            raise ValueError("compact K-class native BPref translation index is outside support")
-        coordinates = rotation_rows * n_translations + translation_indices
-        if np.unique(coordinates).size != coordinates.size:
-            raise ValueError("compact K-class native BPref contains duplicate pair coordinates")
-        dense_posterior = None
-        pair_posterior = posterior_host
-        pair_rotation_row_host = rotation_rows
-        pair_translation_index_host = translation_indices
-    else:
-        if posterior_host.ndim != 2 or int(posterior_host.shape[1]) != n_translations:
-            raise ValueError("rectangular K-class native BPref posterior must have shape (R, T)")
-        if actual_rotation_count > int(posterior_host.shape[0]):
-            raise ValueError("rectangular K-class native BPref posterior has too few rows")
-        if np.any(posterior_host[actual_rotation_count:] != 0):
-            raise ValueError("rectangular K-class native BPref padding carries posterior mass")
-        dense_posterior = np.array(posterior_host[:actual_rotation_count], copy=True)
-        pair_posterior = None
-        pair_rotation_row_host = None
-        pair_translation_index_host = None
-
-    return KClassNativeBPrefContribution(
-        class_index=int(class_index),
-        half_local_index=int(half_local_index),
-        original_index=int(original_index),
-        rotations=rotations_host,
-        n_translations=n_translations,
-        dense_posterior=dense_posterior,
-        pair_posterior=pair_posterior,
-        pair_rotation_row=pair_rotation_row_host,
-        pair_translation_index=pair_translation_index_host,
-    )
-
-
-def _materialize_kclass_native_bpref_posterior(
-    contribution: KClassNativeBPrefContribution,
-) -> np.ndarray:
-    """Densify compact pair slots immediately before one native launch."""
-
-    if contribution.dense_posterior is not None:
-        return np.array(contribution.dense_posterior, copy=True)
-    if (
-        contribution.pair_posterior is None
-        or contribution.pair_rotation_row is None
-        or contribution.pair_translation_index is None
-    ):
-        raise ValueError("K-class native BPref contribution has no posterior representation")
-    dense = np.zeros(
-        (int(contribution.rotations.shape[0]), int(contribution.n_translations)),
-        dtype=contribution.pair_posterior.dtype,
-    )
-    dense[
-        contribution.pair_rotation_row,
-        contribution.pair_translation_index,
-    ] = contribution.pair_posterior
-    return dense
-
-
-def _ordered_kclass_native_bpref_contributions(
-    store: KClassNativeBPrefOperandStore,
-    contributions: list[KClassNativeBPrefContribution],
-    *,
-    n_classes: int,
-) -> tuple[tuple[KClassNativeBPrefContribution, ...], ...]:
-    """Validate complete coverage and restore immutable original-particle order."""
-
-    n_classes = int(n_classes)
-    if n_classes <= 0:
-        raise ValueError("K-class native BPref replay requires at least one class")
-    expected_pairs = {
-        (class_index, local_index)
-        for class_index in range(n_classes)
-        for local_index in store.by_half_local_index
-    }
-    observed_pairs = {(row.class_index, row.half_local_index) for row in contributions}
-    if len(observed_pairs) != len(contributions) or observed_pairs != expected_pairs:
-        raise ValueError("K-class native BPref contribution coverage is incomplete or duplicated")
-    by_class: list[list[KClassNativeBPrefContribution]] = [
-        [] for _ in range(n_classes)
-    ]
-    for contribution in contributions:
-        if contribution.class_index < 0 or contribution.class_index >= n_classes:
-            raise ValueError("K-class native BPref contribution has an invalid class")
-        operands = store.by_half_local_index.get(contribution.half_local_index)
-        if operands is None or operands.original_index != contribution.original_index:
-            raise ValueError("K-class native BPref contribution identity does not match raw operands")
-        by_class[contribution.class_index].append(contribution)
-    return tuple(
-        tuple(sorted(class_rows, key=lambda row: row.original_index))
-        for class_rows in by_class
-    )
-
-
-def _kclass_native_bpref_staged_nbytes(
-    store: KClassNativeBPrefOperandStore | None,
-    contributions: list[KClassNativeBPrefContribution],
-) -> int:
-    """Account retained host buffers without double-counting shared noise."""
-
-    total = 0
-    if store is not None:
-        total += int(store.raw_minvsigma2.nbytes)
-        total += sum(
-            int(row.raw_image.nbytes + row.raw_ctf.nbytes)
-            for row in store.by_half_local_index.values()
-        )
-    for contribution in contributions:
-        total += int(contribution.rotations.nbytes)
-        for value in (
-            contribution.dense_posterior,
-            contribution.pair_posterior,
-            contribution.pair_rotation_row,
-            contribution.pair_translation_index,
-        ):
-            if value is not None:
-                total += int(value.nbytes)
-    return total
-
-
-def _check_kclass_native_bpref_host_limit(
-    store: KClassNativeBPrefOperandStore | None,
-    contributions: list[KClassNativeBPrefContribution],
-    max_bytes: int,
-) -> None:
-    staged_bytes = _kclass_native_bpref_staged_nbytes(store, contributions)
-    if staged_bytes > int(max_bytes):
-        raise MemoryError(
-            "K-class native BPref host staging exceeded its explicit cap: "
-            f"staged={staged_bytes} bytes cap={max_bytes} bytes"
-        )
-
-
 def _stage_deferred_firstiter_bpref_batch(
     *,
     raw_images,
@@ -6872,235 +6568,6 @@ def _normalize_split_relion_firstiter_bpref_accumulators(
         normalized_imag,
         weight_volume / fft_size_squared,
     )
-
-
-def _native_bpref_array_status(value) -> tuple[bool, bool]:
-    """Return finite/nonzero flags without copying a device accumulator."""
-
-    if isinstance(value, np.ndarray):
-        return bool(np.all(np.isfinite(value))), bool(np.any(value != 0))
-    array = jnp.asarray(value)
-    flags = jnp.stack(
-        (
-            jnp.all(jnp.isfinite(array)),
-            jnp.any(array != 0),
-        )
-    )
-    finite, nonzero = np.asarray(jax.device_get(flags), dtype=bool).tolist()
-    return bool(finite), bool(nonzero)
-
-
-def _kclass_native_bpref_retained_weight_cutoff(
-    dense_posterior: np.ndarray,
-) -> float | None:
-    """Return the exact smallest staged weight, or ``None`` for empty support."""
-
-    posterior = np.asarray(dense_posterior)
-    if not np.all(np.isfinite(posterior)) or np.any(posterior < 0.0):
-        raise ValueError("K-class native BPref posterior must be finite and non-negative")
-    positive = posterior[posterior > 0.0]
-    if positive.size == 0:
-        return None
-    return float(np.min(positive))
-
-
-def _require_nonzero_kclass_native_bpref_split(
-    data_real,
-    data_imag,
-    weight,
-    *,
-    class_index: int,
-    posterior_mass: float,
-) -> None:
-    """Fail closed before finalization if retained K-class mass vanished."""
-
-    real_finite, real_nonzero = _native_bpref_array_status(data_real)
-    imag_finite, imag_nonzero = _native_bpref_array_status(data_imag)
-    weight_finite, weight_nonzero = _native_bpref_array_status(weight)
-    if not np.isfinite(posterior_mass) or posterior_mass <= 0.0:
-        raise RuntimeError(
-            f"K-class native BPref class {class_index + 1} has no retained posterior mass"
-        )
-    if not (real_finite and imag_finite and weight_finite):
-        raise FloatingPointError(
-            f"K-class native BPref class {class_index + 1} produced non-finite raw accumulators"
-        )
-    if not (real_nonzero or imag_nonzero) or not weight_nonzero:
-        raise RuntimeError(
-            "K-class native BPref class "
-            f"{class_index + 1} produced zero raw accumulators from retained "
-            f"posterior mass {posterior_mass:.9g}"
-        )
-
-
-def _require_nonzero_kclass_native_bpref_public(
-    data,
-    weight,
-    *,
-    class_index: int,
-) -> None:
-    """Fail closed if finalization or public-layout conversion erased a class."""
-
-    data_finite, data_nonzero = _native_bpref_array_status(data)
-    weight_finite, weight_nonzero = _native_bpref_array_status(weight)
-    if not (data_finite and weight_finite):
-        raise FloatingPointError(
-            f"K-class native BPref class {class_index + 1} produced non-finite public accumulators"
-        )
-    if not data_nonzero or not weight_nonzero:
-        raise RuntimeError(
-            f"K-class native BPref class {class_index + 1} produced zero public accumulators"
-        )
-
-
-def _replay_kclass_firstiter_native_bpref(
-    store: KClassNativeBPrefOperandStore,
-    contributions: list[KClassNativeBPrefContribution],
-    *,
-    n_classes: int,
-    recon_volume_size: int,
-    centered_pixel_indices,
-    fftw_pixel_indices,
-    translation_angles,
-    physical_image_shape,
-    volume_shape,
-    max_r: float,
-    current_size: int | None,
-    n_images: int,
-    symmetry_label: str,
-) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
-    """Replay one particle/class at a time with one live accumulator triplet."""
-
-    ordered = _ordered_kclass_native_bpref_contributions(
-        store,
-        contributions,
-        n_classes=n_classes,
-    )
-    translation_angles = jnp.asarray(translation_angles, dtype=jnp.float32)
-    n_translations = int(translation_angles.shape[0])
-    fft_size = np.float32(np.prod(physical_image_shape))
-    fft_size_squared = np.float32(fft_size * fft_size)
-    Ft_y_out: list[np.ndarray] = []
-    Ft_ctf_out: list[np.ndarray] = []
-
-    for class_index, class_contributions in enumerate(ordered):
-        data_real = jnp.zeros(int(recon_volume_size), dtype=jnp.float32)
-        data_imag = jnp.zeros(int(recon_volume_size), dtype=jnp.float32)
-        weight = jnp.zeros(int(recon_volume_size), dtype=jnp.float32)
-        class_posterior_mass = 0.0
-        for contribution in class_contributions:
-            if int(contribution.n_translations) != n_translations:
-                raise ValueError(
-                    "K-class native BPref contribution translation count changed"
-                )
-            operands = store.by_half_local_index[contribution.half_local_index]
-            dense_posterior = _materialize_kclass_native_bpref_posterior(
-                contribution
-            )
-            significant_weight = _kclass_native_bpref_retained_weight_cutoff(
-                dense_posterior
-            )
-            class_posterior_mass += float(
-                np.sum(dense_posterior, dtype=np.float64)
-            )
-            if significant_weight is None:
-                continue
-            native_batch = DeferredFirstiterBPrefBatch(
-                raw_images=operands.raw_image[None, :],
-                raw_ctf=operands.raw_ctf[None, :],
-                raw_minvsigma2=store.raw_minvsigma2,
-                posterior=dense_posterior[None, :, :],
-                rotations=contribution.rotations[None, :, :, :],
-                actual_counts=np.asarray(
-                    [contribution.rotations.shape[0]], dtype=np.int64
-                ),
-                particle_half_local_indices=np.asarray(
-                    [contribution.half_local_index], dtype=np.int64
-                ),
-                particle_original_indices=np.asarray(
-                    [contribution.original_index], dtype=np.int64
-                ),
-            )
-            data_real, data_imag, weight = _replay_deferred_firstiter_bpref_batches(
-                [native_batch],
-                data_real,
-                data_imag,
-                weight,
-                centered_pixel_indices=centered_pixel_indices,
-                fftw_pixel_indices=fftw_pixel_indices,
-                translation_angles=translation_angles,
-                physical_image_shape=physical_image_shape,
-                volume_shape=volume_shape,
-                max_r=max_r,
-                # ``dense_posterior`` is already the jointly pruned M-step
-                # posterior.  Reusing the cumulative adaptive fraction here
-                # would drop every soft K=4 slot below 0.999.  Admit every
-                # retained positive value by using this batch's exact minimum;
-                # the positive cutoff robustly excludes zero padding even when
-                # the CUDA device flushes subnormal values to zero.
-                adaptive_fraction=significant_weight,
-            )
-
-        _require_nonzero_kclass_native_bpref_split(
-            data_real,
-            data_imag,
-            weight,
-            class_index=class_index,
-            posterior_mass=class_posterior_mass,
-        )
-        data_real, data_imag, weight = (
-            _normalize_split_relion_firstiter_bpref_accumulators(
-                data_real,
-                data_imag,
-                weight,
-                fft_size,
-                fft_size_squared,
-            )
-        )
-        _maybe_dump_split_native_half_mstep(
-            data_real,
-            data_imag,
-            weight,
-            current_size=current_size,
-            n_images=n_images,
-            recon_volume_shape=volume_shape,
-            stage=f"fused_class{class_index + 1}_pre_x0",
-        )
-        class_Ft_y, class_Ft_ctf = finalize_split_relion_x_half_bpref(
-            data_real,
-            data_imag,
-            weight,
-            volume_shape,
-            logger=logger,
-            label=(
-                "Sparse fused K-class firstiter native BPref replay "
-                f"class {class_index + 1}"
-            ),
-            symmetry_label=symmetry_label,
-        )
-        _maybe_dump_native_half_mstep(
-            class_Ft_y,
-            class_Ft_ctf,
-            current_size=current_size,
-            n_images=n_images,
-            recon_volume_shape=volume_shape,
-            stage=f"fused_class{class_index + 1}_post_x0",
-        )
-        class_Ft_y, class_Ft_ctf = relion_x_half_accumulators_to_public_layout(
-            class_Ft_y,
-            class_Ft_ctf,
-            volume_shape,
-        )
-        _require_nonzero_kclass_native_bpref_public(
-            class_Ft_y,
-            class_Ft_ctf,
-            class_index=class_index,
-        )
-        Ft_y_out.append(np.asarray(jax.device_get(class_Ft_y)))
-        Ft_ctf_out.append(np.asarray(jax.device_get(class_Ft_ctf)))
-        del data_real, data_imag, weight, class_Ft_y, class_Ft_ctf
-        gc.collect()
-    return tuple(Ft_y_out), tuple(Ft_ctf_out)
 
 
 def _release_deferred_firstiter_projection_buffers(
@@ -12579,82 +12046,6 @@ def _relion_exact_ctf_half_from_source_star(
     return jnp.asarray(np.stack(ctf_rows, axis=0), dtype=jnp.float64)
 
 
-def _prepare_relion_native_bpref_raw_operands(
-    experiment_dataset,
-    batch,
-    image_indices,
-    noise_variance_half,
-    *,
-    image_corrections,
-    scale_corrections,
-    image_pre_shifts,
-    image_shape,
-):
-    """Build exact native BPref source rows without changing score operands."""
-
-    (
-        relion_cuda_preprocess,
-        integer_pre_shifts,
-        _batch_corr_np,
-        batch_scale_np,
-        relion_preprocess_kwargs,
-    ) = prepare_batch_preprocess_operands(
-        experiment_dataset,
-        batch,
-        image_indices,
-        image_corrections=image_corrections,
-        scale_corrections=scale_corrections,
-        image_pre_shifts=image_pre_shifts,
-    )
-    if not relion_cuda_preprocess or relion_preprocess_kwargs is None:
-        raise ValueError(
-            "K-class native BPref replay requires RELION CUDA preprocessing"
-        )
-    relion_preprocess_kwargs = dict(relion_preprocess_kwargs)
-    relion_preprocess_kwargs["relion_fft_per_image"] = True
-    ctf_half_rfloat = _relion_exact_ctf_half_from_source_star(
-        experiment_dataset,
-        image_indices,
-        image_shape,
-    )
-    if ctf_half_rfloat is None:
-        raise ValueError("K-class native BPref replay requires exact source-STAR CTF rows")
-    raw_image_half = process_half_image(
-        experiment_dataset,
-        batch,
-        False,
-        relion_preprocess_kwargs=relion_preprocess_kwargs,
-    )
-    batch_scale = jnp.asarray(batch_scale_np, dtype=jnp.float32)
-    if image_corrections is not None:
-        raw_image_half = raw_image_half * batch_scale[:, None]
-    if image_pre_shifts is not None and integer_pre_shifts is None:
-        batch_shifts = jnp.asarray(
-            np.asarray(image_pre_shifts)[np.asarray(image_indices)]
-        )
-        raw_image_half = raw_image_half * half_image_phase_factors(
-            image_shape,
-            batch_shifts,
-        )
-    fft_size = float(np.prod(image_shape))
-    return (
-        jnp.asarray(
-            raw_image_half * np.float32(1.0 / fft_size),
-            dtype=jnp.complex64,
-        ),
-        # ``_relion_exact_ctf_half_from_source_star`` deliberately exposes
-        # RECOVAR's forward-model sign.  BP.cuh consumes RELION's native CTF
-        # sign and the split-accumulator normalization converts it back to
-        # RECOVAR's public convention.  Feeding the already converted sign
-        # here therefore negates every reconstructed class.
-        -jnp.asarray(ctf_half_rfloat, dtype=jnp.float32),
-        jnp.reciprocal(
-            jnp.asarray(noise_variance_half, dtype=jnp.float64)
-            / np.float64(fft_size * fft_size)
-        ).astype(jnp.float32),
-    )
-
-
 def _prepare_bucket_io(
     experiment_dataset,
     batch,
@@ -12683,7 +12074,6 @@ def _prepare_bucket_io(
     return_shifted_score=True,
     relion_exact_normalized_cc_operands=False,
     relion_exact_bpref_operands=False,
-    return_exact_bpref_operands=False,
 ):
     """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
 
@@ -12700,7 +12090,6 @@ def _prepare_bucket_io(
             recon_window_indices = window_indices
 
     image_shape = config.image_shape
-    raw_bpref_source_batch = batch
     use_normalized_cc = score_mode == "normalized_cc"
     batch_size = int(batch.shape[0])
     (
@@ -13163,21 +12552,6 @@ def _prepare_bucket_io(
             jnp.asarray(noise_variance_half, dtype=jnp.float64)
             / np.float64(fft_size * fft_size)
         ).astype(jnp.float32)
-    elif return_exact_bpref_operands and not score_only:
-        (
-            direct_bpref_image_half,
-            direct_bpref_ctf_half,
-            direct_bpref_minvsigma2_half,
-        ) = _prepare_relion_native_bpref_raw_operands(
-            experiment_dataset,
-            raw_bpref_source_batch,
-            image_indices,
-            noise_variance_half,
-            image_corrections=image_corrections,
-            scale_corrections=scale_corrections,
-            image_pre_shifts=image_pre_shifts,
-            image_shape=image_shape,
-        )
 
     return (
         shifted_score_half,
@@ -17787,8 +17161,6 @@ def compute_k_class_pass2_stats_sparse_fused(
     bpref_device_signature_active: bool = False,
     relion_translation_angle_scale: float = 1.0,
     symmetry_label: str = "C1",
-    relion_kclass_firstiter_native_bpref_replay: bool = False,
-    initial_model_iteration: int | None = None,
 ) -> SparseKClassPass2FusedResult:
     """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
 
@@ -17837,16 +17209,6 @@ def compute_k_class_pass2_stats_sparse_fused(
     )
     volumes = jnp.asarray(volumes)
     n_classes = int(volumes.shape[0])
-    kclass_native_bpref_replay = _kclass_firstiter_native_bpref_replay_enabled(
-        requested=bool(relion_kclass_firstiter_native_bpref_replay),
-        n_classes=n_classes,
-        initial_model_iteration=initial_model_iteration,
-        use_relion_x_half_mstep=bool(relion_x_half_mstep),
-        use_exact_relion_gaussian=use_exact_relion_gaussian,
-        use_float64_scoring=bool(use_float64_scoring),
-        device_signature_requested=device_signature_requested,
-        current_size=current_size,
-    )
     if device_signature_requested and not any(
         _bpref_contribution_class_enabled(class_index)
         for class_index in range(n_classes)
@@ -18519,32 +17881,8 @@ def compute_k_class_pass2_stats_sparse_fused(
             _SPARSE_KCLASS_COMPACT_BUCKETS_ENV,
         )
 
-    native_bpref_operand_store = None
-    native_bpref_contributions: list[KClassNativeBPrefContribution] = []
-    native_bpref_max_host_bytes = _optional_positive_int_env(
-        _KCLASS_FIRSTITER_NATIVE_BPREF_MAX_HOST_BYTES_ENV
-    )
-    if native_bpref_max_host_bytes is None:
-        native_bpref_max_host_bytes = (
-            _DEFAULT_KCLASS_FIRSTITER_NATIVE_BPREF_MAX_HOST_BYTES
-        )
-    if kclass_native_bpref_replay:
-        logger.info(
-            "STRICT-PARITY: opt-in K=4 InitialModel iteration-1 replay stages "
-            "exact raw BPref operands and sparse posterior slots, then replays "
-            "one class and one particle at a time in original particle order"
-        )
-        Ft_y_total = [None] * n_classes
-        Ft_ctf_total = [None] * n_classes
-    else:
-        Ft_y_total = [
-            jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype)
-            for _ in range(n_classes)
-        ]
-        Ft_ctf_total = [
-            jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype)
-            for _ in range(n_classes)
-        ]
+    Ft_y_total = [jnp.zeros(recon_volume_size, dtype=recon_y_accum_dtype) for _ in range(n_classes)]
+    Ft_ctf_total = [jnp.zeros(recon_volume_size, dtype=recon_ctf_accum_dtype) for _ in range(n_classes)]
     class_hard_assignments = np.empty((n_classes, n_images), dtype=np.int32)
     best_rotations = [np.empty((n_images, 3, 3), dtype=np.float32) for _ in range(n_classes)]
     best_rotation_indices = [np.empty(n_images, dtype=np.int64) for _ in range(n_classes)]
@@ -18825,14 +18163,10 @@ def compute_k_class_pass2_stats_sparse_fused(
         _relion_cuda_score_translation_angles_if_available(
             fine_translations,
             image_shape,
-            enabled=use_exact_relion_gaussian or kclass_native_bpref_replay,
+            enabled=use_exact_relion_gaussian,
             angle_scale=relion_translation_angle_scale,
         )
     )
-    if kclass_native_bpref_replay and relion_score_translation_angles is None:
-        raise RuntimeError(
-            "K-class native BPref replay could not construct RELION translation angles"
-        )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
     score_translation_phases = None
     recon_translation_phases = None
@@ -19238,9 +18572,9 @@ def compute_k_class_pass2_stats_sparse_fused(
             _direct_inverse_noise_half,
             _direct_ctf_rfloat_half,
             _direct_native_corr_img_half,
-            direct_bpref_image_half,
-            direct_bpref_ctf_half,
-            direct_bpref_minvsigma2_half,
+            _direct_bpref_image_half,
+            _direct_bpref_ctf_half,
+            _direct_bpref_minvsigma2_half,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,
@@ -19267,36 +18601,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
             return_shifted_score=not half_spectrum_scoring,
-            return_exact_bpref_operands=kclass_native_bpref_replay,
         )
-        if kclass_native_bpref_replay:
-            if (
-                direct_bpref_image_half is None
-                or direct_bpref_ctf_half is None
-                or direct_bpref_minvsigma2_half is None
-            ):
-                raise RuntimeError(
-                    "K-class native BPref replay is missing exact raw operands"
-                )
-            native_bpref_operand_store = _stage_kclass_native_bpref_raw_operands(
-                native_bpref_operand_store,
-                raw_images=direct_bpref_image_half,
-                raw_ctf=direct_bpref_ctf_half,
-                raw_minvsigma2=direct_bpref_minvsigma2_half,
-                particle_half_local_indices=np.asarray(
-                    image_indices,
-                    dtype=np.int64,
-                ),
-                particle_original_indices=_original_indices_for_local(
-                    experiment_dataset,
-                    image_indices,
-                ),
-            )
-            _check_kclass_native_bpref_host_limit(
-                native_bpref_operand_store,
-                native_bpref_contributions,
-                native_bpref_max_host_bytes,
-            )
         relion_highres_xi2_half = None
         if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
             relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
@@ -20305,43 +19610,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_x_half=use_relion_x_half_mstep,
                         default_probs_sum_t=probs_sum_t_jax,
                     )
-            if kclass_native_bpref_replay:
-                original_indices = _original_indices_for_local(
-                    experiment_dataset,
-                    image_indices,
-                )
-                for batch_row, half_local_index in enumerate(
-                    np.asarray(image_indices, dtype=np.int64).tolist()
-                ):
-                    contribution_kwargs = {}
-                    if bucket_uses_compact_pairs:
-                        contribution_kwargs = {
-                            "pair_rotation_row": pair_arrays["local_rotation_row"][
-                                batch_row
-                            ],
-                            "pair_translation_index": pair_arrays["translation_idx"][
-                                batch_row
-                            ],
-                            "pair_mask": pair_mask[batch_row],
-                        }
-                    native_bpref_contributions.append(
-                        _stage_kclass_native_bpref_contribution(
-                            class_index=class_index,
-                            half_local_index=half_local_index,
-                            original_index=int(original_indices[batch_row]),
-                            posterior=mstep_probs[batch_row],
-                            rotations=arrays["mstep_rotations"][batch_row],
-                            actual_rotation_count=int(arrays["actual_counts"][batch_row]),
-                            n_translations=n_fine_trans,
-                            **contribution_kwargs,
-                        )
-                    )
-                _check_kclass_native_bpref_host_limit(
-                    native_bpref_operand_store,
-                    native_bpref_contributions,
-                    native_bpref_max_host_bytes,
-                )
-
             if (
                 bucket_device_signature_requested
                 and _bpref_contribution_class_enabled(class_index)
@@ -20552,12 +19820,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             _add_sparse_group_timing(group_timing, "mstep_weighted_sums", time.time() - substage_t0)
             substage_t0 = time.time()
             mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
-            if kclass_native_bpref_replay:
-                # The existing weighted sums remain authoritative for noise and
-                # posterior statistics. Only their generic reconstruction
-                # scatter is replaced by the ordered native replay below.
-                pass
-            elif active_flat_rows_chunked:
+            if active_flat_rows_chunked:
                 if use_window:
                     Ft_y_total[class_index], Ft_ctf_total[class_index] = (
                         _accumulate_active_flat_rows_adjoint_chunked(
@@ -20732,7 +19995,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                 and bucket_uses_compact_pairs
                 and not reuse_compact_noise_sums
                 and not compact_noise_sums_match_mstep
-                and not kclass_native_bpref_replay
             ):
                 # The compact-pair noise path recomputes weighted image sums with
                 # masked scoring data.  Release the M-step dense weighted-sum
@@ -21246,31 +20508,12 @@ def compute_k_class_pass2_stats_sparse_fused(
             prematmul_grouped_dense_ratio,
         )
 
-    if kclass_native_bpref_replay:
-        if native_bpref_operand_store is None:
-            raise RuntimeError("K-class native BPref replay staged no raw operands")
-        Ft_y_total, Ft_ctf_total = _replay_kclass_firstiter_native_bpref(
-            native_bpref_operand_store,
-            native_bpref_contributions,
-            n_classes=n_classes,
-            recon_volume_size=recon_volume_size,
-            centered_pixel_indices=centered_recon_indices,
-            fftw_pixel_indices=relion_x_half_recon_indices,
-            translation_angles=relion_score_translation_angles,
-            physical_image_shape=image_shape,
-            volume_shape=recon_volume_shape,
-            max_r=float(current_size // 2),
-            current_size=current_size,
-            n_images=n_images,
-            symmetry_label=symmetry_label,
-        )
-
     Ft_y_out = []
     Ft_ctf_out = []
     for class_index in range(n_classes):
         class_Ft_y = Ft_y_total[class_index]
         class_Ft_ctf = Ft_ctf_total[class_index]
-        if use_half_volume_mstep and not kclass_native_bpref_replay:
+        if use_half_volume_mstep:
             _maybe_dump_native_half_mstep(
                 class_Ft_y,
                 class_Ft_ctf,
@@ -21297,17 +20540,14 @@ def compute_k_class_pass2_stats_sparse_fused(
                 stage=f"fused_class{class_index + 1}_post_x0",
             )
             if use_relion_x_half_mstep:
-                class_Ft_y, class_Ft_ctf = (
-                    relion_x_half_accumulators_to_public_layout(
-                        class_Ft_y,
-                        class_Ft_ctf,
-                        recon_volume_shape,
-                    )
+                class_Ft_y, class_Ft_ctf = relion_x_half_accumulators_to_public_layout(
+                    class_Ft_y,
+                    class_Ft_ctf,
+                    recon_volume_shape,
                 )
             else:
                 logger.info(
-                    "Sparse fused K-class pass-2 class %d M-step: keeping "
-                    "native half-volume accumulators",
+                    "Sparse fused K-class pass-2 class %d M-step: keeping native half-volume accumulators",
                     class_index + 1,
                 )
         Ft_y_out.append(np.asarray(jax.device_get(class_Ft_y)))
@@ -21363,18 +20603,6 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_raw_host_staging_peak_bytes": np.int64(raw_host_staging_peak_bytes),
         "sparse_kclass_raw_host_staging_s": np.float64(raw_host_staging_s),
         "sparse_kclass_exact_relion_gaussian": bool(use_exact_relion_gaussian),
-        "sparse_kclass_firstiter_native_bpref_replay": bool(
-            kclass_native_bpref_replay
-        ),
-        "sparse_kclass_firstiter_native_bpref_staged_bytes": np.int64(
-            _kclass_native_bpref_staged_nbytes(
-                native_bpref_operand_store,
-                native_bpref_contributions,
-            )
-        ),
-        "sparse_kclass_firstiter_native_bpref_host_cap_bytes": np.int64(
-            native_bpref_max_host_bytes
-        ),
         "sparse_kclass_compact_pair_check_rows": np.int64(compact_pair_check_rows),
         "sparse_kclass_compact_pair_check_finite_mismatches": np.int64(
             compact_pair_check_finite_mismatches,
