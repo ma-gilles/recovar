@@ -4,9 +4,11 @@
 RELION rejects ``--split_random_halves`` when ``K > 1``.  The matched
 gold-standard construction is therefore two independent K=4 Class3D runs per
 engine, one on each frozen particle half, all starting from the same four
-references.  A RECOVAR K-class process currently writes its combined numbered
-map twice (``half1`` and ``half2``); those replicas are checked but only one is
-used.  They are never reported as independent half maps.
+references.  Each RECOVAR process is likewise bound to one external particle
+half.  RECOVAR still writes both internal-half map slots, so the occupied slot
+is selected only after the result metadata proves that it contains every
+particle and that the other slot contains none.  The unused slot is never
+reported as an independent half map.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from scripts.collect_em_k1_science_diagnostics import (
     fit_proper_rigid_transform,
 )
 
-SCHEMA = "recovar.em_real_kclass_independent_halfmap_audit.v2"
+SCHEMA = "recovar.em_real_kclass_independent_halfmap_audit.v3"
 MANIFEST_SCHEMA = "recovar.em_real_kclass_independent_halfmap_submission.v2"
 ANALYSIS_POLICY_SCHEMA = "recovar.em_real_kclass_halfmap_analysis_policy.v1"
 N_CLASSES = 4
@@ -525,11 +527,13 @@ def _latest_relion_maps(directory: Path, expected_iteration: int) -> list[Path]:
     return [paths[class_id] for class_id in range(1, N_CLASSES + 1)]
 
 
-def _latest_recovar_combined_maps(
+def _latest_recovar_occupied_half_maps(
     directory: Path,
+    results_path: Path,
     expected_iteration: int,
+    expected_particle_count: int,
 ) -> tuple[list[Path], list[dict[str, Any]]]:
-    """Return one representative per class after proving internal duplication."""
+    """Return maps from the sole occupied RECOVAR internal half."""
 
     grouped: dict[tuple[int, int, int], Path] = {}
     for path in directory.glob("it*_half*_class*_reg.mrc"):
@@ -555,31 +559,92 @@ def _latest_recovar_combined_maps(
         observed_final_keys == expected_final_keys,
         "RECOVAR final numbered class topology has missing or extra class IDs",
     )
-    representatives: list[Path] = []
-    duplicates: list[dict[str, Any]] = []
-    for class_id in range(1, N_CLASSES + 1):
-        first = grouped.get((expected_iteration, 1, class_id))
-        second = grouped.get((expected_iteration, 2, class_id))
-        _require(first is not None and second is not None, f"RECOVAR class {class_id} replica topology is incomplete")
-        first_hash = sha256_file(first)
-        second_hash = sha256_file(second)
+    _require(results_path.is_file(), f"missing RECOVAR refinement results: {results_path}")
+    with np.load(results_path, allow_pickle=False) as payload:
+        required_fields = {
+            "n_images",
+            "n_iterations",
+            "half1_indices",
+            "half2_indices",
+            "hard_assignments_half0",
+            "hard_assignments_half1",
+            "final_all_data_ran",
+        }
         _require(
-            first_hash == second_hash,
-            "RECOVAR K-class numbered half labels are not proven combined-map replicas; "
-            f"refusing ambiguous class {class_id} products",
+            required_fields.issubset(payload.files),
+            f"RECOVAR refinement results lack internal-half evidence: {sorted(required_fields - set(payload.files))}",
         )
-        representatives.append(first)
-        duplicates.append(
+        n_images = int(np.asarray(payload["n_images"]).item())
+        n_iterations = int(np.asarray(payload["n_iterations"]).item())
+        final_all_data_ran = bool(np.asarray(payload["final_all_data_ran"]).item())
+        half_indices = [
+            np.asarray(payload["half1_indices"], dtype=np.int64).reshape(-1),
+            np.asarray(payload["half2_indices"], dtype=np.int64).reshape(-1),
+        ]
+        assignment_counts = [
+            int(np.asarray(payload["hard_assignments_half0"]).size),
+            int(np.asarray(payload["hard_assignments_half1"]).size),
+        ]
+    _require(n_images == expected_particle_count, "RECOVAR particle count differs from frozen external half")
+    _require(n_iterations == expected_iteration + 1, "RECOVAR iteration metadata differs from final map index")
+    _require(not final_all_data_ran, "RECOVAR final-all-data output cannot support an independent-half claim")
+    for half_index, indices in enumerate(half_indices, start=1):
+        _require(
+            np.all((indices >= 0) & (indices < n_images)),
+            f"RECOVAR internal half {half_index} has out-of-range particle indices",
+        )
+        _require(
+            len(np.unique(indices)) == indices.size,
+            f"RECOVAR internal half {half_index} repeats particle indices",
+        )
+    _require(
+        np.intersect1d(half_indices[0], half_indices[1]).size == 0,
+        "RECOVAR internal halves overlap",
+    )
+    _require(
+        np.array_equal(
+            np.sort(np.concatenate(half_indices)),
+            np.arange(n_images, dtype=np.int64),
+        ),
+        "RECOVAR internal halves do not cover the external-half particles exactly",
+    )
+    occupied = [index for index, indices in enumerate(half_indices) if indices.size == n_images]
+    _require(
+        len(occupied) == 1 and sorted(indices.size for indices in half_indices) == [0, n_images],
+        "RECOVAR external-half process is not isolated to exactly one internal half",
+    )
+    occupied_index = occupied[0]
+    _require(
+        assignment_counts[occupied_index] == n_images and assignment_counts[1 - occupied_index] == 0,
+        "RECOVAR hard-assignment topology disagrees with internal-half membership",
+    )
+    selected_replica = occupied_index + 1
+    discarded_replica = 2 if selected_replica == 1 else 1
+    representatives: list[Path] = []
+    selections: list[dict[str, Any]] = []
+    for class_id in range(1, N_CLASSES + 1):
+        selected = grouped.get((expected_iteration, selected_replica, class_id))
+        discarded = grouped.get((expected_iteration, discarded_replica, class_id))
+        _require(
+            selected is not None and discarded is not None,
+            f"RECOVAR class {class_id} internal-half topology is incomplete",
+        )
+        representatives.append(selected)
+        selections.append(
             {
                 "class": class_id,
-                "representative": str(first.resolve()),
-                "discarded_replica": str(second.resolve()),
-                "sha256": first_hash,
-                "byte_identical": True,
-                "semantic_role": "combined_Class3D_map_replica_not_independent_halfmap",
+                "selected_internal_half": selected_replica,
+                "selected_map": str(selected.resolve()),
+                "selected_sha256": sha256_file(selected),
+                "selected_particle_count": n_images,
+                "discarded_internal_half": discarded_replica,
+                "discarded_map": str(discarded.resolve()),
+                "discarded_sha256": sha256_file(discarded),
+                "discarded_particle_count": 0,
+                "semantic_role": "occupied_internal_half_of_external_half_process",
             }
         )
-    return representatives, duplicates
+    return representatives, selections
 
 
 def _reject_cross_process_duplicates(paths_by_half: Sequence[Sequence[Path]], *, engine: str) -> None:
@@ -718,16 +783,8 @@ def _hungarian_to_anchor(
     margin = best_objective - second_objective
     objective_scale = max(abs(best_objective), abs(second_objective), np.finfo(np.float64).eps)
     relative_margin = margin / objective_scale
-    _require(
-        margin >= float(min_absolute_margin),
-        f"{label} class assignment absolute objective margin {margin:.9g} is below "
-        f"the frozen minimum {float(min_absolute_margin):.9g}",
-    )
-    _require(
-        relative_margin >= float(min_relative_margin),
-        f"{label} class assignment relative objective margin {relative_margin:.9g} is below "
-        f"the frozen minimum {float(min_relative_margin):.9g}",
-    )
+    absolute_margin_pass = margin >= float(min_absolute_margin)
+    relative_margin_pass = relative_margin >= float(min_relative_margin)
     return list(winner), {
         "objective": best_objective,
         "second_best_objective": second_objective,
@@ -735,6 +792,9 @@ def _hungarian_to_anchor(
         "relative_objective_margin": relative_margin,
         "minimum_absolute_objective_margin": float(min_absolute_margin),
         "minimum_relative_objective_margin": float(min_relative_margin),
+        "absolute_objective_margin_pass": absolute_margin_pass,
+        "relative_objective_margin_pass": relative_margin_pass,
+        "frozen_margin_thresholds_pass": absolute_margin_pass and relative_margin_pass,
         "exact_optimum_count": 1,
         "permutations_exhaustively_checked": math.factorial(N_CLASSES),
     }
@@ -1121,18 +1181,21 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
 
     relion_paths: list[list[Path]] = []
     recovar_paths: list[list[Path]] = []
-    replica_audits: list[list[dict[str, Any]]] = []
+    internal_half_selection_audits: list[list[dict[str, Any]]] = []
     assignment_raw: list[tuple[np.ndarray, np.ndarray, dict[str, Any]]] = []
     performance: dict[str, Any] = {"relion": [], "recovar": []}
     for row in manifest["halves"]:
         relion_dir = Path(row["relion_dir"])
         recovar_dir = Path(row["recovar_dir"])
         relion_paths.append(_latest_relion_maps(relion_dir, expected_iteration))
-        representatives, replica_audit = _latest_recovar_combined_maps(
-            Path(row["recovar_intermediates_dir"]), expected_iteration - 1
+        representatives, selection_audit = _latest_recovar_occupied_half_maps(
+            Path(row["recovar_intermediates_dir"]),
+            recovar_dir / "refinement_results.npz",
+            expected_iteration - 1,
+            int(row["particle_count"]),
         )
         recovar_paths.append(representatives)
-        replica_audits.append(replica_audit)
+        internal_half_selection_audits.append(selection_audit)
         _reject_within_process_duplicates(relion_paths[-1], engine="RELION", half=int(row["half"]))
         _reject_within_process_duplicates(representatives, engine="RECOVAR", half=int(row["half"]))
         assignment_raw.append(
@@ -1213,6 +1276,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "exact_optimum_count": 1,
         }
     }
+    permutation_science_failures: list[str] = []
     for label in ("relion_half2", "recovar_half1", "recovar_half2"):
         matrix = _pairwise_auc(
             calculator,
@@ -1230,6 +1294,14 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
                 manifest["thresholds"]["permutation_objective_margin_rel_min"]
             ),
         )
+        if not permutation_optima[label]["absolute_objective_margin_pass"]:
+            permutation_science_failures.append(
+                f"{label}:class_permutation_absolute_objective_margin"
+            )
+        if not permutation_optima[label]["relative_objective_margin_pass"]:
+            permutation_science_failures.append(
+                f"{label}:class_permutation_relative_objective_margin"
+            )
 
     canonical: dict[str, list[np.ndarray]] = {}
     raw_canonical: dict[str, list[np.ndarray]] = {}
@@ -1296,7 +1368,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
                 )
         classes.append(row)
 
-    science_failures: list[str] = []
+    science_failures: list[str] = list(permutation_science_failures)
     for row in classes:
         metrics, failures = _science_metrics_for_class(
             int(row["canonical_class"]),
@@ -1373,17 +1445,17 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         "voxel_size_angstrom": voxel_size,
         "map_selection_policy": {
             "relion": "run_itNNN_classXXX.mrc from each independent half process",
-            "recovar": "itNNN_half1_classX_reg.mrc representative from each independent half process",
-            "recovar_internal_replica_policy": (
-                "half1/half2 files inside one K-class process must be byte-identical combined-map replicas; "
-                "the second is discarded and never called an independent half map"
+            "recovar": "itNNN_halfH_classX_reg.mrc from the sole occupied internal half of each independent process",
+            "recovar_internal_half_policy": (
+                "refinement_results.npz must prove that exactly one internal half contains every external-half "
+                "particle and the other contains zero; only the occupied maps are selected"
             ),
             "final_all_data_maps_used": False,
             "within_process_duplicate_class_maps_rejected": True,
             "cross_process_duplicate_maps_rejected": True,
             "extra_final_recovar_class_ids_rejected": True,
         },
-        "recovar_internal_replica_audit": replica_audits,
+        "recovar_internal_half_selection_audit": internal_half_selection_audits,
         "alignment": {
             "policy": (
                 "one proper rigid transform per four-class map set, fitted on the label-invariant equal-weight "

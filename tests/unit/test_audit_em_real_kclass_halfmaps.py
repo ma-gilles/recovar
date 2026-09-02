@@ -193,39 +193,80 @@ def test_particle_split_binds_shared_selection_membership_in_origin_order(tmp_pa
         audit.validate_particle_split(manifest)
 
 
-def _write_recovar_maps(root: Path, *, mismatch: bool = False) -> None:
+def _write_recovar_maps(root: Path) -> None:
     root.mkdir()
     for class_id in range(1, 5):
-        payload = f"class-{class_id}".encode()
-        (root / f"it007_half1_class{class_id}_reg.mrc").write_bytes(payload)
-        second = b"different" if mismatch and class_id == 3 else payload
-        (root / f"it007_half2_class{class_id}_reg.mrc").write_bytes(second)
+        (root / f"it007_half1_class{class_id}_reg.mrc").write_bytes(f"occupied-{class_id}".encode())
+        (root / f"it007_half2_class{class_id}_reg.mrc").write_bytes(f"empty-{class_id}".encode())
 
 
-def test_recovar_internal_kclass_half_labels_must_be_identical_replicas(tmp_path: Path) -> None:
-    good = tmp_path / "good"
-    _write_recovar_maps(good)
+def _write_recovar_results(
+    path: Path,
+    *,
+    n_images: int = 5,
+    half_counts: tuple[int, int] = (5, 0),
+    final_all_data_ran: bool = False,
+) -> None:
+    first_count, second_count = half_counts
+    np.savez(
+        path,
+        n_images=np.asarray(n_images),
+        n_iterations=np.asarray(8),
+        half1_indices=np.arange(first_count, dtype=np.int64),
+        half2_indices=np.arange(first_count, first_count + second_count, dtype=np.int64),
+        hard_assignments_half0=np.zeros(first_count, dtype=np.int32),
+        hard_assignments_half1=np.zeros(second_count, dtype=np.int32),
+        final_all_data_ran=np.asarray(final_all_data_ran),
+    )
 
-    paths, rows = audit._latest_recovar_combined_maps(good, 7)
+
+def test_recovar_selects_only_metadata_proven_occupied_internal_half(tmp_path: Path) -> None:
+    maps = tmp_path / "maps"
+    results = tmp_path / "results.npz"
+    _write_recovar_maps(maps)
+    _write_recovar_results(results)
+
+    paths, rows = audit._latest_recovar_occupied_half_maps(maps, results, 7, 5)
 
     assert len(paths) == 4
-    assert all(row["byte_identical"] for row in rows)
-    assert all("not_independent_halfmap" in row["semantic_role"] for row in rows)
+    assert all("_half1_" in path.name for path in paths)
+    assert all(row["selected_internal_half"] == 1 for row in rows)
+    assert all(row["selected_particle_count"] == 5 for row in rows)
+    assert all(row["discarded_particle_count"] == 0 for row in rows)
 
-    bad = tmp_path / "bad"
-    _write_recovar_maps(bad, mismatch=True)
-    with pytest.raises(audit.AuditError, match="refusing ambiguous class 3"):
-        audit._latest_recovar_combined_maps(bad, 7)
+
+def test_recovar_can_select_second_internal_half_when_metadata_proves_it(tmp_path: Path) -> None:
+    maps = tmp_path / "maps"
+    results = tmp_path / "results.npz"
+    _write_recovar_maps(maps)
+    _write_recovar_results(results, half_counts=(0, 5))
+
+    paths, rows = audit._latest_recovar_occupied_half_maps(maps, results, 7, 5)
+
+    assert all("_half2_" in path.name for path in paths)
+    assert all(row["selected_internal_half"] == 2 for row in rows)
+
+
+def test_recovar_rejects_process_with_two_populated_internal_halves(tmp_path: Path) -> None:
+    maps = tmp_path / "maps"
+    results = tmp_path / "results.npz"
+    _write_recovar_maps(maps)
+    _write_recovar_results(results, n_images=5, half_counts=(3, 2))
+
+    with pytest.raises(audit.AuditError, match="not isolated to exactly one internal half"):
+        audit._latest_recovar_occupied_half_maps(maps, results, 7, 5)
 
 
 def test_recovar_final_topology_rejects_extra_class_ids(tmp_path: Path) -> None:
     root = tmp_path / "extra"
+    results = tmp_path / "results.npz"
     _write_recovar_maps(root)
+    _write_recovar_results(results)
     for replica in (1, 2):
         (root / f"it007_half{replica}_class5_reg.mrc").write_bytes(b"extra")
 
     with pytest.raises(audit.AuditError, match="missing or extra class IDs"):
-        audit._latest_recovar_combined_maps(root, 7)
+        audit._latest_recovar_occupied_half_maps(root, results, 7, 5)
 
 
 def test_cross_process_duplicate_maps_are_rejected(tmp_path: Path) -> None:
@@ -293,21 +334,24 @@ def test_class_matching_requires_unique_exact_optimum_and_records_margin() -> No
     near_tie[1, 1] += 1.0e-14
     near_tie[0, 1] = 1.0
     near_tie[1, 0] = 1.0
-    with pytest.raises(audit.AuditError, match="absolute objective margin"):
-        audit._hungarian_to_anchor(
-            near_tie,
-            label="near-tied",
-            min_absolute_margin=0.01,
-            min_relative_margin=0.0025,
-        )
+    _, near_tie_metadata = audit._hungarian_to_anchor(
+        near_tie,
+        label="near-tied",
+        min_absolute_margin=0.01,
+        min_relative_margin=0.0025,
+    )
+    assert near_tie_metadata["absolute_objective_margin_pass"] is False
+    assert near_tie_metadata["frozen_margin_thresholds_pass"] is False
 
-    with pytest.raises(audit.AuditError, match="relative objective margin"):
-        audit._hungarian_to_anchor(
-            scores,
-            label="relative-margin",
-            min_absolute_margin=0.0,
-            min_relative_margin=0.99,
-        )
+    _, relative_metadata = audit._hungarian_to_anchor(
+        scores,
+        label="relative-margin",
+        min_absolute_margin=0.0,
+        min_relative_margin=0.99,
+    )
+    assert relative_metadata["absolute_objective_margin_pass"] is True
+    assert relative_metadata["relative_objective_margin_pass"] is False
+    assert relative_metadata["frozen_margin_thresholds_pass"] is False
 
 
 def _analysis_args(tmp_path: Path, *extra: str):
