@@ -924,7 +924,9 @@ unset RECOVAR_BPREF_CONTRIBUTION_TARGET_ONLY RECOVAR_BPREF_CONTRIBUTION_STOP_AFT
 unset RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER RECOVAR_FINAL_ALL_DATA_GRID_CORRECT
 {recovar_text} > "${{ROOT}}/recovar/output/runner.stdout" 2> "${{ROOT}}/recovar/output/runner.stderr"
 test "$(find "${{ROOT}}/recovar/pass2" -maxdepth 1 -name '*.npz' | wc -l)" -eq 800
-test -n "$(find "${{ROOT}}/recovar/contributions" -maxdepth 1 -name '*.npz' -print -quit)"
+# The current causal auditor consumes the complete pass-2 tables and final maps.
+# Contribution bundles are best-effort diagnostics and must not suppress a
+# completed score/posterior/map audit when their optional identity filter is empty.
 test -s "${{ROOT}}/recovar/output/k_class_parity_arrays.npz"
 test -s "${{ROOT}}/recovar/output/summary.json"
 

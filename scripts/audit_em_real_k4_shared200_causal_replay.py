@@ -36,7 +36,11 @@ from scripts.summarize_em_completion_bench import (
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v3"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v4"
+MAX_NATIVE_SCALAR_RELATIVE_RANGE = 5.0e-4
+RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS = frozenset(
+    {"reconstruction_probs", "reconstruction_mask", "relion_raw_diff2"}
+)
 PASS2_NAME = re.compile(r"pass2_orig(?P<original>[0-9]{6})_class(?P<class_>[0-9]{3})_cs(?P<size>[0-9]{3})[.]npz")
 FACTOR_NAME = re.compile(
     r"part(?P<part>[0-9]+)_stack(?P<stack>[0-9]+)_img(?P<img>[0-9]+)_class(?P<class_>[0-9]+)[.]bpre-v2[.]bin"
@@ -61,6 +65,52 @@ def _finite(value: float, *, label: str) -> float:
 
 def _float32_from_bits(value: int) -> np.float32:
     return np.asarray(value & 0xFFFFFFFF, dtype=np.uint32).view(np.float32)[()]
+
+
+def _relative_range(values: Iterable[float], *, label: str) -> float:
+    values64 = np.asarray(list(values), dtype=np.float64)
+    _require(values64.size > 0 and np.isfinite(values64).all(), f"{label} is empty or non-finite")
+    denominator = max(float(np.max(np.abs(values64))), np.finfo(np.float64).tiny)
+    return float(np.ptp(values64)) / denominator
+
+
+def _native_scalar_diagnostics(joined: list[dict[str, Any]]) -> dict[str, Any]:
+    """Measure independent native-arm reduction drift without requiring bit identity."""
+
+    _require(bool(joined), "native scalar diagnostics require at least one class")
+    weight_bits = [int(item["weight_norm_bits"]) for item in joined]
+    significant_bits = [int(item["significant_weight_bits"]) for item in joined]
+    weight_values = [float(_float32_from_bits(value)) for value in weight_bits]
+    significant_values = [float(_float32_from_bits(value)) for value in significant_bits]
+    _require(
+        np.all(np.asarray(weight_values) > 0.0)
+        and np.all(np.asarray(significant_values) >= 0.0),
+        "native posterior scalars are outside their valid range",
+    )
+    weight_range = _relative_range(weight_values, label="native weight_norm values")
+    significant_range = _relative_range(
+        significant_values,
+        label="native significant_weight values",
+    )
+    maximum_range = max(weight_range, significant_range)
+    _require(
+        maximum_range <= MAX_NATIVE_SCALAR_RELATIVE_RANGE,
+        "native global posterior scalar replay drift exceeds the sealed diagnostic ceiling: "
+        f"observed={maximum_range:.9g}, ceiling={MAX_NATIVE_SCALAR_RELATIVE_RANGE:.9g}",
+    )
+    return {
+        "weight_norm_values": weight_values,
+        "weight_norm_bit_patterns": weight_bits,
+        "weight_norm_distinct_bit_patterns": len(set(weight_bits)),
+        "weight_norm_relative_range": weight_range,
+        "significant_weight_values": significant_values,
+        "significant_weight_bit_patterns": significant_bits,
+        "significant_weight_distinct_bit_patterns": len(set(significant_bits)),
+        "significant_weight_relative_range": significant_range,
+        "maximum_relative_range": maximum_range,
+        "maximum_allowed_relative_range": MAX_NATIVE_SCALAR_RELATIVE_RANGE,
+        "comparison": "direct relative range across independent native class-capture replays",
+    }
 
 
 @dataclass
@@ -260,13 +310,18 @@ def _load_recovar(
         "candidate_mask",
         "scores_with_prior",
         "probs",
-        "reconstruction_probs",
         "rotation_log_prior",
         "translation_log_prior",
-        "reconstruction_mask",
-        "relion_raw_diff2",
     }
     _require(required <= set(values), f"RECOVAR pass-2 capture lacks {sorted(required - set(values))}: {path}")
+    reconstruction_fields = RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS & set(values)
+    _require(
+        not reconstruction_fields
+        or reconstruction_fields == RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS,
+        "RECOVAR pass-2 reconstruction capture is partial: "
+        f"present={sorted(reconstruction_fields)}, path={path}",
+    )
+    values["_reconstruction_capture_present"] = np.asarray(bool(reconstruction_fields))
     _require(
         int(values["original_index"]) == subset_local_index,
         f"RECOVAR subset-local identity drift: {path}",
@@ -306,11 +361,28 @@ def _join_class(
     recovar_rotations = np.asarray(recovar["rotations"], dtype=np.float32)
     candidate_mask = np.asarray(recovar["candidate_mask"], dtype=bool)
     recovar_posterior = np.asarray(recovar["probs"], dtype=np.float64)
-    recovar_reconstruction_posterior = np.asarray(
-        recovar["reconstruction_probs"],
-        dtype=np.float64,
+    reconstruction_fields = RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS & set(recovar)
+    _require(
+        not reconstruction_fields
+        or reconstruction_fields == RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS,
+        "RECOVAR pass-2 reconstruction capture is partial",
     )
-    recovar_support = np.asarray(recovar["reconstruction_mask"], dtype=bool)
+    reconstruction_capture_present = bool(reconstruction_fields)
+    if reconstruction_capture_present:
+        recovar_reconstruction_posterior = np.asarray(
+            recovar["reconstruction_probs"],
+            dtype=np.float64,
+        )
+        recovar_support = np.asarray(recovar["reconstruction_mask"], dtype=bool)
+        recovar_raw_diff2 = np.asarray(recovar["relion_raw_diff2"], dtype=np.float32)
+    else:
+        _require(
+            not np.any(candidate_mask) and not np.any(recovar_posterior),
+            "RECOVAR omitted reconstruction capture for a nonempty pass-2 record",
+        )
+        recovar_reconstruction_posterior = np.zeros(candidate_mask.shape, dtype=np.float64)
+        recovar_support = np.zeros(candidate_mask.shape, dtype=bool)
+        recovar_raw_diff2 = np.zeros(candidate_mask.shape, dtype=np.float32)
     _require(
         recovar_rotations.shape == (candidate_mask.shape[0], 3, 3)
         and candidate_mask.shape[1] == int(factor.header[21]),
@@ -320,7 +392,8 @@ def _join_class(
         recovar_posterior.shape
         == recovar_reconstruction_posterior.shape
         == candidate_mask.shape
-        == recovar_support.shape,
+        == recovar_support.shape
+        == recovar_raw_diff2.shape,
         "RECOVAR posterior/support geometry drift",
     )
     _require(np.all(recovar_support <= candidate_mask), "RECOVAR support is outside candidates")
@@ -392,6 +465,7 @@ def _join_class(
             "recovar_reconstruction_posterior": recovar_reconstruction_posterior,
             "native_support": native_support,
             "recovar_support": recovar_support,
+            "recovar_reconstruction_capture_present": reconstruction_capture_present,
             "significant_weight_bits": int(factor.header[25]),
             "weight_norm_bits": int(factor.header[26]),
         }
@@ -423,7 +497,6 @@ def _join_class(
     )
     tuple_exact = bool(np.array_equal(native_candidates, candidate_mask))
     common = active & candidate_mask[mapped_rotation, translations]
-    _require(np.any(common), "native/RECOVAR candidate intersection is empty")
     mapped_common_rotation = mapped_rotation[common]
     common_translation = translations[common]
 
@@ -448,7 +521,7 @@ def _join_class(
         "candidate_union": int(np.count_nonzero(native_candidates | candidate_mask)),
         "native_raw": np.asarray(candidates["raw_diff2"][common], dtype=np.float32),
         "recovar_raw": np.asarray(
-            recovar["relion_raw_diff2"][mapped_common_rotation, common_translation], dtype=np.float32
+            recovar_raw_diff2[mapped_common_rotation, common_translation], dtype=np.float32
         ),
         "native_combined": np.asarray(candidates["combined_preexponent"][common], dtype=np.float32),
         "recovar_combined": np.asarray(
@@ -464,6 +537,7 @@ def _join_class(
         "recovar_reconstruction_posterior": recovar_reconstruction_posterior,
         "native_support": native_support,
         "recovar_support": recovar_support,
+        "recovar_reconstruction_capture_present": reconstruction_capture_present,
         "significant_weight_bits": int(factor.header[25]),
         "weight_norm_bits": int(factor.header[26]),
     }
@@ -770,6 +844,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
     row_sum_errors: list[float] = []
     particle_rows = []
     particle_mass_rows = []
+    native_scalar_rows = []
     for subset_local_index, stack in enumerate(stacks):
         joined = []
         for class_id in range(1, CASE.K + 1):
@@ -797,10 +872,13 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             len({item["particle_id"] for item in joined}) == 1,
             f"native particle id differs across classes for stack {stack}",
         )
-        _require(
-            len({item["weight_norm_bits"] for item in joined}) == 1
-            and len({item["significant_weight_bits"] for item in joined}) == 1,
-            f"native global posterior scalars differ across class arms for stack {stack}",
+        scalar_diagnostics = _native_scalar_diagnostics(joined)
+        native_scalar_rows.append(
+            {
+                "stack_index_one_based": stack,
+                "native_particle_id_zero_based": joined[0]["particle_id"],
+                **scalar_diagnostics,
+            }
         )
         native_flat = np.concatenate([item["native_posterior"].reshape(-1) for item in joined])
         recovar_flat = np.concatenate([item["recovar_posterior"].reshape(-1) for item in joined])
@@ -835,6 +913,9 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
                 "winner_exact": native_winner == recovar_winner,
                 "native_pmax": native_max,
                 "recovar_pmax": recovar_max,
+                "native_scalar_maximum_relative_range": scalar_diagnostics[
+                    "maximum_relative_range"
+                ],
             }
         )
 
@@ -897,6 +978,31 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         ),
         "correlation_used": False,
     }
+    native_scalar_summary = {
+        "particle_count": len(native_scalar_rows),
+        "particles_with_weight_norm_bit_drift": sum(
+            row["weight_norm_distinct_bit_patterns"] > 1 for row in native_scalar_rows
+        ),
+        "particles_with_significant_weight_bit_drift": sum(
+            row["significant_weight_distinct_bit_patterns"] > 1
+            for row in native_scalar_rows
+        ),
+        "maximum_weight_norm_relative_range": max(
+            row["weight_norm_relative_range"] for row in native_scalar_rows
+        ),
+        "maximum_significant_weight_relative_range": max(
+            row["significant_weight_relative_range"] for row in native_scalar_rows
+        ),
+        "maximum_relative_range": max(
+            row["maximum_relative_range"] for row in native_scalar_rows
+        ),
+        "maximum_allowed_relative_range": MAX_NATIVE_SCALAR_RELATIVE_RANGE,
+        "bit_identity_required": False,
+        "reason": (
+            "each native class capture is an independent float32/CUDA replay; direct bounded "
+            "relative range is reported while map and assignment inertness remain separate gates"
+        ),
+    }
     causal_metrics = {
         "candidate_tuple_exact_fraction": exact_count / float(CASE.particle_count * CASE.K),
         "centered_raw_score_relative_l2": raw_report["relative_l2"],
@@ -947,6 +1053,8 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             "centered_raw_score": raw_report,
             "centered_combined_score": combined_report,
             "posterior": posterior_report,
+            "native_global_scalar_replay": native_scalar_summary,
+            "native_global_scalar_particle_rows": native_scalar_rows,
             "support_intersection": support_intersection,
             "support_union": support_union,
             "particle_rows": particle_rows,

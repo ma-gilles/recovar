@@ -70,6 +70,50 @@ def test_centered_error_accumulator_removes_only_scalar_offset():
     assert changed.report()["relative_l2"] > 0.0
 
 
+def test_native_scalar_diagnostics_reports_bounded_cross_replay_drift():
+    joined = [
+        {
+            "weight_norm_bits": _bits(100.0 + offset),
+            "significant_weight_bits": _bits(0.25 + offset / 400.0),
+        }
+        for offset in (0.0, 0.005, 0.01, 0.002)
+    ]
+
+    report = auditor._native_scalar_diagnostics(joined)
+
+    assert report["weight_norm_distinct_bit_patterns"] == 4
+    assert report["significant_weight_distinct_bit_patterns"] == 4
+    assert 0.0 < report["maximum_relative_range"] < auditor.MAX_NATIVE_SCALAR_RELATIVE_RANGE
+    assert report["maximum_allowed_relative_range"] == auditor.MAX_NATIVE_SCALAR_RELATIVE_RANGE
+
+    joined[-1]["weight_norm_bits"] = _bits(101.0)
+    with pytest.raises(auditor.AuditError, match="exceeds the sealed diagnostic ceiling"):
+        auditor._native_scalar_diagnostics(joined)
+
+
+def test_load_recovar_allows_absent_empty_enrichment_but_rejects_partial(tmp_path):
+    path = tmp_path / "pass2.npz"
+    base = {
+        "original_index": np.asarray(3),
+        "class_index": np.asarray(1),
+        "current_size": np.asarray(auditor.CASE.current_size),
+        "rotations": np.eye(3, dtype=np.float32)[None, ...],
+        "candidate_mask": np.zeros((1, 2), dtype=bool),
+        "scores_with_prior": np.zeros((1, 2), dtype=np.float32),
+        "probs": np.zeros((1, 2), dtype=np.float32),
+        "rotation_log_prior": np.zeros(1, dtype=np.float32),
+        "translation_log_prior": np.zeros(2, dtype=np.float32),
+    }
+    np.savez(path, **base)
+
+    values = auditor._load_recovar(path, subset_local_index=3, class_id=2)
+    assert not bool(values["_reconstruction_capture_present"])
+
+    np.savez(path, **base, reconstruction_probs=np.zeros((1, 2), dtype=np.float32))
+    with pytest.raises(auditor.AuditError, match="reconstruction capture is partial"):
+        auditor._load_recovar(path, subset_local_index=3, class_id=2)
+
+
 def test_particle_mass_diagnostics_normalizes_once_across_every_class():
     joined = []
     for class_id, native, recovar, native_support, recovar_support in (
@@ -161,6 +205,7 @@ def test_empty_sparse_support_join_requires_matching_explicit_sentinels(monkeypa
         "probs": np.zeros((1, 2), dtype=np.float64),
         "reconstruction_probs": np.zeros((1, 2), dtype=np.float64),
         "reconstruction_mask": np.zeros((1, 2), dtype=bool),
+        "relion_raw_diff2": np.zeros((1, 2), dtype=np.float32),
     }
     monkeypatch.setattr(auditor, "load_factor_capture", lambda _path: factor)
     monkeypatch.setattr(auditor, "load_fine_score_capture", lambda _path: score)
@@ -226,6 +271,7 @@ def test_empty_sparse_support_join_rejects_nonzero_recovar_mass(monkeypatch, tmp
         "probs": np.asarray([[0.25, 0.0]], dtype=np.float64),
         "reconstruction_probs": np.zeros((1, 2), dtype=np.float64),
         "reconstruction_mask": np.zeros((1, 2), dtype=bool),
+        "relion_raw_diff2": np.zeros((1, 2), dtype=np.float32),
     }
     monkeypatch.setattr(auditor, "_load_recovar", lambda *_args, **_kwargs: recovar)
 
@@ -238,6 +284,72 @@ def test_empty_sparse_support_join_rejects_nonzero_recovar_mass(monkeypatch, tmp
             score_path=tmp_path / "score.bin",
             pass2_path=tmp_path / "pass2.npz",
         )
+
+
+def test_nonempty_native_join_reports_disjoint_empty_recovar_candidate_set(monkeypatch, tmp_path):
+    factor_header = [0] * 64
+    factor_header[9:13] = [1, 1, 116, 17]
+    factor_header[21] = 2
+    factor_header[25] = _bits(0.25)
+    factor_header[26] = _bits(1.0)
+    factor_header[45] = 1
+    rotations = np.zeros(1, dtype=[("matrix", "<f4", (9,))])
+    rotations["matrix"] = np.eye(3, dtype=np.float32).reshape(1, 9)
+    factor = SimpleNamespace(
+        geometry_only=True,
+        empty_sparse_support=False,
+        header=tuple(factor_header),
+        rotations=rotations,
+    )
+    score_header = [0] * 48
+    score_header[4:8] = [1, 1, 116, 17]
+    candidate_dtype = np.dtype(
+        [
+            ("flags", "<u4"),
+            ("rotation_local", "<i4"),
+            ("translation_id", "<i4"),
+            ("post_exponent_weight", "<f4"),
+            ("raw_diff2", "<f4"),
+            ("combined_preexponent", "<f4"),
+        ]
+    )
+    candidates = np.zeros(1, dtype=candidate_dtype)
+    candidates["flags"] = auditor.ACTIVE
+    candidates["rotation_local"] = 0
+    candidates["translation_id"] = 1
+    candidates["post_exponent_weight"] = 1.0
+    score = SimpleNamespace(
+        empty_sparse_support=False,
+        header=tuple(score_header),
+        candidates=candidates,
+    )
+    recovar = {
+        "rotations": np.eye(3, dtype=np.float32)[None, ...],
+        "candidate_mask": np.zeros((1, 2), dtype=bool),
+        "probs": np.zeros((1, 2), dtype=np.float64),
+        "scores_with_prior": np.zeros((1, 2), dtype=np.float32),
+    }
+    monkeypatch.setattr(auditor, "load_factor_capture", lambda _path: factor)
+    monkeypatch.setattr(auditor, "load_fine_score_capture", lambda _path: score)
+    monkeypatch.setattr(auditor, "_load_recovar", lambda *_args, **_kwargs: recovar)
+
+    joined = auditor._join_class(
+        stack=17,
+        subset_local_index=0,
+        class_id=1,
+        factor_path=tmp_path / "factor.bin",
+        score_path=tmp_path / "score.bin",
+        pass2_path=tmp_path / "pass2.npz",
+    )
+
+    assert joined["empty_sparse_support"] is False
+    assert joined["candidate_exact"] is False
+    assert joined["candidate_intersection"] == 0
+    assert joined["candidate_union"] == 1
+    assert joined["native_raw"].size == joined["recovar_raw"].size == 0
+    assert joined["native_posterior"][0, 1] == pytest.approx(1.0)
+    assert not np.any(joined["recovar_posterior"])
+    assert joined["recovar_reconstruction_capture_present"] is False
 
 
 def test_exact_keyed_paths_rejects_duplicate_and_missing(tmp_path):

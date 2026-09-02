@@ -316,6 +316,8 @@ def test_rendered_sbatch_is_single_gpu_nonexclusive_and_runs_all_arms(tmp_path):
     assert "RELION_BPRE_CAPTURE_MAX_PARTICLES_PER_RANK=200" in script
     assert "RELION_BPRE_CAPTURE_EXPECTED_FOLLOWERS=1" in script
     assert "RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR" in script
+    assert 'test -n "$(find "${ROOT}/recovar/contributions"' not in script
+    assert "Contribution bundles are best-effort diagnostics" in script
     assert "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE=1" in script
     assert "RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY" in script
     assert f"RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256={launcher.EXPECTED_PARTICLE_STACK_SHA256}" in script
