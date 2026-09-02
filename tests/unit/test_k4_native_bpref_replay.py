@@ -140,7 +140,7 @@ def test_k4_native_bpref_raw_operands_are_staged_once_bitwise():
         )
 
 
-def test_k4_native_bpref_raw_operand_builder_preserves_native_units(monkeypatch):
+def test_k4_native_bpref_raw_operand_builder_restores_relion_ctf_sign(monkeypatch):
     source_batch = np.arange(8, dtype=np.float32).reshape(2, 4)
     raw_half = np.asarray(
         [
@@ -197,7 +197,7 @@ def test_k4_native_bpref_raw_operand_builder_preserves_native_units(monkeypatch)
         noise.astype(np.float64) / np.float64(16.0)
     ).astype(np.float32)
     np.testing.assert_array_equal(np.asarray(image), expected_image)
-    np.testing.assert_array_equal(np.asarray(ctf), source_ctf.astype(np.float32))
+    np.testing.assert_array_equal(np.asarray(ctf), -source_ctf.astype(np.float32))
     np.testing.assert_array_equal(np.asarray(minvsigma2), expected_noise)
     assert np.asarray(image).dtype == np.complex64
     assert np.asarray(ctf).dtype == np.float32

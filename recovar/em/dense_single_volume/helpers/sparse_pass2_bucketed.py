@@ -12642,7 +12642,12 @@ def _prepare_relion_native_bpref_raw_operands(
             raw_image_half * np.float32(1.0 / fft_size),
             dtype=jnp.complex64,
         ),
-        jnp.asarray(ctf_half_rfloat, dtype=jnp.float32),
+        # ``_relion_exact_ctf_half_from_source_star`` deliberately exposes
+        # RECOVAR's forward-model sign.  BP.cuh consumes RELION's native CTF
+        # sign and the split-accumulator normalization converts it back to
+        # RECOVAR's public convention.  Feeding the already converted sign
+        # here therefore negates every reconstructed class.
+        -jnp.asarray(ctf_half_rfloat, dtype=jnp.float32),
         jnp.reciprocal(
             jnp.asarray(noise_variance_half, dtype=jnp.float64)
             / np.float64(fft_size * fft_size)
