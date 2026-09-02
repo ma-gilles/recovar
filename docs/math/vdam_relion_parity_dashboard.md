@@ -13,14 +13,14 @@
 | Full GF46 trajectory | **COMPLETE — 1.84x FASTER, SCIENCE DIVERGES** | Job `13354357` completed iterations `0 -> 200`: wall `2826.410 -> 1538.248 s`, expectation `2734.236 -> 1445.572 s`, and peak RSS `17673 -> 17681 MiB`. The first direct/hybrid discrete split is iteration 35; an independent direct repeat first splits at iteration 76. This is diagnostic, not a correctness pass. |
 | Same-state iteration 35 | **EXACT DECISIONS / ATOMIC-SCALE CONTINUOUS NOISE** | Job `13358712` deep-copied one exact live iteration-34 state into an ABBA panel. Every particle/pose/translation/class/posterior/significance field and all 200 exact support-ID rows agree across direct and hybrid; aggregate support SHA-256 is identical. Cross-backend reconstruction deltas are the same scale as direct/direct and hybrid/hybrid atomic-repeat noise. |
 | Root cause closed | **SHARED EM/DIRECT OPERANDS** | The pre-fix hybrid cache used `mask_current_image_disk=False` while mature EM/direct used `True`. Commit `e9a8e8256` now routes both through one shared projection helper; the previous 405 pose-assignment mismatches fell to **0 / 1,000**. |
-| Performance decomposition | **PASS 1 FIXED; PASS 2 / SHAPE CHURN NEXT** | Across 200 iterations, coarse pass 1 improves `1787.367 -> 493.504 s` (**3.62x**), while pass 2 is flat at `829.611 -> 834.388 s`. About `413 s` lies above shape-local timing floors. The active implementation is the mature shared EM fixed-capacity local executor, currently wired only for call 0. |
+| Performance decomposition | **PASS 1 FIXED; SHARED MULTI-CALL SEAM EXACT** | Across 200 iterations, coarse pass 1 improves `1787.367 -> 493.504 s` (**3.62x**), while pass 2 is flat at `829.611 -> 834.388 s`. About `413 s` lies above shape-local timing floors. H100 job `13359718` now routes every sealed fixed-capacity call through the same mature EM wrapper with bitwise-exact inputs and outputs; collapsing those calls into one numeric boundary is next. |
 | Numerical classification | **NO HYBRID-SPECIFIC ERROR AT SAME STATE** | The full trajectory is sensitive to accumulated ordinary reconstruction perturbations. This explains the observed split but does not make the trajectory stable or release-ready; multi-basin stability remains a correctness requirement. |
 | Focused regression | **126 / 126 PASS** | Hybrid score/support, selector, InitialModel adapter, shared projection, transition analyzer/harness, and focused contracts pass. No broad RECOVAR suite was run. |
 
 ### Immediate queue
 
-1. Generalize the shared EM fixed-capacity local view from call 0 to every sealed chronological call, with poison-tail and operand-identity tests.
-2. Put the mature local score/reconstruction loop behind one fixed-shape execution boundary and benchmark it on the same-state H100 gate.
+1. Put the mature local score/reconstruction loop behind one fixed-shape execution boundary, now that all-call chronology and operand identity are H100-sealed.
+2. Benchmark the boundary on the same-state H100 gate and retain it only for a material local/end-to-end gain with exact support and decisions.
 3. Remove the remaining coarse-pass shape/JIT churn, then rerun the representative trajectory and quantify basin stability rather than demanding impossible bitwise atomic identity.
 4. Expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
 
@@ -190,6 +190,7 @@ release gate.
 | GF46 integrated-hybrid one-transition seal | Source `85c4b13bf5f7b975ea4504750fe8495556e6030c`; job `13344325`; H100 `GPU-75c2d200-95d1-ef57-fb52-1698386c756c`; report JSON SHA-256 `10649aa2916269335f7615d399c0a3388bf722a49a0223b6f2acc7a863535351`; [report](../perf/vdam_gf46_hybrid_transition_h100_13344325.md). |
 | GF46 integrated-hybrid full trajectory | Harness source `c5910f956db6c8a0706d91acfb78b456dbdce64f`, production candidate `e0c1d1746570e64bad3618b09a50be31b79ebe60`, job `13354357`, H100 `GPU-97adb339-219f-d72d-11c9-74dc92fcff8c`, source manifest SHA-256 `9f728182a2c963974697ca06f52db9804282cbe42714c0c1bc27f9c2c575f048`. |
 | GF46 same-state iteration-35 boundary | Source `2fc852da7a408d32dd0142fb177371de0407c552`, job `13358712`, H100 `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, report JSON SHA-256 `a3809404cf10f5c4dd473c3a09795189cc07c543fb3b7d9d89b8fc892c3e7153`; [report](../perf/vdam_hybrid_same_state_it35_h100_13358712.md). |
+| Shared fixed-capacity multi-call seam | Source `231a0191cc17615fe97eef9a3894b93a824f5a64`, job `13359718`, H100 `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`, source manifest SHA-256 `eb668b8bb28adb7ade5aefb9ec73f8bb8bfc85bc76eb5209035838286a528c3f`, result SHA-256 `96374d0c934f870f6f20ef0edf38c3ab4dc924fcea5cf0879e3abce19c2fc840`; [report](../perf/fixed_capacity_local_multicall_h100_13359718.md). |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`
