@@ -212,7 +212,11 @@ capture-inertness gate, and exact likelihood/prior score swaps are documented
 in `real_k4_native_coarse_score_boundary_20260902.md`. The next bounded
 component replay, including the rejected in-kernel observer and accepted
 off-production-path capture, is documented in
-`real_k4_native_coarse_component_boundary_20260902.md`.
+`real_k4_native_coarse_component_boundary_20260902.md`. The three-repeat
+class-resolved operand factorial that excludes the shifted image, correction,
+Euler bridge, and translation phase and localizes the first material difference
+to the projected reference is documented in
+`real_k4_native_coarse_operand_boundary_20260902.md`.
 
 ## Repeating the K-class robustness panel
 

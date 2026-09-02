@@ -1,0 +1,146 @@
+{
+  "schema": "recovar.em_real_k4_native_coarse_operand_diagnostic.v1",
+  "recorded_at": "2026-09-02",
+  "admission_status": "DIAGNOSTIC_ONLY",
+  "accepted_result": false,
+  "dataset": "EMPIAR-10076 frozen shared-200 InitialModel fixture",
+  "scope": {
+    "K": 4,
+    "iteration": 1,
+    "current_size": 20,
+    "particle_records": 16,
+    "classes": 4,
+    "rotations": 576,
+    "translations": 29,
+    "candidate_values": 1069056
+  },
+  "source": {
+    "relion_capture_commit": "b061776eae1ea67f2ab01da2c1575137d3d2221a",
+    "relion_capture_tree": "b5d69080c2c40deef03a165f1164364d334fffb0",
+    "relion_capture_checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_coarse_components_20260902",
+    "relion_binary": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_coarse_components_build_20260902/build/bin/relion_refine",
+    "relion_binary_sha256": "cce955d739c30dc0ac8be3a04c5da2008f252b6dd5d86e7b11120e5e2957cd67",
+    "recovar_operand_commit": "24317e40cc4b0b19406f75c917857c03869a9372",
+    "analysis_commit": "ffff56e0de676ba2e10ce65d50c6030795f4d939",
+    "analysis_script": "scripts/analyze_em_real_k4_native_coarse_operands.py",
+    "operand_validator": "scripts/validate_relion_k4_coarse_operand_capture.py",
+    "repeatability_script": "scripts/audit_relion_k4_coarse_operand_repeatability.py"
+  },
+  "execution": {
+    "repeat_jobs": [
+      {
+        "job_id": "13334583",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_seconds": 72,
+        "node": "della-h19g1",
+        "max_rss_kib": 1545584,
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_operands_deferred_r1_b061776_20260902",
+        "sbatch_sha256": "d37c46dbf50fc7ce14ecdc854db61d505b12b011933715bb1a9a8042d3711c1c"
+      },
+      {
+        "job_id": "13334584",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_seconds": 78,
+        "node": "della-h19g2",
+        "max_rss_kib": 1544576,
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_operands_deferred_r2_b061776_20260902",
+        "sbatch_sha256": "5fec4706abd6ff95a7689947865184dc972fd1d27f505b651d0c23d895c0aaff"
+      },
+      {
+        "job_id": "13334585",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed_seconds": 78,
+        "node": "della-h19g2",
+        "max_rss_kib": 1544516,
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_operands_deferred_r3_b061776_20260902",
+        "sbatch_sha256": "1daad963a33a409901012f632909df8cc2f36a6cff0c2a98f980df31e6427012"
+      }
+    ],
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "cpus_per_job": 8,
+    "memory_gb_per_job": 192,
+    "all_req_tres_equal_alloc_tres": true,
+    "exclusive": false,
+    "formal_engine_performance_result": false,
+    "performance_reason": "These bounded paired capture/control jobs qualify causal instrumentation; they are not matched complete engine trajectories."
+  },
+  "capture_validation": {
+    "capture_ready": true,
+    "artifact_files_per_repeat": 64,
+    "particle_files": 16,
+    "candidate_records": 1069056,
+    "production_diff2_dtype": "float32",
+    "captured_operand_dtype": "complex64"
+  },
+  "capture_repeatability": {
+    "status": "PASS",
+    "classification": "coarse_operand_capture_repeatably_inert_at_recorded_floor",
+    "repeat_count": 3,
+    "passed_repeats": 3,
+    "iteration_1_decision_exact_repeats": 3,
+    "map_fsc_auc_floor": 0.999999,
+    "map_relative_l2_ceiling": 0.00001,
+    "class_map_fsc_auc_minimum": 0.9999999963909805,
+    "class_map_relative_l2_maximum": 1.9836408503783295e-6,
+    "bitwise_inert": false
+  },
+  "operand_comparison": {
+    "classification": "projected_reference_is_first_material_k4_coarse_likelihood_operand_difference",
+    "metric_policy": "Exact native significant-support recovery and centered squared-residual energy are causal metrics; operand relative L2 is descriptive; no correlation metric is used for acceptance.",
+    "projected_reference_relative_l2": 0.01750855973687834,
+    "shifted_image_relative_l2_median": 5.069691224819027e-7,
+    "shifted_image_relative_l2_maximum": 6.295382247144853e-7,
+    "correction_relative_l2_median": 2.3136746937702465e-7,
+    "correction_relative_l2_maximum": 3.065598784017099e-7,
+    "euler_transpose_max_abs": 3.8743019104003906e-7,
+    "translation_phase_max_abs": 1.4901161193847656e-8,
+    "baseline_centered_squared_energy": 183323.83601546436,
+    "fraction_baseline_energy_remaining": {
+      "all_native_operands": 1.1229708010771076e-9,
+      "native_projected_reference": 1.1706319300839754e-9,
+      "native_shifted_image": 1.0000001303649662,
+      "native_correction": 1.000000470984688
+    }
+  },
+  "support_counterfactuals": {
+    "native_captured_combined": {"exact_records": 16, "records": 16, "jaccard": 1.0},
+    "recovar_captured_combined": {"exact_records": 5, "records": 16, "jaccard": 0.9517896274653032},
+    "native_projected_reference": {"exact_records": 16, "records": 16, "jaccard": 1.0},
+    "native_shifted_image": {"exact_records": 5, "records": 16, "jaccard": 0.9517896274653032},
+    "native_correction": {"exact_records": 5, "records": 16, "jaccard": 0.9517896274653032},
+    "all_native_operands": {"exact_records": 16, "records": 16, "jaccard": 1.0},
+    "boundary_tie_records": 0
+  },
+  "rejected_synchronous_capture": {
+    "accepted_evidence": false,
+    "job_id": "13334206",
+    "relion_commit": "8e5c52e4ae072808e4d3acf009ef40585dab1b82",
+    "classification": "capture_inertness_not_established",
+    "cause": "Per-class device-to-host copies synchronized production streams before all class kernels were launched and changed floating-point atomic scheduling. The accepted observer defers every copy until RELION's existing all-class synchronization boundary.",
+    "iteration_1_class_map_fsc_auc_minimum": 0.8973971632114275,
+    "iteration_1_class_map_fsc_auc_maximum": 0.934271264858734,
+    "inertness_report_sha256": "4a9d1a5a910709ad8991c733335235749d029f63bf42b9134167ca8f856f721f"
+  },
+  "artifacts": {
+    "authoritative_operand_boundary": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_operands_deferred_r1_b061776_20260902/analysis/native_coarse_operand_boundary.json",
+      "sha256": "6f5fd33411a9a8e929a55e232e16e1c044dd1f91cb6be5ef02607ed42fe292b6"
+    },
+    "repeatability_gate": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_operands_deferred_r1_b061776_20260902/analysis/operand_capture_repeatability.json",
+      "sha256": "429c0e072d66853e34196c2d13140f601eadecaba1f3fc9656f2189065608864"
+    },
+    "first_operand_validation": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_operands_deferred_r1_b061776_20260902/analysis/operand_capture_validation.json",
+      "sha256": "3c08372eca338f79179cc11b6b206192d99a2b5d9a008c1ce5b308716b62ac18"
+    },
+    "recovar_support_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_significance_probe_r5_24317e40c_20260901/analysis/coarse_score_support.json",
+      "sha256": "d137d59506a859e4b2ddec4c7afd13366645b131174c5f0ea24e58fa617879b2"
+    }
+  },
+  "strict_claim_boundary": "This three-repeat, 16-particle, iteration-1 diagnostic localizes the first material K=4 coarse likelihood operand difference to the projected reference. It does not distinguish source Projector::data construction from interpolation arithmetic and is not a final real-data K=4 refinement, resolution, or formal performance result."
+}

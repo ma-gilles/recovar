@@ -95,6 +95,13 @@ NATIVE_COARSE_COMPONENT_DIAGNOSTIC = json.loads(
         / "real-k4-native-coarse-components-8f9ebc9-20260902"
     ).with_suffix(".json").read_text()
 )
+NATIVE_COARSE_OPERAND_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "real-k4-native-coarse-operands-b061776-20260902"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -184,6 +191,12 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
         )
         == "separate"
     )
+    assert (
+        registry_validator._diagnostic_registry_route(
+            NATIVE_COARSE_OPERAND_DIAGNOSTIC
+        )
+        == "separate"
+    )
     with pytest.raises(RegistryValidationError, match="unrecognized diagnostic family"):
         registry_validator._diagnostic_registry_route({"schema": "unknown.v1"})
 
@@ -240,6 +253,41 @@ def test_native_coarse_component_diagnostic_pins_causal_and_inertness_boundaries
     assert swaps["native_norm_only"]["exact_records"] == 5
     assert swaps["boundary_tie_records"] == 0
     assert diagnostic["rejected_in_kernel_capture"]["accepted_evidence"] is False
+
+
+def test_native_coarse_operand_diagnostic_pins_factorial_and_repeatability_boundaries():
+    diagnostic = NATIVE_COARSE_OPERAND_DIAGNOSTIC
+    assert diagnostic["admission_status"] == "DIAGNOSTIC_ONLY"
+    assert diagnostic["accepted_result"] is False
+    assert diagnostic["execution"]["all_req_tres_equal_alloc_tres"]
+    assert diagnostic["execution"]["formal_engine_performance_result"] is False
+
+    repeatability = diagnostic["capture_repeatability"]
+    assert repeatability["status"] == "PASS"
+    assert repeatability["repeat_count"] == 3
+    assert repeatability["passed_repeats"] == 3
+    assert repeatability["iteration_1_decision_exact_repeats"] == 3
+    assert repeatability["class_map_fsc_auc_minimum"] > 0.999999
+    assert repeatability["class_map_relative_l2_maximum"] < 1e-5
+
+    comparison = diagnostic["operand_comparison"]
+    assert comparison["classification"] == (
+        "projected_reference_is_first_material_k4_coarse_likelihood_operand_difference"
+    )
+    energy = comparison["fraction_baseline_energy_remaining"]
+    assert energy["native_projected_reference"] < 1e-6
+    assert energy["native_shifted_image"] > 0.99
+    assert energy["native_correction"] > 0.99
+    assert comparison["projected_reference_relative_l2"] > 0.01
+    assert comparison["shifted_image_relative_l2_maximum"] < 1e-5
+    assert comparison["correction_relative_l2_maximum"] < 1e-5
+
+    swaps = diagnostic["support_counterfactuals"]
+    assert swaps["native_projected_reference"]["exact_records"] == 16
+    assert swaps["native_shifted_image"]["exact_records"] == 5
+    assert swaps["native_correction"]["exact_records"] == 5
+    assert swaps["boundary_tie_records"] == 0
+    assert diagnostic["rejected_synchronous_capture"]["accepted_evidence"] is False
 
 
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():
