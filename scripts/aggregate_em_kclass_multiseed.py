@@ -189,6 +189,7 @@ def read_trajectory_audit(
     direct_values: list[float] = []
     gt_delta_values: list[float] = []
     class_gate_results: list[bool] = []
+    science_gate_results: list[bool] = []
     agreement_values: list[float] = []
 
     def validate_class_permutation(
@@ -219,6 +220,7 @@ def read_trajectory_audit(
         direct_values.append(direct)
         gt_delta_values.append(delta)
         class_gate_results.append(direct >= direct_min and delta >= gt_delta_min)
+        science_gate_results.append(delta >= gt_delta_min)
         return direct, delta
 
     for expected_iteration, row in enumerate(numbered, start=1):
@@ -276,6 +278,8 @@ def read_trajectory_audit(
     if payload.get("earliest_failure") != (None if replay_pass else failures[0]):
         raise ValueError(f"trajectory audit earliest failure conflicts with its failures: {path}")
 
+    science_pass = all(science_gate_results)
+
     return {
         "path": str(path),
         "sha256": sha256_file(path),
@@ -289,6 +293,15 @@ def read_trajectory_audit(
         "evaluated_iterations": len(numbered),
         "evaluated_class_cells": len(direct_values),
         "passing_class_cells": sum(class_gate_results),
+        "science_status": "PASS" if science_pass else "FAIL",
+        "passing_science_class_cells": sum(science_gate_results),
+        "quality_classification": (
+            "TRAJECTORY_EXACT"
+            if replay_pass
+            else "SCIENCE_EQUIVALENT"
+            if science_pass
+            else "SCIENCE_GAP"
+        ),
         "minimum_direct_fsc_auc": min(direct_values),
         "minimum_gt_fsc_auc_delta": min(gt_delta_values),
         "minimum_final_gt_fsc_auc_delta": min(final_gt_deltas),
@@ -523,6 +536,24 @@ def aggregate(
             if require_trajectory_audits
             else []
         )
+        completion_outcome = group_outcome(replicates)
+        formal_trajectory_status = (
+            "PASS" if trajectory_audits and all(row["status"] == "PASS" for row in trajectory_audits) else "FAIL"
+        )
+        science_quality_status = (
+            "PASS"
+            if trajectory_audits and all(row["science_status"] == "PASS" for row in trajectory_audits)
+            else "FAIL"
+        )
+        quality_classification = (
+            "NOT_EVALUABLE"
+            if completion_outcome != "COMPLETE_ALL_SEEDS"
+            else "TRAJECTORY_EXACT"
+            if formal_trajectory_status == "PASS"
+            else "SCIENCE_EQUIVALENT"
+            if science_quality_status == "PASS"
+            else "SCIENCE_GAP"
+        )
 
         output_groups.append(
             {
@@ -531,7 +562,7 @@ def aggregate(
                 "base_seed": int(rows[0]["base_seed"]),
                 "symmetry": rows[0]["symmetry"],
                 "scientific_contract": {column: rows[0][column] for column in SCIENCE_COLUMNS},
-                "outcome": group_outcome(replicates),
+                "outcome": completion_outcome,
                 "metrics_across_seeds": {
                     "min_recovar_fsc_auc_vs_gt": reduced_metric(summaries, "fsc_auc_vs_gt", "min"),
                     "min_relion_fsc_auc_vs_gt": reduced_metric(summaries, "relion_fsc_auc_vs_gt", "min"),
@@ -570,6 +601,9 @@ def aggregate(
                             "passing_trajectory_class_cells": sum(
                                 row["passing_class_cells"] for row in trajectory_audits
                             ),
+                            "passing_science_class_cells": sum(
+                                row["passing_science_class_cells"] for row in trajectory_audits
+                            ),
                             "evaluated_trajectory_class_cells": sum(
                                 row["evaluated_class_cells"] for row in trajectory_audits
                             ),
@@ -580,11 +614,9 @@ def aggregate(
                 },
                 **(
                     {
-                        "formal_trajectory_status": (
-                            "PASS"
-                            if all(row["status"] == "PASS" for row in trajectory_audits)
-                            else "FAIL"
-                        )
+                        "formal_trajectory_status": formal_trajectory_status,
+                        "science_quality_status": science_quality_status,
+                        "quality_classification": quality_classification,
                     }
                     if trajectory_audits
                     else {}
@@ -594,6 +626,7 @@ def aggregate(
         )
 
     formal_gate_claim = None
+    science_equivalence_claim = None
     formal_gate_claim_reason = (
         "This suite index preserves completion, collapse, GT-FSC, timing, and memory "
         "evidence; per-trajectory Hungarian/direct-FSC records remain separate registry entries."
@@ -612,6 +645,24 @@ def aggregate(
             "passing_class_cells": sum(row["passing_class_cells"] for row in all_audits),
             "audit_sha256": [row["sha256"] for row in all_audits],
         }
+        suite_complete = overall_outcome(output_groups) == "COMPLETE_ALL_CASES_ALL_SEEDS"
+        all_science_pass = all(row["science_status"] == "PASS" for row in all_audits)
+        science_equivalence_claim = {
+            "status": "PASS" if suite_complete and all_science_pass else "FAIL",
+            "classification": (
+                "NOT_EVALUABLE"
+                if not suite_complete
+                else "TRAJECTORY_EXACT"
+                if formal_gate_claim["status"] == "PASS"
+                else "SCIENCE_EQUIVALENT"
+                if all_science_pass
+                else "SCIENCE_GAP"
+            ),
+            "audited_replicates": len(all_audits),
+            "passing_replicates": sum(row["science_status"] == "PASS" for row in all_audits),
+            "evaluated_gt_class_cells": sum(row["evaluated_class_cells"] for row in all_audits),
+            "passing_gt_class_cells": sum(row["passing_science_class_cells"] for row in all_audits),
+        }
         formal_gate_claim_reason = (
             "Every expected seed is bound to a fail-closed permutation-aware trajectory audit; "
             "the formal status is replayed from every numbered and final direct FSC-AUC and signed "
@@ -628,6 +679,7 @@ def aggregate(
         "outcome": overall_outcome(output_groups),
         "formal_gate_claim": formal_gate_claim,
         "formal_gate_claim_reason": formal_gate_claim_reason,
+        "science_equivalence_claim": science_equivalence_claim,
         "artifacts": {
             "matrix_summary": str(matrix_summary),
             "matrix_summary_sha256": sha256_file(matrix_summary),
@@ -640,6 +692,7 @@ def aggregate(
 
 def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
     formal_claim = payload["formal_gate_claim"]
+    science_claim = payload.get("science_equivalence_claim")
     formal_summary = (
         "not made by this aggregate"
         if formal_claim is None
@@ -647,6 +700,16 @@ def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
             f"{formal_claim['status']} "
             f"({formal_claim['passing_replicates']}/{formal_claim['audited_replicates']} replicates; "
             f"{formal_claim['passing_class_cells']}/{formal_claim['evaluated_class_cells']} class cells)"
+        )
+    )
+    science_summary = (
+        "not made by this aggregate"
+        if science_claim is None
+        else (
+            f"{science_claim['status']} / {science_claim['classification']} "
+            f"({science_claim['passing_replicates']}/{science_claim['audited_replicates']} replicates; "
+            f"{science_claim['passing_gt_class_cells']}/{science_claim['evaluated_gt_class_cells']} "
+            "GT class cells)"
         )
     )
     lines = [
@@ -658,6 +721,7 @@ def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
         f"- base cases: **{payload['base_case_count']}**",
         f"- replicate rows: **{payload['replicate_count']}**",
         f"- formal trajectory claim: **{formal_summary}**",
+        f"- science-equivalence claim: **{science_summary}**",
         "",
         "| Case | Sym | Outcome | Seeds | Worst REC-REL GT FSC-AUC | Median RECOVAR s | Median RELION s | Max RECOVAR HBM MiB | Max RELION HBM MiB |",
         "|---|---|---|---|---:|---:|---:|---:|---:|",
@@ -688,8 +752,8 @@ def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
                 "",
                 "## Strict trajectory gates",
                 "",
-                "| Case | K | Formal | Class cells | Min direct FSC-AUC | Min signed GT FSC-AUC delta | Min assignment |",
-                "|---|---:|---|---:|---:|---:|---:|",
+                "| Case | K | Formal | Science | Classification | Strict class cells | GT class cells | Min direct FSC-AUC | Min signed GT FSC-AUC delta | Min assignment |",
+                "|---|---:|---|---|---|---:|---:|---:|---:|---:|",
             ]
         )
         for case in payload["cases"]:
@@ -702,8 +766,14 @@ def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
                         str(case["base_name"]),
                         str(case["scientific_contract"]["n_classes"]),
                         str(case["formal_trajectory_status"]),
+                        str(case["science_quality_status"]),
+                        str(case["quality_classification"]),
                         (
                             f"{metrics['passing_trajectory_class_cells']}/"
+                            f"{metrics['evaluated_trajectory_class_cells']}"
+                        ),
+                        (
+                            f"{metrics['passing_science_class_cells']}/"
                             f"{metrics['evaluated_trajectory_class_cells']}"
                         ),
                         f"{metrics['minimum_direct_fsc_auc']:.9f}",
@@ -721,7 +791,9 @@ def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
                 f"job `{row['job_id']}`; root `{row['case_root']}`"
                 + (
                     f"; trajectory: {row['trajectory_audit']['status']} "
-                    f"(min direct FSC-AUC {row['trajectory_audit']['minimum_direct_fsc_auc']:.9f})"
+                    f"/ science: {row['trajectory_audit']['science_status']} "
+                    f"({row['trajectory_audit']['quality_classification']}; "
+                    f"min direct FSC-AUC {row['trajectory_audit']['minimum_direct_fsc_auc']:.9f})"
                     if "trajectory_audit" in row
                     else ""
                 )

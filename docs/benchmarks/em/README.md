@@ -306,7 +306,13 @@ any expected audit is missing or changes schema, metric policy, iteration or
 class topology. It independently replays every numbered and final direct
 FSC-AUC and signed GT-FSC-AUC gate, every available class-assignment gate, and
 the reported status/failure relationship before reducing across seeds. The v2
-aggregate remains a compact campaign index: seal each accepted trajectory in
+aggregate reports two separate outcomes: the unchanged strict trajectory gate
+(direct FSC-AUC, signed GT-FSC-AUC delta, and assignments) and a science-quality
+gate based only on the signed per-class GT-FSC-AUC deltas. Thus a run can be
+classified `SCIENCE_EQUIVALENT` when reconstruction quality matches RELION but
+late class assignments or direct map identity drift outside the strict gate;
+such a run is never relabeled `TRAJECTORY_EXACT`. The aggregate remains a
+compact campaign index: seal each accepted trajectory in
 `entries/` or a schema-v1 campaign record before treating it as admitted
 benchmark evidence.
 

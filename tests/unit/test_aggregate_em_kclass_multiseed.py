@@ -170,8 +170,11 @@ def _trajectory_payload(
     n_classes: int,
     iterations: int,
     direct_value: float = 0.999,
+    gt_delta: float = -0.0001,
+    agreement: float = 0.999,
     status: str = "pass",
 ) -> dict:
+    failure = "it001 class 1 strict trajectory gate failed"
     return {
         "schema": (
             "em_k4_fsc_trajectory_audit_v2"
@@ -187,8 +190,8 @@ def _trajectory_payload(
             "per_class_recovar_minus_relion_gt_fsc_auc_min": -0.002,
             "class_assignment_agreement_min_when_available": 0.99,
         },
-        "failures": [] if status == "pass" else ["it001 class 1 direct FSC-AUC failed"],
-        "earliest_failure": None if status == "pass" else "it001 class 1 direct FSC-AUC",
+        "failures": [] if status == "pass" else [failure],
+        "earliest_failure": None if status == "pass" else failure,
         "numbered_iterations": [
             {
                 "relion_iteration": iteration,
@@ -198,15 +201,15 @@ def _trajectory_payload(
                         "relion_class": class_id,
                         "gt_class": class_id,
                         "cross_engine": {"fsc_auc": direct_value},
-                        "gt_fsc_auc_delta": -0.0001,
+                        "gt_fsc_auc_delta": gt_delta,
                         "vs_gt": {
-                            "recovar": {"fsc_auc": 0.2499},
+                            "recovar": {"fsc_auc": 0.25 + gt_delta},
                             "relion": {"fsc_auc": 0.25},
                         },
                     }
                     for class_id in range(1, n_classes + 1)
                 ],
-                "class_agreement": {"status": "available", "agreement": 0.999},
+                "class_agreement": {"status": "available", "agreement": agreement},
             }
             for iteration in range(1, iterations + 1)
         ],
@@ -217,9 +220,9 @@ def _trajectory_payload(
                     "relion_class": class_id,
                     "gt_class": class_id,
                     "cross_engine": {"fsc_auc": direct_value},
-                    "gt_fsc_auc_delta": -0.0001,
+                    "gt_fsc_auc_delta": gt_delta,
                     "vs_gt": {
-                        "recovar": {"fsc_auc": 0.2499},
+                        "recovar": {"fsc_auc": 0.25 + gt_delta},
                         "relion": {"fsc_auc": 0.25},
                     },
                 }
@@ -229,7 +232,14 @@ def _trajectory_payload(
     }
 
 
-def _write_trajectory_audits(root: Path, *, direct_value: float = 0.999, status: str = "pass") -> None:
+def _write_trajectory_audits(
+    root: Path,
+    *,
+    direct_value: float = 0.999,
+    gt_delta: float = -0.0001,
+    agreement: float = 0.999,
+    status: str = "pass",
+) -> None:
     with (root / "case_table.tsv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream, delimiter="|"))
     for row in rows:
@@ -242,6 +252,8 @@ def _write_trajectory_audits(root: Path, *, direct_value: float = 0.999, status:
             n_classes=n_classes,
             iterations=iterations,
             direct_value=direct_value,
+            gt_delta=gt_delta,
+            agreement=agreement,
             status=status,
         )
         (output / f"k{n_classes}_fsc_trajectory.json").write_text(json.dumps(payload))
@@ -293,15 +305,26 @@ def test_trajectory_v2_replays_every_seed_and_class_cell(tmp_path):
             for row in payload["cases"][0]["replicates"]
         ],
     }
+    assert payload["science_equivalence_claim"] == {
+        "status": "PASS",
+        "classification": "TRAJECTORY_EXACT",
+        "audited_replicates": 3,
+        "passing_replicates": 3,
+        "evaluated_gt_class_cells": 72,
+        "passing_gt_class_cells": 72,
+    }
     metrics = payload["cases"][0]["metrics_across_seeds"]
     assert metrics["minimum_direct_fsc_auc"] == 0.999
     assert metrics["minimum_gt_fsc_auc_delta"] == -0.0001
     assert metrics["minimum_final_gt_fsc_auc_delta"] == -0.0001
     assert metrics["minimum_class_assignment_agreement"] == 0.999
     assert payload["cases"][0]["formal_trajectory_status"] == "PASS"
+    assert payload["cases"][0]["science_quality_status"] == "PASS"
+    assert payload["cases"][0]["quality_classification"] == "TRAJECTORY_EXACT"
     rendered = aggregate.render_markdown(payload, tmp_path / "summary.json")
     assert "formal trajectory claim: **PASS (3/3 replicates; 72/72 class cells)**" in rendered
-    assert "| ribo_k4_5k_g128_white_noise1_c4_uniform | 4 | PASS | 72/72 | 0.999000000 | -0.000100000 | 0.999000 |" in rendered
+    assert "science-equivalence claim: **PASS / TRAJECTORY_EXACT" in rendered
+    assert "| ribo_k4_5k_g128_white_noise1_c4_uniform | 4 | PASS | PASS | TRAJECTORY_EXACT | 72/72 | 72/72 | 0.999000000 | -0.000100000 | 0.999000 |" in rendered
     assert "Max RELION HBM MiB" in rendered
 
 
@@ -346,7 +369,53 @@ def test_reads_generic_kclass_trajectory_schemas(tmp_path, n_classes):
 
     assert observed["schema"] == "em_kclass_fsc_trajectory_audit_v1"
     assert observed["status"] == "PASS"
+    assert observed["science_status"] == "PASS"
+    assert observed["quality_classification"] == "TRAJECTORY_EXACT"
     assert observed["evaluated_class_cells"] == 6 * n_classes
+
+
+def test_trajectory_v2_keeps_science_equivalence_separate_from_strict_failure(tmp_path):
+    case_table, matrix_summary = _write_suite(tmp_path)
+    _write_trajectory_audits(tmp_path, direct_value=0.994, agreement=0.98, status="fail")
+
+    payload = aggregate.aggregate(
+        tmp_path,
+        matrix_summary=matrix_summary,
+        case_table=case_table,
+        require_trajectory_audits=True,
+    )
+
+    assert payload["formal_gate_claim"]["status"] == "FAIL"
+    assert payload["science_equivalence_claim"] == {
+        "status": "PASS",
+        "classification": "SCIENCE_EQUIVALENT",
+        "audited_replicates": 3,
+        "passing_replicates": 3,
+        "evaluated_gt_class_cells": 72,
+        "passing_gt_class_cells": 72,
+    }
+    case = payload["cases"][0]
+    assert case["formal_trajectory_status"] == "FAIL"
+    assert case["science_quality_status"] == "PASS"
+    assert case["quality_classification"] == "SCIENCE_EQUIVALENT"
+
+
+def test_trajectory_v2_reports_science_gap_when_gt_delta_fails(tmp_path):
+    case_table, matrix_summary = _write_suite(tmp_path)
+    _write_trajectory_audits(tmp_path, gt_delta=-0.003, status="fail")
+
+    payload = aggregate.aggregate(
+        tmp_path,
+        matrix_summary=matrix_summary,
+        case_table=case_table,
+        require_trajectory_audits=True,
+    )
+
+    assert payload["formal_gate_claim"]["status"] == "FAIL"
+    assert payload["science_equivalence_claim"]["status"] == "FAIL"
+    assert payload["science_equivalence_claim"]["classification"] == "SCIENCE_GAP"
+    assert payload["science_equivalence_claim"]["passing_gt_class_cells"] == 0
+    assert payload["cases"][0]["quality_classification"] == "SCIENCE_GAP"
 
 
 def test_trajectory_v2_rejects_inconsistent_signed_gt_delta(tmp_path):
