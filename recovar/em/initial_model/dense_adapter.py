@@ -27,6 +27,7 @@ from recovar.em.dense_single_volume.helpers.significance import (
 from recovar.em.dense_single_volume.k_class import (
     _coarse_selector_audit_from_full_stats,
     _run_sparse_k_class_adaptive_pass2,
+    _with_coarse_significance_diagnostics,
     _with_coarse_selector_audit,
     run_dense_k_class_em,
     run_local_k_class_em,
@@ -695,6 +696,33 @@ def _sparse_pass2_estep_meta(
     _merge(max_posterior, "max_posterior_per_image", np.float32)
     meta["sparse_pass2"] = True
     return meta
+
+
+def _with_initial_model_coarse_diagnostics(
+    result,
+    *,
+    full_stats: dict[str, Any] | None,
+    selector_audit: dict[str, Any] | None,
+):
+    """Carry the shared coarse result diagnostics through InitialModel pass 2."""
+
+    stats = {} if full_stats is None else full_stats
+    significant_counts = stats.get("significant_cutoff_counts")
+    if significant_counts is not None:
+        counts = np.asarray(significant_counts, dtype=np.int32)
+        n_images = int(np.asarray(result.pose_assignments).size)
+        if counts.shape != (n_images,):
+            raise RuntimeError(
+                "InitialModel coarse significant counts do not match pass-2 images: "
+                f"{counts.shape} vs ({n_images},)",
+            )
+        result = result._replace(significant_counts=counts)
+    return _with_coarse_significance_diagnostics(
+        result,
+        selector_audit=selector_audit,
+        support_audit=stats.get("coarse_significance_support_audit"),
+        hybrid_stats=stats.get("coarse_gaussian_gemm_hybrid"),
+    )
 
 
 def _sparse_pass2_profile_summary(
@@ -1394,7 +1422,11 @@ def _run_sparse_pass2_initial_model_estep(
                 coarse_rotations=coarse_metadata_rotations,
                 coarse_translations=coarse_translations,
             )
-        result = _with_coarse_selector_audit(result, coarse_selector_audit)
+        result = _with_initial_model_coarse_diagnostics(
+            result,
+            full_stats=_full_stats,
+            selector_audit=coarse_selector_audit,
+        )
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(
             _arrays_to_accumulators(
