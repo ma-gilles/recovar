@@ -8,6 +8,7 @@ arithmetic remain owned by the existing dense E-step.
 
 from __future__ import annotations
 
+import hashlib
 import operator
 from typing import NamedTuple
 
@@ -43,6 +44,302 @@ class CoarseGemmHybridBlockSelection(NamedTuple):
     raw_max_block_count: np.ndarray
 
 
+class CoarseGemmExpandedF64GammaBounds(NamedTuple):
+    """Upward-rounded coefficients for the promoted expanded-square bound."""
+
+    cross: float
+    energy: float
+    initial_diff2: float
+    energy_envelope: float
+
+
+class CoarseGemmCertificateTopology(NamedTuple):
+    """Immutable link between the GEMM terms and direct CUDA traversal."""
+
+    full_position_count: int
+    compact_pixel_count: int
+    translation_count: int
+    full_to_compact: np.ndarray
+    full_to_compact_sha256: str
+    expanded_f64_gammas: CoarseGemmExpandedF64GammaBounds
+    direct_f32_gamma: float
+
+
+def _upward_rounded_gamma(operation_count: int, unit_roundoff: float) -> float:
+    """Return an upward-rounded ``gamma_k`` for a reviewed operation count."""
+
+    operation_count = operator.index(operation_count)
+    if operation_count <= 0:
+        raise ValueError("operation_count must be positive")
+    scaled_roundoff = np.float64(operation_count) * np.float64(unit_roundoff)
+    if not np.isfinite(scaled_roundoff) or scaled_roundoff >= 1.0:
+        raise ValueError("gamma operation count is outside its valid range")
+    denominator = np.nextafter(
+        np.float64(1.0) - scaled_roundoff,
+        np.float64(-np.inf),
+    )
+    return float(
+        np.nextafter(
+            scaled_roundoff / denominator,
+            np.float64(np.inf),
+        )
+    )
+
+
+def _upward_add_f64(left, right):
+    """Add once in FP64, then step the result toward positive infinity."""
+
+    with jax.enable_x64(True):
+        return jnp.nextafter(
+            jnp.asarray(left, dtype=jnp.float64)
+            + jnp.asarray(right, dtype=jnp.float64),
+            jnp.float64(jnp.inf),
+        )
+
+
+def _upward_multiply_f64(left, right):
+    """Multiply once in FP64, then step the result toward positive infinity."""
+
+    with jax.enable_x64(True):
+        return jnp.nextafter(
+            jnp.asarray(left, dtype=jnp.float64)
+            * jnp.asarray(right, dtype=jnp.float64),
+            jnp.float64(jnp.inf),
+        )
+
+
+def certified_f64_expanded_score_gammas(
+    traversed_full_position_bound: int,
+) -> CoarseGemmExpandedF64GammaBounds:
+    """Return coefficients for the explicit-component promoted score bound.
+
+    The position bound covers both each energy reduction and the full pixel
+    traversal represented by the cross term.  It must therefore describe the
+    stored scorer input, not merely the number of nonzero compact weights.
+    """
+
+    try:
+        n_positions = operator.index(traversed_full_position_bound)
+    except TypeError as error:
+        raise ValueError("traversed_full_position_bound must be an integer") from error
+    if n_positions <= 0:
+        raise ValueError("traversed_full_position_bound must be positive")
+    unit_roundoff = 2.0**-53
+    return CoarseGemmExpandedF64GammaBounds(
+        cross=_upward_rounded_gamma(2 * n_positions + 4, unit_roundoff),
+        energy=_upward_rounded_gamma(n_positions + 5, unit_roundoff),
+        initial_diff2=_upward_rounded_gamma(3, unit_roundoff),
+        energy_envelope=_upward_rounded_gamma(n_positions + 2, unit_roundoff),
+    )
+
+
+def _validate_full_to_compact_mapping(
+    full_to_compact,
+    *,
+    compact_pixel_count: int,
+) -> np.ndarray:
+    """Return a validated view of one complete direct-kernel lookup."""
+
+    mapping = np.asarray(full_to_compact)
+    if mapping.dtype != np.dtype(np.int32) or mapping.ndim != 1 or mapping.size <= 0:
+        raise ValueError("full_to_compact must be a nonempty rank-1 int32 array")
+    if np.any(mapping < -1) or np.any(mapping >= compact_pixel_count):
+        raise ValueError("full_to_compact contains an out-of-range compact pixel ID")
+    visited = np.sort(mapping[mapping >= 0])
+    if not np.array_equal(
+        visited,
+        np.arange(compact_pixel_count, dtype=np.int32),
+    ):
+        raise ValueError("full_to_compact must visit every compact pixel exactly once")
+    return mapping
+
+
+def _full_to_compact_sha256(mapping: np.ndarray) -> str:
+    return hashlib.sha256(mapping.tobytes(order="C")).hexdigest()
+
+
+def plan_coarse_gemm_certificate_topology(
+    full_to_compact,
+    *,
+    compact_pixel_count: int,
+    translation_count: int,
+) -> CoarseGemmCertificateTopology:
+    """Copy, seal, and bind the actual direct lookup to all coefficients.
+
+    Every compact GEMM pixel must occur exactly once in the direct kernel's
+    full traversal; ``-1`` entries are allowed and represent skipped full-grid
+    positions.  The selected-source16 wrapper later consumes this owned copy,
+    so the proof coefficients and exact rescore cannot receive different
+    lookup arrays.
+    """
+
+    try:
+        compact_pixels = operator.index(compact_pixel_count)
+        translations = operator.index(translation_count)
+    except TypeError as error:
+        raise ValueError("certificate topology counts must be integers") from error
+    if compact_pixels <= 0:
+        raise ValueError("compact_pixel_count must be positive")
+    mapping = _validate_full_to_compact_mapping(
+        full_to_compact,
+        compact_pixel_count=compact_pixels,
+    )
+    sealed_mapping = np.array(mapping, copy=True, order="C")
+    sealed_mapping.setflags(write=False)
+    full_positions = int(sealed_mapping.size)
+    return CoarseGemmCertificateTopology(
+        full_position_count=full_positions,
+        compact_pixel_count=compact_pixels,
+        translation_count=translations,
+        full_to_compact=sealed_mapping,
+        full_to_compact_sha256=_full_to_compact_sha256(sealed_mapping),
+        expanded_f64_gammas=certified_f64_expanded_score_gammas(full_positions),
+        direct_f32_gamma=certified_f32_dot_product_gamma(
+            full_positions,
+            translations,
+        ),
+    )
+
+
+def validate_coarse_gemm_certificate_topology(
+    topology: CoarseGemmCertificateTopology,
+) -> None:
+    """Recompute every lookup, count, digest, and coefficient invariant."""
+
+    if not isinstance(topology, CoarseGemmCertificateTopology):
+        raise TypeError("topology must be a CoarseGemmCertificateTopology")
+    mapping = np.asarray(topology.full_to_compact)
+    if not mapping.flags.c_contiguous or mapping.flags.writeable:
+        raise ValueError(
+            "certificate topology lookup must be a contiguous read-only snapshot",
+        )
+    try:
+        full_positions = operator.index(topology.full_position_count)
+        compact_pixels = operator.index(topology.compact_pixel_count)
+        translations = operator.index(topology.translation_count)
+    except TypeError as error:
+        raise ValueError("certificate topology counts must be integers") from error
+    if not isinstance(topology.full_to_compact_sha256, str):
+        raise ValueError("certificate topology digest must be a string")
+    if not isinstance(
+        topology.expanded_f64_gammas,
+        CoarseGemmExpandedF64GammaBounds,
+    ):
+        raise ValueError("certificate topology FP64 gammas have an invalid type")
+    gamma_values = (*topology.expanded_f64_gammas, topology.direct_f32_gamma)
+    if any(np.asarray(value).shape != () for value in gamma_values):
+        raise ValueError("certificate topology gammas must be scalars")
+    expected = plan_coarse_gemm_certificate_topology(
+        mapping,
+        compact_pixel_count=compact_pixels,
+        translation_count=translations,
+    )
+    if (
+        full_positions != expected.full_position_count
+        or compact_pixels != expected.compact_pixel_count
+        or translations != expected.translation_count
+        or topology.full_to_compact_sha256 != expected.full_to_compact_sha256
+        or topology.expanded_f64_gammas != expected.expanded_f64_gammas
+        or topology.direct_f32_gamma != expected.direct_f32_gamma
+    ):
+        raise ValueError(
+            "certificate topology count, digest, or gamma invariant changed",
+        )
+
+
+@jax.jit
+def coarse_gemm_expanded_score_eta_f64(
+    reference_energy_hat,
+    image_energy_hat,
+    initial_diff2,
+    *,
+    cross_gamma,
+    energy_gamma,
+    initial_diff2_gamma,
+    energy_envelope_gamma,
+):
+    """Bound promoted expanded-score error from its existing energy dots.
+
+    ``reference_energy_hat`` is ``[image, rotation]`` and
+    ``image_energy_hat`` is ``[image, translation]``.  All inputs are the
+    results of explicit component-square FP64 arithmetic.  Invalid values
+    become NaN bounds so the compact selector routes the batch to direct
+    scoring.
+    """
+
+    with jax.enable_x64(True):
+        reference_energy = jnp.asarray(reference_energy_hat, dtype=jnp.float64)
+        image_energy = jnp.asarray(image_energy_hat, dtype=jnp.float64)
+        initial = jnp.asarray(initial_diff2, dtype=jnp.float64)
+        if reference_energy.ndim != 2 or image_energy.ndim != 2:
+            raise ValueError("energy estimates must be rank-2 arrays")
+        if reference_energy.shape[0] != image_energy.shape[0]:
+            raise ValueError("reference and image energies must share their image axis")
+        if initial.shape != (reference_energy.shape[0],):
+            raise ValueError("initial_diff2 must have one value per image")
+
+        coefficients = tuple(
+            jnp.asarray(value, dtype=jnp.float64)
+            for value in (
+                cross_gamma,
+                energy_gamma,
+                initial_diff2_gamma,
+                energy_envelope_gamma,
+            )
+        )
+        if any(value.shape != () for value in coefficients):
+            raise ValueError("all expanded-score gamma coefficients must be scalar")
+        cross_coefficient, energy_coefficient, initial_coefficient, alpha = coefficients
+
+        positive_inf = jnp.float64(jnp.inf)
+        negative_inf = jnp.float64(-jnp.inf)
+        denominator = jnp.nextafter(jnp.float64(1.0) - alpha, negative_inf)
+        reference_upper = jnp.nextafter(reference_energy / denominator, positive_inf)
+        image_upper = jnp.nextafter(image_energy / denominator, positive_inf)
+        reference_candidate = reference_upper[:, :, None]
+        image_candidate = image_upper[:, None, :]
+        energy_sum = jnp.nextafter(reference_candidate + image_candidate, positive_inf)
+        energy_product = jnp.nextafter(reference_candidate * image_candidate, positive_inf)
+        cross_envelope = jnp.nextafter(jnp.sqrt(energy_product), positive_inf)
+        cross_term = jnp.nextafter(cross_coefficient * cross_envelope, positive_inf)
+        energy_term = jnp.nextafter(energy_coefficient * energy_sum, positive_inf)
+        energy_term = jnp.nextafter(jnp.float64(0.5) * energy_term, positive_inf)
+        initial_term = jnp.nextafter(
+            initial_coefficient * initial[:, None, None],
+            positive_inf,
+        )
+        eta = jnp.nextafter(
+            jnp.nextafter(cross_term + energy_term, positive_inf) + initial_term,
+            positive_inf,
+        )
+        coefficient_valid = (
+            jnp.isfinite(cross_coefficient)
+            & (cross_coefficient >= 0.0)
+            & jnp.isfinite(energy_coefficient)
+            & (energy_coefficient >= 0.0)
+            & jnp.isfinite(initial_coefficient)
+            & (initial_coefficient >= 0.0)
+            & jnp.isfinite(alpha)
+            & (alpha >= 0.0)
+            & (alpha < 1.0)
+            & jnp.isfinite(denominator)
+            & (denominator > 0.0)
+        )
+        input_valid = (
+            jnp.all(jnp.isfinite(reference_energy) & (reference_energy >= 0.0), axis=1)[:, None, None]
+            & jnp.all(jnp.isfinite(image_energy) & (image_energy >= 0.0), axis=1)[:, None, None]
+            & (jnp.isfinite(initial) & (initial >= 0.0))[:, None, None]
+        )
+        output_valid = (
+            jnp.isfinite(reference_candidate)
+            & jnp.isfinite(image_candidate)
+            & jnp.isfinite(cross_envelope)
+            & jnp.isfinite(eta)
+            & (eta >= 0.0)
+        )
+        return jnp.where(coefficient_valid & input_valid & output_valid, eta, jnp.nan)
+
+
 def certified_f32_dot_product_gamma(
     traversed_full_position_bound: int,
     n_translations: int,
@@ -76,6 +373,168 @@ def certified_f32_dot_product_gamma(
     return float(np.nextafter(np.float64(gamma), np.float64(np.inf)))
 
 
+@jax.jit
+def coarse_gemm_direct_f32_ftz_envelope_and_range(
+    reference_component_abs_max,
+    image_component_abs_max,
+    weight_max,
+    initial_diff2,
+    traversed_full_position_count,
+    direct_gamma,
+):
+    """Return a provisional FTZ envelope and a fail-closed FP32 range gate.
+
+    This is the executable counterpart of the provisional range model in
+    ``docs/math/vdam_coarse_gemm_error_certificate.md``.  The deliberately
+    generous additive envelope covers an absolute ``FLT_MIN`` perturbation at
+    every direct-kernel operation and input, amplified by a power-of-two
+    safety factor.  It is not a replacement for the backend/SASS audit needed
+    before enabling the hybrid path by default.
+
+    The returned arrays have shape ``[image, rotation, 1]``.  A false range
+    value must invalidate every translation for that image/rotation pair.
+    """
+
+    with jax.enable_x64(True):
+        reference_max = jnp.asarray(reference_component_abs_max, dtype=jnp.float64)
+        image_max = jnp.asarray(image_component_abs_max, dtype=jnp.float64)
+        maximum_weight = jnp.asarray(weight_max, dtype=jnp.float64)
+        initial = jnp.asarray(initial_diff2, dtype=jnp.float64)
+        n_positions = jnp.asarray(traversed_full_position_count, dtype=jnp.float64)
+        gamma = jnp.asarray(direct_gamma, dtype=jnp.float64)
+        if reference_max.ndim != 1:
+            raise ValueError("reference_component_abs_max must be rank 1")
+        if (
+            image_max.ndim != 1
+            or maximum_weight.shape != image_max.shape
+            or initial.shape != image_max.shape
+        ):
+            raise ValueError("image range summaries must be matching rank-1 arrays")
+        if n_positions.shape != () or gamma.shape != ():
+            raise ValueError("direct range coefficients must be scalar")
+
+        f32_min_normal = jnp.float64(np.finfo(np.float32).tiny)
+        f32_max = jnp.float64(np.finfo(np.float32).max)
+        unit_roundoff = jnp.float64(2.0**-24)
+        one_plus_u = _upward_add_f64(jnp.float64(1.0), unit_roundoff)
+
+        # Maxima are component maxima, so |real_delta| and |imag_delta| are
+        # each bounded by reference_max + image_max.  Every operation below is
+        # rounded upward in FP64 and mirrors a local source16 FP32 stage.
+        difference = _upward_add_f64(
+            reference_max[None, :],
+            image_max[:, None],
+        )
+        direct_difference = _upward_multiply_f64(one_plus_u, difference)
+        direct_difference = _upward_add_f64(
+            direct_difference,
+            _upward_multiply_f64(jnp.float64(3.0), f32_min_normal),
+        )
+        difference_square = _upward_multiply_f64(
+            direct_difference,
+            direct_difference,
+        )
+        imaginary_square = _upward_add_f64(
+            _upward_multiply_f64(one_plus_u, difference_square),
+            f32_min_normal,
+        )
+        square_sum_input = _upward_add_f64(
+            difference_square,
+            imaginary_square,
+        )
+        square_sum = _upward_add_f64(
+            _upward_multiply_f64(one_plus_u, square_sum_input),
+            f32_min_normal,
+        )
+        half_square_sum = _upward_multiply_f64(jnp.float64(0.5), square_sum)
+        half_square_sum = _upward_multiply_f64(one_plus_u, half_square_sum)
+        half_square_sum = _upward_add_f64(half_square_sum, f32_min_normal)
+        loaded_weight = _upward_add_f64(
+            maximum_weight[:, None],
+            f32_min_normal,
+        )
+        local_term = _upward_multiply_f64(half_square_sum, loaded_weight)
+        local_term = _upward_multiply_f64(one_plus_u, local_term)
+        local_term = _upward_add_f64(local_term, f32_min_normal)
+
+        # A large power-of-two factor keeps the provisional FTZ/DAZ model
+        # independent of fragile compiler details while remaining negligible
+        # at ordinary cryo-EM scales.  Keep this term separate from eta: eta
+        # bounds the FP64 expanded center, whereas rho only covers additive
+        # behavior absent from the relative-error direct theorem.
+        scale_difference = jnp.maximum(jnp.float64(1.0), difference)
+        magnitude_scale = _upward_multiply_f64(
+            scale_difference,
+            scale_difference,
+        )
+        magnitude_scale = _upward_multiply_f64(
+            magnitude_scale,
+            jnp.maximum(jnp.float64(1.0), maximum_weight[:, None]),
+        )
+        operation_budget = _upward_add_f64(
+            n_positions,
+            jnp.float64(128.0),
+        )
+        operation_budget = _upward_multiply_f64(
+            jnp.float64(2.0**20),
+            operation_budget,
+        )
+        rho = _upward_multiply_f64(operation_budget, f32_min_normal)
+        rho = _upward_multiply_f64(rho, magnitude_scale)
+
+        exact_term_upper = _upward_multiply_f64(
+            difference,
+            difference,
+        )
+        exact_term_upper = _upward_multiply_f64(
+            exact_term_upper,
+            maximum_weight[:, None],
+        )
+        exact_residual_upper = _upward_multiply_f64(
+            n_positions,
+            exact_term_upper,
+        )
+        exact_residual_upper = _upward_add_f64(
+            initial[:, None],
+            exact_residual_upper,
+        )
+        direct_upper = _upward_add_f64(jnp.float64(1.0), gamma)
+        direct_upper = _upward_multiply_f64(direct_upper, exact_residual_upper)
+        direct_upper = _upward_add_f64(direct_upper, rho)
+        inputs_valid = (
+            (jnp.isfinite(reference_max) & (reference_max >= 0.0))[None, :]
+            & (jnp.isfinite(image_max) & (image_max >= 0.0))[:, None]
+            & (jnp.isfinite(maximum_weight) & (maximum_weight >= 0.0))[:, None]
+            & (jnp.isfinite(initial) & (initial >= 0.0))[:, None]
+            & jnp.isfinite(n_positions)
+            & (n_positions >= 1.0)
+            & jnp.isfinite(gamma)
+            & (gamma >= 0.0)
+        )
+        local_values = (
+            direct_difference,
+            difference_square,
+            imaginary_square,
+            square_sum_input,
+            square_sum,
+            half_square_sum,
+            loaded_weight,
+            local_term,
+        )
+        local_range_valid = jnp.ones_like(difference, dtype=jnp.bool_)
+        for value in local_values:
+            local_range_valid &= jnp.isfinite(value) & (value <= f32_max)
+        range_valid = (
+            inputs_valid
+            & local_range_valid
+            & jnp.isfinite(rho)
+            & (rho >= 0.0)
+            & jnp.isfinite(direct_upper)
+            & (direct_upper <= f32_max)
+        )
+        return rho[..., None], range_valid[..., None]
+
+
 def coarse_gemm_hybrid_interval_state_bytes(
     batch_size: int,
     n_rotations: int,
@@ -99,20 +558,31 @@ def coarse_gemm_direct_score_intervals(
     expanded_score_f64,
     eta_f64,
     gamma_f64,
+    ftz_absolute_error_f64=0.0,
+    direct_range_valid=True,
 ):
     """Construct outward-rounded direct-score intervals around live ``g64``.
 
     ``eta_f64`` certifies ``abs(g64 - S)`` and may be scalar or broadcastable
-    to ``g64``.  Invalid/nonfinite inputs become NaN endpoints so the streamed
-    state and host selector fail closed without inspecting a full score cube.
+    to ``g64``.  ``ftz_absolute_error_f64`` is a separate additive envelope
+    for behavior excluded by the relative-error theorem.  Invalid/nonfinite
+    inputs become NaN endpoints so the streamed state and host selector fail
+    closed without inspecting a full score cube.
     """
 
     with jax.enable_x64(True):
         score = jnp.asarray(expanded_score_f64, dtype=jnp.float64)
         eta = jnp.broadcast_to(jnp.asarray(eta_f64, dtype=jnp.float64), score.shape)
+        ftz_error = jnp.broadcast_to(
+            jnp.asarray(ftz_absolute_error_f64, dtype=jnp.float64),
+            score.shape,
+        )
+        range_valid = jnp.broadcast_to(jnp.asarray(direct_range_valid), score.shape)
         gamma = jnp.asarray(gamma_f64, dtype=jnp.float64)
         if gamma.shape != ():
             raise ValueError("gamma_f64 must be scalar")
+        if range_valid.dtype != jnp.bool_:
+            raise TypeError("direct_range_valid must have boolean dtype")
         positive_inf = jnp.full_like(score, jnp.inf)
         negative_inf = jnp.full_like(score, -jnp.inf)
         q_upper = jnp.nextafter(
@@ -120,13 +590,17 @@ def coarse_gemm_direct_score_intervals(
             positive_inf,
         )
         gamma_term = jnp.nextafter(gamma * q_upper, positive_inf)
-        error_upper = jnp.nextafter(eta + gamma_term, positive_inf)
+        error_upper = jnp.nextafter(eta + ftz_error, positive_inf)
+        error_upper = jnp.nextafter(error_upper + gamma_term, positive_inf)
         lower = jnp.nextafter(score - error_upper, negative_inf)
         upper = jnp.nextafter(score + error_upper, positive_inf)
         valid = (
             jnp.isfinite(score)
             & jnp.isfinite(eta)
             & (eta >= 0.0)
+            & jnp.isfinite(ftz_error)
+            & (ftz_error >= 0.0)
+            & range_valid
             # A squared-difference score is non-positive.  Given |g-S|<=eta,
             # g<=eta is the subtraction-free form of the required g-eta<=0
             # certificate check and avoids another rounded endpoint operation.

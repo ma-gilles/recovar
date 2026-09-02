@@ -244,6 +244,51 @@ The same construction works for an FP32 expanded center by replacing `g` and
 usually much wider because `eta_32` contains the expanded-square cancellation
 envelope.
 
+## Provisional FTZ/DAZ and FP32 range supplement
+
+The relative direct bound assumes that every finite operation satisfies the
+usual relative-error model.  It therefore does not, by itself, cover a CUDA
+backend that flushes subnormal inputs or results to zero.  It also says
+nothing useful after an intermediate FP32 overflow.  Two stored-input
+counterexamples make those exclusions concrete:
+
+- a component near `1e20` has a finite FP64 expanded square but its direct
+  FP32 square overflows; and
+- a component near `1e-30` has a nonzero mathematical square but its direct
+  FP32 square becomes zero.
+
+The default-off implementation adds a deliberately conservative provisional
+supplement.  Let `tau = FLT_MIN`, let `D` be the upward-rounded sum of the
+maximum absolute reference and image components, and let `wmax` be the maximum
+stored weight.  It uses
+
+```text
+scale = up(max(1, D)^2 max(1, wmax))
+rho = up(2^20 (n + 128) tau scale)
+e = up(up(eta + rho) + up(deltaD Qbar))
+```
+
+while keeping `Qbar` based on `eta` alone.  The power-of-two factor is a large
+safety margin for an absolute-perturbation model
+`abs(fl_FTZ(z) - fl_IEEE(z)) <= tau` at every source16 input and operation.  At
+ordinary cryo-EM scales `rho` is negligible.  It is intentionally recorded as
+a *provisional* envelope: the exact constant and backend FTZ/DAZ semantics
+still require a source/PTX/SASS audit before default promotion.
+
+Separately, the implementation upward-propagates `D`, both component-square
+stages, the square sum, half scaling, maximum weight, and a local weighted
+term.  It rejects the certificate if any stage exceeds `FLT_MAX`.  It also
+requires
+
+```text
+up((1 + deltaD) (d0 + n D^2 wmax) + rho) <= FLT_MAX
+```
+
+and rejects a nonfinite ordinary-path FP32 cast.  These checks are
+candidate-block conservative and avoid constructing a pixel-pair cube.  A
+rejection routes the affected batch through full direct scoring; it is never
+permission to accept the expanded score.
+
 ## Outward-rounded primitives
 
 Certificate arithmetic should be FP64 and use directed enclosures.  Define
@@ -432,7 +477,9 @@ rescore selector.
    StableHLO, optimized HLO, PTX, and representative SASS for both GEMMs and
    the single ordinary-path FP32 conversion.
 2. Unit-test every outward primitive at zeros, powers of two, subnormal and
-   normal boundaries, maximum finite values, and halfway cases.
+   normal boundaries, maximum finite values, and halfway cases.  Retain the
+   explicit `1e20` overflow and `1e-30` underflow regressions, and formally
+   audit or replace the provisional `rho` factor against backend semantics.
 3. On small arrays, compare the expanded center and emulated direct topology
    with an MPFR or exact-rational oracle.  Exercise all legal lane-add orders.
 4. Instrument complete GPU paired surfaces and assert, candidate by candidate,
@@ -451,3 +498,16 @@ rescore selector.
 
 Until all seven steps pass, keep the hybrid selector and promoted-FP64 scoring
 default-off.
+
+## Code references
+
+- `recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py`:
+  `certified_f64_expanded_score_gammas`,
+  `coarse_gemm_expanded_score_eta_f64`,
+  `coarse_gemm_direct_f32_ftz_envelope_and_range`, and
+  `coarse_gemm_direct_score_intervals`
+- `recovar/em/dense_single_volume/helpers/scoring.py`:
+  `_prepare_relion_coarse_gaussian_gemm_f64_image_batch` and
+  `_relion_coarse_gaussian_gemm_update_certificate_state`
+- `recovar/cuda/cuda_backproject.cu`: `relion_fine_diff2_update_f32` and
+  `relion_coarse_diff2_rotation_block_f32`
