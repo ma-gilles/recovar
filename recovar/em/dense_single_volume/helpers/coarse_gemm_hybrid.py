@@ -44,6 +44,25 @@ class CoarseGemmHybridBlockSelection(NamedTuple):
     raw_max_block_count: np.ndarray
 
 
+class CoarseGemmHybridDenseScores(NamedTuple):
+    """Exact selected scores restored to the full RELION coarse layout.
+
+    ``posterior_scores_flat`` has shape ``[B, R*T]`` in source-rotation-major,
+    translation-minor order.  Omitted candidates and padded image rows are
+    represented by ``-inf``.  Retaining the full logical candidate length is
+    intentional: removing exact zero-weight candidates changes the reduction
+    topology of RELION's float32 CUB scan and can change its denominator and
+    normalized probabilities by one or more ULPs.
+    """
+
+    posterior_scores_flat: jax.Array
+    raw_score_max: jax.Array
+    min_diff2_offsets: jax.Array
+    best_score: jax.Array
+    best_pose: jax.Array
+    selected_output_valid: jax.Array
+
+
 class CoarseGemmExpandedF64GammaBounds(NamedTuple):
     """Upward-rounded coefficients for the promoted expanded-square bound."""
 
@@ -951,4 +970,260 @@ def select_coarse_gemm_hybrid_rotation_blocks(
         block_count=block_count,
         posterior_block_count=posterior_count,
         raw_max_block_count=raw_count,
+    )
+
+
+def validate_coarse_gemm_hybrid_block_selection_for_rescore(
+    selection: CoarseGemmHybridBlockSelection,
+    *,
+    actual_image_count: int,
+    n_rotations: int,
+) -> None:
+    """Validate the host selection before dispatching or assembling exact scores.
+
+    The selector emits a strictly increasing active prefix of source-16 block
+    IDs followed by ``-1`` padding.  Enforcing that contract here makes the
+    selected FFI slot order an explicit, fail-closed boundary rather than an
+    implicit assumption in posterior assembly.
+    """
+
+    if not isinstance(selection, CoarseGemmHybridBlockSelection):
+        raise TypeError("selection must be a CoarseGemmHybridBlockSelection")
+    try:
+        actual_images = operator.index(actual_image_count)
+        rotations = operator.index(n_rotations)
+    except TypeError as error:
+        raise ValueError("rescore selection counts must be integers") from error
+    if rotations <= 0 or rotations % SOURCE_ROTATION_BLOCK_SIZE:
+        raise ValueError("rescore selection requires complete source-16 rotation blocks")
+
+    block_ids = np.asarray(selection.block_ids)
+    count_fields = tuple(
+        np.asarray(field)
+        for field in (
+            selection.block_count,
+            selection.posterior_block_count,
+            selection.raw_max_block_count,
+        )
+    )
+    if block_ids.dtype != np.dtype(np.int32) or block_ids.ndim != 2:
+        raise TypeError("selection block_ids must be a rank-2 int32 array")
+    batch_size, capacity = block_ids.shape
+    if batch_size <= 0 or capacity <= 0 or actual_images <= 0 or actual_images > batch_size:
+        raise ValueError("rescore selection has invalid image or capacity counts")
+    if any(field.dtype != np.dtype(np.int32) or field.shape != (batch_size,) for field in count_fields):
+        raise TypeError("selection count fields must be matching rank-1 int32 arrays")
+    if not isinstance(selection.eligible, (bool, np.bool_)) or not selection.eligible:
+        raise ValueError("rescore assembly requires an eligible block selection")
+    if selection.fallback_reason is not None:
+        raise ValueError("eligible rescore selection must not carry a fallback reason")
+
+    block_count, posterior_count, raw_count = count_fields
+    n_source_blocks = rotations // SOURCE_ROTATION_BLOCK_SIZE
+    for row in range(batch_size):
+        count = int(block_count[row])
+        posterior = int(posterior_count[row])
+        raw = int(raw_count[row])
+        if row >= actual_images:
+            if count != 0 or posterior != 0 or raw != 0 or np.any(block_ids[row] != -1):
+                raise ValueError("padded image rows must contain only zero counts and -1 IDs")
+            continue
+        if (
+            count <= 0
+            or count > capacity
+            or posterior <= 0
+            or raw <= 0
+            or posterior > count
+            or raw > count
+            or count < max(posterior, raw)
+            or count > posterior + raw
+        ):
+            raise ValueError("active image row has inconsistent selected block counts")
+        active_ids = block_ids[row, :count]
+        if (
+            np.any(active_ids < 0)
+            or np.any(active_ids >= n_source_blocks)
+            or (active_ids.size > 1 and np.any(np.diff(active_ids) <= 0))
+        ):
+            raise ValueError(
+                "active source-16 block IDs must be unique, in range, and strictly increasing",
+            )
+        if np.any(block_ids[row, count:] != -1):
+            raise ValueError("inactive selected-block slots must use the reserved -1 ID")
+
+
+@jax.jit
+def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
+    selected_diff2,
+    block_ids,
+    block_count,
+    actual_image_count,
+    class_log_prior,
+    rotation_log_prior,
+    translation_log_prior,
+    use_rotation_log_prior,
+    use_translation_log_prior,
+):
+    """Device implementation for exact full-layout score assembly."""
+
+    batch_size, capacity, _source_block_size, n_translations = selected_diff2.shape
+    n_rotations = rotation_log_prior.shape[0]
+    active_rows = jnp.arange(batch_size, dtype=jnp.int32) < actual_image_count
+    active_slots = active_rows[:, None] & (
+        jnp.arange(capacity, dtype=jnp.int32)[None, :] < block_count[:, None]
+    )
+    safe_block_ids = jnp.where(active_slots, block_ids, jnp.int32(0))
+    rotation_ids = (
+        safe_block_ids[:, :, None] * jnp.int32(SOURCE_ROTATION_BLOCK_SIZE)
+        + jnp.arange(SOURCE_ROTATION_BLOCK_SIZE, dtype=jnp.int32)[None, None, :]
+    )
+    active_candidates = active_slots[:, :, None, None]
+
+    raw_scores = -selected_diff2
+    raw_scores_for_reduction = jnp.where(active_candidates, raw_scores, -jnp.inf)
+    raw_score_max = jnp.max(raw_scores_for_reduction, axis=(1, 2, 3))
+
+    posterior_scores = raw_scores + class_log_prior
+    posterior_scores = jax.lax.cond(
+        use_rotation_log_prior,
+        lambda values: values + rotation_log_prior[rotation_ids][..., None],
+        lambda values: values,
+        posterior_scores,
+    )
+    posterior_scores = jax.lax.cond(
+        use_translation_log_prior,
+        lambda values: values + translation_log_prior[:, None, None, :],
+        lambda values: values,
+        posterior_scores,
+    )
+
+    finite_active_diff2 = jnp.all(
+        jnp.where(active_candidates, jnp.isfinite(selected_diff2), True),
+        axis=(1, 2, 3),
+    )
+    positive_inf_padding = jnp.all(
+        jnp.where(active_candidates, True, jnp.isposinf(selected_diff2)),
+        axis=(1, 2, 3),
+    )
+    finite_active_posterior = jnp.all(
+        jnp.where(active_candidates, jnp.isfinite(posterior_scores), True),
+        axis=(1, 2, 3),
+    )
+    selected_output_valid = (
+        finite_active_diff2
+        & positive_inf_padding
+        & finite_active_posterior
+        & jnp.where(active_rows, jnp.isfinite(raw_score_max), True)
+    )
+
+    # Invalid active values are never published.  The host caller must inspect
+    # ``selected_output_valid`` and use full rectangular direct scoring for the
+    # whole padded image batch when any row is false.
+    scatter_values = jnp.where(
+        active_candidates & jnp.isfinite(posterior_scores),
+        posterior_scores,
+        -jnp.inf,
+    )
+    dense_scores = jnp.full(
+        (batch_size, n_rotations, n_translations),
+        -jnp.inf,
+        dtype=jnp.float32,
+    )
+    batch_ids = jnp.broadcast_to(
+        jnp.arange(batch_size, dtype=jnp.int32)[:, None, None],
+        rotation_ids.shape,
+    )
+    # Host validation rejects duplicate active source blocks.  ``max`` makes
+    # the many inactive slots targeting the safe block-zero index true no-ops.
+    dense_scores = dense_scores.at[batch_ids, rotation_ids, :].max(scatter_values)
+    posterior_scores_flat = dense_scores.reshape(batch_size, n_rotations * n_translations)
+    best_score = jnp.max(posterior_scores_flat, axis=1)
+    best_pose = jnp.argmax(posterior_scores_flat, axis=1).astype(jnp.int32)
+    min_diff2_offsets = jnp.where(active_rows, -raw_score_max, jnp.float32(0.0))
+    return CoarseGemmHybridDenseScores(
+        posterior_scores_flat=posterior_scores_flat,
+        raw_score_max=raw_score_max,
+        min_diff2_offsets=min_diff2_offsets,
+        best_score=best_score,
+        best_pose=best_pose,
+        selected_output_valid=selected_output_valid,
+    )
+
+
+def assemble_coarse_gemm_hybrid_dense_scores_f32(
+    selected_diff2,
+    selection: CoarseGemmHybridBlockSelection,
+    *,
+    actual_image_count: int,
+    n_rotations: int,
+    class_log_prior,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+) -> CoarseGemmHybridDenseScores:
+    """Restore selected exact diff2 values to RELION's full flat pose table.
+
+    The selected CUDA output is ``[B,Q,16,T]`` in selected-slot order, while
+    downstream support IDs and exact ties use global ``rotation*T+translation``
+    order.  This helper validates the selector's ordered source-block contract,
+    scatters by the explicit source IDs, applies priors in the production
+    class/rotation/translation float32 sequence, and reconstructs the raw-score
+    maximum needed for RELION's ``min_diff2`` offset.
+    """
+
+    validate_coarse_gemm_hybrid_block_selection_for_rescore(
+        selection,
+        actual_image_count=actual_image_count,
+        n_rotations=n_rotations,
+    )
+    diff2 = jnp.asarray(selected_diff2)
+    if diff2.dtype != jnp.float32:
+        raise TypeError("selected source-16 diff2 values must have float32 dtype")
+    if diff2.ndim != 4:
+        raise ValueError("selected source-16 diff2 values must have shape [B,Q,16,T]")
+    batch_size, capacity, source_block_size, n_translations = map(int, diff2.shape)
+    if (
+        source_block_size != SOURCE_ROTATION_BLOCK_SIZE
+        or n_translations <= 0
+        or n_translations > 128
+        or tuple(selection.block_ids.shape) != (batch_size, capacity)
+    ):
+        raise ValueError("selected diff2 shape does not match the block selection")
+
+    class_prior = jnp.asarray(class_log_prior, dtype=jnp.float32)
+    if class_prior.shape != ():
+        raise ValueError("class_log_prior must be scalar")
+    if rotation_log_prior is None:
+        rotation_prior = jnp.zeros((n_rotations,), dtype=jnp.float32)
+        use_rotation_prior = jnp.bool_(False)
+    else:
+        rotation_prior = jnp.asarray(rotation_log_prior, dtype=jnp.float32)
+        if rotation_prior.shape != (n_rotations,):
+            raise ValueError("rotation_log_prior must have one value per source rotation")
+        use_rotation_prior = jnp.bool_(True)
+    if translation_log_prior is None:
+        translation_prior = jnp.zeros((batch_size, n_translations), dtype=jnp.float32)
+        use_translation_prior = jnp.bool_(False)
+    else:
+        translation_prior = jnp.asarray(translation_log_prior, dtype=jnp.float32)
+        if translation_prior.shape == (n_translations,):
+            translation_prior = jnp.broadcast_to(
+                translation_prior[None, :],
+                (batch_size, n_translations),
+            )
+        elif translation_prior.shape != (batch_size, n_translations):
+            raise ValueError(
+                "translation_log_prior must have shape [T] or [B,T]",
+            )
+        use_translation_prior = jnp.bool_(True)
+
+    return _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
+        diff2,
+        jnp.asarray(selection.block_ids, dtype=jnp.int32),
+        jnp.asarray(selection.block_count, dtype=jnp.int32),
+        jnp.asarray(actual_image_count, dtype=jnp.int32),
+        class_prior,
+        rotation_prior,
+        translation_prior,
+        use_rotation_prior,
+        use_translation_prior,
     )

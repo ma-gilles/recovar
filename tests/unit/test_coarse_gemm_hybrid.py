@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+    CoarseGemmHybridBlockSelection,
+    assemble_coarse_gemm_hybrid_dense_scores_f32,
     certified_f32_dot_product_gamma,
     coarse_gemm_direct_score_intervals,
     coarse_gemm_hybrid_interval_state_bytes,
@@ -13,6 +15,7 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     propagate_coarse_gemm_intervals_through_f32_priors,
     select_coarse_gemm_hybrid_rotation_blocks,
     update_coarse_gemm_hybrid_interval_state,
+    validate_coarse_gemm_hybrid_block_selection_for_rescore,
 )
 
 pytestmark = pytest.mark.unit
@@ -83,6 +86,24 @@ def _complete_candidate_specific_state():
         actual_image_count=2,
     )
     return state, n_rotations, n_translations
+
+
+def _rescore_selection() -> CoarseGemmHybridBlockSelection:
+    return CoarseGemmHybridBlockSelection(
+        eligible=True,
+        fallback_reason=None,
+        block_ids=np.asarray(
+            [
+                [0, 2, -1],
+                [1, -1, -1],
+                [-1, -1, -1],
+            ],
+            dtype=np.int32,
+        ),
+        block_count=np.asarray([2, 1, 0], dtype=np.int32),
+        posterior_block_count=np.asarray([2, 1, 0], dtype=np.int32),
+        raw_max_block_count=np.asarray([1, 1, 0], dtype=np.int32),
+    )
 
 
 def test_certified_gamma_uses_direct_kernel_traversed_position_bound() -> None:
@@ -345,3 +366,272 @@ def test_selector_fails_closed_on_rotation_tail_and_capacity_overflow() -> None:
     )
     assert not tail.eligible
     assert tail.fallback_reason == "rotation_tail_not_supported"
+
+
+def test_exact_selected_scores_restore_relion_flat_order_raw_max_and_padding() -> None:
+    selection = _rescore_selection()
+    batch_size, capacity = selection.block_ids.shape
+    n_rotations, n_translations = 48, 2
+    selected_diff2 = np.full(
+        (batch_size, capacity, 16, n_translations),
+        np.inf,
+        dtype=np.float32,
+    )
+    selected_diff2[0, 0] = np.arange(16, dtype=np.float32)[:, None] * np.float32(
+        4.0
+    ) + np.asarray([1.0, 2.0], dtype=np.float32)[None, :]
+    selected_diff2[0, 1] = np.arange(16, dtype=np.float32)[:, None] * np.float32(
+        3.0
+    ) + np.asarray([0.25, 1.25], dtype=np.float32)[None, :]
+    selected_diff2[1, 0] = np.arange(16, dtype=np.float32)[:, None] * np.float32(
+        2.0
+    ) + np.asarray([5.0, 6.0], dtype=np.float32)[None, :]
+    class_prior = np.float32(-1.25)
+    rotation_prior = np.arange(n_rotations, dtype=np.float32) * np.float32(0.125)
+    translation_prior = np.asarray([0.5, -0.75], dtype=np.float32)
+
+    assembled = assemble_coarse_gemm_hybrid_dense_scores_f32(
+        jnp.asarray(selected_diff2),
+        selection,
+        actual_image_count=2,
+        n_rotations=n_rotations,
+        class_log_prior=class_prior,
+        rotation_log_prior=rotation_prior,
+        translation_log_prior=translation_prior,
+    )
+
+    expected = np.full(
+        (batch_size, n_rotations, n_translations),
+        -np.inf,
+        dtype=np.float32,
+    )
+    for row in range(2):
+        for slot in range(int(selection.block_count[row])):
+            source_block = int(selection.block_ids[row, slot])
+            for offset in range(16):
+                rotation = 16 * source_block + offset
+                values = -selected_diff2[row, slot, offset]
+                values = values + class_prior
+                values = values + rotation_prior[rotation]
+                values = values + translation_prior
+                expected[row, rotation] = values
+
+    actual = np.asarray(assembled.posterior_scores_flat).reshape(expected.shape)
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(
+        np.asarray(assembled.raw_score_max),
+        np.asarray([-0.25, -5.0, -np.inf], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(assembled.min_diff2_offsets),
+        np.asarray([0.25, 5.0, 0.0], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(assembled.best_score),
+        np.max(expected.reshape(batch_size, -1), axis=1),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(assembled.best_pose),
+        np.argmax(expected.reshape(batch_size, -1), axis=1).astype(np.int32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(assembled.selected_output_valid),
+        np.ones(batch_size, dtype=bool),
+    )
+    assert np.all(np.isneginf(actual[0, 16:32]))
+    assert np.all(np.isneginf(actual[1, :16]))
+    assert np.all(np.isneginf(actual[2]))
+
+
+def test_exact_selected_score_ties_use_global_relion_flat_order() -> None:
+    selection = CoarseGemmHybridBlockSelection(
+        eligible=True,
+        fallback_reason=None,
+        block_ids=np.asarray([[0, 2]], dtype=np.int32),
+        block_count=np.asarray([2], dtype=np.int32),
+        posterior_block_count=np.asarray([2], dtype=np.int32),
+        raw_max_block_count=np.asarray([1], dtype=np.int32),
+    )
+    diff2 = np.full((1, 2, 16, 3), np.float32(10.0), dtype=np.float32)
+    diff2[0, 0, 7, 2] = np.float32(1.0)
+    diff2[0, 1, 0, 0] = np.float32(1.0)
+
+    assembled = assemble_coarse_gemm_hybrid_dense_scores_f32(
+        diff2,
+        selection,
+        actual_image_count=1,
+        n_rotations=48,
+        class_log_prior=0.0,
+    )
+
+    assert int(np.asarray(assembled.best_pose)[0]) == 7 * 3 + 2
+    assert int(np.asarray(assembled.best_pose)[0]) < 32 * 3
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    [
+        ("duplicate", "strictly increasing"),
+        ("unsorted", "strictly increasing"),
+        ("out_of_range", "strictly increasing"),
+        ("interior_padding", "strictly increasing"),
+        ("padded_row", "padded image rows"),
+        ("capacity", "inconsistent selected block counts"),
+        ("ineligible", "eligible block selection"),
+    ],
+)
+def test_rescore_selection_validation_fails_closed(mutation: str, match: str) -> None:
+    selection = _rescore_selection()
+    block_ids = selection.block_ids.copy()
+    block_count = selection.block_count.copy()
+    if mutation == "duplicate":
+        block_ids[0, :2] = 1
+    elif mutation == "unsorted":
+        block_ids[0, :2] = [2, 0]
+    elif mutation == "out_of_range":
+        block_ids[0, 1] = 3
+    elif mutation == "interior_padding":
+        block_ids[0, 0] = -1
+    elif mutation == "padded_row":
+        block_ids[2, 0] = 0
+    elif mutation == "capacity":
+        block_count[0] = 4
+    else:
+        selection = selection._replace(eligible=False, fallback_reason="test_fallback")
+    selection = selection._replace(block_ids=block_ids, block_count=block_count)
+
+    with pytest.raises(ValueError, match=match):
+        validate_coarse_gemm_hybrid_block_selection_for_rescore(
+            selection,
+            actual_image_count=2,
+            n_rotations=48,
+        )
+
+
+def test_selected_ffi_nonfinite_active_or_nonpositive_inf_padding_requests_fallback() -> None:
+    selection = _rescore_selection()
+    diff2 = np.full((3, 3, 16, 2), np.inf, dtype=np.float32)
+    diff2[0, :2] = np.float32(1.0)
+    diff2[1, 0] = np.float32(2.0)
+    diff2[0, 1, 3, 0] = np.nan
+    diff2[1, 1, 0, 0] = np.float32(0.0)
+
+    assembled = assemble_coarse_gemm_hybrid_dense_scores_f32(
+        diff2,
+        selection,
+        actual_image_count=2,
+        n_rotations=48,
+        class_log_prior=0.0,
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(assembled.selected_output_valid),
+        np.asarray([False, False, True]),
+    )
+    assert np.all(np.isneginf(np.asarray(assembled.posterior_scores_flat)[2]))
+
+
+def test_full_logical_scatter_preserves_exact_relion_posterior_and_support(
+    monkeypatch,
+) -> None:
+    from recovar.em.dense_single_volume.helpers import oversampling
+
+    cpu_device = jax.devices("cpu")[0]
+    monkeypatch.setattr(oversampling.jax, "default_backend", lambda: "cpu")
+    relion_cuda_f32_coarse_posterior = oversampling.relion_cuda_f32_coarse_posterior
+    relion_cuda_f32_coarse_posterior.clear_cache()
+
+    selection = CoarseGemmHybridBlockSelection(
+        eligible=True,
+        fallback_reason=None,
+        block_ids=np.asarray([[0, 2]], dtype=np.int32),
+        block_count=np.asarray([2], dtype=np.int32),
+        posterior_block_count=np.asarray([2], dtype=np.int32),
+        raw_max_block_count=np.asarray([1], dtype=np.int32),
+    )
+    rng = np.random.default_rng(19)
+    full_diff2 = rng.uniform(1.0, 15.0, size=(1, 48, 3)).astype(np.float32)
+    # Every omitted source block has exact RELION expf weight zero, but remains
+    # finite in the rectangular reference table.
+    full_diff2[:, 16:32] += np.float32(200.0)
+    selected_diff2 = np.stack(
+        [full_diff2[:, 0:16], full_diff2[:, 32:48]],
+        axis=1,
+    )
+    rotation_prior = np.linspace(-0.5, 0.5, 48, dtype=np.float32)
+    translation_prior = np.asarray([0.0, -0.25, 0.125], dtype=np.float32)
+    class_prior = np.float32(-0.75)
+    assembled = assemble_coarse_gemm_hybrid_dense_scores_f32(
+        selected_diff2,
+        selection,
+        actual_image_count=1,
+        n_rotations=48,
+        class_log_prior=class_prior,
+        rotation_log_prior=rotation_prior,
+        translation_log_prior=translation_prior,
+    )
+    full_scores = -jnp.asarray(full_diff2)
+    full_scores = full_scores + class_prior
+    full_scores = full_scores + jnp.asarray(rotation_prior)[None, :, None]
+    full_scores = full_scores + jnp.asarray(translation_prior)[None, None, :]
+    full_raw_max = jnp.max(-jnp.asarray(full_diff2), axis=(1, 2))
+    kwargs = dict(adaptive_fraction=0.999, max_significants=7, tie_score_ulps=0)
+    with jax.default_device(cpu_device):
+        expected = relion_cuda_f32_coarse_posterior(
+            jax.device_put(full_scores.reshape(1, -1), cpu_device),
+            min_diff2_offsets=jax.device_put(-full_raw_max, cpu_device),
+            **kwargs,
+        )
+        actual = relion_cuda_f32_coarse_posterior(
+            jax.device_put(assembled.posterior_scores_flat, cpu_device),
+            min_diff2_offsets=jax.device_put(assembled.min_diff2_offsets, cpu_device),
+            **kwargs,
+        )
+
+    for expected_value, actual_value in zip(expected, actual):
+        np.testing.assert_array_equal(np.asarray(actual_value), np.asarray(expected_value))
+
+
+def test_compacting_exact_zero_weight_candidates_changes_float32_scan_rounding(
+    monkeypatch,
+) -> None:
+    from recovar.em.dense_single_volume.helpers import oversampling
+
+    cpu_device = jax.devices("cpu")[0]
+    monkeypatch.setattr(oversampling.jax, "default_backend", lambda: "cpu")
+    relion_cuda_f32_coarse_posterior = oversampling.relion_cuda_f32_coarse_posterior
+    relion_cuda_f32_coarse_posterior.clear_cache()
+
+    compact_scores = np.asarray(
+        [-0.37921745, -5.3189178, -1.539008],
+        dtype=np.float32,
+    )
+    global_pose_ids = np.asarray([2, 6, 7], dtype=np.int32)
+    full_scores = np.full((18,), -np.inf, dtype=np.float32)
+    full_scores[global_pose_ids] = compact_scores
+    kwargs = dict(
+        adaptive_fraction=0.999,
+        max_significants=500,
+        tie_score_ulps=0,
+    )
+    with jax.default_device(cpu_device):
+        offsets = jnp.zeros((1,), dtype=jnp.float32)
+        full = relion_cuda_f32_coarse_posterior(
+            jnp.asarray(full_scores[None, :]),
+            min_diff2_offsets=offsets,
+            **kwargs,
+        )
+        compact = relion_cuda_f32_coarse_posterior(
+            jnp.asarray(compact_scores[None, :]),
+            min_diff2_offsets=offsets,
+            **kwargs,
+        )
+    full_np = tuple(np.asarray(value) for value in full)
+    compact_np = tuple(np.asarray(value) for value in compact)
+
+    np.testing.assert_array_equal(full_np[1][0, global_pose_ids], compact_np[1][0])
+    np.testing.assert_array_equal(full_np[2], compact_np[2])
+    np.testing.assert_array_equal(full_np[3], compact_np[3])
+    np.testing.assert_array_equal(full_np[5], compact_np[5])
+    assert not np.array_equal(full_np[4], compact_np[4])
+    assert not np.array_equal(full_np[0][0, global_pose_ids], compact_np[0][0])
