@@ -216,6 +216,49 @@ def _resolve_target_random_perturbation(
     return float(exact), source
 
 
+def _adaptive_coarse_scoring_rotations(
+    source_eulers_deg,
+    host_rotations,
+    *,
+    random_perturbation: float,
+    angular_sampling_deg: float,
+    adaptive_2pass: bool,
+):
+    """Use RELION's CUDA-built Euler matrices for adaptive pass-1 scoring.
+
+    RELION constructs adaptive coarse scorer matrices in ``make_eulers_3D``
+    on the device. Fine scoring and weighted-sum backprojection use the
+    separate host inverse path represented by ``host_rotations``. The two
+    panels are only a few float32 ulps apart, but those ulps can flip the
+    integer-truncated outer-shell cutoff, so a parity replay must not reuse
+    the host panel for coarse scoring.
+    """
+
+    host = np.asarray(host_rotations, dtype=np.float32)
+    if not adaptive_2pass:
+        return host, "host_inverse"
+
+    from recovar.em.sampling import _relion_adaptive_pass1_rotations_f32
+
+    device = _relion_adaptive_pass1_rotations_f32(
+        np.asarray(source_eulers_deg, dtype=np.float32),
+        float(random_perturbation),
+        float(angular_sampling_deg),
+    )
+    if device is None:
+        raise RuntimeError(
+            "adaptive K-class parity requires a GPU and the custom CUDA "
+            "RELION make_eulers_3D implementation"
+        )
+    device = np.asarray(device, dtype=np.float32)
+    if device.shape != host.shape:
+        raise RuntimeError(
+            "RELION device/host coarse rotation panels have different shapes: "
+            f"{device.shape} vs {host.shape}"
+        )
+    return device, "relion_cuda_make_eulers_3d"
+
+
 def _scalar(table_or_dict, name: str, default=None):
     if table_or_dict is None:
         if default is None:
@@ -1360,10 +1403,24 @@ def main() -> None:
     )
     offset_range_px = float(sampling["offset_range"]) / pixel_size
     offset_step_px = float(sampling["offset_step"]) / pixel_size
+    source_rotation_eulers = get_relion_rotation_grid_eulers(healpix_order)
+    angular_sampling_deg = relion_angular_sampling_deg(
+        healpix_order,
+        adaptive_oversampling=0,
+    )
     rotations, _ = apply_relion_rotation_perturbation_to_eulers(
-        get_relion_rotation_grid_eulers(healpix_order),
+        source_rotation_eulers,
         random_perturbation,
-        relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
+        angular_sampling_deg,
+    )
+    coarse_scoring_rotations, coarse_rotation_source = (
+        _adaptive_coarse_scoring_rotations(
+            source_rotation_eulers,
+            rotations,
+            random_perturbation=random_perturbation,
+            angular_sampling_deg=angular_sampling_deg,
+            adaptive_2pass=bool(args.adaptive_2pass),
+        )
     )
     base_translations = get_translation_grid(offset_range_px, offset_step_px).astype(np.float32)
     translations = apply_relion_translation_perturbation(
@@ -1378,6 +1435,7 @@ def main() -> None:
         f"star_rp={star_random_perturbation:+.12g}, "
         f"offset_range_px={offset_range_px:.3f}, offset_step_px={offset_step_px:.3f}"
     )
+    print(f"  coarse scorer rotations: {coarse_rotation_source}")
     coarse_current_size = None
     coarse_engine_current_size = current_size
     if args.adaptive_2pass:
@@ -1574,7 +1632,7 @@ def main() -> None:
             means,
             mean_variance_prev,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             fine_rotations,
             fine_translations,
@@ -1599,7 +1657,7 @@ def main() -> None:
             means,
             mean_variance_prev,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             args.disc_type,
             current_size=current_size,
@@ -1629,7 +1687,7 @@ def main() -> None:
             ds,
             means,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             args.disc_type,
             class_log_priors=class_log_priors,
@@ -1752,7 +1810,7 @@ def main() -> None:
             ds,
             means,
             noise_variance,
-            rotations.astype(np.float32),
+            coarse_scoring_rotations,
             translations.astype(np.float32),
             args.disc_type,
             class_log_priors=class_log_priors,
@@ -1970,6 +2028,7 @@ def main() -> None:
         "random_perturbation": float(random_perturbation),
         "random_perturbation_star": float(star_random_perturbation),
         "random_perturbation_source": random_perturbation_source,
+        "coarse_rotation_source": coarse_rotation_source,
         "perturb_restart_state_iteration": args.perturb_restart_state_iteration,
         "elapsed_s": float(elapsed_s),
         "image_fourier_backend": args.image_fourier_backend,
