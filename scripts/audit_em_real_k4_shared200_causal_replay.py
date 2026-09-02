@@ -39,8 +39,10 @@ from scripts.summarize_em_completion_bench import (  # noqa: E402
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture  # noqa: E402
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture  # noqa: E402
 
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v5"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v6"
 MAX_NATIVE_SCALAR_RELATIVE_RANGE = 5.0e-4
+ROTATION_CHILDREN_PER_PARENT = 8
+TRANSLATION_CHILDREN_PER_PARENT = 4
 RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS = frozenset(
     {"reconstruction_probs", "reconstruction_mask", "relion_raw_diff2"}
 )
@@ -155,6 +157,216 @@ def _partial_rotation_map(
         assume_unique=True,
     )
     return native_to_recovar, native_only, recovar_only
+
+
+def _canonical_native_coarse_rotation_ids(
+    rotation_ids: np.ndarray,
+    *,
+    direction_count: int,
+    psi_count: int,
+) -> np.ndarray:
+    """Convert RELION direction-major coarse IDs to RECOVAR psi-major IDs."""
+
+    values = np.asarray(rotation_ids, dtype=np.int64)
+    _require(direction_count > 0 and psi_count > 0, "invalid native coarse rotation dimensions")
+    _require(
+        np.all((values >= 0) & (values < direction_count * psi_count)),
+        "native coarse rotation ID is out of range",
+    )
+    direction = values // psi_count
+    psi = values % psi_count
+    return psi * direction_count + direction
+
+
+def _set_overlap(native: set[Any], recovar: set[Any]) -> dict[str, Any]:
+    intersection = len(native & recovar)
+    union = len(native | recovar)
+    return {
+        "exact": native == recovar,
+        "intersection": intersection,
+        "union": union,
+        "native_only": len(native - recovar),
+        "recovar_only": len(recovar - native),
+        "native_count": len(native),
+        "recovar_count": len(recovar),
+        "jaccard": 1.0 if union == 0 else intersection / float(union),
+    }
+
+
+def _coarse_parent_support(
+    *,
+    candidates: np.ndarray,
+    candidate_mask: np.ndarray,
+    oversampled_rot_indices: np.ndarray,
+    parent_map: np.ndarray,
+    fine_translation_parent: np.ndarray,
+    native_to_recovar: np.ndarray,
+    direction_count: int,
+    psi_count: int,
+) -> dict[str, Any]:
+    """Compare the coarse parents that each engine expanded into pass 2."""
+
+    names = set(candidates.dtype.names or ())
+    required_native = {"rotation_id", "rotation_local", "coarse_translation"}
+    _require(required_native <= names, "native fine-score capture lacks coarse-parent identities")
+    mask = np.asarray(candidate_mask, dtype=bool)
+    fine_rotation_ids = np.asarray(oversampled_rot_indices, dtype=np.int64).reshape(-1)
+    local_parent = np.asarray(parent_map, dtype=np.int64).reshape(-1)
+    translation_parent = np.asarray(fine_translation_parent, dtype=np.int64).reshape(-1)
+    _require(
+        mask.ndim == 2
+        and fine_rotation_ids.shape == local_parent.shape == (mask.shape[0],)
+        and translation_parent.shape == (mask.shape[1],),
+        "RECOVAR coarse-parent capture shapes differ",
+    )
+    _require(
+        np.all(fine_rotation_ids >= 0) and np.all(translation_parent >= 0),
+        "RECOVAR coarse-parent identities are negative",
+    )
+
+    recovar_rotation_parent = fine_rotation_ids // ROTATION_CHILDREN_PER_PARENT
+    unique_rotation_parent = np.unique(recovar_rotation_parent)
+    expected_local_parent = np.searchsorted(unique_rotation_parent, recovar_rotation_parent)
+    _require(
+        np.array_equal(local_parent, expected_local_parent),
+        "RECOVAR parent_map is not the sorted-local gather of global coarse parents",
+    )
+    if fine_rotation_ids.size:
+        rotation_children = np.bincount(local_parent)
+        _require(
+            np.all(rotation_children == ROTATION_CHILDREN_PER_PARENT),
+            "RECOVAR rotation parents are not complete eight-child expansions",
+        )
+        expected_children = np.arange(ROTATION_CHILDREN_PER_PARENT, dtype=np.int64)
+        for parent_index in range(rotation_children.size):
+            observed_children = np.sort(
+                fine_rotation_ids[local_parent == parent_index]
+                % ROTATION_CHILDREN_PER_PARENT
+            )
+            _require(
+                np.array_equal(observed_children, expected_children),
+                "RECOVAR rotation child identities are incomplete",
+            )
+    if translation_parent.size:
+        translation_children = np.bincount(translation_parent)
+        _require(
+            np.all(translation_children == TRANSLATION_CHILDREN_PER_PARENT),
+            "RECOVAR translation parents are not complete four-child expansions",
+        )
+
+    native_rotation_id = np.asarray(candidates["rotation_id"], dtype=np.int64)
+    native_rotation_local = np.asarray(candidates["rotation_local"], dtype=np.int64)
+    native_translation_parent = np.asarray(candidates["coarse_translation"], dtype=np.int64)
+    native_rotation_parent = _canonical_native_coarse_rotation_ids(
+        native_rotation_id,
+        direction_count=direction_count,
+        psi_count=psi_count,
+    )
+    native_joint = set(
+        zip(native_rotation_parent.tolist(), native_translation_parent.tolist(), strict=True)
+    )
+    if candidates.size:
+        native_pairs = np.stack((native_rotation_parent, native_translation_parent), axis=1)
+        _, native_pair_counts = np.unique(native_pairs, axis=0, return_counts=True)
+        _require(
+            np.all(
+                native_pair_counts
+                == ROTATION_CHILDREN_PER_PARENT * TRANSLATION_CHILDREN_PER_PARENT
+            ),
+            "native coarse parents are not complete 8x4 fine expansions",
+        )
+        _require(
+            np.all((native_rotation_local >= 0) & (native_rotation_local < native_to_recovar.size)),
+            "native local rotation identity is out of range",
+        )
+        for local_index in np.unique(native_rotation_local):
+            local_rows = native_rotation_local == local_index
+            local_native_parent = np.unique(native_rotation_parent[local_rows])
+            _require(local_native_parent.size == 1, "native local rotation maps to multiple coarse parents")
+            recovar_index = int(native_to_recovar[int(local_index)])
+            if recovar_index >= 0:
+                _require(
+                    int(recovar_rotation_parent[recovar_index]) == int(local_native_parent[0]),
+                    "native/RECOVAR coarse rotation permutation disagrees with exact child geometry",
+                )
+
+    selected_rotation, selected_translation = np.nonzero(mask)
+    recovar_joint = set(
+        zip(
+            recovar_rotation_parent[selected_rotation].tolist(),
+            translation_parent[selected_translation].tolist(),
+            strict=True,
+        )
+    )
+    if selected_rotation.size:
+        recovar_pairs = np.stack(
+            (
+                recovar_rotation_parent[selected_rotation],
+                translation_parent[selected_translation],
+            ),
+            axis=1,
+        )
+        _, recovar_pair_counts = np.unique(recovar_pairs, axis=0, return_counts=True)
+        _require(
+            np.all(
+                recovar_pair_counts
+                == ROTATION_CHILDREN_PER_PARENT * TRANSLATION_CHILDREN_PER_PARENT
+            ),
+            "RECOVAR coarse parents are not complete 8x4 fine expansions",
+        )
+
+    native_rotation_set = {item[0] for item in native_joint}
+    recovar_rotation_set = {item[0] for item in recovar_joint}
+    native_translation_set = {item[1] for item in native_joint}
+    recovar_translation_set = {item[1] for item in recovar_joint}
+    return {
+        "joint": _set_overlap(native_joint, recovar_joint),
+        "rotation": _set_overlap(native_rotation_set, recovar_rotation_set),
+        "translation": _set_overlap(native_translation_set, recovar_translation_set),
+        "native_rotation_order": "RELION direction-major converted to RECOVAR psi-major",
+        "rotation_children_per_parent": ROTATION_CHILDREN_PER_PARENT,
+        "translation_children_per_parent": TRANSLATION_CHILDREN_PER_PARENT,
+    }
+
+
+def _new_support_accumulator() -> dict[str, int]:
+    return {
+        "records": 0,
+        "exact": 0,
+        "intersection": 0,
+        "union": 0,
+        "native_only": 0,
+        "recovar_only": 0,
+        "native_count": 0,
+        "recovar_count": 0,
+    }
+
+
+def _add_support_metric(accumulator: dict[str, int], metric: dict[str, Any]) -> None:
+    accumulator["records"] += 1
+    accumulator["exact"] += int(metric["exact"])
+    for key in (
+        "intersection",
+        "union",
+        "native_only",
+        "recovar_only",
+        "native_count",
+        "recovar_count",
+    ):
+        accumulator[key] += int(metric[key])
+
+
+def _support_summary(accumulator: dict[str, int]) -> dict[str, Any]:
+    _require(accumulator["records"] > 0, "coarse support accumulator is empty")
+    return {
+        **accumulator,
+        "exact_fraction": accumulator["exact"] / float(accumulator["records"]),
+        "jaccard": (
+            1.0
+            if accumulator["union"] == 0
+            else accumulator["intersection"] / float(accumulator["union"])
+        ),
+    }
 
 
 @dataclass
@@ -356,6 +568,9 @@ def _load_recovar(
         "probs",
         "rotation_log_prior",
         "translation_log_prior",
+        "oversampled_rot_indices",
+        "parent_map",
+        "fine_translation_parent",
     }
     _require(required <= set(values), f"RECOVAR pass-2 capture lacks {sorted(required - set(values))}: {path}")
     reconstruction_fields = RECOVAR_RECONSTRUCTION_CAPTURE_FIELDS & set(values)
@@ -482,6 +697,22 @@ def _join_class(
         empty_scores = np.empty(0, dtype=np.float32)
         native_posterior = np.zeros(candidate_mask.shape, dtype=np.float32)
         native_support = np.zeros(candidate_mask.shape, dtype=bool)
+        coarse_fields = {"oversampled_rot_indices", "parent_map", "fine_translation_parent"}
+        native_coarse_fields = {"rotation_id", "rotation_local", "coarse_translation"}
+        coarse_parent_support = None
+        if coarse_fields <= set(recovar) and native_coarse_fields <= set(
+            score.candidates.dtype.names or ()
+        ):
+            coarse_parent_support = _coarse_parent_support(
+                candidates=score.candidates,
+                candidate_mask=candidate_mask,
+                oversampled_rot_indices=recovar["oversampled_rot_indices"],
+                parent_map=recovar["parent_map"],
+                fine_translation_parent=recovar["fine_translation_parent"],
+                native_to_recovar=np.full(factor.rotations.shape[0], -1, dtype=np.int64),
+                direction_count=int(score.header[12]),
+                psi_count=int(score.header[13]),
+            )
         return {
             "stack": stack,
             "class_id": class_id,
@@ -506,6 +737,7 @@ def _join_class(
             "matched_rotation_count": 0,
             "native_only_rotation_count": 0,
             "recovar_only_rotation_count": int(recovar_rotations.shape[0]),
+            "coarse_parent_support": coarse_parent_support,
             "significant_weight_bits": int(factor.header[25]),
             "weight_norm_bits": int(factor.header[26]),
         }
@@ -515,6 +747,21 @@ def _join_class(
         native_rotations,
         recovar_rotations,
     )
+    candidates = score.candidates
+    coarse_fields = {"oversampled_rot_indices", "parent_map", "fine_translation_parent"}
+    native_coarse_fields = {"rotation_id", "rotation_local", "coarse_translation"}
+    coarse_parent_support = None
+    if coarse_fields <= set(recovar) and native_coarse_fields <= set(candidates.dtype.names or ()):
+        coarse_parent_support = _coarse_parent_support(
+            candidates=candidates,
+            candidate_mask=candidate_mask,
+            oversampled_rot_indices=recovar["oversampled_rot_indices"],
+            parent_map=recovar["parent_map"],
+            fine_translation_parent=recovar["fine_translation_parent"],
+            native_to_recovar=native_to_recovar,
+            direction_count=int(score.header[12]),
+            psi_count=int(score.header[13]),
+        )
     native_to_union = native_to_recovar.copy()
     native_to_union[native_only_rotations] = (
         recovar_rotations.shape[0]
@@ -534,7 +781,6 @@ def _join_class(
     )
     recovar_support_union = np.zeros(union_shape, dtype=bool)
     recovar_support_union[: recovar_rotations.shape[0]] = recovar_support
-    candidates = score.candidates
     active = (candidates["flags"] & ACTIVE) != 0
     native_rotation = np.asarray(candidates["rotation_local"], dtype=np.int64)
     translations = np.asarray(candidates["translation_id"], dtype=np.int64)
@@ -612,6 +858,7 @@ def _join_class(
         "matched_rotation_count": int(np.count_nonzero(native_to_recovar >= 0)),
         "native_only_rotation_count": int(native_only_rotations.size),
         "recovar_only_rotation_count": int(recovar_only_rotations.size),
+        "coarse_parent_support": coarse_parent_support,
         "significant_weight_bits": int(factor.header[25]),
         "weight_norm_bits": int(factor.header[26]),
     }
@@ -926,6 +1173,14 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
     particle_rows = []
     particle_mass_rows = []
     native_scalar_rows = []
+    support_axes = ("joint", "rotation", "translation")
+    coarse_support_accumulators = {
+        axis: _new_support_accumulator() for axis in support_axes
+    }
+    coarse_support_by_class = {
+        class_id: {axis: _new_support_accumulator() for axis in support_axes}
+        for class_id in range(1, CASE.K + 1)
+    }
     for subset_local_index, stack in enumerate(stacks):
         joined = []
         for class_id in range(1, CASE.K + 1):
@@ -944,6 +1199,14 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             native_empty_recovar_nonempty_count += int(
                 item["empty_sparse_support"] and item["candidate_union"] > 0
             )
+            _require(
+                item["coarse_parent_support"] is not None,
+                f"coarse-parent capture is incomplete: stack={stack} class={class_id}",
+            )
+            for axis in support_axes:
+                metric = item["coarse_parent_support"][axis]
+                _add_support_metric(coarse_support_accumulators[axis], metric)
+                _add_support_metric(coarse_support_by_class[class_id][axis], metric)
             if item["native_raw"].size:
                 raw.add(item["native_raw"], item["recovar_raw"], center=True)
                 combined.add(item["native_combined"], item["recovar_combined"], center=True)
@@ -1011,6 +1274,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
                         "candidate_intersection": item["candidate_intersection"],
                         "candidate_union": item["candidate_union"],
                         "candidate_exact": item["candidate_exact"],
+                        "coarse_parent_support": item["coarse_parent_support"],
                         "recovar_reconstruction_capture_present": item[
                             "recovar_reconstruction_capture_present"
                         ],
@@ -1104,8 +1368,46 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             "relative range is reported while map and assignment inertness remain separate gates"
         ),
     }
+    coarse_parent_summary = {
+        **{
+            axis: _support_summary(coarse_support_accumulators[axis])
+            for axis in support_axes
+        },
+        "by_class": [
+            {
+                "class_id_one_based": class_id,
+                **{
+                    axis: _support_summary(coarse_support_by_class[class_id][axis])
+                    for axis in support_axes
+                },
+            }
+            for class_id in range(1, CASE.K + 1)
+        ],
+        "native_rotation_order": "RELION direction-major converted to RECOVAR psi-major",
+        "rotation_children_per_parent": ROTATION_CHILDREN_PER_PARENT,
+        "translation_children_per_parent": TRANSLATION_CHILDREN_PER_PARENT,
+        "physical_permutation_validation": (
+            "every exactly shared fine child must map to the same canonical coarse parent"
+        ),
+    }
     causal_metrics = {
         "candidate_tuple_exact_fraction": exact_count / float(CASE.particle_count * CASE.K),
+        "coarse_parent_joint_exact_fraction": coarse_parent_summary["joint"][
+            "exact_fraction"
+        ],
+        "coarse_parent_joint_jaccard": coarse_parent_summary["joint"]["jaccard"],
+        "coarse_rotation_support_exact_fraction": coarse_parent_summary["rotation"][
+            "exact_fraction"
+        ],
+        "coarse_rotation_support_jaccard": coarse_parent_summary["rotation"][
+            "jaccard"
+        ],
+        "coarse_translation_support_exact_fraction": coarse_parent_summary[
+            "translation"
+        ]["exact_fraction"],
+        "coarse_translation_support_jaccard": coarse_parent_summary["translation"][
+            "jaccard"
+        ],
         "centered_raw_score_relative_l2": raw_report["relative_l2"],
         "centered_combined_score_relative_l2": combined_report["relative_l2"],
         "posterior_relative_l2": posterior_report["relative_l2"],
@@ -1157,6 +1459,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             "posterior": posterior_report,
             "native_global_scalar_replay": native_scalar_summary,
             "native_global_scalar_particle_rows": native_scalar_rows,
+            "coarse_parent_support": coarse_parent_summary,
             "support_intersection": support_intersection,
             "support_union": support_union,
             "particle_rows": particle_rows,

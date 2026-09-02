@@ -117,6 +117,52 @@ def test_partial_rotation_map_preserves_exact_union_topology():
         auditor._partial_rotation_map(duplicate, rotations[[1]])
 
 
+def test_coarse_parent_support_converts_native_order_and_separates_axes():
+    assert auditor._canonical_native_coarse_rotation_ids(
+        np.arange(4),
+        direction_count=2,
+        psi_count=2,
+    ).tolist() == [0, 2, 1, 3]
+
+    candidate_dtype = np.dtype(
+        [
+            ("rotation_id", "<u8"),
+            ("rotation_local", "<u8"),
+            ("coarse_translation", "<u4"),
+        ]
+    )
+    candidates = np.zeros(32, dtype=candidate_dtype)
+    candidates["rotation_id"] = 1
+    candidates["rotation_local"] = np.repeat(np.arange(8), 4)
+    candidates["coarse_translation"] = 0
+    common = dict(
+        candidates=candidates,
+        candidate_mask=np.ones((8, 4), dtype=bool),
+        parent_map=np.zeros(8, dtype=np.int32),
+        fine_translation_parent=np.zeros(4, dtype=np.int32),
+        direction_count=2,
+        psi_count=2,
+    )
+
+    exact = auditor._coarse_parent_support(
+        **common,
+        oversampled_rot_indices=np.arange(16, 24),
+        native_to_recovar=np.arange(8),
+    )
+    assert exact["joint"]["exact"] is True
+    assert exact["rotation"]["jaccard"] == 1.0
+    assert exact["translation"]["jaccard"] == 1.0
+
+    different_rotation = auditor._coarse_parent_support(
+        **common,
+        oversampled_rot_indices=np.arange(8, 16),
+        native_to_recovar=np.full(8, -1, dtype=np.int64),
+    )
+    assert different_rotation["joint"]["jaccard"] == 0.0
+    assert different_rotation["rotation"]["jaccard"] == 0.0
+    assert different_rotation["translation"]["jaccard"] == 1.0
+
+
 def test_map_metrics_loads_recovar_diagnostic_in_its_relion_disk_frame(monkeypatch, tmp_path):
     monkeypatch.setattr(auditor, "CASE", SimpleNamespace(K=1))
     recovar_path = tmp_path / "recovar/output/recovar_class001.mrc"
@@ -159,6 +205,9 @@ def test_load_recovar_allows_absent_empty_enrichment_but_rejects_partial(tmp_pat
         "probs": np.zeros((1, 2), dtype=np.float32),
         "rotation_log_prior": np.zeros(1, dtype=np.float32),
         "translation_log_prior": np.zeros(2, dtype=np.float32),
+        "oversampled_rot_indices": np.asarray([0], dtype=np.int64),
+        "parent_map": np.asarray([0], dtype=np.int32),
+        "fine_translation_parent": np.asarray([0, 0], dtype=np.int32),
     }
     np.savez(path, **base)
 
