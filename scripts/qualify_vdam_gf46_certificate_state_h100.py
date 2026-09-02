@@ -715,6 +715,8 @@ def _runtime_provenance(repo_root: Path, expected_gpu_uuid: str) -> dict[str, An
                 "SLURM_JOB_GPUS",
                 "SLURM_STEP_GPUS",
                 "SLURM_CPUS_PER_TASK",
+                "VDAM_ALLOCATED_GPU_UUIDS_CSV",
+                "VDAM_ALLOCATION_SELECTOR_RESOLUTION",
             )
         },
         "recovar_file": str(recovar_path),

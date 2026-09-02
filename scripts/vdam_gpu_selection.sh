@@ -13,9 +13,11 @@ vdam_assert_target_gpu_allocated() {
   local token
   local uuid
   local found=0
+  local used_cgroup_visible_fallback=0
   local -a allocation_tokens=()
   local -a resolved_uuids=()
   local -a token_uuids=()
+  local -a visible_uuids=()
 
   if [[ -z "${allocation_spec}" ]]; then
     allocation_spec=${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}}
@@ -38,8 +40,23 @@ vdam_assert_target_gpu_allocated() {
       return 76
     fi
     if ! query_output=$(nvidia-smi -i "${token}" --query-gpu=uuid --format=csv,noheader); then
-      echo "VDAM cannot resolve allocated GPU selector ${token}: ${allocation_spec}" >&2
-      return 76
+      # On some Slurm/cgroup configurations SLURM_JOB_GPUS retains the
+      # node-global numeric ordinal while NVML exposes the sole allocated GPU
+      # re-indexed as device zero.  A numeric selector is then unresolvable,
+      # even though the cgroup-visible UUID still proves the allocation.  Only
+      # accept that narrow case: one allocation token, one visible GPU, and an
+      # exact match to the pinned target UUID.
+      mapfile -t visible_uuids < <(vdam_visible_gpu_uuids)
+      if [[ "${#allocation_tokens[@]}" -eq 1 \
+        && "${token}" =~ ^[0-9]+$ \
+        && "${#visible_uuids[@]}" -eq 1 \
+        && "${visible_uuids[0]}" == "${target_uuid}" ]]; then
+        query_output=${visible_uuids[0]}
+        used_cgroup_visible_fallback=1
+      else
+        echo "VDAM cannot resolve allocated GPU selector ${token}: ${allocation_spec}" >&2
+        return 76
+      fi
     fi
     mapfile -t token_uuids < <(
       printf '%s\n' "${query_output}" | sed 's/[[:space:]]//g; /^$/d'
@@ -60,7 +77,14 @@ vdam_assert_target_gpu_allocated() {
   done
 
   VDAM_ALLOCATED_GPU_UUIDS_CSV=$(IFS=,; printf '%s' "${resolved_uuids[*]}")
-  export VDAM_ALLOCATED_GPU_UUIDS_CSV
+  VDAM_ALLOCATION_SELECTOR_RESOLUTION=$(
+    if [[ "${used_cgroup_visible_fallback}" == 1 ]]; then
+      printf '%s' 'cgroup_single_visible_uuid'
+    else
+      printf '%s' 'direct_selector_query'
+    fi
+  )
+  export VDAM_ALLOCATED_GPU_UUIDS_CSV VDAM_ALLOCATION_SELECTOR_RESOLUTION
   if [[ "${found}" != 1 ]]; then
     echo "VDAM_TARGET_GPU_NOT_ALLOCATED expected=${target_uuid} allocation_spec=${allocation_spec} resolved=${VDAM_ALLOCATED_GPU_UUIDS_CSV:-none}" >&2
     return 76

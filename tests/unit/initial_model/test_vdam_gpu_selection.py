@@ -20,13 +20,14 @@ import sys
 
 args = sys.argv[1:]
 mapping = json.loads(os.environ["MOCK_GPU_UUID_MAP"])
-if len(args) < 2 or args[0] != "-i":
-    raise SystemExit(64)
-selector = args[1]
-if selector == os.environ.get("MOCK_GPU_QUERY_FAILURE"):
-    raise SystemExit(65)
 if "--query-gpu=uuid" not in args or "--format=csv,noheader" not in args:
     raise SystemExit(66)
+if len(args) >= 2 and args[0] == "-i":
+    selector = args[1]
+else:
+    selector = "__visible__"
+if selector == os.environ.get("MOCK_GPU_QUERY_FAILURE"):
+    raise SystemExit(65)
 value = mapping.get(selector)
 if value is None:
     raise SystemExit(67)
@@ -60,6 +61,7 @@ set -euo pipefail
 source "$1"
 vdam_assert_target_gpu_allocated "$2" "$3"
 printf 'allocated=%s\n' "${VDAM_ALLOCATED_GPU_UUIDS_CSV}"
+printf 'resolution=%s\n' "${VDAM_ALLOCATION_SELECTOR_RESOLUTION}"
 printf 'visible=%s\n' "${CUDA_VISIBLE_DEVICES-}"
 """
     return subprocess.run(
@@ -82,6 +84,7 @@ def test_target_gpu_allocation_resolves_each_selector_and_preserves_initial_visi
 
     assert result.returncode == 0, result.stderr
     assert "allocated=GPU-first,GPU-second" in result.stdout
+    assert "resolution=direct_selector_query" in result.stdout
     assert "visible=initial-visible-value" in result.stdout
 
 
@@ -119,6 +122,43 @@ def test_target_gpu_allocation_uses_slurm_step_then_job_then_initial_visible_dev
 
         assert result.returncode == 0, result.stderr
         assert f"allocated={target}" in result.stdout
+        assert "resolution=direct_selector_query" in result.stdout
+
+
+def test_target_gpu_allocation_accepts_single_cgroup_visible_uuid_for_stale_numeric_ordinal(
+    tmp_path,
+):
+    result = _run_allocation_assertion(
+        tmp_path,
+        target="GPU-target",
+        allocation_spec="1",
+        mapping={"__visible__": "GPU-target"},
+        environment={"MOCK_GPU_QUERY_FAILURE": "1"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "allocated=GPU-target" in result.stdout
+    assert "resolution=cgroup_single_visible_uuid" in result.stdout
+
+
+def test_target_gpu_allocation_rejects_ambiguous_or_wrong_cgroup_visible_fallback(
+    tmp_path,
+):
+    cases = (
+        ["GPU-target", "GPU-other"],
+        "GPU-other",
+    )
+    for index, visible in enumerate(cases):
+        result = _run_allocation_assertion(
+            tmp_path / str(index),
+            target="GPU-target",
+            allocation_spec="1",
+            mapping={"__visible__": visible},
+            environment={"MOCK_GPU_QUERY_FAILURE": "1"},
+        )
+
+        assert result.returncode == 76
+        assert "cannot resolve allocated GPU selector 1" in result.stderr
 
 
 def test_target_gpu_allocation_rejects_target_outside_resolved_allocation(tmp_path):
