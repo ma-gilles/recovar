@@ -28,6 +28,7 @@ _SIGNIFICANCE_SCORE_CACHE_MAX_GB_ENV = "RECOVAR_SIGNIFICANCE_SCORE_CACHE_MAX_GB"
 _SIGNIFICANCE_SCORE_CACHE_DEFAULT_MAX_GB = 2.0
 _SIGNIFICANCE_FUSED_PASS1_ENV = "RECOVAR_PASS1_FUSED"
 _GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP"
+_RELION_ACC_DOUBLE_FLOORF_QUIRK_ENV = "RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK"
 _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
     "RECOVAR_FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN"
 )
@@ -63,6 +64,17 @@ def _compact_projection_window_positions(compact_indices, window_indices) -> np.
             f"{missing[:8]}"
         )
     return np.asarray([position_by_index[int(index)] for index in window], dtype=np.int32)
+
+
+def _relion_acc_double_floorf_quirk_enabled() -> bool:
+    """Match RELION's texture-free ACC projector coordinate flooring."""
+
+    token = os.environ.get(_RELION_ACC_DOUBLE_FLOORF_QUIRK_ENV, "0").strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(f"Unsupported {_RELION_ACC_DOUBLE_FLOORF_QUIRK_ENV}={token!r}")
 
 
 class SignificanceDumpComplete(RuntimeError):
@@ -229,9 +241,13 @@ def _relion_coarse_gaussian_square_operands(
         jnp.zeros((), dtype=shifted_corrected.dtype),
     )
     pixel_weight = square_score_weight * half_weights[score_indices][None, :]
+    output_complex_dtype = (
+        jnp.complex128 if shifted_corrected.dtype == jnp.complex128 else jnp.complex64
+    )
+    output_real_dtype = jnp.float64 if output_complex_dtype == jnp.complex128 else jnp.float32
     return (
-        jnp.asarray(shifted_corrected, dtype=jnp.complex64),
-        jnp.asarray(pixel_weight, dtype=jnp.float32),
+        jnp.asarray(shifted_corrected, dtype=output_complex_dtype),
+        jnp.asarray(pixel_weight, dtype=output_real_dtype),
     )
 
 
@@ -247,13 +263,9 @@ def _relion_coarse_gaussian_square_operands_sincosf(
     translation_phase_source=None,
     return_unshifted=False,
 ):
-    """Build corrected coarse images with RELION's CUDA ``sincosf`` path."""
+    """Build corrected coarse images with RELION's CUDA sin/cos path."""
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _relion_translation_angles_f32,
-    )
-
     score_indices = jnp.asarray(score_indices, dtype=jnp.int32)
     if translation_phase_source is None:
         translation_phase_source = translations
@@ -272,12 +284,25 @@ def _relion_coarse_gaussian_square_operands_sincosf(
         unshifted_corrected,
         jnp.zeros((), dtype=unshifted_corrected.dtype),
     )
-    shifted_corrected = cuda_backproject.relion_translate_score_f32(
-        jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
-        jnp.asarray(
-            _relion_translation_angles_f32(translation_phase_source, image_shape),
-            dtype=jnp.float32,
-        ),
+    use_float64 = unshifted_corrected.dtype == jnp.complex128
+    complex_dtype = jnp.complex128 if use_float64 else jnp.complex64
+    real_dtype = jnp.float64 if use_float64 else jnp.float32
+    angle_dtype = np.float64 if use_float64 else np.float32
+    translation_angles = np.asarray(
+        -2.0
+        * np.pi
+        * np.asarray(translation_phase_source, dtype=np.float64)
+        / float(image_shape[0]),
+        dtype=angle_dtype,
+    )
+    translate_score = (
+        cuda_backproject.relion_translate_score_f64
+        if use_float64
+        else cuda_backproject.relion_translate_score_f32
+    )
+    shifted_corrected = translate_score(
+        jnp.asarray(unshifted_corrected, dtype=complex_dtype),
+        jnp.asarray(translation_angles, dtype=real_dtype),
         score_indices,
         image_shape,
     )
@@ -288,10 +313,10 @@ def _relion_coarse_gaussian_square_operands_sincosf(
             len(translations),
             unshifted_corrected.shape[1],
         ),
-        jnp.asarray(pixel_weight, dtype=jnp.float32),
+        jnp.asarray(pixel_weight, dtype=real_dtype),
     )
     if return_unshifted:
-        return (*result, jnp.asarray(unshifted_corrected, dtype=jnp.complex64))
+        return (*result, jnp.asarray(unshifted_corrected, dtype=complex_dtype))
     return result
 
 
@@ -419,10 +444,11 @@ def _select_relion_coarse_rescore_winner_slots(
     n_trans: int,
     healpix_order: int | None,
     coarse_rotation_ids=None,
+    score_dtype=np.float32,
 ):
     """Select maxima, resolving exact score ties in RELION's flat order."""
 
-    scores = np.asarray(scores, dtype=np.float32)
+    scores = np.asarray(scores, dtype=score_dtype)
     candidate_pose_ids = np.asarray(candidate_pose_ids, dtype=np.int64)
     if scores.shape != candidate_pose_ids.shape or scores.ndim != 2:
         raise ValueError(
@@ -889,8 +915,8 @@ def _maybe_dump_significance_batch(
             normalization_log_z=np.float64(log_z[local_pos]),
             best_score=np.float64(best_score[local_pos]),
             max_posterior=np.float64(max_posterior[local_pos]),
-            rotations=np.asarray(rotations, dtype=np.float32),
-            translations=np.asarray(translations, dtype=np.float32),
+            rotations=np.asarray(rotations),
+            translations=np.asarray(translations),
             rot_indices=rot_indices,
             trans_indices=trans_indices,
             rotation_log_prior=(
@@ -1108,8 +1134,8 @@ def _maybe_dump_k_class_significance_batch(
             class_log_z=class_log_z_stack[local_pos],
             best_score=np.float64(best_score[local_pos]),
             max_posterior=np.float64(max_posterior[local_pos]),
-            rotations=np.asarray(rotations, dtype=np.float32),
-            translations=np.asarray(translations, dtype=np.float32),
+            rotations=np.asarray(rotations),
+            translations=np.asarray(translations),
             class_indices=class_indices_flat,
             rot_indices=rot_indices_flat,
             trans_indices=trans_indices_flat,
@@ -1141,7 +1167,7 @@ def _maybe_dump_k_class_significance_batch(
                 else np.empty((0,), dtype=np.float64)
             ),
             coarse_gaussian_unshifted_corrected=(
-                np.asarray(coarse_gaussian_unshifted_corrected[local_pos], dtype=np.complex64)
+                np.asarray(coarse_gaussian_unshifted_corrected[local_pos])
                 if coarse_gaussian_unshifted_corrected is not None
                 else np.empty((0,), dtype=np.complex64)
             ),
@@ -1151,12 +1177,12 @@ def _maybe_dump_k_class_significance_batch(
                 else np.empty((0,), dtype=np.complex64)
             ),
             coarse_gaussian_pixel_weight=(
-                np.asarray(coarse_gaussian_pixel_weight[local_pos], dtype=np.float32)
+                np.asarray(coarse_gaussian_pixel_weight[local_pos])
                 if coarse_gaussian_pixel_weight is not None
                 else np.empty((0,), dtype=np.float32)
             ),
             coarse_gaussian_initial_diff2=(
-                np.asarray(coarse_gaussian_initial_diff2[local_pos], dtype=np.float32)
+                np.asarray(coarse_gaussian_initial_diff2[local_pos])
                 if coarse_gaussian_initial_diff2 is not None
                 else np.empty((0,), dtype=np.float32)
             ),
@@ -1390,6 +1416,11 @@ def _compute_significance_batched(
         if relion_projector_texture_interp is None
         else bool(relion_projector_texture_interp)
     )
+    coarse_floorf_quirk = bool(
+        use_float64_scoring
+        and not coarse_texture_interp
+        and _relion_acc_double_floorf_quirk_enabled()
+    )
     projection_kwargs["force_jax"] = bool(projection_force_jax)
     if use_window:
         half_weights_windowed = window_spec.score_values(half_weights)
@@ -1407,7 +1438,13 @@ def _compute_significance_batched(
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
     norm_half_weights = make_half_image_weights(image_shape)
 
-    def _preprocess_batch_relion_numpy(batch_data, ctf_params, batch_size):
+    def _preprocess_batch_relion_numpy(
+        batch_data,
+        ctf_params,
+        batch_size,
+        *,
+        return_unshifted_score_weighted=False,
+    ):
         processed_half = experiment_dataset.process_images_half(
             np.asarray(batch_data),
             apply_image_mask=score_with_masked_images,
@@ -1435,14 +1472,20 @@ def _compute_significance_batched(
             axis=-1,
             keepdims=True,
         ).real
-        return shifted_half, batch_norm, ctf2_over_nv_half
+        result = (shifted_half, batch_norm, ctf2_over_nv_half)
+        if return_unshifted_score_weighted:
+            return (*result, ctf_weighted)
+        return result
 
     # Pad rotations.
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
     n_rot_padded = n_blocks * rotation_block_size
     if n_rot_padded > n_rot:
         pad_size = n_rot_padded - n_rot
-        rotations_padded = np.concatenate([rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))], axis=0)
+        rotations_padded = np.concatenate(
+            [rotations, np.tile(np.eye(3, dtype=np.asarray(rotations).dtype), (pad_size, 1, 1))],
+            axis=0,
+        )
     else:
         rotations_padded = rotations
 
@@ -1528,6 +1571,7 @@ def _compute_significance_batched(
                     int(relion_projector_r_max),
                     int(projection_padding_factor),
                     projector_kwargs.get("projector_output_size"),
+                    coarse_floorf_quirk,
                 )
                 proj_half_b = proj_half_b * _dense_projection_scale(image_shape)
                 proj_abs2_half_b = jnp.abs(proj_half_b) ** 2
@@ -1993,6 +2037,7 @@ def _compute_k_class_significance_batched(
         _e_step_block_scores_windowed,
         _e_step_block_scores_windowed_normalized_cc,
         _relion_coarse_normalized_cc_rescore,
+        _relion_coarse_normalized_cc_rescore_f64,
         _update_logsumexp,
     )
     from recovar.reconstruction import noise as noise_utils
@@ -2093,6 +2138,11 @@ def _compute_k_class_significance_batched(
         if relion_projector_texture_interp is None
         else bool(relion_projector_texture_interp)
     )
+    coarse_floorf_quirk = bool(
+        use_float64_scoring
+        and not coarse_texture_interp
+        and _relion_acc_double_floorf_quirk_enabled()
+    )
     tree_rescore_max_margin = _firstiter_cc_tree_top2_rescore_max_margin()
     # The environment setting spans the full process, while only iteration 1
     # uses normalized CC.  Later Gaussian iterations must remain unaffected.
@@ -2190,14 +2240,10 @@ def _compute_k_class_significance_batched(
             raise ValueError(
                 f"{_K1_COARSE_GAUSSIAN_FFI_ENV} is restricted to K=1"
             )
-        if use_float64_scoring:
-            raise ValueError(
-                f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires production float32 scoring"
-            )
-        if not use_relion_projector or not coarse_texture_interp:
+        if not use_relion_projector:
             raise ValueError(
                 f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires the supplied RELION "
-                "texture projector"
+                "projector"
             )
         if not half_spectrum_scoring:
             raise ValueError(
@@ -2265,7 +2311,7 @@ def _compute_k_class_significance_batched(
         )
         coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
         logger.warning(
-            "K=1 RELION coarse Gaussian FFI enabled (%s): "
+            "K=1 RELION coarse Gaussian FFI enabled (%s, %s): "
             "current_size=%d square_pixels=%d translations=%d",
             (
                 "guarded fresh-K=1 default"
@@ -2273,6 +2319,7 @@ def _compute_k_class_significance_batched(
                 and _K1_COARSE_GAUSSIAN_FFI_ENV not in os.environ
                 else "environment override"
             ),
+            "float64" if use_float64_scoring else "float32",
             score_size,
             square_score_count,
             n_trans,
@@ -2422,7 +2469,10 @@ def _compute_k_class_significance_batched(
     if n_rot_padded > n_rot:
         pad_size = n_rot_padded - n_rot
         rotations_padded = np.concatenate(
-            [rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))],
+            [
+                rotations,
+                np.tile(np.eye(3, dtype=np.asarray(rotations).dtype), (pad_size, 1, 1)),
+            ],
             axis=0,
         )
     else:
@@ -2473,7 +2523,13 @@ def _compute_k_class_significance_batched(
     norm_half_weights = make_half_image_weights(image_shape)
     use_relion_numpy_preprocess = _uses_relion_background_fill(experiment_dataset)
 
-    def _preprocess_batch_relion_numpy(batch_data, ctf_params, batch_size):
+    def _preprocess_batch_relion_numpy(
+        batch_data,
+        ctf_params,
+        batch_size,
+        *,
+        return_unshifted_score_weighted=False,
+    ):
         processed_half = experiment_dataset.process_images_half(
             np.asarray(batch_data),
             apply_image_mask=score_with_masked_images,
@@ -2501,7 +2557,10 @@ def _compute_k_class_significance_batched(
             axis=-1,
             keepdims=True,
         ).real
-        return shifted_half, batch_norm, ctf2_over_nv_half
+        result = (shifted_half, batch_norm, ctf2_over_nv_half)
+        if return_unshifted_score_weighted:
+            return (*result, ctf_weighted)
+        return result
 
     coarse_gaussian_shifted_corrected = None
     coarse_gaussian_unshifted_corrected = None
@@ -2549,6 +2608,7 @@ def _compute_k_class_significance_batched(
                     int(relion_projector_r_max),
                     int(projection_padding_factor),
                     projector_kwargs.get("projector_output_size"),
+                    coarse_floorf_quirk,
                 )
                 proj_half_b = proj_half_b * _dense_projection_scale(image_shape)
                 proj_abs2_half_b = jnp.abs(proj_half_b) ** 2
@@ -2589,8 +2649,14 @@ def _compute_k_class_significance_batched(
                 if projector_returns_compact
                 else proj_half_b[:, coarse_gaussian_score_indices]
             )
-            proj_score = jnp.asarray(proj_score, dtype=jnp.complex64)
-            diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+            coarse_complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
+            proj_score = jnp.asarray(proj_score, dtype=coarse_complex_dtype)
+            coarse_diff2 = (
+                cuda_backproject.relion_coarse_diff2_rectangular_f64
+                if use_float64_scoring
+                else cuda_backproject.relion_coarse_diff2_rectangular_f32
+            )
+            diff2 = coarse_diff2(
                 proj_score,
                 coarse_gaussian_shifted_corrected,
                 coarse_gaussian_pixel_weight,
@@ -2780,16 +2846,21 @@ def _compute_k_class_significance_batched(
                     cc_preprocess_result
                 )
         elif use_relion_numpy_preprocess and not relion_cuda_preprocess:
-            if coarse_gaussian_sincosf_enabled:
-                raise ValueError(
-                    f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV} requires the "
-                    "production half-image preprocessing path",
-                )
-            shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch_relion_numpy(
+            preprocess_result = _preprocess_batch_relion_numpy(
                 batch_data,
                 ctf_params,
                 batch_size,
+                return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled,
             )
+            if coarse_gaussian_sincosf_enabled:
+                (
+                    shifted_half,
+                    batch_norm,
+                    ctf2_over_nv_half,
+                    coarse_gaussian_unshifted_score_weighted,
+                ) = preprocess_result
+            else:
+                shifted_half, batch_norm, ctf2_over_nv_half = preprocess_result
         else:
             preprocess_result = _preprocess_batch(
                 experiment_dataset,
@@ -3025,17 +3096,22 @@ def _compute_k_class_significance_batched(
                     n_trans=n_trans,
                 )
             if exact_coarse_operands_enabled:
+                exact_real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
+                exact_complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
                 ctf_half_rfloat = _relion_exact_ctf_half_from_source_star(
                     experiment_dataset,
                     indices,
                     image_shape,
                 )
-                batch_scale_f32 = jnp.asarray(batch_scale_np, dtype=jnp.float32)
+                batch_scale_exact = jnp.asarray(batch_scale_np, dtype=exact_real_dtype)
                 pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
-                    batch_scale_f32[:, None],
+                    batch_scale_exact[:, None],
                     ctf_half_rfloat,
+                    output_dtype=exact_real_dtype,
                 )
-                exact_unshifted_corrected = processed_direct * pixel_correction
+                exact_unshifted_corrected = (
+                    jnp.asarray(processed_direct, dtype=exact_complex_dtype) * pixel_correction
+                )
                 exact_unshifted_corrected = exact_unshifted_corrected[
                     :, coarse_gaussian_score_indices
                 ]
@@ -3043,27 +3119,48 @@ def _compute_k_class_significance_batched(
                     coarse_gaussian_score_active_mask[None, :],
                     exact_unshifted_corrected,
                     jnp.zeros((), dtype=exact_unshifted_corrected.dtype),
-                ).astype(jnp.complex64)
+                ).astype(exact_complex_dtype)
                 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
                     _relion_translation_angles_f32,
+                    _relion_translation_angles_f64,
                 )
 
-                coarse_gaussian_translation_angles = jnp.asarray(
-                    _relion_translation_angles_f32(translations_source, image_shape),
-                    dtype=jnp.float32,
+                exact_translation_angles = (
+                    _relion_translation_angles_f64
+                    if use_float64_scoring
+                    else _relion_translation_angles_f32
                 )
-                coarse_gaussian_shifted_corrected = cuda_backproject.relion_translate_score_f32(
+                exact_translate_score = (
+                    cuda_backproject.relion_translate_score_f64
+                    if use_float64_scoring
+                    else cuda_backproject.relion_translate_score_f32
+                )
+                coarse_gaussian_shifted_corrected = exact_translate_score(
                     exact_unshifted_corrected,
-                    coarse_gaussian_translation_angles,
+                    jnp.asarray(
+                        exact_translation_angles(translations_source, image_shape),
+                        dtype=exact_real_dtype,
+                    ),
                     coarse_gaussian_score_indices,
                     image_shape,
                 ).reshape(batch_size, n_trans, -1)
-                exact_corr_img = _relion_cuda_corr_img_from_native_noise_variance(
-                    noise_variance_half[None, :],
-                    ctf_half_rfloat,
-                    image_shape,
-                    batch_scale_f32[:, None] if scale_corrections is not None else None,
-                )
+                if use_float64_scoring:
+                    inverse_noise_half = jnp.reciprocal(
+                        jnp.asarray(noise_variance_half, dtype=jnp.float64),
+                    ).astype(exact_real_dtype)
+                    exact_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
+                        inverse_noise_half[None, :],
+                        ctf_half_rfloat,
+                        batch_scale_exact[:, None] if scale_corrections is not None else None,
+                        output_dtype=exact_real_dtype,
+                    )
+                else:
+                    exact_corr_img = _relion_cuda_corr_img_from_native_noise_variance(
+                        noise_variance_half[None, :],
+                        ctf_half_rfloat,
+                        image_shape,
+                        batch_scale_exact[:, None] if scale_corrections is not None else None,
+                    )
                 exact_square_corr_img = exact_corr_img[:, coarse_gaussian_score_indices]
                 exact_square_corr_img = jnp.where(
                     coarse_gaussian_score_active_mask[None, :],
@@ -3072,14 +3169,21 @@ def _compute_k_class_significance_batched(
                 )
                 coarse_gaussian_pixel_weight = jnp.asarray(
                     exact_square_corr_img
-                    * jnp.asarray(half_weights[coarse_gaussian_score_indices], dtype=jnp.float32)[None, :],
-                    dtype=jnp.float32,
+                    * jnp.asarray(
+                        half_weights[coarse_gaussian_score_indices],
+                        dtype=exact_real_dtype,
+                    )[None, :],
+                    dtype=exact_real_dtype,
                 )
                 coarse_gaussian_unshifted_corrected = exact_unshifted_corrected
             coarse_gaussian_initial_diff2 = coarse_gaussian_powerclass(
                 processed_for_powerclass,
                 image_shape=image_shape,
                 current_size=current_size,
+            )
+            coarse_gaussian_initial_diff2 = jnp.asarray(
+                coarse_gaussian_initial_diff2,
+                dtype=jnp.float64 if use_float64_scoring else jnp.float32,
             )
 
         # Identify per-batch dump target rows so we can record raw scores
@@ -3341,8 +3445,10 @@ def _compute_k_class_significance_batched(
             class_sum_values.append(class_sum)
 
         if tree_rescore_enabled:
-            best_scores_np = np.asarray(class_best_scores[0], dtype=np.float32)
-            second_scores_np = np.asarray(class_second_best_scores[0], dtype=np.float32)
+            tree_score_dtype = np.float64 if use_float64_scoring else np.float32
+            tree_complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
+            best_scores_np = np.asarray(class_best_scores[0], dtype=tree_score_dtype)
+            second_scores_np = np.asarray(class_second_best_scores[0], dtype=tree_score_dtype)
             score_margins = best_scores_np - second_scores_np
             ambiguous_rows = np.flatnonzero(
                 np.isfinite(score_margins) & (score_margins <= tree_rescore_max_margin)
@@ -3402,13 +3508,14 @@ def _compute_k_class_significance_batched(
                     projector_max_r=relion_projector_r_max,
                     numerator_weight_candidates=score_weight_candidates,
                 )
-                rescored_scores_np = np.asarray(rescored_candidates, dtype=np.float32)
+                rescored_scores_np = np.asarray(rescored_candidates, dtype=tree_score_dtype)
                 rescored_winner_slot, exact_ties = _select_relion_coarse_rescore_winner_slots(
                     rescored_scores_np,
                     candidate_pose_ids,
                     n_trans=n_trans,
                     healpix_order=coarse_healpix_order,
                     coarse_rotation_ids=coarse_rotation_ids,
+                    score_dtype=tree_score_dtype,
                 )
                 _maybe_dump_tree_rescore_batch(
                     experiment_dataset=experiment_dataset,

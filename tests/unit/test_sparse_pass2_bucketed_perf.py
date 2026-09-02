@@ -233,6 +233,22 @@ def test_relion_corr_img_applies_xfloat_scale_square_after_rfloat_ctf_cast():
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_relion_corr_img_preserves_double_accelerator_precision():
+    inverse_noise = np.asarray([0.133332981234, 1.7500012345], dtype=np.float64)
+    ctf_rfloat = np.asarray([0.994443123456, -0.7135792468], dtype=np.float64)
+    expected = inverse_noise * (ctf_rfloat * ctf_rfloat)
+
+    actual = np.asarray(
+        _relion_cuda_corr_img_from_rfloat_ctf(
+            inverse_noise,
+            ctf_rfloat,
+            output_dtype=jnp.float64,
+        )
+    )
+    assert actual.dtype == np.float64
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_relion_corr_img_converts_noise_units_after_native_xfloat_product():
     image_shape = (384, 384)
     native_noise_variance = np.asarray(
@@ -294,6 +310,24 @@ def test_relion_pixel_correction_divides_by_rfloat_ctf_before_xfloat_cast():
     actual = np.asarray(
         _relion_cuda_pixel_correction_from_rfloat_ctf(scale, ctf_rfloat)
     )
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_relion_pixel_correction_preserves_double_accelerator_precision():
+    scale = np.asarray([[1.0000000123]], dtype=np.float64)
+    ctf_rfloat = np.asarray(
+        [[0.07354116995482596, 0.1265216380265534]], dtype=np.float64
+    )
+    expected = (1.0 / scale) / ctf_rfloat
+
+    actual = np.asarray(
+        _relion_cuda_pixel_correction_from_rfloat_ctf(
+            scale,
+            ctf_rfloat,
+            output_dtype=jnp.float64,
+        )
+    )
+    assert actual.dtype == np.float64
     np.testing.assert_array_equal(actual, expected)
 
 
@@ -1737,9 +1771,9 @@ def test_compact_pair_bucket_arrays_can_be_materialized_per_bucket():
             np.asarray([30, 31], dtype=np.int64),
         ],
         "log_prior": [
-            np.asarray([0.1, 0.2], dtype=np.float32),
-            np.asarray([0.3, 0.4], dtype=np.float32),
-            np.asarray([0.5, 0.6], dtype=np.float32),
+            np.asarray([0.1, 0.2 + 2.0**-40], dtype=np.float64),
+            np.asarray([0.3, 0.4], dtype=np.float64),
+            np.asarray([0.5, 0.6], dtype=np.float64),
         ],
     }
     compact_inputs = _prepare_per_image_compact_candidate_pairs(per_image_inputs)
@@ -1754,6 +1788,8 @@ def test_compact_pair_bucket_arrays_can_be_materialized_per_bucket():
     assert precomputed.keys() == on_demand.keys()
     for key in precomputed:
         np.testing.assert_array_equal(on_demand[key], precomputed[key])
+    assert precomputed["log_prior"].dtype == np.float64
+    assert precomputed["log_prior"][1, 2] == 0.2 + 2.0**-40
 
 
 def test_compact_pair_tail_coalescing_respects_execution_image_mask():
@@ -5841,13 +5877,23 @@ def test_prepare_bucket_io_routes_direct_score_translation_through_relion_cuda(
         return_windowed_shifted=True,
     )
 
-    assert len(calls) == 1
+    direct_score_calls = [
+        call
+        for call in calls
+        if np.array_equal(
+            call["pixel_indices"],
+            np.asarray(window_spec.score_indices, dtype=np.int32),
+        )
+    ]
+    assert direct_score_calls
     np.testing.assert_array_equal(
-        calls[0]["pixel_indices"],
+        direct_score_calls[0]["pixel_indices"],
         np.asarray(window_spec.score_indices, dtype=np.int32),
     )
-    np.testing.assert_array_equal(calls[0]["angles"], np.asarray(translation_angles))
-    assert calls[0]["image_shape"] == IMAGE_SHAPE
+    np.testing.assert_array_equal(
+        direct_score_calls[0]["angles"], np.asarray(translation_angles)
+    )
+    assert direct_score_calls[0]["image_shape"] == IMAGE_SHAPE
     np.testing.assert_array_equal(
         np.asarray(result[7]),
         np.full(

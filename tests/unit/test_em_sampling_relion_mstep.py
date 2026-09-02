@@ -37,9 +37,17 @@ def test_adaptive_pass1_routes_source_eulers_and_host_right_matrix_to_cuda_build
     assert len(calls) == 1
     np.testing.assert_array_equal(calls[0][0], source_eulers)
     perturbation_deg = -0.455874443054 * 7.5
-    expected_right = sampling_module._relion_euler_angles_to_matrix(
-        np.asarray([[perturbation_deg] * 3], dtype=np.float64)
-    )[0]
+    try:
+        from recovar.relion_bind import _relion_bind_core as relion_bind
+
+        expected_right = np.asarray(
+            relion_bind.euler_angles_to_matrix(*([perturbation_deg] * 3)),
+            dtype=np.float64,
+        )
+    except (ImportError, OSError):
+        expected_right = sampling_module._relion_euler_angles_to_matrix(
+            np.asarray([[perturbation_deg] * 3], dtype=np.float64)
+        )[0]
     np.testing.assert_array_equal(calls[0][1], expected_right)
 
 
@@ -90,13 +98,14 @@ def test_adaptive_pass1_float64_routes_to_double_precision_builder(monkeypatch):
     np.testing.assert_array_equal(f64_calls[0][0], source_eulers)
 
 
-def test_relion_device_scoring_rotations_f64_matches_euler_matrix_port():
+def test_relion_device_scoring_rotations_f64_cpu_fallback_matches_euler_matrix_port(monkeypatch):
     """No perturbation: f64 builder must reduce to ``_relion_euler_angles_to_matrix`` exactly."""
     from recovar.em.sampling import (
         _relion_device_scoring_rotations_f64,
         _relion_euler_angles_to_matrix,
     )
 
+    monkeypatch.setattr("recovar.em.sampling.jax.default_backend", lambda: "cpu")
     source_eulers = _UNPERTURBED_FINE_EULERS_F64
     result = _relion_device_scoring_rotations_f64(source_eulers, right_matrix=None)
     expected = _relion_euler_angles_to_matrix(source_eulers)
@@ -105,7 +114,7 @@ def test_relion_device_scoring_rotations_f64_matches_euler_matrix_port():
     np.testing.assert_array_equal(result, expected)
 
 
-def test_relion_device_scoring_rotations_f64_right_multiplies_perturbation_matrix():
+def test_relion_device_scoring_rotations_f64_cpu_fallback_right_multiplies_perturbation_matrix(monkeypatch):
     """With a perturbation: f64 builder must right-multiply, matching ``B = A @ right_matrix``
     from ``cuda_kernel_make_eulers_3D`` (``recovar/cuda/cuda_backproject.cu``)."""
     from recovar.em.sampling import (
@@ -113,6 +122,7 @@ def test_relion_device_scoring_rotations_f64_right_multiplies_perturbation_matri
         _relion_euler_angles_to_matrix,
     )
 
+    monkeypatch.setattr("recovar.em.sampling.jax.default_backend", lambda: "cpu")
     source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
     right_matrix = _relion_euler_angles_to_matrix(np.asarray([[1.5, 1.5, 1.5]], dtype=np.float64))[0]
 
@@ -249,7 +259,7 @@ def test_relion_mstep_rotation_helper_preserves_matrix2d_inverse_source_order():
     assert all(assignment in source for assignment in cofactor_assignments)
     assert "np.linalg" not in source
     assert source.index("determinant = (") < source.index("inverse /= determinant")
-    assert source.index("inverse /= determinant") < source.index("return np.swapaxes(inverse, 1, 2).astype(dtype)")
+    assert source.index("inverse /= determinant") < source.rindex("return np.swapaxes(inverse, 1, 2).astype(dtype)")
 
 
 def test_relion_mstep_rotation_helper_defaults_to_float32_but_accepts_float64():

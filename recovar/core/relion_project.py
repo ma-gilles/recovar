@@ -7,7 +7,7 @@ output bit-for-bit.
 Algorithm (per output pixel (i, x) of the half-image (Y, X//2+1)):
   1. y = i if i <= r_max_out else i - YSIZE     (FFTW-natural y indexing)
   2. (xp, yp, zp) = Ainv @ (x, y, 0)
-  3. Skip if x*x + y*y > r_max_out² OR r² > r_max_ref²    → zero
+  3. Skip if x*x + y*y > r_max_out² OR int(r²) > r_max_ref² → zero
   4. If xp < 0: negate (xp, yp, zp), record is_neg_x
   5. x0 = floor(xp); fx = xp - x0; y0 = floor(yp); fy = yp - y0; z0 = floor(zp); fz = zp - z0
   6. y0 -= STARTINGY; z0 -= STARTINGZ                     (Xmipp-origin shift)
@@ -108,7 +108,13 @@ def relion_project_half(
     yp = jnp.where(is_neg_x, -yp, yp)
     zp = jnp.where(is_neg_x, -zp, zp)
 
-    r2_ref = xp * xp + yp * yp + zp * zp
+    # AccProjectorKernel stores the rotated squared radius in an ``int``
+    # before comparing it with maxR2_padded. Because r2 is nonnegative, this
+    # truncates toward zero. The distinction matters on the outer shell:
+    # roundoff can make an orthogonal rotation produce r2 just above the
+    # integer radius squared, but RELION still retains the pixel while a
+    # direct floating-point comparison incorrectly drops it.
+    r2_ref = (xp * xp + yp * yp + zp * zp).astype(jnp.int32)
     r2_out = (X * X + Y * Y).astype(jnp.float64)
 
     # Floor + fractional. RELION's GPU kernel floors the (double) coordinate

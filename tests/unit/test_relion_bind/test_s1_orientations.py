@@ -19,12 +19,71 @@ import pytest
 healpy = pytest.importorskip("healpy")
 
 from recovar.relion_bind._relion_bind_core import (
+    euler_angles_to_inverse_matrices,
     euler_angles_to_matrix,
     get_angular_sampling,
     get_coarse_orientations,
     get_healpix_directions,
     get_oversampled_orientations,
+    get_oversampled_orientations_batch,
 )
+
+
+def test_mstep_rotation_helper_uses_exact_relion_host_inverse():
+    from recovar.em.sampling import _relion_mstep_rotations_from_eulers
+
+    angles = np.asarray(
+        [
+            [-82.34140109, 159.18206946, -123.87249525],
+            [13.123456789, 42.987654321, -77.111111111],
+        ],
+        dtype=np.float64,
+    )
+    expected = np.swapaxes(euler_angles_to_inverse_matrices(angles), 1, 2)
+    actual = _relion_mstep_rotations_from_eulers(angles, dtype=np.float64)
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_batched_oversampled_orientations_match_individual_calls_exactly():
+    idirs = np.asarray([0, 17, 191], dtype=np.int64)
+    ipsis = np.asarray([0, 5, 11], dtype=np.int64)
+    perturbation = -0.261189430952
+    expected = np.concatenate(
+        [
+            get_oversampled_orientations(2, 1, int(idir), int(ipsi), perturbation)
+            for idir, ipsi in zip(idirs, ipsis, strict=True)
+        ],
+        axis=0,
+    )
+    actual = get_oversampled_orientations_batch(2, 1, idirs, ipsis, perturbation)
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_sampled_grid_uses_native_eulers_and_inverse_exactly():
+    from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
+
+    order = 2
+    n_pixels = 12 * (4**order)
+    parents = np.asarray([17, 5 * n_pixels + 191], dtype=np.int64)
+    perturbation = -0.261189430952
+    eulers = get_oversampled_orientations_batch(
+        order,
+        1,
+        parents % n_pixels,
+        parents // n_pixels,
+        perturbation,
+    )
+    expected = np.swapaxes(euler_angles_to_inverse_matrices(eulers), 1, 2)
+    rotations, _, mstep_rotations = get_oversampled_rotation_grid_from_samples(
+        parents,
+        order,
+        oversampling_order=1,
+        random_perturbation=perturbation,
+        return_mstep_rotations=True,
+        dtype=np.float64,
+    )
+    np.testing.assert_array_equal(rotations, expected)
+    np.testing.assert_array_equal(mstep_rotations, expected)
 
 
 def _recovar_directions(order):
