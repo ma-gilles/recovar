@@ -2199,8 +2199,24 @@ def test_autorefine_continuation_noise_emulates_relion_rank1_broadcast(tmp_path)
     noise_h1, noise_h2 = overrides[0]["noise_variance"]
     np.testing.assert_array_equal(noise_h2, noise_h1)
     assert noise_h1 is not noise_h2
+    assert noise_h1.dtype == np.float32
     assert float(np.min(noise_h2)) == pytest.approx(1.0 * 8**4)
     assert float(np.max(noise_h2)) == pytest.approx(5.0 * 8**4)
+
+    double_overrides = _build_replay_iteration_overrides(
+        tmp_path,
+        half1_idx=np.asarray([0], dtype=np.int64),
+        half2_idx=np.asarray([1], dtype=np.int64),
+        max_iter=0,
+        ds_voxel=2.0,
+        ds_grid=8,
+        include_normcorr=False,
+        init_relion_iteration=1,
+        noise_dtype=np.float64,
+    )
+    double_h1, double_h2 = double_overrides[0]["noise_variance"]
+    assert double_h1.dtype == np.float64
+    assert double_h2.dtype == np.float64
 
     uninterrupted_overrides = _build_replay_iteration_overrides(
         tmp_path,

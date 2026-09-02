@@ -211,6 +211,40 @@ def test_jax_relion_coarse_rescore_matches_numpy_replay():
     )
 
 
+def test_jax_relion_coarse_rescore_preserves_double_accelerator_precision():
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    from recovar.em.dense_single_volume.helpers.scoring import (
+        _relion_coarse_normalized_cc_rescore_f64,
+    )
+
+    rng = np.random.default_rng(6323)
+    n_candidates, n_pixels = 3, 257
+    shifted = rng.normal(size=(n_candidates, n_pixels)) + 1j * rng.normal(
+        size=(n_candidates, n_pixels)
+    )
+    projections = rng.normal(size=(n_candidates, n_pixels)) + 1j * rng.normal(
+        size=(n_candidates, n_pixels)
+    )
+    score_weight = rng.uniform(0.1, 1.5, size=(n_candidates, n_pixels))
+    half_weights = rng.choice(np.asarray([1.0, 2.0]), size=n_pixels)
+    fftw_order = rng.permutation(n_pixels).astype(np.int32)
+
+    actual = np.asarray(
+        _relion_coarse_normalized_cc_rescore_f64(
+            jnp.asarray(shifted, dtype=jnp.complex128),
+            jnp.asarray(score_weight, dtype=jnp.float64),
+            jnp.asarray(projections, dtype=jnp.complex128),
+            jnp.asarray(half_weights, dtype=jnp.float64),
+            jnp.asarray(fftw_order),
+        )
+    )
+
+    assert actual.dtype == np.float64
+    assert np.all(np.isfinite(actual))
+
+
 def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
     from recovar.em.dense_single_volume.helpers.significance import (
         _relion_coarse_pose_tie_break_keys,

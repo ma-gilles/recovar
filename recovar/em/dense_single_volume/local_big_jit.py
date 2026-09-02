@@ -758,7 +758,9 @@ def run_local_bucket_big_jit(
     noise_variance_half = noise_variance_half.astype(precision_policy.score_real_dtype)
     translation_phases_half = translation_phases_half.astype(precision_policy.score_complex_dtype)
     if relion_score_translation_angles is not None:
-        relion_score_translation_angles = relion_score_translation_angles.astype(jnp.float32)
+        relion_score_translation_angles = relion_score_translation_angles.astype(
+            precision_policy.score_real_dtype
+        )
     ctf2_over_nv_half = ctf_half**2 / noise_variance_half
 
     processed_score_half = _preprocess_half(
@@ -789,6 +791,13 @@ def run_local_bucket_big_jit(
         if relion_score_translation_angles is not None:
             from recovar import cuda_backproject
 
+            if use_float64_scoring:
+                return cuda_backproject.relion_translate_score_f64(
+                    jnp.asarray(weighted_half, dtype=jnp.complex128),
+                    relion_score_translation_angles,
+                    jnp.asarray(pixel_indices, dtype=jnp.int32),
+                    image_shape,
+                )
             return cuda_backproject.relion_translate_score_f32(
                 jnp.asarray(weighted_half, dtype=jnp.complex64),
                 relion_score_translation_angles,
@@ -807,6 +816,8 @@ def run_local_bucket_big_jit(
             * ctf_half[:, pixel_indices]
             / noise_variance_half[pixel_indices]
         )
+        if relion_score_translation_angles is not None and use_float64_scoring:
+            return _translate_score_weighted_half(weighted_half, pixel_indices)
         translation_phases = translation_phases_half[:, pixel_indices]
         return (weighted_half[:, None, :] * translation_phases[None, :, :]).reshape(
             batch_size * n_trans,
@@ -837,10 +848,15 @@ def run_local_bucket_big_jit(
         )
         if not score_only:
             recon_weighted_half = processed_recon_half * ctf_half / noise_variance_half
-            shifted_recon_half = (recon_weighted_half[:, None, :] * translation_phases_half[None, :, :]).reshape(
-                batch_size * n_trans,
-                processed_recon_half.shape[1],
-            )
+            if relion_score_translation_angles is not None and use_float64_scoring:
+                shifted_recon_half = _translate_score_weighted_half(
+                    recon_weighted_half,
+                    jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32),
+                )
+            else:
+                shifted_recon_half = (
+                    recon_weighted_half[:, None, :] * translation_phases_half[None, :, :]
+                ).reshape(batch_size * n_trans, processed_recon_half.shape[1])
     batch_norm = jnp.sum(
         (jnp.abs(processed_score_half) ** 2 / noise_variance_half) * norm_half_weights[None, :],
         axis=-1,

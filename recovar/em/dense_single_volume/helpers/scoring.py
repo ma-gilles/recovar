@@ -87,6 +87,51 @@ def _relion_coarse_normalized_cc_rescore(
     return _relion_coarse_cc_atomic_score_from_components(numerator, norm)
 
 
+@jax.jit
+def _relion_coarse_normalized_cc_rescore_f64(
+    shifted_candidates,
+    score_weight_candidates,
+    projection_candidates,
+    half_weights,
+    fftw_order,
+):
+    """Rescore coarse candidates with RELION double-ACC lane arithmetic."""
+
+    shifted = jnp.asarray(shifted_candidates, dtype=jnp.complex128)[..., fftw_order]
+    score_weight = jnp.asarray(score_weight_candidates, dtype=jnp.float64)[..., fftw_order]
+    projection = jnp.asarray(projection_candidates, dtype=jnp.complex128)[..., fftw_order]
+    weights = jnp.asarray(half_weights, dtype=jnp.float64)[fftw_order]
+    numerator_pixels = jnp.real(jnp.conj(shifted) * projection) * weights
+    norm_pixels = score_weight * (jnp.abs(projection) ** 2) * weights
+
+    def reduce_lanes(values):
+        n_pixels = int(values.shape[-1])
+        n_passes = (n_pixels + 127) // 128
+        padded = jnp.pad(
+            values,
+            [(0, 0)] * (values.ndim - 1) + [(0, n_passes * 128 - n_pixels)],
+        )
+        passes = padded.reshape(values.shape[:-1] + (n_passes, 128))
+        lanes = jnp.zeros(values.shape[:-1] + (128,), dtype=jnp.float64)
+        for pass_index in range(n_passes):
+            lanes = lanes + passes[..., pass_index, :]
+        for stride in (64, 32, 16, 8, 4, 2, 1):
+            lanes = lanes[..., :stride] + lanes[..., stride : 2 * stride]
+        return lanes[..., 0]
+
+    numerator = reduce_lanes(numerator_pixels)
+    norm = reduce_lanes(norm_pixels)
+    contribution = numerator / (
+        jnp.asarray(128.0, dtype=jnp.float64)
+        * jnp.sqrt(jnp.maximum(norm, jnp.asarray(1e-30, dtype=jnp.float64)))
+    )
+
+    def add_once(_, accumulated):
+        return accumulated + contribution
+
+    return jax.lax.fori_loop(0, 128, add_once, jnp.zeros_like(contribution))
+
+
 def _score_rotation_block(
     window_spec,
     *,

@@ -518,16 +518,26 @@ _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC = (
     "cuda_relion_preprocess_real_f32_native_atomic"
 )
 _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_f32"
+_TARGET_RELION_MAKE_SCORING_ROTATIONS_F64 = "cuda_relion_make_scoring_rotations_f64"
 _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
+_TARGET_RELION_TRANSLATE_SCORE_F64 = "cuda_relion_translate_score_f64"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
+_TARGET_RELION_TRANSLATE_BPREF_F64 = "cuda_relion_translate_bpref_f64"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
+)
+_TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F64 = (
+    "cuda_relion_coarse_diff2_rectangular_f64"
 )
 _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_rectangular_f32"
 )
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
+_TARGET_RELION_FINE_DIFF2_RECTANGULAR_F64 = (
+    "cuda_relion_fine_diff2_rectangular_f64"
+)
+_TARGET_RELION_FINE_DIFF2_PAIRS_F64 = "cuda_relion_fine_diff2_pairs_f64"
 _TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32 = "cuda_relion_wavg_rotation_atomic_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_add_f32"
@@ -569,9 +579,19 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32,
         "RelionMakeScoringRotationsF32",
     ),
+    (
+        _TARGET_RELION_MAKE_SCORING_ROTATIONS_F64,
+        "RelionMakeScoringRotationsF64",
+    ),
     (_TARGET_RELION_TRANSLATE_SCORE_F32, "RelionTranslateScoreF32"),
+    (_TARGET_RELION_TRANSLATE_SCORE_F64, "RelionTranslateScoreF64"),
     (_TARGET_RELION_TRANSLATE_BPREF_F32, "RelionTranslateBprefF32"),
+    (_TARGET_RELION_TRANSLATE_BPREF_F64, "RelionTranslateBprefF64"),
     (_TARGET_RELION_BPREF_OPERANDS_F32, "RelionBprefOperandsF32"),
+    (
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F64,
+        "RelionCoarseDiff2RectangularF64",
+    ),
     (
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
         "RelionCoarseDiff2RectangularF32",
@@ -581,6 +601,11 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionFineDiff2RectangularF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
+    (
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F64,
+        "RelionFineDiff2RectangularF64",
+    ),
+    (_TARGET_RELION_FINE_DIFF2_PAIRS_F64, "RelionFineDiff2PairsF64"),
     (_TARGET_RELION_CUB_SORT_SCAN_F32, "RelionCubSortScanF32"),
     (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32,
@@ -1156,6 +1181,45 @@ def relion_make_scoring_rotations_f32(
     )
 
 
+@functools.partial(jax.jit, static_argnums=(2,))
+def relion_make_scoring_rotations_f64(
+    eulers_deg: jax.Array,
+    right_matrix: jax.Array,
+    do_right: bool = True,
+) -> jax.Array:
+    """Build scorer rotations with RELION's accelerated float64 arithmetic.
+
+    This is the ``ACC_DOUBLE_PRECISION`` specialization of RELION's CUDA
+    ``make_eulers_3D`` operation. It deliberately executes trigonometry and
+    the optional right-matrix product on the device, matching coarse scoring.
+    """
+
+    if eulers_deg.dtype != jnp.float64:
+        raise TypeError(f"eulers_deg must be float64, got {eulers_deg.dtype}")
+    if right_matrix.dtype != jnp.float64:
+        raise TypeError(f"right_matrix must be float64, got {right_matrix.dtype}")
+    if eulers_deg.ndim != 2 or eulers_deg.shape[1:] != (3,):
+        raise ValueError(f"eulers_deg must have shape (N, 3), got {eulers_deg.shape}")
+    if right_matrix.shape != (3, 3):
+        raise ValueError(f"right_matrix must have shape (3, 3), got {right_matrix.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION scorer-rotation construction requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION scorer-rotation construction was explicitly requested but custom CUDA is disabled")
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct((eulers_deg.shape[0], 3, 3), jnp.float64)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_MAKE_SCORING_ROTATIONS_F64,
+        out_type,
+        vmap_method="sequential",
+    )(
+        eulers_deg,
+        right_matrix,
+        do_right=np.int64(int(do_right)),
+    )
+
+
 @functools.partial(jax.jit, static_argnums=(3,))
 def relion_translate_score_f32(
     images: jax.Array,
@@ -1217,6 +1281,67 @@ def relion_translate_score_f32(
     )
     return jax.ffi.ffi_call(
         _TARGET_RELION_TRANSLATE_SCORE_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        images,
+        translation_angles,
+        pixel_indices,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(half_width),
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3,))
+def relion_translate_score_f64(
+    images: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    image_shape: Tuple[int, int],
+) -> jax.Array:
+    """Translate score/M-step images with RELION's CUDA double arithmetic."""
+
+    if images.dtype != jnp.complex128:
+        raise TypeError(f"images must be complex128, got {images.dtype}")
+    if translation_angles.dtype != jnp.float64:
+        raise TypeError(
+            f"translation_angles must be float64, got {translation_angles.dtype}"
+        )
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if translation_angles.ndim != 2 or translation_angles.shape[1:] != (2,):
+        raise ValueError(
+            "translation_angles must have shape (translations, 2), got "
+            f"{translation_angles.shape}"
+        )
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(
+            f"pixel_indices must have shape ({images.shape[1]},), got "
+            f"{pixel_indices.shape}"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION score translation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION score translation was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    half_width = image_w // 2 + 1
+    out_type = jax.ShapeDtypeStruct(
+        (
+            images.shape[0] * translation_angles.shape[0],
+            images.shape[1],
+        ),
+        jnp.complex128,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_TRANSLATE_SCORE_F64,
         out_type,
         vmap_method="sequential",
     )(
@@ -1332,6 +1457,75 @@ def relion_translate_bpref_f32(
     )
 
 
+@functools.partial(jax.jit, static_argnums=(4,))
+def relion_translate_bpref_f64(
+    images: jax.Array,
+    weighted_ctf: jax.Array,
+    translation_angles: jax.Array,
+    pixel_indices: jax.Array,
+    image_shape: Tuple[int, int],
+) -> jax.Array:
+    """Translate raw images, then apply BPref weights in RELION double order."""
+
+    if images.dtype != jnp.complex128:
+        raise TypeError(f"images must be complex128, got {images.dtype}")
+    if weighted_ctf.dtype != jnp.float64:
+        raise TypeError(f"weighted_ctf must be float64, got {weighted_ctf.dtype}")
+    if translation_angles.dtype != jnp.float64:
+        raise TypeError(
+            f"translation_angles must be float64, got {translation_angles.dtype}"
+        )
+    if pixel_indices.dtype != jnp.int32:
+        raise TypeError(f"pixel_indices must be int32, got {pixel_indices.dtype}")
+    if images.ndim != 2:
+        raise ValueError(f"images must have shape (batch, pixels), got {images.shape}")
+    if weighted_ctf.shape != images.shape:
+        raise ValueError(
+            f"weighted_ctf must have shape {images.shape}, got {weighted_ctf.shape}"
+        )
+    if translation_angles.ndim != 2 or translation_angles.shape[1:] != (2,):
+        raise ValueError(
+            "translation_angles must have shape (translations, 2), got "
+            f"{translation_angles.shape}"
+        )
+    if pixel_indices.shape != (images.shape[1],):
+        raise ValueError(
+            f"pixel_indices must have shape ({images.shape[1]},), got "
+            f"{pixel_indices.shape}"
+        )
+    if len(image_shape) != 2 or any(int(size) <= 0 for size in image_shape):
+        raise ValueError(f"image_shape must contain two positive sizes, got {image_shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION BPref translation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION BPref translation was explicitly requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    image_h, image_w = (int(size) for size in image_shape)
+    half_width = image_w // 2 + 1
+    out_type = jax.ShapeDtypeStruct(
+        (
+            images.shape[0] * translation_angles.shape[0],
+            images.shape[1],
+        ),
+        jnp.complex128,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_TRANSLATE_BPREF_F64,
+        out_type,
+        vmap_method="sequential",
+    )(
+        images,
+        weighted_ctf,
+        translation_angles,
+        pixel_indices,
+        image_h=np.int64(image_h),
+        image_half_width=np.int64(half_width),
+    )
+
+
 @functools.partial(jax.jit, static_argnums=(6, 7))
 def relion_bpref_operands_f32(
     images: jax.Array,
@@ -1420,13 +1614,17 @@ def _validate_relion_fine_diff2_inputs(
     shifted_image: jax.Array,
     weight: jax.Array,
     full_to_compact: jax.Array,
+    *,
+    real_dtype=jnp.float32,
 ) -> None:
-    if reference.dtype != jnp.complex64:
-        raise TypeError(f"reference must be complex64, got {reference.dtype}")
-    if shifted_image.dtype != jnp.complex64:
-        raise TypeError(f"shifted_image must be complex64, got {shifted_image.dtype}")
-    if weight.dtype != jnp.float32:
-        raise TypeError(f"weight must be float32, got {weight.dtype}")
+    real_dtype = jnp.dtype(real_dtype)
+    complex_dtype = jnp.dtype(jnp.complex128 if real_dtype == jnp.float64 else jnp.complex64)
+    if reference.dtype != complex_dtype:
+        raise TypeError(f"reference must be {complex_dtype.name}, got {reference.dtype}")
+    if shifted_image.dtype != complex_dtype:
+        raise TypeError(f"shifted_image must be {complex_dtype.name}, got {shifted_image.dtype}")
+    if weight.dtype != real_dtype:
+        raise TypeError(f"weight must be {real_dtype.name}, got {weight.dtype}")
     if full_to_compact.dtype != jnp.int32:
         raise TypeError(
             f"full_to_compact must be int32, got {full_to_compact.dtype}"
@@ -1501,6 +1699,43 @@ def relion_coarse_diff2_rectangular_f32(
     )
     return jax.ffi.ffi_call(
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, initial_diff2, full_to_compact)
+
+
+@jax.jit
+def relion_coarse_diff2_rectangular_f64(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """Evaluate RELION's coarse Gaussian CUDA topology in double precision."""
+
+    _validate_relion_fine_diff2_inputs(
+        reference, shifted_image, weight, full_to_compact, real_dtype=jnp.float64
+    )
+    if initial_diff2.dtype != jnp.float64:
+        raise TypeError(f"initial_diff2 must be float64, got {initial_diff2.dtype}")
+    if reference.ndim != 2 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError("rectangular coarse diff2 expects reference/image/weight ranks 2/3/2")
+    if (
+        shifted_image.shape[0] != weight.shape[0]
+        or reference.shape[1] != shifted_image.shape[2]
+        or reference.shape[1] != weight.shape[1]
+        or shifted_image.shape[1] <= 0
+        or shifted_image.shape[1] > 128
+        or initial_diff2.shape != (shifted_image.shape[0],)
+    ):
+        raise ValueError("rectangular coarse diff2 operands have inconsistent shapes")
+    out_type = jax.ShapeDtypeStruct(
+        (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
+        jnp.float64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F64,
         out_type,
         vmap_method="sequential",
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
@@ -1597,6 +1832,88 @@ def relion_fine_diff2_pairs_f32(
     out_type = jax.ShapeDtypeStruct(reference.shape[:2], jnp.float32)
     return jax.ffi.ffi_call(
         _TARGET_RELION_FINE_DIFF2_PAIRS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, full_to_compact)
+
+
+@jax.jit
+def relion_fine_diff2_rectangular_f64(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """ACC_DOUBLE_PRECISION specialization of the rectangular fine tree."""
+
+    _validate_relion_fine_diff2_inputs(
+        reference, shifted_image, weight, full_to_compact,
+        real_dtype=jnp.float64,
+    )
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "rectangular fine diff2 expects reference/shifted rank 3 and "
+            f"weight rank 2, got {reference.shape}, {shifted_image.shape}, "
+            f"{weight.shape}"
+        )
+    if (
+        reference.shape[0] != shifted_image.shape[0]
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != shifted_image.shape[2]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "rectangular fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], reference.shape[1], shifted_image.shape[1]),
+        jnp.float64,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_RECTANGULAR_F64,
+        out_type,
+        vmap_method="sequential",
+    )(reference, shifted_image, weight, full_to_compact)
+
+
+@jax.jit
+def relion_fine_diff2_pairs_f64(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+) -> jax.Array:
+    """ACC_DOUBLE_PRECISION specialization of the compact-pair fine tree."""
+
+    _validate_relion_fine_diff2_inputs(
+        reference, shifted_image, weight, full_to_compact,
+        real_dtype=jnp.float64,
+    )
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "pair fine diff2 expects reference/shifted rank 3 and weight rank "
+            f"2, got {reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    if (
+        reference.shape != shifted_image.shape
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "pair fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(reference.shape[:2], jnp.float64)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_PAIRS_F64,
         out_type,
         vmap_method="sequential",
     )(reference, shifted_image, weight, full_to_compact)

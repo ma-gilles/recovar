@@ -4049,6 +4049,18 @@ def test_global_pass1_relion_projector_texture_defaults_to_texture(monkeypatch):
         significance._global_pass1_relion_projector_texture_enabled()
 
 
+def test_global_pass1_relion_projector_floorf_quirk_gate(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import significance
+
+    monkeypatch.delenv("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", raising=False)
+    assert not significance._relion_acc_double_floorf_quirk_enabled()
+    monkeypatch.setenv("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", "1")
+    assert significance._relion_acc_double_floorf_quirk_enabled()
+    monkeypatch.setenv("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", "invalid")
+    with pytest.raises(ValueError, match="RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK"):
+        significance._relion_acc_double_floorf_quirk_enabled()
+
+
 def test_texture_centered_crop_masks_current_image_disk():
     from recovar.em.dense_single_volume.helpers.projection import _texture_centered_crop_to_full
 
@@ -7902,6 +7914,14 @@ def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
     assert "shifted_recon_half = (" in shift_block
 
 
+def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
+    from recovar.em.dense_single_volume import local_big_jit
+
+    src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    assert "cuda_backproject.relion_translate_score_f64" in src
+    assert "relion_score_translation_angles is not None and use_float64_scoring" in src
+
+
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():
     with pytest.raises(
         ValueError,
@@ -7921,25 +7941,10 @@ def test_local_exact_relion_translation_requires_half_spectrum_scoring():
         )
 
 
-def test_local_exact_relion_translation_rejects_float64_scoring():
-    with pytest.raises(
-        ValueError,
-        match="float32 scoring path",
-    ):
-        run_local_em_exact(
-            None,
-            None,
-            None,
-            None,
-            None,
-            "linear_interp",
-            image_batch_size=1,
-            rotation_block_size=1,
-            current_size=None,
-            half_spectrum_scoring=True,
-            relion_exact_score_translation=True,
-            use_float64_scoring=True,
-        )
+def test_local_exact_relion_translation_supports_float64_scoring():
+    src = inspect.getsource(run_local_em_exact)
+    assert "exact RELION score translation is a float32 scoring path" not in src
+    assert "dtype=np.float64 if use_float64_scoring else np.float32" in src
 
 
 def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monkeypatch, rng):

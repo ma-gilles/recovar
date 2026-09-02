@@ -116,7 +116,7 @@ def test_relion_cuda_fine_tree_matches_256_lane_pass_and_tree_bitwise():
     assert actual.dtype == np.float32
 
 
-def test_relion_cuda_fine_diff2_casts_complex128_operands_to_xfloat():
+def test_relion_cuda_fine_diff2_preserves_acc_double_precision_operands():
     rng = np.random.default_rng(365)
     reference64 = (
         rng.normal(size=(2, 259)) + 1j * rng.normal(size=(2, 259))
@@ -141,23 +141,23 @@ def test_relion_cuda_fine_diff2_casts_complex128_operands_to_xfloat():
         )
     )
 
-    np.testing.assert_array_equal(actual, expected)
-    assert actual.dtype == np.float32
+    assert actual.dtype == np.float64
+    np.testing.assert_allclose(actual, expected.astype(np.float64), rtol=2e-7, atol=1e-7)
 
 
-def test_relion_cuda_fine_pixel_weight_casts_operands_before_multiply():
+def test_relion_cuda_fine_pixel_weight_preserves_acc_double_precision():
     corr = np.asarray([75351.31086994553], dtype=np.float64)
     half_weight = np.asarray([53814.33132654639], dtype=np.float64)
-    expected = np.float32(corr) * np.float32(half_weight)
-    wrong_float64_first = np.float32(corr * half_weight)
+    expected = corr * half_weight
+    narrowed = np.float32(corr) * np.float32(half_weight)
 
     actual = np.asarray(
         _relion_cuda_fine_pixel_weights(jnp.asarray(corr), jnp.asarray(half_weight))
     )
 
     np.testing.assert_array_equal(actual, expected)
-    assert actual.dtype == np.float32
-    assert not np.array_equal(actual, wrong_float64_first)
+    assert actual.dtype == np.float64
+    assert not np.array_equal(actual, narrowed)
 
 
 def test_relion_cuda_powerclass_highres_matches_128_lane_block_trees_bitwise():

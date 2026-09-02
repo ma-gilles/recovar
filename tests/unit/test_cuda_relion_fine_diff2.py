@@ -2,6 +2,7 @@
 
 from itertools import permutations
 from pathlib import Path
+from decimal import Decimal, localcontext
 
 import numpy as np
 import pytest
@@ -19,6 +20,16 @@ def _fma32(left, right, addend):
         + np.asarray(addend, dtype=np.float64),
         dtype=np.float32,
     )
+
+
+def _fma64(left, right, addend):
+    with localcontext() as context:
+        context.prec = 200
+        exact = (
+            Decimal.from_float(float(left)) * Decimal.from_float(float(right))
+            + Decimal.from_float(float(addend))
+        )
+    return np.float64(float(exact))
 
 
 def _production_reference(reference, shifted, weight, lookup):
@@ -40,6 +51,23 @@ def _production_reference(reference, shifted, weight, lookup):
     for width in (128, 64, 32, 16, 8, 4, 2, 1):
         lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float32)
     return np.float32(lanes[0])
+
+
+def _production_reference_f64(reference, shifted, weight, lookup):
+    lanes = np.zeros(256, dtype=np.float64)
+    for full_pixel, compact_pixel in enumerate(lookup):
+        if compact_pixel < 0:
+            continue
+        diff_real = np.float64(reference[compact_pixel].real - shifted[compact_pixel].real)
+        diff_imag = np.float64(reference[compact_pixel].imag - shifted[compact_pixel].imag)
+        imag_square = np.float64(diff_imag * diff_imag)
+        square_sum = _fma64(diff_real, diff_real, imag_square)
+        half_square_sum = np.float64(square_sum * np.float64(0.5))
+        lane = full_pixel % 256
+        lanes[lane] = _fma64(half_square_sum, weight[compact_pixel], lanes[lane])
+    for width in (128, 64, 32, 16, 8, 4, 2, 1):
+        lanes[:width] = np.add(lanes[:width], lanes[width : 2 * width], dtype=np.float64)
+    return np.float64(lanes[0])
 
 
 def _coarse_production_results(
@@ -136,6 +164,11 @@ def test_relion_coarse_diff2_cuda_source_pins_production_topology():
     assert "threadIdx.x / translation_count" in block
     assert "pixel_in_chunk += active_lanes" in block
     assert "atomicAdd(" in block
+    f64_start = source.index("relion_coarse_diff2_rectangular_f64_kernel")
+    f64_block = source[f64_start : source.index("cudaError_t", f64_start)]
+    assert "double lane_sums" in f64_block
+    assert "relion_fine_diff2_update_f64" in f64_block
+    assert "atomicAdd(" in f64_block
 
 
 def test_k1_coarse_gaussian_flag_is_off_by_default_and_k1_only(monkeypatch):
@@ -166,7 +199,7 @@ def test_k1_coarse_gaussian_sincosf_flag_is_off_and_requires_ffi(monkeypatch):
 
     source = Path(significance.__file__).read_text()
     assert "coarse_gaussian_sincosf_enabled and not coarse_gaussian_ffi_enabled" in source
-    assert "production half-image preprocessing path" in source
+    assert "return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled" in source
 
 
 def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
@@ -281,6 +314,47 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
         np.asarray(pixel_weight),
         np.asarray([[4.0, 0.0, 0.0]], dtype=np.float32),
     )
+
+
+def test_coarse_gaussian_sincosf_operands_preserve_float64(monkeypatch):
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _relion_coarse_gaussian_square_operands_sincosf,
+    )
+
+    captured = {}
+
+    def fake_translate(images, translation_angles, pixel_indices, image_shape):
+        captured.update(
+            images=np.asarray(images),
+            translation_angles=np.asarray(translation_angles),
+            pixel_indices=np.asarray(pixel_indices),
+            image_shape=tuple(image_shape),
+        )
+        return jnp.repeat(images[:, None, :], 2, axis=1).reshape(2, -1)
+
+    monkeypatch.setattr(cuda_backproject, "relion_translate_score_f64", fake_translate)
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        lambda *args, **kwargs: pytest.fail("float32 translation target was called"),
+    )
+    corrected, pixel_weight, unshifted = _relion_coarse_gaussian_square_operands_sincosf(
+        jnp.asarray([[2 + 4j, -8 + 16j]], dtype=jnp.complex128),
+        jnp.asarray([[2.0, 4.0]], dtype=jnp.float64),
+        jnp.asarray([1.0, 2.0], dtype=jnp.float64),
+        jnp.asarray([1, 0], dtype=jnp.int32),
+        jnp.asarray([True, True]),
+        np.asarray([[0.0, 0.0], [1.0, -2.0]], dtype=np.float64),
+        (8, 8),
+        return_unshifted=True,
+    )
+
+    assert captured["images"].dtype == np.complex128
+    assert captured["translation_angles"].dtype == np.float64
+    assert np.asarray(corrected).dtype == np.complex128
+    assert np.asarray(pixel_weight).dtype == np.float64
+    assert np.asarray(unshifted).dtype == np.complex128
 
 
 @pytest.mark.gpu
@@ -474,34 +548,123 @@ def test_relion_fine_diff2_pairs_matches_production_tree_bitwise(
     )
 
 
+@pytest.mark.gpu
+def test_relion_fine_diff2_rectangular_f64_matches_acc_double_tree_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    reference32, shifted32, weight32, lookup = _operands()
+    reference = reference32.astype(np.complex128)
+    shifted = shifted32.astype(np.complex128)
+    weight = weight32.astype(np.float64)
+    expected = _production_reference_f64(reference, shifted, weight, lookup)
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_fine_diff2_rectangular_f64(
+            jnp.asarray(reference[None, None, :]),
+            jnp.asarray(shifted[None, None, :]),
+            jnp.asarray(weight[None, :]),
+            jnp.asarray(lookup),
+        )
+
+    np.testing.assert_array_equal(
+        np.asarray(actual).view(np.uint64),
+        np.asarray([[[expected]]], dtype=np.float64).view(np.uint64),
+    )
+
+
+@pytest.mark.parametrize(
+    "function_name,expected_target,expected_shape",
+    [
+        (
+            "relion_fine_diff2_rectangular_f64",
+            "cuda_relion_fine_diff2_rectangular_f64",
+            (1, 2, 3),
+        ),
+        (
+            "relion_fine_diff2_pairs_f64",
+            "cuda_relion_fine_diff2_pairs_f64",
+            (1, 2),
+        ),
+    ],
+)
+def test_relion_fine_diff2_f64_uses_double_ffi_target(
+    monkeypatch, function_name, expected_target, expected_shape
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    call = {}
+
+    def fake_ffi_call(target, out_type, **options):
+        call.update(target=target, out_type=out_type, options=options)
+        return lambda *_args: jnp.zeros(out_type.shape, out_type.dtype)
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+    function = getattr(cuda_backproject, function_name).__wrapped__
+    reference_shape = (1, 2, 5)
+    shifted_shape = (1, 3, 5) if "rectangular" in function_name else reference_shape
+    actual = function(
+        jnp.zeros(reference_shape, dtype=jnp.complex128),
+        jnp.zeros(shifted_shape, dtype=jnp.complex128),
+        jnp.ones((1, 5), dtype=jnp.float64),
+        jnp.arange(5, dtype=jnp.int32),
+    )
+
+    assert actual.shape == expected_shape
+    assert actual.dtype == jnp.float64
+    assert call["target"] == expected_target
+
+
 @pytest.mark.parametrize(
     "function_name",
-    ["relion_fine_diff2_rectangular_f32", "relion_fine_diff2_pairs_f32"],
+    [
+        "relion_fine_diff2_rectangular_f32",
+        "relion_fine_diff2_pairs_f32",
+        "relion_fine_diff2_rectangular_f64",
+        "relion_fine_diff2_pairs_f64",
+    ],
 )
 def test_relion_fine_diff2_fails_closed_without_gpu(monkeypatch, function_name):
     import recovar.cuda_backproject as cuda_backproject
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
     function = getattr(cuda_backproject, function_name).__wrapped__
+    is_f64 = function_name.endswith("f64")
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
         function(
-            jnp.zeros((1, 1, 2), dtype=jnp.complex64),
-            jnp.zeros((1, 1, 2), dtype=jnp.complex64),
-            jnp.ones((1, 2), dtype=jnp.float32),
+            jnp.zeros((1, 1, 2), dtype=jnp.complex128 if is_f64 else jnp.complex64),
+            jnp.zeros((1, 1, 2), dtype=jnp.complex128 if is_f64 else jnp.complex64),
+            jnp.ones((1, 2), dtype=jnp.float64 if is_f64 else jnp.float32),
             jnp.asarray([0, 1], dtype=jnp.int32),
         )
 
 
-def test_relion_coarse_diff2_fails_closed_without_gpu(monkeypatch):
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.float64])
+def test_relion_coarse_diff2_fails_closed_without_gpu(monkeypatch, dtype):
     import recovar.cuda_backproject as cuda_backproject
 
     monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    is_f64 = dtype == jnp.float64
+    function = (
+        cuda_backproject.relion_coarse_diff2_rectangular_f64
+        if is_f64
+        else cuda_backproject.relion_coarse_diff2_rectangular_f32
+    )
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
-        cuda_backproject.relion_coarse_diff2_rectangular_f32.__wrapped__(
-            jnp.zeros((1, 2), dtype=jnp.complex64),
-            jnp.zeros((1, 29, 2), dtype=jnp.complex64),
-            jnp.ones((1, 2), dtype=jnp.float32),
-            jnp.zeros((1,), dtype=jnp.float32),
+        function.__wrapped__(
+            jnp.zeros((1, 2), dtype=jnp.complex128 if is_f64 else jnp.complex64),
+            jnp.zeros((1, 29, 2), dtype=jnp.complex128 if is_f64 else jnp.complex64),
+            jnp.ones((1, 2), dtype=dtype),
+            jnp.zeros((1,), dtype=dtype),
             jnp.asarray([0, 1], dtype=jnp.int32),
         )
 
@@ -574,3 +737,36 @@ def test_sparse_pass2_fused_flag_routes_supported_operand_layouts(
     assert actual.shape == expected_shape
     assert routes[0][0] == expected_route
     assert routes[0][-1] == (7,)
+
+
+def test_sparse_pass2_fused_flag_routes_float64_to_f64_ffi(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_cuda_fine_diff2_sum,
+    )
+
+    calls = []
+
+    def rectangular(reference, shifted_image, weight, full_to_compact):
+        calls.append((reference.dtype, shifted_image.dtype, weight.dtype))
+        return jnp.zeros(
+            (reference.shape[0], reference.shape[1], shifted_image.shape[1]),
+            dtype=jnp.float64,
+        )
+
+    monkeypatch.setenv("RECOVAR_RELION_FINE_DIFF2_FUSED_FFI", "1")
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_fine_diff2_rectangular_f64",
+        rectangular,
+    )
+    actual = _relion_cuda_fine_diff2_sum(
+        jnp.zeros((2, 3, 1, 7), dtype=jnp.complex128),
+        jnp.zeros((2, 1, 4, 7), dtype=jnp.complex128),
+        jnp.ones((2, 1, 1, 7), dtype=jnp.float64),
+        jnp.arange(7, dtype=jnp.int32),
+    )
+
+    assert actual.shape == (2, 3, 4)
+    assert actual.dtype == jnp.float64
+    assert calls == [(jnp.complex128, jnp.complex128, jnp.float64)]

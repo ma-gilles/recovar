@@ -966,6 +966,7 @@ def compute_relion_tau2_from_weights(
     full_half_axis=-1,
     accumulator_volume_shape=None,
     weight_combination="average",
+    output_dtype=jnp.float32,
 ):
     """Compute tau2 from CTF weights and external FSC (RELION's updateSSNRarrays).
 
@@ -991,8 +992,15 @@ def compute_relion_tau2_from_weights(
         iteration first adds the two half BackProjectors, then calls
         ``updateSSNRarrays`` on the combined BackProjector; pass ``"sum"`` for
         that path.
+    output_dtype : dtype
+        RELION ``RFLOAT`` precision for the weight combination, FSC, and
+        returned tau2 arrays. Defaults to float32 for compatibility; the
+        dense double-precision refinement path passes float64.
     """
-    prior_dtype = jnp.float32
+    prior_dtype = jnp.dtype(output_dtype)
+    if prior_dtype not in (jnp.dtype(jnp.float32), jnp.dtype(jnp.float64)):
+        raise ValueError(f"output_dtype must be float32 or float64, got {output_dtype}")
+    host_prior_dtype = np.dtype(prior_dtype)
     if weight_combination not in {"average", "sum"}:
         raise ValueError(
             "weight_combination must be 'average' or 'sum', "
@@ -1012,11 +1020,11 @@ def compute_relion_tau2_from_weights(
         and large_weight_size > _RELION_SHELL_STATS_DEVICE_REDUCTION_MAX_VOXELS
     )
     if use_host_shell_stats:
-        H0 = np.asarray(Ft_ctf_0).real.astype(np.float32, copy=False)
-        H1 = np.asarray(Ft_ctf_1).real.astype(np.float32, copy=False)
+        H0 = np.asarray(Ft_ctf_0).real.astype(host_prior_dtype, copy=False)
+        H1 = np.asarray(Ft_ctf_1).real.astype(host_prior_dtype, copy=False)
         H_comb = H0 + H1
         if weight_combination == "average":
-            H_comb = (H_comb * np.float32(0.5)).astype(np.float32, copy=False)
+            H_comb = (H_comb * host_prior_dtype.type(0.5)).astype(host_prior_dtype, copy=False)
     else:
         H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
         H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
@@ -1091,6 +1099,7 @@ def compute_relion_fsc_from_backprojector(
     padding_factor=1,
     r_max=None,
     accumulator_volume_shape=None,
+    output_dtype=jnp.float32,
 ):
     """Compute RELION's gold-standard FSC from backprojector accumulators.
 
@@ -1102,7 +1111,8 @@ def compute_relion_fsc_from_backprojector(
     ``calculateDownSampledFourierShellCorrelation`` bins the two half averages
     with ``ROUND(R)``. RELION's ``ROUND`` is round-half-away-from-zero, not
     NumPy's banker rounding. This helper mirrors that path for centered full
-    Fourier arrays used by RECOVAR's dense single-volume M-step.
+    Fourier arrays used by RECOVAR's dense single-volume M-step. ``output_dtype``
+    selects the RELION ``RFLOAT`` precision of the returned FSC.
     """
 
     volume_shape = tuple(int(s) for s in volume_shape)
@@ -1273,7 +1283,10 @@ def compute_relion_fsc_from_backprojector(
                         "k i j real imag weight"
                     ),
                 )
-    return jnp.asarray(fsc, dtype=jnp.float32)
+    fsc_dtype = jnp.dtype(output_dtype)
+    if fsc_dtype not in (jnp.dtype(jnp.float32), jnp.dtype(jnp.float64)):
+        raise ValueError(f"output_dtype must be float32 or float64, got {output_dtype}")
+    return jnp.asarray(fsc, dtype=fsc_dtype)
 
 
 @functools.lru_cache(maxsize=16)

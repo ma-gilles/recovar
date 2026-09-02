@@ -2313,6 +2313,7 @@ def _relion_projector_half_maps_for_scoring(
         np.savez_compressed(
             os.path.join(dump_dir, f"{safe_label}_relion_projector_half.npz"),
             projector_half=np.asarray(projector_half),
+            reference_real=np.asarray(refs_real),
             projector_r_max=np.int64(projector_r_max),
             current_size=np.int64(resolved_current_size),
             padding_factor=np.int64(padding_factor),
@@ -5996,7 +5997,7 @@ def _run_relion_iteration_loop(
                 logger.info(
                     "RELION adaptive pass 1: using %s-built coarse scorer rotations; "
                     "fine/M-step rotations remain host-generated",
-                    "double-precision host" if adaptive_pass1_use_float64 else "CUDA",
+                    "double-precision CUDA" if adaptive_pass1_use_float64 else "CUDA",
                 )
         # NOTE: previously this branch restricted the translation grid to a single
         # perturbed shift at iter 1 with --firstiter_cc. That was a misguided
@@ -7392,6 +7393,7 @@ def _run_relion_iteration_loop(
                 padding_factor=PADDING_FACTOR,
                 r_max=cs // 2,
                 accumulator_volume_shape=mstep_accumulator_shape,
+                output_dtype=_dense_global_scoring_dtype(),
             )
             logger.info(
                 "Computed iter-%d FSC for tau2 (RELION backprojector path): %.1fs",
@@ -7436,6 +7438,7 @@ def _run_relion_iteration_loop(
                         radius=flatten_radius,
                         radius_p=flatten_radius + RELION_WIDTH_MASK_EDGE,
                         offset=jnp.zeros(3),
+                        dtype=jnp.float64,
                     ),
                     dtype=np.float64,
                 )
@@ -7490,6 +7493,7 @@ def _run_relion_iteration_loop(
                     return_details=True,
                     full_half_axis=-1 if full_half_axis is None else int(full_half_axis),
                     accumulator_volume_shape=mstep_accumulator_shape,
+                    output_dtype=_dense_global_scoring_dtype(),
                 )
                 mean_signal_variance_per_half.append(mean_signal_variance_k)
                 tau2_update_details_per_half.append(tau2_update_details_k)
@@ -9808,6 +9812,7 @@ def _run_relion_iteration_loop(
             padding_factor=PADDING_FACTOR,
             r_max=final_current_size // 2,
             accumulator_volume_shape=final_mstep_accumulator_shape,
+            output_dtype=_dense_global_scoring_dtype(),
         )
         # RELION's joined-half final reconstruction combines the two half
         # BackProjectors before updateSSNRarrays, then applies the whole-data
@@ -9825,6 +9830,7 @@ def _run_relion_iteration_loop(
             full_half_axis=final_mstep_full_half_axis,
             accumulator_volume_shape=final_mstep_accumulator_shape,
             weight_combination="sum",
+            output_dtype=_dense_global_scoring_dtype(),
         )
         logger.info(
             "RELION final all-data tau2 from joined FSC: old_max=%.4e new_max=%.4e "

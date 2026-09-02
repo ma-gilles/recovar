@@ -166,6 +166,18 @@ def test_compute_relion_fsc_from_backprojector_uses_relion_rounding_and_half_lay
     assert fsc[0] == 1.0
     np.testing.assert_allclose(fsc[1], 1.0, atol=1e-7, rtol=1e-7)
 
+    fsc_f64 = regularization.compute_relion_fsc_from_backprojector(
+        data0.reshape(-1),
+        data1.reshape(-1),
+        weight0.reshape(-1),
+        weight1.reshape(-1),
+        shape,
+        padding_factor=2,
+        r_max=1,
+        output_dtype=np.float64,
+    )
+    assert np.asarray(fsc_f64).dtype == np.float64
+
 
 def test_compute_relion_fsc_from_backprojector_accepts_packed_half_accumulators():
     shape = (4, 4, 4)
@@ -420,6 +432,27 @@ def test_compute_relion_tau2_from_weights_constant_weight_details(padding_factor
     np.testing.assert_allclose(np.asarray(prior), expected_sigma2, atol=1e-6)
     assert np.asarray(details["shell_count"]).shape == (n_shells,)
     assert np.all(np.asarray(details["shell_count"]) > 0)
+
+
+def test_compute_relion_tau2_from_weights_preserves_requested_float64_output():
+    shape = (8, 8, 8)
+    weight = np.full(np.prod(shape), np.nextafter(2.0, 3.0), dtype=np.float64)
+    fsc = np.full(shape[0] // 2 + 1, np.nextafter(0.5, 1.0), dtype=np.float64)
+
+    prior, fsc_out, details = regularization.compute_relion_tau2_from_weights(
+        weight,
+        weight,
+        fsc,
+        shape,
+        return_details=True,
+        output_dtype=np.float64,
+    )
+
+    assert np.asarray(prior).dtype == np.float64
+    assert np.asarray(fsc_out).dtype == np.float64
+    assert np.asarray(details["prior_shells"]).dtype == np.float64
+    assert np.asarray(details["sigma2_shells"]).dtype == np.float64
+    assert np.asarray(details["avg_weight_shells"]).dtype == np.float64
 
 
 def test_compute_relion_tau2_from_weights_respects_relion_rmax_support():

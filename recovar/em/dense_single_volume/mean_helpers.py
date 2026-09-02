@@ -540,6 +540,7 @@ def _reconstruct_and_postprocess_means(
                 radius=flatten_radius,
                 radius_p=flatten_radius + relion_width_mask_edge,
                 offset=jnp.zeros(3),
+                dtype=(means[k].real.dtype if not k_class_enabled else means[k][0].real.dtype),
             )
             if k_class_enabled:
                 flattened_classes = []

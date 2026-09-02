@@ -1013,7 +1013,8 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
     n_trans = 3
     n_pix = 5
     experiment_dataset = SimpleNamespace(dataset_indices=np.array([42], dtype=np.int64))
-    rotations = np.arange(n_rot * 9, dtype=np.float32).reshape(n_rot, 3, 3)
+    rotations = np.arange(n_rot * 9, dtype=np.float64).reshape(n_rot, 3, 3)
+    fine_translations = np.zeros((n_trans, 2), dtype=np.float64)
     per_image_inputs = {
         "oversampled_rots": [rotations],
         "oversampled_rot_indices": [np.arange(10, 10 + n_rot, dtype=np.int64)],
@@ -1032,7 +1033,7 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
         per_image_inputs=per_image_inputs,
         current_size=14,
         n_fine_trans=n_trans,
-        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        fine_translations=fine_translations,
         scores=scores,
         probs=probs,
         rotation_log_prior=np.zeros((1, n_rot), dtype=np.float64),
@@ -1059,6 +1060,8 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
         np.testing.assert_array_equal(payload["rotation_rows_global"], np.asarray([1, 3]))
         np.testing.assert_array_equal(payload["scores_with_prior"], scores[0, [1, 3]])
         np.testing.assert_array_equal(payload["rotations"], rotations[[1, 3]])
+        assert payload["rotations"].dtype == np.float64
+        assert payload["fine_translations"].dtype == np.float64
         assert int(payload["candidate_rotation_count"]) == n_rot
         assert int(payload["candidate_mask_total_count"]) == n_rot * n_trans
         assert float(payload["score_max"]) == float(np.max(scores))

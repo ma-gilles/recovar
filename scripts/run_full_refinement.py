@@ -1392,6 +1392,7 @@ def _build_replay_iteration_overrides(
     include_k1_scoring_scale=False,
     strict=False,
     process_start_noise_broadcast=True,
+    noise_dtype=np.float32,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -1424,6 +1425,10 @@ def _build_replay_iteration_overrides(
     run_it000 carries the particle pre-centering offsets, initial orientations,
     image/scale corrections, and direction prior that RELION uses in its first
     expectation step.
+
+    ``noise_dtype`` controls only the expanded pixel representation of the
+    RFLOAT model-STAR spectrum. Double-scoring replays must retain float64 so
+    the reciprocal is not narrowed before construction of ``Minvsigma2``.
     """
     import re as _re
     from pathlib import Path as _Path
@@ -1448,6 +1453,10 @@ def _build_replay_iteration_overrides(
             return read_relion_direction_priors(model_path)
         return read_relion_direction_prior(model_path)
 
+    noise_dtype = np.dtype(noise_dtype)
+    if noise_dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+        raise TypeError(f"noise_dtype must be float32 or float64, got {noise_dtype}")
+
     def _read_model_noise_variance(model, *, image_shape):
         radial = _read_relion_single_optics_sigma2_noise(
             model,
@@ -1458,7 +1467,7 @@ def _build_replay_iteration_overrides(
         radial = radial * float(ds_grid) ** 4
         return np.asarray(
             utils.make_radial_image(jnp.asarray(radial), image_shape, extend_last_frequency=True),
-            dtype=np.float32,
+            dtype=noise_dtype,
         ).reshape(-1)
 
     def _read_model_class_tau2(model):
@@ -3175,6 +3184,18 @@ def main():
         os.path.join(args.data_dir, "particles.star"),
         lazy=False,
     )
+    _double_image_preprocessing = (
+        os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if _double_image_preprocessing:
+        ds.dtype = np.complex128
+        ds.dtype_real = np.dtype(np.float64)
+        image_backend = ds.image_source.backend
+        image_backend.dtype = np.complex128
+        logger.info(
+            "Double scoring: preserving float64/complex128 through particle masking and FFT"
+        )
     relion_mask_params = _maybe_apply_relion_image_mask(
         ds,
         args,
@@ -4206,6 +4227,7 @@ def main():
                 include_k1_mean_variance=(args.state_swap_target_relion_iteration is not None),
                 include_k1_scoring_scale=(args.state_swap_target_relion_iteration is not None),
                 strict=True,
+                noise_dtype=np.float64 if _double_image_preprocessing else np.float32,
             )
 
     final_replay_override = None
@@ -4246,6 +4268,7 @@ def main():
             init_relion_iteration=args.init_relion_iteration,
             particle_names=our_names,
             strict=True,
+            noise_dtype=np.float64 if _double_image_preprocessing else np.float32,
         )
         source_override = final_overrides[-1]
         if source_override is None:
@@ -4303,6 +4326,7 @@ def main():
             particle_names=our_names,
             include_initial_state=True,
             strict=True,
+            noise_dtype=np.float64 if _double_image_preprocessing else np.float32,
         )
         if initial_overrides[0] is not None:
             if args.init_noise_from_npz is not None:

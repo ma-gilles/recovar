@@ -405,7 +405,7 @@ def get_radial_mask(shape, radius=None):
     return jnp.linalg.norm(volume_coords, axis=-1) < radius + 1e-7
 
 
-def raised_cosine_mask(volume_shape, radius, radius_p, offset):
+def raised_cosine_mask(volume_shape, radius, radius_p, offset, *, dtype=None):
     """3D raised-cosine mask with adjustable center.
 
     Value is 1 for ``r < radius``, cosine-tapered for ``radius <= r < radius_p``,
@@ -418,16 +418,28 @@ def raised_cosine_mask(volume_shape, radius, radius_p, offset):
         offset: 3-element center offset.
 
     Returns:
-        Mask array of shape ``volume_shape``.
+        Mask array of shape ``volume_shape``. ``dtype`` defaults to the
+        historical float32 coordinate precision; callers reproducing an
+        RFLOAT-double RELION path may request float64 explicitly.
     """
     grid = fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size=1, scaled=False)
+    if dtype is not None:
+        grid = grid.astype(dtype)
+    offset = jnp.asarray(offset, dtype=grid.dtype)
+    radius = jnp.asarray(radius, dtype=grid.dtype)
+    radius_p = jnp.asarray(radius_p, dtype=grid.dtype)
     grid -= offset
     distances = jnp.linalg.norm(grid, axis=-1)
 
-    mask = jnp.where(distances < radius, 1, 0)
+    zero = jnp.asarray(0.0, dtype=grid.dtype)
+    one = jnp.asarray(1.0, dtype=grid.dtype)
+    half = jnp.asarray(0.5, dtype=grid.dtype)
+    mask = jnp.where(distances < radius, one, zero)
     mask = jnp.where(
         (distances >= radius) & (distances < radius_p),
-        0.5 - 0.5 * jnp.cos(np.pi * (radius_p - distances) / (radius_p - radius)),
+        half
+        - half
+        * jnp.cos(jnp.asarray(np.pi, dtype=grid.dtype) * (radius_p - distances) / (radius_p - radius)),
         mask,
     )
     return mask.reshape(volume_shape)

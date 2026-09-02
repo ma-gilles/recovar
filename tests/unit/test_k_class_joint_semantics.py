@@ -111,12 +111,12 @@ def test_compact_sparse_pass2_preference_respects_env_overrides(monkeypatch):
     assert not _compact_sparse_pass2_preferred_over_dense(n_classes=4, n_images=10_000)
 
 
-def test_exact_fine_gaussian_requires_sparse_float32_gaussian_pass2():
+def test_exact_fine_gaussian_requires_sparse_gaussian_pass2_in_either_precision():
     assert _strict_exact_fine_gaussian_requested({})
     assert not _strict_exact_fine_gaussian_requested(
         {"relion_exact_fine_gaussian": False},
     )
-    assert not _strict_exact_fine_gaussian_requested(
+    assert _strict_exact_fine_gaussian_requested(
         {"use_float64_scoring": True},
     )
     assert not _strict_exact_fine_gaussian_requested(

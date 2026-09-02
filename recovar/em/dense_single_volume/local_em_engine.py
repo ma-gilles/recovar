@@ -1726,12 +1726,25 @@ def _prepare_local_exact_bucket(
     if relion_score_translation_angles is not None:
         from recovar import cuda_backproject
 
-        shifted_score_half = cuda_backproject.relion_translate_score_f32(
-            jnp.asarray(score_weighted_half, dtype=jnp.complex64),
-            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-            jnp.arange(score_weighted_half.shape[1], dtype=jnp.int32),
-            config.image_shape,
-        )
+        translation_dtype = jnp.asarray(relion_score_translation_angles).dtype
+
+        def _cuda_translate(weighted_half):
+            pixel_indices = jnp.arange(weighted_half.shape[1], dtype=jnp.int32)
+            if translation_dtype == jnp.dtype(jnp.float64):
+                return cuda_backproject.relion_translate_score_f64(
+                    jnp.asarray(weighted_half, dtype=jnp.complex128),
+                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float64),
+                    pixel_indices,
+                    config.image_shape,
+                )
+            return cuda_backproject.relion_translate_score_f32(
+                jnp.asarray(weighted_half, dtype=jnp.complex64),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                pixel_indices,
+                config.image_shape,
+            )
+
+        shifted_score_half = _cuda_translate(score_weighted_half)
     else:
         shifted_score_half = _apply_half_translation_phases(score_weighted_half, shift_phases_half)
     if synchronize_profile:
@@ -1784,13 +1797,16 @@ def _prepare_local_exact_bucket(
             score_real_dtype=score_real_dtype,
         )
         recon_weighted_half = shift_processed_recon_half * shift_ctf_half / shift_noise_half
-        shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
+        if relion_score_translation_angles is not None and translation_dtype == jnp.dtype(jnp.float64):
+            shifted_recon_half = _cuda_translate(recon_weighted_half)
+        else:
+            shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
         if synchronize_profile:
             _block_until_ready(shifted_recon_half)
         if timer is not None:
             timer["tile_shift_recon_s"] += time.time() - shift_recon_t0
     else:
-        if relion_score_translation_angles is None:
+        if relion_score_translation_angles is None or translation_dtype == jnp.dtype(jnp.float64):
             shifted_recon_half = shifted_score_half
         else:
             # Exact RELION arithmetic applies only to score translation.
@@ -1938,8 +1954,6 @@ def run_local_em_exact(
     relion_exact_score_translation = bool(relion_exact_score_translation)
     if relion_exact_score_translation and not half_spectrum_scoring:
         raise ValueError("exact RELION score translation requires half_spectrum_scoring=True")
-    if relion_exact_score_translation and use_float64_scoring:
-        raise ValueError("exact RELION score translation is a float32 scoring path")
     if score_only:
         if not (disable_adjoint_y and disable_adjoint_ctf):
             raise ValueError("score_only exact-local EM requires both adjoints disabled")
@@ -2547,6 +2561,7 @@ def run_local_em_exact(
             local_layout.translation_grid,
             image_shape,
             enabled=relion_exact_score_translation,
+            dtype=np.float64 if use_float64_scoring else np.float32,
         )
     )
     if return_profile:

@@ -333,6 +333,8 @@ class ParticleImageDataset:
             else:
                 if images_np.ndim == 2:
                     images_np = images_np[np.newaxis, ...]
+                if np.dtype(self.dtype) == np.dtype(np.complex128):
+                    images_np = images_np.astype(np.float64, copy=False)
                 if apply_image_mask:
                     images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
                 transformed = _centered_fft2_numpy(images_np * self.mult)
@@ -428,6 +430,8 @@ class ParticleImageDataset:
             else:
                 if images_np.ndim == 2:
                     images_np = images_np[np.newaxis, ...]
+                if np.dtype(self.dtype) == np.dtype(np.complex128):
+                    images_np = images_np.astype(np.float64, copy=False)
                 if apply_image_mask:
                     images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
                 if self.relion_fourier_backend == "jax_gpu":

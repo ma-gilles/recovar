@@ -606,7 +606,6 @@ def _strict_exact_fine_gaussian_requested(
     return bool(
         engine_kwargs.get("relion_exact_fine_gaussian", True)
         and score_mode == "gaussian"
-        and not engine_kwargs.get("use_float64_scoring", False)
     )
 
 
@@ -1083,7 +1082,6 @@ def _run_sparse_k_class_adaptive_pass2(
     strict_exact_gaussian = bool(
         common["relion_exact_fine_gaussian"]
         and common["relion_firstiter_score_mode"] == "gaussian"
-        and not common["use_float64_scoring"]
     )
     if strict_exact_gaussian and n_classes > 1 and not use_fused_pass2:
         raise RuntimeError(
@@ -2086,8 +2084,8 @@ def _run_firstiter_global_winner_subset_pass2(
                 rotations_np,
                 translations_np,
             )
-            best_rots_full = np.zeros((n_images, 3, 3), dtype=np.float32)
-            best_trans_full = np.zeros((n_images, 2), dtype=np.float32)
+            best_rots_full = np.zeros((n_images, 3, 3), dtype=np.asarray(best_rots).dtype)
+            best_trans_full = np.zeros((n_images, 2), dtype=np.asarray(best_trans).dtype)
             best_rot_ids_full = np.zeros(n_images, dtype=np.int32)
             best_rots_full[image_indices] = best_rots
             best_trans_full[image_indices] = best_trans
@@ -2311,8 +2309,8 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
                 ),
             )
         if return_best_pose_details:
-            best_rots_full = np.zeros((n_images, 3, 3), dtype=np.float32)
-            best_trans_full = np.zeros((n_images, 2), dtype=np.float32)
+            best_rots_full = np.zeros((n_images, 3, 3), dtype=np.asarray(best_rots).dtype)
+            best_trans_full = np.zeros((n_images, 2), dtype=np.asarray(best_trans).dtype)
             best_rot_ids_full = np.zeros(n_images, dtype=np.int32)
             best_rots_full[image_indices] = best_rots
             best_trans_full[image_indices] = best_trans

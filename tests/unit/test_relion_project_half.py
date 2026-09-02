@@ -245,6 +245,35 @@ def test_relion_acc_double_floorf_quirk_matches_default_away_from_integer_bounda
     np.testing.assert_allclose(quirked, default, rtol=1e-6, atol=1e-6)
 
 
+def test_relion_project_half_truncates_rotated_radius_before_clipping():
+    """AccProjectorKernel assigns the positive floating r² sum to ``int``."""
+    import jax.numpy as jnp
+
+    from recovar.core.relion_project import relion_project_half
+
+    n = 8
+    r_max = 2
+    volume = np.ones((n, n, n // 2 + 1), dtype=np.complex128)
+    rotation = np.eye(3, dtype=np.float64)
+    rotation[0, 0] = 1.0001
+
+    # At output (x=2,y=0), rotated r² is slightly greater than 4. RELION's
+    # int conversion yields 4, so the r_max=2 boundary pixel remains valid.
+    rotated_r2 = (2.0 * rotation[0, 0]) ** 2
+    assert 4.0 < rotated_r2 < 5.0
+    projected = np.asarray(
+        relion_project_half(
+            jnp.asarray(volume),
+            jnp.asarray(rotation),
+            n,
+            r_max=r_max,
+            padding_factor=1,
+        )
+    )
+
+    np.testing.assert_allclose(projected[0, 2], 1.0 + 0.0j, rtol=0.0, atol=1e-12)
+
+
 def test_relion_acc_double_floorf_quirk_flips_bucket_at_integer_boundary():
     """RELION's GPU no_tex3D/BP.cuh floor with float32 ``floorf`` on the double
     coordinate, unconditionally, even under ``ACC_DOUBLE_PRECISION``

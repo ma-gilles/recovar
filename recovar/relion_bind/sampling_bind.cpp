@@ -83,12 +83,15 @@ static py::array_t<double> get_coarse_orientations(int healpix_order, double psi
  * Directly implements RELION's getOrientations logic for C1 symmetry.
  * idir indexes into HEALPix NEST pixels, ipsi indexes into psi grid.
  */
-static py::array_t<double> get_oversampled_orientations(
+static void append_oversampled_orientations(
     int healpix_order,
     int oversampling_order,
     long idir,
     long ipsi,
-    double random_perturbation
+    double random_perturbation,
+    std::vector<double> &my_rot,
+    std::vector<double> &my_tilt,
+    std::vector<double> &my_psi
 ) {
     Healpix_Base hpx_coarse(healpix_order, NEST);
 
@@ -97,7 +100,7 @@ static py::array_t<double> get_oversampled_orientations(
     psi_step = 360.0 / (double)nr_psi;
     double psi_center = ipsi * psi_step;
 
-    std::vector<double> my_rot, my_tilt, my_psi;
+    const size_t first_orientation = my_rot.size();
 
     if (oversampling_order == 0) {
         double zz, phi;
@@ -140,7 +143,7 @@ static py::array_t<double> get_oversampled_orientations(
     if (std::abs(random_perturbation) > 0.) {
         double angular_sampling = 360.0 / (6 * ROUND(std::pow(2., healpix_order)));
         double myperturb = random_perturbation * angular_sampling;
-        for (size_t iover = 0; iover < my_rot.size(); iover++) {
+        for (size_t iover = first_orientation; iover < my_rot.size(); iover++) {
             Matrix2D<RFLOAT> A(3,3), R(3,3);
             Euler_angles2matrix(my_rot[iover], my_tilt[iover], my_psi[iover], A);
             Euler_angles2matrix(myperturb, myperturb, myperturb, R);
@@ -149,6 +152,20 @@ static py::array_t<double> get_oversampled_orientations(
         }
     }
 
+}
+
+
+static py::array_t<double> get_oversampled_orientations(
+    int healpix_order,
+    int oversampling_order,
+    long idir,
+    long ipsi,
+    double random_perturbation
+) {
+    std::vector<double> my_rot, my_tilt, my_psi;
+    append_oversampled_orientations(
+        healpix_order, oversampling_order, idir, ipsi, random_perturbation,
+        my_rot, my_tilt, my_psi);
     long n = my_rot.size();
     py::array_t<double> result({n, (long)3});
     auto r = result.mutable_unchecked<2>();
@@ -156,6 +173,42 @@ static py::array_t<double> get_oversampled_orientations(
         r(i, 0) = my_rot[i];
         r(i, 1) = my_tilt[i];
         r(i, 2) = my_psi[i];
+    }
+    return result;
+}
+
+
+/** Generate oversampled Euler rows for many coarse samples in input order. */
+static py::array_t<double> get_oversampled_orientations_batch(
+    int healpix_order,
+    int oversampling_order,
+    py::array_t<long, py::array::c_style | py::array::forcecast> idirs,
+    py::array_t<long, py::array::c_style | py::array::forcecast> ipsis,
+    double random_perturbation
+) {
+    auto idir_values = idirs.unchecked<1>();
+    auto ipsi_values = ipsis.unchecked<1>();
+    if (idir_values.shape(0) != ipsi_values.shape(0))
+        throw std::runtime_error("idirs and ipsis must have the same length");
+
+    std::vector<double> my_rot, my_tilt, my_psi;
+    const size_t children_per_parent =
+        oversampling_order == 0 ? 1 : (size_t)std::pow(8., oversampling_order);
+    my_rot.reserve(idir_values.shape(0) * children_per_parent);
+    my_tilt.reserve(idir_values.shape(0) * children_per_parent);
+    my_psi.reserve(idir_values.shape(0) * children_per_parent);
+    for (py::ssize_t i = 0; i < idir_values.shape(0); i++)
+        append_oversampled_orientations(
+            healpix_order, oversampling_order, idir_values(i), ipsi_values(i),
+            random_perturbation, my_rot, my_tilt, my_psi);
+
+    const py::ssize_t count = (py::ssize_t)my_rot.size();
+    py::array_t<double> result({count, (py::ssize_t)3});
+    auto output = result.mutable_unchecked<2>();
+    for (py::ssize_t i = 0; i < count; i++) {
+        output(i, 0) = my_rot[i];
+        output(i, 1) = my_tilt[i];
+        output(i, 2) = my_psi[i];
     }
     return result;
 }
@@ -281,6 +334,37 @@ static py::array_t<double> euler_angles_to_matrix(double rot, double tilt, doubl
 
 
 /**
+ * Convert an (N, 3) array of Euler angles to the inverse matrices produced by
+ * RELION's host generateEulerMatrices(..., inverse=true) path.
+ *
+ * This deliberately executes Euler_angles2matrix and Matrix2D::inv in C++.
+ * Reimplementing the same formulas with NumPy is mathematically equivalent,
+ * but libm/vectorized-trig rounding can differ by a few double-precision ulps;
+ * those ulps affect RELION's strict radius cutoff at the outer Fourier shell.
+ */
+static py::array_t<double> euler_angles_to_inverse_matrices(
+    py::array_t<double, py::array::c_style | py::array::forcecast> angles
+) {
+    auto input = angles.unchecked<2>();
+    if (input.shape(1) != 3)
+        throw std::runtime_error("angles must have shape (N,3)");
+
+    const py::ssize_t count = input.shape(0);
+    py::array_t<double> result({count, (py::ssize_t)3, (py::ssize_t)3});
+    auto output = result.mutable_unchecked<3>();
+    for (py::ssize_t i = 0; i < count; i++) {
+        Matrix2D<RFLOAT> A(3, 3);
+        Euler_angles2matrix(input(i, 0), input(i, 1), input(i, 2), A);
+        A = A.inv();
+        for (int row = 0; row < 3; row++)
+            for (int col = 0; col < 3; col++)
+                output(i, row, col) = A(row, col);
+    }
+    return result;
+}
+
+
+/**
  * Convert rotation matrix to Euler angles using RELION's convention.
  * Input: (3, 3) rotation matrix.
  * Returns: (rot, tilt, psi) tuple in degrees.
@@ -340,6 +424,14 @@ Get oversampled orientations for a coarse (idir, ipsi) pair.
 Returns (n_oversampled, 3) with [rot, tilt, psi] in degrees.
 )doc");
 
+    m.def("get_oversampled_orientations_batch", &get_oversampled_orientations_batch,
+          py::arg("healpix_order"),
+          py::arg("oversampling_order"),
+          py::arg("idirs"),
+          py::arg("ipsis"),
+          py::arg("random_perturbation") = 0.0,
+          "Get oversampled Euler rows for arrays of coarse direction/psi IDs.");
+
     m.def("get_coarse_translations", &get_coarse_translations,
           py::arg("offset_range"),
           py::arg("offset_step"),
@@ -363,6 +455,10 @@ Returns (n_oversampled, 2) with [x, y] in pixels.
     m.def("euler_angles_to_matrix", &euler_angles_to_matrix,
           py::arg("rot"), py::arg("tilt"), py::arg("psi"),
           "Convert (rot, tilt, psi) degrees → (3,3) rotation matrix (RELION convention).");
+
+    m.def("euler_angles_to_inverse_matrices", &euler_angles_to_inverse_matrices,
+          py::arg("angles"),
+          "Convert (N,3) Euler angles to RELION host inverse matrices.");
 
     m.def("matrix_to_euler_angles", &matrix_to_euler_angles,
           py::arg("mat"),

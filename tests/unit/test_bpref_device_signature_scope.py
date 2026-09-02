@@ -127,6 +127,20 @@ def test_scoped_device_capture_keeps_live_reduction_and_adjoint_modes_ordinary(m
     assert not modes["live_per_particle_launches"]
 
 
+def test_firstiter_xhalf_topology_is_production_even_without_diagnostic_flags():
+    modes = sparse_pass2_bucketed._resolve_bpref_execution_modes(
+        {
+            "sequential_translation_reduction": False,
+            "per_particle_launches": False,
+        },
+        device_signature_requested=False,
+        production_firstiter_xhalf_topology=True,
+    )
+
+    assert modes["live_sequential_translation_reduction"]
+    assert modes["live_per_particle_launches"]
+
+
 def test_scoped_device_capture_disables_shadows_for_empty_target_bucket():
     modes = sparse_pass2_bucketed._resolve_bpref_bucket_diagnostic_modes(
         device_signature_requested=True,
