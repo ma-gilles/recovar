@@ -102,7 +102,7 @@ def test_sparse_adapter_fails_closed_when_selector_audit_is_missing():
 def test_sparse_adapter_propagates_real_coarse_support_hybrid_and_counts():
     audit = _active_audit(workers=0, atomic=False)
     support = {
-        "schema": "recovar.coarse_significance_support_audit.v1",
+        "schema": "recovar.coarse_significance_support_audit.v2",
         "aggregate_support_sha256": "a" * 64,
     }
     hybrid = {

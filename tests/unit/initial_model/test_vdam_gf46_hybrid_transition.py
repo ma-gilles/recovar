@@ -20,48 +20,58 @@ SPEC.loader.exec_module(MODULE)
 
 
 def _support_audit() -> dict:
-    counts = [[3] * 1_000]
-    row_hashes = [[hashlib.sha256(f"row-{index}".encode()).hexdigest() for index in range(1_000)]]
-    counts_le = np.ascontiguousarray(np.asarray(counts, dtype="<i8"))
-    return {
+    audit = {
         "schema": MODULE.SUPPORT_SCHEMA,
         "classification": "diagnostic_only",
         "canonical_encoding": MODULE.EXPECTED_SUPPORT_ENCODING,
         "n_classes": 1,
         "n_images": 1_000,
         "samples_per_class": 36_864 * 29,
-        "selected_count_sum": 3_000,
-        "selected_count_min": 3,
-        "selected_count_max": 3,
-        "per_class_image_selected_counts": counts,
-        "per_class_image_selected_counts_sha256": hashlib.sha256(
-            counts_le.tobytes(order="C"),
-        ).hexdigest(),
-        "per_class_image_support_sha256": row_hashes,
-        "aggregate_support_sha256": hashlib.sha256(b"aggregate").hexdigest(),
+        "support_ids_included": True,
+        "per_class_image_support_ids": [[[0, 1, 2] for _ in range(1_000)]],
     }
+    _refresh_support_audit(audit)
+    return audit
 
 
-def _change_support_row(audit: dict, index: int, count: int, tag: bytes) -> None:
-    audit["per_class_image_selected_counts"][0][index] = count
-    audit["per_class_image_support_sha256"][0][index] = hashlib.sha256(tag).hexdigest()
-    counts = np.ascontiguousarray(
-        np.asarray(audit["per_class_image_selected_counts"], dtype="<i8"),
-    )
-    audit["selected_count_sum"] = int(counts.sum())
-    audit["selected_count_min"] = int(counts.min())
-    audit["selected_count_max"] = int(counts.max())
-    audit["per_class_image_selected_counts_sha256"] = hashlib.sha256(
-        counts.tobytes(order="C"),
-    ).hexdigest()
-    audit["aggregate_support_sha256"] = hashlib.sha256(
-        repr(
-            (
-                audit["per_class_image_selected_counts"],
-                audit["per_class_image_support_sha256"],
+def _refresh_support_audit(audit: dict) -> None:
+    counts: list[list[int]] = []
+    row_hashes: list[list[str]] = []
+    aggregate = hashlib.sha256()
+    total = int(audit["samples_per_class"])
+    for class_index, rows in enumerate(audit["per_class_image_support_ids"]):
+        class_counts = []
+        class_hashes = []
+        for image_index, ids in enumerate(rows):
+            ids_le = np.ascontiguousarray(np.asarray(ids, dtype="<i8"))
+            header = np.asarray(
+                (class_index, image_index, total, len(ids)),
+                dtype="<i8",
             )
-        ).encode(),
+            row_bytes = header.tobytes(order="C") + ids_le.tobytes(order="C")
+            class_counts.append(len(ids))
+            class_hashes.append(hashlib.sha256(row_bytes).hexdigest())
+            aggregate.update(
+                np.asarray((len(row_bytes),), dtype="<u8").tobytes(order="C"),
+            )
+            aggregate.update(row_bytes)
+        counts.append(class_counts)
+        row_hashes.append(class_hashes)
+    counts_le = np.ascontiguousarray(np.asarray(counts, dtype="<i8"))
+    audit["per_class_image_selected_counts"] = counts
+    audit["per_class_image_support_sha256"] = row_hashes
+    audit["selected_count_sum"] = int(counts_le.sum())
+    audit["selected_count_min"] = int(counts_le.min())
+    audit["selected_count_max"] = int(counts_le.max())
+    audit["per_class_image_selected_counts_sha256"] = hashlib.sha256(
+        counts_le.tobytes(order="C"),
     ).hexdigest()
+    audit["aggregate_support_sha256"] = aggregate.hexdigest()
+
+
+def _change_support_row(audit: dict, index: int, ids: list[int]) -> None:
+    audit["per_class_image_support_ids"][0][index] = ids
+    _refresh_support_audit(audit)
 
 
 def _hybrid_stats() -> dict:
@@ -128,7 +138,9 @@ def test_runner_separates_support_audit_from_clean_abba_timing() -> None:
         "RUN_HYBRID=(0 1 0 1 1 0)",
         "RUN_AUDIT=(1 1 0 0 0 0)",
         "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT=1",
+        "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS=1",
         "-u RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT",
+        "-u RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY=64",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB=4",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB=2",
@@ -156,7 +168,7 @@ def test_runner_separates_support_audit_from_clean_abba_timing() -> None:
 
 
 @pytest.mark.unit
-def test_support_gate_requires_hybrid_rows_from_direct_repeat_outcomes() -> None:
+def test_support_gate_rejects_non_nested_cross_mode_support() -> None:
     arms = {
         "audit_direct": {
             "cold": {"metadata": _audit_metadata(hybrid=False)},
@@ -170,14 +182,16 @@ def test_support_gate_requires_hybrid_rows_from_direct_repeat_outcomes() -> None
     result = MODULE._support_gate(arms)
     assert result["pass"]
     assert result["all_direct_hybrid_cold_warm_support_exact"]
-    assert result["hybrid_novel_support_row_count"] == 0
+    assert result["non_nested_support_row_count"] == 0
 
     changed = copy.deepcopy(arms)
     changed_audit = changed["audit_hybrid"]["warm"]["metadata"]["halfset_0_profile_summary"][
         "coarse_significance_support_audit"
     ]
-    _change_support_row(changed_audit, 73, 4, b"changed")
-    assert not MODULE._support_gate(changed)["pass"]
+    _change_support_row(changed_audit, 73, [0, 1, 4])
+    changed_result = MODULE._support_gate(changed)
+    assert not changed_result["pass"]
+    assert changed_result["non_nested_support_rows"] == [73]
 
 
 @pytest.mark.unit
@@ -195,7 +209,7 @@ def test_support_gate_accepts_direct_inclusive_tie_without_a_novel_hybrid_state(
     direct_warm = arms["audit_direct"]["warm"]["metadata"]["halfset_0_profile_summary"][
         "coarse_significance_support_audit"
     ]
-    _change_support_row(direct_warm, 73, 4, b"direct-inclusive-tie")
+    _change_support_row(direct_warm, 73, [0, 1, 2, 3])
 
     result = MODULE._support_gate(arms)
 
@@ -204,7 +218,9 @@ def test_support_gate_accepts_direct_inclusive_tie_without_a_novel_hybrid_state(
     assert result["direct_repeat_changed_rows"] == [73]
     assert result["direct_repeat_count_absolute_delta"] == 1
     assert result["persisted_cutoff_counts_exact"]
-    assert result["hybrid_support_within_observed_direct_outcomes"]
+    assert result["cross_mode_changed_rows"] == [73]
+    assert result["pairwise_nested_inclusive_tie_supports"]
+    assert result["common_support_core_covers_cutoff"]
 
 
 @pytest.mark.unit
@@ -240,6 +256,7 @@ def test_hybrid_telemetry_is_exact_score_fail_closed_and_accounted() -> None:
 def test_material_runtime_gate_is_ten_percent_and_bounded_scope() -> None:
     assert MODULE.MATERIAL_WALL_RATIO == 0.90
     assert MODULE.CONTROL_REPEAT_ENVELOPE_MULTIPLIER == 2.0
+    assert MODULE.NORMALIZED_NUMERICAL_NOISE_FLOOR == 4.0 * np.finfo(np.float32).eps
     source = SCRIPT.read_text()
     assert '"default_enablement_allowed": False' in source
     assert '"long_trajectory_no_growth_evaluated": False' in source

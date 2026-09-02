@@ -101,6 +101,9 @@ _COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV = (
 _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV = (
     "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT"
 )
+_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV = (
+    "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS"
+)
 _COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR"
 )
@@ -723,6 +726,22 @@ def _coarse_significance_support_audit_enabled(
         return True
     raise ValueError(
         f"Unsupported {_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV}={token!r}",
+    )
+
+
+def _coarse_significance_support_audit_ids_enabled() -> bool:
+    """Whether a support audit also retains its exact selected IDs."""
+
+    token = os.environ.get(
+        _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV,
+        "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV}={token!r}",
     )
 
 
@@ -2345,6 +2364,7 @@ def _build_coarse_significance_support_audit(
     significant_sample_indices,
     *,
     samples_per_class: int,
+    include_ids: bool = False,
 ) -> dict:
     """Hash every ordered class/image coarse support without changing it.
 
@@ -2368,6 +2388,7 @@ def _build_coarse_significance_support_audit(
     aggregate = hashlib.sha256()
     per_class_image_sha256: list[list[str]] = []
     per_class_counts: list[list[int]] = []
+    per_class_ids: list[list[list[int]]] = []
     for class_index, rows in enumerate(significant_sample_indices):
         if not isinstance(rows, (tuple, list)):
             raise TypeError("support audit class rows must be a sequence")
@@ -2379,6 +2400,7 @@ def _build_coarse_significance_support_audit(
             raise ValueError("support audit classes must cover the same images")
         row_digests = []
         row_counts = []
+        row_ids: list[list[int]] = []
         for image_index, samples in enumerate(rows):
             ids = np.asarray(
                 significant_sample_ids(samples, total_size),
@@ -2400,16 +2422,20 @@ def _build_coarse_significance_support_audit(
             row_bytes = header.tobytes(order="C") + ids_le.tobytes(order="C")
             row_digests.append(hashlib.sha256(row_bytes).hexdigest())
             row_counts.append(int(ids.size))
+            if include_ids:
+                row_ids.append([int(value) for value in ids])
             aggregate.update(
                 np.asarray((len(row_bytes),), dtype="<u8").tobytes(order="C"),
             )
             aggregate.update(row_bytes)
         per_class_image_sha256.append(row_digests)
         per_class_counts.append(row_counts)
+        if include_ids:
+            per_class_ids.append(row_ids)
 
     counts = np.ascontiguousarray(np.asarray(per_class_counts, dtype="<i8"))
-    return {
-        "schema": "recovar.coarse_significance_support_audit.v1",
+    result = {
+        "schema": "recovar.coarse_significance_support_audit.v2",
         "classification": "diagnostic_only",
         "canonical_encoding": (
             "class-major/image-major; uint64 row-byte-length; "
@@ -2425,9 +2451,16 @@ def _build_coarse_significance_support_audit(
         "per_class_image_selected_counts_sha256": hashlib.sha256(
             counts.tobytes(order="C"),
         ).hexdigest(),
+        "support_ids_included": bool(include_ids),
         "per_class_image_support_sha256": per_class_image_sha256,
         "aggregate_support_sha256": aggregate.hexdigest(),
     }
+    if include_ids:
+        # Explicit opt-in avoids retaining a potentially enormous full-support
+        # diagnostic in other geometries. GF46 iteration 181 has only ~5,900
+        # selected IDs across all 1,000 images.
+        result["per_class_image_support_ids"] = per_class_ids
+    return result
 
 
 def compact_significant_sample_indices_from_mask(mask) -> object:
@@ -7172,6 +7205,7 @@ def _compute_k_class_significance_batched(
             _build_coarse_significance_support_audit(
                 significant_sample_indices,
                 samples_per_class=n_rot * n_trans,
+                include_ids=_coarse_significance_support_audit_ids_enabled(),
             )
         )
     if relion_f32_sum_weight is not None:

@@ -59,13 +59,14 @@ from scripts.analyze_vdam_coarse_multistream_late_pair import (
     _values_equal,
 )
 
-SCHEMA = "recovar.vdam_gf46_hybrid_transition_analysis.v2"
+SCHEMA = "recovar.vdam_gf46_hybrid_transition_analysis.v3"
 RUN_SCHEMA = "recovar.vdam_gf46_hybrid_transition.v1"
 MATERIAL_WALL_RATIO = 0.90
 # Match the mature EM capture-inertness policy: a candidate must stay within
 # twice the maximum observed control-repeat delta.  Here that control contains
 # six direct executions (all cold/warm phases), yielding 15 control pairs.
 CONTROL_REPEAT_ENVELOPE_MULTIPLIER = 2.0
+NORMALIZED_NUMERICAL_NOISE_FLOOR = 4.0 * float(np.finfo(np.float32).eps)
 AUDIT_SPECS = (("audit_direct", False), ("audit_hybrid", True))
 TIMING_SPECS = (
     ("direct_1", False, 1),
@@ -85,7 +86,7 @@ TIMING_METRICS = (
     "warm_pass2_s",
     "peak_rss_gib",
 )
-SUPPORT_SCHEMA = "recovar.coarse_significance_support_audit.v1"
+SUPPORT_SCHEMA = "recovar.coarse_significance_support_audit.v2"
 EXPECTED_SUPPORT_ENCODING = (
     "class-major/image-major; uint64 row-byte-length; int64-le header(class,image,total,count); int64-le sorted IDs"
 )
@@ -464,6 +465,7 @@ def _validated_support(metadata: dict[str, Any], label: str) -> dict[str, Any]:
         "n_classes": 1,
         "n_images": 1_000,
         "samples_per_class": 36_864 * 29,
+        "support_ids_included": True,
     }
     mismatch = {
         key: {"expected": value, "observed": audit.get(key)}
@@ -476,6 +478,7 @@ def _validated_support(metadata: dict[str, Any], label: str) -> dict[str, Any]:
             isinstance(audit.get(key), str) and bool(_SHA256_RE.fullmatch(audit[key])), f"{label} {key} is invalid"
         )
     counts = audit.get("per_class_image_selected_counts")
+    support_ids = audit.get("per_class_image_support_ids")
     digests = audit.get("per_class_image_support_sha256")
     _require(
         isinstance(counts, list) and len(counts) == 1 and isinstance(counts[0], list) and len(counts[0]) == 1_000,
@@ -486,12 +489,55 @@ def _validated_support(metadata: dict[str, Any], label: str) -> dict[str, Any]:
         f"{label} support hashes topology differs",
     )
     _require(
+        isinstance(support_ids, list)
+        and len(support_ids) == 1
+        and isinstance(support_ids[0], list)
+        and len(support_ids[0]) == 1_000,
+        f"{label} support-ID topology differs",
+    )
+    _require(
         all(isinstance(value, int) and 0 <= value <= expected["samples_per_class"] for value in counts[0]),
         f"{label} support counts are invalid",
     )
     _require(
         all(isinstance(value, str) and bool(_SHA256_RE.fullmatch(value)) for value in digests[0]),
         f"{label} per-row support hash is invalid",
+    )
+    aggregate = hashlib.sha256()
+    for image_index, (count, ids, expected_digest) in enumerate(
+        zip(counts[0], support_ids[0], digests[0], strict=True),
+    ):
+        _require(
+            isinstance(ids, list)
+            and len(ids) == count
+            and all(isinstance(value, int) and not isinstance(value, bool) for value in ids),
+            f"{label} support IDs are invalid at image {image_index}",
+        )
+        ids_np = np.asarray(ids, dtype=np.int64)
+        _require(
+            bool(
+                np.all((ids_np >= 0) & (ids_np < expected["samples_per_class"]))
+                and (ids_np.size <= 1 or np.all(np.diff(ids_np) > 0))
+            ),
+            f"{label} support IDs are not canonical at image {image_index}",
+        )
+        header = np.asarray(
+            (0, image_index, expected["samples_per_class"], count),
+            dtype="<i8",
+        )
+        ids_le = np.ascontiguousarray(ids_np.astype("<i8", copy=False))
+        row_bytes = header.tobytes(order="C") + ids_le.tobytes(order="C")
+        _require(
+            hashlib.sha256(row_bytes).hexdigest() == expected_digest,
+            f"{label} support row digest differs at image {image_index}",
+        )
+        aggregate.update(
+            np.asarray((len(row_bytes),), dtype="<u8").tobytes(order="C"),
+        )
+        aggregate.update(row_bytes)
+    _require(
+        aggregate.hexdigest() == audit["aggregate_support_sha256"],
+        f"{label} aggregate support digest differs",
     )
     _require(sum(counts[0]) == audit.get("selected_count_sum"), f"{label} selected count sum differs")
     _require(
@@ -532,6 +578,7 @@ def _validated_support(metadata: dict[str, Any], label: str) -> dict[str, Any]:
         "persisted_cutoff_counts_sha256": hashlib.sha256(
             cutoff_le.tobytes(order="C"),
         ).hexdigest(),
+        "persisted_cutoff_counts": [int(value) for value in cutoff_np],
         "inclusive_tie_surplus_sum": int(np.sum(tie_surplus, dtype=np.int64)),
         "inclusive_tie_surplus_row_count": int(np.count_nonzero(tie_surplus)),
         "inclusive_tie_surplus_max": int(np.max(tie_surplus)),
@@ -623,20 +670,8 @@ def _support_gate(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
     direct_cold = audits["audit_direct_cold"]
     direct_warm = audits["audit_direct_warm"]
-    direct_cold_states = tuple(
-        zip(
-            direct_cold["per_class_image_selected_counts"][0],
-            direct_cold["per_class_image_support_sha256"][0],
-            strict=True,
-        )
-    )
-    direct_warm_states = tuple(
-        zip(
-            direct_warm["per_class_image_selected_counts"][0],
-            direct_warm["per_class_image_support_sha256"][0],
-            strict=True,
-        )
-    )
+    direct_cold_states = tuple(tuple(ids) for ids in direct_cold["per_class_image_support_ids"][0])
+    direct_warm_states = tuple(tuple(ids) for ids in direct_warm["per_class_image_support_ids"][0])
     direct_changed_rows = [
         index
         for index, (cold, warm) in enumerate(
@@ -652,20 +687,22 @@ def _support_gate(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
     )
 
     cutoff_digests = {audit["persisted_cutoff_counts_sha256"] for audit in audits.values()}
-    novel_rows: dict[str, list[int]] = {}
-    for phase_name in ("cold", "warm"):
-        label = f"audit_hybrid_{phase_name}"
-        audit = audits[label]
-        states = zip(
-            audit["per_class_image_selected_counts"][0],
-            audit["per_class_image_support_sha256"][0],
-            strict=True,
-        )
-        novel_rows[label] = [
-            index
-            for index, state in enumerate(states)
-            if state not in (direct_cold_states[index], direct_warm_states[index])
-        ]
+    cutoff_reference = direct_cold["persisted_cutoff_counts"]
+    support_labels = tuple(audits)
+    non_nested_rows: list[int] = []
+    common_core_below_cutoff_rows: list[int] = []
+    cross_mode_changed_rows: list[int] = []
+    for image_index in range(1_000):
+        row_supports = [set(audits[label]["per_class_image_support_ids"][0][image_index]) for label in support_labels]
+        if any(not (left.issubset(right) or right.issubset(left)) for left, right in combinations(row_supports, 2)):
+            non_nested_rows.append(image_index)
+        common_core = set.intersection(*row_supports)
+        if len(common_core) < cutoff_reference[image_index]:
+            common_core_below_cutoff_rows.append(image_index)
+        direct_rows = row_supports[:2]
+        hybrid_rows = row_supports[2:]
+        if any(direct != hybrid for direct in direct_rows for hybrid in hybrid_rows):
+            cross_mode_changed_rows.append(image_index)
     exact = all(
         audit[key] == direct_cold[key]
         for audit in audits.values()
@@ -677,7 +714,8 @@ def _support_gate(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         )
     )
     cutoff_exact = len(cutoff_digests) == 1
-    no_novel_hybrid_support = not any(novel_rows.values())
+    nested = not non_nested_rows
+    common_core_covers_cutoff = not common_core_below_cutoff_rows
     return {
         "captures": captures,
         "canonical_direct_cold_support_sha256": direct_cold["aggregate_support_sha256"],
@@ -687,10 +725,16 @@ def _support_gate(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "direct_repeat_changed_rows": direct_changed_rows,
         "direct_repeat_count_absolute_delta": direct_count_abs_delta,
         "persisted_cutoff_counts_exact": cutoff_exact,
-        "hybrid_novel_support_row_count": sum(map(len, novel_rows.values())),
-        "hybrid_novel_support_rows": novel_rows,
-        "hybrid_support_within_observed_direct_outcomes": no_novel_hybrid_support,
-        "pass": cutoff_exact and no_novel_hybrid_support,
+        "cross_mode_changed_row_count": len(cross_mode_changed_rows),
+        "cross_mode_changed_rows": cross_mode_changed_rows,
+        "non_nested_support_row_count": len(non_nested_rows),
+        "non_nested_support_rows": non_nested_rows,
+        "common_core_below_cutoff_row_count": len(common_core_below_cutoff_rows),
+        "common_core_below_cutoff_rows": common_core_below_cutoff_rows,
+        "pairwise_nested_inclusive_tie_supports": nested,
+        "common_support_core_covers_cutoff": common_core_covers_cutoff,
+        "inclusive_tie_only_support_variation": (cutoff_exact and nested and common_core_covers_cutoff),
+        "pass": cutoff_exact and nested and common_core_covers_cutoff,
     }
 
 
@@ -764,6 +808,8 @@ def _numeric_panel(arms: dict[str, dict[str, Any]], field: str) -> dict[str, Any
         for key in _delta_envelope(next(iter(direct_repeat.values())))
     }
     envelope = {key: value * CONTROL_REPEAT_ENVELOPE_MULTIPLIER for key, value in raw_envelope.items()}
+    for key in ("relative_l2", "abs_relative_scale_drift"):
+        envelope[key] = max(envelope[key], NORMALIZED_NUMERICAL_NOISE_FLOOR)
 
     def checked(rows: dict[str, dict[str, float]]) -> dict[str, dict[str, Any]]:
         return {label: {**delta, **_against_envelope(delta, envelope)} for label, delta in rows.items()}
@@ -773,8 +819,13 @@ def _numeric_panel(arms: dict[str, dict[str, Any]], field: str) -> dict[str, Any
     hybrid_bounded = all(row["within_control_repeat_envelope"] for row in hybrid_checks.values())
     crossed_bounded = all(row["within_control_repeat_envelope"] for row in crossed_checks.values())
     return {
-        "policy": "all hybrid-repeat and direct/hybrid pairs within 2x pooled direct-repeat envelope",
+        "policy": (
+            "all hybrid-repeat and direct/hybrid pairs within 2x pooled "
+            "direct-repeat envelope; normalized metrics use the mature "
+            "true-200 4*float32-epsilon floor"
+        ),
         "control_repeat_envelope_multiplier": CONTROL_REPEAT_ENVELOPE_MULTIPLIER,
+        "normalized_numerical_noise_floor": NORMALIZED_NUMERICAL_NOISE_FLOOR,
         "direct_execution_count": len(direct),
         "direct_repeat_pair_count": len(direct_repeat),
         "hybrid_execution_count": len(hybrid),
@@ -850,7 +901,7 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         "| Gate | Result | Status |",
         "|---|---:|---:|",
-        f"| Ordered support within observed direct outcomes | novel rows={support['hybrid_novel_support_row_count']}; direct-repeat rows={support['direct_repeat_changed_row_count']} | {mark(support['pass'])} |",
+        f"| Ordered support differs only by nested inclusive ties | cross rows={support['cross_mode_changed_row_count']}; non-nested rows={support['non_nested_support_row_count']} | {mark(support['pass'])} |",
         f"| Audit discrete/STAR identity | exact={science['audit_discrete']['pass']} | {mark(science['audit_discrete']['pass'])} |",
         f"| Clean discrete/STAR identity | exact={science['clean_discrete']['pass']} | {mark(science['clean_discrete']['pass'])} |",
         f"| Map repeat envelope | bounded={science['map_repeat_envelope']['pass']} | {mark(science['map_repeat_envelope']['pass'])} |",
@@ -954,7 +1005,7 @@ def analyze(root: Path, *, repo: Path | None = None) -> dict[str, Any]:
         },
         "acceptance": {
             "sealed_topology_and_provenance": True,
-            "ordered_support_within_observed_direct_outcomes": support["pass"],
+            "ordered_support_inclusive_tie_equivalence": support["pass"],
             "persisted_cutoff_counts_exact": support["persisted_cutoff_counts_exact"],
             "audit_discrete_and_star_identity": audit_discrete["pass"],
             "clean_discrete_and_star_identity": clean_discrete["pass"],

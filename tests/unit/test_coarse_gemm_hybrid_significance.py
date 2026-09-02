@@ -70,6 +70,18 @@ def test_coarse_significance_support_audit_is_strict_default_off(monkeypatch):
         significance._coarse_significance_support_audit_enabled()
 
 
+def test_coarse_support_exact_ids_require_a_separate_opt_in(monkeypatch):
+    variable = "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._coarse_significance_support_audit_ids_enabled()
+    for enabled in ("1", "true", "yes", "on"):
+        monkeypatch.setenv(variable, enabled)
+        assert significance._coarse_significance_support_audit_ids_enabled()
+    monkeypatch.setenv(variable, "automatic")
+    with pytest.raises(ValueError, match=variable):
+        significance._coarse_significance_support_audit_ids_enabled()
+
+
 def test_coarse_significance_support_audit_is_exact_and_localizable():
     supports = [
         [
@@ -88,38 +100,48 @@ def test_coarse_significance_support_audit_is_exact_and_localizable():
     first = significance._build_coarse_significance_support_audit(
         supports,
         samples_per_class=4,
+        include_ids=True,
     )
     repeated = significance._build_coarse_significance_support_audit(
         supports,
         samples_per_class=4,
+        include_ids=True,
     )
 
     assert first == repeated
-    assert first["schema"] == "recovar.coarse_significance_support_audit.v1"
+    assert first["schema"] == "recovar.coarse_significance_support_audit.v2"
+    assert first["support_ids_included"] is True
     assert first["classification"] == "diagnostic_only"
     assert first["n_classes"] == 2
     assert first["n_images"] == 2
     assert first["samples_per_class"] == 4
     assert first["per_class_image_selected_counts"] == [[2, 2], [4, 0]]
+    assert first["per_class_image_support_ids"] == [
+        [[1, 3], [1, 3]],
+        [[0, 1, 2, 3], []],
+    ]
     assert first["selected_count_sum"] == 8
     assert first["selected_count_min"] == 0
     assert first["selected_count_max"] == 4
     assert len(first["aggregate_support_sha256"]) == 64
     assert all(
-        len(digest) == 64
-        for class_digests in first["per_class_image_support_sha256"]
-        for digest in class_digests
+        len(digest) == 64 for class_digests in first["per_class_image_support_sha256"] for digest in class_digests
     )
 
     changed = significance._build_coarse_significance_support_audit(
         [[np.asarray([1, 2]), supports[0][1]], supports[1]],
         samples_per_class=4,
+        include_ids=True,
     )
     assert changed["aggregate_support_sha256"] != first["aggregate_support_sha256"]
-    assert (
-        changed["per_class_image_support_sha256"][0][1]
-        == first["per_class_image_support_sha256"][0][1]
+    assert changed["per_class_image_support_sha256"][0][1] == first["per_class_image_support_sha256"][0][1]
+
+    hashes_only = significance._build_coarse_significance_support_audit(
+        supports,
+        samples_per_class=4,
     )
+    assert hashes_only["support_ids_included"] is False
+    assert "per_class_image_support_ids" not in hashes_only
 
 
 @pytest.mark.parametrize(
@@ -271,11 +293,7 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
     assert result.fallback_reason is None
     np.testing.assert_array_equal(result.selection.block_ids[0], [0, 1])
     np.testing.assert_array_equal(result.selection.block_ids[1], [-1, -1])
-    expected_row = (
-        -jnp.float32(1.0)
-        + jnp.float32(0.25)
-        + jnp.asarray(translation_prior)[None, :]
-    )
+    expected_row = -jnp.float32(1.0) + jnp.float32(0.25) + jnp.asarray(translation_prior)[None, :]
     expected_row = np.broadcast_to(
         np.asarray(expected_row),
         (cache.shape[1], shifted.shape[1]),

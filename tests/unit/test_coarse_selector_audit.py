@@ -199,7 +199,7 @@ def test_absent_audit_preserves_result_identity():
 def test_support_and_hybrid_diagnostics_propagate_without_losing_profile_fields():
     result = _ProfileResult(profile_summary={"pass2_s": 1.25})
     support = {
-        "schema": "recovar.coarse_significance_support_audit.v1",
+        "schema": "recovar.coarse_significance_support_audit.v2",
         "aggregate_support_sha256": "a" * 64,
     }
     hybrid = {
