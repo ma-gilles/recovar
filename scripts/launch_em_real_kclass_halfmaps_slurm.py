@@ -101,9 +101,14 @@ class Profile:
 
 
 PROFILES = {
-    "shared200-128": Profile("shared200-128", 128, "shared200", 200, "04:00:00", "192G", 100),
-    "pilot10k-128": Profile("pilot10k-128", 128, "full10k", 10_000, "12:00:00", "256G", 500),
-    "native10k-256": Profile("native10k-256", 256, "full10k", 10_000, "24:00:00", "500G", 250),
+    # Sealed 128-grid runs used 6.3 GiB RSS for shared-200 and at most
+    # 17.7 GiB for the larger 10k initial-model pair.  These requests retain
+    # substantial headroom without reserving hundreds of unused host GiB.
+    "shared200-128": Profile("shared200-128", 128, "shared200", 200, "04:00:00", "32G", 100),
+    "pilot10k-128": Profile("pilot10k-128", 128, "full10k", 10_000, "12:00:00", "64G", 500),
+    # Native-grid host residency is not yet qualified; keep the larger guard
+    # until its first sealed peak-RSS measurement is available.
+    "native10k-256": Profile("native10k-256", 256, "full10k", 10_000, "24:00:00", "256G", 250),
 }
 
 

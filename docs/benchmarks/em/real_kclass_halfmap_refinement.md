@@ -43,11 +43,18 @@ estimated from both particle halves.
 
 Three profiles are frozen:
 
-| Profile | Particles | Grid | Purpose |
-| --- | ---: | ---: | --- |
-| `shared200-128` | 200 (93/107) | 128 | cheap wiring, topology, memory, and artifact discriminator |
-| `pilot10k-128` | 10,000 (5,000/5,000) | 128 | Tier-6 downsampled pilot |
-| `native10k-256` | 10,000 (5,000/5,000) | 256 | native-grid qualification after pilots pass |
+| Profile | Particles | Grid | Host-memory request | Purpose |
+| --- | ---: | ---: | ---: | --- |
+| `shared200-128` | 200 (93/107) | 128 | 32 GiB | cheap wiring, topology, memory, and artifact discriminator |
+| `pilot10k-128` | 10,000 (5,000/5,000) | 128 | 64 GiB | Tier-6 downsampled pilot |
+| `native10k-256` | 10,000 (5,000/5,000) | 256 | 256 GiB | native-grid qualification after pilots pass |
+
+The 128-grid requests are measurement-based: the sealed shared-200 job peaked
+at 6,217,244 KiB RSS, while prior 10,000-particle K=4 pairs peaked at
+17,722,084 KiB RSS. The native-grid request remains deliberately larger until
+that profile has its own sealed peak-RSS measurement. GPU memory is monitored
+separately at one-second cadence and is not inferred from these host-memory
+requests.
 
 The particle stacks, source STAR, source indices, selection, initial maps, and
 instrumented RELION executable have frozen SHA-256 values in the launcher.

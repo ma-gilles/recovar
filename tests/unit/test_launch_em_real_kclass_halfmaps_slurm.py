@@ -188,6 +188,12 @@ def test_cli_is_dry_run_unless_submit_is_explicit(tmp_path: Path) -> None:
     assert args.seed == 42001
 
 
+def test_profiles_request_measured_host_memory_headroom() -> None:
+    assert launcher.PROFILES["shared200-128"].memory == "32G"
+    assert launcher.PROFILES["pilot10k-128"].memory == "64G"
+    assert launcher.PROFILES["native10k-256"].memory == "256G"
+
+
 def _scontrol_line(
     *,
     job_id: str = "101",
