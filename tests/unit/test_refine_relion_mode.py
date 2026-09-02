@@ -8626,7 +8626,7 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
         **common_kwargs,
     )
 
-    # The padded bucket has eight rotations.  Route only that wide static
+    # The padded bucket has 16 rotations.  Route only that wide static
     # shape through the split path, as in the high-resolution tail fallback.
     monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, "7")
     split = run_local_em_exact(
@@ -8646,7 +8646,7 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     assert int(profile_big["big_jit_wide_bucket_split_count"]) == 0
     assert int(profile_split["big_jit_max_bucket_rotations"]) == 7
     assert int(profile_split["big_jit_wide_bucket_split_count"]) == 1
-    assert int(profile_split["big_jit_wide_bucket_max_rotations"]) == 8
+    assert int(profile_split["big_jit_wide_bucket_max_rotations"]) == 16
     assert profile_big["projection_mode"].item() == "relion_projector"
     assert profile_split["projection_mode"].item() == "relion_projector"
     np.testing.assert_array_equal(hard_big, hard_split)
