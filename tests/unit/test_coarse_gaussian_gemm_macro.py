@@ -10,6 +10,9 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers import scoring, significance
+from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
+    COARSE_GEMM_STREAMING_SCHEMA,
+)
 
 
 def _macro_operands(*, real_dtype, n_images=4, n_trans=3, n_rotations=5, n_pixels=11):
@@ -1295,7 +1298,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     stream_original_indices = []
     for stream_path in stream_paths:
         with np.load(stream_path, allow_pickle=False) as payload:
-            assert payload["schema"].item() == "recovar.coarse_gemm_streaming_rescore.v1"
+            assert payload["schema"].item() == COARSE_GEMM_STREAMING_SCHEMA
             assert payload["retained_topk"].item() == 12
             assert payload["stores_score_cube"].item() is False
             assert payload["production_behavior_changed"].item() is False

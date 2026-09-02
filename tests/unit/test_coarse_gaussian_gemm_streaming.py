@@ -9,6 +9,8 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
+    COARSE_GEMM_STREAMING_SCHEMA,
+    coarse_gemm_streaming_dual_state_bytes,
     coarse_gemm_streaming_state_bytes,
     initialize_coarse_gemm_streaming_state,
     summarize_coarse_gemm_streaming_state,
@@ -88,6 +90,7 @@ def test_streamed_summary_reports_support_errors_and_conservative_supersets() ->
     state = _stream(direct, macro, topk=4, block_size=2)
     summary = summarize_coarse_gemm_streaming_state(
         state,
+        state,
         _mask(6, [(0, 2)]),
         actual_image_count=1,
         adaptive_fraction=0.999,
@@ -130,6 +133,7 @@ def test_streamed_summary_fails_closed_when_support_or_band_overflows_topk() -> 
     support_state = _stream(scores, scores, topk=2, block_size=2)
     support_summary = summarize_coarse_gemm_streaming_state(
         support_state,
+        support_state,
         _mask(5, [(0, 1, 2)]),
         actual_image_count=1,
         adaptive_fraction=0.999,
@@ -144,6 +148,7 @@ def test_streamed_summary_fails_closed_when_support_or_band_overflows_topk() -> 
 
     band_state = _stream(scores, scores, topk=3, block_size=2)
     band_summary = summarize_coarse_gemm_streaming_state(
+        band_state,
         band_state,
         _mask(5, [(0,)]),
         actual_image_count=1,
@@ -160,6 +165,7 @@ def test_streamed_summary_fails_closed_on_winner_and_cutoff_ties() -> None:
     scores = np.asarray([[5.0, 5.0, 4.0, 4.0]], dtype=np.float32)
     state = _stream(scores, scores, topk=3, block_size=2)
     summary = summarize_coarse_gemm_streaming_state(
+        state,
         state,
         _mask(4, [(0, 1, 2, 3)]),
         actual_image_count=1,
@@ -182,6 +188,7 @@ def test_relion_nonzero_surface_superset_is_certified_only_when_complete() -> No
     macro = np.asarray([[10.5, 0.0, -127.5, -130.5, -131.5]], dtype=np.float32)
     state = _stream(direct, macro, topk=5, block_size=2)
     summary = summarize_coarse_gemm_streaming_state(
+        state,
         state,
         _mask(5, [(0,)]),
         actual_image_count=1,
@@ -210,6 +217,7 @@ def test_relion_nonzero_surface_superset_is_certified_only_when_complete() -> No
 
     overflow = summarize_coarse_gemm_streaming_state(
         state,
+        state,
         _mask(5, [(0,)]),
         actual_image_count=1,
         adaptive_fraction=0.5,
@@ -225,6 +233,161 @@ def test_relion_nonzero_surface_superset_is_certified_only_when_complete() -> No
     assert overflow["relion_nonzero_surface_error_safe_source_rotation_block_sentinel_id"].tolist() == [1]
     assert overflow["relion_nonzero_surface_error_safe_source_rotation_block_overflow"].tolist() == [True]
     assert overflow["relion_nonzero_surface_error_safe_source_rotation_block_list_coverage"].tolist() == [False]
+
+
+def test_raw_winner_block_is_unioned_when_a_poor_prior_excludes_its_posterior_block() -> None:
+    pre_prior_scores = np.asarray(
+        [[10.0, 9.0, 8.0, 7.0, 6.0, 5.0]],
+        dtype=np.float32,
+    )
+    posterior_scores = np.asarray(
+        [[-190.0, -191.0, 9.0, 8.0, 7.0, 6.0]],
+        dtype=np.float32,
+    )
+    pre_prior_state = _stream(
+        pre_prior_scores,
+        pre_prior_scores,
+        topk=6,
+        block_size=2,
+    )
+    posterior_state = _stream(
+        posterior_scores,
+        posterior_scores,
+        topk=6,
+        block_size=2,
+    )
+
+    summary = summarize_coarse_gemm_streaming_state(
+        posterior_state,
+        pre_prior_state,
+        _mask(6, [(2,)]),
+        actual_image_count=1,
+        adaptive_fraction=0.5,
+        max_significants=1,
+        band_widths=(0.0,),
+        n_rotations=6,
+        n_translations=1,
+        source_rotation_block_size=2,
+        rotation_block_capacity=4,
+    )
+
+    assert np.asarray(pre_prior_state.direct_candidate_ids)[0, 0] == 0
+    assert summary["relion_nonzero_surface_error_safe_source_rotation_block_ids"].tolist() == [
+        [1, 2, -1, -1]
+    ]
+    assert summary["raw_max_error_safe_width_from_macro_raw_max"].tolist() == [0.0]
+    assert summary["raw_max_error_safe_source_rotation_block_ids"].tolist() == [
+        [0, -1, -1, -1]
+    ]
+    assert summary["relion_rescore_source_rotation_block_union_ids"].tolist() == [
+        [0, 1, 2, -1]
+    ]
+    assert summary[
+        "relion_rescore_source_rotation_block_union_added_by_raw_max_count"
+    ].tolist() == [1]
+    assert summary[
+        "relion_rescore_source_rotation_block_union_list_coverage"
+    ].tolist() == [True]
+
+
+def test_k2_final_rotation_padding_and_union_overflow_use_global_class_block_ids() -> None:
+    n_rotations = 5
+    n_translations = 2
+    n_classes = 2
+    rotation_block_size = 4
+    candidate_count = n_classes * n_rotations * n_translations
+    posterior_scores = np.arange(
+        candidate_count,
+        0,
+        -1,
+        dtype=np.float32,
+    )[None, :]
+    pre_prior_scores = np.zeros((1, candidate_count), dtype=np.float32)
+    pre_prior_scores[0, 18] = 100.0
+
+    def stream_padded(scores: np.ndarray) -> object:
+        state = initialize_coarse_gemm_streaming_state(
+            1,
+            candidate_count,
+            score_dtype=jnp.float32,
+        )
+        candidates_per_class = n_rotations * n_translations
+        for class_index in range(n_classes):
+            class_offset = class_index * candidates_per_class
+            for r0 in range(0, n_rotations, rotation_block_size):
+                valid_rotations = min(rotation_block_size, n_rotations - r0)
+                valid_candidates = valid_rotations * n_translations
+                block = np.full(
+                    (1, rotation_block_size * n_translations),
+                    -np.inf,
+                    dtype=np.float32,
+                )
+                source_start = class_offset + r0 * n_translations
+                block[:, :valid_candidates] = scores[
+                    :,
+                    source_start : source_start + valid_candidates,
+                ]
+                state = update_coarse_gemm_streaming_state(
+                    state,
+                    jnp.asarray(block),
+                    jnp.asarray(block),
+                    candidate_offset=source_start,
+                    actual_image_count=1,
+                )
+        return state
+
+    posterior_state = stream_padded(posterior_scores)
+    pre_prior_state = stream_padded(pre_prior_scores)
+    kwargs = dict(
+        actual_image_count=1,
+        adaptive_fraction=0.5,
+        max_significants=1,
+        band_widths=(0.0,),
+        n_rotations=n_rotations,
+        n_translations=n_translations,
+        source_rotation_block_size=2,
+    )
+    summary = summarize_coarse_gemm_streaming_state(
+        posterior_state,
+        pre_prior_state,
+        _mask(candidate_count, [(0,)]),
+        rotation_block_capacity=6,
+        **kwargs,
+    )
+
+    assert summary["finite_pair_count"].tolist() == [candidate_count]
+    assert summary["pre_prior_finite_pair_count"].tolist() == [candidate_count]
+    assert summary["nonfinite_pair_count"].tolist() == [0]
+    assert summary["pre_prior_nonfinite_pair_count"].tolist() == [0]
+    assert summary["raw_max_error_safe_source_rotation_block_ids"].tolist() == [
+        [5, -1, -1, -1, -1, -1]
+    ]
+    assert summary["relion_rescore_source_rotation_block_union_ids"].tolist() == [
+        [0, 1, 2, 3, 4, 5]
+    ]
+    assert summary[
+        "relion_rescore_source_rotation_block_union_list_coverage"
+    ].tolist() == [True]
+
+    overflow = summarize_coarse_gemm_streaming_state(
+        posterior_state,
+        pre_prior_state,
+        _mask(candidate_count, [(0,)]),
+        rotation_block_capacity=5,
+        **kwargs,
+    )
+    assert overflow["relion_rescore_source_rotation_block_union_ids"].tolist() == [
+        [0, 1, 2, 3, 4]
+    ]
+    assert overflow[
+        "relion_rescore_source_rotation_block_union_sentinel_id"
+    ].tolist() == [5]
+    assert overflow["relion_rescore_source_rotation_block_union_overflow"].tolist() == [
+        True
+    ]
+    assert overflow[
+        "relion_rescore_source_rotation_block_union_list_coverage"
+    ].tolist() == [False]
 
 
 def test_streaming_reductions_remain_float64_when_global_jax_x64_is_disabled() -> None:
@@ -249,12 +412,19 @@ def test_streaming_reductions_remain_float64_when_global_jax_x64_is_disabled() -
 def test_streaming_state_is_megabytes_instead_of_the_gf46_score_cube() -> None:
     state_bytes_observed_batch = coarse_gemm_streaming_state_bytes(187, 2048)
     state_bytes_requested_batch = coarse_gemm_streaming_state_bytes(500, 2048)
+    dual_bytes_observed_batch = coarse_gemm_streaming_dual_state_bytes(187, 2048)
+    dual_bytes_requested_batch = coarse_gemm_streaming_dual_state_bytes(500, 2048)
     paired_gf46_cube_bytes = 2 * 1000 * 36_864 * 29 * np.dtype(np.float32).itemsize
 
+    assert state_bytes_observed_batch == 9_205_636
+    assert state_bytes_requested_batch == 24_614_000
+    assert dual_bytes_observed_batch == 18_411_272
+    assert dual_bytes_requested_batch == 49_228_000
     assert state_bytes_observed_batch < 10 * 1024**2
     assert state_bytes_requested_batch < 25 * 1024**2
+    assert dual_bytes_requested_batch < 50 * 1024**2
     assert paired_gf46_cube_bytes == 8_552_448_000
-    assert state_bytes_requested_batch * 300 < paired_gf46_cube_bytes
+    assert dual_bytes_requested_batch * 150 < paired_gf46_cube_bytes
 
 
 def test_streaming_excludes_padded_rows_and_structural_negative_infinity() -> None:
@@ -271,6 +441,7 @@ def test_streaming_excludes_padded_rows_and_structural_negative_infinity() -> No
     assert np.asarray(state.nonfinite_pair_count).tolist() == [1, 0]
     assert np.asarray(state.direct_candidate_ids)[0].tolist() == [0, -1, -1, -1]
     summary = summarize_coarse_gemm_streaming_state(
+        state,
         state,
         _mask(3, [(0,)]),
         actual_image_count=1,
@@ -324,21 +495,26 @@ def test_compact_summary_writer_is_immutable_and_omits_ranked_tables(tmp_path: P
     write_coarse_gemm_streaming_summary(
         str(output),
         state,
+        state,
         _mask(4, [(0, 2)]),
         **kwargs,
     )
 
     with np.load(output, allow_pickle=False) as artifact:
-        assert artifact["schema"].item() == "recovar.coarse_gemm_streaming_rescore.v1"
+        assert artifact["schema"].item() == COARSE_GEMM_STREAMING_SCHEMA
         assert artifact["original_indices"].tolist() == [2160]
         assert artifact["stores_score_cube"].item() is False
         assert "direct_scores" not in artifact
         assert "macro_scores" not in artifact
         assert artifact["production_behavior_changed"].item() is False
+        assert artifact["posterior_streaming_state_bytes"].item() == 148
+        assert artifact["pre_prior_streaming_state_bytes"].item() == 148
+        assert artifact["persistent_streaming_state_bytes"].item() == 296
     assert output.stat().st_size < 100_000
     with pytest.raises(FileExistsError, match="refusing to overwrite"):
         write_coarse_gemm_streaming_summary(
             str(output),
+            state,
             state,
             _mask(4, [(0, 2)]),
             **kwargs,
@@ -350,11 +526,12 @@ def test_streaming_scope_manifest_seals_every_particle_once(tmp_path: Path) -> N
     paths = []
     particle_ids = (17, 23)
     for call_index, (call_id, particle_id) in enumerate(zip(expected_calls, particle_ids, strict=True)):
-        direct = np.asarray([[5.0, 4.0, 3.0]], dtype=np.float32)
+        direct = np.asarray([[5.0, -200.0, -100.0]], dtype=np.float32)
         state = _stream(direct, direct, topk=2, block_size=2)
         path = tmp_path / f"{call_id}.npz"
         write_coarse_gemm_streaming_summary(
             str(path),
+            state,
             state,
             _mask(3, [(0,)]),
             original_indices=np.asarray([particle_id], dtype=np.int64),
@@ -368,6 +545,10 @@ def test_streaming_scope_manifest_seals_every_particle_once(tmp_path: Path) -> N
             debug_iteration=181,
             current_size=100,
             band_widths=(0.0,),
+            n_rotations=3,
+            n_translations=1,
+            source_rotation_block_size=2,
+            rotation_block_capacity=2,
         )
         paths.append(path)
         scope = CoarseGaussianGemmDiagnosticScope(
@@ -397,8 +578,20 @@ def test_streaming_scope_manifest_seals_every_particle_once(tmp_path: Path) -> N
     assert report["particle_count"] == 2
     assert report["all_candidate"]["error_coverage_count"] == 2
     assert report["all_candidate"]["max_abs_delta"] == 0.0
+    assert report["pre_prior_all_candidate"]["error_coverage_count"] == 2
+    assert report["pre_prior_all_candidate"]["max_abs_delta"] == 0.0
     assert report["winner"]["comparison_coverage_count"] == 2
     assert report["winner"]["mismatch_count"] == 0
     assert report["support"]["comparison_coverage_count"] == 2
     assert report["support"]["false_negative_total"] == 0
     assert report["support"]["false_positive_total"] == 0
+    assert report["relion_raw_max_rescore"]["safe_pair_coverage_count"] == 2
+    assert report["relion_raw_max_rescore"][
+        "safe_source_rotation_block_list_coverage_count"
+    ] == 2
+    assert report["relion_rescore_union"][
+        "source_rotation_block_list_coverage_count"
+    ] == 2
+    assert report["relion_rescore_union"]["source_rotation_block_count"][
+        "maximum"
+    ] == 2

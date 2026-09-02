@@ -17,7 +17,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
+    COARSE_GEMM_STREAMING_SCHEMA,
     aggregate_coarse_gemm_streaming_summaries,
+    coarse_gemm_streaming_dual_state_bytes,
     coarse_gemm_streaming_state_bytes,
     initialize_coarse_gemm_streaming_state,
     update_coarse_gemm_streaming_state,
@@ -1155,7 +1157,7 @@ def _seal_coarse_gaussian_gemm_streaming_scope(
         with np.load(artifact_path, allow_pickle=False) as artifact:
             if (
                 artifact.get("schema", np.asarray("")).item()
-                != "recovar.coarse_gemm_streaming_rescore.v1"
+                != COARSE_GEMM_STREAMING_SCHEMA
                 or artifact.get("diagnostic_run_id", np.asarray("")).item()
                 != scope.run_id
                 or artifact.get("diagnostic_call_id", np.asarray("")).item()
@@ -1175,7 +1177,7 @@ def _seal_coarse_gaussian_gemm_streaming_scope(
             "particle stream in order",
         )
     record = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": scope.run_id,
         "call_id": scope.call_id,
         "expected_call_ids": list(scope.expected_call_ids),
@@ -1212,7 +1214,8 @@ def _seal_coarse_gaussian_gemm_streaming_scope(
         with open(expected_path, encoding="utf-8") as stream:
             expected_record = json.load(stream)
         if (
-            expected_record.get("run_id") != scope.run_id
+            expected_record.get("schema_version") != 2
+            or expected_record.get("run_id") != scope.run_id
             or expected_record.get("call_id") != expected_call_id
             or expected_record.get("expected_call_ids") != list(scope.expected_call_ids)
             or expected_record.get("retained_topk") != int(retained_topk)
@@ -1237,7 +1240,7 @@ def _seal_coarse_gaussian_gemm_streaming_scope(
         for artifact_name in record["artifact_paths"]
     ]
     aggregate = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": scope.run_id,
         "expected_call_ids": list(scope.expected_call_ids),
         "retained_topk": int(retained_topk),
@@ -4585,6 +4588,15 @@ def _compute_k_class_significance_batched(
             if coarse_gemm_stream_capture_control["enabled"]
             else None
         )
+        coarse_gemm_pre_prior_stream_state = (
+            initialize_coarse_gemm_streaming_state(
+                batch_size,
+                coarse_gaussian_gemm_stream_topk,
+                score_dtype=jnp.float32,
+            )
+            if coarse_gemm_stream_capture_control["enabled"]
+            else None
+        )
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied and not relion_cuda_preprocess:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
@@ -5182,6 +5194,24 @@ def _compute_k_class_significance_batched(
                                 :,
                             ]
                         )
+                    if coarse_gemm_pre_prior_stream_state is not None:
+                        if direct_scores_for_diagnostic is None:
+                            raise RuntimeError(
+                                "coarse GEMM pre-prior streaming diagnostic "
+                                "requires the paired direct-square score block",
+                            )
+                        coarse_gemm_pre_prior_stream_state = (
+                            update_coarse_gemm_streaming_state(
+                                coarse_gemm_pre_prior_stream_state,
+                                direct_scores_for_diagnostic,
+                                scores,
+                                candidate_offset=(
+                                    class_index * n_rot * n_trans
+                                    + r0 * n_trans
+                                ),
+                                actual_image_count=actual_batch_size,
+                            )
+                        )
                     scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
                     if direct_scores_for_diagnostic is not None:
                         direct_scores_for_diagnostic = _add_priors(
@@ -5630,6 +5660,13 @@ def _compute_k_class_significance_batched(
                     coarse_gaussian_gemm_diagnostic_target_counts.get(target, 0) + 1
                 )
 
+        if (coarse_gemm_stream_state is None) != (
+            coarse_gemm_pre_prior_stream_state is None
+        ):
+            raise RuntimeError(
+                "coarse GEMM streaming diagnostic requires paired pre-prior "
+                "and posterior states",
+            )
         if coarse_gemm_stream_state is not None:
             if (
                 batch_sig_mask_np is None
@@ -5653,6 +5690,7 @@ def _compute_k_class_significance_batched(
             write_coarse_gemm_streaming_summary(
                 stream_path,
                 coarse_gemm_stream_state,
+                coarse_gemm_pre_prior_stream_state,
                 batch_sig_mask_np,
                 original_indices=batch_original_indices_np,
                 local_indices=local_indices_np,
@@ -6090,6 +6128,18 @@ def _compute_k_class_significance_batched(
             "artifact_paths": tuple(coarse_gaussian_gemm_stream_paths),
             "retained_topk": int(coarse_gaussian_gemm_stream_topk),
             "persistent_state_bytes_at_requested_batch_size": (
+                coarse_gemm_streaming_dual_state_bytes(
+                    int(image_batch_size),
+                    int(coarse_gaussian_gemm_stream_topk),
+                )
+            ),
+            "posterior_state_bytes_at_requested_batch_size": (
+                coarse_gemm_streaming_state_bytes(
+                    int(image_batch_size),
+                    int(coarse_gaussian_gemm_stream_topk),
+                )
+            ),
+            "pre_prior_state_bytes_at_requested_batch_size": (
                 coarse_gemm_streaming_state_bytes(
                     int(image_batch_size),
                     int(coarse_gaussian_gemm_stream_topk),

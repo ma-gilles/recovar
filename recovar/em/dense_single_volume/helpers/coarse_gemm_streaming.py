@@ -63,6 +63,7 @@ DEFAULT_RESCORE_BANDS = (
 RELION_COARSE_NONZERO_SCORE_SPAN = 138.0
 DEFAULT_SOURCE_ROTATION_BLOCK_SIZE = 16
 DEFAULT_ROTATION_BLOCK_CAPACITY = 64
+COARSE_GEMM_STREAMING_SCHEMA = "recovar.coarse_gemm_streaming_rescore.v2"
 
 
 class CoarseGemmStreamingState(NamedTuple):
@@ -107,6 +108,21 @@ def coarse_gemm_streaming_state_bytes(
     # One score-typed maximum, four float64 accumulators, and two int64 counts.
     scalar_bytes = batch_size * (score_bytes + 4 * np.dtype(np.float64).itemsize + 2 * np.dtype(np.int64).itemsize)
     return int(ranked_bytes + scalar_bytes)
+
+
+def coarse_gemm_streaming_dual_state_bytes(
+    batch_size: int,
+    retained_topk: int,
+    *,
+    score_dtype=np.float32,
+) -> int:
+    """Return exact bytes for the pre-prior and posterior streaming states."""
+
+    return 2 * coarse_gemm_streaming_state_bytes(
+        batch_size,
+        retained_topk,
+        score_dtype=score_dtype,
+    )
 
 
 def initialize_coarse_gemm_streaming_state(
@@ -422,8 +438,32 @@ def _source_rotation_block_ids(
     return np.unique(block_ids).astype(np.int32, copy=False)
 
 
+def _record_fixed_capacity_block_ids(
+    block_ids: np.ndarray,
+    *,
+    row: int,
+    prefix: str,
+    capacity: int,
+    output_ids: np.ndarray,
+    integers: dict[str, np.ndarray],
+    booleans: dict[str, np.ndarray],
+) -> None:
+    """Record Q ids plus an explicit Q+1 overflow sentinel."""
+
+    block_ids = np.unique(np.asarray(block_ids, dtype=np.int32))
+    integers[f"{prefix}_count"][row] = block_ids.size
+    copy_count = min(block_ids.size, int(capacity))
+    output_ids[row, :copy_count] = block_ids[:copy_count]
+    overflow = bool(block_ids.size > int(capacity))
+    booleans[f"{prefix}_overflow"][row] = overflow
+    booleans[f"{prefix}_list_coverage"][row] = not overflow
+    if overflow:
+        integers[f"{prefix}_sentinel_id"][row] = int(block_ids[int(capacity)])
+
+
 def summarize_coarse_gemm_streaming_state(
     state: CoarseGemmStreamingState,
+    pre_prior_state: CoarseGemmStreamingState,
     macro_support_mask,
     *,
     actual_image_count: int,
@@ -437,10 +477,12 @@ def summarize_coarse_gemm_streaming_state(
 ) -> dict[str, np.ndarray]:
     """Finalize one batch without materializing either paired score cube.
 
-    ``macro_support_mask`` is the exact production support already computed by
-    the GEMM arm.  Direct support is reconstructed from the streamed direct
-    log-sum-exp and top-k table.  Every derived comparison carries an explicit
-    coverage certificate; a truncated cutoff tie is never reported as exact.
+    ``state`` contains scores after priors, while ``pre_prior_state`` contains
+    the otherwise-identical raw score stream. ``macro_support_mask`` is the
+    exact production support already computed by the GEMM arm. Direct support
+    is reconstructed from the posterior state's streamed direct log-sum-exp
+    and top-k table. Every derived comparison carries an explicit coverage
+    certificate; a truncated cutoff tie is never reported as exact.
     """
 
     actual_image_count = int(actual_image_count)
@@ -450,12 +492,23 @@ def summarize_coarse_gemm_streaming_state(
             "actual_image_count must be positive and no larger than the state "
             f"batch: {actual_image_count} vs {state_batch_size}",
         )
+    if pre_prior_state.direct_scores.shape != state.direct_scores.shape:
+        raise ValueError(
+            "pre-prior and posterior streaming states must have identical "
+            f"ranked shapes, got {pre_prior_state.direct_scores.shape} and "
+            f"{state.direct_scores.shape}",
+        )
     direct_scores = np.asarray(state.direct_scores)[:actual_image_count]
     direct_paired_macro = np.asarray(state.direct_paired_macro_scores)[:actual_image_count]
     direct_ids = np.asarray(state.direct_candidate_ids, dtype=np.int32)[:actual_image_count]
     macro_scores = np.asarray(state.macro_scores)[:actual_image_count]
     macro_paired_direct = np.asarray(state.macro_paired_direct_scores)[:actual_image_count]
     macro_ids = np.asarray(state.macro_candidate_ids, dtype=np.int32)[:actual_image_count]
+    pre_prior_macro_scores = np.asarray(pre_prior_state.macro_scores)[:actual_image_count]
+    pre_prior_macro_ids = np.asarray(
+        pre_prior_state.macro_candidate_ids,
+        dtype=np.int32,
+    )[:actual_image_count]
     direct_max = np.asarray(state.direct_logsumexp_max, dtype=np.float64)[:actual_image_count]
     direct_sum = np.asarray(state.direct_logsumexp_sum, dtype=np.float64)[:actual_image_count]
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -516,6 +569,7 @@ def summarize_coarse_gemm_streaming_state(
         "support_observed_minimum_band",
         "support_global_error_safe_band",
         "relion_nonzero_surface_error_safe_width_from_macro_max",
+        "raw_max_error_safe_width_from_macro_raw_max",
     )
     scalar_int_names = (
         "direct_cutoff_rank",
@@ -532,6 +586,12 @@ def summarize_coarse_gemm_streaming_state(
         "relion_nonzero_surface_error_safe_superset_count",
         "relion_nonzero_surface_error_safe_source_rotation_block_count",
         "relion_nonzero_surface_error_safe_source_rotation_block_sentinel_id",
+        "raw_max_error_safe_superset_count",
+        "raw_max_error_safe_source_rotation_block_count",
+        "raw_max_error_safe_source_rotation_block_sentinel_id",
+        "relion_rescore_source_rotation_block_union_count",
+        "relion_rescore_source_rotation_block_union_sentinel_id",
+        "relion_rescore_source_rotation_block_union_added_by_raw_max_count",
     )
     scalar_bool_names = (
         "direct_support_coverage",
@@ -546,9 +606,15 @@ def summarize_coarse_gemm_streaming_state(
         "support_observed_superset_coverage",
         "support_global_error_superset_coverage",
         "all_candidate_error_coverage",
+        "pre_prior_all_candidate_error_coverage",
         "relion_nonzero_surface_error_safe_superset_coverage",
         "relion_nonzero_surface_error_safe_source_rotation_block_overflow",
         "relion_nonzero_surface_error_safe_source_rotation_block_list_coverage",
+        "raw_max_error_safe_superset_coverage",
+        "raw_max_error_safe_source_rotation_block_overflow",
+        "raw_max_error_safe_source_rotation_block_list_coverage",
+        "relion_rescore_source_rotation_block_union_overflow",
+        "relion_rescore_source_rotation_block_union_list_coverage",
     )
     floats = {name: np.full(actual_image_count, np.nan, dtype=np.float64) for name in scalar_float_names}
     integers = {name: np.full(actual_image_count, -1, dtype=np.int64) for name in scalar_int_names}
@@ -582,12 +648,36 @@ def summarize_coarse_gemm_streaming_state(
         -1,
         dtype=np.int32,
     )
+    raw_max_safe_source_rotation_block_ids = np.full(
+        (actual_image_count, rotation_block_capacity),
+        -1,
+        dtype=np.int32,
+    )
+    rescore_source_rotation_block_union_ids = np.full(
+        (actual_image_count, rotation_block_capacity),
+        -1,
+        dtype=np.int32,
+    )
 
     max_abs_delta = np.asarray(state.max_abs_delta, dtype=np.float64)[:actual_image_count]
     finite_count = np.asarray(state.finite_pair_count, dtype=np.int64)[:actual_image_count]
     nonfinite_count = np.asarray(state.nonfinite_pair_count, dtype=np.int64)[:actual_image_count]
+    pre_prior_max_abs_delta = np.asarray(
+        pre_prior_state.max_abs_delta,
+        dtype=np.float64,
+    )[:actual_image_count]
+    pre_prior_finite_count = np.asarray(
+        pre_prior_state.finite_pair_count,
+        dtype=np.int64,
+    )[:actual_image_count]
+    pre_prior_nonfinite_count = np.asarray(
+        pre_prior_state.nonfinite_pair_count,
+        dtype=np.int64,
+    )[:actual_image_count]
     expected_candidate_count = int(macro_support.shape[1])
     for row in range(actual_image_count):
+        posterior_safe_block_ids = None
+        raw_max_safe_block_ids = None
         direct_support_ids, direct_cutoff, direct_coverage, cutoff_rank, cutoff_excess = _analytic_support_from_ranked(
             direct_scores[row],
             direct_ids[row],
@@ -760,7 +850,7 @@ def summarize_coarse_gemm_streaming_state(
                 integers["relion_nonzero_surface_error_safe_superset_count"][row] = count
                 booleans["relion_nonzero_surface_error_safe_superset_coverage"][row] = coverage
                 if coverage and rotation_layout_available:
-                    block_ids = _source_rotation_block_ids(
+                    posterior_safe_block_ids = _source_rotation_block_ids(
                         macro_ids[row, :-1],
                         macro_scores[row, :-1],
                         macro_max - safe_width,
@@ -768,18 +858,79 @@ def summarize_coarse_gemm_streaming_state(
                         n_translations=n_translations,
                         source_rotation_block_size=source_rotation_block_size,
                     )
-                    integers["relion_nonzero_surface_error_safe_source_rotation_block_count"][row] = block_ids.size
-                    copy_count = min(block_ids.size, rotation_block_capacity)
-                    safe_source_rotation_block_ids[row, :copy_count] = block_ids[:copy_count]
-                    overflow = bool(block_ids.size > rotation_block_capacity)
-                    booleans["relion_nonzero_surface_error_safe_source_rotation_block_overflow"][row] = overflow
-                    booleans["relion_nonzero_surface_error_safe_source_rotation_block_list_coverage"][
-                        row
-                    ] = not overflow
-                    if overflow:
-                        integers["relion_nonzero_surface_error_safe_source_rotation_block_sentinel_id"][row] = int(
-                            block_ids[rotation_block_capacity]
-                        )
+                    _record_fixed_capacity_block_ids(
+                        posterior_safe_block_ids,
+                        row=row,
+                        prefix=(
+                            "relion_nonzero_surface_error_safe_source_rotation_block"
+                        ),
+                        capacity=rotation_block_capacity,
+                        output_ids=safe_source_rotation_block_ids,
+                        integers=integers,
+                        booleans=booleans,
+                    )
+
+        pre_prior_error_coverage = bool(
+            pre_prior_finite_count[row] == expected_candidate_count
+            and pre_prior_nonfinite_count[row] == 0
+        )
+        booleans["pre_prior_all_candidate_error_coverage"][row] = (
+            pre_prior_error_coverage
+        )
+        pre_prior_macro_valid = (
+            (pre_prior_macro_ids[row, :-1] >= 0)
+            & np.isfinite(pre_prior_macro_scores[row, :-1])
+        )
+        if pre_prior_error_coverage and np.any(pre_prior_macro_valid):
+            raw_safe_width = 2.0 * float(pre_prior_max_abs_delta[row])
+            raw_macro_max = float(pre_prior_macro_scores[row, 0])
+            raw_threshold = raw_macro_max - raw_safe_width
+            floats["raw_max_error_safe_width_from_macro_raw_max"][row] = (
+                raw_safe_width
+            )
+            raw_count, raw_coverage = _threshold_count_with_coverage(
+                pre_prior_macro_scores[row],
+                raw_threshold,
+            )
+            integers["raw_max_error_safe_superset_count"][row] = raw_count
+            raw_coverage = bool(raw_coverage and pre_prior_error_coverage)
+            booleans["raw_max_error_safe_superset_coverage"][row] = raw_coverage
+            if raw_coverage and rotation_layout_available:
+                raw_max_safe_block_ids = _source_rotation_block_ids(
+                    pre_prior_macro_ids[row, :-1],
+                    pre_prior_macro_scores[row, :-1],
+                    raw_threshold,
+                    n_rotations=n_rotations,
+                    n_translations=n_translations,
+                    source_rotation_block_size=source_rotation_block_size,
+                )
+                _record_fixed_capacity_block_ids(
+                    raw_max_safe_block_ids,
+                    row=row,
+                    prefix="raw_max_error_safe_source_rotation_block",
+                    capacity=rotation_block_capacity,
+                    output_ids=raw_max_safe_source_rotation_block_ids,
+                    integers=integers,
+                    booleans=booleans,
+                )
+
+        if posterior_safe_block_ids is not None and raw_max_safe_block_ids is not None:
+            union_ids = np.union1d(
+                posterior_safe_block_ids,
+                raw_max_safe_block_ids,
+            ).astype(np.int32, copy=False)
+            integers[
+                "relion_rescore_source_rotation_block_union_added_by_raw_max_count"
+            ][row] = union_ids.size - posterior_safe_block_ids.size
+            _record_fixed_capacity_block_ids(
+                union_ids,
+                row=row,
+                prefix="relion_rescore_source_rotation_block_union",
+                capacity=rotation_block_capacity,
+                output_ids=rescore_source_rotation_block_union_ids,
+                integers=integers,
+                booleans=booleans,
+            )
 
     signed_sum = np.asarray(state.signed_delta_sum, dtype=np.float64)[:actual_image_count]
     squared_sum = np.asarray(state.squared_delta_sum, dtype=np.float64)[:actual_image_count]
@@ -795,10 +946,38 @@ def summarize_coarse_gemm_streaming_state(
         ),
         out=rms,
     )
+    pre_prior_signed_sum = np.asarray(
+        pre_prior_state.signed_delta_sum,
+        dtype=np.float64,
+    )[:actual_image_count]
+    pre_prior_squared_sum = np.asarray(
+        pre_prior_state.squared_delta_sum,
+        dtype=np.float64,
+    )[:actual_image_count]
+    pre_prior_signed_mean = np.full(actual_image_count, np.nan, dtype=np.float64)
+    pre_prior_rms = np.full(actual_image_count, np.nan, dtype=np.float64)
+    np.divide(
+        pre_prior_signed_sum,
+        pre_prior_finite_count,
+        out=pre_prior_signed_mean,
+        where=pre_prior_finite_count > 0,
+    )
+    np.sqrt(
+        np.divide(
+            pre_prior_squared_sum,
+            pre_prior_finite_count,
+            out=np.full(actual_image_count, np.nan, dtype=np.float64),
+            where=pre_prior_finite_count > 0,
+        ),
+        out=pre_prior_rms,
+    )
     payload = {
-        "schema": np.asarray("recovar.coarse_gemm_streaming_rescore.v1"),
+        "schema": np.asarray(COARSE_GEMM_STREAMING_SCHEMA),
         "direct_support_semantics": np.asarray("analytic_float64_streamed_logsumexp_topk_not_relion_cub"),
         "macro_support_semantics": np.asarray("exact_production_relion_f32_support_mask"),
+        "raw_max_certificate_semantics": np.asarray(
+            "pre_prior_macro_within_2E_of_pre_prior_macro_max_includes_direct_raw_max"
+        ),
         "qualification_status": np.asarray("DIAGNOSTIC_ONLY_NO_PRODUCTION_SELECTION"),
         "winner_equal_semantics": np.asarray(
             "defined_only_when_winner_comparison_coverage_is_true",
@@ -817,6 +996,9 @@ def summarize_coarse_gemm_streaming_state(
         ),
         "source_rotation_block_list_semantics": np.asarray(
             "first_Q_ids_invalid_minus_one_plus_separate_Q_plus_1_overflow_sentinel",
+        ),
+        "source_rotation_block_union_semantics": np.asarray(
+            "deduplicated_union_of_posterior_nonzero_and_pre_prior_raw_max_safe_blocks"
         ),
         "retained_topk": np.asarray(direct_scores.shape[1] - 1, dtype=np.int64),
         "adaptive_fraction": np.asarray(adaptive_fraction, dtype=np.float64),
@@ -845,6 +1027,11 @@ def summarize_coarse_gemm_streaming_state(
         "all_candidate_max_abs_delta": max_abs_delta,
         "all_candidate_signed_mean_delta": signed_mean,
         "all_candidate_rms_delta": rms,
+        "pre_prior_finite_pair_count": pre_prior_finite_count,
+        "pre_prior_nonfinite_pair_count": pre_prior_nonfinite_count,
+        "pre_prior_all_candidate_max_abs_delta": pre_prior_max_abs_delta,
+        "pre_prior_all_candidate_signed_mean_delta": pre_prior_signed_mean,
+        "pre_prior_all_candidate_rms_delta": pre_prior_rms,
         "direct_log_z": direct_log_z,
         "near_macro_cutoff_count": near_count,
         "near_macro_cutoff_max_abs_delta": near_max_abs,
@@ -857,6 +1044,12 @@ def summarize_coarse_gemm_streaming_state(
         "macro_max_band_source_rotation_block_count": (macro_max_band_source_rotation_block_count),
         "macro_max_band_source_rotation_block_count_coverage": (macro_max_band_source_rotation_block_count_coverage),
         "relion_nonzero_surface_error_safe_source_rotation_block_ids": (safe_source_rotation_block_ids),
+        "raw_max_error_safe_source_rotation_block_ids": (
+            raw_max_safe_source_rotation_block_ids
+        ),
+        "relion_rescore_source_rotation_block_union_ids": (
+            rescore_source_rotation_block_union_ids
+        ),
     }
     payload.update(floats)
     payload.update(integers)
@@ -867,6 +1060,7 @@ def summarize_coarse_gemm_streaming_state(
 def write_coarse_gemm_streaming_summary(
     output_path: str,
     state: CoarseGemmStreamingState,
+    pre_prior_state: CoarseGemmStreamingState,
     macro_support_mask,
     *,
     original_indices,
@@ -898,8 +1092,15 @@ def write_coarse_gemm_streaming_summary(
             "padded_image_count must equal the streaming state batch size: "
             f"{padded_image_count} vs {state.direct_scores.shape[0]}",
         )
+    if pre_prior_state.direct_scores.shape != state.direct_scores.shape:
+        raise ValueError(
+            "pre-prior and posterior streaming states must have identical "
+            f"ranked shapes, got {pre_prior_state.direct_scores.shape} and "
+            f"{state.direct_scores.shape}",
+        )
     payload = summarize_coarse_gemm_streaming_state(
         state,
+        pre_prior_state,
         macro_support_mask,
         actual_image_count=actual_image_count,
         adaptive_fraction=adaptive_fraction,
@@ -930,6 +1131,30 @@ def write_coarse_gemm_streaming_summary(
         clean_timing_eligible=np.asarray(False),
         stores_score_cube=np.asarray(False),
         production_behavior_changed=np.asarray(False),
+        posterior_streaming_state_bytes=np.asarray(
+            coarse_gemm_streaming_state_bytes(
+                padded_image_count,
+                int(state.direct_scores.shape[1]) - 1,
+                score_dtype=state.direct_scores.dtype,
+            ),
+            dtype=np.int64,
+        ),
+        pre_prior_streaming_state_bytes=np.asarray(
+            coarse_gemm_streaming_state_bytes(
+                padded_image_count,
+                int(pre_prior_state.direct_scores.shape[1]) - 1,
+                score_dtype=pre_prior_state.direct_scores.dtype,
+            ),
+            dtype=np.int64,
+        ),
+        persistent_streaming_state_bytes=np.asarray(
+            coarse_gemm_streaming_dual_state_bytes(
+                padded_image_count,
+                int(state.direct_scores.shape[1]) - 1,
+                score_dtype=state.direct_scores.dtype,
+            ),
+            dtype=np.int64,
+        ),
     )
     output_directory = os.path.dirname(output_path)
     if output_directory:
@@ -983,7 +1208,7 @@ def aggregate_coarse_gemm_streaming_summaries(
     rotation_block_capacity = None
     for path in paths:
         with np.load(path, allow_pickle=False) as artifact:
-            if artifact["schema"].item() != "recovar.coarse_gemm_streaming_rescore.v1":
+            if artifact["schema"].item() != COARSE_GEMM_STREAMING_SCHEMA:
                 raise ValueError(f"unexpected streaming summary schema: {path}")
             bands = np.asarray(artifact["band_widths"], dtype=np.float64)
             artifact_topk = int(artifact["retained_topk"])
@@ -1025,6 +1250,47 @@ def aggregate_coarse_gemm_streaming_summaries(
         )
     )
 
+    pre_prior_finite_count = joined("pre_prior_finite_pair_count").astype(
+        np.int64,
+        copy=False,
+    )
+    pre_prior_nonfinite_count = joined("pre_prior_nonfinite_pair_count").astype(
+        np.int64,
+        copy=False,
+    )
+    pre_prior_signed_mean = joined(
+        "pre_prior_all_candidate_signed_mean_delta"
+    ).astype(np.float64, copy=False)
+    pre_prior_rms = joined("pre_prior_all_candidate_rms_delta").astype(
+        np.float64,
+        copy=False,
+    )
+    total_pre_prior_finite = int(
+        np.sum(pre_prior_finite_count, dtype=np.int64)
+    )
+    weighted_pre_prior_signed_mean = (
+        None
+        if total_pre_prior_finite == 0
+        else float(
+            np.nansum(pre_prior_signed_mean * pre_prior_finite_count)
+            / total_pre_prior_finite
+        )
+    )
+    weighted_pre_prior_rms = (
+        None
+        if total_pre_prior_finite == 0
+        else float(
+            np.sqrt(
+                np.nansum(
+                    pre_prior_rms
+                    * pre_prior_rms
+                    * pre_prior_finite_count
+                )
+                / total_pre_prior_finite
+            )
+        )
+    )
+
     winner_coverage = joined("winner_comparison_coverage").astype(bool)
     winner_equal = joined("winner_equal").astype(bool)
     support_coverage = joined("support_comparison_coverage").astype(bool)
@@ -1048,6 +1314,36 @@ def aggregate_coarse_gemm_streaming_summaries(
     safe_width = joined(
         "relion_nonzero_surface_error_safe_width_from_macro_max",
     ).astype(np.float64)
+    raw_safe_pair_coverage = joined(
+        "raw_max_error_safe_superset_coverage",
+    ).astype(bool)
+    raw_safe_pair_count = joined(
+        "raw_max_error_safe_superset_count",
+    ).astype(np.int64)
+    raw_safe_block_coverage = joined(
+        "raw_max_error_safe_source_rotation_block_list_coverage",
+    ).astype(bool)
+    raw_safe_block_count = joined(
+        "raw_max_error_safe_source_rotation_block_count",
+    ).astype(np.int64)
+    raw_safe_block_overflow = joined(
+        "raw_max_error_safe_source_rotation_block_overflow",
+    ).astype(bool)
+    raw_safe_width = joined(
+        "raw_max_error_safe_width_from_macro_raw_max",
+    ).astype(np.float64)
+    union_coverage = joined(
+        "relion_rescore_source_rotation_block_union_list_coverage",
+    ).astype(bool)
+    union_count = joined(
+        "relion_rescore_source_rotation_block_union_count",
+    ).astype(np.int64)
+    union_overflow = joined(
+        "relion_rescore_source_rotation_block_union_overflow",
+    ).astype(bool)
+    union_added_by_raw = joined(
+        "relion_rescore_source_rotation_block_union_added_by_raw_max_count",
+    ).astype(np.int64)
 
     band_records = []
     macro_pair_counts = joined("macro_max_band_superset_count").astype(np.int64)
@@ -1104,7 +1400,7 @@ def aggregate_coarse_gemm_streaming_summaries(
 
     particle_count = int(finite_count.size)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "qualification_status": "DIAGNOSTIC_ONLY_NO_PRODUCTION_SELECTION",
         "production_fallback_requirement": (
             "FULL_DIRECT_FALLBACK_UNLESS_ERROR_BOUND_AND_CANDIDATE_SENTINEL_ARE_CERTIFIED"
@@ -1121,6 +1417,22 @@ def aggregate_coarse_gemm_streaming_summaries(
             "max_abs_delta": _finite_max(joined("all_candidate_max_abs_delta")),
             "weighted_signed_mean_delta": weighted_signed_mean,
             "weighted_rms_delta": weighted_rms,
+        },
+        "pre_prior_all_candidate": {
+            "error_coverage_count": int(
+                np.count_nonzero(
+                    joined("pre_prior_all_candidate_error_coverage")
+                ),
+            ),
+            "finite_pair_count": total_pre_prior_finite,
+            "nonfinite_pair_count": int(
+                np.sum(pre_prior_nonfinite_count, dtype=np.int64)
+            ),
+            "max_abs_delta": _finite_max(
+                joined("pre_prior_all_candidate_max_abs_delta")
+            ),
+            "weighted_signed_mean_delta": weighted_pre_prior_signed_mean,
+            "weighted_rms_delta": weighted_pre_prior_rms,
         },
         "winner": {
             "comparison_coverage_count": int(np.count_nonzero(winner_coverage)),
@@ -1157,6 +1469,51 @@ def aggregate_coarse_gemm_streaming_summaries(
             ),
             "safe_source_rotation_block_count": _count_distribution(
                 safe_block_count[safe_pair_coverage],
+            ),
+        },
+        "relion_raw_max_rescore": {
+            "safe_pair_coverage_count": int(
+                np.count_nonzero(raw_safe_pair_coverage)
+            ),
+            "safe_width_max": _finite_max(
+                raw_safe_width[raw_safe_pair_coverage]
+            ),
+            "safe_pair_count": _count_distribution(
+                raw_safe_pair_count[raw_safe_pair_coverage],
+            ),
+            "safe_source_rotation_block_list_coverage_count": int(
+                np.count_nonzero(raw_safe_block_coverage)
+            ),
+            "safe_source_rotation_block_overflow_count": int(
+                np.count_nonzero(raw_safe_block_overflow)
+            ),
+            "safe_source_rotation_block_count": _count_distribution(
+                raw_safe_block_count[raw_safe_pair_coverage],
+            ),
+        },
+        "relion_rescore_union": {
+            "source_rotation_block_list_coverage_count": int(
+                np.count_nonzero(union_coverage)
+            ),
+            "source_rotation_block_overflow_count": int(
+                np.count_nonzero(union_overflow)
+            ),
+            "source_rotation_block_count": _count_distribution(
+                union_count[union_coverage],
+            ),
+            "source_rotation_block_added_by_raw_max_count": (
+                _count_distribution(union_added_by_raw[union_coverage])
+            ),
+        },
+        "persistent_streaming_state_bytes": {
+            "maximum_per_batch": int(
+                np.max(joined("persistent_streaming_state_bytes"))
+            ),
+            "posterior_maximum_per_batch": int(
+                np.max(joined("posterior_streaming_state_bytes"))
+            ),
+            "pre_prior_maximum_per_batch": int(
+                np.max(joined("pre_prior_streaming_state_bytes"))
             ),
         },
         "bands": band_records,
