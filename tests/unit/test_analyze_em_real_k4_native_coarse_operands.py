@@ -72,6 +72,25 @@ def test_classifies_projected_reference_boundary() -> None:
     )
 
 
+def test_classifies_closed_projected_reference_and_support_boundary() -> None:
+    exact = _support(16, 1.0)
+    summary = {
+        "support_counterfactuals": {
+            "recovar_operands": exact,
+            "recovar_captured_combined": exact.copy(),
+        },
+        "score_residual_energy": {},
+        "operand_relative_l2": {
+            "projected_reference": {"maximum": 0.0},
+        },
+        "mapping": {"euler_transpose_max_abs": 0.0},
+    }
+
+    assert analysis.classify(summary, 16) == (
+        "k4_coarse_projected_reference_and_significant_support_match_native"
+    )
+
+
 def test_rejects_projected_reference_classification_when_shifted_image_also_helps() -> None:
     baseline = _support(5, 0.95)
     summary = {

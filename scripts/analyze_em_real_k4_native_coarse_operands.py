@@ -269,6 +269,15 @@ def classify(summary: dict[str, Any], record_count: int) -> str:
     support = summary["support_counterfactuals"]
     energy = summary["score_residual_energy"]
     baseline = support["recovar_operands"]
+    if (
+        baseline["exact_records"] == record_count
+        and baseline["jaccard"] == 1.0
+        and support["recovar_captured_combined"]["exact_records"] == record_count
+        and support["recovar_captured_combined"]["jaccard"] == 1.0
+        and summary["operand_relative_l2"]["projected_reference"]["maximum"] == 0.0
+        and summary["mapping"]["euler_transpose_max_abs"] == 0.0
+    ):
+        return "k4_coarse_projected_reference_and_significant_support_match_native"
     reference = support["native_projected_reference"]
     shifted = support["native_shifted_image"]
     correction = support["native_correction"]
