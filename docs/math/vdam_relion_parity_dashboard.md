@@ -10,15 +10,16 @@
 | Signal | Status | Evidence / next decision |
 |---|---|---|
 | Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
-| Corrected GF46 checkpoint | **COMPLETE DATA GREEN / SEALED RERUN NEXT** | Job `13343052`, frozen iteration `180 -> 181`: zero novel hybrid support rows, exact cutoff/discrete/STAR/model identities, and every hybrid map/model delta inside the pooled direct-repeat numerical envelope. The job stopped only in its obsolete post-analyzer and is not promoted as sealed evidence. |
+| Corrected GF46 checkpoint | **SEALED DIAGNOSTIC FAIL / HARNESS BOUNDARY LOCALIZED** | Job `13343577`, frozen iteration `180 -> 181`, sealed all six arms. Cutoff/discrete/STAR/model identities are exact. Its v2 analyzer could not prove that the one support difference was a nested inclusive tie from hashes alone, and rejected map scale drift `2.21e-11` against a near-zero empirical `1.75e-11` bound. Exact-ID and mature numerical-floor corrections are now focused-test green; a superseding seal is next. |
 | Root cause closed | **SHARED EM/DIRECT OPERANDS** | The pre-fix hybrid cache used `mask_current_image_disk=False` while mature EM/direct used `True`. Commit `e9a8e8256` now routes both through one shared projection helper; the previous 405 pose-assignment mismatches fell to **0 / 1,000**. |
-| Speed result | **4.38x WARM TRANSITION SPEEDUP** | Clean audit-off ABBA medians: wall `21.267882 -> 4.852816 s`; expectation `20.640134 -> 4.172020 s` (**4.95x**); pass 1 `18.787344 -> 2.309944 s` (**8.13x**); pass 2 is unchanged (`1.110826 -> 1.121583 s`). Peak RSS `3.325 -> 3.508 GiB`. |
-| Numerical classification | **CONTROL-BOUNDED FP32 NOISE** | Direct itself changed one inclusive threshold-tie support at row 412 while persisted cutoff counts and downstream discretes stayed exact. Hybrid introduced no support outcome outside the two direct observations. Across six direct and six hybrid executions, all 15 hybrid-repeat and 36 crossed map/model pairs pass the mature EM-style `2x` pooled-control envelope. |
-| Focused regression | **49 / 49 PASS** | Hybrid significance, InitialModel diagnostic propagation, shared projection operands, and transition analyzer/harness tests pass. No broad RECOVAR suite was run. |
+| Speed result | **4.04x–4.38x REPRODUCED WARM SPEEDUP** | Clean audit-off ABBA wall medians were `21.267882 -> 4.852816 s` in `13343052` and `21.384448 -> 5.297722 s` in `13343577`. The latest pass 1 is **8.22x** faster; feature remains default-off pending the corrected seal and trajectories. |
+| Numerical classification | **EXACT STATE; FP32-SCALE CONTINUOUS DELTAS** | Job `13343577` has exact persisted cutoff/discrete/STAR/model identity. The only map rejection was norm-scale drift `2.21e-11`, orders below float32 resolution; relative L2/max-absolute/signed-bias passed. The corrected analyzer reuses the mature true-200 `4·eps32` normalized floor but retains control-derived max-absolute and signed-bias gates. |
+| Support proof | **HASH-ONLY → EXACT-ID NESTING** | Diagnostic support is only ~5,900 IDs. The v2 audit now retains those exact IDs, revalidates every row/aggregate hash, and requires every observed support to be pairwise nested with a common core at least as large as RELION's exact cutoff rank. Same-size swaps or non-nested changes still fail closed. |
+| Focused regression | **67 / 67 PASS** | Hybrid significance/support audit, selector propagation, InitialModel adapter, shared projection operands, and transition analyzer/harness tests pass. No broad RECOVAR suite was run. |
 
 ### Immediate queue
 
-1. Rerun the same pinned GF46 direct/hybrid audit plus clean ABBA with the corrected v2 analyzer and seal the result.
+1. Rerun the same pinned GF46 direct/hybrid audit plus clean ABBA with exact support IDs and the mature normalized numerical floor; require a sealed PASS.
 2. If the sealed rerun reproduces this boundary, run the representative repeat/no-growth trajectory.
 3. Then rerun frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
 
@@ -29,8 +30,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **CORRECTED CHECKPOINT DATA GREEN / SEAL OPEN** | Job `13343052`: exact downstream state and zero novel hybrid support outcomes after sharing mature EM/direct operands; analyzer-only superseding rerun pending. |
-| Current performance work | **4.38x CHECKPOINT SIGNAL / SEAL OPEN** | Clean ABBA wall `21.267882 -> 4.852816 s`; pass 1 is 8.13x faster and pass 2 unchanged. Frozen runtime stays 0/20 pending trajectory scoring. |
+| Current correctness work | **EXACT-ID CHECKPOINT SEAL OPEN** | Job `13343577` sealed a diagnostic FAIL with exact downstream state; its two rejected conditions are now represented by exact nested-set proof and the pre-existing mature numerical floor. |
+| Current performance work | **4.04x–4.38x CHECKPOINT SIGNAL / SEAL OPEN** | Two complete clean ABBA panels reproduce material speed. Frozen runtime stays 0/20 pending a passing seal and trajectory scoring. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
