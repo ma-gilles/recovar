@@ -400,6 +400,79 @@ def test_fixed_capacity_call0_view_is_read_only_call_scoped_and_canonical():
     assert not np.any(np.isneginf(view.bucket.local_rotation_log_prior))
 
 
+def test_fixed_capacity_materializes_every_active_call_in_sealed_chronology():
+    plan, _, hypotheses, bundle, _, _ = _call0_fixture()
+
+    views = tuple(
+        _materialize_fixed_capacity_local_call_view(bundle, call_index=index, enabled=True)
+        for index in range(plan.valid_call_count)
+    )
+
+    assert [view.call_index for view in views] == [0, 1]
+    assert [view.call_image_offset for view in views] == [0, 2]
+    assert [view.call_row_offset for view in views] == [0, 5]
+    np.testing.assert_array_equal(
+        np.concatenate([view.bucket.image_indices for view in views]),
+        plan.image_indices[: plan.valid_image_count],
+    )
+    np.testing.assert_array_equal(
+        np.concatenate(
+            [
+                view.bucket.local_rotation_ids[view.bucket.local_rotation_mask]
+                for view in views
+            ]
+        ),
+        hypotheses.local_rotation_ids[: plan.valid_row_count],
+    )
+
+    second = views[1]
+    assert second.valid_image_count == second.physical_image_capacity == 1
+    assert second.valid_row_count == 1
+    assert second.physical_rotation_capacity == 2
+    np.testing.assert_array_equal(second.row_offsets, [0, 1])
+    np.testing.assert_array_equal(second.bucket.actual_rotation_counts, [1])
+    np.testing.assert_array_equal(second.bucket.image_indices, [1])
+    np.testing.assert_array_equal(second.raw_images, _IndexedDataset().images[[1]])
+    np.testing.assert_array_equal(second.ctf_params, _IndexedDataset().ctf_params[[1]])
+    np.testing.assert_array_equal(second.metadata_by_name["scale"], [1.5])
+    np.testing.assert_array_equal(second.metadata_by_name["image_pre_shifts"], [[1.25, -1.5]])
+    assert all(
+        value.flags.writeable is False
+        for value in (
+            second.row_offsets,
+            second.bucket.image_indices,
+            second.bucket.local_rotation_ids,
+            second.raw_images,
+            second.ctf_params,
+            second.metadata_by_name["scale"],
+        )
+    )
+
+
+@pytest.mark.parametrize("call_index", (-1, 2, 3, 100))
+def test_fixed_capacity_call_materialization_rejects_inactive_or_out_of_range_calls(call_index):
+    _, _, _, bundle, _, _ = _call0_fixture()
+
+    with pytest.raises(ValueError, match=rf"fixed-capacity call {call_index} is not active"):
+        _materialize_fixed_capacity_local_call_view(
+            bundle,
+            call_index=call_index,
+            enabled=True,
+        )
+
+
+@pytest.mark.parametrize("call_index", (True, np.bool_(False), 0.5, "1"))
+def test_fixed_capacity_call_materialization_rejects_noninteger_call_indices(call_index):
+    _, _, _, bundle, _, _ = _call0_fixture()
+
+    with pytest.raises(ValueError, match="call index must be an integer"):
+        _materialize_fixed_capacity_local_call_view(
+            bundle,
+            call_index=call_index,
+            enabled=True,
+        )
+
+
 def _assert_bucket_arrays_equal(actual, expected):
     for field_name in (
         "image_indices",
@@ -602,22 +675,6 @@ def test_fixed_capacity_call0_rejects_current_dataset_fetch_order_before_jit(mon
         )
 
     assert jit_calls == []
-
-
-@pytest.mark.parametrize(
-    ("call_index", "message"),
-    (
-        (True, "must be an integer"),
-        (-1, "supports call 0 only"),
-        (1, "supports call 0 only"),
-        (3, "supports call 0 only"),
-    ),
-)
-def test_fixed_capacity_call0_rejects_invalid_or_out_of_scope_call_index(call_index, message):
-    _, _, _, bundle, _, _ = _call0_fixture()
-
-    with pytest.raises(ValueError, match=message):
-        _materialize_fixed_capacity_local_call_view(bundle, call_index=call_index, enabled=True)
 
 
 @pytest.mark.parametrize("identity_field", ("descriptor_fingerprint", "generation_token"))

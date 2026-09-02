@@ -398,20 +398,18 @@ def _materialize_fixed_capacity_local_call_view(
     call_index: int = 0,
     enabled: bool = False,
 ) -> _FixedCapacityLocalCallView | None:
-    """Rebuild call 0 without exposing poison-filled whole-arena tails."""
+    """Rebuild one active call without exposing poison-filled arena tails."""
 
     if not enabled:
         return None
     if isinstance(call_index, (bool, np.bool_)) or not isinstance(call_index, Integral):
         raise ValueError("fixed-capacity local call index must be an integer")
     call_index = int(call_index)
-    if call_index != 0:
-        raise ValueError("fixed-capacity score-only execution currently supports call 0 only")
 
     active = _materialize_fixed_capacity_active_local_rows(bundle, enabled=True)
     plan = bundle.plan
-    if call_index >= plan.valid_call_count or not bool(plan.call_valid_mask[call_index]):
-        raise ValueError("fixed-capacity call 0 is not active in the bound plan")
+    if not 0 <= call_index < plan.valid_call_count or not bool(plan.call_valid_mask[call_index]):
+        raise ValueError(f"fixed-capacity call {call_index} is not active in the bound plan")
 
     image_offset = int(plan.call_image_offsets[call_index])
     row_offset = int(plan.call_row_offsets[call_index])
@@ -422,17 +420,25 @@ def _materialize_fixed_capacity_local_call_view(
     image_stop = image_offset + valid_images
     row_stop = row_offset + valid_rows
     if min(valid_images, valid_rows, physical_images, physical_rotations) <= 0:
-        raise ValueError("fixed-capacity call 0 has a nonpositive physical or active extent")
+        raise ValueError(f"fixed-capacity call {call_index} has a nonpositive physical or active extent")
     if valid_images > physical_images:
-        raise ValueError("fixed-capacity call 0 active image count exceeds its physical capacity")
+        raise ValueError(
+            f"fixed-capacity call {call_index} active image count exceeds its physical capacity"
+        )
     if image_stop > active.image_indices.size or row_stop > active.local_rotation_ids.size:
-        raise ValueError("fixed-capacity call 0 offsets exceed the materialized active prefixes")
+        raise ValueError(
+            f"fixed-capacity call {call_index} offsets exceed the materialized active prefixes"
+        )
 
     global_row_offsets = np.asarray(active.row_offsets[image_offset : image_stop + 1])
     if global_row_offsets.shape != (valid_images + 1,):
-        raise ValueError("fixed-capacity call 0 row-offset slice has the wrong active shape")
+        raise ValueError(
+            f"fixed-capacity call {call_index} row-offset slice has the wrong active shape"
+        )
     if int(global_row_offsets[0]) != row_offset or int(global_row_offsets[-1]) != row_stop:
-        raise ValueError("fixed-capacity call 0 row offsets do not match its sealed row extent")
+        raise ValueError(
+            f"fixed-capacity call {call_index} row offsets do not match its sealed row extent"
+        )
     local_row_offsets = np.asarray(global_row_offsets - row_offset, dtype=np.int64)
     row_counts_int64 = np.diff(local_row_offsets)
     if (
@@ -440,14 +446,20 @@ def _materialize_fixed_capacity_local_call_view(
         or np.any(row_counts_int64 <= 0)
         or np.any(row_counts_int64 > physical_rotations)
     ):
-        raise ValueError("fixed-capacity call 0 active row counts do not fit its physical radix")
+        raise ValueError(
+            f"fixed-capacity call {call_index} active row counts do not fit its physical radix"
+        )
 
     image_indices_active = np.asarray(active.image_indices[image_offset:image_stop])
     expected_image_slice = np.asarray(plan.image_indices[image_offset:image_stop])
     if not np.array_equal(image_indices_active, expected_image_slice):
-        raise ValueError("fixed-capacity call 0 image slice does not match its sealed image extent")
+        raise ValueError(
+            f"fixed-capacity call {call_index} image slice does not match its sealed image extent"
+        )
     if np.any(image_indices_active < 0) or np.any(image_indices_active > np.iinfo(np.int32).max):
-        raise ValueError("fixed-capacity call 0 image IDs do not fit the canonical int32 bucket dtype")
+        raise ValueError(
+            f"fixed-capacity call {call_index} image IDs do not fit the canonical int32 bucket dtype"
+        )
 
     raw_images_active = _require_fixed_capacity_call_array(
         "raw_images",
