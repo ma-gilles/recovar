@@ -2169,6 +2169,28 @@ def _run_fixed_capacity_whole_local_program(
     return carry, tuple(call_outputs)
 
 
+def _reconstruct_fixed_capacity_score_only_result(final_carry, call_output):
+    """Restore the mature 22-plus-value result topology for score-only calls."""
+
+    final_carry = tuple(final_carry)
+    call_output = tuple(call_output)
+    if len(final_carry) != 10:
+        raise ValueError(
+            "fixed-capacity score-only reconstruction requires ten carry values"
+        )
+    if len(call_output) < 11:
+        raise ValueError(
+            "fixed-capacity score-only reconstruction requires invariant call outputs"
+        )
+    return (
+        *final_carry[:8],
+        call_output[0],
+        *final_carry[8:],
+        call_output[1],
+        *call_output[2:],
+    )
+
+
 @partial(
     jax.jit,
     donate_argnums=(1, 2),

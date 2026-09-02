@@ -54,7 +54,7 @@ from recovar.em.dense_single_volume.local_layout import (
 )
 
 
-SCHEMA = "recovar.fixed_capacity_local_score_gate.v3"
+SCHEMA = "recovar.fixed_capacity_local_score_gate.v4"
 IMAGE_SHAPE = (8, 8)
 VOLUME_SHAPE = (8, 8, 8)
 IMAGE_SIZE = int(np.prod(IMAGE_SHAPE))
@@ -575,6 +575,13 @@ def _run_outer(
             _fixed_capacity_enabled=True,
             _fixed_capacity_class_count=1,
         )
+    elif arm == "whole":
+        kwargs.update(
+            _fixed_capacity_bundle=fixture.fixed_bundle,
+            _fixed_capacity_enabled=True,
+            _fixed_capacity_class_count=1,
+            _fixed_capacity_whole_boundary_enabled=True,
+        )
     else:
         raise ValueError(f"unknown score-gate arm: {arm}")
     mean_dtype = np.complex128 if precision == "float64" else np.complex64
@@ -664,12 +671,9 @@ def _run_and_compare_whole_boundary(
     ):
         # This gate is score-only, so the ten state values are invariant across
         # calls and the final carry reconstructs every mature result topology.
-        reconstructed = (
-            *final_carry[:8],
-            call_output[0],
-            *final_carry[8:],
-            call_output[1],
-            *call_output[2:],
+        reconstructed = local_big_jit._reconstruct_fixed_capacity_score_only_result(
+            final_carry,
+            call_output,
         )
         if len(reconstructed) != len(result_names):
             raise AssertionError(
@@ -984,6 +988,7 @@ def run_gate(
         production_default = _outer_snapshot(_run_outer(fixture, precision, "default"))
         production_disabled = _outer_snapshot(_run_outer(fixture, precision, "disabled"))
         production_fixed = _outer_snapshot(_run_outer(fixture, precision, "fixed"))
+        production_whole = _outer_snapshot(_run_outer(fixture, precision, "whole"))
         production_comparisons.extend(
             (
                 compare_outer_snapshots(
@@ -995,6 +1000,11 @@ def run_gate(
                     production_fixed,
                     production_default,
                     label=f"{precision}:production-mature-vs-fixed",
+                ),
+                compare_outer_snapshots(
+                    production_whole,
+                    production_default,
+                    label=f"{precision}:production-mature-vs-fixed-one-boundary",
                 ),
             )
         )
@@ -1035,6 +1045,7 @@ def run_gate(
         },
         "speed_claim_allowed": False,
         "default_promotion_allowed": False,
+        "production_whole_boundary_enabled": True,
         "repeat_count": int(repeat_count),
         "precision_lanes": ["float32", "float64"],
         "fixture": {

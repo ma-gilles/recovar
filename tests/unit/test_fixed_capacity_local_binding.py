@@ -863,12 +863,17 @@ def test_local_em_caller_allocates_and_forwards_fresh_donated_accumulators_per_r
     allocation_y = source.index("Ft_y = jnp.zeros(")
     allocation_ctf = source.index("Ft_ctf = jnp.zeros(")
     bucket_loop = source.index("for bucket_index, bucket in enumerate(bucket_specs):")
+    argument_tuple = source.index("big_jit_arguments = (")
     invocation = source.index("_invoke_local_bucket_big_jit(")
 
-    assert allocation_y < bucket_loop < invocation
-    assert allocation_ctf < bucket_loop < invocation
-    invocation_source = source[invocation : source.index("debug_scores = None", invocation)]
-    positional_lines = [line.strip().rstrip(",") for line in invocation_source.splitlines()[1:10]]
+    assert allocation_y < bucket_loop < argument_tuple < invocation
+    assert allocation_ctf < bucket_loop < argument_tuple < invocation
+    argument_source = source[
+        argument_tuple : source.index("big_jit_static_options = dict(", argument_tuple)
+    ]
+    positional_lines = [
+        line.strip().rstrip(",") for line in argument_source.splitlines()[1:11]
+    ]
     assert positional_lines[7:9] == ["Ft_y", "Ft_ctf"]
 
 
@@ -877,6 +882,7 @@ def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_c
     assert signature.parameters["_fixed_capacity_enabled"].default is False
     assert signature.parameters["_fixed_capacity_bundle"].default is None
     assert signature.parameters["_fixed_capacity_class_count"].default is None
+    assert signature.parameters["_fixed_capacity_whole_boundary_enabled"].default is False
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert source.count("_invoke_local_bucket_big_jit(") == 1
     assert "big_jit_result = run_local_bucket_big_jit(" not in source

@@ -109,6 +109,9 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.em.dense_single_volume.local_big_jit import (
     _noise_image_power_shells_and_per_image,
+    _prepare_fixed_capacity_local_call,
+    _reconstruct_fixed_capacity_score_only_result,
+    run_fixed_capacity_whole_local,
     run_local_bucket_big_jit,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
@@ -1533,6 +1536,15 @@ class _LocalPostprocessBuffers:
     reconstruction_sample_indices_by_image: list[np.ndarray] | None = None
 
 
+@dataclass(frozen=True)
+class _FixedCapacityWholeScoreCallContext:
+    """Host metadata retained while score calls execute in one boundary."""
+
+    unpadded_bucket: LocalBucketSpec
+    padded_bucket: LocalBucketSpec
+    unpadded_batch_size: int
+
+
 @dataclass
 class _LocalProjectionBlock:
     proj_weighted: jnp.ndarray
@@ -2801,6 +2813,125 @@ def _postprocess_local_bucket(
     return significant_sample_count, int(reconstruction_row_count)
 
 
+def _postprocess_fixed_capacity_whole_score_calls(
+    contexts,
+    final_carry,
+    call_outputs,
+    *,
+    n_trans: int,
+    translation_grid,
+    stats_use_reconstruction_probs: bool,
+    collect_profile_stats: bool,
+    buffers: _LocalPostprocessBuffers,
+) -> tuple[int, int]:
+    """Scatter one-boundary score outputs with the mature host postprocessor."""
+
+    contexts = tuple(contexts)
+    call_outputs = tuple(call_outputs)
+    if len(contexts) != len(call_outputs):
+        raise RuntimeError(
+            "fixed-capacity whole-local score output count does not match its call program"
+        )
+    total_significant_samples = 0
+    total_reconstruction_rows = 0
+    for context, call_output in zip(contexts, call_outputs, strict=True):
+        result = _reconstruct_fixed_capacity_score_only_result(
+            final_carry,
+            call_output,
+        )
+        if len(result) != 22:
+            raise RuntimeError(
+                "fixed-capacity whole-local score call returned a non-production topology"
+            )
+        (
+            _Ft_y,
+            _Ft_ctf,
+            _noise_wsum,
+            _noise_img_power,
+            _noise_a2,
+            _noise_xa,
+            _noise_scale_xa,
+            _noise_scale_aa,
+            _bucket_norm_correction,
+            _noise_sigma2_offset,
+            _noise_sumw,
+            batch_norm,
+            log_Z,
+            best_log_score,
+            best_argmax,
+            max_posterior,
+            probs_sum_t,
+            reconstruction_probs_sum_t,
+            n_significant_samples,
+            reconstruction_sample_mask,
+            reconstruction_rotation_mask,
+            reconstruction_row_count_jax,
+        ) = result
+        bucket = context.padded_bucket
+        unpadded_bucket = context.unpadded_bucket
+        unpadded_batch_size = int(context.unpadded_batch_size)
+        reconstruction_rotation_mask_np = np.asarray(
+            reconstruction_rotation_mask[:unpadded_batch_size],
+            dtype=bool,
+        )
+        local_mask_np = np.asarray(
+            bucket.local_rotation_mask[:unpadded_batch_size],
+            dtype=bool,
+        )
+        reconstruction_take_indices = np.broadcast_to(
+            np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
+            (unpadded_batch_size, int(bucket.bucket_rotation_count)),
+        )
+        reconstruction_pack_mask_np = reconstruction_rotation_mask_np & local_mask_np
+        reconstruction_row_count = int(
+            np.asarray(reconstruction_row_count_jax, dtype=np.int32)
+        )
+        stats_probs_sum_t = (
+            reconstruction_probs_sum_t
+            if stats_use_reconstruction_probs
+            else probs_sum_t
+        )
+        significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
+            image_indices=unpadded_bucket.image_indices,
+            local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
+            local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
+            local_rotations=bucket.local_rotations[:unpadded_batch_size],
+            local_rotation_posterior_ids=(
+                None
+                if bucket.local_rotation_posterior_ids is None
+                else bucket.local_rotation_posterior_ids[:unpadded_batch_size]
+            ),
+            translation_grid=translation_grid,
+            n_trans=n_trans,
+            best_argmax=best_argmax[:unpadded_batch_size],
+            batch_norm=batch_norm[:unpadded_batch_size],
+            log_Z=log_Z[:unpadded_batch_size],
+            best_log_score=best_log_score[:unpadded_batch_size],
+            max_posterior=max_posterior[:unpadded_batch_size],
+            probs_sum_t=stats_probs_sum_t[:unpadded_batch_size],
+            n_significant_samples=n_significant_samples[:unpadded_batch_size],
+            reconstruction_sample_mask=reconstruction_sample_mask[
+                :unpadded_batch_size
+            ],
+            collect_profile_stats=collect_profile_stats,
+            reconstruction_row_count=reconstruction_row_count,
+            reconstruction_take_indices=reconstruction_take_indices,
+            reconstruction_pack_mask=reconstruction_pack_mask_np,
+            buffers=buffers,
+        )
+        if collect_profile_stats:
+            total_significant_samples += significant_sample_count
+            total_reconstruction_rows += int(reconstruction_row_count)
+        logger.debug(
+            "Exact local one-boundary score call: %d images, bucket_rot=%d, "
+            "total_local_rot=%d",
+            unpadded_batch_size,
+            int(bucket.bucket_rotation_count),
+            int(np.sum(unpadded_bucket.actual_rotation_counts)),
+        )
+    return total_significant_samples, total_reconstruction_rows
+
+
 def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
     """Pad a local big-JIT bucket to its planned image shape class."""
 
@@ -4030,12 +4161,20 @@ def run_local_em_exact(
     _fixed_capacity_bundle: _FixedCapacityLocalExecutionBundle | None = None,
     _fixed_capacity_enabled: bool = False,
     _fixed_capacity_class_count: int | None = None,
+    _fixed_capacity_whole_boundary_enabled: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
     resolved_exact_local_bucket_radix = _resolve_exact_local_bucket_radix(exact_local_bucket_radix)
     score_only = bool(score_only)
     fixed_capacity_enabled = bool(_fixed_capacity_enabled)
+    fixed_capacity_whole_boundary_enabled = bool(
+        _fixed_capacity_whole_boundary_enabled
+    )
+    if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
+        raise ValueError(
+            "fixed-capacity whole-local boundary requires fixed-capacity execution"
+        )
     use_relion_f32_fine_posterior = bool(
         relion_f32_fine_posterior
         and mstep_relion_x_half
@@ -5022,6 +5161,11 @@ def run_local_em_exact(
             raw_batch_cache, ctf_param_cache = _build_local_raw_cache(experiment_dataset, n_images)
             timing.raw_cache_build_s = time.time() - raw_cache_t0
 
+    fixed_capacity_whole_call_program = []
+    fixed_capacity_whole_call_contexts = []
+    fixed_capacity_whole_initial_carry = None
+    fixed_capacity_whole_static_options = None
+    fixed_capacity_whole_preparation_s = 0.0
     for bucket_index, bucket in enumerate(bucket_specs):
         if (
             relion_projection_cache_groups
@@ -5507,7 +5651,7 @@ def run_local_em_exact(
             return_big_jit_debug_operands = bool(debug_score_dump_operands and score_debug_bucket_matches)
             if return_big_jit_debug_arrays:
                 big_jit_debug_bucket_count += 1
-            big_jit_result = _invoke_local_bucket_big_jit(
+            big_jit_arguments = (
                 jnp.asarray(batch_data),
                 jnp.asarray(ctf_params),
                 ctf_rfloat_half_arg,
@@ -5567,6 +5711,8 @@ def run_local_em_exact(
                 normalization_max_posterior_arg,
                 reconstruction_probability_threshold_arg,
                 config,
+            )
+            big_jit_static_options = dict(
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,
@@ -5624,6 +5770,67 @@ def run_local_em_exact(
                 return_debug_arrays=return_big_jit_debug_arrays,
                 return_debug_scores=return_big_jit_debug_scores,
                 return_debug_operands=return_big_jit_debug_operands,
+            )
+            if fixed_capacity_whole_boundary_enabled:
+                fixed_capacity_whole_preparation_s += time.time() - big_jit_t0
+                if fixed_capacity_whole_initial_carry is None:
+                    fixed_capacity_whole_initial_carry = tuple(
+                        big_jit_arguments[7:17]
+                    )
+                    fixed_capacity_whole_static_options = big_jit_static_options
+                elif big_jit_static_options != fixed_capacity_whole_static_options:
+                    raise ValueError(
+                        "fixed-capacity whole-local calls require one static option topology"
+                    )
+                fixed_capacity_whole_call_program.append(
+                    _prepare_fixed_capacity_local_call(*big_jit_arguments)
+                )
+                fixed_capacity_whole_call_contexts.append(
+                    _FixedCapacityWholeScoreCallContext(
+                        unpadded_bucket=unpadded_bucket,
+                        padded_bucket=bucket,
+                        unpadded_batch_size=unpadded_batch_size,
+                    )
+                )
+                if bucket_index + 1 < len(bucket_specs):
+                    continue
+                fixed_capacity_whole_execution_t0 = time.time()
+                final_carry, whole_call_outputs = run_fixed_capacity_whole_local(
+                    fixed_capacity_whole_call_program,
+                    *fixed_capacity_whole_initial_carry,
+                    **fixed_capacity_whole_static_options,
+                )
+                Ft_y, Ft_ctf = final_carry[:2]
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf, whole_call_outputs)
+                timing.big_jit_bucket_s += (
+                    fixed_capacity_whole_preparation_s
+                    + time.time()
+                    - fixed_capacity_whole_execution_t0
+                )
+                big_jit_bucket_count += len(fixed_capacity_whole_call_program)
+                postprocess_t0 = time.time()
+                added_significant, added_reconstruction_rows = (
+                    _postprocess_fixed_capacity_whole_score_calls(
+                        fixed_capacity_whole_call_contexts,
+                        final_carry,
+                        whole_call_outputs,
+                        n_trans=n_trans,
+                        translation_grid=local_layout.translation_grid,
+                        stats_use_reconstruction_probs=stats_use_reconstruction_probs,
+                        collect_profile_stats=collect_profile_stats,
+                        buffers=postprocess_buffers,
+                    )
+                )
+                total_significant_samples += added_significant
+                total_reconstruction_rows += added_reconstruction_rows
+                timing.postprocess_s += time.time() - postprocess_t0
+                for context in fixed_capacity_whole_call_contexts:
+                    _mark_exact_local_bucket_done(context.padded_bucket)
+                continue
+            big_jit_result = _invoke_local_bucket_big_jit(
+                *big_jit_arguments,
+                **big_jit_static_options,
             )
             debug_scores = None
             debug_probs = None

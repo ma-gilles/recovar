@@ -155,8 +155,13 @@ def test_fixed_capacity_local_score_gate_is_exact_on_gpu(tmp_path):
     assert payload["current_seam_exact"] is True
     assert payload["speed_claim_allowed"] is False
     assert payload["default_promotion_allowed"] is False
+    assert payload["production_whole_boundary_enabled"] is True
     assert all(item["passed"] for item in payload["comparisons"])
     assert all(item["passed"] for item in payload["production_comparisons"])
+    assert any(
+        "production-mature-vs-fixed-one-boundary" in item["label"]
+        for item in payload["production_comparisons"]
+    )
     assert all(item["passed"] for item in payload["whole_boundary_comparisons"])
     assert all(
         item["one_compiled_boundary"] and item["call_count"] == 2
