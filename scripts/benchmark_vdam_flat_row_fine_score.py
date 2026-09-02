@@ -136,7 +136,10 @@ def _make_operands(case: dict, seed: int) -> dict:
     for image_index, count in enumerate(physical_counts):
         rotation_mask[image_index, : int(count)] = True
     valid_image_mask = np.arange(batch) < int(physical_counts.size)
-    candidate_mask = rotation_mask[:, :, None] & valid_image_mask[:, None, None]
+    candidate_mask = np.broadcast_to(
+        rotation_mask[:, :, None] & valid_image_mask[:, None, None],
+        (batch, rotations, translations),
+    ).copy()
 
     flat_reference = reference[plan.image_indices, plan.rotation_rows]
     flat_reference[~plan.present_mask] = np.complex64(np.nan + 1j * np.nan)
