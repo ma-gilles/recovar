@@ -1747,6 +1747,7 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
         "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
+        "VDAM_ALLOCATION_SELECTOR_RESOLUTION",
     ):
         assert name in runtime_contract["science_environment_capture_names"]
     cache = contract["science_contract"]["hybrid_projection_cache_contract"]

@@ -2393,6 +2393,11 @@ def _validate_science_environment(
         and str(expected["gpu_uuid"]) in visible_gpu_uuids,
         f"arm {label} visible GPU UUID evidence is invalid",
     )
+    _require(
+        environment.get("VDAM_ALLOCATION_SELECTOR_RESOLUTION")
+        in {"direct_selector_query", "cgroup_single_visible_uuid"},
+        f"arm {label} allocation-selector resolution evidence is invalid",
+    )
     if "VDAM_TRUE200_ROOT" in environment:
         _require(
             Path(environment["VDAM_TRUE200_ROOT"]).resolve() == root.resolve(),
