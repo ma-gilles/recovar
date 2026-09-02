@@ -9,16 +9,16 @@
 
 | Question | Current answer |
 |---|---|
-| What is working now? | The shared one-build C64 projection cache, certified FP64 interval/state update, immutable source16 topology, exact selected-block CUDA rescore, and full-logical-layout score assembler are integrated on the isolated development branch. The assembler deliberately preserves `[B,R*T]`; a regression proves compacting exact zero-posterior candidates changes the float32 scan result. |
-| What is being wired? | The first default-off K=1 production dispatch: cache once per significance call, certify all 4,608-row chunks, direct-rescore only the selected source16 blocks, then reuse the mature RELION float32 posterior unchanged. Any certificate, capacity, topology, or selected-output failure falls back for the whole padded batch to the mature full rectangular direct scorer on the same cache. |
+| What is working now? | **The first default-off K=1 production dispatch is integrated at `583c9ee47`.** It caches the C64 projections once, certifies every aligned chunk, publishes only exact source16 rescoring, preserves the full `[B,R*T]` posterior layout, and reuses the mature RELION float32 posterior. Any certificate/capacity/output failure uses one whole-batch rectangular direct fallback. Focused result: **202 passed**. |
+| What is being qualified? | H100 selected-path and forced-fallback execution at production geometry, followed by the frozen GF46 `180 -> 181` candidatewise support/winner/state/runtime A/B. The feature remains explicit opt-in and cannot change the frozen score before those gates pass. |
 | What is the speed gate doing? | **Full-shape H100 certificate pass.** Job `13340384` qualified exact GF46 geometry (`B=500`, `T=29`, `F=5100`, `Rblock=4608`) at `0.053900466 s` median per synchronized chunk, or `0.431203728 s` projected for all eight chunks. XLA peak is `4,338,930,856 B`; all outputs repeated byte-identically. The graph has exactly two high-precision cuBLAS GEMMs. |
 | Any new parity failure? | **No.** The preceding stops were fail-fast harness/setup issues, not trajectory/science failures. Job `13340384` supersedes them and completed every static, memory, execution, repeatability, and semantic gate. |
-| What remains before trajectories? | Finish the default-off batch dispatch, pass selected-path and whole-batch-fallback tests, complete the full-shape H100 memory/runtime gate, then run a GF46 candidatewise coverage/runtime transition before spending on complete trajectories. |
+| What remains before trajectories? | Pass the H100 selected/fallback memory and runtime gates, then pass one GF46 candidatewise transition. Only then spend on the frozen full trajectories. |
 
 ### Immediate queue
 
-1. Complete the K=1 hybrid significance dispatch without duplicating projector, direct scorer, prior, posterior, or log-evidence math from mature EM.
-2. Run focused H100 selected/fallback boundary tests, then a one-transition GF46 A/B for support, winner, state, memory, and wall time.
+1. Run focused H100 selected/fallback boundary tests at production geometry and record peak memory, exact score source, selected fraction, repeatability, and wall time.
+2. Run a one-transition GF46 A/B for candidatewise support, winner, state, memory, and wall time.
 3. Only after that gate is green, rerun the frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, and long trajectories. K>1 and real data remain separate later gates.
 
 ## At a glance
@@ -28,7 +28,7 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **COMPONENTS INTEGRATED / DISPATCH OPEN** | Certified interval/state, immutable topology, source16 exact rescore, and full-layout posterior assembly are integrated and focused-test green. Production batch dispatch and GPU candidatewise coverage remain open. |
+| Current correctness work | **DEFAULT-OFF DISPATCH INTEGRATED / CPU GATE PASS** | Commit `583c9ee47`: 202 focused tests pass, including selected exact publication, one-call whole-batch fallback, invalid-output fallback, no double priors, two-pass table reuse, padded rows, and full-layout float32 posterior topology. H100 and real GF46 coverage remain open. |
 | Current performance work | **FULL-SHAPE CERTIFICATE PASS** | The 1.40 GiB GF46 projection cache passed H100 allocation/alias checks. Exact job `13340384` qualifies a 4,608-rotation certificate chunk at 53.90 ms median with 4.339 GB XLA peak; eight chunks project to 0.431 s. Selected-rescore and end-to-end hybrid runtime remain unqualified. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
