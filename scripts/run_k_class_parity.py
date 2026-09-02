@@ -277,6 +277,36 @@ def _scalar(table_or_dict, name: str, default=None):
     return table_or_dict[name].iloc[0]
 
 
+def _resolve_relion_padding_factor(
+    model_general,
+    cli_override: int | None,
+    *,
+    option_name: str,
+) -> tuple[int, str]:
+    """Resolve a replay padding factor from RELION unless explicitly overridden."""
+
+    if cli_override is None:
+        raw_value = _scalar(model_general, "rlnPaddingFactor")
+        source = "relion_model"
+    else:
+        raw_value = cli_override
+        source = "cli_override"
+
+    value = float(raw_value)
+    if not np.isfinite(value):
+        raise ValueError(
+            f"{option_name} must resolve to a positive integer; got {raw_value!r} "
+            f"from {source}"
+        )
+    rounded = int(round(value))
+    if rounded < 1 or abs(value - rounded) > 1e-6:
+        raise ValueError(
+            f"{option_name} must resolve to a positive integer; got {raw_value!r} "
+            f"from {source}"
+        )
+    return rounded, source
+
+
 def _class_table(model, class_index: int):
     key = f"model_class_{class_index + 1}"
     if key not in model:
@@ -976,8 +1006,18 @@ def main() -> None:
     parser.add_argument("--image-batch-size", type=int, default=250)
     parser.add_argument("--rotation-block-size", type=int, default=5000)
     parser.add_argument("--tau2-fudge", type=float, default=None)
-    parser.add_argument("--projection-padding-factor", type=int, default=2)
-    parser.add_argument("--reconstruction-padding-factor", type=int, default=2)
+    parser.add_argument(
+        "--projection-padding-factor",
+        type=int,
+        default=None,
+        help="Override RELION's model padding factor for projection diagnostics.",
+    )
+    parser.add_argument(
+        "--reconstruction-padding-factor",
+        type=int,
+        default=None,
+        help="Override RELION's model padding factor for reconstruction diagnostics.",
+    )
     parser.add_argument("--disc-type", default="linear_interp")
     parser.add_argument(
         "--winner-take-all-mstep",
@@ -1299,6 +1339,20 @@ def main() -> None:
     pixel_size = float(_scalar(prev_model["model_general"], "rlnPixelSize"))
     current_size = int(_scalar(target_model["model_general"], "rlnCurrentImageSize"))
     tau2_fudge = float(args.tau2_fudge or _scalar(prev_model["model_general"], "rlnTau2FudgeFactor", 4.0))
+    args.projection_padding_factor, projection_padding_factor_source = (
+        _resolve_relion_padding_factor(
+            prev_model["model_general"],
+            args.projection_padding_factor,
+            option_name="--projection-padding-factor",
+        )
+    )
+    args.reconstruction_padding_factor, reconstruction_padding_factor_source = (
+        _resolve_relion_padding_factor(
+            prev_model["model_general"],
+            args.reconstruction_padding_factor,
+            option_name="--reconstruction-padding-factor",
+        )
+    )
     particle_diameter = _read_particle_diameter(relion_dir, args.prev_iter)
     relion_cli_flags = _read_relion_optimiser_cli_flags(relion_dir, args.prev_iter)
     firstiter_cc_mode = _resolve_firstiter_cc_mode(args, relion_cli_flags)
@@ -1310,6 +1364,12 @@ def main() -> None:
 
     print(f"RELION K-class replay: K={n_classes}, N={grid_size}, prev={args.prev_iter}, target={args.target_iter}")
     print(f"  current_size={current_size}, pixel_size={pixel_size}, tau2_fudge={tau2_fudge}")
+    print(
+        "  padding factors: "
+        f"projection={args.projection_padding_factor} ({projection_padding_factor_source}), "
+        f"reconstruction={args.reconstruction_padding_factor} "
+        f"({reconstruction_padding_factor_source})"
+    )
     print(f"  output_dir={output_dir}")
     print(f"  JAX devices: {jax.devices()}")
     print(
@@ -2022,6 +2082,10 @@ def main() -> None:
         "n_classes": int(n_classes),
         "n_images": int(ds.n_images),
         "current_size": int(current_size),
+        "projection_padding_factor": int(args.projection_padding_factor),
+        "projection_padding_factor_source": projection_padding_factor_source,
+        "reconstruction_padding_factor": int(args.reconstruction_padding_factor),
+        "reconstruction_padding_factor_source": reconstruction_padding_factor_source,
         "healpix_order": int(healpix_order),
         "n_rotations": int(rotations.shape[0]),
         "n_translations": int(translations.shape[0]),

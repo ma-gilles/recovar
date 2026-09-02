@@ -94,6 +94,35 @@ def test_k_class_replay_star_precision_is_explicitly_rounded():
     assert source == "star-rounded"
 
 
+def test_k_class_replay_inherits_relion_model_padding_factor():
+    from scripts.run_k_class_parity import _resolve_relion_padding_factor
+
+    value, source = _resolve_relion_padding_factor(
+        {"rlnPaddingFactor": 1.0},
+        None,
+        option_name="--projection-padding-factor",
+    )
+
+    assert value == 1
+    assert source == "relion_model"
+
+
+def test_k_class_replay_padding_override_is_explicit_and_validated():
+    from scripts.run_k_class_parity import _resolve_relion_padding_factor
+
+    assert _resolve_relion_padding_factor(
+        {"rlnPaddingFactor": 1.0},
+        2,
+        option_name="--reconstruction-padding-factor",
+    ) == (2, "cli_override")
+    with pytest.raises(ValueError, match="positive integer"):
+        _resolve_relion_padding_factor(
+            {"rlnPaddingFactor": 1.5},
+            None,
+            option_name="--reconstruction-padding-factor",
+        )
+
+
 def test_k_class_replay_adaptive_coarse_rotations_use_relion_device_builder(monkeypatch):
     from recovar.em import sampling
     from scripts.run_k_class_parity import _adaptive_coarse_scoring_rotations
