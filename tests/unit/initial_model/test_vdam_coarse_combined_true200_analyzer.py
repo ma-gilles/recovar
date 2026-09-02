@@ -1601,6 +1601,8 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     # verifies provenance, exact 804 topology/full hashes, options, timing,
     # profiles, and GPU-monitor evidence before the wrapper skips an arm.
     assert "VDAM_TRUE200_RESUME" in text
+    assert 'if [[ "$#" -ne 5 ]]' in text
+    assert "ROOT LAUNCH_MANIFEST LAUNCH_SHA256 RESUME SENTINEL" in text
     assert "initial_allocation_spec=${SLURM_STEP_GPUS:-${SLURM_JOB_GPUS:-${CUDA_VISIBLE_DEVICES:-}}}" in text
     assert "allocated_gpu_uuids.csv" in text
     assert "visible_gpu_uuids.csv" in text

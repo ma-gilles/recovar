@@ -15,6 +15,18 @@
 
 set -euo pipefail
 
+if [[ "$#" -ne 0 ]]; then
+  if [[ "$#" -ne 5 ]]; then
+    echo "usage: $0 [ROOT LAUNCH_MANIFEST LAUNCH_SHA256 RESUME SENTINEL]" >&2
+    exit 2
+  fi
+  VDAM_TRUE200_ROOT=$1
+  VDAM_TRUE200_LAUNCH_MANIFEST=$2
+  EXPECTED_LAUNCH_MANIFEST_SHA256=$3
+  VDAM_TRUE200_RESUME=$4
+  VDAM_TRUE200_SENTINEL=$5
+fi
+
 : "${VDAM_TRUE200_ROOT:?set a fresh disposable result root}"
 : "${VDAM_TRUE200_LAUNCH_MANIFEST:?set the reviewed launch manifest}"
 : "${EXPECTED_LAUNCH_MANIFEST_SHA256:?pin the reviewed launch manifest SHA-256}"
