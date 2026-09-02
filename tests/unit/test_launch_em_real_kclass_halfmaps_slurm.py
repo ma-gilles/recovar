@@ -24,6 +24,7 @@ def _row(tmp_path: Path, half: int) -> dict:
 
 def test_matched_commands_use_independent_all_data_k4_processes(tmp_path: Path) -> None:
     row = _row(tmp_path, 1)
+    initial_class_volumes = [tmp_path / f"reference_init_class{class_id:03d}.mrc" for class_id in range(1, 5)]
     relion = launcher.build_relion_command(
         executable=tmp_path / "relion_refine_mpi",
         row=row,
@@ -37,6 +38,7 @@ def test_matched_commands_use_independent_all_data_k4_processes(tmp_path: Path) 
     recovar = launcher.build_recovar_command(
         python=tmp_path / "python",
         row=row,
+        initial_class_volumes=initial_class_volumes,
         max_iter=8,
         seed=42001,
         particle_diameter=200.0,
@@ -51,6 +53,9 @@ def test_matched_commands_use_independent_all_data_k4_processes(tmp_path: Path) 
     assert "--final-replay-relion-dir" not in recovar
     assert recovar[recovar.index("--initial-pose-source") + 1] == "none"
     assert recovar[recovar.index("--relion-scale-followers") + 1] == "2"
+    assert recovar[recovar.index("--init_class_volumes") + 1] == ",".join(
+        str(path.resolve()) for path in initial_class_volumes
+    )
 
 
 def test_rendered_job_is_nonexclusive_serial_one_gpu_and_audited(tmp_path: Path) -> None:

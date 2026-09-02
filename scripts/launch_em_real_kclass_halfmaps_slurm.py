@@ -391,12 +391,15 @@ def build_recovar_command(
     *,
     python: Path,
     row: Mapping[str, Any],
+    initial_class_volumes: Sequence[Path],
     max_iter: int,
     seed: int,
     particle_diameter: float,
     image_batch_size: int,
     mpi_ranks: int,
 ) -> list[str]:
+    _require(len(initial_class_volumes) == 4, "K=4 requires exactly four initial class volumes")
+    initial_class_volume_arg = ",".join(str(path.resolve()) for path in initial_class_volumes)
     relion_dir = Path(row["relion_dir"])
     recovar_dir = Path(row["recovar_dir"])
     return [
@@ -451,6 +454,8 @@ def build_recovar_command(
         "--apply-initial-lowpass",
         "--n_classes",
         "4",
+        "--init_class_volumes",
+        initial_class_volume_arg,
         "--initial-pose-source",
         "none",
         "--timing_dir",
@@ -858,6 +863,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         recovar_command = build_recovar_command(
             python=run_python,
             row=row,
+            initial_class_volumes=reference_paths,
             max_iter=args.max_iter,
             seed=args.seed,
             particle_diameter=args.particle_diameter,
