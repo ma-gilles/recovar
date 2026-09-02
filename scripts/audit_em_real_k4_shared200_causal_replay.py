@@ -21,7 +21,6 @@ from typing import Any, Callable, Iterable
 import numpy as np
 
 from recovar.data_io.starfile import read_star
-from scripts.analyze_em_k4_allclass_native_boundary import exact_rotation_permutation
 from scripts.launch_em_real_k4_shared200_causal_replay_slurm import (
     CASE,
     TARGET_SCHEMA,
@@ -449,6 +448,10 @@ def _join_class(
         "RECOVAR posterior is negative",
     )
     _require(
+        not np.any(recovar_posterior[~candidate_mask]),
+        "RECOVAR full posterior is nonzero outside candidates",
+    )
+    _require(
         np.array_equal(recovar_support, recovar_reconstruction_posterior > 0.0),
         "RECOVAR reconstruction mask does not equal its positive posterior support",
     )
@@ -472,19 +475,6 @@ def _join_class(
     )
     if score.empty_sparse_support:
         _require(score.candidates.size == 0, "empty fine-score sentinel contains candidates")
-        if factor.rotations.size:
-            native_rotations = (
-                np.asarray(factor.rotations["matrix"], dtype=np.float32)
-                .reshape(-1, 3, 3)
-                .transpose(0, 2, 1)
-            )
-            exact_rotation_permutation(native_rotations, recovar_rotations)
-        _require(not np.any(candidate_mask), "RECOVAR candidate mask is nonempty for native empty support")
-        _require(not np.any(recovar_posterior), "RECOVAR posterior is nonzero for native empty support")
-        _require(
-            not np.any(recovar_reconstruction_posterior) and not np.any(recovar_support),
-            "RECOVAR retained support is nonzero for native empty support",
-        )
         empty_scores = np.empty(0, dtype=np.float32)
         native_posterior = np.zeros(candidate_mask.shape, dtype=np.float32)
         native_support = np.zeros(candidate_mask.shape, dtype=bool)
@@ -493,9 +483,9 @@ def _join_class(
             "class_id": class_id,
             "particle_id": int(score.header[6]),
             "empty_sparse_support": True,
-            "candidate_exact": True,
+            "candidate_exact": not np.any(candidate_mask),
             "candidate_intersection": 0,
-            "candidate_union": 0,
+            "candidate_union": int(np.count_nonzero(candidate_mask)),
             "native_raw": empty_scores,
             "recovar_raw": empty_scores.copy(),
             "native_combined": empty_scores.copy(),
@@ -916,6 +906,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
     posterior = ErrorAccumulator()
     exact_count = 0
     empty_sparse_support_count = 0
+    native_empty_recovar_nonempty_count = 0
     support_intersection = 0
     support_union = 0
     winner_matches = 0
@@ -940,6 +931,9 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
             joined.append(item)
             exact_count += int(item["candidate_exact"])
             empty_sparse_support_count += int(item["empty_sparse_support"])
+            native_empty_recovar_nonempty_count += int(
+                item["empty_sparse_support"] and item["candidate_union"] > 0
+            )
             if item["native_raw"].size:
                 raw.add(item["native_raw"], item["recovar_raw"], center=True)
                 combined.add(item["native_combined"], item["recovar_combined"], center=True)
@@ -1147,6 +1141,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         "causal_boundary": {
             "metrics": causal_metrics,
             "empty_sparse_support_records": empty_sparse_support_count,
+            "native_empty_recovar_nonempty_records": native_empty_recovar_nonempty_count,
             "centered_raw_score": raw_report,
             "centered_combined_score": combined_report,
             "posterior": posterior_report,

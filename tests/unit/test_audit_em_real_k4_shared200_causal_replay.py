@@ -263,7 +263,7 @@ def test_empty_sparse_support_join_requires_matching_explicit_sentinels(monkeypa
         )
 
 
-def test_empty_sparse_support_join_rejects_nonzero_recovar_mass(monkeypatch, tmp_path):
+def test_empty_sparse_support_join_rejects_recovar_mass_outside_candidates(monkeypatch, tmp_path):
     factor_header = [0] * 64
     factor_header[9:13] = [1, 2, 117, 17]
     factor_header[21] = 2
@@ -300,7 +300,7 @@ def test_empty_sparse_support_join_rejects_nonzero_recovar_mass(monkeypatch, tmp
     }
     monkeypatch.setattr(auditor, "_load_recovar", lambda *_args, **_kwargs: recovar)
 
-    with pytest.raises(auditor.AuditError, match="posterior is nonzero"):
+    with pytest.raises(auditor.AuditError, match="posterior is nonzero outside candidates"):
         auditor._join_class(
             stack=17,
             subset_local_index=0,
@@ -309,6 +309,60 @@ def test_empty_sparse_support_join_rejects_nonzero_recovar_mass(monkeypatch, tmp
             score_path=tmp_path / "score.bin",
             pass2_path=tmp_path / "pass2.npz",
         )
+
+
+def test_empty_native_join_preserves_nonempty_recovar_topology(monkeypatch, tmp_path):
+    factor_header = [0] * 64
+    factor_header[9:13] = [1, 2, 117, 17]
+    factor_header[21] = 2
+    factor_header[25] = _bits(0.25)
+    factor_header[26] = _bits(1.0)
+    score_header = [0] * 48
+    score_header[4:8] = [1, 2, 117, 17]
+    monkeypatch.setattr(
+        auditor,
+        "load_factor_capture",
+        lambda _path: SimpleNamespace(
+            geometry_only=True,
+            empty_sparse_support=True,
+            header=tuple(factor_header),
+            rotations=np.empty(0, dtype=np.float32),
+        ),
+    )
+    monkeypatch.setattr(
+        auditor,
+        "load_fine_score_capture",
+        lambda _path: SimpleNamespace(
+            empty_sparse_support=True,
+            header=tuple(score_header),
+            candidates=np.empty(0, dtype=np.float32),
+        ),
+    )
+    recovar = {
+        "rotations": np.eye(3, dtype=np.float32)[None, ...],
+        "candidate_mask": np.asarray([[False, True]]),
+        "probs": np.asarray([[0.0, 1.0]], dtype=np.float64),
+        "reconstruction_probs": np.asarray([[0.0, 1.0]], dtype=np.float64),
+        "reconstruction_mask": np.asarray([[False, True]]),
+        "relion_raw_diff2": np.asarray([[0.0, 3.0]], dtype=np.float32),
+    }
+    monkeypatch.setattr(auditor, "_load_recovar", lambda *_args, **_kwargs: recovar)
+
+    joined = auditor._join_class(
+        stack=17,
+        subset_local_index=0,
+        class_id=2,
+        factor_path=tmp_path / "factor.bin",
+        score_path=tmp_path / "score.bin",
+        pass2_path=tmp_path / "pass2.npz",
+    )
+
+    assert joined["empty_sparse_support"] is True
+    assert joined["candidate_exact"] is False
+    assert joined["candidate_intersection"] == 0
+    assert joined["candidate_union"] == 1
+    assert joined["native_posterior"].sum() == 0.0
+    assert joined["recovar_posterior"].sum() == 1.0
 
 
 def test_nonempty_native_join_reports_disjoint_empty_recovar_candidate_set(monkeypatch, tmp_path):
