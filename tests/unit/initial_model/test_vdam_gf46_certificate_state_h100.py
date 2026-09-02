@@ -101,7 +101,7 @@ def test_runner_seals_commit_tree_source_gpu_x64_and_exact_execution_protocol() 
         'vdam_select_target_gpu "${TARGET_GPU_UUID}" 0',
         '[[ "${gpu_name}" == *H100* ]]',
         "export JAX_ENABLE_X64=1",
-        "export JAX_PLATFORMS=cuda",
+        "export JAX_PLATFORMS=cuda,cpu",
         "--warmup-runs 2",
         "--timed-runs 5",
     ):

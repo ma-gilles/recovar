@@ -65,7 +65,9 @@ export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export CUDA_VISIBLE_DEVICES=${selected_gpu_uuid}
 export JAX_ENABLE_X64=1
-export JAX_PLATFORMS=cuda
+# RECOVAR initializes a CPU control device at import time.  Keep CUDA first so
+# it remains the default backend while retaining that required CPU backend.
+export JAX_PLATFORMS=cuda,cpu
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export JAX_COMPILATION_CACHE_DIR=${RUNTIME_ROOT}/jax_cache
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0

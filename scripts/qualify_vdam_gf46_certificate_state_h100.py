@@ -632,8 +632,8 @@ def _runtime_provenance(repo_root: Path, expected_gpu_uuid: str) -> dict[str, An
         raise ValueError("expected GPU UUID must have the form GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
     if os.environ.get("JAX_ENABLE_X64") != "1":
         raise RuntimeError("JAX_ENABLE_X64 must be exactly 1")
-    if os.environ.get("JAX_PLATFORMS") != "cuda":
-        raise RuntimeError("JAX_PLATFORMS must be exactly cuda")
+    if os.environ.get("JAX_PLATFORMS") != "cuda,cpu":
+        raise RuntimeError("JAX_PLATFORMS must be exactly cuda,cpu")
     if os.environ.get("CUDA_VISIBLE_DEVICES") != expected_gpu_uuid:
         raise RuntimeError("CUDA_VISIBLE_DEVICES must be the pinned physical GPU UUID")
     slurm_job_id = os.environ.get("SLURM_JOB_ID")
