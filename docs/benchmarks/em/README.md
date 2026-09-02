@@ -290,15 +290,25 @@ assignment agreement when the particle tables are available. K=4 remains the
 default for compatibility with the historical
 `scripts/audit_k4_fsc_trajectory.py` entry point and its sealed v2 records.
 
-The multi-seed aggregate is intentionally not a schema-v1 registry record and
-does not make a formal gate claim. It proves that exactly three frozen seeds
-were indexed without scientific-axis drift, preserves every per-seed failure
-(including class collapse), and provides cross-seed quality/runtime/memory
-reductions. Seal each accepted trajectory separately in `entries/`; then use
-the aggregate as a compact suite-level index. Each aggregate row is bound back
-to the runtime-written `case_config.json` (including source PDB directory,
-seed, symmetry, case name/index, and Slurm job), and that config is hashed in
-the aggregate so a swapped or mislabeled case root fails validation.
+The default multi-seed aggregate is intentionally not a schema-v1 registry
+record and does not make a formal gate claim. It proves that exactly three
+frozen seeds were indexed without scientific-axis drift, preserves every
+per-seed failure (including class collapse), and provides cross-seed
+quality/runtime/memory reductions. Each aggregate row is bound back to the
+runtime-written `case_config.json` (including source PDB directory, seed,
+symmetry, case name/index, and Slurm job), and that config is hashed in the
+aggregate so a swapped or mislabeled case root fails validation.
+
+After all strict trajectory audits exist, add
+`--require-trajectory-audits` to `scripts/aggregate_em_kclass_multiseed.py`
+to emit the v2 aggregate and a formal suite-level claim. This mode fails when
+any expected audit is missing or changes schema, metric policy, iteration or
+class topology. It independently replays every numbered and final direct
+FSC-AUC and signed GT-FSC-AUC gate, every available class-assignment gate, and
+the reported status/failure relationship before reducing across seeds. The v2
+aggregate remains a compact campaign index: seal each accepted trajectory in
+`entries/` or a schema-v1 campaign record before treating it as admitted
+benchmark evidence.
 
 Cases 25--27 are stricter than ordinary repeated simulations. Per seed, case
 25 generates and hashes one shared dataset; cases 26 and 27 depend on that job

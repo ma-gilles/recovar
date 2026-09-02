@@ -659,8 +659,8 @@ def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
         f"- replicate rows: **{payload['replicate_count']}**",
         f"- formal trajectory claim: **{formal_summary}**",
         "",
-        "| Case | Sym | Outcome | Seeds | Worst REC-REL GT FSC-AUC | Median RECOVAR s | Median RELION s | Max RECOVAR HBM MiB |",
-        "|---|---|---|---|---:|---:|---:|---:|",
+        "| Case | Sym | Outcome | Seeds | Worst REC-REL GT FSC-AUC | Median RECOVAR s | Median RELION s | Max RECOVAR HBM MiB | Max RELION HBM MiB |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|",
     ]
     for case in payload["cases"]:
         metrics = case["metrics_across_seeds"]
@@ -677,10 +677,42 @@ def render_markdown(payload: dict[str, Any], output_json: Path) -> str:
                     str(metrics["median_recovar_wall_s"]),
                     str(metrics["median_relion_wall_s"]),
                     str(metrics["max_recovar_peak_hbm_mib"]),
+                    str(metrics["max_relion_peak_hbm_mib"]),
                 ]
             )
             + " |"
         )
+    if formal_claim is not None:
+        lines.extend(
+            [
+                "",
+                "## Strict trajectory gates",
+                "",
+                "| Case | K | Formal | Class cells | Min direct FSC-AUC | Min signed GT FSC-AUC delta | Min assignment |",
+                "|---|---:|---|---:|---:|---:|---:|",
+            ]
+        )
+        for case in payload["cases"]:
+            metrics = case["metrics_across_seeds"]
+            agreement = metrics["minimum_class_assignment_agreement"]
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(case["base_name"]),
+                        str(case["scientific_contract"]["n_classes"]),
+                        str(case["formal_trajectory_status"]),
+                        (
+                            f"{metrics['passing_trajectory_class_cells']}/"
+                            f"{metrics['evaluated_trajectory_class_cells']}"
+                        ),
+                        f"{metrics['minimum_direct_fsc_auc']:.9f}",
+                        f"{metrics['minimum_gt_fsc_auc_delta']:+.9f}",
+                        "unavailable" if agreement is None else f"{agreement:.6f}",
+                    ]
+                )
+                + " |"
+            )
     lines.extend(["", "## Replicates", ""])
     for case in payload["cases"]:
         for row in case["replicates"]:

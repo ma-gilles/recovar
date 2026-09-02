@@ -301,6 +301,8 @@ def test_trajectory_v2_replays_every_seed_and_class_cell(tmp_path):
     assert payload["cases"][0]["formal_trajectory_status"] == "PASS"
     rendered = aggregate.render_markdown(payload, tmp_path / "summary.json")
     assert "formal trajectory claim: **PASS (3/3 replicates; 72/72 class cells)**" in rendered
+    assert "| ribo_k4_5k_g128_white_noise1_c4_uniform | 4 | PASS | 72/72 | 0.999000000 | -0.000100000 | 0.999000 |" in rendered
+    assert "Max RELION HBM MiB" in rendered
 
 
 def test_trajectory_v2_fails_closed_when_a_seed_audit_is_missing(tmp_path):
