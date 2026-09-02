@@ -7,19 +7,20 @@
 
 ## Live engineering snapshot — 2026-09-02
 
-| Question | Current answer |
-|---|---|
-| What is working now? | **The integrated default-off K=1 hybrid passed its full-shape H100 boundary at `b611aeff1`, job `13341618`.** At exact GF46 geometry it selected and published only exact source16 CUDA rescoring, preserved the full `[B,R*T]` layout, passed the mature RELION-f32 posterior, and physically exercised capacity-overflow fallback. Focused result: **206 / 206 passed**. |
-| What is being qualified? | **The real frozen GF46 `180 -> 181` transition is next:** direct versus hybrid candidate support, winner, particle state, map/model envelope, peak memory, and warm wall. The feature remains explicit opt-in and cannot change the frozen score before that gate passes. |
-| What is the speed gate doing? | **Selected/fallback H100 boundary PASS.** Job `13341618` measured a `0.471513 s` selected-score median plus `0.813419 s` for the mature posterior at `B=500,R=36864,T=29,F=5100`; only `0.0868056%` of candidates were exact-rescored. Device peak was `18.459 GiB`. End-to-end speed remains unqualified until the checkpoint A/B. |
-| Any new parity failure? | **No.** Job `13341559` stopped before hybrid execution because its runner did not preload cuSPARSE. Reusing the established pinned preload fixed the setup; superseding job `13341618` passed every selected, posterior, fallback, memory, repeatability, and provenance check. |
-| What remains before trajectories? | Pass one candidatewise and end-to-end GF46 checkpoint transition. Only then spend on the frozen full trajectories and broader stress matrix. |
+| Signal | Status | Evidence / next decision |
+|---|---|---|
+| Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
+| Corrected GF46 checkpoint | **COMPLETE DATA GREEN / SEALED RERUN NEXT** | Job `13343052`, frozen iteration `180 -> 181`: zero novel hybrid support rows, exact cutoff/discrete/STAR/model identities, and every hybrid map/model delta inside the pooled direct-repeat numerical envelope. The job stopped only in its obsolete post-analyzer and is not promoted as sealed evidence. |
+| Root cause closed | **SHARED EM/DIRECT OPERANDS** | The pre-fix hybrid cache used `mask_current_image_disk=False` while mature EM/direct used `True`. Commit `e9a8e8256` now routes both through one shared projection helper; the previous 405 pose-assignment mismatches fell to **0 / 1,000**. |
+| Speed result | **4.38x WARM TRANSITION SPEEDUP** | Clean audit-off ABBA medians: wall `21.267882 -> 4.852816 s`; expectation `20.640134 -> 4.172020 s` (**4.95x**); pass 1 `18.787344 -> 2.309944 s` (**8.13x**); pass 2 is unchanged (`1.110826 -> 1.121583 s`). Peak RSS `3.325 -> 3.508 GiB`. |
+| Numerical classification | **CONTROL-BOUNDED FP32 NOISE** | Direct itself changed one inclusive threshold-tie support at row 412 while persisted cutoff counts and downstream discretes stayed exact. Hybrid introduced no support outcome outside the two direct observations. Across six direct and six hybrid executions, all 15 hybrid-repeat and 36 crossed map/model pairs pass the mature EM-style `2x` pooled-control envelope. |
+| Focused regression | **49 / 49 PASS** | Hybrid significance, InitialModel diagnostic propagation, shared projection operands, and transition analyzer/harness tests pass. No broad RECOVAR suite was run. |
 
 ### Immediate queue
 
-1. Run a one-transition GF46 direct/hybrid A/B for candidatewise support, winner, state, map/model envelope, memory, and warm wall time.
-2. If that gate is green, run the representative repeat/no-growth trajectory before spending on the complete frozen K=1 suite.
-3. Then rerun the frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, and long trajectories. K>1 and real data remain separate later gates.
+1. Rerun the same pinned GF46 direct/hybrid audit plus clean ABBA with the corrected v2 analyzer and seal the result.
+2. If the sealed rerun reproduces this boundary, run the representative repeat/no-growth trajectory.
+3. Then rerun frozen K=1 full trajectories and expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
 
 ## At a glance
 
@@ -28,8 +29,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **INTEGRATED HYBRID H100 BOUNDARY PASS** | Commit `b611aeff1`, job `13341618`: 206 focused tests pass; exact selected publication, full-layout posterior, byte-identical repeats, and a physically executed whole-batch fallback all passed at unreduced GF46 shape. Real checkpoint coverage remains open. |
-| Current performance work | **HYBRID COMPONENT PASS / END-TO-END OPEN** | Selected score median `0.471513 s`; mature posterior `0.813419 s`; peak `18.459 GiB`; selected fraction `0.0868056%`. The frozen GF46 direct/hybrid transition is required before any runtime promotion. |
+| Current correctness work | **CORRECTED CHECKPOINT DATA GREEN / SEAL OPEN** | Job `13343052`: exact downstream state and zero novel hybrid support outcomes after sharing mature EM/direct operands; analyzer-only superseding rerun pending. |
+| Current performance work | **4.38x CHECKPOINT SIGNAL / SEAL OPEN** | Clean ABBA wall `21.267882 -> 4.852816 s`; pass 1 is 8.13x faster and pass 2 unchanged. Frozen runtime stays 0/20 pending trajectory scoring. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
