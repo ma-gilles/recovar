@@ -11,9 +11,9 @@ resulting artifacts are sealed.
 RELION rejects `--split_random_halves` when `nr_classes > 1`; its source tells
 users to classify first and then refine classes separately. A single RELION
 K=4 process therefore cannot emit four independent gold-standard half-map
-pairs. RECOVAR's K-class loop has the same scientific shape: the two numbered
-files written for one class inside one process are byte-identical replicas of
-one combined Class3D map, not independent half maps.
+pairs. RECOVAR's numbered K-class map labels are also internal process products;
+their scientific role must be proved from the saved particle memberships, not
+inferred from the filename or from whether two files happen to hash equally.
 
 The harness uses this construction instead:
 
@@ -21,9 +21,12 @@ The harness uses this construction instead:
 2. Write one disjoint particle STAR for subset 1 and one for subset 2.
 3. Run an independent K=4 RELION process on each STAR.
 4. Run an independent K=4 RECOVAR process on each STAR.
-5. Treat one process from subset 1 and one from subset 2 as the genuine
-   half-map pair. Never use RECOVAR's two same-process replica labels or either
-   engine's final all-data products as half maps.
+5. In each RECOVAR process, prove from `refinement_results.npz` that one
+   internal membership contains every particle in that external half and the
+   other contains none, then select only the occupied membership's numbered
+   maps. Treat the occupied products from the two disjoint processes as the
+   genuine half-map pair. Never use the empty-membership or final all-data
+   products as half maps.
 
 All four engine processes run serially on one physical H100. The setup/build
 job is separate and is not included in either engine's runtime.
@@ -96,6 +99,54 @@ Because roots are immutable, do not add `--submit` to an already prepared dry
 root. Prepare a new root. Run seeds 42001, 42002, and 42003 for the 128 pilot;
 only after those are stable, run seeds 42001 and 42002 at 256.
 
+## First bounded execution: rejected as a parity result
+
+The `shared200-128`, seed-42001 computation completed for all four processes at
+RECOVAR source commit `abaada2d66d35916a8b8826f93467e0d6af7f8e4` in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_shared200_seed42001_abaada2d6_submitted_20260901`.
+Setup job `13328373` completed in 3:41. Qualification job `13328374` used one
+H100, 24 CPUs, and 192 GB with exact `ReqTRES == AllocTRES`; all four engine
+runs completed before the job exited 2 at the original auditor's incorrect
+numbered-map semantic guard. The corrected schema-v3 auditor at commit
+`82208f49f` proves the occupied/empty internal memberships described above and
+produces a complete report. It exits 3 because the predeclared science gate
+fails, not because report generation failed.
+
+The matched per-class results are:
+
+| Class | Source IDs RELION h1/h2; RECOVAR h1/h2 | Unmasked 0.143 A, RELION / RECOVAR | Common-mask 0.143 A, RELION / RECOVAR | Frozen-band half-map FSC-AUC, RELION / RECOVAR | Merged cross-engine band FSC-AUC |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 1 | `1/2; 2/4` | 13.52 / 104.80 | 13.52 / 104.80 | 0.267 / 0.152 | 0.028 |
+| 2 | `2/3; 4/3` | 83.84 / 16.12 | 83.84 / 16.12 | 0.298 / 0.670 | 0.736 |
+| 3 | `3/1; 3/2` | 104.80 / 69.87 | 104.80 / 69.87 | 0.104 / 0.845 | 0.844 |
+| 4 | `4/4; 1/1` | 20.96 / 20.96 | 20.96 / 20.96 | 0.436 / 0.319 | 0.400 |
+
+These values are bounded relative diagnostics, not absolute-resolution claims:
+the common-mask FSC is uncorrected and each half has only 93 or 107 particles.
+More importantly, hard-assignment agreement is only 0.151 and 0.131 for halves
+1 and 2. The class populations are `24/62/1/6` versus `4/14/70/5` in half 1
+and `70/1/33/3` versus `9/81/14/3` in half 2 (RELION versus RECOVAR after label
+matching). RECOVAR-half-1's unique class permutation also has absolute
+best-to-second-best objective margin 0.00218, below the frozen 0.01 minimum.
+The mixture has therefore split or merged differently; apparently better FSC
+for classes 2 and 3 cannot rescue the result. This run is useful as a cheap
+wiring and failure-localization discriminator, but it is not evidence that K=4
+parity is achieved and it is not admitted to the accepted registry.
+
+Small-run performance is recorded only as a resource regression point, not a
+throughput claim:
+
+| External half | RELION wall / peak HBM | RECOVAR wall / peak HBM |
+| ---: | ---: | ---: |
+| 1 | 15.24 s / 79,549 MiB | 404.39 s / 4,771 MiB |
+| 2 | 14.27 s / 79,593 MiB | 374.11 s / 4,771 MiB |
+
+The sealed report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_shared200_seed42001_abaada2d6_submitted_20260901/audit/halfmap_audit.json`
+(SHA-256 `a74ffbef6b14b5ad1026a300d98e576cd11245acb583f238d4d80313bf321c44`).
+The shellwise curves are in the adjacent `halfmap_fsc_curves.npz` (SHA-256
+`359c692df4c6334262c1b47095dccae5d590d4d23eb1eeba45ca7b0fa36a24f6`).
+
 ## Fail-closed audit
 
 `scripts/audit_em_real_kclass_halfmaps.py` requires:
@@ -109,10 +160,12 @@ only after those are stable, run seeds 42001 and 42002 at 256.
   the qualification allocation's Slurm job ID;
 - exactly four numbered classes from the last expected iteration in each
   independent process;
-- byte-identical RECOVAR same-process replicas, which are explicitly discarded
-  as non-half-map products, no duplicate class maps within an engine/half, no
-  extra final RECOVAR class IDs, and no byte-identical maps across independent
-  processes;
+- RECOVAR saved-image count, no final-all-data pass, disjoint and complete
+  internal-half membership, exactly one membership containing all external-half
+  particles, hard-assignment topology, and SHA-256 identities for both selected
+  occupied maps and discarded empty-membership products; plus no duplicate class
+  maps within an engine/half, no extra final class IDs, and no byte-identical
+  maps across independent external-half processes;
 - one proper rigid transform per four-class map set, fitted to a label-invariant
   equal-weight ensemble, followed by a uniquely optimal Hungarian class match
   to RELION half 1 with best-to-second-best objective margin at least `0.01`
