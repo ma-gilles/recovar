@@ -57,6 +57,239 @@ def test_coarse_gaussian_gemm_macro_is_default_off_and_fail_closed(monkeypatch):
         significance._coarse_gaussian_gemm_macro_enabled()
 
 
+def test_coarse_gaussian_gemm_projection_cache_is_default_off_and_fail_closed(
+    monkeypatch,
+):
+    variable = "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._coarse_gaussian_gemm_projection_cache_enabled()
+    assert significance._coarse_gaussian_gemm_projection_cache_enabled(
+        default=True,
+    )
+
+    for disabled in ("0", "false", "no", "off"):
+        monkeypatch.setenv(variable, disabled)
+        assert not significance._coarse_gaussian_gemm_projection_cache_enabled(
+            default=True,
+        )
+    for enabled in ("1", "true", "yes", "on"):
+        monkeypatch.setenv(variable, enabled)
+        assert significance._coarse_gaussian_gemm_projection_cache_enabled()
+
+    monkeypatch.setenv(variable, "automatic")
+    with pytest.raises(ValueError, match=variable):
+        significance._coarse_gaussian_gemm_projection_cache_enabled()
+
+
+def _projection_cache_request_kwargs(**updates):
+    values = dict(
+        macro_enabled=True,
+        n_classes=1,
+        n_rotations=16,
+        coarse_gaussian_ffi_enabled=True,
+        exact_coarse_operands_enabled=True,
+        use_relion_projector=True,
+        relion_texture_interp_enabled=True,
+        half_spectrum_scoring=True,
+        use_float64_scoring=False,
+        relion_projector_dtype=np.complex64,
+    )
+    values.update(updates)
+    return values
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"macro_enabled": False}, "GEMM_MACRO"),
+        ({"n_classes": 2}, "K=1"),
+        ({"n_rotations": 17}, "divisible by 16"),
+        ({"coarse_gaussian_ffi_enabled": False}, "exact RELION"),
+        ({"exact_coarse_operands_enabled": False}, "EXACT_COARSE_OPERANDS"),
+        ({"use_relion_projector": False}, "RELION texture projector"),
+        ({"relion_texture_interp_enabled": False}, "RELION texture projector"),
+        ({"half_spectrum_scoring": False}, "half-spectrum"),
+        ({"use_float64_scoring": True}, "float32/complex64"),
+        ({"relion_projector_dtype": np.complex128}, "complex64 RELION projector"),
+    ],
+)
+def test_coarse_gaussian_gemm_projection_cache_rejects_unqualified_contracts(
+    updates,
+    message,
+):
+    with pytest.raises((ValueError, TypeError), match=message):
+        significance._validate_coarse_gaussian_gemm_projection_cache_request(
+            **_projection_cache_request_kwargs(**updates),
+        )
+
+
+def test_coarse_gaussian_gemm_projection_cache_plan_is_conservative_for_gf46(
+    monkeypatch,
+):
+    variable = "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB"
+    monkeypatch.delenv(variable, raising=False)
+    budget_bytes = significance._coarse_gaussian_gemm_projection_cache_budget_bytes()
+    plan = significance._plan_coarse_gaussian_gemm_projection_cache(
+        n_rotations=36_864,
+        compact_pixel_count=5_100,
+        image_shape=(128, 128),
+        budget_bytes=budget_bytes,
+    )
+
+    assert budget_bytes == 4 * 1024**3
+    assert plan.cache_shape == (1, 36_864, 5_100)
+    assert plan.cache_dtype == np.dtype(np.complex64)
+    assert plan.chunk_rows == 4_608
+    assert plan.chunk_count_per_table == 8
+    assert plan.retained_bytes == 1_504_051_200
+    assert plan.additional_transient_bytes == 306_708_480
+    assert plan.destination_copy_bytes == plan.retained_bytes
+    assert plan.predicted_peak_bytes == 3_502_817_280
+    assert not plan.destination_alias_proven
+    assert plan.admitted
+    stats = significance._coarse_gaussian_gemm_projection_cache_stats(
+        plan,
+        enabled=True,
+    )
+    assert stats["conservative_predicted_peak_bytes"] == 3_502_817_280
+    assert stats["h100_alias_evidence_applies_to_plan"] is True
+    assert stats["h100_observed_donated_insert_alias"] is True
+    assert stats["h100_observed_alias_peak_bytes"] == 1_998_766_080
+    assert stats["h100_alias_evidence_used_for_admission"] is False
+
+    monkeypatch.setenv(variable, "3.0")
+    rejected = significance._plan_coarse_gaussian_gemm_projection_cache(
+        n_rotations=36_864,
+        compact_pixel_count=5_100,
+        image_shape=(128, 128),
+        budget_bytes=(
+            significance._coarse_gaussian_gemm_projection_cache_budget_bytes()
+        ),
+    )
+    assert not rejected.admitted
+    assert "exceeds budget" in rejected.admission_reason
+
+
+def test_coarse_gaussian_gemm_projection_cache_reuses_exact_c64_blocks_bitwise():
+    rng = np.random.default_rng(13332001)
+    n_rotations = 16
+    n_pixels = 7
+    projected = (
+        rng.normal(size=(n_rotations, n_pixels))
+        + 1j * rng.normal(size=(n_rotations, n_pixels))
+    ).astype(np.complex64)
+    plan = significance._plan_coarse_gaussian_gemm_projection_cache(
+        n_rotations=n_rotations,
+        compact_pixel_count=n_pixels,
+        image_shape=(4, 4),
+        budget_bytes=1_000_000,
+    )
+    stats = significance._coarse_gaussian_gemm_projection_cache_stats(
+        plan,
+        enabled=True,
+    )
+    assert stats["h100_alias_evidence_applies_to_plan"] is False
+    assert stats["h100_observed_donated_insert_alias"] is None
+    assert stats["h100_observed_alias_peak_bytes"] is None
+    build_calls = []
+
+    def project_block(table_index, start, stop):
+        build_calls.append((table_index, start, stop))
+        return jnp.asarray(projected[start:stop])
+
+    cache = significance._build_coarse_gaussian_gemm_projection_cache(
+        plan,
+        project_block,
+    )
+    assert build_calls == [(0, 0, 16)]
+
+    rotations_block = np.zeros((6, 3, 3), dtype=np.float32)
+    cached_projection, cached_abs2 = (
+        significance._project_coarse_gaussian_gemm_projection_cache_block_once(
+            cache,
+            0,
+            object(),
+            rotations_block,
+            rotation_start=3,
+        )
+    )
+    expected_projection = projected[3:9]
+    expected_abs2 = np.asarray(jnp.abs(jnp.asarray(expected_projection)) ** 2)
+    np.testing.assert_array_equal(
+        np.asarray(cached_projection).view(np.uint32),
+        expected_projection.view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(cached_abs2).view(np.uint32),
+        expected_abs2.view(np.uint32),
+    )
+    assert build_calls == [(0, 0, 16)]
+
+    shifted = (
+        rng.normal(size=(3, 2, n_pixels))
+        + 1j * rng.normal(size=(3, 2, n_pixels))
+    ).astype(np.complex64)
+    pixel_weight = rng.uniform(0.1, 2.0, size=(3, n_pixels)).astype(np.float32)
+    initial_diff2 = rng.uniform(0.0, 3.0, size=3).astype(np.float32)
+
+    def uncached_projector(_class_index, _mean_for_proj, _rotations_block):
+        return jnp.asarray(expected_projection), jnp.asarray(expected_abs2)
+
+    def cached_projector(class_index, mean_for_proj, selected_rotations):
+        return significance._project_coarse_gaussian_gemm_projection_cache_block_once(
+            cache,
+            class_index,
+            mean_for_proj,
+            selected_rotations,
+            rotation_start=3,
+        )
+
+    score_arguments = (
+        0,
+        object(),
+        rotations_block,
+        jnp.asarray(shifted),
+        jnp.asarray(pixel_weight),
+        jnp.asarray(initial_diff2),
+        3,
+    )
+    uncached_scores = np.asarray(
+        significance._score_relion_coarse_gaussian_gemm_macro(
+            uncached_projector,
+            *score_arguments,
+            image_shape=(4, 4),
+            volume_shape=(4, 4, 4),
+        )
+    )
+    cached_scores = np.asarray(
+        significance._score_relion_coarse_gaussian_gemm_macro(
+            cached_projector,
+            *score_arguments,
+            image_shape=(4, 4),
+            volume_shape=(4, 4, 4),
+        )
+    )
+    np.testing.assert_array_equal(
+        cached_scores.view(np.uint32),
+        uncached_scores.view(np.uint32),
+    )
+    assert build_calls == [(0, 0, 16)]
+
+    tail_projection, tail_abs2 = (
+        significance._project_coarse_gaussian_gemm_projection_cache_block_once(
+            cache,
+            0,
+            object(),
+            rotations_block,
+            rotation_start=13,
+        )
+    )
+    np.testing.assert_array_equal(np.asarray(tail_projection[:3]), projected[13:])
+    np.testing.assert_array_equal(np.asarray(tail_projection[3:]), 0.0)
+    np.testing.assert_array_equal(np.asarray(tail_abs2[3:]), 0.0)
+    assert build_calls == [(0, 0, 16)]
+
+
 def _backend_kwargs(**updates):
     values = dict(
         gemm_macro_requested=True,
@@ -889,6 +1122,179 @@ class _MacroIntegrationDataset:
         )
 
 
+def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
+    monkeypatch,
+):
+    """The opt-in cache owns projections once and only serves later blocks."""
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+
+    for name, value in {
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB": "0.001",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "0.01",
+        "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
+        "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
+        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
+        "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
+        "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
+        "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
+        "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
+        "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "0",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_relion_exact_ctf_half_from_source_star",
+        lambda _dataset, indices, image_shape: jnp.ones(
+            (
+                len(indices),
+                int(image_shape[0]) * (int(image_shape[1]) // 2 + 1),
+            ),
+            dtype=jnp.float64,
+        ),
+    )
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_relion_cuda_powerclass_highres_xi2_half",
+        lambda processed, **_kwargs: jnp.zeros(
+            processed.shape[0],
+            dtype=jnp.float32,
+        ),
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        lambda images, translation_angles, pixel_indices, image_shape: jnp.repeat(
+            images[:, None, :],
+            int(translation_angles.shape[0]),
+            axis=1,
+        ).reshape(images.shape[0] * int(translation_angles.shape[0]), -1),
+    )
+
+    projection_calls = []
+
+    def fake_projection(projector_half, rotations_block, image_shape, **kwargs):
+        del projector_half, image_shape
+        rotation_codes = np.asarray(rotations_block)[:, 0, 1].astype(np.float32)
+        projection_calls.append(
+            (
+                rotation_codes.copy(),
+                bool(kwargs.get("return_abs2", True)),
+            )
+        )
+        projected = jnp.repeat(
+            jnp.asarray(rotation_codes, dtype=jnp.complex64)[:, None],
+            len(kwargs["pixel_indices"]),
+            axis=1,
+        )
+        projected_abs2 = (
+            jnp.abs(projected) ** 2
+            if kwargs.get("return_abs2", True)
+            else None
+        )
+        return projected, projected_abs2
+
+    monkeypatch.setattr(
+        projection_helpers,
+        "compute_relion_projector_projections_block",
+        fake_projection,
+    )
+
+    def controlled_scores(
+        projected,
+        projected_abs2,
+        shifted,
+        weight,
+        initial,
+        actual_image_count,
+        **_kwargs,
+    ):
+        del projected_abs2, weight, initial, actual_image_count
+        codes = jnp.asarray(projected.real[:, 0], dtype=jnp.float32)
+        return jnp.broadcast_to(
+            codes[None, :, None],
+            (shifted.shape[0], projected.shape[0], shifted.shape[1]),
+        )
+
+    monkeypatch.setattr(
+        significance,
+        "_relion_coarse_gaussian_gemm_scores",
+        controlled_scores,
+    )
+
+    dataset = _MacroIntegrationDataset()
+    rotations = np.tile(np.eye(3, dtype=np.float32), (16, 1, 1))
+    rotations[:, 0, 1] = np.arange(1, 17, dtype=np.float32)
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    relion_projector = jnp.ones((1, 3, 3, 2), dtype=jnp.complex64)
+    common = dict(
+        class_log_priors=np.zeros(1, dtype=np.float64),
+        adaptive_fraction=0.5,
+        max_significants=1,
+        image_batch_size=2,
+        rotation_block_size=6,
+        current_size=4,
+        half_spectrum_scoring=True,
+        relion_projector_half=relion_projector,
+        relion_projector_r_max=1,
+        relion_projector_texture_interp=True,
+        score_mode="gaussian",
+        collect_significance=False,
+        pad_final_image_batch=True,
+    )
+
+    def run():
+        return significance._compute_k_class_significance_batched(
+            dataset,
+            jnp.zeros((1, dataset.volume_size), dtype=jnp.complex64),
+            jnp.ones(dataset.image_size, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            **common,
+        )
+
+    uncached = run()
+    uncached_calls = tuple(projection_calls)
+    assert len(uncached_calls) == 6
+    assert all(returned_abs2 for _codes, returned_abs2 in uncached_calls)
+
+    projection_calls.clear()
+    monkeypatch.setenv("RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE", "1")
+    cached = run()
+    assert len(projection_calls) == 1
+    np.testing.assert_array_equal(projection_calls[0][0], np.arange(1, 17))
+    assert projection_calls[0][1] is False
+
+    for key in (
+        "normalization_log_z",
+        "normalization_log_evidence",
+        "log_evidence_per_image",
+        "best_log_score_per_image",
+        "max_posterior_per_image",
+        "class_log_evidence_per_image",
+        "class_assignments",
+    ):
+        np.testing.assert_array_equal(cached[5][key], uncached[5][key])
+    np.testing.assert_array_equal(cached[2], uncached[2])
+    np.testing.assert_array_equal(cached[3], uncached[3])
+    cache_stats = cached[5]["coarse_gaussian_gemm_projection_cache"]
+    assert cache_stats["enabled"] is True
+    assert cache_stats["cache_shape"] == (1, 16, 12)
+    assert cache_stats["stores_projection_abs2"] is False
+    assert cache_stats["h100_alias_evidence_applies_to_plan"] is False
+    assert cache_stats["h100_observed_donated_insert_alias"] is None
+
+
 def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     monkeypatch,
     tmp_path,
@@ -901,6 +1307,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
 
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "0.01",
         "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
         "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",

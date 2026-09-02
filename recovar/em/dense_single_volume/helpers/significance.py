@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers import projection_cache as projection_cache_helpers
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     COARSE_GEMM_STREAMING_SCHEMA,
     aggregate_coarse_gemm_streaming_summaries,
@@ -69,6 +70,16 @@ _COARSE_GAUSSIAN_GEMM_MACRO_ENV = "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO"
 _COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB"
 )
+_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE"
+)
+_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB_ENV = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB"
+)
+_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_DEFAULT_MAX_GB = 4.0
+_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_CHUNK_ROWS = 4_608
+_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ROW_ALIGNMENT = 16
+_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ALIAS_EVIDENCE_JOB = 13_332_001
 _COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR"
 )
@@ -640,6 +651,25 @@ def _coarse_gaussian_gemm_macro_enabled(*, default: bool = False) -> bool:
     )
 
 
+def _coarse_gaussian_gemm_projection_cache_enabled(
+    *,
+    default: bool = False,
+) -> bool:
+    """Resolve the explicit call-scoped coarse-projection cache toggle."""
+
+    token = os.environ.get(
+        _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV}={token!r}",
+    )
+
+
 class _CoarseGaussianScoreBackend(str, Enum):
     """One resolved coarse Gaussian score/reduction implementation."""
 
@@ -854,6 +884,31 @@ def _coarse_gaussian_gemm_projected_transient_budget_bytes(
     return int(budget_gb * 1024**3)
 
 
+def _coarse_gaussian_gemm_projection_cache_budget_bytes(
+    *,
+    default_gb: float = _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_DEFAULT_MAX_GB,
+) -> int:
+    """Return the explicit conservative call-scoped cache budget."""
+
+    token = os.environ.get(
+        _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB_ENV,
+        str(default_gb),
+    ).strip()
+    try:
+        budget_gb = float(token)
+    except ValueError as error:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB_ENV} must be "
+            f"a finite positive number, got {token!r}",
+        ) from error
+    if not np.isfinite(budget_gb) or budget_gb <= 0.0:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB_ENV} must be "
+            f"a finite positive number, got {token!r}",
+        )
+    return int(budget_gb * 1024**3)
+
+
 def _coarse_gaussian_gemm_resources(
     *,
     rotation_block_size: int,
@@ -896,6 +951,193 @@ def _coarse_gaussian_gemm_resources(
             f"{resources.projected_transient_budget_bytes} bytes",
         )
     return resources
+
+
+def _validate_coarse_gaussian_gemm_projection_cache_request(
+    *,
+    macro_enabled: bool,
+    n_classes: int,
+    n_rotations: int,
+    coarse_gaussian_ffi_enabled: bool,
+    exact_coarse_operands_enabled: bool,
+    use_relion_projector: bool,
+    relion_texture_interp_enabled: bool,
+    half_spectrum_scoring: bool,
+    use_float64_scoring: bool,
+    relion_projector_dtype,
+) -> None:
+    """Fail closed unless the first cache seam's exact K=1 contract holds."""
+
+    prefix = f"{_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV}=1 requires"
+    if not macro_enabled:
+        raise ValueError(
+            f"{prefix} {_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1",
+        )
+    if int(n_classes) != 1:
+        raise ValueError(f"{prefix} K=1, got K={int(n_classes)}")
+    if int(n_rotations) <= 0 or int(n_rotations) % int(
+        _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ROW_ALIGNMENT
+    ):
+        raise ValueError(
+            f"{prefix} a positive rotation count divisible by "
+            f"{_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ROW_ALIGNMENT}, "
+            f"got {int(n_rotations)}",
+        )
+    if not coarse_gaussian_ffi_enabled:
+        raise ValueError(
+            f"{prefix} the exact RELION coarse Gaussian FFI path",
+        )
+    if not exact_coarse_operands_enabled:
+        raise ValueError(
+            f"{prefix} {_K1_RELION_EXACT_COARSE_OPERANDS_ENV}=1",
+        )
+    if not use_relion_projector or not relion_texture_interp_enabled:
+        raise ValueError(
+            f"{prefix} the supplied RELION texture projector",
+        )
+    if not half_spectrum_scoring:
+        raise ValueError(f"{prefix} half-spectrum scoring")
+    if use_float64_scoring:
+        raise ValueError(f"{prefix} production float32/complex64 scoring")
+    if relion_projector_dtype is None or np.dtype(relion_projector_dtype) != np.dtype(
+        np.complex64
+    ):
+        raise TypeError(
+            f"{prefix} a complex64 RELION projector, got "
+            f"{relion_projector_dtype}",
+        )
+
+
+def _plan_coarse_gaussian_gemm_projection_cache(
+    *,
+    n_rotations: int,
+    compact_pixel_count: int,
+    image_shape,
+    budget_bytes: int,
+) -> projection_cache_helpers.ProjectionCachePlan:
+    """Plan one conservative C64 K=1 cache in qualified 4,608-row chunks."""
+
+    image_height, image_width = (int(value) for value in image_shape)
+    return projection_cache_helpers.plan_projection_cache(
+        table_count=1,
+        row_count=int(n_rotations),
+        pixel_count=int(compact_pixel_count),
+        cache_dtype=np.complex64,
+        requested_max_chunk_rows=(
+            _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_CHUNK_ROWS
+        ),
+        row_alignment=_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ROW_ALIGNMENT,
+        transient_specs=(
+            projection_cache_helpers.ProjectionCacheTransientSpec(
+                name="full_centered_projection",
+                elements_per_row=image_height * (image_width // 2 + 1),
+                dtype=np.complex64,
+            ),
+        ),
+        budget_bytes=int(budget_bytes),
+        # Job 13332001 observed donation aliasing on one H100 lowering.  The
+        # production admission remains conservative and correct if that
+        # informational hardware-specific observation does not generalize.
+        destination_alias_proven=False,
+    )
+
+
+def _build_coarse_gaussian_gemm_projection_cache(plan, project_block):
+    """Build one private call-scoped cache through the shared exact builder."""
+
+    return projection_cache_helpers.build_projection_cache(plan, project_block)
+
+
+def _coarse_gaussian_gemm_projection_cache_stats(plan, *, enabled: bool):
+    """Describe conservative admission and narrowly scoped alias evidence."""
+
+    h100_alias_evidence_applies = bool(
+        plan.cache_shape == (1, 36_864, 5_100)
+        and plan.chunk_rows
+        == _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_CHUNK_ROWS
+    )
+    return {
+        "enabled": bool(enabled),
+        "scope": "one significance call",
+        "cache_shape": tuple(int(value) for value in plan.cache_shape),
+        "cache_dtype": plan.cache_dtype.name,
+        "stores_projection_abs2": False,
+        "chunk_rows": int(plan.chunk_rows),
+        "chunk_count": int(plan.chunk_count_per_table),
+        "retained_bytes": int(plan.retained_bytes),
+        "conservative_predicted_peak_bytes": int(plan.predicted_peak_bytes),
+        "budget_bytes": int(plan.budget_bytes),
+        "admission_destination_alias_proven": bool(
+            plan.destination_alias_proven
+        ),
+        # Informational only: deterministic job 13332001 observed donated
+        # insert aliasing for exactly (1, 36864, 5100) with 4608-row chunks
+        # on one H100. Admission always reserves a non-aliased copy.
+        "h100_alias_evidence_applies_to_plan": h100_alias_evidence_applies,
+        "h100_alias_evidence_cache_shape": (1, 36_864, 5_100),
+        "h100_alias_evidence_chunk_rows": int(
+            _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_CHUNK_ROWS
+        ),
+        "h100_observed_donated_insert_alias": (
+            True if h100_alias_evidence_applies else None
+        ),
+        "h100_alias_evidence_job_id": int(
+            _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ALIAS_EVIDENCE_JOB
+        ),
+        "h100_observed_alias_peak_bytes": (
+            int(plan.predicted_peak_bytes - plan.destination_copy_bytes)
+            if h100_alias_evidence_applies
+            else None
+        ),
+        "h100_alias_evidence_used_for_admission": False,
+    }
+
+
+def _project_coarse_gaussian_gemm_projection_cache_block_once(
+    cache,
+    class_index,
+    mean_for_proj,
+    rotations_block,
+    *,
+    rotation_start: int,
+):
+    """Serve one existing macro block from C64 cache without reprojection."""
+
+    del mean_for_proj
+    cache = jnp.asarray(cache)
+    if cache.ndim != 3 or np.dtype(cache.dtype) != np.dtype(np.complex64):
+        raise TypeError(
+            "coarse GEMM projection cache must have shape "
+            "(table, rotation, pixel) and dtype complex64",
+        )
+    table_index = int(class_index)
+    if table_index < 0 or table_index >= int(cache.shape[0]):
+        raise IndexError(
+            f"coarse GEMM projection-cache table {table_index} is out of range",
+        )
+    start = int(rotation_start)
+    requested_rows = int(rotations_block.shape[0])
+    if start < 0 or requested_rows <= 0 or start >= int(cache.shape[1]):
+        raise IndexError(
+            "coarse GEMM projection-cache block must start inside the cache "
+            "and contain at least one row",
+        )
+    stop = min(start + requested_rows, int(cache.shape[1]))
+    projected_reference = cache[table_index, start:stop]
+    padding_rows = requested_rows - int(projected_reference.shape[0])
+    if padding_rows:
+        # The shared significance loop masks these physical tail rows to -inf.
+        # Zero padding preserves its fixed score-block shape without projecting
+        # synthetic identity rotations or changing any valid cached row.
+        projected_reference = jnp.pad(
+            projected_reference,
+            ((0, padding_rows), (0, 0)),
+        )
+    # This is the same C64 expression used by the mature projector callback.
+    # The promoted certificate deliberately ignores this companion and forms
+    # its two component squares explicitly after conversion to FP64.
+    projected_reference_abs2 = jnp.abs(projected_reference) ** 2
+    return projected_reference, projected_reference_abs2
 
 
 def _coarse_gaussian_gemm_diagnostic_request() -> tuple[str | None, set[int] | None]:
@@ -3590,6 +3832,9 @@ def _compute_k_class_significance_batched(
         coarse_gaussian_native_texture_requested and score_mode == "gaussian"
     )
     coarse_gaussian_gemm_macro_requested = _coarse_gaussian_gemm_macro_enabled()
+    coarse_gaussian_gemm_projection_cache_requested = (
+        _coarse_gaussian_gemm_projection_cache_enabled()
+    )
     coarse_gaussian_score_backend = _resolve_coarse_gaussian_score_backend(
         gemm_macro_requested=coarse_gaussian_gemm_macro_requested,
         score_mode=score_mode,
@@ -3680,6 +3925,21 @@ def _compute_k_class_significance_batched(
             f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1 requires "
             f"{_K1_RELION_EXACT_COARSE_OPERANDS_ENV}=1",
         )
+    if coarse_gaussian_gemm_projection_cache_requested:
+        _validate_coarse_gaussian_gemm_projection_cache_request(
+            macro_enabled=coarse_gaussian_gemm_macro_enabled,
+            n_classes=n_classes,
+            n_rotations=n_rot,
+            coarse_gaussian_ffi_enabled=coarse_gaussian_ffi_enabled,
+            exact_coarse_operands_enabled=exact_coarse_operands_enabled,
+            use_relion_projector=use_relion_projector,
+            relion_texture_interp_enabled=coarse_texture_interp,
+            half_spectrum_scoring=half_spectrum_scoring,
+            use_float64_scoring=use_float64_scoring,
+            relion_projector_dtype=(
+                relion_projector_half[0].dtype if use_relion_projector else None
+            ),
+        )
     if coarse_gaussian_native_texture_enabled and not exact_coarse_operands_enabled:
         raise ValueError(
             f"{_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV} requires "
@@ -3714,6 +3974,7 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_powerclass = None
     coarse_gaussian_projector_full = None
     coarse_gaussian_gemm_resource_estimate = None
+    coarse_gaussian_gemm_projection_cache_plan = None
     if coarse_gaussian_ffi_enabled:
         if use_float64_scoring:
             raise ValueError(
@@ -3803,6 +4064,17 @@ def _compute_k_class_significance_batched(
                 image_shape=image_shape,
                 compact_pixel_count=int(square_score_count),
                 budget_bytes=_coarse_gaussian_gemm_projected_transient_budget_bytes(),
+            )
+        if coarse_gaussian_gemm_projection_cache_requested:
+            coarse_gaussian_gemm_projection_cache_plan = (
+                _plan_coarse_gaussian_gemm_projection_cache(
+                    n_rotations=n_rot,
+                    compact_pixel_count=int(square_score_count),
+                    image_shape=image_shape,
+                    budget_bytes=(
+                        _coarse_gaussian_gemm_projection_cache_budget_bytes()
+                    ),
+                )
             )
         coarse_gaussian_projector_full_by_class = None
         coarse_gaussian_translation_angles = None
@@ -4201,14 +4473,14 @@ def _compute_k_class_significance_batched(
     }
 
 
-    def _project_coarse_gemm_block_once(class_index, mean_for_proj, rots_b):
-        del mean_for_proj
+    def _project_coarse_gemm_rows(class_index, rots_b, *, return_abs2: bool):
         return _compute_relion_projector_projections_block(
             relion_projector_half[class_index],
             rots_b,
             image_shape,
             r_max=int(relion_projector_r_max),
             padding_factor=int(projection_padding_factor),
+            return_abs2=return_abs2,
             centered_rows=True,
             dense_scale=True,
             projector_output_size=int(score_size),
@@ -4222,15 +4494,72 @@ def _compute_k_class_significance_batched(
             mask_current_image_disk=False,
         )
 
+    def _project_coarse_gemm_block_once(class_index, mean_for_proj, rots_b):
+        del mean_for_proj
+        return _project_coarse_gemm_rows(
+            class_index,
+            rots_b,
+            return_abs2=True,
+        )
+
+    coarse_gaussian_gemm_projection_cache = None
+    if coarse_gaussian_gemm_projection_cache_plan is not None:
+
+        def _project_coarse_gemm_cache_build_block(table_index, start, stop):
+            projected_reference, projected_reference_abs2 = (
+                _project_coarse_gemm_rows(
+                    table_index,
+                    rotations[start:stop],
+                    return_abs2=False,
+                )
+            )
+            if projected_reference_abs2 is not None:
+                raise RuntimeError(
+                    "coarse GEMM cache build unexpectedly materialized abs2",
+                )
+            return projected_reference
+
+        coarse_gaussian_gemm_projection_cache = (
+            _build_coarse_gaussian_gemm_projection_cache(
+                coarse_gaussian_gemm_projection_cache_plan,
+                _project_coarse_gemm_cache_build_block,
+            )
+        )
+        logger.warning(
+            "Opt-in call-scoped coarse GEMM C64 projection cache built: "
+            "shape=%s chunks=%d conservative_peak_bytes=%d budget_bytes=%d",
+            coarse_gaussian_gemm_projection_cache_plan.cache_shape,
+            coarse_gaussian_gemm_projection_cache_plan.chunk_count_per_table,
+            coarse_gaussian_gemm_projection_cache_plan.predicted_peak_bytes,
+            coarse_gaussian_gemm_projection_cache_plan.budget_bytes,
+        )
+
     coarse_gemm_diagnostic_positions = None
     coarse_gemm_direct_capture = {"scores": None}
     coarse_gemm_stream_capture_control = {"enabled": False}
 
-    def _score_block(class_index, mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+    def _score_block(
+        class_index,
+        mean_for_proj,
+        rots_b,
+        shifted_data,
+        batch_norm,
+        ctf2_data,
+        batch_size,
+        *,
+        rotation_start,
+    ):
         if coarse_gaussian_gemm_macro_enabled:
             coarse_gemm_direct_capture["scores"] = None
+            project_block_once = _project_coarse_gemm_block_once
+            if coarse_gaussian_gemm_projection_cache is not None:
+                project_block_once = partial(
+                    _project_coarse_gaussian_gemm_projection_cache_block_once,
+                    coarse_gaussian_gemm_projection_cache,
+                    rotation_start=int(rotation_start),
+                )
             score_result = _score_relion_coarse_gaussian_gemm_macro(
-                _project_coarse_gemm_block_once,
+                project_block_once,
                 class_index,
                 mean_for_proj,
                 rots_b,
@@ -5137,6 +5466,7 @@ def _compute_k_class_significance_batched(
                         batch_norm,
                         ctf2_data,
                         batch_size,
+                        rotation_start=r0,
                     )
                     direct_scores_for_diagnostic = coarse_gemm_direct_capture["scores"]
                     if (
@@ -5480,6 +5810,7 @@ def _compute_k_class_significance_batched(
                             batch_norm,
                             ctf2_data,
                             batch_size,
+                            rotation_start=r0,
                         )
                         if r1 > n_rot:
                             valid = n_rot - r0
@@ -6111,6 +6442,13 @@ def _compute_k_class_significance_batched(
                 "scale amplification or negative implied diff2 is NO-GO"
             ),
         }
+    if coarse_gaussian_gemm_projection_cache_plan is not None:
+        full_stats["coarse_gaussian_gemm_projection_cache"] = (
+            _coarse_gaussian_gemm_projection_cache_stats(
+                coarse_gaussian_gemm_projection_cache_plan,
+                enabled=coarse_gaussian_gemm_projection_cache is not None,
+            )
+        )
     if coarse_gaussian_gemm_diagnostic_paths:
         full_stats["coarse_gaussian_gemm_diagnostic_paths"] = tuple(
             coarse_gaussian_gemm_diagnostic_paths,
