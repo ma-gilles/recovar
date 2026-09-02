@@ -412,7 +412,8 @@ validate_completed_arm() {
   local require_marker=$5
   (
     cd "${REPO_ROOT}"
-    env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" PYTHONPATH="${REPO_ROOT}" \
+    env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" LD_PRELOAD="${CUSPARSE_LIBRARY}" \
+      PYTHONPATH="${REPO_ROOT}" \
       "${PIXI_PY}" - "${ROOT}" "${ACCEPTANCE}" "${label}" "${workers}" \
       "${native_atomic}" "${hybrid}" "${require_marker}" <<'PY'
 import json
@@ -564,7 +565,8 @@ PY
 else
   (
     cd "${REPO_ROOT}"
-    env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" PYTHONPATH="${REPO_ROOT}" \
+    env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" LD_PRELOAD="${CUSPARSE_LIBRARY}" \
+      PYTHONPATH="${REPO_ROOT}" \
       "${PIXI_PY}" - "${ROOT}" "${ACCEPTANCE}" "${SCORECARD}" <<'PY'
 import sys
 from pathlib import Path
@@ -608,8 +610,11 @@ for index in "${!RUN_LABELS[@]}"; do
   fi
   mkdir -p "${output}" "${cache}" "${tmp}"
   touch "${cache}/SAFE_TO_DELETE" "${tmp}/SAFE_TO_DELETE"
-  "${PIXI_PY}" - "${run_root}/command.json" "${FIXTURE}/particles.star" \
-    "${output}/run" "${FIXTURE}" "${ACCEPTANCE}" <<'PY'
+  (
+    cd "${REPO_ROOT}"
+    env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" LD_PRELOAD="${CUSPARSE_LIBRARY}" \
+      PYTHONPATH="${REPO_ROOT}" "${PIXI_PY}" - "${run_root}/command.json" \
+      "${FIXTURE}/particles.star" "${output}/run" "${FIXTURE}" "${ACCEPTANCE}" <<'PY'
 import json, sys
 from pathlib import Path
 from scripts.run_vdam_relion_parity_case import build_recovar_command
@@ -622,6 +627,7 @@ argv = build_recovar_command(
 )
 Path(target).write_text(json.dumps({"argv": argv}, indent=2, sort_keys=True) + "\n")
 PY
+  )
   mapfile -d '' -t command < <("${PIXI_PY}" - "${run_root}/command.json" <<'PY'
 import json, sys
 for value in json.load(open(sys.argv[1], encoding="utf-8"))["argv"]:
@@ -794,7 +800,8 @@ trap - ERR
 set +e
 (
   cd "${REPO_ROOT}"
-  env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" PYTHONPATH="${REPO_ROOT}" \
+  env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" LD_PRELOAD="${CUSPARSE_LIBRARY}" \
+    PYTHONPATH="${REPO_ROOT}" \
     "${PIXI_PY}" "${ANALYZER}" \
     --root "${ROOT}" \
     --acceptance "${ACCEPTANCE}" \

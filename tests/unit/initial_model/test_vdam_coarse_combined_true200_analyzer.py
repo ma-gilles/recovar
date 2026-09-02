@@ -1636,6 +1636,7 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=${hybrid}"' in text
     assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=${hybrid}"' in text
     assert "FIXED_SCIENCE_ENVIRONMENT_ARGS" in text
+    assert text.count('LD_PRELOAD="${CUSPARSE_LIBRARY}"') >= 5
     assert "VDAM_TRUE200_SENTINEL" in text
     assert 'write_marker_once "${ROOT}/SENTINEL_PASSED"' in text
     assert 'validate_completed_arm "${label}"' in text
