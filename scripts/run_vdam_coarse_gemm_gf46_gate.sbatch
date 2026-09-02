@@ -653,7 +653,7 @@ trap - ERR
 set +e
 (
   cd "${REPO_ROOT}"
-  env JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu \
+  env LD_PRELOAD="${CUSPARSE_LIBRARY}" JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu \
     "${PIXI_PY}" -m scripts.analyze_vdam_coarse_gemm_gf46_gate \
     --root "${ROOT}" --repo "${REPO_ROOT}" \
     --output-json "${ANALYSIS}/report.json" \

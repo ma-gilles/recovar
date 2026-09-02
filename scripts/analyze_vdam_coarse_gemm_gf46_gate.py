@@ -102,6 +102,11 @@ EXPECTED_SCHEDULE = {
     "subset_size": 1_000,
     "random_perturbation": 0.4751259684562683,
 }
+# The continuation scores iteration 181 with the checkpoint's box size (100),
+# then advances the persisted schedule to 128 for the emitted iteration-181
+# state.  Raw paired-score artifacts therefore record the scoring box, while
+# profile summaries and output metadata record the post-iteration schedule.
+EXPECTED_RAW_SCORE_CURRENT_SIZE = 100
 ARM_SPECS = (
     ("direct_1", 0, 1),
     ("gemm_1", 1, 1),
@@ -573,7 +578,11 @@ def _raw_artifact_summary(path: Path, *, expected_run_id: str, expected_call_id:
             _require(not bool(_np_scalar(archive, "requires_bitwise_score_identity")), "raw policy unexpectedly requires bitwise scores")
             _require(bool(_np_scalar(archive, "requires_exact_discrete_identity")), "raw policy did not require exact discretes")
             _require(_integer(_np_scalar(archive, "debug_iteration"), "raw debug iteration") == 181, "raw diagnostic iteration differs")
-            _require(_integer(_np_scalar(archive, "current_size"), "raw current size") == 128, "raw current size differs")
+            _require(
+                _integer(_np_scalar(archive, "current_size"), "raw current size")
+                == EXPECTED_RAW_SCORE_CURRENT_SIZE,
+                "raw current size differs",
+            )
             reasons = [str(value) for value in np.asarray(archive["automatic_no_go_reasons"]).reshape(-1)]
             _require(not reasons, f"raw score diagnostic has automatic NO-GO reasons: {reasons}")
             pending = [str(value) for value in np.asarray(archive["pending_qualification_gates"]).reshape(-1)]

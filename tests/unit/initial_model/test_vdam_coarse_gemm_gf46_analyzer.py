@@ -139,7 +139,7 @@ def _write_raw_artifact(
         diagnostic_call_id=np.asarray(call_id),
         diagnostic_selection_policy=np.asarray("explicit_call_scope_intersection"),
         debug_iteration=np.asarray(181, dtype=np.int64),
-        current_size=np.asarray(128, dtype=np.int64),
+        current_size=np.asarray(100, dtype=np.int64),
         direct_scores_pre_prior=direct,
         macro_scores_pre_prior=macro,
         direct_scores_with_prior=direct,
@@ -168,7 +168,7 @@ def _write_raw_tree(tmp_path: Path) -> Path:
     output = root / "raw_score_diagnostic" / "output"
     diagnostic.mkdir(parents=True)
     output.mkdir(parents=True)
-    run_id = "initial_model_it0181_cs0128_k001_fixture"
+    run_id = "initial_model_it0181_cs0100_k001_fixture"
     call_id = "call0000_group0000_joint_halfsets"
     call_ids = [call_id]
     artifact_names = []
@@ -177,7 +177,7 @@ def _write_raw_tree(tmp_path: Path) -> Path:
         (2160, 500, 1000),
     ):
         artifact_name = (
-            f"coarse_gemm_ab_{run_id}_{call_id}_it0181_cs0128_"
+            f"coarse_gemm_ab_{run_id}_{call_id}_it0181_cs0100_"
             f"batch{batch_start:08d}_{batch_end:08d}.npz"
         )
         _write_raw_artifact(
@@ -251,6 +251,7 @@ def test_panel_contract_is_frozen_a_b_b_a_at_point_nine() -> None:
         "subset_size": 1_000,
         "random_perturbation": 0.4751259684562683,
     }
+    assert analyzer.EXPECTED_RAW_SCORE_CURRENT_SIZE == 100
 
 
 def test_performance_accepts_the_exact_crossed_median_boundary() -> None:

@@ -37,6 +37,14 @@ def test_runner_pins_clean_committed_head_tree_and_exact_h100() -> None:
     assert '[[ "${gpu_name}" == *H100* ]]' in source
 
 
+def test_runner_preloads_cusparse_for_cpu_analyzer() -> None:
+    source = _source()
+    assert (
+        'env LD_PRELOAD="${CUSPARSE_LIBRARY}" JAX_PLATFORMS=cpu '
+        'JAX_PLATFORM_NAME=cpu' in source
+    )
+
+
 def test_runner_reuses_the_hash_pinned_qualified_runtime_without_building() -> None:
     source = _source()
 
