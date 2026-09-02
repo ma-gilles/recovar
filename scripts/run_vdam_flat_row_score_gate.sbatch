@@ -178,7 +178,7 @@ test_finished=$(date +%s.%N)
 exact_started=$(date +%s.%N)
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" scripts/benchmark_vdam_flat_row_fine_score.py \
+  "${PIXI_PY}" -m scripts.benchmark_vdam_flat_row_fine_score \
     --metadata-root "${VDAM_FLAT_ROW_METADATA_ROOT}" \
     --iterations 60 --warmups 2 --exactness-only \
     --output "${EXACT_JSON}"
@@ -188,7 +188,7 @@ exact_finished=$(date +%s.%N)
 timing_started=$(date +%s.%N)
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" scripts/benchmark_vdam_flat_row_fine_score.py \
+  "${PIXI_PY}" -m scripts.benchmark_vdam_flat_row_fine_score \
     --metadata-root "${VDAM_FLAT_ROW_METADATA_ROOT}" \
     --iterations 20 40 60 80 --warmups 2 --repeats 5 \
     --output "${TIMING_JSON}"
