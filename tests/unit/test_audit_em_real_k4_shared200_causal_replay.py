@@ -53,6 +53,57 @@ def test_gate_evaluation_reports_scale_sensitive_failure():
     assert "posterior_relative_l2" in result["failures"][0]
 
 
+def test_gate_evaluation_retains_but_does_not_score_inadmissible_metric():
+    metrics = _passing_metrics()
+    metrics["cross_engine_map_fsc_auc"] = 0.25
+
+    result = auditor.evaluate_gates(
+        metrics,
+        launcher.THRESHOLDS,
+        inadmissible_metrics=frozenset({"cross_engine_map_fsc_auc"}),
+    )
+
+    assert result["accepted"] is True
+    assert result["failures"] == []
+    map_gate = result["gates"]["cross_engine_map_fsc_auc"]
+    assert map_gate["admissible"] is False
+    assert map_gate["passed"] is None
+    assert map_gate["diagnostic_threshold_passed"] is False
+
+
+def test_update_rule_compatibility_rejects_map_gate_for_mixed_vdam_and_em(tmp_path):
+    optimiser = tmp_path / "run_it000_optimiser.star"
+    optimiser.write_text(
+        "_rlnDoGradientRefine 1\n"
+        "_rlnDoStochasticGradientDescent 0\n"
+    )
+    report = auditor._update_rule_compatibility(
+        {
+            "continuation_bundle": {
+                "derived_optimiser": {"path": str(optimiser)},
+            }
+        }
+    )
+
+    assert report["native_relion"]["rlnDoGradientRefine"] == 1
+    assert report["recovar"]["driver"] == "scripts.run_k_class_parity"
+    assert report["same_update_rule"] is False
+    assert report["cross_engine_map_gate_admissible"] is False
+
+    optimiser.write_text(
+        "_rlnDoGradientRefine 0\n"
+        "_rlnDoStochasticGradientDescent 0\n"
+    )
+    with pytest.raises(auditor.AuditError, match="no longer the frozen"):
+        auditor._update_rule_compatibility(
+            {
+                "continuation_bundle": {
+                    "derived_optimiser": {"path": str(optimiser)},
+                }
+            }
+        )
+
+
 def test_centered_error_accumulator_removes_only_scalar_offset():
     accumulator = auditor.ErrorAccumulator()
     accumulator.add(

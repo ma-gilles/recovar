@@ -3,9 +3,11 @@
 
 The audit joins every native RELION and RECOVAR fine-search table by the
 immutable stack/class/rotation/translation identity.  It gates direct array
-errors (never correlation), global posterior/support/winner agreement,
-particle-class assignments, and signed shellwise FSC/FSC-AUC for maps.
-Malformed or incomplete topology raises before a report is written.
+errors (never correlation), global posterior/support/winner agreement, and
+particle-class assignments.  Signed shellwise FSC/FSC-AUC is also reported,
+but a cross-engine map comparison is admissible as a parity gate only when the
+two arms execute the same reconstruction/update rule.  Malformed or incomplete
+topology raises before a report is written.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from recovar.data_io.starfile import read_star  # noqa: E402
 from scripts.launch_em_real_k4_shared200_causal_replay_slurm import (  # noqa: E402
     CASE,
     TARGET_SCHEMA,
+    _star_scalar,
     validate_manifest,
 )
 from scripts.summarize_em_completion_bench import (  # noqa: E402
@@ -39,7 +42,7 @@ from scripts.summarize_em_completion_bench import (  # noqa: E402
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture  # noqa: E402
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture  # noqa: E402
 
-SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v6"
+SCHEMA = "recovar.em_real_k4_shared200_causal_replay_audit.v7"
 MAX_NATIVE_SCALAR_RELATIVE_RANGE = 5.0e-4
 ROTATION_CHILDREN_PER_PARENT = 8
 TRANSLATION_CHILDREN_PER_PARENT = 4
@@ -66,6 +69,50 @@ def _finite(value: float, *, label: str) -> float:
     value = float(value)
     _require(math.isfinite(value), f"{label} is non-finite")
     return value
+
+
+def _update_rule_compatibility(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Describe the map-claim boundary for this deliberately mixed replay.
+
+    Native RELION replays the frozen InitialModel gradient/VDAM controller,
+    whereas ``run_k_class_parity`` reconstructs a direct ordinary-EM map from
+    the joined posterior.  Their E-step arrays are comparable, but their
+    resulting maps are not an update-rule parity experiment.
+    """
+
+    optimiser_path = Path(manifest["continuation_bundle"]["derived_optimiser"]["path"])
+    optimiser_text = optimiser_path.read_text()
+    gradient_refine = int(float(_star_scalar(optimiser_text, "_rlnDoGradientRefine")))
+    stochastic_gradient_descent = int(
+        float(_star_scalar(optimiser_text, "_rlnDoStochasticGradientDescent"))
+    )
+    _require(
+        gradient_refine == 1,
+        "native replay is no longer the frozen RELION gradient/VDAM controller",
+    )
+    return {
+        "native_relion": {
+            "update_rule": "RELION InitialModel gradient/VDAM",
+            "rlnDoGradientRefine": gradient_refine,
+            "rlnDoStochasticGradientDescent": stochastic_gradient_descent,
+            "optimiser": str(optimiser_path.resolve()),
+        },
+        "recovar": {
+            "update_rule": "RECOVAR direct ordinary-EM reconstruction",
+            "driver": "scripts.run_k_class_parity",
+        },
+        "same_update_rule": False,
+        "cross_engine_map_gate_admissible": False,
+        "reason": (
+            "the native arm executes RELION gradient/VDAM while the RECOVAR arm "
+            "reconstructs a direct ordinary-EM map; map FSC remains diagnostic "
+            "telemetry and cannot establish or refute update-rule parity"
+        ),
+        "admissible_map_checks": (
+            "native control repeatability, passive-capture inertness, and native "
+            "frozen-target replay compare matched RELION gradient/VDAM update rules"
+        ),
+    }
 
 
 def _float32_from_bits(value: int) -> np.float32:
@@ -1090,7 +1137,12 @@ def _map_metrics(
     }
 
 
-def evaluate_gates(metrics: dict[str, float], thresholds: dict[str, float]) -> dict[str, Any]:
+def evaluate_gates(
+    metrics: dict[str, float],
+    thresholds: dict[str, float],
+    *,
+    inadmissible_metrics: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     specifications = (
         ("candidate_tuple_exact_fraction", "minimum_candidate_tuple_exact_fraction", "minimum"),
         ("centered_raw_score_relative_l2", "maximum_centered_raw_score_relative_l2", "maximum"),
@@ -1121,14 +1173,18 @@ def evaluate_gates(metrics: dict[str, float], thresholds: dict[str, float]) -> d
         _require(threshold_name in thresholds, f"missing gate threshold {threshold_name}")
         value = _finite(metrics[metric_name], label=metric_name)
         threshold = _finite(thresholds[threshold_name], label=threshold_name)
-        passed = value >= threshold if direction == "minimum" else value <= threshold
+        threshold_passed = value >= threshold if direction == "minimum" else value <= threshold
+        admissible = metric_name not in inadmissible_metrics
         gates[metric_name] = {
             "value": value,
             "comparison": ">=" if direction == "minimum" else "<=",
             "threshold": threshold,
-            "passed": passed,
+            "admissible": admissible,
+            "passed": threshold_passed if admissible else None,
         }
-        if not passed:
+        if not admissible:
+            gates[metric_name]["diagnostic_threshold_passed"] = threshold_passed
+        elif not threshold_passed:
             failures.append(f"{metric_name}={value:.12g} {gates[metric_name]['comparison']} {threshold:.12g} failed")
     return {"accepted": not failures, "gates": gates, "failures": failures}
 
@@ -1465,7 +1521,17 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         "native_assignment_inertness": inventory["native_assignment_inertness"],
         "frozen_target_assignment_accuracy": inventory["frozen_target_assignment_accuracy"],
     }
-    evaluation = evaluate_gates(gate_metrics, manifest["thresholds"])
+    update_rule_compatibility = _update_rule_compatibility(manifest)
+    inadmissible_metrics = frozenset(
+        {"cross_engine_map_fsc_auc"}
+        if not update_rule_compatibility["cross_engine_map_gate_admissible"]
+        else set()
+    )
+    evaluation = evaluate_gates(
+        gate_metrics,
+        manifest["thresholds"],
+        inadmissible_metrics=inadmissible_metrics,
+    )
     return {
         "schema": SCHEMA,
         "status": "complete",
@@ -1474,7 +1540,8 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         "scientific_limitations": manifest["scientific_limitations"],
         "metric_policy": (
             "exact immutable candidate keys; centered scale-sensitive L2 for score tables; "
-            "direct posterior/support/winner errors; signed shellwise FSC/FSC-AUC for maps; no correlation"
+            "direct posterior/support/winner errors; signed shellwise FSC/FSC-AUC for maps; "
+            "cross-engine maps gate only matched update rules; no correlation"
         ),
         "correlation_used": False,
         "launch_manifest": str(manifest_path.resolve()),
@@ -1497,6 +1564,7 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
         },
         "parity_output": parity,
         "maps": maps,
+        "update_rule_compatibility": update_rule_compatibility,
         "gate_metrics": gate_metrics,
         "thresholds": manifest["thresholds"],
         "gates": evaluation["gates"],
