@@ -113,6 +113,47 @@ def _native_scalar_diagnostics(joined: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _partial_rotation_map(
+    native_rotations: np.ndarray,
+    recovar_rotations: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Join unique float32 rotation tables by exact matrix bytes."""
+
+    native = np.ascontiguousarray(np.asarray(native_rotations, dtype=np.float32))
+    recovar = np.ascontiguousarray(np.asarray(recovar_rotations, dtype=np.float32))
+    _require(
+        native.ndim == recovar.ndim == 3
+        and native.shape[1:] == recovar.shape[1:] == (3, 3),
+        "rotation tables do not contain 3x3 matrices",
+    )
+    _require(native.shape[0] > 0 and recovar.shape[0] > 0, "rotation tables must be nonempty")
+    key_dtype = np.dtype((np.void, 9 * np.dtype(np.float32).itemsize))
+    native_keys = native.reshape(-1, 9).view(key_dtype).reshape(-1)
+    recovar_keys = recovar.reshape(-1, 9).view(key_dtype).reshape(-1)
+    _require(
+        np.unique(native_keys).size == native_keys.size
+        and np.unique(recovar_keys).size == recovar_keys.size,
+        "rotation table contains duplicate exact matrices",
+    )
+    recovar_by_key = {key.tobytes(): row for row, key in enumerate(recovar_keys)}
+    native_to_recovar = np.asarray(
+        [recovar_by_key.get(key.tobytes(), -1) for key in native_keys],
+        dtype=np.int64,
+    )
+    native_only = np.flatnonzero(native_to_recovar < 0).astype(np.int64)
+    matched_recovar = native_to_recovar[native_to_recovar >= 0]
+    _require(
+        np.unique(matched_recovar).size == matched_recovar.size,
+        "partial native-to-RECOVAR rotation mapping is not one-to-one",
+    )
+    recovar_only = np.setdiff1d(
+        np.arange(recovar.shape[0], dtype=np.int64),
+        matched_recovar,
+        assume_unique=True,
+    )
+    return native_to_recovar, native_only, recovar_only
+
+
 @dataclass
 class ErrorAccumulator:
     """Scale-sensitive L2 error accumulator with optional offset removal."""
@@ -466,47 +507,79 @@ def _join_class(
             "native_support": native_support,
             "recovar_support": recovar_support,
             "recovar_reconstruction_capture_present": reconstruction_capture_present,
+            "native_rotation_count": int(factor.rotations.shape[0]),
+            "recovar_rotation_count": int(recovar_rotations.shape[0]),
+            "matched_rotation_count": 0,
+            "native_only_rotation_count": 0,
+            "recovar_only_rotation_count": int(recovar_rotations.shape[0]),
             "significant_weight_bits": int(factor.header[25]),
             "weight_norm_bits": int(factor.header[26]),
         }
 
     native_rotations = np.asarray(factor.rotations["matrix"], dtype=np.float32).reshape(-1, 3, 3).transpose(0, 2, 1)
-    native_to_recovar = exact_rotation_permutation(native_rotations, recovar_rotations)
-    _require(
-        candidate_mask.shape == (native_to_recovar.size, int(factor.header[21])),
-        f"candidate geometry drift: stack {stack} class {class_id}",
+    native_to_recovar, native_only_rotations, recovar_only_rotations = _partial_rotation_map(
+        native_rotations,
+        recovar_rotations,
     )
+    native_to_union = native_to_recovar.copy()
+    native_to_union[native_only_rotations] = (
+        recovar_rotations.shape[0]
+        + np.arange(native_only_rotations.size, dtype=np.int64)
+    )
+    union_shape = (
+        recovar_rotations.shape[0] + native_only_rotations.size,
+        candidate_mask.shape[1],
+    )
+    recovar_candidates_union = np.zeros(union_shape, dtype=bool)
+    recovar_candidates_union[: recovar_rotations.shape[0]] = candidate_mask
+    recovar_posterior_union = np.zeros(union_shape, dtype=np.float64)
+    recovar_posterior_union[: recovar_rotations.shape[0]] = recovar_posterior
+    recovar_reconstruction_posterior_union = np.zeros(union_shape, dtype=np.float64)
+    recovar_reconstruction_posterior_union[: recovar_rotations.shape[0]] = (
+        recovar_reconstruction_posterior
+    )
+    recovar_support_union = np.zeros(union_shape, dtype=bool)
+    recovar_support_union[: recovar_rotations.shape[0]] = recovar_support
     candidates = score.candidates
     active = (candidates["flags"] & ACTIVE) != 0
     native_rotation = np.asarray(candidates["rotation_local"], dtype=np.int64)
     translations = np.asarray(candidates["translation_id"], dtype=np.int64)
     _require(
-        np.all((native_rotation >= 0) & (native_rotation < native_to_recovar.size)),
+        np.all((native_rotation >= 0) & (native_rotation < native_to_union.size)),
         "native rotation index is out of range",
     )
     _require(
         np.all((translations >= 0) & (translations < candidate_mask.shape[1])),
         "native translation index is out of range",
     )
-    mapped_rotation = native_to_recovar[native_rotation]
-    native_candidates = np.zeros(candidate_mask.shape, dtype=bool)
-    native_candidates[mapped_rotation[active], translations[active]] = True
+    mapped_union_rotation = native_to_union[native_rotation]
+    mapped_recovar_rotation = native_to_recovar[native_rotation]
+    native_candidates = np.zeros(union_shape, dtype=bool)
+    native_candidates[mapped_union_rotation[active], translations[active]] = True
     _require(
         int(np.count_nonzero(native_candidates)) == int(np.count_nonzero(active)),
         "native active tuple keys are not unique",
     )
-    tuple_exact = bool(np.array_equal(native_candidates, candidate_mask))
-    common = active & candidate_mask[mapped_rotation, translations]
-    mapped_common_rotation = mapped_rotation[common]
+    tuple_exact = bool(np.array_equal(native_candidates, recovar_candidates_union))
+    common = active & (mapped_recovar_rotation >= 0)
+    common_rows = np.flatnonzero(common)
+    common[common_rows] &= candidate_mask[
+        mapped_recovar_rotation[common_rows],
+        translations[common_rows],
+    ]
+    mapped_common_rotation = mapped_recovar_rotation[common]
     common_translation = translations[common]
 
-    native_posterior = np.zeros(candidate_mask.shape, dtype=np.float32)
-    native_posterior[mapped_rotation[active], translations[active]] = np.divide(
+    native_posterior = np.zeros(union_shape, dtype=np.float32)
+    native_posterior[mapped_union_rotation[active], translations[active]] = np.divide(
         candidates["post_exponent_weight"][active], weight_norm, dtype=np.float32
     )
-    native_support = np.zeros(candidate_mask.shape, dtype=bool)
+    native_support = np.zeros(union_shape, dtype=bool)
     native_significant_rows = active & (candidates["post_exponent_weight"] >= significant_weight)
-    native_support[mapped_rotation[native_significant_rows], translations[native_significant_rows]] = True
+    native_support[
+        mapped_union_rotation[native_significant_rows],
+        translations[native_significant_rows],
+    ] = True
     _require(
         int(np.count_nonzero(native_support)) == int(factor.header[45]),
         "native support does not replay the BPref header",
@@ -517,8 +590,10 @@ def _join_class(
         "particle_id": int(score.header[6]),
         "empty_sparse_support": False,
         "candidate_exact": tuple_exact,
-        "candidate_intersection": int(np.count_nonzero(native_candidates & candidate_mask)),
-        "candidate_union": int(np.count_nonzero(native_candidates | candidate_mask)),
+        "candidate_intersection": int(
+            np.count_nonzero(native_candidates & recovar_candidates_union)
+        ),
+        "candidate_union": int(np.count_nonzero(native_candidates | recovar_candidates_union)),
         "native_raw": np.asarray(candidates["raw_diff2"][common], dtype=np.float32),
         "recovar_raw": np.asarray(
             recovar_raw_diff2[mapped_common_rotation, common_translation], dtype=np.float32
@@ -528,16 +603,21 @@ def _join_class(
             recovar["scores_with_prior"][mapped_common_rotation, common_translation], dtype=np.float32
         ),
         "native_posterior": native_posterior,
-        "recovar_posterior": recovar_posterior,
+        "recovar_posterior": recovar_posterior_union,
         "native_reconstruction_posterior": np.where(
             native_support,
             native_posterior,
             np.float32(0.0),
         ),
-        "recovar_reconstruction_posterior": recovar_reconstruction_posterior,
+        "recovar_reconstruction_posterior": recovar_reconstruction_posterior_union,
         "native_support": native_support,
-        "recovar_support": recovar_support,
+        "recovar_support": recovar_support_union,
         "recovar_reconstruction_capture_present": reconstruction_capture_present,
+        "native_rotation_count": int(native_rotations.shape[0]),
+        "recovar_rotation_count": int(recovar_rotations.shape[0]),
+        "matched_rotation_count": int(np.count_nonzero(native_to_recovar >= 0)),
+        "native_only_rotation_count": int(native_only_rotations.size),
+        "recovar_only_rotation_count": int(recovar_only_rotations.size),
         "significant_weight_bits": int(factor.header[25]),
         "weight_norm_bits": int(factor.header[26]),
     }
@@ -915,6 +995,23 @@ def build_report(manifest_path: Path) -> dict[str, Any]:
                 "recovar_pmax": recovar_max,
                 "native_scalar_maximum_relative_range": scalar_diagnostics[
                     "maximum_relative_range"
+                ],
+                "class_topology": [
+                    {
+                        "class_id_one_based": item["class_id"],
+                        "native_rotation_count": item["native_rotation_count"],
+                        "recovar_rotation_count": item["recovar_rotation_count"],
+                        "matched_rotation_count": item["matched_rotation_count"],
+                        "native_only_rotation_count": item["native_only_rotation_count"],
+                        "recovar_only_rotation_count": item["recovar_only_rotation_count"],
+                        "candidate_intersection": item["candidate_intersection"],
+                        "candidate_union": item["candidate_union"],
+                        "candidate_exact": item["candidate_exact"],
+                        "recovar_reconstruction_capture_present": item[
+                            "recovar_reconstruction_capture_present"
+                        ],
+                    }
+                    for item in joined
                 ],
             }
         )

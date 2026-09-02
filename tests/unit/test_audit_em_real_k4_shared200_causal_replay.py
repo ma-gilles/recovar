@@ -91,6 +91,31 @@ def test_native_scalar_diagnostics_reports_bounded_cross_replay_drift():
         auditor._native_scalar_diagnostics(joined)
 
 
+def test_partial_rotation_map_preserves_exact_union_topology():
+    rotations = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            np.diag(np.asarray([-1.0, -1.0, 1.0], dtype=np.float32)),
+            np.asarray(
+                [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                dtype=np.float32,
+            ),
+        ]
+    )
+    native_to_recovar, native_only, recovar_only = auditor._partial_rotation_map(
+        rotations[[2, 0]],
+        rotations[[0, 1]],
+    )
+
+    assert native_to_recovar.tolist() == [-1, 0]
+    assert native_only.tolist() == [0]
+    assert recovar_only.tolist() == [1]
+
+    duplicate = rotations[[0, 0]]
+    with pytest.raises(auditor.AuditError, match="duplicate exact matrices"):
+        auditor._partial_rotation_map(duplicate, rotations[[1]])
+
+
 def test_load_recovar_allows_absent_empty_enrichment_but_rejects_partial(tmp_path):
     path = tmp_path / "pass2.npz"
     base = {
