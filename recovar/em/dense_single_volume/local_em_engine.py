@@ -5341,8 +5341,36 @@ def run_local_em_exact(
         )
         timing.host_stats_s += time.time() - host_stats_t0
         _mark_exact_local_bucket_done(bucket)
-        if debug_score_dump_force_split and debug_score_dump_bucket_matches:
+        release_split_bucket_intermediates = bool(
+            wide_bucket_split
+            or (
+                debug_score_dump_force_split
+                and debug_score_dump_bucket_matches
+            )
+        )
+        if release_split_bucket_intermediates:
             cleanup_t0 = time.time()
+            if wide_bucket_split:
+                # The next split-route projection is allocated before Python
+                # would naturally overwrite this bucket's output variables.
+                # At high resolution that overlaps two complete projection
+                # working sets (the 10202 size-564 tail retained roughly
+                # another 5 GiB) and can OOM even though either bucket fits by
+                # itself.  Synchronize the loop-carried results, then drop all
+                # large bucket-local references before advancing.  This does
+                # not change projection/scoring/reduction arithmetic.
+                _block_until_ready(
+                    Ft_y,
+                    Ft_ctf,
+                    noise_wsum,
+                    noise_img_power,
+                    noise_a2,
+                    noise_xa,
+                    noise_scale_xa,
+                    noise_scale_aa,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                )
             shifted_half = None
             shifted_recon_half = None
             shifted_score = None
@@ -5361,7 +5389,8 @@ def run_local_em_exact(
             reconstruction_sample_mask = None
             reconstruction_rotation_mask = None
             gc.collect()
-            jax.clear_caches()
+            if debug_score_dump_force_split and debug_score_dump_bucket_matches:
+                jax.clear_caches()
             timing.host_stats_s += time.time() - cleanup_t0
 
     _log_exact_local_progress(force=True, done=True)

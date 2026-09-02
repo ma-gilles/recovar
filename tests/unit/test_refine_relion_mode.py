@@ -8,6 +8,7 @@ Verifies:
 """
 
 import inspect
+import weakref
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
+import recovar.em.dense_single_volume.local_em_engine as local_em_engine_module
 import recovar.em.dense_single_volume.local_layout as local_layout_module
 import recovar.em.dense_single_volume.relion_replay as relion_replay_module
 import recovar.reconstruction.regularization as regularization_module
@@ -8601,7 +8603,7 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
         ),
     )
     common_kwargs = dict(
-        image_batch_size=3,
+        image_batch_size=1,
         rotation_block_size=8,
         current_size=6,
         accumulate_noise=True,
@@ -8630,6 +8632,24 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     # The padded bucket has 16 rotations.  Route only that wide static
     # shape through the split path, as in the high-resolution tail fallback.
     monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, "7")
+    original_project_local_bucket = local_em_engine_module._project_local_bucket
+    previous_projection_block = None
+    split_projection_calls = 0
+
+    def tracked_project_local_bucket(**kwargs):
+        nonlocal previous_projection_block, split_projection_calls
+        if previous_projection_block is not None:
+            assert previous_projection_block() is None
+        result = original_project_local_bucket(**kwargs)
+        previous_projection_block = weakref.ref(result)
+        split_projection_calls += 1
+        return result
+
+    monkeypatch.setattr(
+        local_em_engine_module,
+        "_project_local_bucket",
+        tracked_project_local_bucket,
+    )
     split = run_local_em_exact(
         dataset,
         mean,
@@ -8642,12 +8662,14 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
 
     Ft_y_big, Ft_ctf_big, hard_big, stats_big, noise_big, profile_big = big
     Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
-    assert int(profile_big["big_jit_bucket_count"]) == 1
+    assert int(profile_big["big_jit_bucket_count"]) == 3
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert int(profile_big["big_jit_wide_bucket_split_count"]) == 0
     assert int(profile_split["big_jit_max_bucket_rotations"]) == 7
-    assert int(profile_split["big_jit_wide_bucket_split_count"]) == 1
+    assert int(profile_split["big_jit_wide_bucket_split_count"]) == 3
     assert int(profile_split["big_jit_wide_bucket_max_rotations"]) == 16
+    assert split_projection_calls == 3
+    assert previous_projection_block() is None
     assert profile_big["projection_mode"].item() == "relion_projector"
     assert profile_split["projection_mode"].item() == "relion_projector"
     np.testing.assert_array_equal(hard_big, hard_split)
