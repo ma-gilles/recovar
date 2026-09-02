@@ -103,6 +103,48 @@ PIXI_PY="$(pixi run which python)"
 The command intentionally exits 1 while the strict scientific gate fails;
 the complete report is still written before that exit.
 
+## Rejected native-BPref reconstruction counterfactual
+
+The coarse/support boundary above leaves open whether RECOVAR's ordinary
+batched reconstruction order amplifies otherwise fixed E-step differences.
+Job `13327702` therefore replayed the same 200-particle K=4 E-step and staged
+the exact sparse posterior slots, raw BPref operands, CTF sign, class order,
+and original particle order into an opt-in one-class/one-particle-at-a-time
+native reconstruction arm. The job requested and received exactly one H100,
+eight CPUs, and 192 GB without exclusivity. Its qualified source commit was
+`55c2098654180435a54c74f769086b3554630af0` in the immutable worktree
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_native_bpref_gate_55c209865_20260901`.
+
+The corrected counterfactual is numerically the same reconstruction as the
+standard RECOVAR path:
+
+| Metric | Result |
+| --- | ---: |
+| Minimum native replay vs standard FSC-AUC | 0.999999997101 |
+| Maximum native replay vs standard relative L2 | 9.813e-7 |
+| Minimum native replay vs RELION FSC-AUC | 0.604141192254 |
+| Minimum standard vs RELION FSC-AUC | 0.604141364863 |
+
+Per-class native-versus-standard relative L2 values are
+`[9.813e-7, 2.072e-7, 5.984e-7, 4.668e-7]`. The experimental reconstruction
+arm therefore reproduces RECOVAR but does not close any material RELION gap.
+It is rejected as a production change, and its opt-in implementation is
+removed from the integration branch. This negative result shifts further
+work upstream to coarse significance scoring/selection.
+
+The report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_bpref_gate_439a1049c_20260901/attempt3/analysis/native_bpref_gate_report.json`
+(SHA-256
+`942d70a68ee82999372713b150883ea310fde7961ddd99c2195dae40c3ee42ef`).
+The exact command is sealed at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_bpref_gate_439a1049c_20260901/attempt3/provenance/command_13327702.sh`,
+and the complete Slurm launcher is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_bpref_gate_439a1049c_20260901/scripts/run_native_bpref_gate_attempt3.sbatch`.
+The first corrected-sign replay report, source commit, maps, allocation audit,
+and command remain immutable under the attempt-3 root. Earlier attempts are
+not scientific evidence: attempt 1 was cancelled during an unnecessary CUDA
+rebuild, and attempt 2 exposed the now-fixed CTF-sign discriminator.
+
 ## Frozen case
 
 - Dataset: EMPIAR-10076 frozen 10,000-particle fixture.
