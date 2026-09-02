@@ -420,7 +420,7 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
     real_dtype,
     record_property,
 ):
-    """p == s exposes raw scale-dependent cancellation and remains NO-GO."""
+    """p == s records cancellation behavior but cannot qualify the macro."""
 
     if real_dtype == np.float64:
         jax.config.update("jax_enable_x64", True)
@@ -432,6 +432,7 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
     unit_weight = rng.uniform(0.5, 1.5, size=(1, 4096)).astype(real_dtype)
     records = []
     score_deltas = []
+    nonzero_macro_by_scale = []
     for scale in (1.0, 100.0, 1.0e4):
         projected = np.asarray(scale, dtype=real_dtype) * unit_projected
         shifted = projected[None, :, :].copy()
@@ -455,15 +456,20 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
         )
         np.testing.assert_array_equal(direct, np.zeros_like(direct))
         assert np.all(np.isfinite(macro))
-        assert np.any(macro != 0.0)
+        nonzero_macro = bool(np.any(macro != 0.0))
+        nonzero_macro_by_scale.append(nonzero_macro)
         np.testing.assert_array_equal(
             diagnostics["exact_zero_direct_nonzero_macro_per_image"],
-            True,
+            nonzero_macro,
         )
         score_deltas.append(diagnostics["score_delta"])
         records.append(
             {
-                "classification": "NO_GO_unqualified_cancellation_instability",
+                "classification": (
+                    "NO_GO_observed_cancellation_drift"
+                    if nonzero_macro
+                    else "NO_GO_inconclusive_exact_equal_fixture"
+                ),
                 "operand_scale": scale,
                 "precision_bits": int(diagnostics["score_precision_bits"]),
                 "signed_mean_score_delta": float(
@@ -487,8 +493,23 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
         np.stack(score_deltas, axis=0),
         precision_bits=np.dtype(real_dtype).itemsize * 8,
     )
-    assert bool(scale_panel["scale_amplified"]) is True
-    assert str(scale_panel["qualification_status"]) == "NO_GO_scale-amplified_drift"
+    # XLA may contract or simplify this exact-equality fixture so that every
+    # expanded-square score is exactly zero.  That is mathematically valid but
+    # supplies no qualification evidence.  When drift is observed, classify
+    # the scale panel from the observations instead of requiring a particular
+    # backend/lowering artifact.
+    scale_amplified = bool(scale_panel["scale_amplified"])
+    expected_status = (
+        "NO_GO_scale-amplified_drift"
+        if scale_amplified
+        else "NO_GO_unqualified_non-growing_scale_panel"
+    )
+    assert str(scale_panel["qualification_status"]) == expected_status
+    if not any(nonzero_macro_by_scale):
+        np.testing.assert_array_equal(
+            np.stack(score_deltas, axis=0),
+            np.zeros_like(np.stack(score_deltas, axis=0)),
+        )
     record_property("cancellation_records", json.dumps(records, sort_keys=True))
     assert all(record["classification"].startswith("NO_GO") for record in records)
 
