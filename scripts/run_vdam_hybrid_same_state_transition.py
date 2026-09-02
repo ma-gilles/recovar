@@ -30,13 +30,20 @@ import numpy as np
 SCHEMA = "recovar.vdam_hybrid_same_state_transition.v3"
 ARM_ORDER = ("direct_1", "hybrid_1", "hybrid_2", "direct_2")
 FLAT_ROW_ARM_ORDER = ("direct_1", "flat_rows_1", "flat_rows_2", "direct_2")
+PACKED_PROJECTION_ARM_ORDER = (
+    "direct_1",
+    "packed_projection_1",
+    "packed_projection_2",
+    "direct_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
 )
 FLAT_ROW_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
-CANDIDATE_MODES = ("hybrid", "flat_rows")
+PACKED_PROJECTION_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
+CANDIDATE_MODES = ("hybrid", "flat_rows", "packed_projection")
 META_ARRAY_KEYS = (
     "selected_particle_ids",
     "best_pose_rotation_ids",
@@ -66,6 +73,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return ARM_ORDER
     if candidate_mode == "flat_rows":
         return FLAT_ROW_ARM_ORDER
+    if candidate_mode == "packed_projection":
+        return PACKED_PROJECTION_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -73,12 +82,16 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
     values = {
         **{name: "0" for name in HYBRID_ENVIRONMENT},
         FLAT_ROW_ENVIRONMENT: "0",
+        PACKED_PROJECTION_ENVIRONMENT: "0",
     }
     if enabled:
         if candidate_mode == "hybrid":
             values.update({name: "1" for name in HYBRID_ENVIRONMENT})
         elif candidate_mode == "flat_rows":
             values[FLAT_ROW_ENVIRONMENT] = "1"
+        elif candidate_mode == "packed_projection":
+            values[FLAT_ROW_ENVIRONMENT] = "1"
+            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
         else:
             raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
     return values

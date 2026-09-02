@@ -882,6 +882,7 @@ def _project_local_half_spectrum(
         "relion_exact_bpref_operands",
         "relion_exact_fine_diff2",
         "use_flat_local_rows",
+        "use_packed_local_projection",
         "relion_wavg_sequential_cuda",
         "relion_cuda_preprocess_radius",
         "relion_cuda_preprocess_cosine_width",
@@ -1004,6 +1005,7 @@ def run_local_bucket_big_jit(
     relion_exact_bpref_operands: bool = False,
     relion_exact_fine_diff2: bool = False,
     use_flat_local_rows: bool = False,
+    use_packed_local_projection: bool = False,
     relion_wavg_sequential_cuda: bool | None = None,
     relion_cuda_preprocess_radius: float = 0.0,
     relion_cuda_preprocess_cosine_width: float = 0.0,
@@ -1077,6 +1079,12 @@ def run_local_bucket_big_jit(
             raise ValueError(
                 "flat local row plan must be a nonempty int32 array with shape (rows, 3)"
             )
+    if use_packed_local_projection and not use_flat_local_rows:
+        raise ValueError("packed local projection requires flat local rows")
+    if use_packed_local_projection and return_debug_operands:
+        raise ValueError(
+            "packed local projection does not yet support dense projection operand dumps"
+        )
     if return_deferred_mstep_inputs and (
         return_mstep_tensors
         or accumulate_noise
@@ -1352,7 +1360,9 @@ def run_local_bucket_big_jit(
                 shifted_noise = shifted_half_with_dc
             ctf2_over_nv_recon = ctf2_over_nv_recon_half_with_dc
 
-    packed_score_only_projection = bool(use_flat_local_rows and score_only)
+    packed_local_projection = bool(
+        use_flat_local_rows and (score_only or use_packed_local_projection)
+    )
     if use_flat_local_rows:
         flat_row_image_ids = flat_local_row_plan[:, 0]
         flat_row_rotation_rows = flat_local_row_plan[:, 1]
@@ -1361,7 +1371,7 @@ def run_local_bucket_big_jit(
         flat_row_image_ids = jnp.zeros((1,), dtype=jnp.int32)
         flat_row_rotation_rows = jnp.zeros((1,), dtype=jnp.int32)
         flat_row_present_mask = jnp.ones((1,), dtype=bool)
-    if packed_score_only_projection:
+    if packed_local_projection:
         flat_rotations = local_rotations[
             flat_row_image_ids,
             flat_row_rotation_rows,
@@ -1380,7 +1390,7 @@ def run_local_bucket_big_jit(
             3,
         )
     if use_relion_projection_cache:
-        if packed_score_only_projection:
+        if packed_local_projection:
             selected_rotation_ids = local_rotation_ids_for_projection_cache[
                 flat_row_image_ids,
                 flat_row_rotation_rows,
@@ -1414,7 +1424,7 @@ def run_local_bucket_big_jit(
             score_projection_rows = proj_half_flat[:, projection_score_take_indices]
         else:
             score_projection_rows = proj_half_flat[:, window_indices]
-        if packed_score_only_projection:
+        if packed_local_projection:
             proj_half = score_projection_rows
         else:
             proj_half = score_projection_rows.reshape(
@@ -1426,6 +1436,16 @@ def run_local_bucket_big_jit(
             if use_compact_relion_projector_projection:
                 if return_deferred_mstep_inputs and not accumulate_noise and not return_debug_operands:
                     proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
+                elif packed_local_projection:
+                    proj_for_noise = scatter_flat_local_rows(
+                        proj_half_flat[:, projection_recon_take_indices],
+                        flat_row_image_ids,
+                        flat_row_rotation_rows,
+                        flat_row_present_mask,
+                        batch_size=batch_size,
+                        dense_rotation_count=int(local_rotations.shape[1]),
+                        fill_value=0.0,
+                    )
                 else:
                     proj_for_noise = proj_half_flat[:, projection_recon_take_indices].reshape(
                         batch_size,
@@ -1435,6 +1455,16 @@ def run_local_bucket_big_jit(
             else:
                 if return_deferred_mstep_inputs and not accumulate_noise and not return_debug_operands:
                     proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
+                elif packed_local_projection:
+                    proj_for_noise = scatter_flat_local_rows(
+                        proj_half_flat[:, recon_window_indices],
+                        flat_row_image_ids,
+                        flat_row_rotation_rows,
+                        flat_row_present_mask,
+                        batch_size=batch_size,
+                        dense_rotation_count=int(local_rotations.shape[1]),
+                        fill_value=0.0,
+                    )
                 else:
                     proj_for_noise = proj_half_flat[:, recon_window_indices].reshape(
                         batch_size,
@@ -1442,17 +1472,27 @@ def run_local_bucket_big_jit(
                         recon_window_indices.shape[0],
                     )
     else:
-        if packed_score_only_projection:
+        if packed_local_projection:
             proj_half = proj_half_flat
         else:
             proj_half = proj_half_flat.reshape(batch_size, local_rotations.shape[1], -1)
         if not score_only:
             if return_deferred_mstep_inputs and not accumulate_noise and not return_debug_operands:
                 proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
+            elif packed_local_projection:
+                proj_for_noise = scatter_flat_local_rows(
+                    proj_half_flat,
+                    flat_row_image_ids,
+                    flat_row_rotation_rows,
+                    flat_row_present_mask,
+                    batch_size=batch_size,
+                    dense_rotation_count=int(local_rotations.shape[1]),
+                    fill_value=0.0,
+                )
             else:
                 proj_for_noise = proj_half
 
-    if packed_score_only_projection:
+    if packed_local_projection:
         proj_weighted = proj_half * score_half_weights[None, :]
     else:
         proj_weighted = proj_half * score_half_weights[None, None, :]
@@ -1479,7 +1519,7 @@ def run_local_bucket_big_jit(
         if use_flat_local_rows:
             flat_score_projection = (
                 proj_half
-                if packed_score_only_projection
+                if packed_local_projection
                 else proj_half[flat_row_image_ids, flat_row_rotation_rows]
             )
             direct_diff2_flat = (

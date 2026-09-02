@@ -884,6 +884,7 @@ def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_c
     assert signature.parameters["_fixed_capacity_class_count"].default is None
     assert signature.parameters["_fixed_capacity_whole_boundary_enabled"].default is False
     assert signature.parameters["_flat_local_rows_enabled"].default is False
+    assert signature.parameters["_packed_local_projection_enabled"].default is False
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert source.count("_invoke_local_bucket_big_jit(") == 1
     assert "big_jit_result = run_local_bucket_big_jit(" not in source

@@ -4223,6 +4223,7 @@ def run_local_em_exact(
     _fixed_capacity_class_count: int | None = None,
     _fixed_capacity_whole_boundary_enabled: bool = False,
     _flat_local_rows_enabled: bool = False,
+    _packed_local_projection_enabled: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -4233,6 +4234,7 @@ def run_local_em_exact(
         _fixed_capacity_whole_boundary_enabled
     )
     flat_local_rows_enabled = bool(_flat_local_rows_enabled)
+    packed_local_projection_enabled = bool(_packed_local_projection_enabled)
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -4256,6 +4258,10 @@ def run_local_em_exact(
     if flat_local_rows_enabled and not relion_exact_fine_diff2:
         raise ValueError(
             "flat local rows require exact RELION fine diff2"
+        )
+    if packed_local_projection_enabled and not flat_local_rows_enabled:
+        raise ValueError(
+            "packed local projection requires flat local rows"
         )
     if relion_wavg_sequential_cuda is not None:
         relion_wavg_sequential_cuda = bool(relion_wavg_sequential_cuda)
@@ -5850,6 +5856,7 @@ def run_local_em_exact(
                 relion_exact_bpref_operands=relion_exact_bpref_operands,
                 relion_exact_fine_diff2=relion_exact_fine_diff2,
                 use_flat_local_rows=flat_local_rows_enabled,
+                use_packed_local_projection=packed_local_projection_enabled,
                 relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
                 relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
                 relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
@@ -8779,6 +8786,9 @@ def run_local_em_exact(
         "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
         "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
         "flat_local_rows_enabled": np.asarray(flat_local_rows_enabled),
+        "packed_local_projection_enabled": np.asarray(
+            packed_local_projection_enabled
+        ),
         "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
         "chunk_planned_padded_rotations": np.asarray(
             chunk_planned_padded_rotations,

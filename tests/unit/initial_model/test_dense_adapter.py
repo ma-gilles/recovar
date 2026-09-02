@@ -929,6 +929,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     calls = {}
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", raising=False)
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
 
@@ -1019,6 +1020,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         ]
         calls["local_relion_exact_fine_diff2"] = kwargs["relion_exact_fine_diff2"]
         calls["local_flat_local_rows"] = kwargs["_flat_local_rows_enabled"]
+        calls["local_packed_local_projection"] = kwargs[
+            "_packed_local_projection_enabled"
+        ]
         calls["local_relion_exact_score_translation"] = kwargs[
             "relion_exact_score_translation"
         ]
@@ -1176,6 +1180,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_preserve_bpref_particle_order"] is False
     assert calls["local_relion_exact_fine_diff2"] is True
     assert calls["local_flat_local_rows"] is False
+    assert calls["local_packed_local_projection"] is False
     assert calls["local_relion_exact_score_translation"] is True
     assert calls["local_relion_wavg_sequential_cuda"] is True
     assert calls["local_exact_local_bucket_radix"] == 4
@@ -1212,6 +1217,19 @@ def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
     for value in ("0", "false", "NO", "Off"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", value)
         assert _flat_local_rows_enabled() is False
+
+
+def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):
+    from recovar.em.initial_model.dense_adapter import _packed_local_projection_enabled
+
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", raising=False)
+    assert _packed_local_projection_enabled() is False
+    for value in ("1", "true", "YES", "On"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", value)
+        assert _packed_local_projection_enabled() is True
+    for value in ("0", "false", "NO", "Off"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", value)
+        assert _packed_local_projection_enabled() is False
 
 
 def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch):

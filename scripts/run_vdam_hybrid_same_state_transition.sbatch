@@ -68,6 +68,9 @@ case "${CANDIDATE_MODE}" in
   flat_rows)
     expected_arm_order=direct_1,flat_rows_1,flat_rows_2,direct_2
     ;;
+  packed_projection)
+    expected_arm_order=direct_1,packed_projection_1,packed_projection_2,direct_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -161,6 +164,7 @@ command=(
   "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=0"
   "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=0"
   "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS=0"
+  "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION=0"
   "TMPDIR=${RUNTIME}/tmp"
   "PIXI_HOME=${RUNTIME}/pixi_home"
   "RATTLER_CACHE_DIR=${RUNTIME}/rattler_cache"
