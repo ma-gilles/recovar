@@ -7,7 +7,7 @@ completed artifacts through the sign-fixed EMPIAR-10076 three-seed
 independent-half diagnostic at RECOVAR commit `7136e5c8d`; live or later runs
 must be sealed separately before this inventory can promote them.
 
-The machine registry currently contains six single-run entries, six campaign
+The machine registry currently contains six single-run entries, nine campaign
 records, and one synthetic negative diagnostic. The exact filenames are pinned
 by `tests/unit/test_validate_em_benchmark_registry.py`, while
 `scripts/validate_em_benchmark_registry.py` validates every accepted or
@@ -46,6 +46,9 @@ occupancy, wall/HBM, and Slurm ReqTRES/AllocTRES.
 
 | Campaign | Cases | Frozen / science outcomes | Performance coverage |
 | --- | ---: | --- | --- |
+| `k2-ribosembly-three-seed-0d85b576b-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
+| `k8-ribosembly-three-seed-0d85b576b-h100` | 3 | 3 FAIL / 3 PASS | Three matched-H100 wall/HBM pairs; strict failures preserve small map/assignment drift. |
+| `k16-ribosembly-three-seed-0d85b576b-h100` | 3 | 3 FAIL / 3 PASS | Three matched-H100 wall/HBM pairs; all direct/GT class cells pass and strict failures are assignment-only. |
 | `k4-expanded14-3466e7a32-h100` | 14 | 6 PASS, 7 FAIL, 1 NOT_EVALUABLE / 11 PASS, 2 BOUNDARY, 1 UNRESOLVED | Both wall/HBM values are present for all 14 same-H100 cases, with limitations retained for non-evaluable endpoints. |
 | `k4-exact-input-invariance-91e8a30f4-h100` | 9 | 3 PASS, 6 FAIL / 3 PASS, 6 UNRESOLVED | All nine rows retain timing/HBM, but only the three producer rows admit a matched-hardware comparison; consumers reuse the sealed RELION oracle. |
 | `k4-c4-three-seed-c75cbfffc-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
@@ -53,7 +56,9 @@ occupancy, wall/HBM, and Slurm ReqTRES/AllocTRES.
 | `k4-o-three-seed-22efd8065-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
 | `k4-i1-three-seed-22efd8065-h100` | 3 | 3 PASS / 3 PASS | Three matched-H100 wall/HBM pairs. |
 
-The C4, D4, O, and I1 records are the checked-in multi-seed rotational-
+The K=2/K=8/K=16 extension is documented in
+`kclass_k2_k8_k16_multiseed_20260902.md`. The C4, D4, O, and I1 records are
+the checked-in multi-seed rotational-
 symmetry evidence. The no-CTF cases 30, 35, and 36 are not positive campaign
 results: all nine RELION replicates had a zero-mass class before RECOVAR ran.
 Their sealed RELION-only provenance and performance are retained in
@@ -140,9 +145,9 @@ admission.
    seed-42001 weak-class outlier and frozen gate failures, but do not spend more
    pilot effort treating it as a deterministic RECOVAR-only defect. Do not
    promote the result to native-grid acceptance.
-5. The runnable robustness matrix includes K=2, K=8, and K=16, but no accepted
-   schema-v1 result for those K values is checked in. Do not generalize the K=4
-   campaigns to them.
+5. K=2, K=8, and K=16 now have accepted three-seed schema-v1 synthetic
+   campaigns. Real-particle K>1 acceptance remains open; do not generalize
+   synthetic science equivalence to real-data class recovery.
 
 ## Validation and replay
 

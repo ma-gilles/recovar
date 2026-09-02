@@ -39,6 +39,13 @@ CAMPAIGN = json.loads(
         / "k4-expanded14-3466e7a32-h100"
     ).with_suffix(".json").read_text()
 )
+K16_MULTISEED_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k16-ribosembly-three-seed-0d85b576b-h100"
+    ).with_suffix(".json").read_text()
+)
 K2_MULTISEED_CAMPAIGN = json.loads(
     (
         REGISTRY_ROOT
@@ -141,6 +148,7 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-ribosembly-10k128-radial3-nonuniform-linear-0050dc54f-h100",
         "k4-ribosembly-10k128-radial3-nonuniform-outliers20-0050dc54f-h100",
         "k4-ribosembly-10k128-white1-uniform-0050dc54f-h100",
+        "k16-ribosembly-three-seed-0d85b576b-h100",
         "k2-ribosembly-three-seed-0d85b576b-h100",
         "k4-c4-three-seed-c75cbfffc-h100",
         "k4-d4-three-seed-c75cbfffc-h100",
@@ -188,7 +196,12 @@ def test_exact_input_campaign_does_not_promote_gt_only_equivalence():
             )
 
 
-def test_k2_and_k8_multiseed_campaigns_preserve_science_distinction():
+def test_k2_k8_and_k16_multiseed_campaigns_preserve_science_distinction():
+    assert [case["case_id"] for case in K16_MULTISEED_CAMPAIGN["cases"]] == [
+        41001,
+        41002,
+        41003,
+    ]
     assert [case["case_id"] for case in K2_MULTISEED_CAMPAIGN["cases"]] == [
         41001,
         41002,
@@ -208,6 +221,19 @@ def test_k2_and_k8_multiseed_campaigns_preserve_science_distinction():
         assert case["quality"]["trajectory"]["status"] == "FAIL"
         assert case["outcome"]["science_status"] == "PASS"
         assert case["quality"]["occupancy"]["status"] == "CLEAR"
+        assert min(
+            row["gt_fsc_auc_delta"]
+            for row in case["quality"]["final_classes"]
+        ) >= -0.002
+    for case in K16_MULTISEED_CAMPAIGN["cases"]:
+        assert case["outcome"]["classification"] == "SCIENCE_EQUIVALENT"
+        assert case["quality"]["trajectory"]["status"] == "FAIL"
+        assert case["outcome"]["science_status"] == "PASS"
+        assert case["quality"]["occupancy"]["status"] == "CLEAR"
+        assert min(
+            row["cross_engine_fsc_auc"]
+            for row in case["quality"]["final_classes"]
+        ) >= 0.995
         assert min(
             row["gt_fsc_auc_delta"]
             for row in case["quality"]["final_classes"]

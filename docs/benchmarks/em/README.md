@@ -343,6 +343,14 @@ The completed 14-case synthetic K=4 campaign is summarized in
 `k4_expanded14_20260901.md` and sealed machine-readably in
 `campaigns/k4-expanded14-3466e7a32-h100.json`.
 
+The completed K=2, K=8, and K=16 three-seed extension is summarized in
+`kclass_k2_k8_k16_multiseed_20260902.md` and sealed in three corresponding
+campaign records. All nine runs pass the signed per-class GT FSC-AUC science
+contract. K=2 is `TRAJECTORY_EXACT`; K=8 and K=16 are
+`SCIENCE_EQUIVALENT` because small hard-assignment differences fail the
+stricter 0.99 assignment gate without degrading per-class reconstruction
+quality.
+
 The post-campaign shared-build orchestration check is documented in
 `k4_shared_cuda_setup_qualification_20260901.md`. It records the rejected
 CPU-only setup attempt, the corrected one-H100 setup/case/summary dependency
