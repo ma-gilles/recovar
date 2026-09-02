@@ -20,7 +20,7 @@ shared-200 replay from immutable RECOVAR source
 `24317e40cc4b0b19406f75c917857c03869a9372`. ReqTRES and AllocTRES were both
 `billing=15,cpu=8,gres/gpu=1,mem=192G,node=1`; the elapsed time was 469 s on
 `della-h19g1`. The outer job exited `1:0` because its wrapper still required an
-optional contribution dump after every scientific arm had completed. The v5
+optional contribution dump after every scientific arm had completed. The v6
 post-hoc auditor removes that stale assertion and consumes the complete sealed
 capture set: 800 native fine-score records, 800 native BPref factor records,
 800 RECOVAR pass-2 records, and six native data STAR files.
@@ -42,9 +42,25 @@ The strict parity gate fails before reconstruction:
 There are 249 native empty-support records, including six for which RECOVAR
 retains nonempty support. Across all 800 particle/class records, 395 have
 different rotation counts; the exact union contains 768 native-only and 4,216
-RECOVAR-only rotation rows. This is a real fine candidate/topology and score
-difference, not an M-step-only failure. The capture does not distinguish
-whether the first upstream cause is coarse significance or fine expansion.
+RECOVAR-only rotation rows. Every selected coarse parent expands completely to
+eight rotation children times four translation children in both engines. After
+converting RELION's direction-major coarse rotation IDs into RECOVAR's
+psi-major IDs and validating that permutation against every exactly shared
+fine rotation matrix, the upstream boundary is:
+
+| Coarse support | Exact records | Aggregate Jaccard |
+| --- | ---: | ---: |
+| Joint rotation/translation parent pairs | 0.5725 | 0.847195 |
+| Rotation parents | 0.8025 | 0.891799 |
+| Translation parents | 0.74375 | 0.949900 |
+
+The fine candidate intersection and union are exactly 32 times the joint
+coarse-parent intersection and union (504,576 and 595,584 fine tuples versus
+15,768 and 18,612 coarse pairs). Thus, the first measured discrepancy is the
+coarse significance selection itself; fine expansion preserves that decision
+exactly, and the failure is not M-step-only. Most parents still overlap, with
+the remaining difference concentrated in marginal parent choices and their
+rotation/translation coupling rather than a wholesale orientation mismatch.
 
 The correctly framed RECOVAR-versus-RELION class-map FSC-AUC values are
 `[0.604141, 0.906911, 0.693999, 0.748018]`. Native repeatability and passive
@@ -56,20 +72,21 @@ The earlier negative-map interpretation came from loading maps written with
 scientific evidence.
 
 The authoritative report is
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v5.json`
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v6.json`
 (SHA-256
-`7c6921cac7bf879be7319a7427b51deea9d37c193a47ab36d4811995b949e8a1`).
+`2e7e5bb8b2d84b2392b205af6304e73a5c0c52860fe2932ef643477d4cdc4328`).
 It was produced by auditor commit
-`9e67f24c1a5a1471b1d827f0e649ac73b88c0642`, integrated here as
-`ceaee74ce`. The launch manifest is
+`0ec8b85c5d59f22d5c6c3d1c90de9168845eae77`. The launch manifest is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/launch_manifest.json`
 (SHA-256
 `d30c978f933f76af430d2df9da74e571c6633965917e3b5e43795021de2f929e`).
 The retained v4 report at `analysis/causal_replay_report.json` has SHA-256
 `6c7ac1d0e3229e8257429d02ebec5c1fbdca2d3c2ade4a80754dcc3669d19edc`
 and is explicitly superseded because of the map-frame loader error.
-Replaying the integrated auditor produced a byte-identical report at
-`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v5_integrated_ceaee74ce.json`.
+The v5 report remains valid for its published score, posterior, support, and
+map metrics, but v6 supersedes it as the complete causal report because v5 did
+not collapse fine candidates onto their global coarse parents. A pre-commit
+v6 replay and the committed replay were byte-identical.
 
 Reproduce that post-hoc report from the sealed GPU products with a fresh
 output filename:
@@ -80,7 +97,7 @@ export PYTHONNOUSERSITE=1
 PIXI_PY="$(pixi run which python)"
 "${PIXI_PY}" scripts/audit_em_real_k4_shared200_causal_replay.py \
   --manifest /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/launch_manifest.json \
-  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v5_replay.json
+  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_causal_v4_24317e40c_20260901/analysis/causal_replay_report_v6_replay.json
 ```
 
 The command intentionally exits 1 while the strict scientific gate fails;
@@ -178,6 +195,13 @@ fixed gates are:
   native hard-class assignment accuracy at least 0.995; and
 - exact native hard-class assignments between the uninstrumented replay and
   every repeat/capture arm.
+
+The coarse-parent exact fractions and Jaccards are diagnostic localizers, not
+additional acceptance gates: the existing exact fine candidate-tuple gate
+already requires the same topology. The auditor nevertheless fails closed if
+either engine does not emit a complete 8-by-4 expansion, if RECOVAR's local
+parent map is inconsistent with its global oversampled IDs, or if the native
+rotation-order permutation disagrees with any exactly shared fine child.
 
 A particle/class with no RELION sparse support still contributes one file of
 each native capture type. Fine-score v1 marks it with header flag word 32 bit
