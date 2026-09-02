@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 
+from scripts import build_k1_ppref_capture_from_map as builder
 from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.build_k1_ppref_capture_from_map import write_ppref_capture
+
+
+def test_direct_entrypoint_can_resolve_repository_imports() -> None:
+    result = subprocess.run(
+        [sys.executable, str(Path(builder.__file__).resolve()), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--map-convention" in result.stdout
 
 
 def test_write_ppref_capture_roundtrips_schema(tmp_path):

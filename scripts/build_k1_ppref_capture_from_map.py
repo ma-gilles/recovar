@@ -5,13 +5,19 @@ from __future__ import annotations
 
 import argparse
 import struct
+import sys
 from pathlib import Path
 
 import numpy as np
 
-from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
-from recovar.utils import helpers
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
+from recovar.em.initial_model.dense_adapter import (  # noqa: E402
+    reference_to_relion_projector_half_maps,
+)
+from recovar.utils import helpers  # noqa: E402
 
 MAGIC = b"RLNPPREFV1".ljust(16, b"\0")
 HEADER_WORDS = 16
@@ -38,8 +44,10 @@ def write_ppref_capture(
     _require(not output.exists(), f"refusing to overwrite {output}")
     zdim, ydim, xdim = (int(value) for value in values.shape)
     padding_bits = struct.unpack("<I", struct.pack("<f", float(padding_factor)))[0]
+
     def as_u64(value: int) -> int:
         return int(np.asarray(value, dtype=np.int64).view(np.uint64).item())
+
     header = np.asarray(
         [
             1,
