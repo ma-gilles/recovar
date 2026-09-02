@@ -368,6 +368,13 @@ pose, translation, and significant-support trajectories. The completed pilot
 therefore establishes the independent-half infrastructure and a shared
 stochastic-instability boundary, but it cannot be described as complete Tier-6
 evidence while the frozen per-seed quality and assignment gates remain red.
+The final-map analysis has a separate cross-CPU reproduction contract: inputs,
+discrete class mappings, and decisions must match exactly; every reported
+FSC-AUC may move by at most 0.005 under the continuous proper-rigid fit; and the
+minimum same-seed-versus-cross-seed per-class separation must remain at least
+0.05. Job `13354170` passes this contract. Job `13353671` is retained as a
+completed-analysis harness failure because its obsolete final `cmp` required
+the continuous optimizer parameters to be byte-identical.
 
 ## Runnable now versus planned-only
 

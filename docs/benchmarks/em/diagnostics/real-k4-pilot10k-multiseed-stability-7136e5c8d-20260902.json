@@ -180,6 +180,49 @@
     "analysis_source": {
       "script": "scripts/analyze_em_real_kclass_multiseed_map_stability.py",
       "commit": "277e4303b4005c7210cc0f0c81a72aaa7e1b7aa6"
+    },
+    "semantic_reproduction": {
+      "status": "PASS",
+      "checker_source_commit": "cdb026bcbb17f7496136daaff55c9aa8bee58ef8",
+      "policy": {
+        "max_fsc_auc_absolute_delta": 0.005,
+        "minimum_per_class_separation_margin": 0.05,
+        "continuous_proper_rigid_fit_parameters_byte_exact": false
+      },
+      "cross_cpu_discriminator": {
+        "job_id": 13353671,
+        "node": "della-i13n15",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "failure_classification": "OVERSTRICT_BYTE_COMPARISON_AFTER_COMPLETE_ANALYSIS",
+        "requested_tres": "billing=16,cpu=4,mem=64G,node=1",
+        "allocated_tres": "billing=16,cpu=4,mem=64G,node=1",
+        "req_tres_equals_alloc_tres": true,
+        "candidate_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.reproduced.json",
+          "sha256": "61142e5a6b82f30196e9d83cef6a2ae2b85229a72fe51cebdd981d558804a9ba"
+        },
+        "semantic_status": "PASS",
+        "all_frozen_inputs_decisions_and_class_permutations_exact": true,
+        "max_same_seed_cross_engine_fsc_auc_absolute_delta": 0.0,
+        "max_within_engine_cross_seed_fsc_auc_absolute_delta": 0.0036306102,
+        "candidate_minimum_per_class_separation_margin": 0.0744733615
+      },
+      "qualified_job": {
+        "job_id": 13354170,
+        "node": "della-h12n16",
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "elapsed": "00:01:23",
+        "max_rss_kib": 1101436,
+        "requested_tres": "billing=16,cpu=4,mem=64G,node=1",
+        "allocated_tres": "billing=16,cpu=4,mem=64G,node=1",
+        "req_tres_equals_alloc_tres": true,
+        "verification_report": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.reproduction-verification.json",
+          "sha256": "2e59490b389e750a1f9fbbc4bd0e86e52e4b2263c7b0d6a03e4d39bc2a1b189c"
+        }
+      }
     }
   },
   "masked_halfmap_quality": {
@@ -223,7 +266,8 @@
     "sha256": "80255e714145c0ab77b24b48a25b850055baa5f17a58482333fb402bb919947d"
   },
   "reproduction": {
-    "script": "scripts/aggregate_em_real_kclass_halfmap_seeds.py",
+    "assignment_script": "scripts/aggregate_em_real_kclass_halfmap_seeds.py",
+    "map_script": "scripts/analyze_em_real_kclass_multiseed_map_stability.py",
     "expected_seeds": "42001,42002,42003",
     "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902"
   },

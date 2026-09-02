@@ -396,6 +396,23 @@ def test_real_k4_multiseed_diagnostic_retains_failures_and_stochastic_boundary()
     assert map_stability["analysis_job"]["state"] == "COMPLETED"
     assert map_stability["analysis_job"]["exit_code"] == "0:0"
     assert map_stability["analysis_job"]["req_tres_equals_alloc_tres"] is True
+    reproduction = map_stability["semantic_reproduction"]
+    assert reproduction["status"] == "PASS"
+    assert reproduction["policy"]["max_fsc_auc_absolute_delta"] == 0.005
+    assert reproduction["policy"]["minimum_per_class_separation_margin"] == 0.05
+    assert reproduction["policy"]["continuous_proper_rigid_fit_parameters_byte_exact"] is False
+    cross_cpu = reproduction["cross_cpu_discriminator"]
+    assert cross_cpu["state"] == "FAILED"
+    assert cross_cpu["failure_classification"] == (
+        "OVERSTRICT_BYTE_COMPARISON_AFTER_COMPLETE_ANALYSIS"
+    )
+    assert cross_cpu["semantic_status"] == "PASS"
+    assert cross_cpu["max_within_engine_cross_seed_fsc_auc_absolute_delta"] < 0.005
+    assert cross_cpu["candidate_minimum_per_class_separation_margin"] > 0.05
+    assert cross_cpu["req_tres_equals_alloc_tres"] is True
+    assert reproduction["qualified_job"]["state"] == "COMPLETED"
+    assert reproduction["qualified_job"]["exit_code"] == "0:0"
+    assert reproduction["qualified_job"]["req_tres_equals_alloc_tres"] is True
 
     quality = diagnostic["masked_halfmap_quality"]
     assert quality["paired_recovar_minus_relion_fsc_auc"]["median"] > -0.001

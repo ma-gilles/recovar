@@ -258,6 +258,20 @@ seed-sensitive local optima, not a deterministic RECOVAR-only weak-class bug.
 The original per-seed gates and the seed-42001 -0.1193 masked half-map FSC-AUC
 outlier remain recorded and rejected.
 
+The map discriminator is reproducible by a semantic contract rather than a
+byte-comparison of continuous optimizer output. A cross-CPU replay on
+`della-i13n15` (job `13353671`) completed the analysis but deliberately remains
+recorded with Slurm state `FAILED`: its original harness ended with `cmp`, and
+the proper-rigid Powell fit moved slightly on that CPU. All frozen inputs,
+decisions, row identities, and class permutations were exact; same-seed FSC-AUC
+was unchanged, and the largest within-engine cross-seed FSC-AUC cell shift was
+0.003631. The scientific conclusion remained separated for every class, with a
+minimum per-class margin of 0.07447. The checked gate therefore permits at most
+0.005 absolute FSC-AUC drift, requires at least 0.05 per-class separation, and
+never requires continuous fit parameters to be byte-identical. A fresh
+qualified replay, job `13354170`, passed that contract with exit 0 on exact
+four-CPU/64-GiB resources.
+
 The same-GPU serial resource measurements across the six half-runs are:
 
 | Engine | Wall time, median (range) | Peak HBM, median (range) | Host MaxRSS, median (range) |
@@ -296,7 +310,11 @@ pixi run python -m scripts.analyze_em_real_kclass_multiseed_map_stability \
   --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42001_7136e5c8d_20260902/audit/halfmap_audit.json \
   --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42002_7136e5c8d_20260902/audit/halfmap_audit.json \
   --audit /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_native_signfix_seed42003_7136e5c8d_20260902/audit/halfmap_audit.json \
-  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.reproduced.json
+  --output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.semantic-reproduced.json \
+  --reference-report /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.json \
+  --verification-output /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.reproduction-verification.json \
+  --max-fsc-auc-abs-delta 0.005 \
+  --min-per-class-separation-margin 0.05
 ```
 
 The sealed map report is
@@ -304,7 +322,12 @@ The sealed map report is
 (SHA-256
 `1afcc15f4ca42496ba8b202ecf6a4926a4bd7a6b21d7562f69e8e5a3ff1cc27e`).
 CPU analysis job `13353269` completed in 1m17s with exact requested and
-allocated four-CPU, 64-GiB resources and exit 0.
+allocated four-CPU, 64-GiB resources and exit 0. Semantic reproduction job
+`13354170` completed in 1m23s with the same exact allocation and exit 0. Its
+verification report is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_pilot10k_multiseed_stability_7136e5c8d_20260902/analysis/map_stability.reproduction-verification.json`
+(SHA-256
+`2e59490b389e750a1f9fbbc4bd0e86e52e4b2263c7b0d6a03e4d39bc2a1b189c`).
 
 ## Reproduction
 
