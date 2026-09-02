@@ -121,6 +121,13 @@ def test_runner_separates_support_audit_from_clean_abba_timing() -> None:
     assert "export JAX_ENABLE_X64" not in source
     assert "#SBATCH --nodelist" not in source
     assert "sbatch " not in source
+    command_start = source.index("  command=(")
+    diagnostic_unset = source.index(
+        "-u RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR",
+        command_start,
+    )
+    conditional_audit = source.index('"${audit_env[@]}"', command_start)
+    assert diagnostic_unset < conditional_audit
 
 
 @pytest.mark.unit

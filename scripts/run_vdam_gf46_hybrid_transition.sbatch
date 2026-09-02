@@ -286,9 +286,9 @@ for index in "${!RUN_LABELS[@]}"; do
   fi
   command=(
     env
-    "${audit_env[@]}"
     -u RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR
     -u RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_ORIGINAL_INDICES
+    "${audit_env[@]}"
     "LD_PRELOAD=${CUSPARSE_LIBRARY}"
     "RECOVAR_CACHE_DIR="
     RECOVAR_EM_RAW_IMAGE_CACHE=auto
