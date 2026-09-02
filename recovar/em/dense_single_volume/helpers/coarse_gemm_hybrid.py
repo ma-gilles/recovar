@@ -1,9 +1,9 @@
 """Certified block selection building blocks for a K=1 coarse-score hybrid.
 
-This module deliberately has no production caller.  It provides the small,
-default-off pieces needed to turn streamed candidate score intervals into a
-fail-closed set of aligned 16-rotation blocks.  Exact rescoring and posterior
-arithmetic remain owned by the existing dense E-step.
+This module provides the small, default-off pieces needed to turn streamed
+candidate score intervals into a fail-closed set of aligned 16-rotation
+blocks.  The significance engine owns the production orchestration; exact
+rescoring and posterior arithmetic remain on the existing dense E-step path.
 """
 
 from __future__ import annotations
@@ -1097,8 +1097,12 @@ def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
         posterior_scores,
     )
 
-    finite_active_diff2 = jnp.all(
-        jnp.where(active_candidates, jnp.isfinite(selected_diff2), True),
+    valid_active_diff2 = jnp.all(
+        jnp.where(
+            active_candidates,
+            jnp.isfinite(selected_diff2) & (selected_diff2 >= jnp.float32(0.0)),
+            True,
+        ),
         axis=(1, 2, 3),
     )
     positive_inf_padding = jnp.all(
@@ -1110,7 +1114,7 @@ def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
         axis=(1, 2, 3),
     )
     selected_output_valid = (
-        finite_active_diff2
+        valid_active_diff2
         & positive_inf_padding
         & finite_active_posterior
         & jnp.where(active_rows, jnp.isfinite(raw_score_max), True)

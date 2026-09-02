@@ -7,6 +7,7 @@ Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refin
 
 import json
 import logging
+import operator
 import os
 from enum import Enum
 from functools import partial
@@ -17,6 +18,15 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers import projection_cache as projection_cache_helpers
+from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+    DEFAULT_ROTATION_BLOCK_CAPACITY,
+    SOURCE_ROTATION_BLOCK_SIZE,
+    CoarseGemmHybridBlockSelection,
+    assemble_coarse_gemm_hybrid_dense_scores_f32,
+    initialize_coarse_gemm_hybrid_interval_state,
+    plan_coarse_gemm_certificate_topology,
+    select_coarse_gemm_hybrid_rotation_blocks,
+)
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     COARSE_GEMM_STREAMING_SCHEMA,
     aggregate_coarse_gemm_streaming_summaries,
@@ -33,7 +43,10 @@ from recovar.em.dense_single_volume.helpers.scoring import (
     _coarse_gaussian_qualification_decision,
     _e_step_block_scores,
     _e_step_block_scores_windowed,
+    _prepare_relion_coarse_gaussian_gemm_f64_image_batch,
+    _relion_coarse_diff2_rotation_blocks_from_topology_f32,
     _relion_coarse_gaussian_gemm_scores,
+    _relion_coarse_gaussian_gemm_update_certificate_state,
     _update_logsumexp,
 )
 from recovar.utils.nvtx_shim import nvtx
@@ -80,6 +93,10 @@ _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_DEFAULT_MAX_GB = 4.0
 _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_CHUNK_ROWS = 4_608
 _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ROW_ALIGNMENT = 16
 _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ALIAS_EVIDENCE_JOB = 13_332_001
+_COARSE_GAUSSIAN_GEMM_HYBRID_ENV = "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID"
+_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY"
+)
 _COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR"
 )
@@ -670,6 +687,47 @@ def _coarse_gaussian_gemm_projection_cache_enabled(
     )
 
 
+def _coarse_gaussian_gemm_hybrid_enabled(*, default: bool = False) -> bool:
+    """Resolve the default-off certified GEMM/exact-source16 hybrid."""
+
+    token = os.environ.get(
+        _COARSE_GAUSSIAN_GEMM_HYBRID_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_COARSE_GAUSSIAN_GEMM_HYBRID_ENV}={token!r}",
+    )
+
+
+def _coarse_gaussian_gemm_hybrid_block_capacity(
+    *,
+    default: int = DEFAULT_ROTATION_BLOCK_CAPACITY,
+) -> int:
+    """Return the fixed selected-source16 capacity for one image row."""
+
+    token = os.environ.get(
+        _COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV,
+        str(default),
+    ).strip()
+    try:
+        capacity = int(token)
+    except ValueError as error:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV} must be a "
+            f"positive integer, got {token!r}",
+        ) from error
+    if capacity <= 0:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV} must be a "
+            f"positive integer, got {token!r}",
+        )
+    return capacity
+
+
 class _CoarseGaussianScoreBackend(str, Enum):
     """One resolved coarse Gaussian score/reduction implementation."""
 
@@ -1138,6 +1196,244 @@ def _project_coarse_gaussian_gemm_projection_cache_block_once(
     # its two component squares explicitly after conversion to FP64.
     projected_reference_abs2 = jnp.abs(projected_reference) ** 2
     return projected_reference, projected_reference_abs2
+
+
+def _validate_coarse_gaussian_gemm_hybrid_request(
+    *,
+    macro_enabled: bool,
+    projection_cache_enabled: bool,
+    n_classes: int,
+    n_rotations: int,
+    score_mode: str,
+    coarse_gaussian_ffi_enabled: bool,
+    exact_coarse_operands_enabled: bool,
+    relion_f32_coarse_support_enabled: bool,
+    collect_significance: bool,
+    any_diagnostic_requested: bool,
+) -> None:
+    """Fail closed unless the first production hybrid contract is complete."""
+
+    prefix = f"{_COARSE_GAUSSIAN_GEMM_HYBRID_ENV}=1 requires"
+    if not macro_enabled:
+        raise ValueError(
+            f"{prefix} {_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1",
+        )
+    if not projection_cache_enabled:
+        raise ValueError(
+            f"{prefix} {_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV}=1",
+        )
+    if int(n_classes) != 1:
+        raise ValueError(f"{prefix} K=1, got K={int(n_classes)}")
+    if int(n_rotations) <= 0 or int(n_rotations) % SOURCE_ROTATION_BLOCK_SIZE:
+        raise ValueError(
+            f"{prefix} a rotation count divisible by "
+            f"{SOURCE_ROTATION_BLOCK_SIZE}, got {int(n_rotations)}",
+        )
+    if score_mode != "gaussian":
+        raise ValueError(f"{prefix} score_mode='gaussian'")
+    if not coarse_gaussian_ffi_enabled:
+        raise ValueError(f"{prefix} the exact RELION coarse Gaussian FFI path")
+    if not exact_coarse_operands_enabled:
+        raise ValueError(
+            f"{prefix} {_K1_RELION_EXACT_COARSE_OPERANDS_ENV}=1",
+        )
+    if not relion_f32_coarse_support_enabled:
+        raise ValueError(
+            f"{prefix} {_K1_RELION_F32_COARSE_SUPPORT_ENV}=1",
+        )
+    if not collect_significance:
+        raise ValueError(f"{prefix} collect_significance=True")
+    if any_diagnostic_requested:
+        raise ValueError(
+            f"{prefix} paired coarse GEMM diagnostics to be disabled",
+        )
+
+
+class CoarseGaussianGemmHybridBatchResult(NamedTuple):
+    """One batch's exact dense score table or its full-direct fallback."""
+
+    scores: jax.Array
+    raw_score_max: jax.Array
+    scores_include_priors: bool
+    used_selected_rescore: bool
+    fallback_reason: str | None
+    selection: CoarseGemmHybridBlockSelection
+
+
+def _compute_coarse_gaussian_gemm_hybrid_batch(
+    projection_cache,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    *,
+    topology,
+    actual_image_count: int,
+    class_log_prior,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+    certificate_chunk_rows: int = _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_CHUNK_ROWS,
+    block_capacity: int = DEFAULT_ROTATION_BLOCK_CAPACITY,
+) -> CoarseGaussianGemmHybridBatchResult:
+    """Certify, exactly rescore, and restore one K=1 coarse score table.
+
+    The expanded FP64 GEMMs only choose complete source-16 rotation blocks.
+    Published values always come from the mature direct CUDA arithmetic.  Any
+    incomplete certificate, capacity overflow, or invalid selected output
+    routes the whole padded image batch through one full rectangular direct
+    call, preserving a simple fail-closed boundary.
+    """
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+        validate_coarse_gemm_certificate_topology,
+    )
+
+    validate_coarse_gemm_certificate_topology(topology)
+    cache = jnp.asarray(projection_cache)
+    shifted = jnp.asarray(shifted_corrected)
+    weight = jnp.asarray(pixel_weight)
+    initial = jnp.asarray(initial_diff2)
+    if cache.ndim != 3 or tuple(cache.shape[:1]) != (1,):
+        raise ValueError(
+            "certified coarse GEMM hybrid requires one [1,R,F] projection table",
+        )
+    if cache.dtype != jnp.complex64:
+        raise TypeError("certified coarse GEMM hybrid projection cache must be complex64")
+    if shifted.ndim != 3:
+        raise ValueError(
+            "certified coarse GEMM hybrid shifted images must have shape [B,T,F]",
+        )
+    batch_size, n_translations, n_pixels = map(int, shifted.shape)
+    n_rotations = int(cache.shape[1])
+    if (
+        shifted.dtype != jnp.complex64
+        or weight.dtype != jnp.float32
+        or initial.dtype != jnp.float32
+        or tuple(weight.shape) != (batch_size, n_pixels)
+        or tuple(initial.shape) != (batch_size,)
+        or int(cache.shape[2]) != n_pixels
+        or n_rotations <= 0
+        or n_rotations % SOURCE_ROTATION_BLOCK_SIZE
+        or topology.compact_pixel_count != n_pixels
+        or topology.translation_count != n_translations
+    ):
+        raise ValueError(
+            "certified coarse GEMM hybrid operands have inconsistent shapes, "
+            "dtypes, or topology",
+        )
+    try:
+        chunk_rows = operator.index(certificate_chunk_rows)
+        capacity = operator.index(block_capacity)
+        actual_count = operator.index(actual_image_count)
+    except TypeError as error:
+        raise ValueError("certified coarse GEMM hybrid counts must be integers") from error
+    if (
+        chunk_rows <= 0
+        or chunk_rows % SOURCE_ROTATION_BLOCK_SIZE
+        or capacity <= 0
+        or actual_count <= 0
+        or actual_count > batch_size
+    ):
+        raise ValueError(
+            "certified coarse GEMM hybrid requires positive aligned chunk, "
+            "capacity, and image counts",
+        )
+
+    image_batch = _prepare_relion_coarse_gaussian_gemm_f64_image_batch(
+        shifted,
+        weight,
+        initial,
+        actual_count,
+    )
+    state = initialize_coarse_gemm_hybrid_interval_state(
+        batch_size,
+        n_rotations,
+    )
+    rotation_prior = None
+    if rotation_log_prior is not None:
+        rotation_prior = jnp.asarray(rotation_log_prior, dtype=jnp.float32)
+        if tuple(rotation_prior.shape) != (n_rotations,):
+            raise ValueError(
+                "hybrid rotation_log_prior must have one value per source rotation",
+            )
+    for rotation_start in range(0, n_rotations, chunk_rows):
+        rotation_stop = min(rotation_start + chunk_rows, n_rotations)
+        state = _relion_coarse_gaussian_gemm_update_certificate_state(
+            state,
+            cache[0, rotation_start:rotation_stop],
+            image_batch,
+            topology=topology,
+            rotation_offset=rotation_start,
+            class_log_prior=class_log_prior,
+            rotation_log_prior=(
+                None
+                if rotation_prior is None
+                else rotation_prior[rotation_start:rotation_stop]
+            ),
+            translation_log_prior=translation_log_prior,
+        )
+    selection = select_coarse_gemm_hybrid_rotation_blocks(
+        state,
+        actual_image_count=actual_count,
+        n_rotations=n_rotations,
+        n_translations=n_translations,
+        certificate_valid=True,
+        block_capacity=capacity,
+    )
+    fallback_reason = selection.fallback_reason
+    if selection.eligible:
+        selected_diff2 = _relion_coarse_diff2_rotation_blocks_from_topology_f32(
+            cache[0],
+            shifted,
+            weight,
+            initial,
+            jnp.asarray(selection.block_ids, dtype=jnp.int32),
+            topology=topology,
+        )
+        assembled = assemble_coarse_gemm_hybrid_dense_scores_f32(
+            selected_diff2,
+            selection,
+            actual_image_count=actual_count,
+            n_rotations=n_rotations,
+            class_log_prior=class_log_prior,
+            rotation_log_prior=rotation_prior,
+            translation_log_prior=translation_log_prior,
+        )
+        if np.all(np.asarray(assembled.selected_output_valid, dtype=bool)):
+            return CoarseGaussianGemmHybridBatchResult(
+                scores=assembled.posterior_scores_flat.reshape(
+                    batch_size,
+                    n_rotations,
+                    n_translations,
+                ),
+                raw_score_max=jnp.where(
+                    jnp.arange(batch_size, dtype=jnp.int32) < actual_count,
+                    assembled.raw_score_max,
+                    jnp.float32(0.0),
+                ),
+                scores_include_priors=True,
+                used_selected_rescore=True,
+                fallback_reason=None,
+                selection=selection,
+            )
+        fallback_reason = "invalid_selected_exact_output"
+
+    full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+        cache[0],
+        shifted,
+        weight,
+        initial,
+        jnp.asarray(topology.full_to_compact),
+    )
+    raw_scores = -full_diff2
+    return CoarseGaussianGemmHybridBatchResult(
+        scores=raw_scores,
+        raw_score_max=jnp.max(raw_scores.reshape(batch_size, -1), axis=1),
+        scores_include_priors=False,
+        used_selected_rescore=False,
+        fallback_reason=fallback_reason or "unspecified_fail_closed_fallback",
+        selection=selection,
+    )
 
 
 def _coarse_gaussian_gemm_diagnostic_request() -> tuple[str | None, set[int] | None]:
@@ -3835,6 +4131,14 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_projection_cache_requested = (
         _coarse_gaussian_gemm_projection_cache_enabled()
     )
+    coarse_gaussian_gemm_hybrid_requested = (
+        _coarse_gaussian_gemm_hybrid_enabled()
+    )
+    coarse_gaussian_gemm_hybrid_capacity = (
+        _coarse_gaussian_gemm_hybrid_block_capacity()
+        if coarse_gaussian_gemm_hybrid_requested
+        else DEFAULT_ROTATION_BLOCK_CAPACITY
+    )
     coarse_gaussian_score_backend = _resolve_coarse_gaussian_score_backend(
         gemm_macro_requested=coarse_gaussian_gemm_macro_requested,
         score_mode=score_mode,
@@ -3951,6 +4255,19 @@ def _compute_k_class_significance_batched(
     relion_f32_coarse_support_enabled = (
         relion_f32_coarse_support_requested and score_mode == "gaussian"
     )
+    if coarse_gaussian_gemm_hybrid_requested:
+        _validate_coarse_gaussian_gemm_hybrid_request(
+            macro_enabled=coarse_gaussian_gemm_macro_enabled,
+            projection_cache_enabled=coarse_gaussian_gemm_projection_cache_requested,
+            n_classes=n_classes,
+            n_rotations=n_rot,
+            score_mode=score_mode,
+            coarse_gaussian_ffi_enabled=coarse_gaussian_ffi_enabled,
+            exact_coarse_operands_enabled=exact_coarse_operands_enabled,
+            relion_f32_coarse_support_enabled=relion_f32_coarse_support_enabled,
+            collect_significance=collect_significance,
+            any_diagnostic_requested=coarse_gaussian_gemm_any_diagnostic,
+        )
     if relion_f32_coarse_support_enabled:
         if use_float64_scoring:
             raise ValueError(
@@ -3967,6 +4284,7 @@ def _compute_k_class_significance_batched(
             int(image_shape[0]) if current_size is None else int(current_size),
         )
     coarse_gaussian_full_to_compact = None
+    coarse_gaussian_full_to_compact_np = None
     coarse_gaussian_score_indices = None
     coarse_gaussian_score_indices_np = None
     coarse_gaussian_score_active_mask = None
@@ -3975,6 +4293,7 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_projector_full = None
     coarse_gaussian_gemm_resource_estimate = None
     coarse_gaussian_gemm_projection_cache_plan = None
+    coarse_gaussian_gemm_certificate_topology = None
     if coarse_gaussian_ffi_enabled:
         if use_float64_scoring:
             raise ValueError(
@@ -4049,14 +4368,26 @@ def _compute_k_class_significance_batched(
             ),
             dtype=jnp.int32,
         )
-        coarse_gaussian_full_to_compact = jnp.asarray(
+        coarse_gaussian_full_to_compact_np = np.asarray(
             _relion_cuda_fine_full_to_compact_lookup(
                 image_shape,
                 score_size,
                 square_score_indices_np,
             ),
+            dtype=np.int32,
+        )
+        coarse_gaussian_full_to_compact = jnp.asarray(
+            coarse_gaussian_full_to_compact_np,
             dtype=jnp.int32,
         )
+        if coarse_gaussian_gemm_hybrid_requested:
+            coarse_gaussian_gemm_certificate_topology = (
+                plan_coarse_gemm_certificate_topology(
+                    coarse_gaussian_full_to_compact_np,
+                    compact_pixel_count=int(square_score_count),
+                    translation_count=n_trans,
+                )
+            )
         coarse_gaussian_powerclass = _relion_cuda_powerclass_highres_xi2_half
         if coarse_gaussian_gemm_macro_enabled:
             coarse_gaussian_gemm_resource_estimate = _coarse_gaussian_gemm_resources(
@@ -4200,6 +4531,15 @@ def _compute_k_class_significance_batched(
                 n_rot,
                 int(image_batch_size),
                 n_trans,
+            )
+        if coarse_gaussian_gemm_hybrid_requested:
+            logger.warning(
+                "Opt-in certified K=1 coarse GEMM/source16 hybrid enabled: "
+                "rotations=%d translations=%d selected_block_capacity=%d; "
+                "all ineligible batches use full rectangular direct fallback",
+                n_rot,
+                n_trans,
+                coarse_gaussian_gemm_hybrid_capacity,
             )
         if coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.NATIVE_TEXTURE:
             from recovar.em.dense_single_volume.helpers.projection import (
@@ -4537,6 +4877,7 @@ def _compute_k_class_significance_batched(
     coarse_gemm_diagnostic_positions = None
     coarse_gemm_direct_capture = {"scores": None}
     coarse_gemm_stream_capture_control = {"enabled": False}
+    coarse_gaussian_gemm_hybrid_batch_result = None
 
     def _score_block(
         class_index,
@@ -4549,6 +4890,28 @@ def _compute_k_class_significance_batched(
         *,
         rotation_start,
     ):
+        if coarse_gaussian_gemm_hybrid_batch_result is not None:
+            if int(class_index) != 0:
+                raise RuntimeError("certified coarse GEMM hybrid is restricted to K=1")
+            start = int(rotation_start)
+            requested_rows = int(rots_b.shape[0])
+            dense_scores = coarse_gaussian_gemm_hybrid_batch_result.scores
+            if (
+                start < 0
+                or start >= int(dense_scores.shape[1])
+                or requested_rows <= 0
+            ):
+                raise IndexError("hybrid score block is outside the dense source table")
+            stop = min(start + requested_rows, int(dense_scores.shape[1]))
+            scores = dense_scores[:, start:stop, :]
+            padding_rows = requested_rows - int(scores.shape[1])
+            if padding_rows:
+                scores = jnp.pad(
+                    scores,
+                    ((0, 0), (0, padding_rows), (0, 0)),
+                    constant_values=-jnp.inf,
+                )
+            return scores
         if coarse_gaussian_gemm_macro_enabled:
             coarse_gemm_direct_capture["scores"] = None
             project_block_once = _project_coarse_gemm_block_once
@@ -4837,6 +5200,14 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_diagnostic_target_counts = {}
     coarse_gaussian_gemm_stream_paths = []
     coarse_gaussian_gemm_stream_original_indices = []
+    coarse_gaussian_gemm_hybrid_batch_count = 0
+    coarse_gaussian_gemm_hybrid_selected_batch_count = 0
+    coarse_gaussian_gemm_hybrid_fallback_batch_count = 0
+    coarse_gaussian_gemm_hybrid_selected_image_count = 0
+    coarse_gaussian_gemm_hybrid_fallback_image_count = 0
+    coarse_gaussian_gemm_hybrid_selected_block_count = 0
+    coarse_gaussian_gemm_hybrid_max_blocks_per_image = 0
+    coarse_gaussian_gemm_hybrid_fallback_reasons = {}
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -4847,6 +5218,7 @@ def _compute_k_class_significance_batched(
     ):
         actual_batch_size = len(indices)
         end_idx = start_idx + actual_batch_size
+        coarse_gaussian_gemm_hybrid_batch_result = None
         (
             relion_cuda_preprocess,
             integer_pre_shifts,
@@ -5338,6 +5710,71 @@ def _compute_k_class_significance_batched(
             dump_target_pre_prior_blocks_per_class = None
             dump_target_with_prior_blocks_per_class = None
 
+        if coarse_gaussian_gemm_hybrid_requested:
+            if dump_target_local_positions is not None:
+                raise ValueError(
+                    f"{_COARSE_GAUSSIAN_GEMM_HYBRID_ENV}=1 does not support "
+                    "raw significance score dumps",
+                )
+            if (
+                coarse_gaussian_gemm_projection_cache is None
+                or coarse_gaussian_gemm_projection_cache_plan is None
+                or coarse_gaussian_gemm_certificate_topology is None
+            ):
+                raise RuntimeError(
+                    "certified coarse GEMM hybrid is missing its projection "
+                    "cache, cache plan, or sealed topology",
+                )
+            coarse_gaussian_gemm_hybrid_batch_result = (
+                _compute_coarse_gaussian_gemm_hybrid_batch(
+                    coarse_gaussian_gemm_projection_cache,
+                    jnp.asarray(coarse_gaussian_shifted_corrected, dtype=jnp.complex64),
+                    jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
+                    jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
+                    topology=coarse_gaussian_gemm_certificate_topology,
+                    actual_image_count=actual_batch_size,
+                    class_log_prior=class_log_priors_np[0],
+                    rotation_log_prior=(
+                        None
+                        if rotation_log_prior_padded is None
+                        else rotation_log_prior_padded[0, :n_rot]
+                    ),
+                    translation_log_prior=batch_translation_log_prior,
+                    certificate_chunk_rows=(
+                        coarse_gaussian_gemm_projection_cache_plan.chunk_rows
+                    ),
+                    block_capacity=coarse_gaussian_gemm_hybrid_capacity,
+                )
+            )
+            coarse_gaussian_gemm_hybrid_batch_count += 1
+            if coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
+                coarse_gaussian_gemm_hybrid_selected_batch_count += 1
+                coarse_gaussian_gemm_hybrid_selected_image_count += actual_batch_size
+                selected_counts = np.asarray(
+                    coarse_gaussian_gemm_hybrid_batch_result.selection.block_count,
+                    dtype=np.int32,
+                )[:actual_batch_size]
+                coarse_gaussian_gemm_hybrid_selected_block_count += int(
+                    np.sum(selected_counts, dtype=np.int64),
+                )
+                coarse_gaussian_gemm_hybrid_max_blocks_per_image = max(
+                    coarse_gaussian_gemm_hybrid_max_blocks_per_image,
+                    int(np.max(selected_counts)),
+                )
+            else:
+                coarse_gaussian_gemm_hybrid_fallback_batch_count += 1
+                coarse_gaussian_gemm_hybrid_fallback_image_count += actual_batch_size
+                fallback_reason = str(
+                    coarse_gaussian_gemm_hybrid_batch_result.fallback_reason,
+                )
+                coarse_gaussian_gemm_hybrid_fallback_reasons[fallback_reason] = (
+                    coarse_gaussian_gemm_hybrid_fallback_reasons.get(
+                        fallback_reason,
+                        0,
+                    )
+                    + 1
+                )
+
         global_max = jnp.full(batch_size, -jnp.inf)
         global_sum = jnp.zeros(batch_size, dtype=jnp.float64)
         class_max_values = []
@@ -5393,11 +5830,18 @@ def _compute_k_class_significance_batched(
                 "scores for min_diff2 offset reconstruction"
             )
 
-        relion_raw_score_max = (
-            jnp.full(batch_size, -jnp.inf, dtype=jnp.float32)
-            if relion_f32_coarse_support_enabled
-            else None
-        )
+        if not relion_f32_coarse_support_enabled:
+            relion_raw_score_max = None
+        elif coarse_gaussian_gemm_hybrid_batch_result is not None:
+            relion_raw_score_max = (
+                coarse_gaussian_gemm_hybrid_batch_result.raw_score_max
+            )
+        else:
+            relion_raw_score_max = jnp.full(
+                batch_size,
+                -jnp.inf,
+                dtype=jnp.float32,
+            )
 
         # Precompute fused-path inputs once per batch (constant across class/block).
         if use_fused_pass1:
@@ -5491,7 +5935,10 @@ def _compute_k_class_significance_batched(
                             )
                     if passive_raw_score_blocks_per_class is not None:
                         passive_raw_score_blocks_per_class[class_index].append(scores)
-                    if relion_raw_score_max is not None:
+                    if (
+                        relion_raw_score_max is not None
+                        and coarse_gaussian_gemm_hybrid_batch_result is None
+                    ):
                         relion_raw_score_max = jnp.maximum(
                             relion_raw_score_max,
                             jnp.max(scores.reshape(batch_size, -1), axis=1),
@@ -5542,7 +5989,11 @@ def _compute_k_class_significance_batched(
                                 actual_image_count=actual_batch_size,
                             )
                         )
-                    scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                    if not (
+                        coarse_gaussian_gemm_hybrid_batch_result is not None
+                        and coarse_gaussian_gemm_hybrid_batch_result.scores_include_priors
+                    ):
+                        scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
                     if direct_scores_for_diagnostic is not None:
                         direct_scores_for_diagnostic = _add_priors(
                             direct_scores_for_diagnostic,
@@ -5815,7 +6266,17 @@ def _compute_k_class_significance_batched(
                         if r1 > n_rot:
                             valid = n_rot - r0
                             scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
-                        scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                        if not (
+                            coarse_gaussian_gemm_hybrid_batch_result is not None
+                            and coarse_gaussian_gemm_hybrid_batch_result.scores_include_priors
+                        ):
+                            scores = _add_priors(
+                                scores,
+                                class_index,
+                                r0,
+                                r1,
+                                batch_translation_log_prior,
+                            )
                     else:
                         scores = cached_class_score_blocks[class_index][block_index]
                     actual_rot = min(rotation_block_size, n_rot - r0)
@@ -6449,6 +6910,65 @@ def _compute_k_class_significance_batched(
                 enabled=coarse_gaussian_gemm_projection_cache is not None,
             )
         )
+    if coarse_gaussian_gemm_hybrid_requested:
+        selected_candidate_count = (
+            coarse_gaussian_gemm_hybrid_selected_block_count
+            * SOURCE_ROTATION_BLOCK_SIZE
+            * n_trans
+        )
+        full_selected_image_candidate_count = (
+            coarse_gaussian_gemm_hybrid_selected_image_count * n_rot * n_trans
+        )
+        full_stats["coarse_gaussian_gemm_hybrid"] = {
+            "enabled": True,
+            "default_enabled": False,
+            "published_score_source": "exact_relion_source16_or_full_rectangular",
+            "expanded_gemm_scores_published": False,
+            "whole_batch_fail_closed_fallback": True,
+            "batch_count": int(coarse_gaussian_gemm_hybrid_batch_count),
+            "selected_rescore_batch_count": int(
+                coarse_gaussian_gemm_hybrid_selected_batch_count,
+            ),
+            "fallback_batch_count": int(
+                coarse_gaussian_gemm_hybrid_fallback_batch_count,
+            ),
+            "selected_rescore_image_count": int(
+                coarse_gaussian_gemm_hybrid_selected_image_count,
+            ),
+            "fallback_image_count": int(
+                coarse_gaussian_gemm_hybrid_fallback_image_count,
+            ),
+            "selected_source16_block_count": int(
+                coarse_gaussian_gemm_hybrid_selected_block_count,
+            ),
+            "selected_exact_candidate_count": int(selected_candidate_count),
+            "full_candidate_count_for_selected_images": int(
+                full_selected_image_candidate_count,
+            ),
+            "selected_exact_candidate_fraction": (
+                float(selected_candidate_count / full_selected_image_candidate_count)
+                if full_selected_image_candidate_count
+                else None
+            ),
+            "max_selected_blocks_per_image": int(
+                coarse_gaussian_gemm_hybrid_max_blocks_per_image,
+            ),
+            "selected_block_capacity": int(
+                coarse_gaussian_gemm_hybrid_capacity,
+            ),
+            "certificate_chunk_rows": int(
+                coarse_gaussian_gemm_projection_cache_plan.chunk_rows,
+            ),
+            "certificate_chunk_count_per_batch": int(
+                coarse_gaussian_gemm_projection_cache_plan.chunk_count_per_table,
+            ),
+            "topology_full_to_compact_sha256": (
+                coarse_gaussian_gemm_certificate_topology.full_to_compact_sha256
+            ),
+            "fallback_reasons": dict(
+                sorted(coarse_gaussian_gemm_hybrid_fallback_reasons.items()),
+            ),
+        }
     if coarse_gaussian_gemm_diagnostic_paths:
         full_stats["coarse_gaussian_gemm_diagnostic_paths"] = tuple(
             coarse_gaussian_gemm_diagnostic_paths,

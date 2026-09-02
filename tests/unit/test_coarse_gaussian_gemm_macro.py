@@ -1295,6 +1295,227 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     assert cache_stats["h100_observed_donated_insert_alias"] is None
 
 
+def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
+    monkeypatch,
+):
+    """The live loop must neither republish GEMM scores nor add priors twice."""
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers import oversampling, sparse_pass2_bucketed
+    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+        CoarseGemmHybridBlockSelection,
+    )
+
+    for name, value in {
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB": "0.001",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "0.01",
+        "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
+        "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
+        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
+        "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
+        "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
+        "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
+        "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
+        "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "1",
+        "RECOVAR_SIGNIFICANCE_SCORE_CACHE": "0",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_relion_exact_ctf_half_from_source_star",
+        lambda _dataset, indices, image_shape: jnp.ones(
+            (
+                len(indices),
+                int(image_shape[0]) * (int(image_shape[1]) // 2 + 1),
+            ),
+            dtype=jnp.float64,
+        ),
+    )
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_relion_cuda_powerclass_highres_xi2_half",
+        lambda processed, **_kwargs: jnp.zeros(
+            processed.shape[0],
+            dtype=jnp.float32,
+        ),
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        lambda images, translation_angles, pixel_indices, image_shape: jnp.repeat(
+            images[:, None, :],
+            int(translation_angles.shape[0]),
+            axis=1,
+        ).reshape(images.shape[0] * int(translation_angles.shape[0]), -1),
+    )
+
+    projection_calls = []
+
+    def fake_projection(projector_half, rotations_block, image_shape, **kwargs):
+        del projector_half, image_shape
+        projection_calls.append(
+            (len(rotations_block), bool(kwargs.get("return_abs2", True))),
+        )
+        projected = jnp.zeros(
+            (len(rotations_block), len(kwargs["pixel_indices"])),
+            dtype=jnp.complex64,
+        )
+        return projected, None
+
+    monkeypatch.setattr(
+        projection_helpers,
+        "compute_relion_projector_projections_block",
+        fake_projection,
+    )
+
+    helper_outputs = []
+
+    def fake_hybrid(
+        projection_cache,
+        shifted_corrected,
+        pixel_weight,
+        initial_diff2,
+        *,
+        topology,
+        actual_image_count,
+        class_log_prior,
+        rotation_log_prior,
+        translation_log_prior,
+        certificate_chunk_rows,
+        block_capacity,
+    ):
+        batch_size = int(shifted_corrected.shape[0])
+        del shifted_corrected, pixel_weight, initial_diff2
+        assert projection_cache.shape == (1, 16, 12)
+        assert topology.compact_pixel_count == 12
+        assert topology.translation_count == 2
+        assert actual_image_count in (1, 2)
+        assert np.float32(class_log_prior) == np.float32(0.25)
+        assert rotation_log_prior is None
+        assert translation_log_prior.shape == (2, 2)
+        assert certificate_chunk_rows == 16
+        assert block_capacity == 64
+
+        scores = np.full((batch_size, 16, 2), -100.0, dtype=np.float32)
+        scores[:actual_image_count, 5, 1] = np.float32(3.0)
+        scores[actual_image_count:] = -np.inf
+        block_ids = np.full((batch_size, block_capacity), -1, dtype=np.int32)
+        block_ids[:actual_image_count, 0] = 0
+        counts = np.zeros(batch_size, dtype=np.int32)
+        counts[:actual_image_count] = 1
+        selection = CoarseGemmHybridBlockSelection(
+            eligible=True,
+            fallback_reason=None,
+            block_ids=block_ids,
+            block_count=counts,
+            posterior_block_count=counts.copy(),
+            raw_max_block_count=counts.copy(),
+        )
+        result = significance.CoarseGaussianGemmHybridBatchResult(
+            scores=jnp.asarray(scores),
+            raw_score_max=jnp.zeros(batch_size, dtype=jnp.float32),
+            scores_include_priors=True,
+            used_selected_rescore=True,
+            fallback_reason=None,
+            selection=selection,
+        )
+        helper_outputs.append(np.asarray(result.scores))
+        return result
+
+    monkeypatch.setattr(
+        significance,
+        "_compute_coarse_gaussian_gemm_hybrid_batch",
+        fake_hybrid,
+    )
+
+    posterior_inputs = []
+
+    def fake_posterior(
+        score_values,
+        *,
+        adaptive_fraction,
+        max_significants,
+        tie_score_ulps,
+        min_diff2_offsets,
+    ):
+        del adaptive_fraction, max_significants, tie_score_ulps
+        scores = jnp.asarray(score_values, dtype=jnp.float32)
+        posterior_inputs.append(np.asarray(scores))
+        np.testing.assert_array_equal(
+            np.asarray(min_diff2_offsets),
+            np.zeros(scores.shape[0], dtype=np.float32),
+        )
+        best = jnp.argmax(scores, axis=1)
+        rows = jnp.arange(scores.shape[0], dtype=jnp.int32)
+        mask = jnp.zeros(scores.shape, dtype=jnp.bool_).at[rows, best].set(True)
+        weights = mask.astype(jnp.float32)
+        has_mass = jnp.any(jnp.isfinite(scores), axis=1)
+        count = has_mass.astype(jnp.int32)
+        total = has_mass.astype(jnp.float32)
+        return weights, mask, count, count, total, total
+
+    monkeypatch.setattr(
+        oversampling,
+        "relion_cuda_f32_coarse_posterior",
+        fake_posterior,
+    )
+
+    dataset = _MacroIntegrationDataset()
+    rotations = np.tile(np.eye(3, dtype=np.float32), (16, 1, 1))
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    translation_prior = np.asarray(
+        [[0.0, 0.5], [0.25, -0.5], [-0.25, 0.75]],
+        dtype=np.float32,
+    )
+    result = significance._compute_k_class_significance_batched(
+        dataset,
+        jnp.zeros((1, dataset.volume_size), dtype=jnp.complex64),
+        jnp.ones(dataset.image_size, dtype=jnp.float32),
+        rotations,
+        translations,
+        "linear_interp",
+        class_log_priors=np.asarray([0.25], dtype=np.float64),
+        adaptive_fraction=0.5,
+        max_significants=1,
+        image_batch_size=2,
+        rotation_block_size=6,
+        current_size=4,
+        translation_log_prior=translation_prior,
+        half_spectrum_scoring=True,
+        relion_projector_half=jnp.ones((1, 3, 3, 2), dtype=jnp.complex64),
+        relion_projector_r_max=1,
+        relion_projector_texture_interp=True,
+        score_mode="gaussian",
+        collect_significance=True,
+        pad_final_image_batch=True,
+    )
+
+    assert projection_calls == [(16, False)]
+    assert len(helper_outputs) == len(posterior_inputs) == 2
+    for helper_scores, posterior_scores in zip(helper_outputs, posterior_inputs):
+        np.testing.assert_array_equal(posterior_scores, helper_scores.reshape(2, -1))
+    np.testing.assert_array_equal(result[1], np.ones(3, dtype=np.int32))
+    np.testing.assert_array_equal(result[2], np.full(3, 11, dtype=np.int32))
+    np.testing.assert_array_equal(result[3], np.zeros(3, dtype=np.int32))
+    hybrid_stats = result[5]["coarse_gaussian_gemm_hybrid"]
+    assert hybrid_stats["batch_count"] == 2
+    assert hybrid_stats["selected_rescore_batch_count"] == 2
+    assert hybrid_stats["fallback_batch_count"] == 0
+    assert hybrid_stats["selected_rescore_image_count"] == 3
+    assert hybrid_stats["selected_source16_block_count"] == 3
+    assert hybrid_stats["selected_exact_candidate_fraction"] == 1.0
+    assert hybrid_stats["fallback_reasons"] == {}
+
+
 def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     monkeypatch,
     tmp_path,
