@@ -105,6 +105,7 @@ quality pair into a formal speed comparison.
 | `diagnostics/real-kclass-offset-prior-fullpairs-92438c285-20260901.json` | Two clean-source same-H100 pairs, one per dataset | Exact raw iteration-1 labels but failing post-update maps; the later shared-200 audit supersedes the earlier M-step-first interpretation by proving a pre-reconstruction candidate/score gap | Native wall/HBM/RSS retained; raw 31.59x and 26.90x RECOVAR/RELION wall ratios are diagnostic only. |
 | `diagnostics/real-kclass-selected-fine-10076-20260901.json` | Two-particle iteration-1 selected-fine capture made before `d1f2f9f93` | Historical support/prior discriminator only. Its large translation-prior delta is from the subsequently fixed InitialModel offset-prior arithmetic and is not a current-source causal boundary. | No final performance claim. This routed record does not yet have a standalone whole-ledger validator. |
 | `real_k4_shared200_causal_replay.md` | Frozen 200-particle, four-class iteration-1 replay; source `24317e40c`, job 13322235 | Strict gate FAIL, but 199/200 hard assignments agree and correctly framed per-class map FSC-AUC is 0.604--0.907. Candidate topology/raw scores already differ before reconstruction. | Six native arms plus one RECOVAR arm are bundled, so the 469 s allocation is causal evidence, not a formal speed ratio. |
+| `real_k4_native_coarse_score_boundary_20260902.md` and `diagnostics/real-k4-native-coarse-score-a32cccccb-20260902.json` | Native RELION and RECOVAR coarse surfaces for 16 frozen shared-200 probes, 1,069,056 candidates; job 13330906 | Diagnostic PASS: priors are excluded causally and the first material support difference is the raw likelihood/`diff2` surface. This is not a final K=4 quality admission. | Capture/control replay used one H100 for 35 s; timing is instrumentation qualification, not an engine speed comparison. |
 | `real_kclass_halfmap_refinement.md` | Independent-half refinement launcher/runbook | Runnable infrastructure only; no accepted completed pair | Pending. |
 
 InitialModel emits one class map rather than independently refined half maps,
@@ -123,11 +124,11 @@ performance after the quality gate passes.
    unless a new frozen gate passes.
 3. Finish and seal the RECOVAR EMPIAR-10202 arm before making any target-grid
    high-resolution or two-engine performance claim.
-4. Trace and repair the real K=4 pass-2 candidate-topology/raw-score divergence,
-   then rerun the shared-200 gate and a full independent-half, multi-seed
-   refinement. The completed causal replay rules out an M-step-only first
-   failure. Existing diagnostic timing cannot be promoted after a scientific
-   failure.
+4. Trace and repair the real K=4 coarse raw-likelihood/`diff2` divergence, then
+   rerun the shared-200 gate and a full independent-half, multi-seed refinement.
+   Exact score swaps now exclude the priors and place most squared score drift
+   on the class/rotation axis. Existing diagnostic timing cannot be promoted
+   after a scientific failure.
 5. Add a dedicated whole-ledger validator for the selected-fine diagnostic or
    migrate it into a versioned diagnostic schema before relying on it as more
    than causal evidence.

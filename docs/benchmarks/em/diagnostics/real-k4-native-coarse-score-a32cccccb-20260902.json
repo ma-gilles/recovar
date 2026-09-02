@@ -1,0 +1,121 @@
+{
+  "schema": "recovar.em_real_k4_native_coarse_score_diagnostic.v1",
+  "recorded_at": "2026-09-02",
+  "admission_status": "DIAGNOSTIC_ONLY",
+  "accepted_result": false,
+  "dataset": "EMPIAR-10076 frozen shared-200 InitialModel fixture",
+  "scope": {
+    "K": 4,
+    "iteration": 1,
+    "current_size": 20,
+    "particle_records": 16,
+    "classes": 4,
+    "rotations": 576,
+    "translations": 29,
+    "candidate_values": 1069056
+  },
+  "source": {
+    "relion_capture_commit": "a32cccccb8ba93b9dc471204d652236f67226282",
+    "relion_capture_checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_coarse_score_capture_20260902",
+    "relion_binary": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_coarse_score_capture_build_20260902/build/bin/relion_refine",
+    "relion_binary_sha256": "f54e20924a99268a2df840390adef1738edf9a8d5ea2788a049a5bbc378b97e6",
+    "recovar_significance_commit": "24317e40c",
+    "analysis_script": "scripts/analyze_em_real_k4_native_coarse_scores.py",
+    "inertness_script": "scripts/audit_relion_k4_coarse_score_capture_inertness.py"
+  },
+  "execution": {
+    "job_id": "13330906",
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed_seconds": 35,
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "cpus": 8,
+    "memory_gb": 192,
+    "req_tres_equals_alloc_tres": true,
+    "exclusive": false,
+    "control_peak_rss_kib": 2782180,
+    "instrumented_peak_rss_kib": 2723356,
+    "formal_engine_performance_result": false,
+    "performance_reason": "The serial control/capture timing qualifies passive instrumentation only; it is not a matched full-engine speed comparison."
+  },
+  "capture_validation": {
+    "particle_files": 16,
+    "candidate_records": 1069056,
+    "active_candidate_records": 1069056,
+    "significant_candidate_records": 1336,
+    "prior_diff2_algebra_max_abs": 0.0,
+    "exponent_shift_max_abs": 0.0,
+    "exponentiation_max_relative": 2.5249443e-7
+  },
+  "capture_inertness": {
+    "status": "PASS",
+    "classification": "scientifically_inert_at_recorded_floor_but_not_bitwise_inert",
+    "map_fsc_auc_floor": 0.999999,
+    "map_relative_l2_ceiling": 1e-5,
+    "iteration_0_map_arrays_exact": true,
+    "iteration_0_particle_fields_exact": true,
+    "iteration_1_pose_class_and_support_fields_exact": true,
+    "iteration_1_class_map_fsc_auc": [
+      0.9999999995584506,
+      0.9999999990778512,
+      0.9999999995973384,
+      0.9999999996509391
+    ],
+    "iteration_1_class_map_relative_l2": [
+      2.4602343381484358e-6,
+      6.1058216509288e-7,
+      1.8293103354829847e-6,
+      1.312511982238272e-6
+    ],
+    "bitwise_inert": false
+  },
+  "score_comparison": {
+    "classification": "raw_likelihood_surface_is_first_material_support_difference",
+    "metric_policy": "Remove only one per-particle additive constant; use exact support-set swaps as the causal metric.",
+    "orientation_class_prior_centered_max_abs": 0.0,
+    "translation_prior_centered_max_abs": 1.5045034474339977e-6,
+    "total_prior_centered_max_abs": 1.4575048424731729e-5,
+    "raw_likelihood_centered_max_abs": 6.694366470421755,
+    "raw_likelihood_pooled_centered_rms": 0.4141038802570511,
+    "raw_likelihood_median_centered_relative_l2": 0.01797765139040587,
+    "raw_likelihood_winner_exact_records": 16
+  },
+  "support_counterfactuals": {
+    "native_combined": {"exact_records": 16, "records": 16, "jaccard": 1.0},
+    "native_raw_plus_recovar_prior": {"exact_records": 16, "records": 16, "jaccard": 1.0},
+    "recovar_combined": {"exact_records": 5, "records": 16, "jaccard": 0.9517896274653032},
+    "recovar_raw_plus_native_prior": {"exact_records": 5, "records": 16, "jaccard": 0.9517896274653032},
+    "native_raw_without_prior": {"exact_records": 1, "records": 16, "jaccard": 0.5829383886255924},
+    "recovar_raw_without_prior": {"exact_records": 1, "records": 16, "jaccard": 0.5838767042086545},
+    "boundary_tie_records": 0
+  },
+  "raw_difference_axis_decomposition": {
+    "median_class_rotation_fraction": 0.8306602230326716,
+    "median_within_class_rotation_fraction": 0.16933977696732844,
+    "median_translation_main_effect_fraction": 0.00045694934387475246
+  },
+  "artifacts": {
+    "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_score_a32cccccb_20260902",
+    "sbatch": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_score_a32cccccb_20260902/jobs/run_native_coarse_score.sbatch",
+      "sha256": "93de36e19e78f2f67e41dcdbdb5b27594cf0836c7e1f239207bed8c0a8621984"
+    },
+    "capture_validation": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_score_a32cccccb_20260902/analysis/capture_validation.json",
+      "sha256": "3d8913639736ec73d65ad486e3e1235b1a52d86244d4aa4e7967c591220bc1a9"
+    },
+    "capture_inertness": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_score_a32cccccb_20260902/analysis/capture_inertness.json",
+      "sha256": "9aa9a484baabb36609ab65f15590925e4ddcc50a54c2f484e8c92e4aacb471f0"
+    },
+    "native_score_boundary": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_score_a32cccccb_20260902/analysis/native_coarse_score_boundary.json",
+      "sha256": "659adf64f0d451ac5b5eaf6dcd3a4faa6118cd435f485792dc16780510391e47"
+    },
+    "recovar_support_report": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_significance_probe_r5_24317e40c_20260901/analysis/coarse_score_support.json",
+      "sha256": "d137d59506a859e4b2ddec4c7afd13366645b131174c5f0ea24e58fa617879b2"
+    }
+  },
+  "strict_claim_boundary": "This 16-particle iteration-1 diagnostic causally excludes priors and localizes the first material K=4 support difference to coarse raw likelihood evaluation. It is not a final real-data K=4 refinement, resolution, or formal performance result."
+}

@@ -135,6 +135,12 @@ mismatch particles remain nonexact without a boundary tie. Further causal
 work must compare the native and RECOVAR coarse score components/order; merely
 copying RELION's significant-parent count is not an acceptable fix.
 
+That next comparison is now complete. The native score boundary and exact
+likelihood/prior swap result are documented in
+`real_k4_native_coarse_score_boundary_20260902.md`. They localize the first
+material support difference to the raw likelihood/`diff2` surface; the priors
+are not the cause.
+
 The authoritative report is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_significance_probe_r5_24317e40c_20260901/analysis/coarse_score_support.json`
 (SHA-256

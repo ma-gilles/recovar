@@ -207,7 +207,9 @@ gaps are in `audit_inventory_20260901.md`. The runnable 10k real-data K=4
 InitialModel diagnostic and its explicit half-map limitations are documented
 in `real_kclass_initialmodel_pairs.md`. The fixed iteration-1 EMPIAR-10076
 shared-200 candidate/posterior/reconstruction discriminator is documented in
-`real_k4_shared200_causal_replay.md`.
+`real_k4_shared200_causal_replay.md`. Its follow-on native coarse-score capture,
+capture-inertness gate, and exact likelihood/prior score swaps are documented
+in `real_k4_native_coarse_score_boundary_20260902.md`.
 
 ## Repeating the K-class robustness panel
 

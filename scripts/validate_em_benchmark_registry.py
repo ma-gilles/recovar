@@ -20,6 +20,7 @@ class RegistryValidationError(ValueError):
 _SYNTHETIC_NEGATIVE_RECORD_TYPE = "synthetic_kclass_negative_campaign_collection"
 _SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS = {
     "recovar.em.real_kclass_selected_fine_diagnostic.v1",
+    "recovar.em_real_k4_native_coarse_score_diagnostic.v1",
     "recovar.em_real_kclass_initialmodel_diagnostics.v1",
     "recovar.em_real_kclass_offset_prior_fullpairs.v1",
 }

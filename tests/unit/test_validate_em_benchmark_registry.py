@@ -81,6 +81,13 @@ NEGATIVE_DIAGNOSTIC = json.loads(
         / "k4-noctf-collapse-cases30-35-36-h100"
     ).with_suffix(".json").read_text()
 )
+NATIVE_COARSE_SCORE_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "real-k4-native-coarse-score-a32cccccb-20260902"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -160,8 +167,36 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
         )
         == "separate"
     )
+    assert (
+        registry_validator._diagnostic_registry_route(NATIVE_COARSE_SCORE_DIAGNOSTIC)
+        == "separate"
+    )
     with pytest.raises(RegistryValidationError, match="unrecognized diagnostic family"):
         registry_validator._diagnostic_registry_route({"schema": "unknown.v1"})
+
+
+def test_native_coarse_score_diagnostic_pins_causal_and_admission_boundaries():
+    diagnostic = NATIVE_COARSE_SCORE_DIAGNOSTIC
+    assert diagnostic["admission_status"] == "DIAGNOSTIC_ONLY"
+    assert diagnostic["accepted_result"] is False
+    assert diagnostic["execution"]["req_tres_equals_alloc_tres"] is True
+    assert diagnostic["execution"]["formal_engine_performance_result"] is False
+    assert diagnostic["capture_inertness"]["status"] == "PASS"
+    assert diagnostic["capture_inertness"]["bitwise_inert"] is False
+    assert min(diagnostic["capture_inertness"]["iteration_1_class_map_fsc_auc"]) > 0.999999
+
+    scores = diagnostic["score_comparison"]
+    assert scores["classification"] == (
+        "raw_likelihood_surface_is_first_material_support_difference"
+    )
+    assert scores["orientation_class_prior_centered_max_abs"] == 0
+    assert scores["raw_likelihood_centered_max_abs"] > 6
+
+    swaps = diagnostic["support_counterfactuals"]
+    assert swaps["native_raw_plus_recovar_prior"]["exact_records"] == 16
+    assert swaps["recovar_raw_plus_native_prior"]["exact_records"] == 5
+    assert swaps["recovar_raw_plus_native_prior"] == swaps["recovar_combined"]
+    assert swaps["boundary_tie_records"] == 0
 
 
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():
