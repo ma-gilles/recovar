@@ -209,7 +209,10 @@ in `real_kclass_initialmodel_pairs.md`. The fixed iteration-1 EMPIAR-10076
 shared-200 candidate/posterior/reconstruction discriminator is documented in
 `real_k4_shared200_causal_replay.md`. Its follow-on native coarse-score capture,
 capture-inertness gate, and exact likelihood/prior score swaps are documented
-in `real_k4_native_coarse_score_boundary_20260902.md`.
+in `real_k4_native_coarse_score_boundary_20260902.md`. The next bounded
+component replay, including the rejected in-kernel observer and accepted
+off-production-path capture, is documented in
+`real_k4_native_coarse_component_boundary_20260902.md`.
 
 ## Repeating the K-class robustness panel
 

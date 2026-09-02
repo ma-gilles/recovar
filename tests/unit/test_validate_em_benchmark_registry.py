@@ -88,6 +88,13 @@ NATIVE_COARSE_SCORE_DIAGNOSTIC = json.loads(
         / "real-k4-native-coarse-score-a32cccccb-20260902"
     ).with_suffix(".json").read_text()
 )
+NATIVE_COARSE_COMPONENT_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "real-k4-native-coarse-components-8f9ebc9-20260902"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -171,6 +178,12 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
         registry_validator._diagnostic_registry_route(NATIVE_COARSE_SCORE_DIAGNOSTIC)
         == "separate"
     )
+    assert (
+        registry_validator._diagnostic_registry_route(
+            NATIVE_COARSE_COMPONENT_DIAGNOSTIC
+        )
+        == "separate"
+    )
     with pytest.raises(RegistryValidationError, match="unrecognized diagnostic family"):
         registry_validator._diagnostic_registry_route({"schema": "unknown.v1"})
 
@@ -197,6 +210,36 @@ def test_native_coarse_score_diagnostic_pins_causal_and_admission_boundaries():
     assert swaps["recovar_raw_plus_native_prior"]["exact_records"] == 5
     assert swaps["recovar_raw_plus_native_prior"] == swaps["recovar_combined"]
     assert swaps["boundary_tie_records"] == 0
+
+
+def test_native_coarse_component_diagnostic_pins_causal_and_inertness_boundaries():
+    diagnostic = NATIVE_COARSE_COMPONENT_DIAGNOSTIC
+    assert diagnostic["admission_status"] == "DIAGNOSTIC_ONLY"
+    assert diagnostic["accepted_result"] is False
+    assert diagnostic["execution"]["native_replay"]["req_tres_equals_alloc_tres"]
+    assert diagnostic["execution"]["recovar_components"]["req_tres_equals_alloc_tres"]
+    assert diagnostic["capture_inertness"]["status"] == "PASS"
+    assert diagnostic["capture_inertness"]["iteration_1_decision_fields_exact"]
+    assert min(diagnostic["capture_inertness"]["iteration_1_class_map_fsc_auc"]) > 0.999999
+
+    comparison = diagnostic["component_comparison"]
+    assert comparison["classification"] == (
+        "cross_term_is_dominant_component_of_first_material_likelihood_difference"
+    )
+    assert comparison["cross_term_pooled_centered_rms"] > (
+        comparison["reference_norm_pooled_centered_rms"]
+    )
+    assert comparison["pooled_raw_residual_energy_remaining_after_native_cross"] < (
+        comparison["pooled_raw_residual_energy_remaining_after_native_norm"]
+    )
+
+    swaps = diagnostic["support_counterfactuals"]
+    assert swaps["native_combined"]["exact_records"] == 16
+    assert swaps["recovar_combined"]["exact_records"] == 5
+    assert swaps["native_cross_only"]["exact_records"] == 11
+    assert swaps["native_norm_only"]["exact_records"] == 5
+    assert swaps["boundary_tie_records"] == 0
+    assert diagnostic["rejected_in_kernel_capture"]["accepted_evidence"] is False
 
 
 def test_negative_diagnostic_is_complete_but_never_an_accepted_result():

@@ -1,0 +1,130 @@
+{
+  "schema": "recovar.em_real_k4_native_coarse_component_diagnostic.v1",
+  "recorded_at": "2026-09-02",
+  "admission_status": "DIAGNOSTIC_ONLY",
+  "accepted_result": false,
+  "dataset": "EMPIAR-10076 frozen shared-200 InitialModel fixture",
+  "scope": {
+    "K": 4,
+    "iteration": 1,
+    "current_size": 20,
+    "particle_records": 16,
+    "classes": 4,
+    "rotations": 576,
+    "translations": 29,
+    "candidate_values": 1069056
+  },
+  "source": {
+    "relion_capture_commit": "8f9ebc9221b9f8f3eb55c82f7d16377025ff3f46",
+    "relion_capture_tree": "282eab18f5def7f58d5fee1b0ee50dd61cb21275",
+    "relion_capture_checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/relion_k4_coarse_components_20260902",
+    "relion_binary": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_k4_coarse_components_build_20260902/build/bin/relion_refine",
+    "relion_binary_sha256": "2f2eaaa4496c3c6dbca1aca57b4a1936603018531a5cca4983d50ce618e3800c",
+    "recovar_component_commit": "24317e40cc4b0b19406f75c917857c03869a9372",
+    "recovar_component_checkout": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_empty_support_audit_20260901",
+    "analysis_commit": "8c39e734b2485de5bebdc23f0267059c9e51f8eb",
+    "analysis_script": "scripts/analyze_em_real_k4_native_coarse_components.py",
+    "component_validator": "scripts/validate_relion_coarse_component_capture.py",
+    "inertness_script": "scripts/audit_relion_k4_coarse_score_capture_inertness.py"
+  },
+  "execution": {
+    "native_replay": {
+      "job_id": "13332998",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_seconds": 68,
+      "node": "della-h19g1",
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "cpus": 8,
+      "memory_gb": 192,
+      "req_tres_equals_alloc_tres": true,
+      "exclusive": false,
+      "control_peak_rss_kib": 2707944,
+      "instrumented_peak_rss_kib": 2720344
+    },
+    "recovar_components": {
+      "job_id": "13332392",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_seconds": 287,
+      "node": "della-h19g1",
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "cpus": 8,
+      "memory_gb": 192,
+      "req_tres_equals_alloc_tres": true,
+      "exclusive": false,
+      "max_rss_kib": 8068208
+    },
+    "formal_engine_performance_result": false,
+    "performance_reason": "These bounded capture and replay jobs qualify causal instrumentation; they are not matched complete engine trajectories."
+  },
+  "capture_validation": {
+    "capture_ready": true,
+    "particle_files": 16,
+    "candidate_records": 1069056,
+    "production_diff2_dtype": "float32",
+    "component_accumulation_dtype": "float64"
+  },
+  "capture_inertness": {
+    "status": "PASS",
+    "classification": "scientifically_inert_at_recorded_floor_but_not_bitwise_inert",
+    "map_fsc_auc_floor": 0.999999,
+    "map_relative_l2_ceiling": 1e-5,
+    "iteration_0_numeric_state_exact": true,
+    "iteration_1_decision_fields_exact": true,
+    "iteration_1_class_map_fsc_auc": [
+      0.9999999995549114,
+      0.999999999072861,
+      0.9999999996037408,
+      0.9999999996338911
+    ],
+    "iteration_1_class_map_relative_l2": [
+      2.8453804072346883e-6,
+      8.320032894624834e-7,
+      1.3947795956737569e-6,
+      2.2912017736866995e-6
+    ],
+    "bitwise_inert": false
+  },
+  "component_comparison": {
+    "classification": "cross_term_is_dominant_component_of_first_material_likelihood_difference",
+    "metric_policy": "Remove one per-particle additive image constant; use exact support swaps as the causal metric.",
+    "reference_norm_pooled_centered_rms": 0.22538471345138905,
+    "cross_term_pooled_centered_rms": 0.3031616423080899,
+    "raw_likelihood_pooled_centered_rms": 0.4141038736387703,
+    "raw_likelihood_median_centered_relative_l2": 0.01797764955227915,
+    "component_residual_closure_centered_max_abs": 0.00010296075239956543,
+    "component_residual_closure_median_centered_rms": 1.4117865137675277e-5,
+    "pooled_raw_residual_energy_remaining_after_native_cross": 0.29623087949307514,
+    "pooled_raw_residual_energy_remaining_after_native_norm": 0.535956961270266
+  },
+  "support_counterfactuals": {
+    "native_combined": {"exact_records": 16, "records": 16, "jaccard": 1.0},
+    "recovar_combined": {"exact_records": 5, "records": 16, "jaccard": 0.9517896274653032},
+    "native_cross_only": {"exact_records": 11, "records": 16, "jaccard": 0.9895755770662695},
+    "native_norm_only": {"exact_records": 5, "records": 16, "jaccard": 0.9546452084857352},
+    "prior_invariant_records": 16,
+    "boundary_tie_records": 0
+  },
+  "rejected_in_kernel_capture": {
+    "accepted_evidence": false,
+    "job_id": "13332319",
+    "relion_commit": "4847df3",
+    "classification": "capture_inertness_not_established",
+    "cause": "Double-precision diagnostic accumulation was inserted into the production diff2 kernel and changed its register/reduction schedule.",
+    "iteration_1_class_map_fsc_auc_minimum": 0.8973971510943403,
+    "iteration_1_class_map_fsc_auc_maximum": 0.9342712783843793,
+    "inertness_report_sha256": "eed7bf948508de81301824b353fccdb3c3e15e82b5c0cc4709c649db463cf9b6"
+  },
+  "artifacts": {
+    "native_run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_native_coarse_components_replay_8f9ebc9_20260902",
+    "recovar_run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10076_shared200_recovar_components_r1_24317e40c_20260902",
+    "native_sbatch_sha256": "9a907aafec3612ffebd006e471488fa106cec1d3a6aeea8e9f572b9e16b619f7",
+    "recovar_sbatch_sha256": "18bed076e3f011af60c5131cc4c46e3cacc6946a6b9459bf3aaeb694489ea94b",
+    "component_validation_sha256": "bbcb54aa73cb4932cc663b8edfd9c7dff9a5c10b80b3493f47f60b78dde48df5",
+    "capture_inertness_sha256": "c5b6b415cc6bd1d8bb17975c5a02226c638d838a30d31f05341b08fabd48e32f",
+    "component_boundary_sha256": "5b6b6bc1098b1703f68ec4261fc459be0ae1ddf20761f6bc54c69a7504ea4f83",
+    "recovar_parity_arrays_sha256": "5f469bf8eac9003608e7e90367139875f58e3742b9115a3763f66ae641d47b66"
+  },
+  "strict_claim_boundary": "This 16-particle iteration-1 diagnostic localizes most of the first material coarse likelihood difference to the cross term. It is not a final real-data K=4 refinement, resolution, or formal performance result."
+}
