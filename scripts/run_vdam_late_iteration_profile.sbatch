@@ -51,6 +51,7 @@ CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 RELION_BIND_DIR=${RUNTIME}/relion_bind
 EXACT_LOCAL_BUCKET_RADIX=${EXACT_LOCAL_BUCKET_RADIX:-4}
 EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE=${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE:-0}
+STABLE_FOURIER_WINDOW_SHAPES=${STABLE_FOURIER_WINDOW_SHAPES:-0}
 
 on_error() {
   local status=$?
@@ -76,6 +77,7 @@ test -s "${PARTICLE_STACK}"
 test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${EXACT_LOCAL_BUCKET_RADIX}" =~ ^(2|4)$ ]]
 [[ "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}" =~ ^[0-9]+$ ]]
+[[ "${STABLE_FOURIER_WINDOW_SHAPES}" =~ ^[01]$ ]]
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
@@ -98,6 +100,9 @@ printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/allocated_gpu_uui
 printf 'exact_local_bucket_radix=%s\nexact_local_physical_order_chunk_size=%s\n' \
   "${EXACT_LOCAL_BUCKET_RADIX}" "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}" \
   > "${PROVENANCE}/candidate_parameters.txt"
+printf 'stable_fourier_window_shapes=%s\n' \
+  "${STABLE_FOURIER_WINDOW_SHAPES}" \
+  >> "${PROVENANCE}/candidate_parameters.txt"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 "${NSYS}" --version > "${PROVENANCE}/nsys_version.txt"
@@ -266,6 +271,9 @@ RECOVAR_COMMAND=(
   --exact-local-physical-order-chunk-size "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}"
   --cuda-profiler-range
 )
+if [[ "${STABLE_FOURIER_WINDOW_SHAPES}" = 1 ]]; then
+  RECOVAR_COMMAND+=(--stable-fourier-window-shapes)
+fi
 printf '%q ' "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
   --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \
   --capture-range-end=stop -o "${RECOVAR_NSYS_BASE}" "${RECOVAR_COMMAND[@]}" \

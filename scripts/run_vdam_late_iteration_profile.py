@@ -35,6 +35,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--exact-local-bucket-radix", type=int, choices=(2, 4), default=4)
     parser.add_argument("--exact-local-physical-order-chunk-size", type=int, default=0)
     parser.add_argument(
+        "--stable-fourier-window-shapes",
+        action="store_true",
+        help="Use the production candidate's stable physical Fourier ABI.",
+    )
+    parser.add_argument(
         "--cuda-profiler-range",
         action="store_true",
         help="Call cudaProfilerStart/Stop around only the warm execution.",
@@ -136,6 +141,8 @@ def _recovar_argv(
                 str(args.exact_local_physical_order_chunk_size),
             )
         )
+    if args.stable_fourier_window_shapes:
+        command.append("--stable-fourier-window-shapes")
     return command
 
 
