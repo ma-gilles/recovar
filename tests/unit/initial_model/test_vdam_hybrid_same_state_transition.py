@@ -470,6 +470,23 @@ def test_all_optimized_stable_pair_changes_only_the_two_stable_abis() -> None:
     assert runner._candidate_uses_packed_deferred(mode) is True
 
 
+def test_same_state_accepts_a_focused_posterior_dump_target(tmp_path) -> None:
+    args = runner._parse_args(
+        [
+            "--fixture-dir",
+            str(tmp_path),
+            "--acceptance-config",
+            str(tmp_path / "acceptance.json"),
+            "--output-root",
+            str(tmp_path / "out"),
+            "--fused-posterior-dump-original-index",
+            "2798",
+        ]
+    )
+
+    assert args.fused_posterior_dump_original_index == 2798
+
+
 def test_hybrid_image_batch_gate_uses_one_oracle_and_mirrored_four_repeats() -> None:
     specs = runner._hybrid_image_batch_arm_specs()
     assert tuple(label for label, _request in specs) == (
@@ -1877,6 +1894,8 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     )
     assert "all_optimized_stable_shapes_on_q32_batched" in source
     assert 'values[BATCHED_POSTERIOR_ENVIRONMENT] = "1"' in source
+    assert "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES" in source
+    assert "VDAM_SAME_STATE_FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX" in sbatch
     assert (
         "single_translate_off_1,single_translate_on_1,"
         "single_translate_on_2,single_translate_off_2"

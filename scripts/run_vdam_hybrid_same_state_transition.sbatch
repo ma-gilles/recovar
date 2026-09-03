@@ -29,6 +29,7 @@ TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
 NOISE_SPLIT_DIAGNOSTICS=${VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS:-0}
 MIRRORED_INCREMENTAL_PANELS=${VDAM_SAME_STATE_MIRRORED_INCREMENTAL_PANELS:-0}
 MIRRORED_HYBRID_IMAGE_BATCH_PANELS=${VDAM_SAME_STATE_MIRRORED_HYBRID_IMAGE_BATCH_PANELS:-0}
+FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX=${VDAM_SAME_STATE_FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX:-}
 PIXI_PY=$(jq -er '.files.interpreter.path' "${LAUNCH_MANIFEST}")
 RELION_BIND_SOURCE=$(jq -er '.files.relion_bind.path' "${LAUNCH_MANIFEST}")
 CUSPARSE_LIBRARY=$(jq -er '.files.cusparse_library.resolved_path' "${LAUNCH_MANIFEST}")
@@ -67,6 +68,9 @@ trap on_error ERR
 [[ "${NOISE_SPLIT_DIAGNOSTICS}" =~ ^[01]$ ]]
 [[ "${MIRRORED_INCREMENTAL_PANELS}" =~ ^[01]$ ]]
 [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" =~ ^[01]$ ]]
+if [[ -n "${FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX}" ]]; then
+  [[ "${FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX}" =~ ^[0-9]+$ ]]
+fi
 test "$((MIRRORED_INCREMENTAL_PANELS + MIRRORED_HYBRID_IMAGE_BATCH_PANELS))" -le 1
 case "${CANDIDATE_MODE}" in
   hybrid)
@@ -183,6 +187,8 @@ printf '%s\n' "${MIRRORED_INCREMENTAL_PANELS}" \
   > "${PROVENANCE}/mirrored_incremental_panels.txt"
 printf '%s\n' "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" \
   > "${PROVENANCE}/mirrored_hybrid_image_batch_panels.txt"
+printf '%s\n' "${FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX}" \
+  > "${PROVENANCE}/fused_posterior_dump_original_index.txt"
 printf '%s\n' "${CUDA_ARCH_FLAGS}" > "${PROVENANCE}/cuda_arch_flags.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
@@ -257,6 +263,12 @@ if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
 fi
 if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
   command+=(--mirrored-hybrid-image-batch-panels)
+fi
+if [[ -n "${FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX}" ]]; then
+  command+=(
+    --fused-posterior-dump-original-index
+    "${FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX}"
+  )
 fi
 printf '%q ' "${command[@]}" > "${PROVENANCE}/command.sh"
 printf '\n' >> "${PROVENANCE}/command.sh"

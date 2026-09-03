@@ -243,6 +243,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--image-batch-size", type=int, default=500)
     parser.add_argument("--candidate-mode", choices=CANDIDATE_MODES, default="hybrid")
     parser.add_argument(
+        "--fused-posterior-dump-original-index",
+        type=int,
+        default=None,
+        help="diagnostically dump one particle's production pass-2 scores in every timed arm",
+    )
+    parser.add_argument(
         "--mirrored-incremental-panels",
         action="store_true",
         help=(
@@ -2076,7 +2082,7 @@ def _capture_direct_checkpoint(
     ):
         argv.append("--stable-fourier-window-shapes")
 
-    captured: dict[str, Any] = {"argv": argv}
+    captured: dict[str, Any] = {"argv": argv, "output_root": output_root}
     original_expectation_factory = driver._native_expectation_step
     original_run = driver.run_native_initial_model
 
@@ -2168,6 +2174,7 @@ def _run_transition_arm(
     backend_mode: str | None = None,
     hybrid_image_batch_request: int | None = None,
     exact_coarse_profile_enabled: bool = False,
+    fused_posterior_dump_original_index: int | None = None,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from recovar.data_io.starfile import read_star
@@ -2292,12 +2299,28 @@ def _run_transition_arm(
             "1" if exact_coarse_profile_enabled else "0"
         )
     effective_environment: dict[str, str | None] = {}
+    diagnostic_environment: dict[str, str] = {}
+    if fused_posterior_dump_original_index is not None:
+        diagnostic_environment = {
+            "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR": str(
+                checkpoint["output_root"] / "fused_posterior_dumps"
+            ),
+            "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES": str(
+                int(fused_posterior_dump_original_index)
+            ),
+            "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION": str(
+                int(checkpoint_iteration) + 1
+            ),
+            "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL": label,
+            "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES": "1",
+        }
     persistent_cache_before = _persistent_cache_snapshot()
     wall_clock_started_epoch_s = time.time()
     started = time.perf_counter()
     with _temporary_environment(
         {
             **requested_environment,
+            **diagnostic_environment,
             "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "1",
             "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS": "1",
         }
@@ -3656,6 +3679,9 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint_iteration=args.checkpoint_iteration,
             backend_mode=backend_mode,
             hybrid_image_batch_request=hybrid_image_batch_request,
+            fused_posterior_dump_original_index=(
+                args.fused_posterior_dump_original_index
+            ),
         )
 
     for label, arm in arms.items():
@@ -3809,6 +3835,14 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoint_iteration": int(args.checkpoint_iteration),
         "profiled_iteration": int(args.checkpoint_iteration) + 1,
         "candidate_mode": args.candidate_mode,
+        "fused_posterior_dump_original_index": (
+            args.fused_posterior_dump_original_index
+        ),
+        "fused_posterior_dump_dir": (
+            str((output_root / "fused_posterior_dumps").resolve())
+            if args.fused_posterior_dump_original_index is not None
+            else None
+        ),
         "mirrored_incremental_panels": bool(args.mirrored_incremental_panels),
         "mirrored_hybrid_image_batch_panels": bool(
             args.mirrored_hybrid_image_batch_panels,
