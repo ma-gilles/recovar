@@ -68,6 +68,54 @@ These run in every EM PR and should finish in minutes.
 The unit suite must include identity and nonidentity K=4 permutations, tied
 assignments, duplicated maps, missing classes, and a negative GT association.
 
+### Current-source executable K=4 controls, 2026-09-02
+
+Three focused controls now cover previously implicit K=4 execution boundaries:
+
+| Boundary | Executable evidence | Established scope |
+| --- | --- | --- |
+| Final all-data eligibility | Commit `1a8b3521a`: `TestRelionModeSmokeTest::test_relion_final_iteration_supports_k_class` and `TestRelionModeSmokeTest::test_relion_k4_does_not_finalize_after_max_iter_even_when_diagnostic_force_enabled` | A converged tiny K=4 refinement invokes exactly one final all-data pass and retains four class means plus both halves' final class assignments. A nonconverged K=4 refinement invokes no final pass, including when the K=1 diagnostic force-after-max environment switch is enabled. |
+| Simultaneous dense image/rotation partitioning | Commit `1d9011a18`: `test_dense_k4_image_and_rotation_partition_equivalence` | A deterministic four-image, four-class dense global E/M step compares image batch 4 / rotation block 5 with image batch 3 / rotation block 2. Discrete class/pose outputs are exact; complex128 accumulator, evidence, and map reductions agree within the frozen `1024 * eps(float64)` bound. The odd five-rotation grid exercises a padded tail block. |
+| Numbered global-to-local continuity | Commit `ca626914d`: `test_k4_numbered_global_to_exact_local_preserves_per_half_pose_state` | Numbered iteration 1 routes both halves through the real dense K-class orchestrator; a forced controller transition routes both halves through the real exact-local K-class orchestrator at iteration 2. Exact assertions bind each half's dense pose outputs to iteration-1 history, local rotation/translation priors and integer pre-shifts, and local pose outputs to iteration-2 history, while preserving four class means. No final all-data pass is involved. |
+
+These are CPU unit controls, not trajectory-quality, FSC, HBM, or performance
+evidence. The continuity control deliberately sets
+`RECOVAR_K_CLASS_RELION_X_HALF_MSTEP=0`; it qualifies the numbered orchestration
+and full-volume exact-local K-class handoff, not the GPU/CUDA x-half BPref
+implementation. The dense partition control covers one simultaneous partition
+pair, not the complete Tier-1 batch/block matrix.
+
+The following focused commands were run from
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902`
+on `della-mol.princeton.edu` with the checkout-bound pixi interpreter and the
+qualified RELION binding:
+
+```bash
+env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
+  PYTHONNOUSERSITE=1 JAX_PLATFORMS=cpu \
+  TMPDIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_gap_audit_authoritative/tmp \
+  PIXI_HOME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_gap_audit_authoritative/pixi_home \
+  RATTLER_CACHE_DIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_gap_audit_authoritative/rattler_cache \
+  RECOVAR_RELION_BIND_BUILD_DIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_symmetry_build_20260830/relion_bind \
+  .pixi/envs/default/bin/python -m pytest \
+  tests/unit/test_k4_dense_partition_equivalence.py::test_dense_k4_image_and_rotation_partition_equivalence -q
+# 1 passed in 13.07s
+```
+
+```bash
+env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
+  PYTHONNOUSERSITE=1 JAX_PLATFORMS=cpu \
+  TMPDIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_gap_audit_authoritative/tmp \
+  PIXI_HOME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_gap_audit_authoritative/pixi_home \
+  RATTLER_CACHE_DIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k4_gap_audit_authoritative/rattler_cache \
+  RECOVAR_RELION_BIND_BUILD_DIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_symmetry_build_20260830/relion_bind \
+  .pixi/envs/default/bin/python -m pytest \
+  tests/unit/test_refine_relion_mode.py::test_k4_numbered_global_to_exact_local_preserves_per_half_pose_state \
+  tests/unit/test_refine_relion_mode.py::TestRelionModeSmokeTest::test_relion_k4_does_not_finalize_after_max_iter_even_when_diagnostic_force_enabled \
+  tests/unit/test_refine_relion_mode.py::TestRelionModeSmokeTest::test_relion_final_iteration_supports_k_class -q
+# 3 passed in 137.56s (0:02:17)
+```
+
 ## Tier 1: fixed-state GPU discriminators
 
 Use a sealed 32–256 particle panel at two current sizes (one coarse, one late
