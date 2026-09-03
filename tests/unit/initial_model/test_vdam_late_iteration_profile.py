@@ -17,6 +17,7 @@ from scripts.run_vdam_late_iteration_profile import (
     _validate_profile_contract_environment,
     _validate_profile_environment,
     _validate_profile_execution_contract,
+    _validate_reused_native_inputs,
 )
 from scripts.summarize_vdam_nsys_sqlite import summarize
 
@@ -508,6 +509,50 @@ def test_late_profile_contract_environment_rejects_mislabeled_runs():
         )
     with pytest.raises(RuntimeError, match="requires candidate selectors to be absent"):
         _validate_profile_contract_environment("default", candidate)
+
+
+def test_reused_native_inputs_accept_content_identical_worktree_move(tmp_path):
+    source_gdb = tmp_path / "old-worktree" / "scripts" / "vdam_relion_one_iteration.gdb"
+    current_gdb = tmp_path / "new-worktree" / "scripts" / "vdam_relion_one_iteration.gdb"
+    checkpoint = tmp_path / "run_it047_optimiser.star"
+    for path, content in (
+        (source_gdb, b"gdb commands\n"),
+        (current_gdb, b"gdb commands\n"),
+        (checkpoint, b"checkpoint\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    manifest = tmp_path / "static_inputs.sha256"
+    manifest.write_text(
+        f"{hashlib.sha256(source_gdb.read_bytes()).hexdigest()}  {source_gdb}\n"
+        f"{hashlib.sha256(checkpoint.read_bytes()).hexdigest()}  {checkpoint}\n"
+    )
+
+    report = _validate_reused_native_inputs(manifest, [checkpoint, current_gdb])
+
+    assert report["inputs"][0]["role"] == "absolute_path"
+    assert report["inputs"][1]["role"] == "scripts/vdam_relion_one_iteration.gdb"
+    assert report["inputs"][1]["source_manifest_path"] == str(source_gdb)
+
+
+def test_reused_native_inputs_reject_changed_or_ambiguous_relocated_script(tmp_path):
+    current_gdb = tmp_path / "current" / "scripts" / "vdam_relion_one_iteration.gdb"
+    current_gdb.parent.mkdir(parents=True)
+    current_gdb.write_bytes(b"changed\n")
+    old_a = tmp_path / "old-a" / "scripts" / current_gdb.name
+    old_b = tmp_path / "old-b" / "scripts" / current_gdb.name
+    manifest = tmp_path / "static_inputs.sha256"
+    source_digest = hashlib.sha256(b"original\n").hexdigest()
+    manifest.write_text(f"{source_digest}  {old_a}\n")
+    with pytest.raises(RuntimeError, match="input changed"):
+        _validate_reused_native_inputs(manifest, [current_gdb])
+
+    manifest.write_text(
+        f"{source_digest}  {old_a}\n"
+        f"{source_digest}  {old_b}\n"
+    )
+    with pytest.raises(RuntimeError, match="ambiguous relocated role"):
+        _validate_reused_native_inputs(manifest, [current_gdb])
 
 
 def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():

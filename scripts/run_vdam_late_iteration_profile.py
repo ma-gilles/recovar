@@ -54,6 +54,9 @@ _PROFILE_ALL_OPTIMIZED_Q32_EXTRA_ENVIRONMENT = {
     "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
     "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM": "32",
 }
+_NATIVE_REUSE_RELOCATABLE_SUFFIXES = (
+    Path("scripts/vdam_relion_one_iteration.gdb"),
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -102,6 +105,62 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _validate_reused_native_inputs(
+    manifest_path: Path,
+    current_paths: list[Path],
+) -> dict[str, list[dict[str, str]]]:
+    """Validate capture inputs while allowing a content-identical worktree move."""
+
+    expected: dict[str, str] = {}
+    for line in manifest_path.read_text().splitlines():
+        digest, raw_path = line.split(maxsplit=1)
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise RuntimeError(f"invalid reused native digest for {raw_path}")
+        if raw_path in expected and expected[raw_path] != digest:
+            raise RuntimeError(f"conflicting reused native digests for {raw_path}")
+        expected[raw_path] = digest
+
+    records: list[dict[str, str]] = []
+    for path in current_paths:
+        raw_path = str(path)
+        source_path = raw_path
+        role = "absolute_path"
+        if raw_path not in expected:
+            matching_suffixes = [
+                suffix
+                for suffix in _NATIVE_REUSE_RELOCATABLE_SUFFIXES
+                if path.parts[-len(suffix.parts) :] == suffix.parts
+            ]
+            if len(matching_suffixes) != 1:
+                raise RuntimeError(f"reused native manifest omitted {raw_path}")
+            suffix = matching_suffixes[0]
+            source_matches = [
+                candidate
+                for candidate in expected
+                if Path(candidate).parts[-len(suffix.parts) :] == suffix.parts
+            ]
+            if len(source_matches) != 1:
+                raise RuntimeError(
+                    "reused native manifest has ambiguous relocated role "
+                    f"{suffix}: {source_matches}"
+                )
+            source_path = source_matches[0]
+            role = str(suffix)
+
+        digest = _sha256(path)
+        if digest != expected[source_path]:
+            raise RuntimeError(f"reused native input changed: {raw_path}")
+        records.append(
+            {
+                "path": raw_path,
+                "source_manifest_path": source_path,
+                "role": role,
+                "sha256": digest,
+            }
+        )
+    return {"inputs": records}
 
 
 def _profile_environment_bool(

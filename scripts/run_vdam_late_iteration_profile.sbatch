@@ -252,31 +252,19 @@ if [[ -n "${REUSE_NATIVE_ROOT}" ]]; then
   )
   "${PIXI_PY}" - "${PROVENANCE}/reused_native_inputs.json" \
     "${source_native_manifest}" "${NATIVE_REUSE_INPUTS[@]}" <<'PY'
-import hashlib
 import json
 import sys
 from pathlib import Path
 
+from scripts.run_vdam_late_iteration_profile import _validate_reused_native_inputs
+
 output = Path(sys.argv[1])
 manifest_path = Path(sys.argv[2])
-expected = {}
-for line in manifest_path.read_text().splitlines():
-    digest, path = line.split(maxsplit=1)
-    expected[path] = digest
-records = []
-for raw_path in sys.argv[3:]:
-    path = Path(raw_path)
-    if raw_path not in expected:
-        raise RuntimeError(f"reused native manifest omitted {raw_path}")
-    checksum = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            checksum.update(block)
-    digest = checksum.hexdigest()
-    if digest != expected[raw_path]:
-        raise RuntimeError(f"reused native input changed: {raw_path}")
-    records.append({"path": raw_path, "sha256": digest})
-output.write_text(json.dumps({"inputs": records}, indent=2, sort_keys=True) + "\n")
+report = _validate_reused_native_inputs(
+    manifest_path,
+    [Path(raw_path) for raw_path in sys.argv[3:]],
+)
+output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
   cp --reflink=auto "${source_native_report}" "${NATIVE_NSYS_BASE}.nsys-rep"
   test "$(sha256sum "${NATIVE_NSYS_BASE}.nsys-rep" | awk '{print $1}')" = \
