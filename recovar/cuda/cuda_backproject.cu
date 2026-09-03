@@ -10041,6 +10041,159 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
     }
 }
 
+/* Compact source-ordered fine jobs.  Each row is
+ * (image, projected-reference row, dense rotation row, translation).  The
+ * dense rotation field is carried for the caller's scatter and deliberately
+ * ignored here.  Packing across the whole microbatch avoids the B * P_max
+ * expansion of the transitional pair ABI while retaining RELION's four-job
+ * block grouping and exact 256-lane accumulation tree. */
+__global__ __launch_bounds__(kRelionFineDiff2BlockSize)
+void relion_fine_diff2_fused_translate_jobs_f32_kernel(
+    const float2* reference,
+    const float2* image,
+    const float* translation_angles,
+    const float* weight,
+    const float* initial_diff2,
+    const int32_t* job_plan,
+    const int32_t* full_to_compact,
+    float* output,
+    int64_t batch_size,
+    int64_t reference_row_count,
+    int64_t job_count,
+    int64_t translation_count,
+    int64_t compact_pixel_count,
+    int64_t full_pixel_capacity,
+    int current_size,
+    const int32_t* runtime_current_size)
+{
+    constexpr int kJobsPerBlock = kRelionFineDiff2Ref3dJobChunk;
+    const int64_t job_start =
+        static_cast<int64_t>(blockIdx.x) * kJobsPerBlock;
+    if (job_start >= job_count) return;
+    const int jobs_in_block = static_cast<int>(min(
+        static_cast<int64_t>(kJobsPerBlock), job_count - job_start));
+
+    int32_t image_rows[kJobsPerBlock];
+    int32_t reference_rows[kJobsPerBlock];
+    int32_t translations[kJobsPerBlock];
+    bool valid_jobs[kJobsPerBlock];
+    bool any_valid_job = false;
+    #pragma unroll
+    for (int offset = 0; offset < kJobsPerBlock; ++offset) {
+        const bool in_block = offset < jobs_in_block;
+        const int64_t plan_offset = 4 * (job_start + offset);
+        const int32_t image_row = in_block ? job_plan[plan_offset] : -1;
+        const int32_t reference_row =
+            in_block ? job_plan[plan_offset + 1] : -1;
+        const int32_t translation =
+            in_block ? job_plan[plan_offset + 3] : -1;
+        const bool valid =
+            in_block && image_row >= 0 && image_row < batch_size &&
+            reference_row >= 0 && reference_row < reference_row_count &&
+            translation >= 0 && translation < translation_count;
+        image_rows[offset] = image_row;
+        reference_rows[offset] = reference_row;
+        translations[offset] = translation;
+        valid_jobs[offset] = valid;
+        any_valid_job = any_valid_job || valid;
+    }
+    if (!any_valid_job) {
+        if (threadIdx.x < jobs_in_block)
+            output[job_start + threadIdx.x] = __int_as_float(0x7f800000);
+        return;
+    }
+
+    const int logical_current_size = runtime_current_size == nullptr
+        ? current_size
+        : runtime_current_size[0];
+    const int64_t logical_full_pixel_count =
+        static_cast<int64_t>(logical_current_size) *
+        (logical_current_size / 2 + 1);
+    if (logical_current_size <= 0 || (logical_current_size & 1) != 0 ||
+        logical_full_pixel_count > full_pixel_capacity) {
+        if (threadIdx.x < jobs_in_block) {
+            const int offset = threadIdx.x;
+            output[job_start + offset] = valid_jobs[offset]
+                ? nanf("")
+                : __int_as_float(0x7f800000);
+        }
+        return;
+    }
+
+    float job_sums[kJobsPerBlock];
+    #pragma unroll
+    for (int offset = 0; offset < kJobsPerBlock; ++offset)
+        job_sums[offset] = 0.0f;
+    const int current_half_width = logical_current_size / 2 + 1;
+    const int pass_count = static_cast<int>(
+        (logical_full_pixel_count + kRelionFineDiff2BlockSize - 1) /
+        kRelionFineDiff2BlockSize);
+    for (int pass = 0; pass < pass_count; ++pass) {
+        const int64_t full_pixel =
+            static_cast<int64_t>(pass) * kRelionFineDiff2BlockSize +
+            threadIdx.x;
+        if (full_pixel >= logical_full_pixel_count) continue;
+        const int32_t compact_pixel = full_to_compact[full_pixel];
+        if (compact_pixel < 0 || compact_pixel >= compact_pixel_count) continue;
+        const int x = static_cast<int>(full_pixel % current_half_width);
+        int y = static_cast<int>(full_pixel / current_half_width);
+        if (y > logical_current_size / 2) y -= logical_current_size;
+        #pragma unroll
+        for (int offset = 0; offset < kJobsPerBlock; ++offset) {
+            if (offset >= jobs_in_block || !valid_jobs[offset]) continue;
+            const int64_t operand_index =
+                static_cast<int64_t>(image_rows[offset]) *
+                    compact_pixel_count + compact_pixel;
+            const int64_t reference_index =
+                static_cast<int64_t>(reference_rows[offset]) *
+                    compact_pixel_count + compact_pixel;
+            const int32_t translation = translations[offset];
+            const float2 shifted = relion_score_translate_f32(
+                image[operand_index],
+                x,
+                y,
+                translation_angles[2 * translation],
+                translation_angles[2 * translation + 1]);
+            job_sums[offset] = relion_fine_diff2_update_f32(
+                reference[reference_index],
+                shifted,
+                weight[operand_index],
+                job_sums[offset]);
+        }
+    }
+
+    __shared__ float lane_sums[
+        kRelionFineDiff2BlockSize * kJobsPerBlock];
+    #pragma unroll
+    for (int offset = 0; offset < kJobsPerBlock; ++offset) {
+        if (offset < jobs_in_block && valid_jobs[offset])
+            lane_sums[offset * kRelionFineDiff2BlockSize + threadIdx.x] =
+                job_sums[offset];
+    }
+    __syncthreads();
+    for (int width = kRelionFineDiff2BlockSize / 2; width > 0; width /= 2) {
+        if (threadIdx.x < width) {
+            #pragma unroll
+            for (int offset = 0; offset < kJobsPerBlock; ++offset) {
+                if (offset >= jobs_in_block || !valid_jobs[offset]) continue;
+                const int lane =
+                    offset * kRelionFineDiff2BlockSize + threadIdx.x;
+                lane_sums[lane] = __fadd_rn(
+                    lane_sums[lane], lane_sums[lane + width]);
+            }
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x < jobs_in_block) {
+        const int offset = threadIdx.x;
+        output[job_start + offset] = valid_jobs[offset]
+            ? __fadd_rn(
+                  lane_sums[offset * kRelionFineDiff2BlockSize],
+                  initial_diff2[image_rows[offset]])
+            : __int_as_float(0x7f800000);
+    }
+}
+
 cudaError_t launch_relion_fine_diff2_rectangular_f32(
     cudaStream_t stream,
     const float2* reference,
@@ -10418,6 +10571,53 @@ cudaError_t launch_relion_fine_diff2_fused_translate_pairs_f32(
             batch_size,
             reference_row_count,
             pair_count,
+            translation_count,
+            compact_pixel_count,
+            full_pixel_count,
+            current_size,
+            runtime_current_size);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_fine_diff2_fused_translate_jobs_f32(
+    cudaStream_t stream,
+    const float2* reference,
+    const float2* image,
+    const float* translation_angles,
+    const float* weight,
+    const float* initial_diff2,
+    const int32_t* job_plan,
+    const int32_t* full_to_compact,
+    float* output,
+    int64_t batch_size,
+    int64_t reference_row_count,
+    int64_t job_count,
+    int64_t translation_count,
+    int64_t compact_pixel_count,
+    int64_t full_pixel_count,
+    int current_size,
+    const int32_t* runtime_current_size)
+{
+    const int64_t total_blocks =
+        (job_count + kRelionFineDiff2Ref3dJobChunk - 1) /
+        kRelionFineDiff2Ref3dJobChunk;
+    if (total_blocks == 0) return cudaSuccess;
+    relion_fine_diff2_fused_translate_jobs_f32_kernel<<<
+        static_cast<unsigned int>(total_blocks),
+        kRelionFineDiff2BlockSize,
+        0,
+        stream>>>(
+            reference,
+            image,
+            translation_angles,
+            weight,
+            initial_diff2,
+            job_plan,
+            full_to_compact,
+            output,
+            batch_size,
+            reference_row_count,
+            job_count,
             translation_count,
             compact_pixel_count,
             full_pixel_count,
@@ -14080,6 +14280,169 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionFineDiff2FusedTranslateJobsF32Common(
+    cudaStream_t stream,
+    int64_t current_size,
+    const ffi::AnyBuffer* runtime_current_size,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer job_plan,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (reference.element_type() != ffi::DataType::C64 ||
+        image.element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateJobsF32: reference/image must be C64");
+    if (translation_angles.element_type() != ffi::DataType::F32 ||
+        weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateJobsF32: angles/weight/initial/output must be F32");
+    if (job_plan.element_type() != ffi::DataType::S32 ||
+        full_to_compact.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateJobsF32: job plan/lookup must be S32");
+    if (runtime_current_size != nullptr &&
+        (runtime_current_size->element_type() != ffi::DataType::S32 ||
+         runtime_current_size->dimensions().size() != 0))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateRuntimeJobsF32: "
+            "logical_current_size must be an S32 scalar");
+    if (runtime_current_size == nullptr &&
+        (current_size <= 0 || current_size > std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateJobsF32: invalid current_size");
+
+    const auto reference_dims = reference.dimensions();
+    const auto image_dims = image.dimensions();
+    const auto translation_dims = translation_angles.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
+    const auto job_dims = job_plan.dimensions();
+    const auto lookup_dims = full_to_compact.dimensions();
+    const auto output_dims = output->dimensions();
+    const bool lookup_shape_valid = lookup_dims.size() == 1 && lookup_dims[0] > 0;
+    const int64_t expected_full_pixels = runtime_current_size == nullptr
+        ? current_size * (current_size / 2 + 1)
+        : (lookup_shape_valid ? lookup_dims[0] : 0);
+    if (reference_dims.size() != 2 || image_dims.size() != 2 ||
+        translation_dims.size() != 2 || translation_dims[1] != 2 ||
+        weight_dims.size() != 2 || initial_dims.size() != 1 ||
+        job_dims.size() != 2 || job_dims[0] <= 0 || job_dims[1] != 4 ||
+        !lookup_shape_valid || output_dims.size() != 1 ||
+        reference_dims[0] <= 0 || reference_dims[1] <= 0 ||
+        image_dims[0] <= 0 || image_dims[1] != reference_dims[1] ||
+        translation_dims[0] <= 0 || weight_dims[0] != image_dims[0] ||
+        weight_dims[1] != reference_dims[1] ||
+        initial_dims[0] != image_dims[0] ||
+        lookup_dims[0] != expected_full_pixels || output_dims[0] != job_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateJobsF32: inconsistent operand shapes");
+
+    const int64_t total_blocks =
+        (job_dims[0] + kRelionFineDiff2Ref3dJobChunk - 1) /
+        kRelionFineDiff2Ref3dJobChunk;
+    if (total_blocks > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateJobsF32: block count exceeds CUDA grid");
+    cudaError_t err = launch_relion_fine_diff2_fused_translate_jobs_f32(
+        stream,
+        reinterpret_cast<const float2*>(reference.untyped_data()),
+        reinterpret_cast<const float2*>(image.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
+        static_cast<const int32_t*>(job_plan.untyped_data()),
+        static_cast<const int32_t*>(full_to_compact.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        image_dims[0],
+        reference_dims[0],
+        job_dims[0],
+        translation_dims[0],
+        reference_dims[1],
+        lookup_dims[0],
+        static_cast<int>(current_size),
+        runtime_current_size == nullptr
+            ? nullptr
+            : static_cast<const int32_t*>(runtime_current_size->untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+ffi::Error RelionFineDiff2FusedTranslateJobsF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer job_plan,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslateJobsF32Common(
+        stream, current_size, nullptr, reference, image, translation_angles,
+        weight, initial_diff2, job_plan, full_to_compact, output);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2FusedTranslateJobsF32,
+    RelionFineDiff2FusedTranslateJobsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionFineDiff2FusedTranslateRuntimeJobsF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer job_plan,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer logical_current_size,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslateJobsF32Common(
+        stream, 0, &logical_current_size, reference, image,
+        translation_angles, weight, initial_diff2, job_plan,
+        full_to_compact, output);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2FusedTranslateRuntimeJobsF32,
+    RelionFineDiff2FusedTranslateRuntimeJobsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

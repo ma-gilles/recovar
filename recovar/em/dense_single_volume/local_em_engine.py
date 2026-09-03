@@ -3145,8 +3145,13 @@ def _build_local_fused_pair_fine_arguments(
         np.int32,
         copy=False,
     )
+    flat_jobs = _sparse_pass2_diagnostics.build_compact_fine_job_plan(
+        candidate_mask,
+        dense_to_flat,
+    )
     return {
         **pair_arrays,
+        **flat_jobs,
         "reference_row": reference_rows,
         "valid_pair_count": int(np.sum(pair_arrays["pair_counts"], dtype=np.int64)),
         "dense_candidate_capacity": int(candidate_mask.size),

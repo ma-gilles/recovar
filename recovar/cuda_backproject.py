@@ -603,6 +603,12 @@ _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_PAIRS_F32 = (
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_PAIRS_F32 = (
     "cuda_relion_fine_diff2_fused_translate_runtime_pairs_f32"
 )
+_TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_JOBS_F32 = (
+    "cuda_relion_fine_diff2_fused_translate_jobs_f32"
+)
+_TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_JOBS_F32 = (
+    "cuda_relion_fine_diff2_fused_translate_runtime_jobs_f32"
+)
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
 _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32 = (
     "cuda_relion_powerclass_spectrum_highres_f32"
@@ -746,6 +752,14 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_PAIRS_F32,
         "RelionFineDiff2FusedTranslateRuntimePairsF32",
+    ),
+    (
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_JOBS_F32,
+        "RelionFineDiff2FusedTranslateJobsF32",
+    ),
+    (
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_JOBS_F32,
+        "RelionFineDiff2FusedTranslateRuntimeJobsF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
     (
@@ -4054,6 +4068,180 @@ def relion_fine_diff2_fused_translate_runtime_pairs_f32(
     out_type = jax.ShapeDtypeStruct(operands[5].shape, jnp.float32)
     return jax.ffi.ffi_call(
         _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_PAIRS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(*operands, logical_current_size)
+
+
+def _prepare_relion_fine_diff2_fused_translate_jobs_operands(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    job_plan: jax.Array,
+    full_to_compact: jax.Array,
+    initial_diff2: jax.Array | None = None,
+) -> tuple[jax.Array, ...]:
+    """Validate the global compact fine-job ABI."""
+
+    reference = jnp.asarray(reference)
+    image = jnp.asarray(image)
+    translation_angles = jnp.asarray(translation_angles)
+    weight = jnp.asarray(weight)
+    job_plan = jnp.asarray(job_plan)
+    full_to_compact = jnp.asarray(full_to_compact)
+    if reference.dtype != jnp.complex64 or image.dtype != jnp.complex64:
+        raise TypeError(
+            "job-indexed RELION fine diff2 reference/image must be complex64, got "
+            f"{reference.dtype} and {image.dtype}"
+        )
+    if job_plan.dtype != jnp.int32 or full_to_compact.dtype != jnp.int32:
+        raise TypeError(
+            "job-indexed RELION fine diff2 plan/lookup must be int32, got "
+            f"{job_plan.dtype} and {full_to_compact.dtype}"
+        )
+    if translation_angles.dtype != jnp.float32 or weight.dtype != jnp.float32:
+        raise TypeError(
+            "job-indexed RELION fine diff2 angles/weight must be float32, got "
+            f"{translation_angles.dtype} and {weight.dtype}"
+        )
+    if (
+        reference.ndim != 2
+        or image.ndim != 2
+        or translation_angles.ndim != 2
+        or translation_angles.shape[1] != 2
+        or weight.shape != image.shape
+        or job_plan.ndim != 2
+        or job_plan.shape[0] <= 0
+        or job_plan.shape[1] != 4
+        or full_to_compact.ndim != 1
+        or reference.shape[1] != image.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or image.shape[0] <= 0
+        or translation_angles.shape[0] <= 0
+    ):
+        raise ValueError(
+            "job-indexed RELION fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {image.shape}, {translation_angles.shape}, "
+            f"{weight.shape}, {job_plan.shape}, {full_to_compact.shape}"
+        )
+    if initial_diff2 is None:
+        initial_diff2 = jnp.zeros((image.shape[0],), dtype=jnp.float32)
+    else:
+        initial_diff2 = jnp.asarray(initial_diff2)
+    if initial_diff2.dtype != jnp.float32 or initial_diff2.shape != (
+        image.shape[0],
+    ):
+        raise ValueError(
+            "job-indexed RELION fine diff2 initial_diff2 must be float32 with "
+            f"shape ({image.shape[0]},), got {initial_diff2.shape} "
+            f"{initial_diff2.dtype}"
+        )
+    return (
+        reference,
+        image,
+        translation_angles,
+        weight,
+        initial_diff2,
+        job_plan,
+        full_to_compact,
+    )
+
+
+@functools.partial(jax.jit, static_argnames=("current_size",))
+def relion_fine_diff2_fused_translate_jobs_f32(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    job_plan: jax.Array,
+    full_to_compact: jax.Array,
+    initial_diff2: jax.Array | None = None,
+    *,
+    current_size: int,
+) -> jax.Array:
+    """Score one global source-ordered compact fine-job plan.
+
+    ``job_plan`` has shape ``(J, 4)`` and stores image row, projected-reference
+    row, dense rotation row, and translation id.  ``-1`` rows are inert static
+    padding.  The dense rotation field is returned to the caller unchanged for
+    scattering; CUDA consumes the other three fields and returns ``(J,)``.
+    """
+
+    operands = _prepare_relion_fine_diff2_fused_translate_jobs_operands(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        job_plan,
+        full_to_compact,
+        initial_diff2,
+    )
+    current_size = int(current_size)
+    expected_full_pixels = current_size * (current_size // 2 + 1)
+    if current_size <= 0 or operands[-1].shape != (expected_full_pixels,):
+        raise ValueError(
+            "job-indexed RELION fine diff2 lookup does not match current_size: "
+            f"current_size={current_size}, lookup={operands[-1].shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("job-indexed fused RELION fine diff2 requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "job-indexed fused RELION fine diff2 was explicitly requested but "
+            "custom CUDA is disabled"
+        )
+    _ensure_ffi()
+    out_type = jax.ShapeDtypeStruct((operands[5].shape[0],), jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_JOBS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(*operands, current_size=current_size)
+
+
+@jax.jit
+def relion_fine_diff2_fused_translate_runtime_jobs_f32(
+    reference: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    job_plan: jax.Array,
+    full_to_compact: jax.Array,
+    logical_current_size: jax.Array,
+    initial_diff2: jax.Array | None = None,
+) -> jax.Array:
+    """Score compact fine jobs inside a fixed physical pixel capacity."""
+
+    operands = _prepare_relion_fine_diff2_fused_translate_jobs_operands(
+        reference,
+        image,
+        translation_angles,
+        weight,
+        job_plan,
+        full_to_compact,
+        initial_diff2,
+    )
+    logical_current_size = jnp.asarray(logical_current_size, dtype=jnp.int32)
+    if logical_current_size.shape != ():
+        raise ValueError(
+            "runtime job-indexed RELION fine diff2 logical_current_size must "
+            f"be a scalar, got {logical_current_size.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(
+            "runtime job-indexed fused RELION fine diff2 requires a JAX GPU backend"
+        )
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "runtime job-indexed fused RELION fine diff2 was explicitly "
+            "requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+    out_type = jax.ShapeDtypeStruct((operands[5].shape[0],), jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_JOBS_F32,
         out_type,
         vmap_method="sequential",
     )(*operands, logical_current_size)

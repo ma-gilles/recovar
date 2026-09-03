@@ -209,6 +209,8 @@ def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_ro
         np.testing.assert_array_equal(actual[field], shared[field])
     assert actual["valid_pair_count"] == 7
     assert actual["dense_candidate_capacity"] == 144
+    assert actual["valid_job_count"] == 7
+    assert actual["job_bucket_size"] == 16
 
     dense_to_flat = build_dense_to_flat_local_row_lookup(
         encoded,
@@ -233,6 +235,21 @@ def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_ro
             dense_to_flat[image_row, expected_rotation],
         )
         assert np.all(actual["reference_row"][image_row, count:] == -1)
+
+    expected_jobs = np.asarray(
+        [
+            [0, dense_to_flat[0, 0], 0, 0],
+            [0, dense_to_flat[0, 0], 0, 2],
+            [0, dense_to_flat[0, 2], 2, 1],
+            [0, dense_to_flat[0, 2], 2, 2],
+            [1, dense_to_flat[1, 1], 1, 0],
+            [1, dense_to_flat[1, 1], 1, 1],
+            [1, dense_to_flat[1, 1], 1, 2],
+        ],
+        dtype=np.int32,
+    )
+    np.testing.assert_array_equal(actual["job_plan"][:7], expected_jobs)
+    assert np.all(actual["job_plan"][7:] == -1)
 
 
 @pytest.mark.unit

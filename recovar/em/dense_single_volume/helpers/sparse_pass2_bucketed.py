@@ -2197,6 +2197,96 @@ def build_compact_pair_index_arrays(
     }
 
 
+def build_compact_fine_job_plan(
+    candidate_masks,
+    reference_row_lookup,
+    *,
+    job_bucket_size: int | None = None,
+    job_block_size_for_quantization: int = 5000,
+):
+    """Pack all selected fine hypotheses into one global source-order plan.
+
+    The mature pair encoder quantizes a separate capacity for every image and
+    therefore executes ``B * max(P_i)`` slots.  This companion ABI preserves
+    the identical image-major, rotation-major, translation-major order while
+    quantizing only the total selected count.  Rows encode ``(image,
+    projected-reference row, dense rotation row, translation)``; an all-``-1``
+    tail is inert static padding for JAX compilation reuse.
+    """
+
+    candidate_masks = tuple(np.asarray(mask, dtype=bool) for mask in candidate_masks)
+    if not candidate_masks:
+        raise ValueError("compact fine jobs require at least one image mask")
+    first_shape = candidate_masks[0].shape
+    if len(first_shape) != 2 or first_shape[0] <= 0 or first_shape[1] <= 0:
+        raise ValueError(
+            "compact fine-job masks must have nonempty (rotation, translation) shape"
+        )
+    if any(mask.shape != first_shape for mask in candidate_masks):
+        raise ValueError("compact fine-job masks must share one dense shape")
+
+    batch_size = len(candidate_masks)
+    rotation_count, _ = first_shape
+    reference_row_lookup = np.asarray(reference_row_lookup)
+    if (
+        reference_row_lookup.dtype != np.int32
+        or reference_row_lookup.shape != (batch_size, rotation_count)
+    ):
+        raise ValueError(
+            "compact fine-job reference lookup must be int32 with shape "
+            f"{(batch_size, rotation_count)}, got "
+            f"{reference_row_lookup.shape} {reference_row_lookup.dtype}"
+        )
+
+    compact_indices = tuple(
+        compact_candidate_indices_in_source_order(candidate_mask)
+        for candidate_mask in candidate_masks
+    )
+    job_counts = np.asarray(
+        [rotation_rows.shape[0] for rotation_rows, _ in compact_indices],
+        dtype=np.int32,
+    )
+    valid_job_count = int(np.sum(job_counts, dtype=np.int64))
+    if job_bucket_size is None:
+        job_bucket_size = _exact_bucket_rotation_size(
+            valid_job_count,
+            job_block_size_for_quantization,
+        )
+    job_bucket_size = int(job_bucket_size)
+    if job_bucket_size <= 0:
+        raise ValueError("compact fine-job bucket size must be positive")
+    if valid_job_count > job_bucket_size:
+        raise ValueError(
+            "compact fine-job bucket is smaller than the source-ordered prefix: "
+            f"required={valid_job_count}, capacity={job_bucket_size}"
+        )
+
+    job_plan = np.full((job_bucket_size, 4), -1, dtype=np.int32)
+    cursor = 0
+    for image_row, (rotation_rows, translation_ids) in enumerate(compact_indices):
+        count = int(rotation_rows.shape[0])
+        if count == 0:
+            continue
+        reference_rows = reference_row_lookup[image_row, rotation_rows]
+        if np.any(reference_rows < 0):
+            raise ValueError(
+                "a selected fine job has no projected-reference row"
+            )
+        next_cursor = cursor + count
+        job_plan[cursor:next_cursor, 0] = image_row
+        job_plan[cursor:next_cursor, 1] = reference_rows
+        job_plan[cursor:next_cursor, 2] = rotation_rows
+        job_plan[cursor:next_cursor, 3] = translation_ids
+        cursor = next_cursor
+
+    return {
+        "job_bucket_size": job_bucket_size,
+        "job_counts": job_counts,
+        "valid_job_count": valid_job_count,
+        "job_plan": job_plan,
+    }
+
+
 def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=None):
     """Flatten per-image sparse pass-2 masks into valid candidate pairs.
 
