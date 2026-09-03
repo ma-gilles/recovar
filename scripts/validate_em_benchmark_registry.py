@@ -30,6 +30,7 @@ _INLINE_DIAGNOSTIC_FILENAMES = {
     _REAL_KCLASS_SINGLE_SEED_SCHEMA: "real-k4-10345-native10k-seed42001-2f6759608-20260903",
 }
 _SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS = {
+    "recovar.em.real_kclass_compact_pair_threshold_campaign.v1",
     "recovar.em.real_kclass_compact_pair_threshold_diagnostic.v1",
     "recovar.em.real_kclass_halfmap_multiseed_stability.v1",
     "recovar.em.real_kclass_selected_fine_diagnostic.v1",

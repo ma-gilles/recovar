@@ -472,4 +472,21 @@ therefore rejects scientific equivalence (two of three pairs pass); no
 averaging or near-identical endpoint maps can erase that failed pair. The
 production default remains 512; see
 `real_k4_10345_compact_pair_threshold_20260903.md` and
+`diagnostics/real-k4-10345-native10k-compact-pair-threshold1-2f6759608-20260903.json`.
+
+The follow-up threshold-128/default-512 campaign retains all three independent
+seed pairs and applies an all-pair conjunction with no averaging. It rejects
+formally on 3/3 pairs and rejects scientific equivalence on 1/3 pairs: seed
+42002 has one distinct iteration-8 physical pose even though assignments,
+controller arrays, and translations are exact and the maps meet the scientific
+FSC/L2 limits. Threshold 128 therefore remains diagnostic-only and the
+production default remains 512. The compact record is
 `diagnostics/real-k4-10345-native10k-compact-pair-threshold128-default512-campaign-2f6759608-20260903.json`.
+Validate its claim boundary and, only when explicitly re-auditing shared
+scratch, its source/report/run hashes with:
+
+```bash
+pixi run python scripts/validate_em_real_kclass_compact_pair_threshold_campaign.py
+pixi run python scripts/validate_em_real_kclass_compact_pair_threshold_campaign.py --verify-files
+pixi run pytest tests/unit/test_validate_em_real_kclass_compact_pair_threshold_campaign.py
+```

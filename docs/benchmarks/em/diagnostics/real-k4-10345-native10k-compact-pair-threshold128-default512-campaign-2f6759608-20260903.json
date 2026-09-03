@@ -1,0 +1,484 @@
+{
+  "schema": "recovar.em.real_kclass_compact_pair_threshold_campaign.v1",
+  "diagnostic_id": "real-k4-10345-native10k-compact-pair-threshold128-default512-campaign-2f6759608-20260903",
+  "recorded_at": "2026-09-03T08:02:43.978073Z",
+  "admission_status": "DIAGNOSTIC_ONLY_REJECTED",
+  "accepted_result": false,
+  "status": "complete_formal_and_scientific_aggregate_rejected",
+  "workload": {
+    "dataset": "EMPIAR-10345",
+    "K": 4,
+    "particles_total": 10000,
+    "particles_compared_half1": 5000,
+    "native_grid_size": 256,
+    "full_iterations": 8,
+    "half": 1,
+    "seeds": [
+      42001,
+      42002,
+      42003
+    ],
+    "initial_reference_voxel_arrays_equal_across_seeds": true,
+    "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT": "unset",
+    "exclusive_requested": false
+  },
+  "source": {
+    "branch": "codex/pr158-10345-native10k-source-2f6759608",
+    "commit": "2f6759608c82356dd5c24e7b149002df8cc84f28",
+    "tree": "b2e9b35f3988ae63aae45e1dac90c0386099d97f",
+    "clean": true
+  },
+  "treatment": {
+    "environment_variable": "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE",
+    "source_default_constant": "_DEFAULT_COMPACT_PAIR_MIN_BUCKET_SIZE",
+    "source_path": "recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py",
+    "baseline": {
+      "label": "default512",
+      "environment_value": null,
+      "resolved_min_bucket_size": 512
+    },
+    "candidate": {
+      "label": "threshold128",
+      "environment_value": "128",
+      "resolved_min_bucket_size": 128
+    },
+    "production_default_min_bucket_size": 512,
+    "production_default_changed": false,
+    "disposition": "retain_default_512"
+  },
+  "sealed_evidence": {
+    "campaign_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903",
+    "aggregate": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/analysis/attempt2_pair_audits/aggregate.json",
+      "sha256": "19a341f196c955ba6fdb19ac975caee412c66ccec88cdfab5719858527807c96",
+      "schema": "recovar.em.kclass_default_threshold_pair_aggregate.v1"
+    },
+    "aggregate_markdown": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/analysis/attempt2_pair_audits/aggregate.md",
+      "sha256": "6d98231b644796c035c8ac59a8b41ea39d139ed55ac7ff29e0ee4b48a7cf29e0"
+    },
+    "attempt2_contract": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/analysis/predeclared_two_level_acceptance_attempt2.json",
+      "sha256": "a38953a6a8b1d7365d9d790f694fbed80f1fb572714be85a5eb9219f6b413e7f"
+    },
+    "original_contract": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/analysis/predeclared_two_level_acceptance.json",
+      "sha256": "96124778fda722b06a0741e99d433bdfa833ee5806bd75618294abd0ebb69934"
+    }
+  },
+  "decision_contract": {
+    "aggregation_rule": "all_pair_conjunction_no_averaging",
+    "tiers_are_independent": true,
+    "scientific_equivalence_cannot_rewrite_formal": true,
+    "formal_thresholds": {
+      "all_class_assignments_exact": true,
+      "all_controller_arrays_exact": true,
+      "final_map_max_relative_l2": 1.02e-05,
+      "final_map_min_signed_non_dc_fsc_auc": 0.99999999,
+      "max_sampled_hbm_ratio": 1.05,
+      "max_sparse_group_wall_ratio": 0.95
+    },
+    "scientific_equivalence_thresholds": {
+      "all_class_assignments_exact": true,
+      "all_controller_arrays_exact": true,
+      "all_pose_arrays_exact": true,
+      "final_map_max_relative_l2": 0.0001,
+      "final_map_min_signed_non_dc_fsc_auc": 0.999999,
+      "max_sampled_hbm_ratio": 1.05,
+      "max_sparse_group_wall_ratio": 0.95,
+      "no_class_collapse": "all four class labels must be occupied in both arms at every saved iteration"
+    }
+  },
+  "aggregate": {
+    "pair_count": 3,
+    "formal": {
+      "accept_pair_count": 0,
+      "reject_pair_count": 3,
+      "decision": "reject"
+    },
+    "scientific_equivalence": {
+      "accept_pair_count": 2,
+      "reject_pair_count": 1,
+      "decision": "reject"
+    },
+    "aggregation_rule": "all_pair_conjunction_no_averaging",
+    "production_disposition": "retain_default_512"
+  },
+  "pairs": [
+    {
+      "seed": 42001,
+      "label": "seed42001",
+      "formal_contract_timing": "prospective",
+      "scientific_equivalence_contract_timing": "retrospective",
+      "formal_decision": "reject",
+      "scientific_equivalence_decision": "accept",
+      "pair_report": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/analysis/attempt2_pair_audits/seed42001.json",
+        "sha256": "60684e10414fd83109f4aa807a33c4baeb313338dd8adae2b29b9c3fb6bf45a8"
+      },
+      "jobs": {
+        "baseline": {
+          "job_id": 13377738,
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:26:36",
+          "node": "della-h19g3",
+          "gpu": "NVIDIA H100 80GB HBM3",
+          "gpu_uuid": "GPU-2c050a78-6cbe-4581-8204-0bdf25d68848",
+          "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "nonexclusive": true,
+          "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_default512_full8_10345_native10k_seed42001_2f6759608_20260903",
+          "gpu_monitor": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_default512_full8_10345_native10k_seed42001_2f6759608_20260903/logs/gpu-monitor-13377738.csv",
+          "walltime": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_default512_full8_10345_native10k_seed42001_2f6759608_20260903/provenance/walltime-13377738.json"
+        },
+        "candidate": {
+          "job_id": 13377631,
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:23:55",
+          "node": "della-h19g3",
+          "gpu": "NVIDIA H100 80GB HBM3",
+          "gpu_uuid": "GPU-1fdb3b99-e7ff-fe6d-4f59-9d2cc85fa319",
+          "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "nonexclusive": true,
+          "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_full8_10345_native10k_seed42001_2f6759608_20260903",
+          "gpu_monitor": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_full8_10345_native10k_seed42001_2f6759608_20260903/logs/gpu-monitor-13377631.csv",
+          "walltime": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_full8_10345_native10k_seed42001_2f6759608_20260903/provenance/walltime-13377631.json"
+        }
+      },
+      "summary": {
+        "assignment_mismatch_count": 0,
+        "controller_exact": true,
+        "poses_exact": true,
+        "max_euler_absolute_delta": 0.0,
+        "max_translation_absolute_delta": 0.0,
+        "max_pmax_absolute_delta": 0.0015423744916915894,
+        "significant_count_mismatch_count": 3,
+        "no_class_collapse": true,
+        "min_final_map_signed_non_dc_fsc_auc": 0.999999909144184,
+        "max_final_map_relative_l2": 3.191627404205041e-06
+      },
+      "performance": {
+        "baseline_peak_sampled_hbm_mib": 33793,
+        "candidate_peak_sampled_hbm_mib": 33781,
+        "sampled_hbm_ratio": 0.9996448968721333,
+        "baseline_sparse_group_wall_sum_s": 1091.1000000000004,
+        "candidate_sparse_group_wall_sum_s": 925.0999999999998,
+        "sparse_group_wall_ratio": 0.8478599578407108,
+        "baseline_external_wall_s": 1573.006793498993,
+        "candidate_external_wall_s": 1413.2439596652985,
+        "external_wall_ratio_descriptive": 0.8984347464397668
+      },
+      "artifact_sha256": {
+        "baseline_gpu_monitor": "8b76c3ad0e2255edce059862fd053b7551bf46e177e7416594c14cef90e7f363",
+        "baseline_log": "f7f64be761918cdc3814ccd7a5d97fcaa2196dbd6622b8c2410107c540310261",
+        "baseline_results": "60cc396363980a50594f97dd1f1efa5156c251982a103b6a22cb4004b6fb2359",
+        "candidate_gpu_monitor": "13ff6025553ca3cfc0a91995966f130dfcdb4b24e34995d3e8d077933115f873",
+        "candidate_log": "dcd2dd81ba59e74c8aafc66bfb2c93c7a959e80222e352583696449993b8f59f",
+        "candidate_results": "06c8faa104a231510385c82a90cd86c657932641ba6e654648890c5f05db0da9"
+      }
+    },
+    {
+      "seed": 42002,
+      "label": "seed42002",
+      "formal_contract_timing": "prospective",
+      "scientific_equivalence_contract_timing": "prospective",
+      "formal_decision": "reject",
+      "scientific_equivalence_decision": "reject",
+      "pair_report": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/analysis/attempt2_pair_audits/seed42002.json",
+        "sha256": "29f2b481b4d428d83168f13548e033a0454d233387946d68ec8aecf878e3ec63"
+      },
+      "jobs": {
+        "baseline": {
+          "job_id": 13378734,
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:26:28",
+          "node": "della-h19g2",
+          "gpu": "NVIDIA H100 80GB HBM3",
+          "gpu_uuid": "GPU-202f2d43-7a0a-bec1-135f-bb496ab059a7",
+          "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "nonexclusive": true,
+          "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/default512",
+          "gpu_monitor": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/default512/logs/gpu-monitor-13378734.csv",
+          "walltime": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/default512/provenance/walltime-13378734.json"
+        },
+        "candidate": {
+          "job_id": 13378735,
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:24:10",
+          "node": "della-h19g2",
+          "gpu": "NVIDIA H100 80GB HBM3",
+          "gpu_uuid": "GPU-e2c3190a-9599-15f7-a19c-7ae55e4e0a85",
+          "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "nonexclusive": true,
+          "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/threshold128",
+          "gpu_monitor": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/threshold128/logs/gpu-monitor-13378735.csv",
+          "walltime": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/threshold128/provenance/walltime-13378735.json"
+        }
+      },
+      "summary": {
+        "assignment_mismatch_count": 0,
+        "controller_exact": true,
+        "poses_exact": false,
+        "max_euler_absolute_delta": 156.68465328216553,
+        "max_translation_absolute_delta": 0.0,
+        "max_pmax_absolute_delta": 0.010482549667358398,
+        "significant_count_mismatch_count": 17,
+        "no_class_collapse": true,
+        "min_final_map_signed_non_dc_fsc_auc": 0.9999997920037381,
+        "max_final_map_relative_l2": 8.834071189780367e-05
+      },
+      "performance": {
+        "baseline_peak_sampled_hbm_mib": 33789,
+        "candidate_peak_sampled_hbm_mib": 33781,
+        "sampled_hbm_ratio": 0.9997632365562757,
+        "baseline_sparse_group_wall_sum_s": 1054.1,
+        "candidate_sparse_group_wall_sum_s": 919.4999999999999,
+        "sparse_group_wall_ratio": 0.872308130158429,
+        "baseline_external_wall_s": 1556.012338399887,
+        "candidate_external_wall_s": 1418.4816904067993,
+        "external_wall_ratio_descriptive": 0.911613394958991
+      },
+      "artifact_sha256": {
+        "baseline_gpu_monitor": "56c6bf619cd13c6c17573755934a128a10ce4b48beadd9d7ea670d88f6026446",
+        "baseline_log": "bd9af05b4115a12416fcd2c2b9919b607edfe72736ff2dbb4507617cbe02976e",
+        "baseline_results": "99adef0cc1f2dee00f9eff310d2eabec974f987ae347f3cbdac9f3d14dc322ae",
+        "candidate_gpu_monitor": "128f5191092d21b95c3994fadb1f327769c678d24a28bbdd3554eabd35556194",
+        "candidate_log": "e296f6264808221a9a2bda0fef15cab01bbe9eb4dcb0a66ab255350c8ed6a517",
+        "candidate_results": "9321fdf98941444b045f45b2b0673bcab2757903b1af2dd994b3df4ad38bf4f8"
+      }
+    },
+    {
+      "seed": 42003,
+      "label": "seed42003",
+      "formal_contract_timing": "prospective",
+      "scientific_equivalence_contract_timing": "prospective",
+      "formal_decision": "reject",
+      "scientific_equivalence_decision": "accept",
+      "pair_report": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/analysis/attempt2_pair_audits/seed42003.json",
+        "sha256": "3c8ca12be45a97562b6680a8ebfc678286104d7893942bece42d131ea1bc5992"
+      },
+      "jobs": {
+        "baseline": {
+          "job_id": 13378736,
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:26:11",
+          "node": "della-h19g3",
+          "gpu": "NVIDIA H100 80GB HBM3",
+          "gpu_uuid": "GPU-2c050a78-6cbe-4581-8204-0bdf25d68848",
+          "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "nonexclusive": true,
+          "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42003/default512",
+          "gpu_monitor": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42003/default512/logs/gpu-monitor-13378736.csv",
+          "walltime": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42003/default512/provenance/walltime-13378736.json"
+        },
+        "candidate": {
+          "job_id": 13378737,
+          "state": "COMPLETED",
+          "exit_code": "0:0",
+          "elapsed": "00:23:02",
+          "node": "della-h19g4",
+          "gpu": "NVIDIA H100 80GB HBM3",
+          "gpu_uuid": "GPU-990435ac-e5fe-18d9-c741-59b8fd9c9439",
+          "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+          "nonexclusive": true,
+          "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42003/threshold128",
+          "gpu_monitor": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42003/threshold128/logs/gpu-monitor-13378737.csv",
+          "walltime": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42003/threshold128/provenance/walltime-13378737.json"
+        }
+      },
+      "summary": {
+        "assignment_mismatch_count": 0,
+        "controller_exact": true,
+        "poses_exact": true,
+        "max_euler_absolute_delta": 0.0,
+        "max_translation_absolute_delta": 0.0,
+        "max_pmax_absolute_delta": 8.308887481689453e-05,
+        "significant_count_mismatch_count": 3,
+        "no_class_collapse": true,
+        "min_final_map_signed_non_dc_fsc_auc": 0.9999999095178567,
+        "max_final_map_relative_l2": 8.629477152678789e-07
+      },
+      "performance": {
+        "baseline_peak_sampled_hbm_mib": 33795,
+        "candidate_peak_sampled_hbm_mib": 33781,
+        "sampled_hbm_ratio": 0.9995857375351384,
+        "baseline_sparse_group_wall_sum_s": 1062.2999999999997,
+        "candidate_sparse_group_wall_sum_s": 879.3,
+        "sparse_group_wall_ratio": 0.8277322790172269,
+        "baseline_external_wall_s": 1547.2329676151276,
+        "candidate_external_wall_s": 1361.2072455883026,
+        "external_wall_ratio_descriptive": 0.8797687704951368
+      },
+      "artifact_sha256": {
+        "baseline_gpu_monitor": "3b11462c54512ee141c4adc8c7efa49ea92b2b8522fef9fdac836d149df183c3",
+        "baseline_log": "381c9546e5867f44d35486ba50404703e2cadf9f6df597ea5e956f5fcc6ae7db",
+        "baseline_results": "251e9f3ca767ab36c8de99d121479bae23c2c3f3b499d5e2c2e0aac28c78f966",
+        "candidate_gpu_monitor": "0622bb94f23bfd122e4ac3c50c47b5e60c13eb206ac64e732783d6478595a395",
+        "candidate_log": "67bc34b9ce6d8c554ded2193ad269bf6753d4a637b95ffe8fe9b2bf189efec6a",
+        "candidate_results": "c19ca4ce0ee9874b927142be05d5d24d4e460f66df582aee500d978f9faad7b6"
+      }
+    }
+  ],
+  "physical_pose_discriminator": {
+    "metric_provenance": {
+      "aggregate_field_present": false,
+      "pair_report_field_present": false,
+      "raw_euler_row_is_immutable_source": true,
+      "derivation_status": "checked_derived_diagnostic",
+      "conversion": "RELION rot/tilt/psi Euler matrices; degrees(acos(clamp((trace(R_candidate @ R_baseline.T) - 1) / 2, -1, 1)))",
+      "baseline_refinement_results": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/default512/half1/recovar/refinement_results.npz",
+        "sha256": "99adef0cc1f2dee00f9eff310d2eabec974f987ae347f3cbdac9f3d14dc322ae"
+      },
+      "candidate_refinement_results": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/attempt2/runs/seed42002/threshold128/half1/recovar/refinement_results.npz",
+        "sha256": "9321fdf98941444b045f45b2b0673bcab2757903b1af2dd994b3df4ad38bf4f8"
+      }
+    },
+    "seed": 42002,
+    "iteration": 8,
+    "differing_pose_row_count": 1,
+    "row_zero_based": 3280,
+    "baseline_euler_deg": [
+      -142.99462890625,
+      150.5906524658203,
+      2.571798324584961
+    ],
+    "candidate_euler_deg": [
+      13.690024375915527,
+      161.02734375,
+      157.18435668945312
+    ],
+    "euler_component_max_abs_deg": 156.68465328216553,
+    "physical_relative_rotation_deg": 47.374945112723495,
+    "genuinely_distinct_physical_pose": true,
+    "assignments_exact_all_iterations": true,
+    "controller_exact": true,
+    "translations_exact_all_iterations": true,
+    "maps_pass_scientific_fsc_and_l2_gates": true,
+    "classification": "single_physical_pose_difference_rejects_scientific_equivalence"
+  },
+  "failed_first_attempt": {
+    "accepted_evidence": false,
+    "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold128_default512_seedpair_42002_42003_10345_native10k_2f6759608_20260903/runs",
+    "failure_stage": "before_iteration_1",
+    "reason": "seed42001 dispatch_schedule.npz encoded random_seed=42001 and rejected refinement seeds 42002/42003",
+    "jobs": [
+      {
+        "job_id": 13378526,
+        "seed": 42002,
+        "arm": "default512",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "elapsed": "00:01:48",
+        "node": "della-h19g1",
+        "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "completed_science_iterations": 0
+      },
+      {
+        "job_id": 13378527,
+        "seed": 42002,
+        "arm": "threshold128",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "elapsed": "00:01:48",
+        "node": "della-h19g3",
+        "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "completed_science_iterations": 0
+      },
+      {
+        "job_id": 13378528,
+        "seed": 42003,
+        "arm": "default512",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "elapsed": "00:01:48",
+        "node": "della-h19g3",
+        "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "completed_science_iterations": 0
+      },
+      {
+        "job_id": 13378529,
+        "seed": 42003,
+        "arm": "threshold128",
+        "state": "FAILED",
+        "exit_code": "1:0",
+        "elapsed": "00:01:35",
+        "node": "della-h19g4",
+        "req_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "alloc_tres": "cpu=8,mem=128G,node=1,billing=10,gres/gpu=1",
+        "completed_science_iterations": 0
+      }
+    ]
+  },
+  "audit_jobs": [
+    {
+      "job_id": 13378859,
+      "scope": "seed42001",
+      "state": "FAILED",
+      "exit_code": "3:0",
+      "elapsed": "00:00:49",
+      "node": "della-r3c3n3",
+      "req_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "alloc_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "nonexclusive": true,
+      "compute_failure": false,
+      "classification": "expected_formal_rejection_exit"
+    },
+    {
+      "job_id": 13378860,
+      "scope": "seed42002",
+      "state": "FAILED",
+      "exit_code": "3:0",
+      "elapsed": "00:00:24",
+      "node": "della-r3c2n14",
+      "req_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "alloc_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "nonexclusive": true,
+      "compute_failure": false,
+      "classification": "expected_formal_rejection_exit"
+    },
+    {
+      "job_id": 13378861,
+      "scope": "seed42003",
+      "state": "FAILED",
+      "exit_code": "3:0",
+      "elapsed": "00:00:35",
+      "node": "della-r3c2n16",
+      "req_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "alloc_tres": "cpu=4,mem=64G,node=1,billing=16",
+      "nonexclusive": true,
+      "compute_failure": false,
+      "classification": "expected_formal_rejection_exit"
+    },
+    {
+      "job_id": 13378887,
+      "scope": "aggregate",
+      "state": "FAILED",
+      "exit_code": "3:0",
+      "elapsed": "00:00:04",
+      "node": "della-r3c4n16",
+      "req_tres": "cpu=1,mem=4G,node=1,billing=1",
+      "alloc_tres": "cpu=1,mem=4G,node=1,billing=1",
+      "nonexclusive": true,
+      "compute_failure": false,
+      "classification": "expected_aggregate_rejection_exit"
+    }
+  ],
+  "strict_claim_boundary": "Threshold 128 remains diagnostic-only and must not replace production default 512. Scientific equivalence cannot rewrite formal rejection, and no averaging or close-map summary may hide seed42002's distinct physical pose."
+}

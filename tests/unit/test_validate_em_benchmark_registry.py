@@ -159,6 +159,14 @@ REAL_K4_SINGLE_SEED_DIAGNOSTIC = json.loads(
         / "real-k4-10345-native10k-seed42001-2f6759608-20260903"
     ).with_suffix(".json").read_text()
 )
+REAL_K4_COMPACT_PAIR_THRESHOLD_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "real-k4-10345-native10k-compact-pair-threshold128-default512-"
+        "campaign-2f6759608-20260903"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -320,6 +328,12 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
     assert (
         registry_validator._diagnostic_registry_route(
             {"schema": "recovar.em.real_kclass_compact_pair_threshold_diagnostic.v1"}
+        )
+        == "separate"
+    )
+    assert (
+        registry_validator._diagnostic_registry_route(
+            REAL_K4_COMPACT_PAIR_THRESHOLD_CAMPAIGN
         )
         == "separate"
     )
