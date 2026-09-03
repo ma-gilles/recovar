@@ -255,3 +255,90 @@ passes, has matching requested and allocated resources, and produces a
 `COMPLETED` marker.  Full-dataset job `13363818` is the separate production
 quality and high-resolution gate for this planner; no final-quality claim is
 inferred from job `13363559`.
+
+## Accepted unused local-padding removal
+
+Commit `f91c73f2907ccea635782814d0cbde1d4f8ed4c2` (tree
+`5c73c5d41b62c0b1bbeae5033ae047c39eaad609`) removes an independent box-800
+memory and runtime defect from exact local search.  When an exact RELION
+`Projector::data` volume is supplied, every scoring and M-step branch reads
+that projector and does not read the padded native mean.  The old path
+nevertheless constructed a full padding-factor-2 complex64 mean before
+dispatch.  At box 800, that dead `(1600,1600,1600)` array is exactly 31.25
+GiB.  The fix skips native mean padding only in the supplied-projector route;
+native projection retains its previous padding behavior.
+
+The focused source regression runs exact local search with a supplied
+projector and `projection_padding_factor=2`, replaces the native padding
+routine with a hard failure, and exercises both the big-JIT and split
+projection branches.  The matched H100 gate then replays the same 32 deposited
+particles, box, I1 reference, seed, options, and score-only work as job
+`13363559`.
+
+| Measurement | Job 13363559, before | Job 13366512, after | Change |
+| --- | ---: | ---: | ---: |
+| Sampled peak HBM | 38,059 MiB | 20,123 MiB | -17,936 MiB (-47.13%) |
+| Exact-local-window peak HBM | 38,059 MiB | 6,809 MiB | -31,250 MiB |
+| Refinement ledger wall | 650.344222 s | 124.896842 s | -525.447381 s (-80.80%; 5.21x faster) |
+| Parent bucket loop | 5.9 s | 5.0 s | -0.9 s |
+| Fine bucket loop | 14.5 s | 14.5 s | unchanged |
+
+The machine audit accepts all six exact semantic comparisons: ledger run
+shape, ordered batch plans, significant-support summaries, adaptive-mask
+counts, bucket work, and completion shape.  In particular, both jobs retain
+the 24-by-148 outer plan, 29-by-41 and 64-by-72 parent workspaces, 24-by-128
+fine plan, parent support `(184,8192,1368)`, mask medians/maxima
+`(31,109,1008,3488)`, and fine support `(556,1904,11057)`.  Neither candidate
+log nor output contains an OOM, traceback, fatal marker, or incomplete loop.
+
+Job `13366512` requested and received exactly
+`cpu=4,mem=500G,node=1,billing=40,gres/gpu=1`, used one H100 on
+`della-h19g3` with `OverSubscribe=OK`, and completed `0:0` in 3:21.  Its
+scientific step completed in 3:11 with `MaxRSS=101493172K`.
+
+The accepted run and separate runtime root, both marked `SAFE_TO_DELETE`, are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_padding_guard_f91c73f29_20260902`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/box800_local_padding_guard_f91c73f29_20260902`.
+
+Important sealed identities are:
+
+- launcher SHA-256:
+  `2eb44b0327deb2c8d6c2c7954a29d1bf5ef2c543655321c530eac77ff59b8ff6`;
+- custom CUDA library SHA-256:
+  `ad3b4a38bc320ca7e6f7c6793500f03799b32daf8a549869eafbefb5cc289bf1`;
+- stderr SHA-256:
+  `963e6b14dc3146033a8d18db5596bb656b9dd812dd47ef2238fc4188c99e7c35`;
+- HBM trace SHA-256:
+  `128adb3526f83c9bbcd4a3e466f579d4d05e2271daa8ff40556f7f36d462939f`;
+- benchmark ledger SHA-256:
+  `dd861a3c872a5483fdc79d262796ba01389d6fc53aee5c8fc2272045bb3de6c1`;
+- Slurm allocation record SHA-256:
+  `19d56958500682229367a5bc94f58dac4ee5b7826fe1032b9d0cd6eeb82917c5`;
+- accepted comparison JSON SHA-256:
+  `cdee5733e5cbd2d344a79ccee8e45d3e20656430c8146914dee2deae129dec2d`.
+
+The reusable auditor is `scripts/audit_em_k1_box800_local_padding_gate.py`.
+To reproduce the machine decision without rerunning either GPU arm, invoke it
+with the two ledgers, stderr logs, HBM CSV files, and completion markers named
+in the comparison JSON, requiring at least the observed conservative gates:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902
+.pixi/envs/default/bin/python scripts/audit_em_k1_box800_local_padding_gate.py \
+  --baseline-ledger /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_planner_fresh_ff6099641_20260902/runs/fresh_score_only_13363559/benchmark_ledger.json \
+  --candidate-ledger /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_padding_guard_f91c73f29_20260902/outputs/score_only_13366512/benchmark_ledger.json \
+  --baseline-log /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_planner_fresh_ff6099641_20260902/logs/fresh-score-only-13363559.err \
+  --candidate-log /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_padding_guard_f91c73f29_20260902/logs/score-only-13366512.err \
+  --baseline-hbm /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_planner_fresh_ff6099641_20260902/logs/fresh-score-only-13363559-hbm.csv \
+  --candidate-hbm /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_padding_guard_f91c73f29_20260902/logs/score-only-13366512-hbm.csv \
+  --baseline-completed /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_planner_fresh_ff6099641_20260902/runs/fresh_score_only_13363559/COMPLETED \
+  --candidate-completed /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_padding_guard_f91c73f29_20260902/outputs/score_only_13366512/COMPLETED \
+  --minimum-hbm-reduction-mib 17000 \
+  --minimum-wall-reduction-s 500 \
+  --output /absolute/new/output/padding-gate.json
+```
+
+This remains a score-only memory/performance qualification.  The advancing
+full-particle trajectories and their checkpoint/FSC audits separately decide
+final scientific quality.

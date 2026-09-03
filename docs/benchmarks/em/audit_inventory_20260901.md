@@ -77,8 +77,20 @@ cross-engine quality/performance result. It now also records fresh local
 score-only job `13363559`: the compact K=1 planner replaced the false
 81.92-GB persistent estimate with 4.02 GB, completed on one H100 with a
 38,059-MiB sampled peak, and released the separate full-dataset job
-`13363818`. A future K=1 completion record must be added rather than inferring
-registry admission from either memory gate.
+`13363818`.  Commit `f91c73f29` then removed an unused 31.25-GiB padded mean
+from the supplied-projector local path.  Matched job `13366512` preserved all
+audited plans and support counts while reducing peak HBM to 20,123 MiB and
+wall from 650.344 to 124.897 s.  A future K=1 completion record must be added
+rather than inferring registry admission from either memory gate.
+
+`k1_empiar10202_checkpoint_equivalence_20260902.md` records the first three
+matching checkpoints from the full-particle box-800 I1 control and compact
+candidate.  Checkpoint 0 is execution-exact.  At checkpoints 1 and 2, strict
+execution equivalence rejects small accumulated pose/state differences, while
+both FSC thresholds still cross at identical shells, minimum map correlation
+remains above `0.9999999`, and FSC-curve RMSE remains at most `1.18175e-4`.
+This is in-progress same-engine trajectory evidence, not a final
+RECOVAR-versus-RELION admission.
 
 ### Real particles
 
