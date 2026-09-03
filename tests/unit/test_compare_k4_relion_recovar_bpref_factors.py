@@ -83,6 +83,13 @@ def test_relion_cuda_processed_reconstruction_replays_captured_native_lane(monke
         return images, images
 
     monkeypatch.setattr(comparator, "relion_preprocess_real_f32", fake_preprocess)
+    # This is a source-routing test.  Keep the unit test CPU-only while the
+    # actual JAX/cuFFT primitive is covered by its accelerator tests.
+    monkeypatch.setattr(
+        comparator,
+        "_centered_rfft2_jax",
+        lambda images: comparator._centered_rfft2_numpy(np.asarray(images)),
+    )
     values = {
         "raw_real_images": raw,
         "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),

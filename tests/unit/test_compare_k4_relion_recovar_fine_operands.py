@@ -531,6 +531,11 @@ def test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree(
         return images, images
 
     monkeypatch.setattr(comparator, "relion_preprocess_real_f32", fake_preprocess)
+    monkeypatch.setattr(
+        comparator,
+        "_centered_rfft2_jax",
+        lambda images: comparator._centered_rfft2_numpy(np.asarray(images)),
+    )
     values = {
         "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
         "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),
@@ -560,7 +565,12 @@ def test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree(
     assert _is_relion_cuda_replay_mode(mode)
 
 
-def test_fine_operand_dataset_native_counterfactual_accepts_relion_capture():
+def test_fine_operand_dataset_native_counterfactual_accepts_relion_capture(monkeypatch):
+    monkeypatch.setattr(
+        comparator,
+        "_centered_rfft2_jax",
+        lambda images: comparator._centered_rfft2_numpy(np.asarray(images)),
+    )
     values = {
         "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
         "relion_preprocess_normalization_factors": np.asarray(
@@ -630,6 +640,11 @@ def test_fine_operand_replays_captured_native_lane_mode(monkeypatch):
         return images, images
 
     monkeypatch.setattr(comparator, "relion_preprocess_real_f32", fake_preprocess)
+    monkeypatch.setattr(
+        comparator,
+        "_centered_rfft2_jax",
+        lambda images: comparator._centered_rfft2_numpy(np.asarray(images)),
+    )
     values = {
         "raw_real_images": np.arange(16, dtype=np.float32).reshape(1, 4, 4),
         "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),

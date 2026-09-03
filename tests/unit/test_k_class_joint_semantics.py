@@ -6,6 +6,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
+import recovar.em.dense_single_volume.firstiter_cc as firstiter_cc_module
 import recovar.em.dense_single_volume.k_class as k_class_module
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
@@ -45,6 +46,34 @@ def _stats(log_evidence, best_score, pmax, n_rot=3):
         best_log_score_per_image=np.asarray(best_score, dtype=np.float32),
         max_posterior_per_image=np.asarray(pmax, dtype=np.float32),
         rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
+    )
+
+
+def _stub_firstiter_rotation_oversampling(monkeypatch):
+    """Isolate first-iteration translation/plumbing tests from RELION pybind."""
+
+    def fake_oversampled_rotations(
+        rotation_ids,
+        *,
+        return_mstep_rotations=False,
+        **_kwargs,
+    ):
+        rotation_ids = np.asarray(rotation_ids)
+        parent_map = np.repeat(np.arange(rotation_ids.size, dtype=np.int64), 8)
+        rotations = np.repeat(
+            np.eye(3, dtype=np.float32)[None],
+            parent_map.size,
+            axis=0,
+        )
+        outputs = (rotations, parent_map)
+        if return_mstep_rotations:
+            return (*outputs, rotations.copy())
+        return outputs
+
+    monkeypatch.setattr(
+        firstiter_cc_module,
+        "get_oversampled_rotation_grid_from_samples",
+        fake_oversampled_rotations,
     )
 
 
@@ -1905,7 +1934,7 @@ def test_sparse_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
     assert calls[0]["source_faithful_spectrum_norm"] is True
 
 
-def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
+def test_firstiter_adaptive_translation_perturbation_uses_coarse_step(monkeypatch):
     """RELION perturbs oversampled translations by random_perturbation * offset_step.
 
     Source: HealpixSampling::getTranslations first subdivides each translation
@@ -1913,6 +1942,7 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     oversampled child. The perturbation does not use the subdivided fine step.
     """
 
+    _stub_firstiter_rotation_oversampling(monkeypatch)
     coarse_rot = np.eye(3, dtype=np.float32)[None]
     coarse_trans = np.array([[0.0, 0.0]], dtype=np.float32)
     random_perturbation = 0.25
@@ -1949,9 +1979,10 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
     np.testing.assert_array_equal(trans_parent_map, np.zeros(4, dtype=np.int64))
 
 
-def test_firstiter_adaptive_translation_angle_preserves_relion_host_precision():
+def test_firstiter_adaptive_translation_angle_preserves_relion_host_precision(monkeypatch):
     """Do not round fine translations before RELION's float32 angle cast."""
 
+    _stub_firstiter_rotation_oversampling(monkeypatch)
     coarse_rot = np.eye(3, dtype=np.float32)[None]
     base_trans = np.asarray([[1.0, 0.0]], dtype=np.float64)
     random_perturbation = -0.04798632860183716
@@ -1985,7 +2016,8 @@ def test_firstiter_adaptive_translation_angle_preserves_relion_host_precision():
     assert rounded_angle_bits[2, 0] == np.uint32(3178343904)
 
 
-def test_firstiter_adaptive_grid_can_return_relion_host_mstep_rotations():
+def test_firstiter_adaptive_grid_can_return_relion_host_mstep_rotations(monkeypatch):
+    _stub_firstiter_rotation_oversampling(monkeypatch)
     coarse_rot = np.eye(3, dtype=np.float32)[None]
     coarse_trans = np.array([[0.0, 0.0]], dtype=np.float32)
     legacy = _build_firstiter_cc_pass2_grids(
