@@ -8,16 +8,18 @@
 ## Live engineering snapshot — 2026-09-03
 
 > **LIVE RESULT:** The combined backend completes the two-arm GF46 `0 -> 200`
-> sentinel **1.639x faster** (`2810.434 -> 1714.290 s`), but the two trajectories
-> first differ in one hard pose at iteration 48 and finish with normalized map
-> L2 `0.1412`. Causal ABBA job `13372936` replayed exactly iteration `47 -> 48`
-> from one byte-identical in-memory state: every decision and support field is
-> exact, cross-backend continuous deltas remain inside CUDA repeat noise, and
-> the warm combined transition is **2.521x faster**. Thus no deterministic
-> iteration-48 backend error reproduces; accumulated numerical basin stability
-> remains open. Stable-shape trajectory job `13372996` and shared-EM local
-> projection-cache job `13373715` are active. Frozen scores remain **2/20
-> correctness, 0/20 runtime**.
+> sentinel **1.639x faster** (`2810.434 -> 1714.290 s`), and exact-state ABBA
+> job `13372936` makes its iteration-48 transition **2.521x faster** with every
+> discrete/support field exact. The first full-trajectory pose split therefore
+> remains an accumulated CUDA near-tie/basin question, not a reproducible local
+> backend error. Two follow-up shortcuts are now closed: stable Fourier shapes
+> reduce median expectation by 5.25% but only 2.07% end-to-end and cannot clear
+> the repeat-unstable trajectory gate; the shared local projection cache is
+> rejected after changing 21/200 fine poses from the same state. Current H100
+> job `13374637` instead skips the 70.62% invalid packed fine rows before exact
+> CUDA pixel work; its dedicated primitive test passed in job `13374638` and
+> every same-state science field is repeat-exact. Isolated timing is still open.
+> Frozen scores remain **2/20 correctness, 0/20 runtime**.
 
 | Signal | Status | Evidence / next decision |
 |---|---|---|
@@ -26,8 +28,10 @@
 | Same-state iteration 35 | **EXACT DECISIONS / ATOMIC-SCALE CONTINUOUS NOISE** | Job `13358712` deep-copied one exact live iteration-34 state into an ABBA panel. Every particle/pose/translation/class/posterior/significance field and all 200 exact support-ID rows agree across direct and hybrid; aggregate support SHA-256 is identical. Cross-backend reconstruction deltas are the same scale as direct/direct and hybrid/hybrid atomic-repeat noise. |
 | Combined same-state iteration 35 | **QUALITY + MATERIAL RUNTIME PASS** | Job `13368042` enables both optimized seams. All decisions/support/state are exact; maps/noise remain repeat-scale. Warm wall improves `2.603267 -> 1.654054 s` (**36.46%**), expectation **39.85%**, pass 1 **45.33%**, and pass 2 **42.70%**. Full trajectory remains open. |
 | Combined same-state iteration 48 | **EXACT DECISIONS / 2.521x WARM SPEED** | Job `13372936` starts all four arms from the exact iteration-47 state. All discrete state and support audits are exact. Cross accumulator L2 is at most `9.63e-8` versus `9.16e-8` direct/direct. Warm wall is `8.142330 -> 3.229593 s`; pass 1 is 4.469x and pass 2 is 1.261x faster. This localizes the sentinel split to accumulated roundoff, not a reproducible transition error. |
-| Stable shape trajectory | **RUNNING** | Job `13372996`, source `471908510`, runs fresh-process ABBA through iteration 50 across 19 logical sizes. Same-state job `13371878` already retained exact decisions/support with cross-state L2 <= `1.67e-7` and neutral warm wall (+0.69%). |
-| Shared local projection cache | **RUNNING** | Job `13373715`, source `8816d487e`, gates the mature EM projection cache from the same iteration-47 state. Candidate-only cache capacity is 1 GB; controls force it off. This targets repeated projection of 19,008 packed rows across only a much smaller unique-rotation set. |
+| Stable shape trajectory | **HOLD — 2.07% WALL GAIN / STRICT SCIENCE FAIL** | Job `13372996` completed four fresh-process trajectories through iteration 50. Fine pass 2 improves 22.82%, but wall improves only 2.07%. The baseline OFF/OFF pair itself splits discretely at iteration 35, while one ON arm remains discrete-identical to OFF1 through iteration 50. This rules out a deterministic toggle-only displacement but cannot exclude a variance effect or qualify promotion. |
+| Shared local projection cache | **REJECTED — FINE POSES CHANGE** | Job `13373715` is repeatable within each mode but changes 21/200 fine pose assignments, nine rotation IDs, and 33 translation coordinates across modes from the exact same state. Cross accumulator L2 reaches `0.1838` versus about `9e-8` repeat noise. The approximate rotation-ID cache aliases oversampled exact matrices. |
+| Validity-aware packed fine CUDA | **SCIENCE PASS / ISOLATED TIMING OPEN** | Commit `4dc4a79f7` passes the H100 invalid-row primitive (`13374638`), and same-state job `13374637` keeps every decision/support/state field exact with continuous drift inside repeat scale. The warmed bundled path is 2.387x direct, but a validity-off/on kernel comparison is required before crediting speed to this change. |
+| Compact hybrid posterior | **IMPLEMENTING SHARED RELION SEMANTICS** | The certified hybrid selects only about 0.26% of coarse candidates but currently expands and scans a huge mostly-`-inf` dense table. The next shared primitive first restores RELION's positive-weight filtering before CUB sort/scan, then can process selected source-16 blocks compactly without changing global pose/tie order. |
 | Output pseudo-halfsets | **FIXED / 78 TARGETED TESTS PASS** | Commit `a8ce0bb52` writes `_rlnRandomSubset` from RELION InitialModel part-id parity, mapped back to input STAR rows, and overwrites stale labels. `tests/unit/initial_model/test_native_driver.py`: `78 passed`. |
 | Root cause closed | **SHARED EM/DIRECT OPERANDS** | The pre-fix hybrid cache used `mask_current_image_disk=False` while mature EM/direct used `True`. Commit `e9a8e8256` now routes both through one shared projection helper; the previous 405 pose-assignment mismatches fell to **0 / 1,000**. |
 | Performance decomposition | **BOTH PASSES NOW MATERIAL** | Across the prior 200-iteration hybrid, coarse pass 1 improved `1787.367 -> 493.504 s` (**3.62x**) while pass 2 stayed flat. Combined job `13368042` now improves the same-state pass 1 **45.33%** and pass 2 **42.70%**. The combined full-trajectory effect is not measured yet. |
@@ -39,10 +43,11 @@
 
 ### Immediate queue
 
-1. Finish the stable-shape `0 -> 50` ABBA gate (`13372996`) and accept only if cross-arm deltas stay inside the direct-repeat envelope.
-2. Finish the shared local projection-cache same-state gate (`13373715`); retain it only for a material warm pass-2 gain with exact decisions and repeat-scale continuous state.
-3. Compose accepted stable-shape/cache work with the combined backend, then run a repeat-controlled `0 -> 200` panel. A two-arm basin split cannot update either frozen score.
-4. Expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
+1. Finish the isolated validity-off/on CUDA timing gate; same-state science
+   already passes in jobs `13374637`/`13374638`.
+2. Implement and primitive-qualify RELION-positive-filtered compact coarse posterior execution; keep the dense path as a fail-closed oracle.
+3. Integrate only accepted work, then run a same-GPU repeat-controlled combined `0 -> 200` panel. A two-arm basin split cannot update either frozen score.
+4. Expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain later independent gates.
 
 ## At a glance
 
@@ -52,7 +57,7 @@
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
 | Current correctness work | **SAME-STATE EXACT / REPEAT-CONTROLLED BASIN GATE OPEN** | Job `13372936` rules out a reproducible combined-backend error at the sentinel's first hard split, iteration 48. The remaining question is whether full-run divergence exceeds direct/direct stochastic basin spread. |
-| Current performance work | **1.639x FULL SENTINEL / 2.521x ITERATION-48 TRANSITION** | Job `13369646` is the current full combined speed result. Shape stability (`13372996`) targets compile churn; the shared local projection cache (`13373715`) targets repeated pass-2 GPU projections. |
+| Current performance work | **1.639x FULL SENTINEL / 2.521x ITERATION-48 TRANSITION** | Job `13369646` is the current full combined speed result. Stable shapes and the approximate projection cache did not qualify; validity-aware fine rows (`13374637`) and compact coarse posterior execution are the active higher-ceiling lanes. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
@@ -182,11 +187,12 @@ release gate.
 
 ## Next gates
 
-1. Finish the active stable-shape `0 -> 50` ABBA trajectory and shared local
-   projection-cache same-state gates.
-2. Integrate only gates with exact decisions, repeat-envelope continuous state,
-   material runtime improvement, and bounded memory.
-3. Run a same-GPU repeat-controlled combined `0 -> 200` panel with basin,
+1. Finish the isolated validity-off/on CUDA timing gate; same-state science
+   and the exact invalid-row contract already pass.
+2. Implement and primitive-qualify RELION-positive-filtered compact coarse
+   posterior execution, with the dense path retained as a fail-closed oracle.
+3. Integrate only qualified gates, then run a same-GPU repeat-controlled
+   combined `0 -> 200` panel with basin,
    FSC/scale, selector/fallback, memory, and runtime audits.
 4. Then rerun the frozen K=1 trajectory suite and the expanded outlier,
    pose/noise-distribution, scale, parameter, and long-trajectory matrix.
@@ -225,6 +231,9 @@ release gate.
 | Combined hybrid + packed-deferred transition | Source `209aae4593f0a040090e150482f9d44dfa57e79f`, job `13368042`, H100 `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, report JSON SHA-256 `302b222ebc223d580314012e6cc423f467981d96f24d2bd6bc0aff278ae5ebe1`; [report](../perf/vdam_hybrid_packed_deferred_same_state_it35_h100_13368042.md). |
 | Combined full sentinel | Source `10cd188edc4d81d038e582c277c65d60396368d1`, job `13369646`, H100 `GPU-97adb339-219f-d72d-11c9-74dc92fcff8c`; two-arm setup/performance sentinel only, wall `2810.434 -> 1714.290 s`. |
 | Combined iteration-48 causal gate | Source `10cd188edc4d81d038e582c277c65d60396368d1`, job `13372936`, H100 `GPU-e2c3190a-9599-15f7-a19c-7ae55e4e0a85`, report JSON SHA-256 `e734d48748cc6ae41f3851df5878b8928456d3b32db31fd39511b0927c5cec5e`; [report](../perf/vdam_combined_same_state_it48_h100_13372936.md). |
+| Stable Fourier-shape trajectory | Source `47190851099ba608d60114de1df0624e9efe8e1a`, job `13372996`, H100 `GPU-ddb1592d-744e-ea56-d0a3-aec6e7c97d10`, analyzer report SHA-256 `037cdda817bb5914d6836aaf305ea2a6383539035620909fef602c586b316149`; [report](../perf/vdam_stable_shapes_trajectory_h100_13372996.md). |
+| Shared local-projection-cache rejection | Source `8816d487e76540690e8e38cfa12bd014ba5d856f`, job `13373715`, H100 `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, report SHA-256 `0ec47650576126f977380235595402e5766cf43671c856e665fa86ce7256c557`; [report](../perf/vdam_local_projection_cache_it48_h100_13373715.md). |
+| Validity-aware packed fine rows | Source `4dc4a79f7c5f6f31d7a8e04bfe43339b700b48c6`, jobs `13374637`/`13374638`, H100 `GPU-75c2d200-95d1-ef57-fb52-1698386c756c`, same-state report SHA-256 `da4f9e4e3146a862e714e9531f44fbbe2c48e6a466dcd0a1c9547cc11dab4e8d`; [report](../perf/vdam_flat_row_validity_it48_h100_13374637.md). |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`
