@@ -16525,6 +16525,268 @@ def test_replay_current_size_uses_control_model_star():
     assert _replay_control_model_iteration(13, 0) == 14
 
 
+def test_k4_numbered_global_to_exact_local_preserves_per_half_pose_state(
+    half_datasets,
+    init_volume,
+    monkeypatch,
+):
+    """A numbered K=4 trajectory carries each half's global pose into local search."""
+    import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
+
+    n_classes = 4
+    one_rotation = _make_rotations(1, seed=1201)
+    one_translation = np.zeros((1, 2), dtype=np.float32)
+    original_update = iteration_loop_module.update_refinement_state
+    original_dense_score = iteration_loop_module._score_half_dense_in_bpref_scope
+    original_dense_k_class = iteration_loop_module.run_dense_k_class_em
+    original_local_k_class = local_search_iteration.run_local_k_class_em
+    half_index_by_dataset = {id(dataset): half_index for half_index, dataset in enumerate(half_datasets)}
+    update_calls = 0
+    dense_route_calls = []
+    dense_calls = []
+    local_calls = []
+    layout_records = {}
+
+    def force_local_after_first_numbered_iteration(*args, **kwargs):
+        nonlocal update_calls
+        updated = original_update(*args, **kwargs)
+        update_calls += 1
+        updated.has_converged = False
+        if update_calls == 1:
+            # Keep iteration 1 global, then emulate the controller transition
+            # consumed at the start of numbered iteration 2.
+            updated.healpix_order = 0
+            updated.angular_step = healpix_angular_step(0)
+            updated.max_healpix_order = 1
+            updated.auto_local_healpix_order = 1
+            updated.do_local_search = True
+            updated.sigma_rot = np.deg2rad(15.0)
+            updated.sigma_psi = np.deg2rad(15.0)
+        return updated
+
+    def record_dense_score(**kwargs):
+        dense_route_calls.append((kwargs["debug_iteration"], kwargs["k"]))
+        return original_dense_score(**kwargs)
+
+    def record_dense_k_class(experiment_dataset, means, *args, **kwargs):
+        result = original_dense_k_class(experiment_dataset, means, *args, **kwargs)
+        dense_calls.append(
+            {
+                "half_index": half_index_by_dataset[id(experiment_dataset)],
+                "means_shape": np.asarray(means).shape,
+                "best_pose_rotations": np.asarray(result.best_pose_rotations, dtype=np.float32).copy(),
+                "best_pose_translations": np.asarray(result.best_pose_translations, dtype=np.float32).copy(),
+            }
+        )
+        return result
+
+    def build_one_pose_per_image_layout(
+        prior_rotations,
+        rotation_grid_rotations,
+        sigma_rot,
+        sigma_psi,
+        healpix_order,
+        translations,
+        prior_translations,
+        sigma_offset_angstrom,
+        offset_range_pixels,
+        voxel_size,
+        **kwargs,
+    ):
+        del (
+            rotation_grid_rotations,
+            sigma_rot,
+            sigma_psi,
+            healpix_order,
+            sigma_offset_angstrom,
+            offset_range_pixels,
+            voxel_size,
+        )
+        prior_eulers = np.asarray(prior_rotations, dtype=np.float32).copy()
+        prior_translation_array = np.asarray(prior_translations, dtype=np.float32).copy()
+        translation_grid = np.asarray(translations, dtype=np.float32).copy()
+        n_images = int(prior_eulers.shape[0])
+        local_rotations = np.asarray(
+            iteration_loop_module.utils.R_from_relion(prior_eulers, degrees=True),
+            dtype=np.float32,
+        )
+        layout = LocalHypothesisLayout(
+            n_global_rotations=1,
+            n_pixels=1,
+            n_psi=1,
+            rotation_offsets=np.arange(n_images + 1, dtype=np.int64),
+            rotation_ids_flat=np.zeros(n_images, dtype=np.int32),
+            rotations_flat=local_rotations,
+            rotation_log_priors_flat=np.zeros(n_images, dtype=np.float32),
+            rotation_counts=np.ones(n_images, dtype=np.int32),
+            translation_grid=translation_grid,
+            translation_log_priors=np.zeros((n_images, translation_grid.shape[0]), dtype=np.float32),
+            mstep_rotations_flat=local_rotations.copy(),
+        )
+        layout_records[id(layout)] = {
+            "prior_rotations": prior_eulers,
+            "prior_translations": prior_translation_array,
+            "translation_prior_reference_translations": np.asarray(
+                kwargs["translation_prior_reference_translations"],
+                dtype=np.float32,
+            ).copy(),
+        }
+        return layout
+
+    def record_local_k_class(experiment_dataset, means, mean_variance, noise_variance, local_layout, *args, **kwargs):
+        result = original_local_k_class(
+            experiment_dataset,
+            means,
+            mean_variance,
+            noise_variance,
+            local_layout,
+            *args,
+            **kwargs,
+        )
+        local_calls.append(
+            {
+                "half_index": half_index_by_dataset[id(experiment_dataset)],
+                "debug_iteration": kwargs.get("debug_iteration"),
+                "return_best_pose_details": kwargs.get("return_best_pose_details"),
+                "means_shape": np.asarray(means).shape,
+                "layout": layout_records[id(local_layout)],
+                "translation_prior_centers": np.asarray(
+                    kwargs["translation_prior_centers"],
+                    dtype=np.float32,
+                ).copy(),
+                "image_pre_shifts": np.asarray(kwargs["image_pre_shifts"], dtype=np.float32).copy(),
+                "best_pose_rotations": np.asarray(result.best_pose_rotations, dtype=np.float32).copy(),
+                "best_pose_translations": np.asarray(result.best_pose_translations, dtype=np.float32).copy(),
+            }
+        )
+        return result
+
+    monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "0")
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "update_refinement_state",
+        force_local_after_first_numbered_iteration,
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "_score_half_dense_in_bpref_scope",
+        record_dense_score,
+    )
+    monkeypatch.setattr(iteration_loop_module, "run_dense_k_class_em", record_dense_k_class)
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "_precompute_exact_local_fine_grid_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "_translation_grid_for_class_count",
+        lambda *_args, **_kwargs: one_translation.astype(np.float64),
+    )
+    monkeypatch.setattr(
+        local_search_iteration,
+        "build_local_search_grid_metadata",
+        lambda *_args, **_kwargs: {"mode": "explicit", "n_pixels": 1, "n_psi": 1, "symmetry": "C1"},
+    )
+    monkeypatch.setattr(
+        iteration_loop_module,
+        "build_local_hypothesis_layout",
+        build_one_pose_per_image_layout,
+    )
+    monkeypatch.setattr(local_search_iteration, "run_local_k_class_em", record_local_k_class)
+
+    result = refine_single_volume(
+        half_datasets,
+        init_volume,
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+        one_rotation,
+        one_translation,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=2,
+                init_current_size=4,
+                init_healpix_order=0,
+                max_healpix_order=1,
+                skip_final_iteration=True,
+            ),
+            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            parity=RelionParityOptions(perturb_factor=0.0, low_resol_join_halves_angstrom=0.0),
+            k_class=KClassOptions(
+                n_classes=n_classes,
+                init_class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
+            ),
+        ),
+    )
+
+    assert update_calls == 2
+    assert dense_route_calls == [(1, 0), (1, 1)]
+    assert [call["half_index"] for call in dense_calls] == [0, 1]
+    assert [(call["debug_iteration"], call["half_index"]) for call in local_calls] == [(2, 0), (2, 1)]
+    assert all(call["means_shape"] == (n_classes, VOLUME_SIZE) for call in dense_calls)
+    assert all(call["means_shape"] == (n_classes, VOLUME_SIZE) for call in local_calls)
+    assert all(call["return_best_pose_details"] is True for call in local_calls)
+
+    assert len(result["best_rotation_eulers_history"]) == 2
+    assert len(result["best_translations_history"]) == 2
+    for call in dense_calls:
+        half_index = call["half_index"]
+        expected_iter1_eulers = iteration_loop_module.utils.R_to_relion(
+            call["best_pose_rotations"],
+            degrees=True,
+        ).astype(np.float32)
+        expected_iter1_translations = iteration_loop_module._relion_metadata_translations(
+            None,
+            call["best_pose_translations"],
+        )
+        np.testing.assert_array_equal(
+            result["best_rotation_eulers_history"][0][half_index],
+            expected_iter1_eulers,
+        )
+        np.testing.assert_array_equal(
+            result["best_translations_history"][0][half_index],
+            expected_iter1_translations,
+        )
+    for call in local_calls:
+        half_index = call["half_index"]
+        iter1_eulers = np.asarray(result["best_rotation_eulers_history"][0][half_index], dtype=np.float32)
+        iter1_translations = np.asarray(result["best_translations_history"][0][half_index], dtype=np.float32)
+        np.testing.assert_array_equal(call["layout"]["prior_rotations"], iter1_eulers)
+        np.testing.assert_array_equal(
+            call["layout"]["prior_translations"],
+            relion_local_translation_prior_center(iter1_translations, half_datasets[half_index].voxel_size),
+        )
+        np.testing.assert_array_equal(call["layout"]["translation_prior_reference_translations"], one_translation)
+        np.testing.assert_array_equal(
+            call["translation_prior_centers"],
+            relion_sigma_offset_prior_center(iter1_translations),
+        )
+        np.testing.assert_array_equal(call["image_pre_shifts"], relion_translation_search_base(iter1_translations))
+        expected_iter2_eulers = iteration_loop_module.utils.R_to_relion(
+            call["best_pose_rotations"],
+            degrees=True,
+        ).astype(np.float32)
+        expected_iter2_translations = iteration_loop_module._relion_metadata_translations(
+            iter1_translations,
+            call["best_pose_translations"],
+        )
+        np.testing.assert_array_equal(
+            result["best_rotation_eulers_history"][1][half_index],
+            expected_iter2_eulers,
+        )
+        np.testing.assert_array_equal(
+            result["best_translations_history"][1][half_index],
+            expected_iter2_translations,
+        )
+
+    assert np.asarray(result["class_means"]).shape == (n_classes, VOLUME_SIZE)
+    assert all(np.asarray(half_means).shape == (n_classes, VOLUME_SIZE) for half_means in result["means"])
+    assert len(result["class_assignment_history"]) == 2
+    assert result["final_all_data_ran"] is False
+
+
 def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootstrap(
     half_datasets,
     init_volume,
