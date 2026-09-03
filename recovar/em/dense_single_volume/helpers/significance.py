@@ -6467,7 +6467,8 @@ def _compute_k_class_significance_batched(
             ):
                 raise RuntimeError(
                     "exact+compact preprocessing cannot execute the generic "
-                    "score fallback",
+                    "score fallback: "
+                    f"{coarse_gaussian_gemm_hybrid_batch_result.fallback_reason}",
                 )
             coarse_gaussian_gemm_hybrid_batch_count += 1
             if coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
