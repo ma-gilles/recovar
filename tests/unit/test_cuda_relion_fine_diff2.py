@@ -2401,7 +2401,7 @@ def test_relion_fused_translate_jobs_match_rectangular_tree_bitwise(
             [1, 5, 2, 0],
             [1, 3, 0, 3],
             [1, -1, 2, 4],
-            [-1, -1, -1, -1],
+            [0, 1, -1, 2],
             [-1, -1, -1, -1],
             [-1, -1, -1, -1],
         ],
@@ -2540,6 +2540,28 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
     admitted[0, 2] = False
     pair_translation_ids[1, 5] = -1
     admitted[1, 5] = False
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+
+    candidate_mask = admitted.reshape(
+        batch_size,
+        rotation_count,
+        translation_count,
+    )
+    compact_pairs = sparse_pass2_bucketed.build_compact_pair_index_arrays(
+        candidate_mask
+    )
+    reference_lookup = np.arange(
+        batch_size * rotation_count,
+        dtype=np.int32,
+    ).reshape(batch_size, rotation_count)
+    compact_jobs = (
+        sparse_pass2_bucketed.build_compact_fine_job_plan_from_pair_arrays(
+            compact_pairs,
+            reference_lookup,
+        )
+    )
+    job_plan = compact_jobs["job_plan"]
+    valid_job_count = int(compact_jobs["valid_job_count"])
 
     with jax.default_device(gpu_device):
         dense_costs = (
@@ -2564,7 +2586,19 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
             jnp.asarray(initial_diff2),
             current_size=current_size,
         )
-        dense_costs, pair_costs = jax.block_until_ready((dense_costs, pair_costs))
+        job_costs = cuda_backproject.relion_fine_diff2_fused_translate_jobs_f32(
+            jnp.asarray(flat_reference),
+            jnp.asarray(image),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(job_plan),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
+        )
+        dense_costs, pair_costs, job_costs = jax.block_until_ready(
+            (dense_costs, pair_costs, job_costs)
+        )
         dense_scores = -jnp.asarray(dense_costs)
         dense_scores = jnp.where(
             jnp.asarray(admitted.reshape(dense_scores.shape)),
@@ -2580,8 +2614,18 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
             pair_scores,
             adaptive_fraction=0.5,
         )
-        dense_posterior, pair_posterior = jax.block_until_ready(
-            (dense_posterior, pair_posterior)
+        valid_job_plan = job_plan[:valid_job_count]
+        job_scattered = jnp.full_like(dense_costs, jnp.inf).at[
+            jnp.asarray(valid_job_plan[:, 0]),
+            jnp.asarray(valid_job_plan[:, 2]),
+            jnp.asarray(valid_job_plan[:, 3]),
+        ].set(jnp.asarray(job_costs[:valid_job_count]))
+        job_posterior = _relion_f32_fine_posterior(
+            -job_scattered,
+            adaptive_fraction=0.5,
+        )
+        dense_posterior, pair_posterior, job_posterior = jax.block_until_ready(
+            (dense_posterior, pair_posterior, job_posterior)
         )
 
     expected_costs = np.asarray(dense_costs).reshape(batch_size, -1)
@@ -2595,12 +2639,23 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
         batch_costs = np.asarray(pair_costs)[batch, admitted[batch]]
         assert np.unique(batch_costs.view(np.uint32)).size == 1
     assert valid_costs.size == admitted.sum()
+    expected_job_costs = np.asarray(dense_costs)[candidate_mask]
+    np.testing.assert_array_equal(
+        np.asarray(job_costs[:valid_job_count]).view(np.uint32),
+        expected_job_costs.view(np.uint32),
+    )
+    assert np.all(np.isposinf(np.asarray(job_costs[valid_job_count:])))
     np.testing.assert_array_equal(np.asarray(pair_posterior[2]), admitted)
     for dense_value, pair_value in zip(dense_posterior, pair_posterior):
         dense_array = np.asarray(dense_value).reshape(-1)
         pair_array = np.asarray(pair_value).reshape(-1)
         assert dense_array.dtype == pair_array.dtype
         assert dense_array.tobytes() == pair_array.tobytes()
+    for dense_value, job_value in zip(dense_posterior, job_posterior):
+        dense_array = np.asarray(dense_value).reshape(-1)
+        job_array = np.asarray(job_value).reshape(-1)
+        assert dense_array.dtype == job_array.dtype
+        assert dense_array.tobytes() == job_array.tobytes()
 
 
 @pytest.mark.gpu
@@ -2620,13 +2675,26 @@ def test_relion_runtime_fused_translate_pairs_reuse_physical_compile(
     translation_angles = rng.normal(0, 0.2, (4, 2)).astype(np.float32)
     pair_reference_rows = np.asarray([[0, 2], [3, 1]], dtype=np.int32)
     pair_translation_ids = np.asarray([[0, 3], [2, 1]], dtype=np.int32)
+    job_plan = np.asarray(
+        [
+            [0, 0, 0, 0],
+            [0, 2, 2, 3],
+            [1, 3, 0, 2],
+            [1, 1, 1, 1],
+        ],
+        dtype=np.int32,
+    )
     initial_diff2 = np.asarray([0.022644043, 0.03125], dtype=np.float32)
 
     with jax.default_device(gpu_device):
         runtime_function = (
             cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32
         )
+        runtime_jobs_function = (
+            cuda_backproject.relion_fine_diff2_fused_translate_runtime_jobs_f32
+        )
         runtime_function.clear_cache()
+        runtime_jobs_function.clear_cache()
         for logical_size in (30, 32):
             logical_pixels = logical_size * (logical_size // 2 + 1)
             reference = (
@@ -2683,11 +2751,41 @@ def test_relion_runtime_fused_translate_pairs_reuse_physical_compile(
                 np.asarray(actual).view(np.uint32),
                 np.asarray(expected).view(np.uint32),
             )
+            expected_jobs = cuda_backproject.relion_fine_diff2_fused_translate_jobs_f32(
+                jnp.asarray(reference),
+                jnp.asarray(image),
+                jnp.asarray(translation_angles),
+                jnp.asarray(weight),
+                jnp.asarray(job_plan),
+                jnp.asarray(lookup),
+                jnp.asarray(initial_diff2),
+                current_size=logical_size,
+            )
+            actual_jobs = runtime_jobs_function(
+                jnp.asarray(physical_reference),
+                jnp.asarray(physical_image),
+                jnp.asarray(translation_angles),
+                jnp.asarray(physical_weight),
+                jnp.asarray(job_plan),
+                jnp.asarray(physical_lookup),
+                jnp.asarray(logical_size, dtype=jnp.int32),
+                jnp.asarray(initial_diff2),
+            )
+            expected_jobs, actual_jobs = jax.block_until_ready(
+                (expected_jobs, actual_jobs)
+            )
+            np.testing.assert_array_equal(
+                np.asarray(actual_jobs).view(np.uint32),
+                np.asarray(expected_jobs).view(np.uint32),
+            )
             cache_size = runtime_function._cache_size()
+            jobs_cache_size = runtime_jobs_function._cache_size()
             if logical_size == 30:
                 first_cache_size = cache_size
+                first_jobs_cache_size = jobs_cache_size
             else:
                 assert cache_size == first_cache_size
+                assert jobs_cache_size == first_jobs_cache_size
 
 
 @pytest.mark.gpu

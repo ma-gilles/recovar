@@ -153,7 +153,9 @@ def test_dense_to_flat_lookup_gathers_final_rows_in_requested_source_order():
 
 
 @pytest.mark.unit
-def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_rows():
+def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_rows(
+    monkeypatch,
+):
     rotation_counts = np.asarray([3, 2], dtype=np.int32)
     dense_rotation_count = 16
     plan = build_pool_flat_local_row_plan(
@@ -250,6 +252,19 @@ def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_ro
     )
     np.testing.assert_array_equal(actual["job_plan"][:7], expected_jobs)
     assert np.all(actual["job_plan"][7:] == -1)
+
+    monkeypatch.setenv("RECOVAR_EXACT_FINE_JOB_BUCKET_QUANTUM", "8192")
+    capacities = local_em_engine._plan_local_fine_job_capacities([bucket])
+    assert capacities == {(3, dense_rotation_count): 4096}
+    stable = local_em_engine._build_local_fused_pair_fine_arguments(
+        bucket,
+        encoded,
+        np.asarray([True, True, False]),
+        fine_job_bucket_size=capacities[(3, dense_rotation_count)],
+    )
+    assert stable["job_plan"].shape == (4096, 4)
+    np.testing.assert_array_equal(stable["job_plan"][:7], expected_jobs)
+    assert np.all(stable["job_plan"][7:] == -1)
 
 
 @pytest.mark.unit

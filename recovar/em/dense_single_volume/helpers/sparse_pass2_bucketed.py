@@ -2238,14 +2238,49 @@ def build_compact_fine_job_plan(
             f"{reference_row_lookup.shape} {reference_row_lookup.dtype}"
         )
 
-    compact_indices = tuple(
-        compact_candidate_indices_in_source_order(candidate_mask)
-        for candidate_mask in candidate_masks
+    pair_arrays = build_compact_pair_index_arrays(candidate_masks)
+    return build_compact_fine_job_plan_from_pair_arrays(
+        pair_arrays,
+        reference_row_lookup,
+        job_bucket_size=job_bucket_size,
+        job_block_size_for_quantization=job_block_size_for_quantization,
     )
-    job_counts = np.asarray(
-        [rotation_rows.shape[0] for rotation_rows, _ in compact_indices],
-        dtype=np.int32,
-    )
+
+
+def build_compact_fine_job_plan_from_pair_arrays(
+    pair_arrays,
+    reference_row_lookup,
+    *,
+    job_bucket_size: int | None = None,
+    job_block_size_for_quantization: int = 5000,
+):
+    """Collapse the mature per-image pair ABI into one global job prefix."""
+
+    local_rotation_row = np.asarray(pair_arrays["local_rotation_row"])
+    translation_idx = np.asarray(pair_arrays["translation_idx"])
+    pair_mask = np.asarray(pair_arrays["pair_mask"])
+    job_counts = np.asarray(pair_arrays["pair_counts"])
+    if (
+        local_rotation_row.dtype != np.int32
+        or translation_idx.dtype != np.int32
+        or pair_mask.dtype != np.bool_
+        or job_counts.dtype != np.int32
+        or local_rotation_row.ndim != 2
+        or translation_idx.shape != local_rotation_row.shape
+        or pair_mask.shape != local_rotation_row.shape
+        or job_counts.shape != (local_rotation_row.shape[0],)
+    ):
+        raise ValueError("compact pair arrays are not aligned with the mature ABI")
+    expected_mask = np.arange(local_rotation_row.shape[1])[None, :] < job_counts[:, None]
+    if not np.array_equal(pair_mask, expected_mask):
+        raise ValueError("compact pair validity must be a source-ordered prefix")
+
+    batch_size = int(local_rotation_row.shape[0])
+    reference_row_lookup = np.asarray(reference_row_lookup)
+    if reference_row_lookup.dtype != np.int32 or reference_row_lookup.ndim != 2:
+        raise ValueError("compact fine-job reference lookup must be a 2-D int32 array")
+    if reference_row_lookup.shape[0] != batch_size:
+        raise ValueError("compact fine-job reference lookup batch axis is misaligned")
     valid_job_count = int(np.sum(job_counts, dtype=np.int64))
     if job_bucket_size is None:
         job_bucket_size = _exact_bucket_rotation_size(
@@ -2263,10 +2298,18 @@ def build_compact_fine_job_plan(
 
     job_plan = np.full((job_bucket_size, 4), -1, dtype=np.int32)
     cursor = 0
-    for image_row, (rotation_rows, translation_ids) in enumerate(compact_indices):
-        count = int(rotation_rows.shape[0])
+    for image_row, count_value in enumerate(job_counts):
+        count = int(count_value)
         if count == 0:
             continue
+        rotation_rows = local_rotation_row[image_row, :count]
+        translation_ids = translation_idx[image_row, :count]
+        if np.any(rotation_rows < 0) or np.any(
+            rotation_rows >= reference_row_lookup.shape[1]
+        ):
+            raise ValueError("a selected fine job has an invalid dense rotation row")
+        if np.any(translation_ids < 0):
+            raise ValueError("a selected fine job has an invalid translation id")
         reference_rows = reference_row_lookup[image_row, rotation_rows]
         if np.any(reference_rows < 0):
             raise ValueError(

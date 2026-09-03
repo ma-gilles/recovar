@@ -3091,23 +3091,22 @@ def _build_flat_local_row_argument(
     return encode_flat_local_row_plan(plan)
 
 
-def _build_local_fused_pair_fine_arguments(
-    bucket: LocalBucketSpec,
-    flat_local_row_argument,
-    valid_image_mask,
-) -> dict[str, np.ndarray | int]:
-    """Map the mature compact-pair ABI onto packed local projection rows.
+_FINE_JOB_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_FINE_JOB_BUCKET_QUANTUM"
+_FINE_JOB_BUCKET_QUANTUM_DEFAULT = 65536
+_FINE_JOB_MIN_CAPACITY = 4096
 
-    Candidate order and pair padding come from the shared compact-pass-2 host
-    encoder.  This local bridge adds only the projection-storage row mapping
-    needed by the fused CUDA ABI; it does not define another pair layout.
-    """
+
+def _local_fine_candidate_mask(
+    bucket: LocalBucketSpec,
+    valid_image_mask,
+) -> np.ndarray:
+    """Return the canonical dense candidate mask used by both compact ABIs."""
 
     rotation_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)
     valid_image_mask = np.asarray(valid_image_mask, dtype=bool)
     if rotation_mask.ndim != 2 or valid_image_mask.shape != (rotation_mask.shape[0],):
         raise ValueError(
-            "fused-pair fine scoring requires aligned bucket and valid-image axes"
+            "fused fine scoring requires aligned bucket and valid-image axes"
         )
     n_translations = int(np.asarray(bucket.translation_log_prior).shape[1])
     candidate_mask = np.broadcast_to(
@@ -3118,10 +3117,78 @@ def _build_local_fused_pair_fine_arguments(
         sample_mask = np.asarray(bucket.local_sample_mask, dtype=bool)
         if sample_mask.shape != candidate_mask.shape:
             raise ValueError(
-                "fused-pair fine sample mask does not match the dense source layout"
+                "fused fine sample mask does not match the dense source layout"
             )
         candidate_mask &= sample_mask
     candidate_mask &= valid_image_mask[:, None, None]
+    return candidate_mask
+
+
+def _plan_local_fine_job_capacities(
+    bucket_specs,
+) -> dict[tuple[int, int], int]:
+    """Choose stable global-job capacity per physical big-JIT bucket ABI."""
+
+    try:
+        large_quantum = int(
+            os.environ.get(
+                _FINE_JOB_BUCKET_QUANTUM_ENV,
+                str(_FINE_JOB_BUCKET_QUANTUM_DEFAULT),
+            )
+        )
+    except ValueError as exc:
+        raise ValueError(f"{_FINE_JOB_BUCKET_QUANTUM_ENV} must be an integer") from exc
+    if large_quantum < _FINE_JOB_MIN_CAPACITY:
+        raise ValueError(
+            f"{_FINE_JOB_BUCKET_QUANTUM_ENV} must be at least "
+            f"{_FINE_JOB_MIN_CAPACITY}"
+        )
+
+    required_by_abi: dict[tuple[int, int], int] = {}
+    for bucket in bucket_specs:
+        physical_image_count = int(np.asarray(bucket.image_indices).shape[0])
+        dense_batch_size = max(
+            physical_image_count,
+            int(getattr(bucket, "bucket_image_count", physical_image_count)),
+        )
+        dense_rotation_count = int(bucket.bucket_rotation_count)
+        candidate_mask = _local_fine_candidate_mask(
+            bucket,
+            np.ones(physical_image_count, dtype=bool),
+        )
+        required = int(np.count_nonzero(candidate_mask))
+        key = (dense_batch_size, dense_rotation_count)
+        required_by_abi[key] = max(required_by_abi.get(key, 0), required)
+
+    return {
+        key: max(
+            _FINE_JOB_MIN_CAPACITY,
+            _exact_bucket_rotation_size(
+                required,
+                5000,
+                large_bucket_quantum=large_quantum,
+            ),
+        )
+        for key, required in required_by_abi.items()
+    }
+
+
+def _build_local_fused_pair_fine_arguments(
+    bucket: LocalBucketSpec,
+    flat_local_row_argument,
+    valid_image_mask,
+    *,
+    fine_job_bucket_size: int | None = None,
+) -> dict[str, np.ndarray | int]:
+    """Map the mature compact-pair ABI onto packed local projection rows.
+
+    Candidate order and pair padding come from the shared compact-pass-2 host
+    encoder.  This local bridge adds only the projection-storage row mapping
+    needed by the fused CUDA ABI; it does not define another pair layout.
+    """
+
+    rotation_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)
+    candidate_mask = _local_fine_candidate_mask(bucket, valid_image_mask)
 
     pair_arrays = _sparse_pass2_diagnostics.build_compact_pair_index_arrays(
         candidate_mask,
@@ -3145,9 +3212,10 @@ def _build_local_fused_pair_fine_arguments(
         np.int32,
         copy=False,
     )
-    flat_jobs = _sparse_pass2_diagnostics.build_compact_fine_job_plan(
-        candidate_mask,
+    flat_jobs = _sparse_pass2_diagnostics.build_compact_fine_job_plan_from_pair_arrays(
+        pair_arrays,
         dense_to_flat,
+        job_bucket_size=fine_job_bucket_size,
     )
     return {
         **pair_arrays,
@@ -5143,6 +5211,11 @@ def run_local_em_exact(
         if flat_local_rows_enabled
         else {}
     )
+    fine_job_capacities = (
+        _plan_local_fine_job_capacities(bucket_specs)
+        if fused_pair_fine_score_enabled
+        else {}
+    )
     if bucket_specs:
         bucket_rotation_counts = np.asarray(
             [int(bucket.bucket_rotation_count) for bucket in bucket_specs],
@@ -6048,28 +6121,23 @@ def run_local_em_exact(
                 else np.zeros((1, 3), dtype=np.int32)
             )
             if fused_pair_fine_score_enabled:
+                fine_job_capacity_key = (
+                    int(batch_size),
+                    int(bucket.bucket_rotation_count),
+                )
                 fused_pair_arguments = _build_local_fused_pair_fine_arguments(
                     bucket,
                     flat_local_row_argument,
                     valid_image_mask,
+                    fine_job_bucket_size=fine_job_capacities[
+                        fine_job_capacity_key
+                    ],
                 )
-                fused_pair_reference_rows_arg = jnp.asarray(
-                    fused_pair_arguments["reference_row"],
+                fused_fine_job_plan_arg = jnp.asarray(
+                    fused_pair_arguments["job_plan"],
                     dtype=jnp.int32,
                 )
-                fused_pair_local_rotation_rows_arg = jnp.asarray(
-                    fused_pair_arguments["local_rotation_row"],
-                    dtype=jnp.int32,
-                )
-                fused_pair_translation_ids_arg = jnp.asarray(
-                    fused_pair_arguments["translation_idx"],
-                    dtype=jnp.int32,
-                )
-                fused_pair_mask_arg = jnp.asarray(
-                    fused_pair_arguments["pair_mask"],
-                    dtype=bool,
-                )
-                pair_capacity = int(fused_pair_arguments["pair_bucket_size"])
+                pair_capacity = int(fused_pair_arguments["job_bucket_size"])
                 valid_pair_count = int(fused_pair_arguments["valid_pair_count"])
                 dense_pair_capacity = int(
                     fused_pair_arguments["dense_candidate_capacity"]
@@ -6077,26 +6145,15 @@ def run_local_em_exact(
                 chunk_fused_pair_capacities.append(pair_capacity)
                 chunk_fused_pair_counts.append(valid_pair_count)
                 chunk_fused_pair_dense_capacities.append(dense_pair_capacity)
-                total_fused_pair_capacity += int(batch_size * pair_capacity)
+                total_fused_pair_capacity += pair_capacity
                 total_fused_pair_candidates += valid_pair_count
                 total_fused_pair_dense_capacity += dense_pair_capacity
             else:
-                fused_pair_reference_rows_arg = jnp.full(
-                    (1, 1),
+                fused_fine_job_plan_arg = jnp.full(
+                    (1, 4),
                     -1,
                     dtype=jnp.int32,
                 )
-                fused_pair_local_rotation_rows_arg = jnp.full(
-                    (1, 1),
-                    -1,
-                    dtype=jnp.int32,
-                )
-                fused_pair_translation_ids_arg = jnp.full(
-                    (1, 1),
-                    -1,
-                    dtype=jnp.int32,
-                )
-                fused_pair_mask_arg = jnp.zeros((1, 1), dtype=bool)
             big_jit_arguments = (
                 jnp.asarray(batch_data),
                 jnp.asarray(ctf_params),
@@ -6147,10 +6204,7 @@ def run_local_em_exact(
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(_local_mstep_rotations(bucket)),
                 jnp.asarray(flat_local_row_argument, dtype=jnp.int32),
-                fused_pair_reference_rows_arg,
-                fused_pair_local_rotation_rows_arg,
-                fused_pair_translation_ids_arg,
-                fused_pair_mask_arg,
+                fused_fine_job_plan_arg,
                 local_rotation_log_prior_arg,
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),

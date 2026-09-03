@@ -1013,10 +1013,7 @@ def run_local_bucket_big_jit(
     local_rotations,
     local_mstep_rotations,
     flat_local_row_plan,
-    fused_pair_reference_rows,
-    fused_pair_local_rotation_rows,
-    fused_pair_translation_ids,
-    fused_pair_mask,
+    fused_fine_job_plan,
     rotation_log_prior,
     translation_log_prior,
     rotation_mask,
@@ -1153,30 +1150,20 @@ def run_local_bucket_big_jit(
         raise ValueError(
             "packed local projection does not yet support dense projection operand dumps"
         )
-    fused_pair_reference_rows = jnp.asarray(fused_pair_reference_rows)
-    fused_pair_local_rotation_rows = jnp.asarray(fused_pair_local_rotation_rows)
-    fused_pair_translation_ids = jnp.asarray(fused_pair_translation_ids)
-    fused_pair_mask = jnp.asarray(fused_pair_mask)
+    fused_fine_job_plan = jnp.asarray(fused_fine_job_plan)
     if use_fused_pair_fine_score:
         if not (relion_exact_fine_diff2 and use_flat_local_rows):
             raise ValueError(
                 "fused-pair fine scoring requires exact RELION fine diff2 and flat local rows"
             )
-        expected_pair_shape = fused_pair_reference_rows.shape
         if (
-            fused_pair_reference_rows.dtype != jnp.int32
-            or fused_pair_local_rotation_rows.dtype != jnp.int32
-            or fused_pair_translation_ids.dtype != jnp.int32
-            or fused_pair_mask.dtype != jnp.bool_
-            or fused_pair_reference_rows.ndim != 2
-            or expected_pair_shape[0] != local_rotations.shape[0]
-            or expected_pair_shape[1] <= 0
-            or fused_pair_local_rotation_rows.shape != expected_pair_shape
-            or fused_pair_translation_ids.shape != expected_pair_shape
-            or fused_pair_mask.shape != expected_pair_shape
+            fused_fine_job_plan.dtype != jnp.int32
+            or fused_fine_job_plan.ndim != 2
+            or fused_fine_job_plan.shape[0] <= 0
+            or fused_fine_job_plan.shape[1] != 4
         ):
             raise ValueError(
-                "fused-pair fine operands must be aligned (B, P) int32/int32/int32/bool arrays"
+                "fused fine-job plan must be a nonempty int32 array with shape (J, 4)"
             )
     if return_deferred_mstep_inputs and (
         return_mstep_tensors
@@ -1684,43 +1671,57 @@ def run_local_bucket_big_jit(
                 else proj_half[flat_row_image_ids, flat_row_rotation_rows]
             )
             if use_fused_pair_fine_score:
-                pair_args = (
+                fine_job_args = (
                     jnp.asarray(flat_score_projection, dtype=jnp.complex64),
                     corrected_score,
                     jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
                     direct_weight,
-                    fused_pair_reference_rows,
-                    fused_pair_translation_ids,
+                    fused_fine_job_plan,
                     jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
                 )
                 if stable_fourier_window_shapes:
-                    direct_diff2_pairs = (
-                        cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32(
-                            *pair_args,
+                    direct_diff2_jobs = (
+                        cuda_backproject.relion_fine_diff2_fused_translate_runtime_jobs_f32(
+                            *fine_job_args,
                             runtime_logical_current_size,
                             direct_highres,
                         )
                     )
                 else:
-                    direct_diff2_pairs = (
-                        cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
-                            *pair_args,
+                    direct_diff2_jobs = (
+                        cuda_backproject.relion_fine_diff2_fused_translate_jobs_f32(
+                            *fine_job_args,
                             direct_highres,
                             current_size=norm_current_size,
                         )
                     )
-                pair_batch_rows = jnp.broadcast_to(
-                    jnp.arange(batch_size, dtype=jnp.int32)[:, None],
-                    fused_pair_mask.shape,
+                job_image_rows = fused_fine_job_plan[:, 0]
+                job_reference_rows = fused_fine_job_plan[:, 1]
+                job_rotation_rows = fused_fine_job_plan[:, 2]
+                job_translation_ids = fused_fine_job_plan[:, 3]
+                valid_jobs = (
+                    (job_image_rows >= 0)
+                    & (job_image_rows < batch_size)
+                    & (job_reference_rows >= 0)
+                    & (job_reference_rows < flat_score_projection.shape[0])
+                    & (job_rotation_rows >= 0)
+                    & (job_rotation_rows < local_rotations.shape[1])
+                    & (job_translation_ids >= 0)
+                    & (job_translation_ids < n_trans)
+                )
+                scatter_image_rows = jnp.where(
+                    valid_jobs,
+                    job_image_rows,
+                    jnp.int32(batch_size),
                 )
                 scatter_rotation_rows = jnp.where(
-                    fused_pair_mask,
-                    fused_pair_local_rotation_rows,
+                    valid_jobs,
+                    job_rotation_rows,
                     jnp.int32(local_rotations.shape[1]),
                 )
                 scatter_translation_ids = jnp.where(
-                    fused_pair_mask,
-                    fused_pair_translation_ids,
+                    valid_jobs,
+                    job_translation_ids,
                     jnp.int32(n_trans),
                 )
                 direct_diff2 = jnp.full(
@@ -1728,11 +1729,11 @@ def run_local_bucket_big_jit(
                     jnp.inf,
                     dtype=jnp.float32,
                 ).at[
-                    pair_batch_rows,
+                    scatter_image_rows,
                     scatter_rotation_rows,
                     scatter_translation_ids,
                 ].set(
-                    direct_diff2_pairs,
+                    direct_diff2_jobs,
                     mode="drop",
                 )
             else:

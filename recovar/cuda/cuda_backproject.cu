@@ -10085,11 +10085,14 @@ void relion_fine_diff2_fused_translate_jobs_f32_kernel(
         const int32_t image_row = in_block ? job_plan[plan_offset] : -1;
         const int32_t reference_row =
             in_block ? job_plan[plan_offset + 1] : -1;
+        const int32_t rotation_row =
+            in_block ? job_plan[plan_offset + 2] : -1;
         const int32_t translation =
             in_block ? job_plan[plan_offset + 3] : -1;
         const bool valid =
             in_block && image_row >= 0 && image_row < batch_size &&
             reference_row >= 0 && reference_row < reference_row_count &&
+            rotation_row >= 0 &&
             translation >= 0 && translation < translation_count;
         image_rows[offset] = image_row;
         reference_rows[offset] = reference_row;

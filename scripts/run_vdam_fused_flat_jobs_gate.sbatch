@@ -47,6 +47,7 @@ nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
     recovar/cuda/cuda_backproject.cu \
     recovar/cuda_backproject.py \
     recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py \
+    recovar/em/dense_single_volume/local_big_jit.py \
     recovar/em/dense_single_volume/local_em_engine.py \
     tests/unit/test_cuda_relion_fine_diff2.py \
     tests/unit/test_flat_local_rows.py \
@@ -90,6 +91,8 @@ touch "${JAX_COMPILATION_CACHE_DIR}/SAFE_TO_DELETE"
     --junitxml="${RESULTS}/pytest.junit.xml" \
     tests/unit/test_cuda_relion_fine_diff2.py::test_relion_fused_translate_cuda_source_pins_native_block_topology \
     tests/unit/test_cuda_relion_fine_diff2.py::test_relion_fused_translate_jobs_match_rectangular_tree_bitwise \
+    tests/unit/test_cuda_relion_fine_diff2.py::test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties \
+    tests/unit/test_cuda_relion_fine_diff2.py::test_relion_runtime_fused_translate_pairs_reuse_physical_compile \
     tests/unit/test_cuda_relion_fine_diff2.py::test_relion_runtime_jobs_fails_closed_without_gpu \
     tests/unit/test_flat_local_rows.py::test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_rows
 ) > "${RESULTS}/pytest.stdout" 2> "${RESULTS}/pytest.stderr"
