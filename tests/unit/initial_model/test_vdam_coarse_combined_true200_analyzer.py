@@ -371,11 +371,22 @@ def _hybrid_stats(
     }
 
 
-def _direct_or_hybrid_metadata(*, hybrid: bool) -> dict[str, object]:
+def _direct_or_hybrid_metadata(
+    *, hybrid: bool, packed_deferred: bool | None = None
+) -> dict[str, object]:
     metadata = _joint_stream_metadata(_inactive_selector_audit())
     metadata["selected_particle_ids"] = list(range(1_000))
     if hybrid:
         metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] = _hybrid_stats()
+    if packed_deferred is not None:
+        metadata["halfset_0_profile_summary"].update(
+            {
+                "flat_local_rows_enabled": packed_deferred,
+                "packed_local_projection_enabled": packed_deferred,
+                "defer_packed_vdam_enabled": packed_deferred,
+                "packed_vdam_reuses_flat_score_projection": packed_deferred,
+            }
+        )
     return metadata
 
 
@@ -402,6 +413,60 @@ def test_direct_hybrid_profile_proof_accepts_exact_score_accounting() -> None:
     )
     assert hybrid_rows[0]["hybrid"]["selected_rescore_image_count"] == 1_000
     assert hybrid_rows[0]["hybrid"]["inferred_rotation_count"] == 36_864
+
+
+def test_combined_profile_proves_packed_projection_reuse() -> None:
+    direct_rows = analyzer._validate_coarse_selector_profile_audits(
+        _direct_or_hybrid_metadata(hybrid=False, packed_deferred=False),
+        label="control_serial_1",
+        iteration=181,
+        multistream_workers=0,
+        native_atomic_reduction=0,
+        coarse_gemm_hybrid=0,
+        packed_deferred=0,
+    )
+    candidate_rows = analyzer._validate_coarse_selector_profile_audits(
+        _direct_or_hybrid_metadata(hybrid=True, packed_deferred=True),
+        label="combined_candidate_1",
+        iteration=181,
+        multistream_workers=0,
+        native_atomic_reduction=0,
+        coarse_gemm_hybrid=1,
+        packed_deferred=1,
+    )
+    assert direct_rows[0]["packed_deferred"] == {
+        "flat_local_rows_enabled": False,
+        "packed_local_projection_enabled": False,
+        "defer_packed_vdam_enabled": False,
+        "packed_vdam_reuses_flat_score_projection": False,
+    }
+    assert all(candidate_rows[0]["packed_deferred"].values())
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "flat_local_rows_enabled",
+        "packed_local_projection_enabled",
+        "defer_packed_vdam_enabled",
+        "packed_vdam_reuses_flat_score_projection",
+    ),
+)
+def test_combined_profile_rejects_missing_or_disabled_packed_execution(
+    field: str,
+) -> None:
+    metadata = _direct_or_hybrid_metadata(hybrid=True, packed_deferred=True)
+    metadata["halfset_0_profile_summary"][field] = False
+    with pytest.raises(analyzer.GateSetupError, match="packed/deferred execution differs"):
+        analyzer._validate_coarse_selector_profile_audits(
+            metadata,
+            label="combined_candidate_1",
+            iteration=181,
+            multistream_workers=0,
+            native_atomic_reduction=0,
+            coarse_gemm_hybrid=1,
+            packed_deferred=1,
+        )
 
 
 def test_hybrid_profile_proof_accepts_accounted_full_direct_fallback() -> None:
@@ -433,7 +498,7 @@ def test_completed_hybrid_arm_proves_every_checkpoint_and_maximum_cache_shape(
         (1, 4_608, 36_864),
         (2, 36_864, 294_912),
     ):
-        metadata = _direct_or_hybrid_metadata(hybrid=True)
+        metadata = _direct_or_hybrid_metadata(hybrid=True, packed_deferred=True)
         metadata["current_size"] = 100 if iteration == 1 else 128
         metadata["n_rotations"] = fine_rotation_count
         metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] = (
@@ -454,6 +519,7 @@ def test_completed_hybrid_arm_proves_every_checkpoint_and_maximum_cache_shape(
             "maximum_exercised_coarse_rotation_count": 36_864,
             "maximum_exercised_compact_pixel_count": 8_320,
         },
+        packed_deferred=1,
     )
     assert result["checkpoint_count"] == 2
     assert result["maximum_metadata_fine_rotation_count"] == 294_912
@@ -461,6 +527,7 @@ def test_completed_hybrid_arm_proves_every_checkpoint_and_maximum_cache_shape(
     assert result["maximum_inferred_rotation_count"] == 36_864
     assert result["maximum_compact_pixel_count"] == 8_320
     assert result["total_fallback_image_count"] == 0
+    assert result["packed_deferred"] == 1
 
 
 def test_completed_hybrid_arm_rejects_coarse_grid_inconsistent_with_oversampling(
@@ -1677,6 +1744,10 @@ def test_true200_wrapper_is_fail_closed_resumable_and_seals_terminal_state_last(
     assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID=${hybrid}"' in text
     assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=${hybrid}"' in text
     assert '"RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=${hybrid}"' in text
+    assert '"RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS=${packed_deferred}"' in text
+    assert '"RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION=${packed_deferred}"' in text
+    assert '"RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM=${packed_deferred}"' in text
+    assert "PACKED_DEFERRED_CANDIDATE" in text
     assert "FIXED_SCIENCE_ENVIRONMENT_ARGS" in text
     assert "CUSPARSE_LIBRARY=$(jq -er '.files.cusparse_library.path'" not in text
     assert text.count('LD_PRELOAD="${CUSPARSE_LIBRARY}"') >= 5
@@ -1723,6 +1794,7 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
     assert panel["coarse_multistream_workers"] == [0] * 12
     assert panel["coarse_native_atomic_reduction"] == [0] * 12
     assert panel["coarse_gemm_hybrid"] == [0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0]
+    assert contract["science_contract"]["packed_deferred_candidate"] is True
     assert panel["sentinel_prefix_arm_count"] == 2
     assert panel["blocked_assignment_count"] == 216
     assert analyzer._balanced_assignments(BLOCKS).__len__() == 216
@@ -1767,6 +1839,12 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
         contract["required_gates"]["coarse_hybrid_execution_proven_every_postinit_joint_stream"]
         is True
     )
+    assert (
+        contract["required_gates"][
+            "packed_deferred_execution_proven_every_postinit_joint_stream"
+        ]
+        is True
+    )
     assert contract["trajectory"]["exact_state_first_iteration"] == 1
     assert contract["trajectory"]["exact_state_last_iteration"] == 200
     native = contract["native_reference"]
@@ -1793,6 +1871,9 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
         "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
+        "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM",
+        "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS",
+        "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION",
         "VDAM_ALLOCATION_SELECTOR_RESOLUTION",
     ):
         assert name in runtime_contract["science_environment_capture_names"]

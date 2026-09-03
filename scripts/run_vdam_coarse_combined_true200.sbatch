@@ -81,6 +81,12 @@ if [[ "${SENTINEL}" -eq 1 && "${RESUME}" -eq 1 ]]; then
   echo "the two-arm sentinel must use a fresh result root" >&2
   exit 2
 fi
+PACKED_DEFERRED_CANDIDATE=$(jq -er '
+  if .science_contract.packed_deferred_candidate == true then 1
+  elif .science_contract.packed_deferred_candidate == false then 0
+  else error("packed/deferred candidate contract is invalid") end
+' "${ACCEPTANCE}")
+test "${PACKED_DEFERRED_CANDIDATE}" -eq 1
 
 mapfile -t SOURCE_FILES < <(
   jq -er '.source_contract.files[]' "${ACCEPTANCE}" | LC_ALL=C sort
@@ -409,13 +415,14 @@ validate_completed_arm() {
   local workers=$2
   local native_atomic=$3
   local hybrid=$4
-  local require_marker=$5
+  local packed_deferred=$5
+  local require_marker=$6
   (
     cd "${REPO_ROOT}"
     env "${FIXED_SCIENCE_ENVIRONMENT_ARGS[@]}" LD_PRELOAD="${CUSPARSE_LIBRARY}" \
       PYTHONPATH="${REPO_ROOT}" \
       "${PIXI_PY}" - "${ROOT}" "${ACCEPTANCE}" "${label}" "${workers}" \
-      "${native_atomic}" "${hybrid}" "${require_marker}" <<'PY'
+      "${native_atomic}" "${hybrid}" "${packed_deferred}" "${require_marker}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -430,7 +437,9 @@ from scripts.analyze_vdam_coarse_combined_true200 import (
 
 root, acceptance_path = Path(sys.argv[1]), Path(sys.argv[2])
 label = sys.argv[3]
-workers, native_atomic, hybrid, require_marker = map(int, sys.argv[4:8])
+workers, native_atomic, hybrid, packed_deferred, require_marker = map(
+    int, sys.argv[4:9]
+)
 acceptance = _load_json(acceptance_path, "acceptance contract")
 run = _load_json(root / "provenance/run.json", "run provenance")
 expected = {
@@ -452,6 +461,7 @@ artifact = _validate_arm_artifacts(
     expected=expected,
     runtime_contract=acceptance["runtime_contract"],
     require_completion_marker=bool(require_marker),
+    packed_deferred=packed_deferred,
 )
 _validate_native_options(
     root / "runs" / label / "output/run_native_options.json",
@@ -467,6 +477,7 @@ coarse_execution = _validate_arm_coarse_hybrid_execution(
     cache_contract=acceptance["science_contract"][
         "hybrid_projection_cache_contract"
     ],
+    packed_deferred=packed_deferred,
 )
 runtime = _arm_runtime(
     root,
@@ -556,6 +567,9 @@ payload = {
     "coarse_multistream_workers": acceptance["panel"]["coarse_multistream_workers"],
     "coarse_native_atomic_reduction": acceptance["panel"]["coarse_native_atomic_reduction"],
     "coarse_gemm_hybrid": acceptance["panel"]["coarse_gemm_hybrid"],
+    "packed_deferred_candidate": bool(
+        acceptance["science_contract"]["packed_deferred_candidate"]
+    ),
     "fresh_process_and_jax_cache_per_arm": True,
     "only_configuration_delta": acceptance["science_contract"]["only_configuration_delta"],
     "initial_model_profile": True,
@@ -590,6 +604,7 @@ for index in "${!RUN_LABELS[@]}"; do
   workers=${RUN_WORKERS[index]}
   native_atomic=${RUN_ATOMIC[index]}
   hybrid=${RUN_HYBRID[index]}
+  packed_deferred=$((hybrid * PACKED_DEFERRED_CANDIDATE))
   run_root=${ROOT}/runs/${label}
   output=${run_root}/output
   cache=${run_root}/jax_cache
@@ -597,7 +612,8 @@ for index in "${!RUN_LABELS[@]}"; do
   if [[ -f "${run_root}/SCIENCE_COMPLETED" ]]; then
     test "${RESUME}" -eq 1
     test "${completed_prefix}" -eq 1
-    validate_completed_arm "${label}" "${workers}" "${native_atomic}" "${hybrid}" 1
+    validate_completed_arm "${label}" "${workers}" "${native_atomic}" "${hybrid}" \
+      "${packed_deferred}" 1
     continue
   fi
   completed_prefix=0
@@ -643,6 +659,9 @@ PY
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID=${hybrid}"
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=${hybrid}"
     "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=${hybrid}"
+    "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS=${packed_deferred}"
+    "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION=${packed_deferred}"
+    "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM=${packed_deferred}"
     "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=${workers}"
     "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=${native_atomic}"
   )
@@ -718,11 +737,12 @@ open(sys.argv[1], "w", encoding="utf-8").write(json.dumps({
 }, indent=2, sort_keys=True) + "\n")
 PY
   "${PIXI_PY}" - "${run_root}/arm.json" "${PROVENANCE}/run.json" "${label}" "${workers}" \
-    "${native_atomic}" "${hybrid}" "${output}" "${cache}" "${run_root}/science_environment.json" \
+    "${native_atomic}" "${hybrid}" "${packed_deferred}" "${output}" "${cache}" \
+    "${run_root}/science_environment.json" \
     "${SLURM_JOB_ID}" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
-(target, run_path, label, workers, native_atomic, hybrid, output, cache,
+(target, run_path, label, workers, native_atomic, hybrid, packed_deferred, output, cache,
  science_environment, job_id) = sys.argv[1:]
 run = json.load(open(run_path, encoding="utf-8"))
 def sha256(path):
@@ -740,6 +760,7 @@ payload.update(schema="recovar.vdam_coarse_combined_true200_arm.v3", label=label
                job_id=job_id,
                multistream_workers=int(workers), native_atomic_reduction=int(native_atomic),
                coarse_gemm_hybrid=int(hybrid),
+               packed_deferred=int(packed_deferred),
                output_dir=str(Path(output).resolve()),
                jax_cache_dir=str(Path(cache).resolve()), exit_status=0, fresh_process=True,
                fresh_jax_cache=True, initial_model_profile=True,
@@ -753,7 +774,8 @@ PY
       arm.json science_environment.json output/run_native_options.json | \
       LC_ALL=C sort | xargs sha256sum
   ) > "${run_root}/runtime_artifact_manifest.sha256"
-  validate_completed_arm "${label}" "${workers}" "${native_atomic}" "${hybrid}" 0
+  validate_completed_arm "${label}" "${workers}" "${native_atomic}" "${hybrid}" \
+    "${packed_deferred}" 0
   write_marker_once "${run_root}/SCIENCE_COMPLETED" "job_id=${SLURM_JOB_ID}"
   test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = \
     "$(jq -r '.qualified_candidate.cuda_sha256' "${ACCEPTANCE}")"

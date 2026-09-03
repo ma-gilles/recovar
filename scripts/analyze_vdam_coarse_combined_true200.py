@@ -1445,6 +1445,30 @@ def _validate_coarse_gemm_hybrid_profile(
     return validated
 
 
+def _validate_packed_deferred_profile(
+    profile: Any,
+    *,
+    label: str,
+    expected_enabled: bool,
+) -> dict[str, bool]:
+    """Prove that the combined candidate used its packed local E/M path."""
+
+    _require(isinstance(profile, dict), f"{label} packed/deferred profile is missing")
+    expected = {
+        "flat_local_rows_enabled": bool(expected_enabled),
+        "packed_local_projection_enabled": bool(expected_enabled),
+        "defer_packed_vdam_enabled": bool(expected_enabled),
+        "packed_vdam_reuses_flat_score_projection": bool(expected_enabled),
+    }
+    mismatches = {
+        key: {"expected": value, "observed": profile.get(key)}
+        for key, value in expected.items()
+        if profile.get(key) is not value
+    }
+    _require(not mismatches, f"{label} packed/deferred execution differs: {mismatches}")
+    return expected
+
+
 def _validate_coarse_selector_profile_audits(
     metadata: dict[str, Any],
     *,
@@ -1453,6 +1477,7 @@ def _validate_coarse_selector_profile_audits(
     multistream_workers: int,
     native_atomic_reduction: int,
     coarse_gemm_hybrid: int | None = None,
+    packed_deferred: int | None = None,
 ) -> list[dict[str, Any]]:
     """Prove the sealed direct, legacy selector, or certified hybrid path ran."""
 
@@ -1478,6 +1503,11 @@ def _validate_coarse_selector_profile_audits(
     )
     multistream = int(multistream_workers) > 0
     hybrid_contract = coarse_gemm_hybrid is not None
+    if packed_deferred is not None:
+        _require(
+            int(packed_deferred) in (0, 1) and hybrid_contract,
+            f"{label} packed/deferred lane contract is invalid",
+        )
     if hybrid_contract:
         _require(
             int(coarse_gemm_hybrid) in (0, 1)
@@ -1522,6 +1552,13 @@ def _validate_coarse_selector_profile_audits(
     for key in profile_keys:
         profile = metadata[key]
         _require(isinstance(profile, dict), f"{label} iteration {iteration} {key} is invalid")
+        packed_deferred_profile = None
+        if packed_deferred is not None:
+            packed_deferred_profile = _validate_packed_deferred_profile(
+                profile,
+                label=f"{label} iteration {iteration} {key}",
+                expected_enabled=bool(packed_deferred),
+            )
         try:
             audit = _validate_coarse_selector_audit(profile.get("coarse_selector_audit"))
         except (TypeError, ValueError) as exc:
@@ -1596,6 +1633,7 @@ def _validate_coarse_selector_profile_audits(
                 "audit": audit,
                 "coarse_gemm_hybrid": None if coarse_gemm_hybrid is None else int(coarse_gemm_hybrid),
                 "hybrid": hybrid_stats,
+                "packed_deferred": packed_deferred_profile,
             }
         )
     return rows
@@ -1610,6 +1648,7 @@ def _validate_arm_coarse_hybrid_execution(
     iterations: Sequence[int],
     *,
     cache_contract: dict[str, Any],
+    packed_deferred: int | None = None,
 ) -> dict[str, Any]:
     """Validate every saved coarse profile for one completed direct/hybrid arm."""
 
@@ -1642,6 +1681,7 @@ def _validate_arm_coarse_hybrid_execution(
                 multistream_workers=multistream_workers,
                 native_atomic_reduction=native_atomic_reduction,
                 coarse_gemm_hybrid=coarse_gemm_hybrid,
+                packed_deferred=packed_deferred,
             )
         )
     expected_iterations = tuple(int(value) for value in iterations)
@@ -1725,6 +1765,7 @@ def _validate_arm_coarse_hybrid_execution(
         "label": label,
         "checkpoint_count": len(rows),
         "coarse_gemm_hybrid": int(coarse_gemm_hybrid),
+        "packed_deferred": None if packed_deferred is None else int(packed_deferred),
         "maximum_metadata_fine_rotation_count": maximum_fine_rotation_count,
         "maximum_metadata_coarse_rotation_count": maximum_metadata_coarse_rotation_count,
         "maximum_inferred_rotation_count": maximum_rotation_count,
@@ -2373,6 +2414,7 @@ def _validate_science_environment(
     multistream_workers: int,
     native_atomic_reduction: int,
     coarse_gemm_hybrid: int,
+    packed_deferred: int | None,
     arm: dict[str, Any],
     expected: dict[str, Any],
     runtime_contract: dict[str, Any],
@@ -2427,6 +2469,15 @@ def _validate_science_environment(
         "VDAM_SELECTED_GPU_UUID": str(expected["gpu_uuid"]),
         "VDAM_VISIBLE_GPU_UUIDS_CSV": str(expected["visible_gpu_uuids_csv"]),
     }
+    if packed_deferred is not None:
+        packed_value = str(int(packed_deferred))
+        required.update(
+            {
+                "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS": packed_value,
+                "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION": packed_value,
+                "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM": packed_value,
+            }
+        )
     mismatches = {
         key: {"expected": value, "observed": environment.get(key)}
         for key, value in required.items()
@@ -2490,6 +2541,7 @@ def _validate_arm_artifacts(
     expected: dict[str, Any],
     runtime_contract: dict[str, Any],
     require_completion_marker: bool = True,
+    packed_deferred: int | None = None,
 ) -> dict[str, Any]:
     run_root = root / "runs" / label
     output = run_root / "output"
@@ -2524,6 +2576,8 @@ def _validate_arm_artifacts(
         "fresh_jax_cache": True,
         "initial_model_profile": True,
     }
+    if packed_deferred is not None:
+        exact_fields["packed_deferred"] = int(packed_deferred)
     mismatches = {
         key: {"expected": value, "observed": arm.get(key)}
         for key, value in exact_fields.items()
@@ -2546,6 +2600,7 @@ def _validate_arm_artifacts(
         multistream_workers=multistream_workers,
         native_atomic_reduction=native_atomic_reduction,
         coarse_gemm_hybrid=coarse_gemm_hybrid,
+        packed_deferred=packed_deferred,
         arm=arm,
         expected=expected,
         runtime_contract=runtime_contract,
@@ -2955,6 +3010,13 @@ def _validate_run_provenance(
     labels, workers, atomic, hybrid, _ = _validate_direct_hybrid_panel(
         acceptance.get("panel")
     )
+    packed_deferred_candidate = acceptance["science_contract"].get(
+        "packed_deferred_candidate"
+    )
+    _require(
+        isinstance(packed_deferred_candidate, bool),
+        "packed/deferred candidate contract is invalid",
+    )
     expected = {
         "schema": "recovar.vdam_coarse_combined_true200_run.v3",
         "git_head": run.get("git_head"),
@@ -2975,6 +3037,7 @@ def _validate_run_provenance(
         "coarse_multistream_workers": list(workers),
         "coarse_native_atomic_reduction": list(atomic),
         "coarse_gemm_hybrid": list(hybrid),
+        "packed_deferred_candidate": packed_deferred_candidate,
         "fresh_process_and_jax_cache_per_arm": True,
         "only_configuration_delta": acceptance["science_contract"]["only_configuration_delta"],
         "initial_model_profile": True,
@@ -3299,16 +3362,29 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
     labels, workers, atomic, hybrid, block_indices = _validate_direct_hybrid_panel(
         acceptance.get("panel")
     )
+    packed_deferred_candidate = acceptance["science_contract"].get(
+        "packed_deferred_candidate"
+    )
+    _require(
+        isinstance(packed_deferred_candidate, bool)
+        and packed_deferred_candidate,
+        "combined true-200 gate must enable the packed/deferred candidate",
+    )
+    packed_deferred = tuple(
+        int(packed_deferred_candidate and hybrid_mode)
+        for hybrid_mode in hybrid
+    )
     arm_expected = {
         **run,
         "production_candidate_head": acceptance["qualified_candidate"]["production_head"],
     }
     arms = []
-    for label, worker_count, atomic_mode, hybrid_mode in zip(
+    for label, worker_count, atomic_mode, hybrid_mode, packed_mode in zip(
         labels,
         workers,
         atomic,
         hybrid,
+        packed_deferred,
         strict=True,
     ):
         arms.append(
@@ -3322,6 +3398,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
                 trajectory["required_artifact_suffixes"],
                 expected=arm_expected,
                 runtime_contract=acceptance["runtime_contract"],
+                packed_deferred=packed_mode,
             )
         )
         arms[-1]["validated_native_options"] = _validate_native_options(
@@ -3384,11 +3461,12 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
             )
             for label in labels
         ]
-        for label, worker_count, atomic_mode, hybrid_mode, meta in zip(
+        for label, worker_count, atomic_mode, hybrid_mode, packed_mode, meta in zip(
             labels,
             workers,
             atomic,
             hybrid,
+            packed_deferred,
             metadata,
             strict=True,
         ):
@@ -3400,6 +3478,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
                     multistream_workers=worker_count,
                     native_atomic_reduction=atomic_mode,
                     coarse_gemm_hybrid=hybrid_mode,
+                    packed_deferred=packed_mode,
                 )
             )
         metadata_result = classify_metadata_iteration(metadata, labels, acceptance["state_contract"])
@@ -3471,6 +3550,7 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
                 row["audit"]["counts"]["native_atomic_selected_calls"] for row in arm_rows
             ),
             "coarse_gemm_hybrid": int(hybrid[labels.index(label)]),
+            "packed_deferred": int(packed_deferred[labels.index(label)]),
             "total_hybrid_batches": sum(
                 row["hybrid"]["batch_count"] for row in arm_rows if row["hybrid"] is not None
             ),
@@ -3489,7 +3569,8 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
         "policy": (
             "every sealed post-initialization joint-halfset profile must prove the mature direct "
             "selector is inactive; hybrid arms must additionally prove exact-source16/full-rectangular "
-            "score publication and complete selected/fallback image and batch accounting"
+            "score publication, complete selected/fallback image and batch accounting, and the "
+            "packed score/reconstruction projection-reuse path"
         ),
         "checkpoint_count": len(state_iterations),
         "audit_count": len(coarse_selector_audit_rows),
@@ -3550,6 +3631,9 @@ def analyze(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndar
     gates = {
         "artifact_and_provenance_complete": True,
         "coarse_hybrid_executed_as_sealed_at_every_checkpoint": coarse_selector_execution[
+            "pass"
+        ],
+        "packed_deferred_executed_as_sealed_at_every_checkpoint": coarse_selector_execution[
             "pass"
         ],
         "state_joint_exact_path_and_continuous_panel": state["pass"],
