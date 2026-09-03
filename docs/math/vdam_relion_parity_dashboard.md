@@ -13,10 +13,14 @@
 > **1.269x** faster, the coarse score table is **36x smaller**, and every pose,
 > translation, class, support ID, posterior maximum, particle state, and
 > sampling state is exact. Continuous state remains below `4*float32` epsilon.
-> The fixed packed-row ABI (`Q=B*R`) separately passed its exact same-state gate
-> (`13376686`); its decisive four-fresh-process trajectory is running as
-> `13377009`. Fine pretranslation is rejected as immaterial (`+0.05%` warm
-> wall). Final-support noise packing completed `13377626`: it improves warm pass
+> The fixed packed-row ABI separately passed its exact same-state gate
+> (`13376686`). Combined with stable Fourier shapes, its four-fresh-process
+> trajectory is **25.90% faster** through iteration 50 (`13377009`), but both
+> optimized repeats reproducibly choose an alternate hard-assignment basin at
+> iteration 35, so strict trajectory science remains on hold. Flat-row-only
+> isolation is running as `13378054`. Fine pretranslation is rejected as
+> immaterial (`+0.05%` warm wall). Final-support noise packing completed
+> `13377626`: it improves warm pass
 > 2 by about 15.7% but is neutral alone end to end, so its value must be measured
 > on top of the compact stack. The last full `0 -> 200` result remains the prior
 > **1.639x** speedup with a one-pose iteration-48 basin split. Frozen scores
@@ -32,7 +36,7 @@
 | Stable shape trajectory | **HOLD — 2.07% WALL GAIN / STRICT SCIENCE FAIL** | Job `13372996` completed four fresh-process trajectories through iteration 50. Fine pass 2 improves 22.82%, but wall improves only 2.07%. The baseline OFF/OFF pair itself splits discretely at iteration 35, while one ON arm remains discrete-identical to OFF1 through iteration 50. This rules out a deterministic toggle-only displacement but cannot exclude a variance effect or qualify promotion. |
 | Shared local projection cache | **REJECTED — FINE POSES CHANGE** | Job `13373715` is repeatable within each mode but changes 21/200 fine pose assignments, nine rotation IDs, and 33 translation coordinates across modes from the exact same state. Cross accumulator L2 reaches `0.1838` versus about `9e-8` repeat noise. The approximate rotation-ID cache aliases oversampled exact matrices. |
 | Validity-aware packed fine CUDA | **RETAIN — BITWISE / 3.233x KERNEL-LOCAL** | Jobs `13374637`/`13374638` preserve same-state science. Dedicated ABBA job `13375396` keeps all active values bitwise exact, writes exact `+inf` for all 2,631,104 invalid outputs, and changes four-call wall `0.038706 -> 0.011973 s` (-69.07%). The absolute 26.7 ms saving makes this an enabler, not the gap closer. Exact integrated CUDA artifact job `13376273` also passes. |
-| Stable packed-row ABI (`Q=B*R`) | **SAME-STATE PASS / FRESH TRAJECTORY RUNNING** | Job `13376686` keeps all decisions/support exact and cross-state normalized L2 below `9.83e-8`. Warm wall is neutral (`+0.82%`) while first occurrence improves 75.28%, consistent with compile reuse rather than cheaper steady-state math. It replaces 78 observed `Q` values with mature EM's fixed `B*R` ABI. Four fresh processes/caches are running in `13377009`. |
+| Stable packed-row ABI (`Q=B*R`) | **25.90% TRAJECTORY SPEED / STRICT SCIENCE HOLD** | Job `13376686` keeps the same-state transition exact. Combined stable-ABI job `13377009` cuts fresh-process wall `513.649 -> 380.602 s` and expectation 27.41%, with 31.23% fewer JAX cache objects. Both candidate repeats remain discrete-identical to each other but first differ from ordinary execution at iteration 35; flat-row-only job `13378054` is isolating the cause. |
 | Pretranslated fine scorer | **REJECTED — NO END-TO-END VALUE** | Job `13377045` keeps science exact, but warm wall changes `2.478951 -> 2.480252 s` (`+0.0525%`) and saves only `0.560 ms` inside big-JIT. The added tensor/memory path is not being integrated or exposed in the GUI. |
 | Compact hybrid posterior + packed fine path | **QUALITY PASS / 2.583x WARM SPEED** | Job `13377600` keeps every hard decision and support ID exact with zero fallback. Warm wall changes `5.966168 -> 2.309737 s` (-61.29%); pass 1 is 7.891x and pass 2 is 1.269x faster. Only 0.2595% of full candidates are rescored, using a 42.109 MiB table instead of 1,515.938 MiB. Integrated default-off; full `0 -> 200` remains required. |
 | Final-support packed noise | **SCIENCE-SAFE / COMPOSITION DECISION OPEN** | Job `13377626` keeps decisions/support/state exact and continuous deltas near `1e-8`. Warm pass 2 changes `1.311271 -> 1.105007 s` (-15.73%), while standalone wall changes `5.880235 -> 5.964363 s` (+1.43%) because direct coarse work still dominates. Measure it on top of the compact pass-1 path before accepting or rejecting it. |
@@ -47,12 +51,11 @@
 
 ### Immediate queue
 
-1. Finish job `13377009` and quantify whether fixed Fourier/row ABIs materially
-   reduce fresh-process compile count and trajectory wall without a toggle-only
-   basin effect.
-2. Compose compact posterior, packed/deferred fine work, stable shapes, and—if
-   its combined pass-2 timing is positive—final-support packed noise in one
-   exact-state H100 gate. Keep mature dense paths as fail-closed oracles.
+1. Finish flat-row-only job `13378054` to assign the 25.90% trajectory gain and
+   iteration-35 basin choice between fixed `Q=B*R` and Fourier bucketing.
+2. Complete all-stack exact-state job `13378175`, which composes compact
+   posterior, packed/deferred fine work, and both stable ABIs while checking
+   nine named execution seams against fail-closed direct oracles.
 3. Run a fresh repeat-controlled `0 -> 200` sentinel for the qualified complete
    stack, with direct/direct variability, FSC/scale, selector/fallback, memory,
    compile-count, and runtime audits. A two-arm basin split cannot update a score.
@@ -67,7 +70,7 @@
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
 | Current correctness work | **SAME-STATE EXACT / REPEAT-CONTROLLED BASIN GATE OPEN** | Job `13372936` rules out a reproducible combined-backend error at the sentinel's first hard split, iteration 48. The remaining question is whether full-run divergence exceeds direct/direct stochastic basin spread. |
-| Current performance work | **1.639x FULL SENTINEL / 2.583x ITERATION-48 TRANSITION** | Job `13369646` remains the current full result. Job `13377600` is the fastest science-safe one-transition stack: 7.891x pass 1, 1.269x pass 2, 2.583x wall. Fixed `B*R` fresh-trajectory and final-noise composition gates are active; pretranslation is rejected. |
+| Current performance work | **25.90% FRESH 0->50 / 2.583x ITERATION-48 TRANSITION** | Combined stable ABIs cut fresh trajectory wall 25.90% but choose a repeatable alternate basin at iteration 35, so remain default-off. Job `13377600` is the fastest exact-state one-transition stack: 7.891x pass 1, 1.269x pass 2, 2.583x wall. Flat-row isolation and final-noise composition are active; pretranslation is rejected. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
@@ -250,6 +253,7 @@ release gate.
 | Shared local-projection-cache rejection | Source `8816d487e76540690e8e38cfa12bd014ba5d856f`, job `13373715`, H100 `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, report SHA-256 `0ec47650576126f977380235595402e5766cf43671c856e665fa86ce7256c557`; [report](../perf/vdam_local_projection_cache_it48_h100_13373715.md). |
 | Validity-aware packed fine rows | Source `4dc4a79f7c5f6f31d7a8e04bfe43339b700b48c6`, same-state jobs `13374637`/`13374638`, dedicated timing job `13375396`, H100 `GPU-75c2d200-95d1-ef57-fb52-1698386c756c`, timing manifest SHA-256 `d89361d388017f55ec77f9948673c6de6307594ab4f55edde697b4a88b2e5481`; [science report](../perf/vdam_flat_row_validity_it48_h100_13374637.md), [timing report](../perf/vdam_flat_row_invalid_early_exit_h100_13375396.md). Integrated source `9ae038377778419d5ead8f96c5eb75753807fd8d`, job `13376273`, CUDA SHA-256 `870ac72044ef78bcccd1ab695b9991b088cc42512231d1a3cafc000ea32ea777`. |
 | Stable packed-row ABI | Source `2957ae6a4e4d81ca9c5524871f4e9609c2d9d39d`, job `13376686`, H100 `GPU-1fdb3b99-e7ff-fe6d-4f59-9d2cc85fa319`, report JSON SHA-256 `1eb3d9a92aa9886c7a08cdca91ae9f06899b4a2ab845f8cbfaf2d5a6bf5a8b42`; [report](../perf/vdam_stable_flat_capacity_same_state_it48_h100_13376686.md). |
+| Combined stable-ABI trajectory | Source `f5792e9b0af6a70f13cb63a546d594013c774f16`, job `13377009`, H100 `GPU-e2c3190a-9599-15f7-a19c-7ae55e4e0a85`, report JSON SHA-256 `a39f95b6b0f56b95b1f7e91bd6531f9b7c1a4d582c37e94503cf9656c13400e0`; [report](../perf/vdam_stable_combined_abi_trajectory_h100_13377009.md). |
 | Compact posterior + packed/deferred transition | Source `17ec60ca5dcd5d3b67e956876d9df07ed2a6345d`, job `13377600`, H100 `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, science report SHA-256 `3e7b0b0df783adc2ce8c64ddd3e2860ea2f0c87908ca6cc5c938694f7dc62b25`; [report](../perf/vdam_compact_packed_same_state_it48_h100_13377600.md). |
 | Fine-pretranslation rejection | Source `79375ada3`, job `13377045`, H100 on `della-h19g3`; immutable decision report commit `b7e1f1da1`, default-off and not integrated. |
 
