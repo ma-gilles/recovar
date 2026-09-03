@@ -1067,6 +1067,12 @@ def test_deferred_packed_vdam_keeps_dense_oracle_and_packed_final_noise_lane():
     assert "packed_source_vdam_posterior," in engine
     assert '"packed_vdam_reuses_flat_score_projection"' in engine
     assert '"packed_vdam_avoids_dense_noise_rows"' in engine
+    assert '"packed_final_noise_preserves_dense_scalar_order"' in engine
+    assert "preserve_dense_scalar_reduction = bool(" in engine
+    assert "scalar_noise_reconstruction_probs = reconstruction_probs" in engine
+    assert "pixel_support_mass = support_mass[:unpadded_batch_size]" in engine
+    assert "compute_local_noise_scalar_terms(" in engine
+    assert "compute_local_noise_scalar_terms(" in big_jit
     assert "_relion_wavg_direct_triplet_shells(" in engine
     assert "materialize_shifted_recon = not return_deferred_source_vdam_operands" in big_jit
     assert "deferred_flat_proj_for_noise = proj_half_flat[" in big_jit

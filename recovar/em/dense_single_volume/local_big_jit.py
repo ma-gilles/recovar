@@ -57,6 +57,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 )
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_mstep_sums,
+    compute_local_noise_scalar_terms,
     compute_local_weighted_sums,
 )
 
@@ -2186,10 +2187,16 @@ def run_local_bucket_big_jit(
             if stable_fourier_window_shapes
             else projection_max_r
         )
-        support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
-        support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
-        translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
-        noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
+        (
+            support_mass,
+            _translation_posterior,
+            noise_sumw_offset,
+            retained_mass,
+        ) = compute_local_noise_scalar_terms(
+            reconstruction_probs,
+            translation_sqdist_ang,
+            valid_image_mask,
+        )
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
         batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
             processed_noise_power_half,
@@ -2209,7 +2216,7 @@ def run_local_bucket_big_jit(
             use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
-        noise_sumw = noise_sumw + jnp.sum(support_mass)
+        noise_sumw = noise_sumw + retained_mass
 
         shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
         shifted_noise_split = jnp.where(support_mass[:, None, None] != 0.0, shifted_noise_split, 0.0)

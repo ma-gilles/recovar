@@ -5,9 +5,10 @@ The ordinary InitialModel artifacts intentionally omit the large VDAM
 gradient-moment state, so independently restarted trajectories cannot prove
 which implementation caused the first difference.  This diagnostic runs the
 direct implementation through a requested checkpoint, retains that exact
-in-memory state, and then executes a direct/candidate/candidate/direct (ABBA)
-panel for precisely one next iteration. Every arm receives independent deep
-copies of the same model, particle, and sampling state.
+in-memory state, and then executes a repeated one-transition panel.  The
+incremental packed-final mode prewarms both packed backends before mirrored
+packed-deferred/packed-final ABBA and BAAB panels.  Every arm receives
+independent deep copies of the same model, particle, and sampling state.
 
 This is a diagnostic harness, not a production continuation interface.
 """
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import gc
 import hashlib
 import json
 import os
@@ -47,6 +49,22 @@ PACKED_FINAL_NOISE_ARM_ORDER = (
     "packed_final_noise_1",
     "packed_final_noise_2",
     "direct_2",
+)
+PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER = (
+    "abba_packed_deferred_1",
+    "abba_packed_final_noise_1",
+    "abba_packed_final_noise_2",
+    "abba_packed_deferred_2",
+)
+PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER = (
+    "baab_packed_final_noise_1",
+    "baab_packed_deferred_1",
+    "baab_packed_deferred_2",
+    "baab_packed_final_noise_2",
+)
+PACKED_FINAL_NOISE_INCREMENTAL_ARM_ORDER = (
+    *PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER,
+    *PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER,
 )
 HYBRID_PACKED_DEFERRED_ARM_ORDER = (
     "direct_1",
@@ -131,6 +149,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-iteration", type=int, default=34)
     parser.add_argument("--image-batch-size", type=int, default=500)
     parser.add_argument("--candidate-mode", choices=CANDIDATE_MODES, default="hybrid")
+    parser.add_argument(
+        "--mirrored-incremental-panels",
+        action="store_true",
+        help=(
+            "prewarm packed-deferred and packed-final, then measure mirrored "
+            "ABBA/BAAB panels between only those two backends"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -682,6 +708,59 @@ def _arm_performance_summary(
     return summary
 
 
+def _incremental_backend_for_label(label: str) -> str:
+    if "packed_final_noise" in label:
+        return "packed_final_noise"
+    if "packed_deferred" in label:
+        return "packed_deferred"
+    raise ValueError(f"unsupported incremental arm label: {label}")
+
+
+def _incremental_arm_specs() -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (label, _incremental_backend_for_label(label))
+        for label in PACKED_FINAL_NOISE_INCREMENTAL_ARM_ORDER
+    )
+
+
+def _incremental_pair_labels() -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for panel in (
+        PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER,
+        PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER,
+    ):
+        baseline = [
+            label
+            for label in panel
+            if _incremental_backend_for_label(label) == "packed_deferred"
+        ]
+        candidate = [
+            label
+            for label in panel
+            if _incremental_backend_for_label(label) == "packed_final_noise"
+        ]
+        pairs.extend(
+            [
+                (baseline[0], baseline[1]),
+                (candidate[0], candidate[1]),
+                *((left, right) for left in baseline for right in candidate),
+            ]
+        )
+    pairs.extend(
+        [
+            (
+                PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER[0],
+                PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER[1],
+            ),
+            (
+                PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER[1],
+                PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER[0],
+            ),
+        ]
+    )
+    return tuple(pairs)
+
+
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -1000,6 +1079,7 @@ def _run_transition_arm(
     candidate_mode: str,
     candidate_enabled: bool,
     checkpoint_iteration: int,
+    backend_mode: str | None = None,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from recovar.data_io.starfile import read_star
@@ -1056,10 +1136,21 @@ def _run_transition_arm(
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(
         int(dataset.n_images)
     )
-    requested_environment = _candidate_environment(
-        candidate_mode,
-        enabled=candidate_enabled,
-    )
+    resolved_backend_mode = (
+        candidate_mode if candidate_enabled else "direct"
+    ) if backend_mode is None else backend_mode
+    if backend_mode is None:
+        requested_environment = _candidate_environment(
+            candidate_mode,
+            enabled=candidate_enabled,
+        )
+    elif resolved_backend_mode == "direct":
+        requested_environment = _candidate_environment(candidate_mode, enabled=False)
+    else:
+        requested_environment = _candidate_environment(
+            resolved_backend_mode,
+            enabled=True,
+        )
     effective_environment: dict[str, str | None] = {}
     started = time.perf_counter()
     with _temporary_environment(
@@ -1155,12 +1246,18 @@ def _run_transition_arm(
         "candidate_mode": candidate_mode,
         "candidate_enabled": bool(candidate_enabled),
         "hybrid": bool(
-            _candidate_uses_hybrid(candidate_mode)
+            _candidate_uses_hybrid(
+                candidate_mode if backend_mode is None else resolved_backend_mode
+            )
             and (
                 candidate_enabled
-                or candidate_mode in {"stable_shapes", "stable_flat_capacity"}
+                or (
+                    backend_mode is None
+                    and candidate_mode in {"stable_shapes", "stable_flat_capacity"}
+                )
             )
         ),
+        "backend_mode": resolved_backend_mode,
         "execution_contract": execution_contract,
         "performance_summary": performance_summary,
         "wall_s": wall_s,
@@ -1381,6 +1478,10 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("checkpoint-iteration must be positive")
     if args.image_batch_size < 1:
         raise ValueError("image-batch-size must be positive")
+    if args.mirrored_incremental_panels and args.candidate_mode != "packed_final_noise":
+        raise ValueError(
+            "mirrored incremental panels require --candidate-mode packed_final_noise"
+        )
     if output_root.exists():
         raise FileExistsError(f"output root already exists: {output_root}")
     output_root.mkdir(parents=True)
@@ -1403,36 +1504,85 @@ def main(argv: list[str] | None = None) -> int:
         "particle_state": _dataclass_manifest(checkpoint["particle_state"]),
         "sampling_state": _dataclass_manifest(checkpoint["sampling_state"]),
     }
-    arm_order = _arm_order(args.candidate_mode)
-    arms: dict[str, dict[str, Any]] = {}
-    for label in arm_order:
-        arms[label] = _run_transition_arm(
-            checkpoint,
-            label=label,
-            candidate_mode=args.candidate_mode,
-            candidate_enabled=_arm_candidate_enabled(label, args.candidate_mode),
-            checkpoint_iteration=args.checkpoint_iteration,
-        )
-
     expected_manifests = {
         "initial_state_manifest": checkpoint_manifest["state"]["manifest_sha256"],
         "initial_particle_state_manifest": checkpoint_manifest["particle_state"]["manifest_sha256"],
         "initial_sampling_state_manifest": checkpoint_manifest["sampling_state"]["manifest_sha256"],
     }
+
+    prewarm: dict[str, Any] = {}
+    if args.mirrored_incremental_panels:
+        for backend_mode in ("packed_deferred", "packed_final_noise"):
+            warm = _run_transition_arm(
+                checkpoint,
+                label=f"prewarm_{backend_mode}",
+                candidate_mode=args.candidate_mode,
+                candidate_enabled=backend_mode == args.candidate_mode,
+                checkpoint_iteration=args.checkpoint_iteration,
+                backend_mode=backend_mode,
+            )
+            for key, expected in expected_manifests.items():
+                if warm[key]["manifest_sha256"] != expected:
+                    raise RuntimeError(
+                        f"prewarm_{backend_mode} did not start from the exact shared {key}"
+                    )
+            prewarm[backend_mode] = {
+                "label": warm["label"],
+                "backend_mode": warm["backend_mode"],
+                "wall_s": warm["wall_s"],
+                "initial_state_manifest_sha256": warm["initial_state_manifest"][
+                    "manifest_sha256"
+                ],
+                "initial_particle_state_manifest_sha256": warm[
+                    "initial_particle_state_manifest"
+                ]["manifest_sha256"],
+                "initial_sampling_state_manifest_sha256": warm[
+                    "initial_sampling_state_manifest"
+                ]["manifest_sha256"],
+            }
+            del warm
+            gc.collect()
+        arm_specs = _incremental_arm_specs()
+    else:
+        legacy_arm_order = _arm_order(args.candidate_mode)
+        arm_specs = tuple(
+            (label, None)
+            for label in legacy_arm_order
+        )
+    arm_order = tuple(label for label, _backend_mode in arm_specs)
+    arms: dict[str, dict[str, Any]] = {}
+    for label, backend_mode in arm_specs:
+        candidate_enabled = (
+            _arm_candidate_enabled(label, args.candidate_mode)
+            if backend_mode is None
+            else backend_mode == args.candidate_mode
+        )
+        arms[label] = _run_transition_arm(
+            checkpoint,
+            label=label,
+            candidate_mode=args.candidate_mode,
+            candidate_enabled=candidate_enabled,
+            checkpoint_iteration=args.checkpoint_iteration,
+            backend_mode=backend_mode,
+        )
+
     for label, arm in arms.items():
         for key, expected in expected_manifests.items():
             if arm[key]["manifest_sha256"] != expected:
                 raise RuntimeError(f"{label} did not start from the exact shared {key}")
 
-    candidate_1, candidate_2 = arm_order[1:3]
-    pair_labels = (
-        (arm_order[0], arm_order[3]),
-        (candidate_1, candidate_2),
-        (arm_order[0], candidate_1),
-        (arm_order[0], candidate_2),
-        (arm_order[3], candidate_1),
-        (arm_order[3], candidate_2),
-    )
+    if args.mirrored_incremental_panels:
+        pair_labels = _incremental_pair_labels()
+    else:
+        candidate_1, candidate_2 = arm_order[1:3]
+        pair_labels = (
+            (arm_order[0], arm_order[3]),
+            (candidate_1, candidate_2),
+            (arm_order[0], candidate_1),
+            (arm_order[0], candidate_2),
+            (arm_order[3], candidate_1),
+            (arm_order[3], candidate_2),
+        )
     comparisons = {
         f"{left}__vs__{right}": _pair_report(arms[left], arms[right])
         for left, right in pair_labels
@@ -1451,6 +1601,7 @@ def main(argv: list[str] | None = None) -> int:
             "hybrid": arm["hybrid"],
             "candidate_mode": arm["candidate_mode"],
             "candidate_enabled": arm["candidate_enabled"],
+            "backend_mode": arm["backend_mode"],
             "execution_contract": arm["execution_contract"],
             "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
@@ -1476,6 +1627,7 @@ def main(argv: list[str] | None = None) -> int:
             "hybrid": arm["hybrid"],
             "candidate_mode": arm["candidate_mode"],
             "candidate_enabled": arm["candidate_enabled"],
+            "backend_mode": arm["backend_mode"],
             "execution_contract": arm["execution_contract"],
             "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
@@ -1499,8 +1651,18 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoint_iteration": int(args.checkpoint_iteration),
         "profiled_iteration": int(args.checkpoint_iteration) + 1,
         "candidate_mode": args.candidate_mode,
+        "mirrored_incremental_panels": bool(args.mirrored_incremental_panels),
         "frozen_nr_iter_schedule": frozen_nr_iter,
         "arm_order": list(arm_order),
+        "panel_orders": (
+            {
+                "abba": list(PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER),
+                "baab": list(PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER),
+            }
+            if args.mirrored_incremental_panels
+            else {"abba": list(arm_order)}
+        ),
+        "prewarm": prewarm,
         "checkpoint_wall_s": checkpoint_wall_s,
         "checkpoint_manifest": checkpoint_manifest,
         "fixture_dir": str(fixture_dir),
@@ -1514,12 +1676,16 @@ def main(argv: list[str] | None = None) -> int:
             "particle_state_exact_for_every_arm": True,
             "sampling_state_exact_for_every_arm": True,
             "baseline_trajectory_backend": (
-                "hybrid_packed_deferred_stable_fourier_off"
-                if args.candidate_mode == "stable_shapes"
+                "packed_deferred"
+                if args.mirrored_incremental_panels
                 else (
-                    "hybrid_packed_deferred_stable_flat_capacity_off"
-                    if args.candidate_mode == "stable_flat_capacity"
-                    else "direct"
+                    "hybrid_packed_deferred_stable_fourier_off"
+                    if args.candidate_mode == "stable_shapes"
+                    else (
+                        "hybrid_packed_deferred_stable_flat_capacity_off"
+                        if args.candidate_mode == "stable_flat_capacity"
+                        else "direct"
+                    )
                 )
             ),
             "candidate_backend": (
@@ -1531,7 +1697,15 @@ def main(argv: list[str] | None = None) -> int:
                     else args.candidate_mode
                 )
             ),
-            "transition_panel": "/".join(arm_order),
+            "transition_panel": (
+                "packed_deferred/packed_final_noise/packed_final_noise/packed_deferred"
+                "+packed_final_noise/packed_deferred/packed_deferred/packed_final_noise"
+                if args.mirrored_incremental_panels
+                else "/".join(arm_order)
+            ),
+            "both_incremental_backends_prewarmed": bool(
+                args.mirrored_incremental_panels
+            ),
             "support_audit_ids_enabled_for_transition_arms": True,
             "requested_environment_exact_for_every_arm": True,
             "compact_profile_fail_closed": _candidate_uses_compact_posterior(

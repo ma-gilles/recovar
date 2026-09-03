@@ -112,6 +112,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_ctf_sums_from_probs_sum_t,
     compute_local_mstep_sums,
+    compute_local_noise_scalar_terms,
     compute_local_weighted_sums,
     flatten_bucket_rotations,
     flatten_bucket_rows,
@@ -7490,47 +7491,47 @@ def run_local_em_exact(
                     return_deferred_source_vdam_operands
                     and not use_packed_final_noise
                 )
+                preserve_dense_scalar_reduction = bool(
+                    return_deferred_source_vdam_operands
+                )
                 if use_packed_final_noise:
                     if packed_reconstruction_probs is None:
                         raise RuntimeError(
                             "packed final-support VDAM noise is missing posterior rows"
                         )
-                    noise_reconstruction_probs = packed_reconstruction_probs
-                elif preserve_dense_noise_reduction:
-                    noise_reconstruction_probs = reconstruction_probs
+                if preserve_dense_scalar_reduction:
+                    scalar_noise_reconstruction_probs = reconstruction_probs
+                    scalar_noise_batch_size = int(batch_size)
+                    scalar_noise_valid_image_mask = valid_image_mask
                 else:
-                    noise_reconstruction_probs = reconstruction_probs_unpadded
-                noise_batch_size = (
-                    int(batch_size)
-                    if preserve_dense_noise_reduction
-                    else int(unpadded_batch_size)
+                    scalar_noise_reconstruction_probs = reconstruction_probs_unpadded
+                    scalar_noise_batch_size = int(unpadded_batch_size)
+                    scalar_noise_valid_image_mask = jnp.ones(
+                        scalar_noise_batch_size,
+                        dtype=bool,
+                    )
+                (
+                    support_mass,
+                    _translation_posterior,
+                    noise_sumw_offset,
+                    retained_mass,
+                ) = compute_local_noise_scalar_terms(
+                    scalar_noise_reconstruction_probs,
+                    translation_sqdist_arg[:scalar_noise_batch_size],
+                    scalar_noise_valid_image_mask,
                 )
-                support_mass = jnp.sum(
-                    noise_reconstruction_probs.reshape(noise_batch_size, -1),
-                    axis=1,
-                ).astype(jnp.float32)
-                if preserve_dense_noise_reduction:
-                    support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
-                translation_posterior = jnp.sum(noise_reconstruction_probs, axis=1).astype(jnp.float32)
-                noise_sumw_offset = jnp.sum(
-                    translation_posterior
-                    * translation_sqdist_arg[:noise_batch_size].astype(jnp.float32),
-                )
-                processed_noise_power_half = processed_score_half[:noise_batch_size]
+                processed_noise_power_half = processed_score_half[
+                    :scalar_noise_batch_size
+                ]
                 processed_noise_power_half = (
                     processed_noise_power_half
-                    * image_only_corrections_arg[:noise_batch_size, None]
-                )
-                noise_valid_image_mask = (
-                    valid_image_mask
-                    if preserve_dense_noise_reduction
-                    else jnp.ones_like(support_mass, dtype=bool)
+                    * image_only_corrections_arg[:scalar_noise_batch_size, None]
                 )
                 batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
                     processed_noise_power_half,
                     support_mass,
                     shell_indices_half,
-                    noise_valid_image_mask,
+                    scalar_noise_valid_image_mask,
                     norm_unweighted_shell_cutoff,
                     shell_count=n_shells,
                     image_shape=image_shape,
@@ -7551,7 +7552,7 @@ def run_local_em_exact(
                     ),
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
-                noise_sumw = noise_sumw + jnp.sum(support_mass)
+                noise_sumw = noise_sumw + retained_mass
 
                 block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
                 block_a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
@@ -7592,6 +7593,11 @@ def run_local_em_exact(
                         scale_for_noise_reduction = scale_corrections_arg[
                             :unpadded_batch_size
                         ]
+                        pixel_noise_batch_size = int(unpadded_batch_size)
+                        pixel_support_mass = support_mass[:unpadded_batch_size]
+                        pixel_noise_valid_image_mask = valid_image_mask[
+                            :unpadded_batch_size
+                        ]
                     else:
                         flat_row_plan = jnp.asarray(
                             flat_local_row_argument,
@@ -7630,10 +7636,13 @@ def run_local_em_exact(
                         processed_score_for_wavg = processed_score_half
                         ctf_rfloat_for_wavg = ctf_rfloat_half_arg
                         scale_for_noise_reduction = scale_corrections_arg
+                        pixel_noise_batch_size = int(batch_size)
+                        pixel_support_mass = support_mass
+                        pixel_noise_valid_image_mask = valid_image_mask
 
                     shifted_for_noise_reduction = jnp.where(
-                        support_mass[:, None, None] != 0.0,
-                        shifted_noise_split[:noise_batch_size],
+                        pixel_support_mass[:, None, None] != 0.0,
+                        shifted_noise_split[:pixel_noise_batch_size],
                         0.0,
                     )
                     summed_masked_for_noise_reduction = compute_local_weighted_sums(
@@ -7680,7 +7689,7 @@ def run_local_em_exact(
                                 ctf_rfloat_for_wavg,
                                 scale_for_noise_reduction,
                                 probs_for_noise_reduction,
-                                noise_valid_image_mask,
+                                pixel_noise_valid_image_mask,
                                 image_shape=image_shape,
                                 shell_count=n_shells,
                                 cutoff_shell=int(logical_current_size) // 2,
@@ -7903,7 +7912,13 @@ def run_local_em_exact(
                 if return_noise_split:
                     noise_a2 = noise_a2 + block_a2_shells
                     noise_xa = noise_xa + block_xa_shells
-                bucket_norm_rows = batch_img_power_per_image + block_norm_residual
+                if use_packed_final_noise:
+                    bucket_norm_rows = (
+                        batch_img_power_per_image[:unpadded_batch_size]
+                        + block_norm_residual
+                    )
+                else:
+                    bucket_norm_rows = batch_img_power_per_image + block_norm_residual
                 if preserve_dense_noise_reduction:
                     bucket_norm_rows = bucket_norm_rows[:unpadded_batch_size]
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
@@ -9448,6 +9463,9 @@ def run_local_em_exact(
             defer_packed_vdam_enabled and accumulate_noise
         ),
         "packed_vdam_avoids_dense_noise_rows": np.asarray(
+            packed_final_noise_enabled and accumulate_noise
+        ),
+        "packed_final_noise_preserves_dense_scalar_order": np.asarray(
             packed_final_noise_enabled and accumulate_noise
         ),
         "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),

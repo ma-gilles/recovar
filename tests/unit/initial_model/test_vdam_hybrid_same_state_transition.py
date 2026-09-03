@@ -785,6 +785,46 @@ def test_arm_performance_summary_exposes_compact_table_geometry() -> None:
     table = summary["coarse_hybrid_tables"]["halfset_0_profile_summary"]
     assert table["selected_score_table_capacity_candidates"] == 5_939_200
     assert table["dense_global_score_table_capacity_bytes_f32"] == 855_244_800
+
+
+def test_same_state_incremental_gate_is_mirrored_repeated_and_backend_scoped() -> None:
+    assert runner.PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER == (
+        "abba_packed_deferred_1",
+        "abba_packed_final_noise_1",
+        "abba_packed_final_noise_2",
+        "abba_packed_deferred_2",
+    )
+    assert runner.PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER == (
+        "baab_packed_final_noise_1",
+        "baab_packed_deferred_1",
+        "baab_packed_deferred_2",
+        "baab_packed_final_noise_2",
+    )
+    specs = runner._incremental_arm_specs()
+    assert tuple(label for label, _backend in specs) == (
+        *runner.PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER,
+        *runner.PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER,
+    )
+    assert [backend for _label, backend in specs].count("packed_deferred") == 4
+    assert [backend for _label, backend in specs].count("packed_final_noise") == 4
+
+    pairs = runner._incremental_pair_labels()
+    assert len(pairs) == 14
+    assert len(set(pairs)) == len(pairs)
+    assert (
+        "abba_packed_deferred_1",
+        "abba_packed_final_noise_1",
+    ) in pairs
+    assert (
+        "abba_packed_deferred_1",
+        "baab_packed_deferred_1",
+    ) in pairs
+    assert (
+        "abba_packed_final_noise_1",
+        "baab_packed_final_noise_1",
+    ) in pairs
+
+
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     source = SCRIPT.read_text()
     sbatch = RUNNER.read_text()
@@ -806,6 +846,13 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "direct_1,packed_deferred_1,packed_deferred_2,direct_2" in sbatch
     assert (
         "direct_1,packed_final_noise_1,packed_final_noise_2,direct_2"
+        in sbatch
+    )
+    assert (
+        "abba_packed_deferred_1,abba_packed_final_noise_1,"
+        "abba_packed_final_noise_2,abba_packed_deferred_2,"
+        "baab_packed_final_noise_1,baab_packed_deferred_1,"
+        "baab_packed_deferred_2,baab_packed_final_noise_2"
         in sbatch
     )
     assert (
@@ -832,6 +879,11 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert ".execution_contract.all_optimized_profile_exact == true" in sbatch
     assert "helpers/fourier_window.py" in sbatch
     assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
+    assert '"${REPO_ROOT}/recovar/em/dense_single_volume/local_backprojection.py"' in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch
     assert "VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS" in sbatch
     assert "RECOVAR_NOISE_DEBUG_DUMP_DIR=${RUNTIME}/noise_split_enabled" in sbatch
+    assert "VDAM_SAME_STATE_MIRRORED_INCREMENTAL_PANELS" in sbatch
+    assert "--mirrored-incremental-panels" in source
+    assert "for backend_mode in (\"packed_deferred\", \"packed_final_noise\")" in source
+    assert "del warm\n            gc.collect()" in source

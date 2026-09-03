@@ -27,6 +27,7 @@ CHECKPOINT_ITERATION=${CHECKPOINT_ITERATION:-34}
 CANDIDATE_MODE=${CANDIDATE_MODE:-hybrid}
 TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
 NOISE_SPLIT_DIAGNOSTICS=${VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS:-0}
+MIRRORED_INCREMENTAL_PANELS=${VDAM_SAME_STATE_MIRRORED_INCREMENTAL_PANELS:-0}
 PIXI_PY=$(jq -er '.files.interpreter.path' "${LAUNCH_MANIFEST}")
 RELION_BIND_SOURCE=$(jq -er '.files.relion_bind.path' "${LAUNCH_MANIFEST}")
 CUSPARSE_LIBRARY=$(jq -er '.files.cusparse_library.resolved_path' "${LAUNCH_MANIFEST}")
@@ -63,6 +64,7 @@ trap on_error ERR
 
 [[ "${CHECKPOINT_ITERATION}" =~ ^[1-9][0-9]*$ ]]
 [[ "${NOISE_SPLIT_DIAGNOSTICS}" =~ ^[01]$ ]]
+[[ "${MIRRORED_INCREMENTAL_PANELS}" =~ ^[01]$ ]]
 case "${CANDIDATE_MODE}" in
   hybrid)
     expected_arm_order=direct_1,hybrid_1,hybrid_2,direct_2
@@ -102,6 +104,10 @@ case "${CANDIDATE_MODE}" in
     exit 2
     ;;
 esac
+if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
+  test "${CANDIDATE_MODE}" = packed_final_noise
+  expected_arm_order=abba_packed_deferred_1,abba_packed_final_noise_1,abba_packed_final_noise_2,abba_packed_deferred_2,baab_packed_final_noise_1,baab_packed_deferred_1,baab_packed_deferred_2,baab_packed_final_noise_2
+fi
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
 test -x "${NVCC}"
@@ -154,6 +160,8 @@ printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/visible_gpu_uuids
 printf '%s\n' "${CANDIDATE_MODE}" > "${PROVENANCE}/candidate_mode.txt"
 printf '%s\n' "${NOISE_SPLIT_DIAGNOSTICS}" \
   > "${PROVENANCE}/noise_split_diagnostics.txt"
+printf '%s\n' "${MIRRORED_INCREMENTAL_PANELS}" \
+  > "${PROVENANCE}/mirrored_incremental_panels.txt"
 printf '%s\n' "${CUDA_ARCH_FLAGS}" > "${PROVENANCE}/cuda_arch_flags.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
@@ -165,6 +173,7 @@ sha256sum \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/flat_local_rows.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/fourier_window.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/significance.py" \
+  "${REPO_ROOT}/recovar/em/dense_single_volume/local_backprojection.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_big_jit.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_em_engine.py" \
   "${REPO_ROOT}/recovar/em/initial_model/dense_adapter.py" \
@@ -219,6 +228,9 @@ command=(
   --image-batch-size 500
   --candidate-mode "${CANDIDATE_MODE}"
 )
+if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
+  command+=(--mirrored-incremental-panels)
+fi
 printf '%q ' "${command[@]}" > "${PROVENANCE}/command.sh"
 printf '\n' >> "${PROVENANCE}/command.sh"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
@@ -245,6 +257,8 @@ test "$(jq -r '.checkpoint_iteration' "${SCIENCE}/report.json")" = \
   "${CHECKPOINT_ITERATION}"
 test "$(jq -r '.candidate_mode' "${SCIENCE}/report.json")" = \
   "${CANDIDATE_MODE}"
+test "$(jq -r '.mirrored_incremental_panels' "${SCIENCE}/report.json")" = \
+  "$([[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]] && printf true || printf false)"
 test "$(jq -r '.arm_order | join(",")' "${SCIENCE}/report.json")" = \
   "${expected_arm_order}"
 if [[ "${CANDIDATE_MODE}" == compact_posterior || \
@@ -307,6 +321,14 @@ if [[ "${CANDIDATE_MODE}" == all_optimized ]]; then
          and .stable_flat_capacity_contract.strict_reduction_count == 0' \
       "${SCIENCE}/report.json" > /dev/null
   done
+fi
+if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
+  test "$(jq -r '.prewarm | keys | join(",")' "${SCIENCE}/report.json")" = \
+    packed_deferred,packed_final_noise
+  test "$(jq -r '.same_state_contract.baseline_trajectory_backend' "${SCIENCE}/report.json")" = \
+    packed_deferred
+  test "$(jq -r '.same_state_contract.both_incremental_backends_prewarmed' "${SCIENCE}/report.json")" = \
+    true
 fi
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${cuda_sha256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"

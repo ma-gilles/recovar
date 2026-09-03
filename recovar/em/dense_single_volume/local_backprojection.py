@@ -114,6 +114,38 @@ def compute_local_mstep_sums(
 
 
 @jax.jit
+def compute_local_noise_scalar_terms(
+    reconstruction_probs,
+    translation_sqdist,
+    valid_image_mask,
+):
+    """Reduce the small RELION noise scalars in dense posterior row order.
+
+    Keeping these operations in one shared helper matters when a caller packs
+    the pixel-heavy M-step rows.  Removing structurally zero rotation rows can
+    change XLA's float32 reduction tree by one ULP even though the posterior is
+    mathematically identical.  The dense big-JIT oracle and packed VDAM lane
+    therefore call this exact sequence on the same dense posterior shape.
+    """
+
+    batch_size = reconstruction_probs.shape[0]
+    support_mass = jnp.sum(
+        reconstruction_probs.reshape(batch_size, -1),
+        axis=1,
+    ).astype(jnp.float32)
+    support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
+    translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(
+        jnp.float32
+    )
+    noise_sumw_offset = jnp.sum(
+        translation_posterior
+        * jnp.asarray(translation_sqdist, dtype=jnp.float32)
+    )
+    retained_mass = jnp.sum(support_mass)
+    return support_mass, translation_posterior, noise_sumw_offset, retained_mass
+
+
+@jax.jit
 def flatten_bucket_rows(values):
     """Flatten a bucket's per-image rows into one row-major batch."""
 
