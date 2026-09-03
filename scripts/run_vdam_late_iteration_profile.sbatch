@@ -53,6 +53,8 @@ EXACT_LOCAL_BUCKET_RADIX=${EXACT_LOCAL_BUCKET_RADIX:-4}
 EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE=${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE:-0}
 STABLE_FOURIER_WINDOW_SHAPES=${STABLE_FOURIER_WINDOW_SHAPES:-0}
 AUDIT_RAW_IMAGE_CACHE=${AUDIT_RAW_IMAGE_CACHE:-0}
+EXECUTION_CONTRACT=${VDAM_LATE_PROFILE_CONTRACT:-diagnostic}
+IMAGE_SIZE=${VDAM_LATE_PROFILE_IMAGE_SIZE:-128}
 REUSE_NATIVE_ROOT=${VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT:-}
 EXPECTED_REUSED_NATIVE_NSYS_SHA256=${EXPECTED_REUSED_NATIVE_NSYS_SHA256:-}
 
@@ -82,6 +84,9 @@ test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}" =~ ^[0-9]+$ ]]
 [[ "${STABLE_FOURIER_WINDOW_SHAPES}" =~ ^[01]$ ]]
 [[ "${AUDIT_RAW_IMAGE_CACHE}" =~ ^[01]$ ]]
+[[ "${EXECUTION_CONTRACT}" =~ ^(diagnostic|default|all_optimized_q32)$ ]]
+[[ "${IMAGE_SIZE}" =~ ^[0-9]+$ ]]
+test "${IMAGE_SIZE}" -gt 0
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
@@ -94,6 +99,39 @@ if [[ -n "${REUSE_NATIVE_ROOT}" ]]; then
   test -d "${REUSE_NATIVE_ROOT}"
   test "${REUSE_NATIVE_ROOT}" != "${ROOT}"
 fi
+
+# Derive the candidate selector list from the same Python helper that performs
+# the post-run metadata validation.  This keeps submission labels and runtime
+# contracts from drifting apart.
+PROFILE_CANDIDATE_ENV=()
+if [[ "${EXECUTION_CONTRACT}" != diagnostic ]]; then
+  mapfile -t PROFILE_CANDIDATE_ENV < <(
+    cd "${REPO_ROOT}"
+    "${PIXI_PY}" - <<'PY'
+from scripts.run_vdam_late_iteration_profile import _all_optimized_q32_environment
+
+for name, value in sorted(_all_optimized_q32_environment().items()):
+    print(f"{name}={value}")
+PY
+  )
+  test "${#PROFILE_CANDIDATE_ENV[@]}" -gt 0
+fi
+case "${EXECUTION_CONTRACT}" in
+  diagnostic)
+    ;;
+  default)
+    for assignment in "${PROFILE_CANDIDATE_ENV[@]}"; do
+      unset "${assignment%%=*}"
+    done
+    STABLE_FOURIER_WINDOW_SHAPES=0
+    ;;
+  all_optimized_q32)
+    for assignment in "${PROFILE_CANDIDATE_ENV[@]}"; do
+      export "${assignment}"
+    done
+    STABLE_FOURIER_WINDOW_SHAPES=1
+    ;;
+esac
 
 source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
 vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
@@ -116,6 +154,9 @@ printf 'stable_fourier_window_shapes=%s\n' \
 printf 'audit_raw_image_cache=%s\n' \
   "${AUDIT_RAW_IMAGE_CACHE}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
+printf 'execution_contract=%s\nimage_size=%s\n' \
+  "${EXECUTION_CONTRACT}" "${IMAGE_SIZE}" \
+  >> "${PROVENANCE}/candidate_parameters.txt"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 "${NSYS}" --version > "${PROVENANCE}/nsys_version.txt"
@@ -126,14 +167,19 @@ env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 # the fused/canonical backends that are default-on for this continuation path.
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" - "${PROVENANCE}/profile_environment_preflight.json" <<'PY'
+  "${PIXI_PY}" - "${PROVENANCE}/profile_environment_preflight.json" \
+    "${EXECUTION_CONTRACT}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-from scripts.run_vdam_late_iteration_profile import _validate_profile_environment
+from scripts.run_vdam_late_iteration_profile import (
+    _validate_profile_contract_environment,
+    _validate_profile_environment,
+)
 
 report = _validate_profile_environment()
+report["execution_contract"] = _validate_profile_contract_environment(sys.argv[2])
 Path(sys.argv[1]).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 print(json.dumps(report, sort_keys=True))
 PY
@@ -374,8 +420,10 @@ RECOVAR_COMMAND=(
   --nr-iter "${NR_ITER_SCHEDULE}"
   --random-seed 29
   --image-batch-size 500
+  --image-size "${IMAGE_SIZE}"
   --exact-local-bucket-radix "${EXACT_LOCAL_BUCKET_RADIX}"
   --exact-local-physical-order-chunk-size "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}"
+  --execution-contract "${EXECUTION_CONTRACT}"
   --cuda-profiler-range
 )
 if [[ "${STABLE_FOURIER_WINDOW_SHAPES}" = 1 ]]; then
@@ -403,6 +451,28 @@ test -s "${RECOVAR_PROFILE}/profile_summary.json"
 test -s "${RECOVAR_PROFILE}/warm/run_it$(printf '%03d' "${PROFILED_ITERATION}")_recovar_meta.json"
 test ! -e "${RECOVAR_PROFILE}/warm/run_it$(printf '%03d' "$((PROFILED_ITERATION + 1))")_recovar_meta.json"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
+
+"${PIXI_PY}" - "${RECOVAR_PROFILE}/profile_summary.json" \
+  "${PROVENANCE}/recovar_execution_contract.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text())
+payload = {
+    "mode": profile["execution_contract_mode"],
+    "environment": profile["execution_contract_environment"],
+    "cold": profile["cold"]["execution_contract"],
+    "warm": profile["warm"]["execution_contract"],
+}
+if payload["mode"] != "diagnostic":
+    for label in ("cold", "warm"):
+        contract = payload[label]
+        if not contract.get("profile_exact") or not contract.get("profile_checked"):
+            raise RuntimeError(f"{label} execution contract is not exact")
+Path(sys.argv[2]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+test -s "${PROVENANCE}/recovar_execution_contract.json"
 
 for implementation in native recovar; do
   if [[ "${implementation}" == native ]]; then

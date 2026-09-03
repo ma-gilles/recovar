@@ -713,6 +713,7 @@ def _all_optimized_estep_meta(*, enabled: bool) -> dict:
         "packed_final_noise_preserves_dense_scalar_order": enabled,
         "sum_packed_final_noise_rows": 800 if enabled else 0,
         "stable_fourier_window_shapes": enabled,
+        "stable_fourier_window_quantum": 8,
         "logical_current_size": 84,
         "physical_current_size": physical_size,
         "logical_reconstruction_pixels": 2835,
@@ -758,8 +759,36 @@ def test_all_optimized_execution_contract_proves_every_candidate_seam() -> None:
     assert composed["enabled_seams"] == list(runner.ALL_OPTIMIZED_SEAMS)
     assert composed["disabled_seams"] == []
     assert composed["stable_fourier"]["enabled"] is True
+    assert composed["stable_fourier"]["stable_fourier_window_quantum"] == 8
     assert composed["stable_flat_capacity"]["strict_reduction_count"] == 0
     assert composed["packed_final_noise"]["enabled"] is True
+
+
+def test_all_optimized_execution_contract_validates_q32_capacity() -> None:
+    meta = _all_optimized_estep_meta(enabled=True)
+    profile = meta["halfset_0_profile_summary"]
+    profile.update(
+        stable_fourier_window_quantum=32,
+        physical_current_size=96,
+        physical_reconstruction_pixels=3691,
+        n_windowed=3690,
+        n_projection_windowed=3691,
+        big_jit_projection_pixels=3691,
+    )
+
+    contract = runner._validate_all_optimized_profiles(
+        meta,
+        enabled=True,
+        label="all_optimized_q32",
+        image_shape=(128, 128),
+        stable_fourier_window_quantum=32,
+    )
+
+    stable = contract["stable_fourier"]
+    assert stable["stable_fourier_window_quantum"] == 32
+    assert stable["profiles"]["halfset_0_profile_summary"][
+        "physical_current_size"
+    ] == 96
 
 
 def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None:

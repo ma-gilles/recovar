@@ -483,6 +483,7 @@ def _validate_stable_fourier_profiles(
     enabled: bool,
     label: str,
     image_shape: tuple[int, int],
+    stable_fourier_window_quantum: int = 8,
 ) -> dict[str, Any]:
     """Prove logical Fourier support was carried by the requested capacity."""
 
@@ -493,6 +494,15 @@ def _validate_stable_fourier_profiles(
     image_shape = tuple(int(value) for value in image_shape)
     if len(image_shape) != 2 or image_shape[0] != image_shape[1]:
         raise RuntimeError(f"{label} has invalid image shape {image_shape}")
+    stable_fourier_window_quantum = int(stable_fourier_window_quantum)
+    if (
+        stable_fourier_window_quantum < 2
+        or stable_fourier_window_quantum % 2 != 0
+    ):
+        raise RuntimeError(
+            f"{label} has invalid stable Fourier quantum "
+            f"{stable_fourier_window_quantum}, expected an even integer >= 2"
+        )
     for key in (
         "requested_stable_fourier_window_shapes",
         "effective_stable_fourier_window_shapes",
@@ -511,6 +521,7 @@ def _validate_stable_fourier_profiles(
             continue
         required = (
             "stable_fourier_window_shapes",
+            "stable_fourier_window_quantum",
             "logical_current_size",
             "physical_current_size",
             "logical_reconstruction_pixels",
@@ -530,12 +541,14 @@ def _validate_stable_fourier_profiles(
             logical_size,
             n_half,
             enabled=bool(enabled),
+            quantum=stable_fourier_window_quantum,
             recon_exact_radius=False,
         )
         expected = {
             "stable_fourier_window_shapes": bool(
                 enabled and plan.logical_spec.use_window
             ),
+            "stable_fourier_window_quantum": stable_fourier_window_quantum,
             "logical_current_size": int(plan.logical_current_size),
             "physical_current_size": int(plan.physical_current_size),
             "logical_reconstruction_pixels": int(
@@ -561,6 +574,7 @@ def _validate_stable_fourier_profiles(
     return {
         "enabled": bool(enabled),
         "image_shape": list(image_shape),
+        "stable_fourier_window_quantum": stable_fourier_window_quantum,
         "profiles": profiles,
     }
 
@@ -585,6 +599,7 @@ def _validate_all_optimized_profiles(
     enabled: bool,
     label: str,
     image_shape: tuple[int, int],
+    stable_fourier_window_quantum: int = 8,
 ) -> dict[str, Any]:
     """Fail closed unless every seam in the composed arm is effective."""
 
@@ -593,6 +608,7 @@ def _validate_all_optimized_profiles(
         enabled=enabled,
         label=label,
         image_shape=image_shape,
+        stable_fourier_window_quantum=stable_fourier_window_quantum,
     )
     for key in (
         "requested_stable_flat_row_capacity",

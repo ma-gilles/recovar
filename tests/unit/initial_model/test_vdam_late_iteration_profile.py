@@ -9,11 +9,14 @@ import pytest
 
 from recovar.data_io.image_loader import ImageLoader
 from scripts.run_vdam_late_iteration_profile import (
+    _all_optimized_q32_environment,
     _capture_raw_image_cache_loads,
     _process_resource_delta,
     _profile_metadata,
     _recovar_argv,
+    _validate_profile_contract_environment,
     _validate_profile_environment,
+    _validate_profile_execution_contract,
 )
 from scripts.summarize_vdam_nsys_sqlite import summarize
 
@@ -332,6 +335,180 @@ def test_late_profile_environment_accepts_explicit_q32_gemm_selectors():
     )
 
 
+def _complete_q32_profile_meta() -> dict:
+    compact = {
+        "enabled": True,
+        "default_enabled": False,
+        "compact_posterior_enabled": True,
+        "compact_posterior_default_enabled": False,
+        "selected_score_layout": "fixed_capacity_source16",
+        "positive_only_scan_role": "correctness_oracle_not_runtime",
+        "published_score_source": "exact_relion_source16_or_full_rectangular",
+        "expanded_gemm_scores_published": False,
+        "whole_batch_fail_closed_fallback": True,
+        "batch_count": 1,
+        "certificate_chunk_count_per_batch": 1,
+        "certificate_chunk_rows": 4608,
+        "selected_rescore_batch_count": 1,
+        "fallback_batch_count": 0,
+        "selected_rescore_image_count": 200,
+        "fallback_image_count": 0,
+        "selected_source16_block_count": 800,
+        "selected_exact_candidate_count": 473_600,
+        "selected_score_table_capacity_candidates": 18_944_000,
+        "dense_global_score_table_capacity_candidates": 85_248_000,
+        "selected_score_table_capacity_bytes_f32": 75_776_000,
+        "dense_global_score_table_capacity_bytes_f32": 340_992_000,
+        "selected_to_dense_score_table_capacity_fraction": 2.0 / 9.0,
+        "topology_full_to_compact_sha256": "a" * 64,
+        "input_image_batch_size": 500,
+        "requested_hybrid_image_batch_size": 200,
+        "effective_image_batch_size": 200,
+        "streamed_certificate_candidate_count_at_effective_batch": 200
+        * 4608
+        * 37,
+        "actual_image_batch_sizes": [200],
+        "physical_image_batch_sizes": [200],
+    }
+    exact = {
+        "skip_generic_default_enabled": False,
+        "skip_generic_requested": True,
+        "skip_generic_effective": True,
+        "exact_coarse_operands_effective": True,
+        "exact_compact_preprocess_default_enabled": False,
+        "exact_compact_preprocess_requested": True,
+        "exact_compact_preprocess_effective": True,
+        "generic_score_preprocess_count": 0,
+        "exact_source_preprocess_count": 1,
+        "generic_ctf_evaluation_count": 0,
+        "generic_full_translation_count": 0,
+        "generic_assembly_count": 0,
+        "exact_assembly_count": 1,
+        "translate_score_call_site_count": 1,
+        "translate_score_call_count": 1,
+        "downstream_operand_source": "exact_source_star",
+        "diagnostic_operand_source": "exact_source_star",
+        "raw_score_capture_changed": False,
+        "generic_fallback_policy": "raise_before_generic_score_fallback",
+        "skipped_generic_outputs": [
+            "coarse_gaussian_shifted_corrected",
+            "coarse_gaussian_pixel_weight",
+            "coarse_gaussian_unshifted_corrected",
+        ],
+    }
+    local = {
+        "flat_local_rows_enabled": True,
+        "stable_flat_row_capacity_enabled": True,
+        "packed_local_projection_enabled": True,
+        "defer_packed_vdam_enabled": True,
+        "packed_vdam_reuses_flat_score_projection": True,
+        "packed_final_noise_enabled": True,
+        "packed_vdam_avoids_dense_noise_rows": True,
+        "packed_final_noise_preserves_dense_scalar_order": True,
+        "sum_packed_final_noise_rows": 800,
+        "stable_fourier_window_shapes": True,
+        "stable_fourier_window_quantum": 32,
+        "logical_current_size": 84,
+        "physical_current_size": 96,
+        "logical_reconstruction_pixels": 2835,
+        "physical_reconstruction_pixels": 3691,
+        "n_windowed": 3690,
+        "n_projection_windowed": 3691,
+        "big_jit_projection_pixels": 3691,
+        "chunk_flat_score_rows": [61_440],
+        "chunk_padded_rotations": [61_440],
+        "chunk_planned_padded_rotations": [61_440],
+        "chunk_reconstruction_rows": [377],
+        "chunk_nonzero_posterior_rows": [377],
+        "sum_flat_score_rows": 61_440,
+        "sum_padded_rows": 61_440,
+        "sum_planned_padded_rows": 61_440,
+        "sum_reconstruction_rows": 377,
+        "sum_nonzero_posterior_rows": 377,
+        "fused_pair_fine_score_enabled": False,
+        "fused_pair_fine_score_default_enabled": False,
+        "fused_pair_fine_uses_shared_compact_order": False,
+        "fused_pair_fine_avoids_pair_pixel_gathers": False,
+        "fused_pair_fine_restores_dense_posterior_order": False,
+        "chunk_fused_pair_capacities": [],
+        "chunk_fused_pair_counts": [],
+        "chunk_fused_pair_dense_capacities": [],
+        "sum_fused_pair_candidates": 0,
+        "sum_fused_pair_capacity": 0,
+        "sum_fused_pair_dense_capacity": 0,
+        "fused_pair_valid_fraction_of_dense": 0.0,
+        "fused_pair_padded_fraction_of_dense": 0.0,
+        "coarse_gaussian_gemm_hybrid": compact,
+        "exact_coarse_operand_assembly": exact,
+    }
+    return {
+        "requested_stable_fourier_window_shapes": True,
+        "effective_stable_fourier_window_shapes": True,
+        "requested_stable_flat_row_capacity": True,
+        "effective_stable_flat_row_capacity": True,
+        "requested_fused_pair_fine_score": False,
+        "effective_fused_pair_fine_score": False,
+        "n_translations": 37,
+        "halfset_0_profile_summary": local,
+    }
+
+
+def test_late_profile_complete_q32_contract_is_fail_closed():
+    environment = _all_optimized_q32_environment()
+    contract = _validate_profile_execution_contract(
+        _complete_q32_profile_meta(),
+        contract_mode="all_optimized_q32",
+        image_shape=(128, 128),
+        environment=environment,
+    )
+
+    stable = contract["all_optimized"]["stable_fourier"]
+    assert contract["profile_exact"] is True
+    assert stable["profiles"]["halfset_0_profile_summary"][
+        "physical_current_size"
+    ] == 96
+    assert contract["image_batch"]["profiles"]["halfset_0_profile_summary"][
+        "physical_image_batch_sizes"
+    ] == [200]
+    assert contract["fused_pair_fine"]["enabled"] is False
+    assert contract["row_totals"]["profiles"]["halfset_0_profile_summary"][
+        "totals"
+    ]["sum_padded_rows"] == 61_440
+
+    broken = _complete_q32_profile_meta()
+    broken["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"][
+        "compact_posterior_enabled"
+    ] = False
+    with pytest.raises(RuntimeError, match="compact_posterior_enabled"):
+        _validate_profile_execution_contract(
+            broken,
+            contract_mode="all_optimized_q32",
+            image_shape=(128, 128),
+            environment=environment,
+        )
+
+
+def test_late_profile_contract_environment_rejects_mislabeled_runs():
+    candidate = _all_optimized_q32_environment()
+    assert candidate["RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR"] == "1"
+    assert candidate["RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE"] == "1"
+    assert candidate["RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS"] == "1"
+    assert candidate["RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS"] == "1"
+    assert candidate["RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"] == "0"
+    assert candidate["RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"] == "32"
+    assert candidate["RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE"] == "200"
+
+    missing_compact = dict(candidate)
+    del missing_compact["RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR"]
+    with pytest.raises(RuntimeError, match="qualified stack"):
+        _validate_profile_contract_environment(
+            "all_optimized_q32",
+            missing_compact,
+        )
+    with pytest.raises(RuntimeError, match="requires candidate selectors to be absent"):
+        _validate_profile_contract_environment("default", candidate)
+
+
 def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     launcher = (ROOT / "scripts" / "run_vdam_late_iteration_profile.sbatch").read_text()
     gdb_commands = (ROOT / "scripts" / "vdam_relion_one_iteration.gdb").read_text()
@@ -349,6 +526,10 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert "EXPECTED_REUSED_NATIVE_NSYS_SHA256" in launcher
     assert 'AUDIT_RAW_IMAGE_CACHE=${AUDIT_RAW_IMAGE_CACHE:-0}' in launcher
     assert 'RECOVAR_COMMAND+=(--audit-raw-image-cache)' in launcher
+    assert "VDAM_LATE_PROFILE_CONTRACT" in launcher
+    assert "_all_optimized_q32_environment" in launcher
+    assert '--execution-contract "${EXECUTION_CONTRACT}"' in launcher
+    assert "recovar_execution_contract.json" in launcher
     assert "status --porcelain=v1 --untracked-files=no" in launcher
     assert "test ! -e" in launcher
     assert 'test ! -e "${NATIVE_PROFILE}/run_it' in launcher

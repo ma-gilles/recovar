@@ -33,6 +33,27 @@ _PROFILE_NATIVE_ATOMIC_ENV = "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION"
 _PROFILE_SINGLE_LANE_ENV = "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL"
 _PROFILE_MULTISTREAM_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
 _PROFILE_NATIVE_TEXTURE_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
+_PROFILE_CONTRACT_CHOICES = ("diagnostic", "default", "all_optimized_q32")
+_PROFILE_ALL_OPTIMIZED_Q32_EXTRA_ENVIRONMENT = {
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY": "64",
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE": "200",
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "2",
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB": "40",
+    "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "0",
+    "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS": "0",
+    "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
+    "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
+    "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
+    "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
+    "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
+    "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
+    "RECOVAR_K1_COARSE_PREHALF_WEIGHT": "0",
+    "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
+    "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
+    "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "1",
+    "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
+    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM": "32",
+}
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -45,6 +66,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--nr-iter", type=int, default=200)
     parser.add_argument("--random-seed", type=int, default=29)
     parser.add_argument("--image-batch-size", type=int, default=500)
+    parser.add_argument("--image-size", type=int, default=128)
     parser.add_argument("--exact-local-bucket-radix", type=int, choices=(2, 4), default=4)
     parser.add_argument("--exact-local-physical-order-chunk-size", type=int, default=0)
     parser.add_argument(
@@ -61,6 +83,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--audit-raw-image-cache",
         action="store_true",
         help="Record every ImageLoader.load_all call without changing cache policy.",
+    )
+    parser.add_argument(
+        "--execution-contract",
+        choices=_PROFILE_CONTRACT_CHOICES,
+        default="diagnostic",
+        help=(
+            "Fail closed on the emitted default or complete optimized-q32 "
+            "execution profile; diagnostic preserves the legacy unchecked mode."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -190,6 +221,292 @@ def _validate_profile_environment(
     }
 
 
+def _all_optimized_q32_environment() -> dict[str, str]:
+    """Return the complete qualified stack, including post-ten-seam removals."""
+
+    from scripts import run_vdam_hybrid_same_state_transition as same_state
+
+    requested = same_state._candidate_environment(
+        "exact_compact_preprocess",
+        enabled=True,
+    )
+    requested[same_state.EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT] = "1"
+    requested.update(_PROFILE_ALL_OPTIMIZED_Q32_EXTRA_ENVIRONMENT)
+    return requested
+
+
+def _validate_profile_contract_environment(
+    contract_mode: str,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Prove the process environment names the profile it is about to run."""
+
+    if contract_mode not in _PROFILE_CONTRACT_CHOICES:
+        raise ValueError(f"unsupported late-profile contract {contract_mode!r}")
+    environ = os.environ if environment is None else environment
+    candidate = _all_optimized_q32_environment()
+    if contract_mode == "diagnostic":
+        return {
+            "mode": contract_mode,
+            "environment_checked": False,
+            "effective_environment": {
+                name: environ.get(name) for name in sorted(candidate)
+            },
+        }
+    if contract_mode == "default":
+        unexpected = {
+            name: environ[name] for name in sorted(candidate) if name in environ
+        }
+        if unexpected:
+            raise RuntimeError(
+                "default late-profile contract requires candidate selectors to "
+                f"be absent, got {unexpected!r}"
+            )
+        return {
+            "mode": contract_mode,
+            "environment_checked": True,
+            "required_absent": sorted(candidate),
+            "effective_environment": {},
+        }
+
+    effective = {name: environ.get(name) for name in sorted(candidate)}
+    if effective != dict(sorted(candidate.items())):
+        raise RuntimeError(
+            "all_optimized_q32 late-profile environment differs from the "
+            f"qualified stack: expected={candidate!r}, effective={effective!r}"
+        )
+    return {
+        "mode": contract_mode,
+        "environment_checked": True,
+        "requested_environment": dict(sorted(candidate.items())),
+        "effective_environment": effective,
+    }
+
+
+def _validate_optimized_row_totals(
+    estep_meta: dict[str, object],
+    *,
+    label: str,
+) -> dict[str, object]:
+    """Validate every published compact row vector and its scalar total."""
+
+    import numpy as np
+
+    array_to_sum = {
+        "chunk_flat_score_rows": "sum_flat_score_rows",
+        "chunk_padded_rotations": "sum_padded_rows",
+        "chunk_planned_padded_rotations": "sum_planned_padded_rows",
+        "chunk_reconstruction_rows": "sum_reconstruction_rows",
+        "chunk_nonzero_posterior_rows": "sum_nonzero_posterior_rows",
+    }
+    profiles: dict[str, object] = {}
+    for name, raw_profile in sorted(estep_meta.items()):
+        if not isinstance(raw_profile, dict) or "chunk_padded_rotations" not in raw_profile:
+            continue
+        arrays: dict[str, list[int]] = {}
+        totals: dict[str, int] = {}
+        for array_name, sum_name in array_to_sum.items():
+            if array_name not in raw_profile or sum_name not in raw_profile:
+                raise RuntimeError(
+                    f"{label} profile {name} omitted {array_name} or {sum_name}"
+                )
+            values = np.asarray(raw_profile[array_name], dtype=np.int64)
+            if values.ndim != 1 or values.size == 0 or np.any(values < 0):
+                raise RuntimeError(
+                    f"{label} profile {name} has invalid {array_name}"
+                )
+            observed_sum = int(raw_profile[sum_name])
+            expected_sum = int(np.sum(values, dtype=np.int64))
+            if observed_sum != expected_sum:
+                raise RuntimeError(
+                    f"{label} profile {name} reported {sum_name}={observed_sum}, "
+                    f"expected {expected_sum} from {array_name}"
+                )
+            arrays[array_name] = values.tolist()
+            totals[sum_name] = observed_sum
+        if arrays["chunk_flat_score_rows"] != arrays["chunk_padded_rotations"]:
+            raise RuntimeError(
+                f"{label} profile {name} flat and padded row ABIs differ"
+            )
+        if arrays["chunk_planned_padded_rotations"] != arrays["chunk_padded_rotations"]:
+            raise RuntimeError(
+                f"{label} profile {name} planned and executed row ABIs differ"
+            )
+        if arrays["chunk_reconstruction_rows"] != arrays["chunk_nonzero_posterior_rows"]:
+            raise RuntimeError(
+                f"{label} profile {name} reconstruction and posterior rows differ"
+            )
+        if totals["sum_reconstruction_rows"] <= 0:
+            raise RuntimeError(f"{label} profile {name} reconstructed no rows")
+        profiles[name] = {"arrays": arrays, "totals": totals}
+    if not profiles:
+        raise RuntimeError(f"{label} has no local row profile")
+    return {"profile_exact": True, "profiles": profiles}
+
+
+def _validate_late_hybrid_image_batch(
+    estep_meta: dict[str, object],
+    *,
+    label: str,
+    n_translations: int,
+) -> dict[str, object]:
+    """Prove late profiling used one real 200-image matrix-matrix batch."""
+
+    from scripts import run_vdam_hybrid_same_state_transition as same_state
+
+    profiles = same_state._coarse_hybrid_profiles(estep_meta)
+    if not profiles:
+        raise RuntimeError(f"{label} did not publish a compact-hybrid profile")
+    observed: dict[str, object] = {}
+    exact = {
+        "input_image_batch_size": 500,
+        "requested_hybrid_image_batch_size": 200,
+        "effective_image_batch_size": 200,
+        "batch_count": 1,
+        "selected_rescore_batch_count": 1,
+        "selected_rescore_image_count": 200,
+        "fallback_batch_count": 0,
+        "fallback_image_count": 0,
+        "actual_image_batch_sizes": [200],
+        "physical_image_batch_sizes": [200],
+    }
+    for name, profile in sorted(profiles.items()):
+        current: dict[str, object] = {}
+        for field, expected in exact.items():
+            value = profile.get(field)
+            if value != expected:
+                raise RuntimeError(
+                    f"{label} profile {name} reported {field}={value!r}, "
+                    f"expected {expected!r}"
+                )
+            current[field] = value
+        chunk_rows = profile.get("certificate_chunk_rows")
+        chunk_count = profile.get("certificate_chunk_count_per_batch")
+        if not isinstance(chunk_rows, int) or chunk_rows <= 0:
+            raise RuntimeError(f"{label} profile {name} has invalid certificate_chunk_rows")
+        if not isinstance(chunk_count, int) or chunk_count <= 0:
+            raise RuntimeError(
+                f"{label} profile {name} has invalid certificate_chunk_count_per_batch"
+            )
+        expected_streamed = 200 * chunk_rows * int(n_translations)
+        if profile.get("streamed_certificate_candidate_count_at_effective_batch") != expected_streamed:
+            raise RuntimeError(
+                f"{label} profile {name} has stale streamed certificate geometry"
+            )
+        current.update(
+            certificate_chunk_rows=chunk_rows,
+            certificate_chunk_count_per_batch=chunk_count,
+            streamed_certificate_candidate_count_at_effective_batch=expected_streamed,
+        )
+        observed[name] = current
+    return {"profile_exact": True, "profiles": observed}
+
+
+def _validate_profile_execution_contract(
+    estep_meta: dict[str, object],
+    *,
+    contract_mode: str,
+    image_shape: tuple[int, int],
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Fail closed on effective metadata before a profile can be labeled."""
+
+    environment_contract = _validate_profile_contract_environment(
+        contract_mode,
+        environment,
+    )
+    if contract_mode == "diagnostic":
+        return {
+            "mode": contract_mode,
+            "profile_checked": False,
+            "environment": environment_contract,
+        }
+
+    from scripts import run_vdam_hybrid_same_state_transition as same_state
+
+    if contract_mode == "default":
+        composed = same_state._validate_all_optimized_profiles(
+            estep_meta,
+            enabled=False,
+            label="default",
+            image_shape=image_shape,
+            stable_fourier_window_quantum=8,
+        )
+        if same_state._coarse_hybrid_profiles(estep_meta):
+            raise RuntimeError("default profile unexpectedly used the GEMM hybrid")
+        fused_pair = same_state._validate_fused_pair_fine_profiles(
+            estep_meta,
+            enabled=False,
+            label="default",
+        )
+        return {
+            "mode": contract_mode,
+            "profile_checked": True,
+            "profile_exact": True,
+            "environment": environment_contract,
+            "all_optimized": composed,
+            "fused_pair_fine": fused_pair,
+        }
+
+    requested = _all_optimized_q32_environment()
+    effective = {
+        name: (os.environ if environment is None else environment).get(name)
+        for name in requested
+    }
+    compact = same_state._validate_arm_execution_contract(
+        candidate_mode="exact_compact_preprocess",
+        candidate_enabled=True,
+        requested_environment=requested,
+        effective_environment=effective,
+        estep_meta=estep_meta,
+    )
+    composed = same_state._validate_all_optimized_profiles(
+        estep_meta,
+        enabled=True,
+        label="all_optimized_q32",
+        image_shape=image_shape,
+        stable_fourier_window_quantum=32,
+    )
+    exact_coarse = same_state._validate_exact_coarse_single_translate_profiles(
+        estep_meta,
+        enabled=True,
+        label="all_optimized_q32",
+    )
+    exact_compact = same_state._validate_exact_compact_preprocess_profiles(
+        estep_meta,
+        enabled=True,
+        label="all_optimized_q32",
+    )
+    fused_pair = same_state._validate_fused_pair_fine_profiles(
+        estep_meta,
+        enabled=False,
+        label="all_optimized_q32",
+    )
+    n_translations = estep_meta.get("n_translations")
+    if not isinstance(n_translations, int) or n_translations <= 0:
+        raise RuntimeError("all_optimized_q32 metadata has invalid n_translations")
+    image_batch = _validate_late_hybrid_image_batch(
+        estep_meta,
+        label="all_optimized_q32",
+        n_translations=n_translations,
+    )
+    rows = _validate_optimized_row_totals(
+        estep_meta,
+        label="all_optimized_q32",
+    )
+    return {
+        "mode": contract_mode,
+        "profile_checked": True,
+        "profile_exact": True,
+        "environment": environment_contract,
+        "compact_hybrid": compact,
+        "all_optimized": composed,
+        "exact_coarse_single_translate": exact_coarse,
+        "exact_compact_preprocess": exact_compact,
+        "fused_pair_fine": fused_pair,
+        "image_batch": image_batch,
+        "row_totals": rows,
+    }
 def _load_cuda_profiler() -> tuple[Callable[[], None], Callable[[], None]]:
     try:
         cudart = ctypes.CDLL("libcudart.so")
@@ -329,7 +646,13 @@ def _process_resource_delta(
     return delta
 
 
-def _profile_metadata(output_prefix: Path, iteration: int) -> dict[str, object]:
+def _profile_metadata(
+    output_prefix: Path,
+    iteration: int,
+    *,
+    execution_contract: str = "diagnostic",
+    image_shape: tuple[int, int] = (128, 128),
+) -> dict[str, object]:
     meta_path = Path(f"{output_prefix}_it{iteration:03d}_recovar_meta.json")
     continuation_path = Path(f"{output_prefix}_diagnostic_continuation.json")
     if not meta_path.is_file() or not continuation_path.is_file():
@@ -380,6 +703,11 @@ def _profile_metadata(output_prefix: Path, iteration: int) -> dict[str, object]:
             "iteration metadata subset_size does not match selected_particle_ids: "
             f"{subset_size} != {len(selected_particle_ids)}"
         )
+    contract = _validate_profile_execution_contract(
+        meta,
+        contract_mode=execution_contract,
+        image_shape=image_shape,
+    )
     return {
         "meta_path": str(meta_path.resolve()),
         "meta_sha256": _sha256(meta_path),
@@ -390,6 +718,7 @@ def _profile_metadata(output_prefix: Path, iteration: int) -> dict[str, object]:
             key: value for key, value in meta.items() if key.startswith("halfset_") and key.endswith("_profile_summary")
         },
         "schedule": {key: meta[key] for key in schedule_keys},
+        "execution_contract": contract,
     }
 
 
@@ -547,6 +876,17 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("nr-iter must exceed checkpoint-iteration")
     if int(args.exact_local_physical_order_chunk_size) < 0:
         raise ValueError("exact-local-physical-order-chunk-size must be non-negative")
+    if int(args.image_size) <= 0:
+        raise ValueError("image-size must be positive")
+    if args.execution_contract == "all_optimized_q32" and not args.stable_fourier_window_shapes:
+        raise ValueError(
+            "all_optimized_q32 requires --stable-fourier-window-shapes"
+        )
+    if args.execution_contract == "default" and args.stable_fourier_window_shapes:
+        raise ValueError("default execution contract forbids stable Fourier shapes")
+    contract_environment = _validate_profile_contract_environment(
+        args.execution_contract,
+    )
     if output_root.exists():
         if any(output_root.iterdir()):
             raise FileExistsError(f"output root is not empty: {output_root}")
@@ -597,7 +937,12 @@ def main(argv: list[str] | None = None) -> int:
                     "after": resources_after,
                     "delta": _process_resource_delta(resources_before, resources_after),
                 },
-                **_profile_metadata(prefix, target_iteration),
+                **_profile_metadata(
+                    prefix,
+                    target_iteration,
+                    execution_contract=args.execution_contract,
+                    image_shape=(int(args.image_size), int(args.image_size)),
+                ),
             }
             if cache_events is not None:
                 reports[label]["raw_image_cache_audit"] = {
@@ -619,6 +964,9 @@ def main(argv: list[str] | None = None) -> int:
         "data_dir": str(data_dir),
         "cuda_profiler_range": bool(args.cuda_profiler_range),
         "raw_image_cache_audit_enabled": bool(args.audit_raw_image_cache),
+        "execution_contract_mode": args.execution_contract,
+        "execution_contract_environment": contract_environment,
+        "image_shape": [int(args.image_size), int(args.image_size)],
         "exact_local_bucket_radix": int(args.exact_local_bucket_radix),
         "exact_local_physical_order_chunk_size": int(args.exact_local_physical_order_chunk_size),
         "cold": reports["cold"],
