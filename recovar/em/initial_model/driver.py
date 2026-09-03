@@ -22,6 +22,11 @@ from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
 from recovar.em.dense_single_volume.batch_planning import maybe_cache_raw_image_loaders
+from recovar.em.dense_single_volume.helpers.convergence import (
+    compute_relion_offset_changes_angstrom,
+    compute_relion_orientation_changes,
+    relion_mpi_hidden_variable_change_is_small,
+)
 from recovar.em.dense_single_volume.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy_from_prepared_inputs,
     estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
@@ -72,6 +77,7 @@ RELION_ORIENTATIONAL_PRIOR_NOPRIOR = 0
 RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI = 1
 RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM = 1.5
 RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN = 1
+RELION_INITIALMODEL_MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES = 1
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
@@ -1147,6 +1153,11 @@ def _prepare_native_sampling_for_iteration(
         return False
     if sampling_state.nr_iter_wo_resol_gain < RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN:
         return False
+    if (
+        sampling_state.nr_iter_wo_large_hidden_variable_changes
+        < RELION_INITIALMODEL_MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
+    ):
+        return False
     return _relion_update_native_sampling_state(sampling_state, do_grad=do_grad)
 
 
@@ -1336,6 +1347,8 @@ def _record_native_sampling_assignment_changes(
     particle_ids: np.ndarray | None,
     previous_translations: np.ndarray,
     current_translations: np.ndarray,
+    previous_rotations: np.ndarray | None,
+    current_rotations: np.ndarray | None,
     previous_classes: np.ndarray,
     current_classes: np.ndarray,
 ) -> None:
@@ -1347,24 +1360,65 @@ def _record_native_sampling_assignment_changes(
 
     prev_t = np.asarray(previous_translations, dtype=np.float64)
     curr_t = np.asarray(current_translations, dtype=np.float64)
-    delta = curr_t[ids, :2] - prev_t[ids, :2]
-    if delta.size:
-        rms_pixels = float(np.sqrt(np.sum(delta[:, 0] ** 2 + delta[:, 1] ** 2) / (2.0 * float(ids.size))))
-        sampling_state.current_changes_optimal_offsets_angstrom = rms_pixels * float(sampling_state.pixel_size)
-        if (
-            sampling_state.current_changes_optimal_offsets_angstrom
-            < sampling_state.smallest_changes_optimal_offsets_angstrom
-        ):
-            sampling_state.smallest_changes_optimal_offsets_angstrom = (
-                sampling_state.current_changes_optimal_offsets_angstrom
-            )
+    current_offsets = compute_relion_offset_changes_angstrom(
+        curr_t[ids, :2],
+        prev_t[ids, :2],
+        float(sampling_state.pixel_size),
+    )
+    sampling_state.current_changes_optimal_offsets_angstrom = current_offsets
+
+    current_orientations = compute_relion_orientation_changes(
+        None if current_rotations is None else np.asarray(current_rotations)[ids],
+        None if previous_rotations is None else np.asarray(previous_rotations)[ids],
+    )
+    sampling_state.current_changes_optimal_orientations = current_orientations
 
     prev_c = np.asarray(previous_classes, dtype=np.int32)
     curr_c = np.asarray(current_classes, dtype=np.int32)
-    class_changes = float(np.count_nonzero(curr_c[ids] != prev_c[ids]))
+    class_changes = float(np.count_nonzero(curr_c[ids] != prev_c[ids])) / float(ids.size)
     sampling_state.current_changes_optimal_classes = class_changes
+
+    if np.isfinite(current_offsets) and np.isfinite(current_orientations):
+        # The shared predicate is named for the MPI controller because that
+        # path supplies leader-held sampling steps.  InitialModel is the same
+        # RELION predicate with this process's current effective steps.
+        changes_are_small = relion_mpi_hidden_variable_change_is_small(
+            current_classes=class_changes,
+            current_offsets_angstrom=current_offsets,
+            current_orientations_deg=current_orientations,
+            smallest_classes=sampling_state.smallest_changes_optimal_classes,
+            smallest_offsets_angstrom=(
+                sampling_state.smallest_changes_optimal_offsets_angstrom
+            ),
+            smallest_orientations_deg=(
+                sampling_state.smallest_changes_optimal_orientations
+            ),
+            mpi_leader_angular_step_deg=sampling.relion_angular_sampling_deg(
+                sampling_state.healpix_order,
+                sampling_state.adaptive_oversampling,
+            ),
+            mpi_leader_translation_step_angstrom=(
+                sampling_state.effective_offset_step_angstrom
+            ),
+        )
+        if changes_are_small:
+            sampling_state.nr_iter_wo_large_hidden_variable_changes += 1
+        else:
+            sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
+
+        # RELION updates the sticky minima after evaluating the counter.
+        if current_offsets < sampling_state.smallest_changes_optimal_offsets_angstrom:
+            sampling_state.smallest_changes_optimal_offsets_angstrom = current_offsets
+        if current_orientations < sampling_state.smallest_changes_optimal_orientations:
+            sampling_state.smallest_changes_optimal_orientations = current_orientations
+    else:
+        sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
+
     if class_changes < sampling_state.smallest_changes_optimal_classes:
-        sampling_state.smallest_changes_optimal_classes = class_changes
+        # RELION's ROUND macro is floor(x + 0.5), not Python's bankers round.
+        sampling_state.smallest_changes_optimal_classes = float(
+            np.floor(class_changes + 0.5)
+        )
 
 
 def _build_sampling_plan(
@@ -1855,6 +1909,11 @@ def _native_expectation_step(
         )
         config.engine_kwargs["debug_iteration"] = iteration
         previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float64).copy()
+        previous_rotations = (
+            None
+            if particle_state.best_pose_rotations is None
+            else np.asarray(particle_state.best_pose_rotations, dtype=np.float64).copy()
+        )
         previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
         result = run_dense_initial_model_estep(
             dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
@@ -1912,6 +1971,8 @@ def _native_expectation_step(
                 particle_ids=result.meta.get("selected_particle_ids"),
                 previous_translations=previous_translations,
                 current_translations=particle_state.translation_offsets,
+                previous_rotations=previous_rotations,
+                current_rotations=particle_state.best_pose_rotations,
                 previous_classes=previous_classes,
                 current_classes=particle_state.class_assignments,
             )
@@ -1919,7 +1980,22 @@ def _native_expectation_step(
             result.meta["current_changes_optimal_offsets_angstrom"] = float(
                 sampling_state.current_changes_optimal_offsets_angstrom
             )
+            result.meta["current_changes_optimal_orientations"] = float(
+                sampling_state.current_changes_optimal_orientations
+            )
             result.meta["current_changes_optimal_classes"] = float(sampling_state.current_changes_optimal_classes)
+            result.meta["sampling_nr_iter_wo_large_hidden_variable_changes"] = int(
+                sampling_state.nr_iter_wo_large_hidden_variable_changes
+            )
+            result.meta["sampling_smallest_changes_optimal_offsets_angstrom"] = float(
+                sampling_state.smallest_changes_optimal_offsets_angstrom
+            )
+            result.meta["sampling_smallest_changes_optimal_orientations"] = float(
+                sampling_state.smallest_changes_optimal_orientations
+            )
+            result.meta["sampling_smallest_changes_optimal_classes"] = float(
+                sampling_state.smallest_changes_optimal_classes
+            )
         return result.accumulators, result.meta
 
     return _expectation_step

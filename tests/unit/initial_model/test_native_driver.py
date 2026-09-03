@@ -1016,6 +1016,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
     assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
 
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
@@ -1029,6 +1030,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.effective_offset_step_angstrom == pytest.approx(1.5)
 
     sampling_state.current_changes_optimal_offsets_angstrom = 2.614243
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
@@ -1041,6 +1043,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
 
     sampling_state.current_changes_optimal_offsets_angstrom = 2.0
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
@@ -1052,6 +1055,126 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
     assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
     assert sampling_state.uniform_local_orientation_prior is True
+
+
+def test_native_sampling_waits_for_hidden_variable_stability():
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    state = initialise_denovo_state(
+        ori_size=128,
+        pixel_size=2.125,
+        K=1,
+        nr_iter=200,
+        n_directions=1,
+    )
+    sampling_state.last_current_resolution = float(state.current_resolution)
+
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=10,
+        do_grad=True,
+    ) is False
+    assert sampling_state.nr_iter_wo_resol_gain == 1
+    assert sampling_state.healpix_order == 1
+
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=20,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 2
+    assert sampling_state.nr_iter_wo_resol_gain == 0
+    assert sampling_state.nr_iter_wo_large_hidden_variable_changes == 0
+
+
+def test_native_sampling_change_monitor_reuses_relion_em_predicate():
+    sampling_state = driver.NativeSamplingState(
+        healpix_order=1,
+        adaptive_oversampling=1,
+        offset_range_angstrom=12.75,
+        offset_step_angstrom=4.25,
+        offset_range_ori_angstrom=12.75,
+        offset_step_ori_angstrom=4.25,
+        pixel_size=2.125,
+    )
+    translations = np.zeros((2, 2), dtype=np.float64)
+    rotations = np.repeat(np.eye(3, dtype=np.float64)[None, :, :], 2, axis=0)
+    classes = np.zeros(2, dtype=np.int32)
+    particle_ids = np.asarray([1, 0], dtype=np.int64)
+
+    # RELION evaluates the counter against the old sticky minima, then updates
+    # those minima.  Consequently the first complete observation seeds the
+    # trackers and the second identical observation increments the counter.
+    for expected_counter in (0, 1):
+        driver._record_native_sampling_assignment_changes(
+            sampling_state,
+            particle_ids=particle_ids,
+            previous_translations=translations,
+            current_translations=translations,
+            previous_rotations=rotations,
+            current_rotations=rotations,
+            previous_classes=classes,
+            current_classes=classes,
+        )
+        assert (
+            sampling_state.nr_iter_wo_large_hidden_variable_changes
+            == expected_counter
+        )
+
+    assert sampling_state.current_changes_optimal_offsets_angstrom == 0.0
+    assert sampling_state.current_changes_optimal_orientations == 0.0
+    assert sampling_state.current_changes_optimal_classes == 0.0
+    assert sampling_state.smallest_changes_optimal_offsets_angstrom == 0.0
+    assert sampling_state.smallest_changes_optimal_orientations == 0.0
+    assert sampling_state.smallest_changes_optimal_classes == 0.0
+
+
+def test_native_sampling_change_monitor_records_relion_orientation_distance():
+    sampling_state = driver.NativeSamplingState(
+        healpix_order=1,
+        adaptive_oversampling=1,
+        offset_range_angstrom=12.0,
+        offset_step_angstrom=4.0,
+        offset_range_ori_angstrom=12.0,
+        offset_step_ori_angstrom=4.0,
+        pixel_size=2.0,
+    )
+    identity = np.eye(3, dtype=np.float64)
+    theta = np.deg2rad(30.0)
+    rotate_z = np.asarray(
+        [
+            [np.cos(theta), -np.sin(theta), 0.0],
+            [np.sin(theta), np.cos(theta), 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    previous_rotations = np.stack([identity, identity])
+    current_rotations = np.stack([identity, rotate_z])
+    previous_translations = np.zeros((2, 2), dtype=np.float64)
+    current_translations = np.asarray([[0.0, 0.0], [1.0, 0.0]])
+
+    driver._record_native_sampling_assignment_changes(
+        sampling_state,
+        particle_ids=np.asarray([0, 1]),
+        previous_translations=previous_translations,
+        current_translations=current_translations,
+        previous_rotations=previous_rotations,
+        current_rotations=current_rotations,
+        previous_classes=np.asarray([0, 0]),
+        current_classes=np.asarray([1, 0]),
+    )
+
+    # A 30-degree Z rotation changes two of RELION's three matrix axes, so
+    # that particle contributes 20 degrees and the two-particle mean is 10.
+    assert sampling_state.current_changes_optimal_orientations == pytest.approx(10.0)
+    assert sampling_state.current_changes_optimal_offsets_angstrom == pytest.approx(1.0)
+    assert sampling_state.current_changes_optimal_classes == pytest.approx(0.5)
+    assert sampling_state.smallest_changes_optimal_classes == 1.0
+    assert sampling_state.nr_iter_wo_large_hidden_variable_changes == 0
 
 
 def test_uniform_local_orientation_prior_replaces_learned_direction_prior():
@@ -1517,6 +1640,7 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
     state = initialise_denovo_state(ori_size=8, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
     state.iter = 10
     sampling_state.last_current_resolution = float(state.current_resolution)
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=2.125, n_images=1),
@@ -1625,6 +1749,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     state.iter = 10
     state.tau2_fudge_factor = 3.995253
     sampling_state.last_current_resolution = float(state.current_resolution)
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
     optics_state = driver.NativeOpticsState(
         voltage=300.0,
