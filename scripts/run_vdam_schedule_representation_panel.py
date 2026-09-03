@@ -90,6 +90,9 @@ def _run_arm(args: argparse.Namespace, label: str, capacity: int) -> dict:
         "block_capacity": capacity,
         "wall_s": wall_s,
         "output_prefix": str(output_prefix.resolve()),
+        "artifact_prefix": str(
+            meta_path.with_name(meta_path.name.removesuffix("_recovar_meta.json")).resolve()
+        ),
         "meta_path": str(meta_path.resolve()),
         "score_representation_batch_counts": hybrid[
             "score_representation_batch_counts"

@@ -67,7 +67,8 @@ def test_single_process_panel_passes_exact_and_zero_noise_contract(
             "label": label,
             "block_capacity": capacity,
             "wall_s": 1.0 if dynamic else 2.0,
-            "output_prefix": str(tmp_path / label / "run_it026"),
+            "output_prefix": str(tmp_path / label / "run"),
+            "meta_path": str(tmp_path / label / "run_it026_recovar_meta.json"),
         }
     panel = {
         "schema": analyzer.PANEL_SCHEMA,

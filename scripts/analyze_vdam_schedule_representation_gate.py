@@ -225,6 +225,26 @@ def _load_output_prefix(prefix: Path) -> dict[str, Any]:
     }
 
 
+def _panel_artifact_prefix(record: dict[str, Any], label: str) -> Path:
+    raw_prefix = record.get("artifact_prefix")
+    if raw_prefix is not None:
+        prefix = Path(raw_prefix)
+    else:
+        raw_meta_path = record.get("meta_path")
+        meta_path = Path(raw_meta_path) if raw_meta_path is not None else Path()
+        suffix = "_recovar_meta.json"
+        if not meta_path.name.endswith(suffix):
+            raise GateSetupError(
+                f"representation panel arm {label!r} has no artifact prefix"
+            )
+        prefix = meta_path.with_name(meta_path.name.removesuffix(suffix))
+    if not prefix.is_absolute():
+        raise GateSetupError(
+            f"representation panel arm {label!r} has no absolute artifact prefix"
+        )
+    return prefix
+
+
 def _load_repeat(root: Path, repeat: str) -> dict[str, Any]:
     summary = _load_json(root / "recovar_profiled" / "profile_summary.json")
     profile = summary.get(repeat)
@@ -442,13 +462,11 @@ def analyze_panel(panel_root: Path) -> dict[str, Any]:
         record = raw_arms[label]
         if not isinstance(record, dict):
             raise GateSetupError(f"representation panel arm {label!r} is invalid")
-        output_prefix = Path(record.get("output_prefix", ""))
-        if not output_prefix.is_absolute():
-            raise GateSetupError(f"representation panel arm {label!r} has no absolute prefix")
+        artifact_prefix = _panel_artifact_prefix(record, label)
         arms[label] = {
             "profile": record,
             "wall_s": record.get("wall_s"),
-            **_load_output_prefix(output_prefix),
+            **_load_output_prefix(artifact_prefix),
         }
         try:
             schedules[label] = {
