@@ -133,6 +133,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         runner._arm_order("compact_posterior")
         == runner.COMPACT_POSTERIOR_ARM_ORDER
     )
+    assert (
+        runner._arm_order("compact_packed_deferred")
+        == runner.COMPACT_PACKED_DEFERRED_ARM_ORDER
+    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -156,6 +160,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     compact_posterior = runner._candidate_environment(
         "compact_posterior",
+        enabled=True,
+    )
+    compact_packed_deferred = runner._candidate_environment(
+        "compact_packed_deferred",
         enabled=True,
     )
 
@@ -220,8 +228,23 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert compact_posterior[runner.FLAT_ROW_ENVIRONMENT] == "0"
     assert compact_posterior[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
     assert compact_posterior[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
+    assert all(
+        compact_packed_deferred[name] == "1"
+        for name in runner.HYBRID_ENVIRONMENT
+    )
+    assert compact_packed_deferred[runner.COMPACT_POSTERIOR_ENVIRONMENT] == "1"
+    assert compact_packed_deferred[runner.FLAT_ROW_ENVIRONMENT] == "1"
+    assert compact_packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
+    assert compact_packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
     assert runner._candidate_uses_hybrid("compact_posterior") is True
+    assert runner._candidate_uses_hybrid("compact_packed_deferred") is True
     assert runner._candidate_uses_hybrid("packed_deferred") is False
+    assert runner._candidate_uses_compact_posterior("compact_posterior") is True
+    assert (
+        runner._candidate_uses_compact_posterior("compact_packed_deferred")
+        is True
+    )
+    assert runner._candidate_uses_compact_posterior("hybrid") is False
     assert runner._arm_candidate_enabled("stable_off_1", "stable_shapes") is False
     assert runner._arm_candidate_enabled("stable_on_1", "stable_shapes") is True
     assert (
@@ -330,6 +353,60 @@ def test_compact_posterior_execution_contract_requires_effective_profile() -> No
     assert contract["compact_effective"] is True
     assert contract["profile_exact"] is True
     assert list(contract["hybrid_profiles"]) == ["halfset_0_profile_summary"]
+
+
+@pytest.mark.parametrize(
+    "broken_field",
+    [
+        "flat_local_rows_enabled",
+        "packed_local_projection_enabled",
+        "defer_packed_vdam_enabled",
+        "packed_vdam_reuses_flat_score_projection",
+    ],
+)
+def test_compact_packed_execution_contract_requires_both_optimized_profiles(
+    broken_field: str,
+) -> None:
+    requested = runner._candidate_environment(
+        "compact_packed_deferred",
+        enabled=True,
+    )
+    profile = {
+        "coarse_gaussian_gemm_hybrid": _compact_profile(),
+        "flat_local_rows_enabled": True,
+        "packed_local_projection_enabled": True,
+        "defer_packed_vdam_enabled": True,
+        "packed_vdam_reuses_flat_score_projection": True,
+    }
+    contract = runner._validate_arm_execution_contract(
+        candidate_mode="compact_packed_deferred",
+        candidate_enabled=True,
+        requested_environment=requested,
+        effective_environment=dict(requested),
+        estep_meta={"halfset_0_profile_summary": profile},
+    )
+
+    assert contract["compact_effective"] is True
+    assert contract["packed_deferred_effective"] is True
+    assert contract["profile_exact"] is True
+    assert contract["packed_profiles"] == {
+        "halfset_0_profile_summary": {
+            "flat_local_rows_enabled": True,
+            "packed_local_projection_enabled": True,
+            "defer_packed_vdam_enabled": True,
+            "packed_vdam_reuses_flat_score_projection": True,
+        },
+    }
+
+    profile[broken_field] = False
+    with pytest.raises(RuntimeError, match=broken_field):
+        runner._validate_arm_execution_contract(
+            candidate_mode="compact_packed_deferred",
+            candidate_enabled=True,
+            requested_environment=requested,
+            effective_environment=dict(requested),
+            estep_meta={"halfset_0_profile_summary": profile},
+        )
 
 
 @pytest.mark.parametrize(
@@ -540,8 +617,13 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert (
         "direct_1,compact_posterior_1,compact_posterior_2,direct_2" in sbatch
     )
+    assert (
+        "direct_1,compact_packed_deferred_1,compact_packed_deferred_2,direct_2"
+        in sbatch
+    )
     assert "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR=0" in sbatch
     assert ".compact_effective == true" in sbatch
+    assert ".packed_deferred_effective == true" in sbatch
     assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch
     assert "VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS" in sbatch

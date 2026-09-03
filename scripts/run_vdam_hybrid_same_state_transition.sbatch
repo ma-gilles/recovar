@@ -88,6 +88,9 @@ case "${CANDIDATE_MODE}" in
   compact_posterior)
     expected_arm_order=direct_1,compact_posterior_1,compact_posterior_2,direct_2
     ;;
+  compact_packed_deferred)
+    expected_arm_order=direct_1,compact_packed_deferred_1,compact_packed_deferred_2,direct_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -236,7 +239,8 @@ test "$(jq -r '.candidate_mode' "${SCIENCE}/report.json")" = \
   "${CANDIDATE_MODE}"
 test "$(jq -r '.arm_order | join(",")' "${SCIENCE}/report.json")" = \
   "${expected_arm_order}"
-if [[ "${CANDIDATE_MODE}" == compact_posterior ]]; then
+if [[ "${CANDIDATE_MODE}" == compact_posterior || \
+      "${CANDIDATE_MODE}" == compact_packed_deferred ]]; then
   jq -e '.compact_science_contract.hard_exact_contract_passed == true' \
     "${SCIENCE}/report.json" > /dev/null
   for arm in direct_1 direct_2; do
@@ -249,7 +253,7 @@ if [[ "${CANDIDATE_MODE}" == compact_posterior ]]; then
          and .profile_exact == true' \
       "${SCIENCE}/report.json" > /dev/null
   done
-  for arm in compact_posterior_1 compact_posterior_2; do
+  for arm in "${CANDIDATE_MODE}_1" "${CANDIDATE_MODE}_2"; do
     jq -e --arg arm "${arm}" \
       '.arms[$arm].execution_contract
        | .environment_exact == true
@@ -260,6 +264,13 @@ if [[ "${CANDIDATE_MODE}" == compact_posterior ]]; then
          and (.hybrid_profiles | length) > 0' \
       "${SCIENCE}/report.json" > /dev/null
   done
+  if [[ "${CANDIDATE_MODE}" == compact_packed_deferred ]]; then
+    for arm in compact_packed_deferred_1 compact_packed_deferred_2; do
+      jq -e --arg arm "${arm}" \
+        '.arms[$arm].execution_contract.packed_deferred_effective == true' \
+        "${SCIENCE}/report.json" > /dev/null
+    done
+  fi
 fi
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${cuda_sha256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"

@@ -66,6 +66,12 @@ COMPACT_POSTERIOR_ARM_ORDER = (
     "compact_posterior_2",
     "direct_2",
 )
+COMPACT_PACKED_DEFERRED_ARM_ORDER = (
+    "direct_1",
+    "compact_packed_deferred_1",
+    "compact_packed_deferred_2",
+    "direct_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
@@ -87,6 +93,7 @@ CANDIDATE_MODES = (
     "stable_shapes",
     "stable_flat_capacity",
     "compact_posterior",
+    "compact_packed_deferred",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -129,6 +136,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return STABLE_FLAT_CAPACITY_ARM_ORDER
     if candidate_mode == "compact_posterior":
         return COMPACT_POSTERIOR_ARM_ORDER
+    if candidate_mode == "compact_packed_deferred":
+        return COMPACT_PACKED_DEFERRED_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -174,6 +183,12 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         elif candidate_mode == "compact_posterior":
             values.update({name: "1" for name in HYBRID_ENVIRONMENT})
             values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
+        elif candidate_mode == "compact_packed_deferred":
+            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+            values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
+            values[FLAT_ROW_ENVIRONMENT] = "1"
+            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
         else:
             raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
     return values
@@ -186,6 +201,14 @@ def _candidate_uses_hybrid(candidate_mode: str) -> bool:
         "stable_shapes",
         "stable_flat_capacity",
         "compact_posterior",
+        "compact_packed_deferred",
+    }
+
+
+def _candidate_uses_compact_posterior(candidate_mode: str) -> bool:
+    return candidate_mode in {
+        "compact_posterior",
+        "compact_packed_deferred",
     }
 
 
@@ -280,9 +303,9 @@ def _validate_arm_execution_contract(
         "requested_environment": dict(requested_environment),
         "effective_environment": dict(effective_environment),
         "environment_exact": True,
-        "profile_checked": candidate_mode == "compact_posterior",
+        "profile_checked": _candidate_uses_compact_posterior(candidate_mode),
     }
-    if candidate_mode != "compact_posterior":
+    if not _candidate_uses_compact_posterior(candidate_mode):
         return contract
 
     profiles = _coarse_hybrid_profiles(estep_meta)
@@ -320,6 +343,7 @@ def _validate_arm_execution_contract(
         "fallback_batch_count": 0,
         "fallback_image_count": 0,
     }
+    packed_profiles: dict[str, dict[str, Any]] = {}
     for profile_name, profile in profiles.items():
         for field, expected in required_exact.items():
             if profile.get(field) != expected:
@@ -356,11 +380,33 @@ def _validate_arm_execution_contract(
             raise RuntimeError(
                 f"{profile_name} compact table fraction must be strictly between 0 and 1",
             )
+        if candidate_mode == "compact_packed_deferred":
+            parent_profile = estep_meta[profile_name]
+            packed_required = {
+                "flat_local_rows_enabled": True,
+                "packed_local_projection_enabled": True,
+                "defer_packed_vdam_enabled": True,
+                "packed_vdam_reuses_flat_score_projection": True,
+            }
+            packed_profiles[profile_name] = {
+                field: parent_profile.get(field) for field in packed_required
+            }
+            for field, expected in packed_required.items():
+                if parent_profile.get(field) != expected:
+                    raise RuntimeError(
+                        f"{profile_name} packed profile field {field!r} is "
+                        f"{parent_profile.get(field)!r}, expected {expected!r}",
+                    )
     contract.update(
         compact_requested=True,
         compact_effective=True,
+        packed_deferred_effective=(
+            candidate_mode == "compact_packed_deferred"
+        ),
         profile_exact=True,
     )
+    if packed_profiles:
+        contract["packed_profiles"] = _json_ready(packed_profiles)
     return contract
 
 
@@ -1144,7 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     compact_science_contract = (
         _compact_science_contract(comparisons, arm_order)
-        if args.candidate_mode == "compact_posterior"
+        if _candidate_uses_compact_posterior(args.candidate_mode)
         else None
     )
     arm_dir = output_root / "arms"
@@ -1233,8 +1279,9 @@ def main(argv: list[str] | None = None) -> int:
             "transition_panel": "/".join(arm_order),
             "support_audit_ids_enabled_for_transition_arms": True,
             "requested_environment_exact_for_every_arm": True,
-            "compact_profile_fail_closed": args.candidate_mode
-            == "compact_posterior",
+            "compact_profile_fail_closed": _candidate_uses_compact_posterior(
+                args.candidate_mode,
+            ),
         },
         "science_promotion_allowed": False,
     }
