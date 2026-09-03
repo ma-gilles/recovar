@@ -726,7 +726,9 @@ def _validate_all_optimized_stable_pair_profiles(
         enabled=enabled,
         label=label,
         image_shape=image_shape,
-        stable_fourier_window_quantum=32,
+        # The inactive adapter intentionally reports its canonical default
+        # quantum; q32 becomes an effective ABI only when stable shapes are on.
+        stable_fourier_window_quantum=32 if enabled else 8,
     )
     for key in (
         "requested_stable_flat_row_capacity",

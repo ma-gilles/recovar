@@ -896,7 +896,7 @@ def test_all_optimized_stable_pair_profile_keeps_other_seams_on(
     meta["effective_stable_flat_row_capacity"] = enabled
     profile.update(
         stable_fourier_window_shapes=enabled,
-        stable_fourier_window_quantum=32,
+        stable_fourier_window_quantum=32 if enabled else 8,
         physical_current_size=96 if enabled else 84,
         physical_reconstruction_pixels=3691 if enabled else 2835,
         n_windowed=3690 if enabled else 2834,
