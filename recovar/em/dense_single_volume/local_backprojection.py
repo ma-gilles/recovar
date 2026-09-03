@@ -113,7 +113,6 @@ def compute_local_mstep_sums(
     return compute_local_weighted_sums(probs, shifted), denominator
 
 
-@jax.jit
 def compute_local_noise_scalar_terms(
     reconstruction_probs,
     translation_sqdist,
@@ -125,7 +124,10 @@ def compute_local_noise_scalar_terms(
     the pixel-heavy M-step rows.  Removing structurally zero rotation rows can
     change XLA's float32 reduction tree by one ULP even though the posterior is
     mathematically identical.  The dense big-JIT oracle and packed VDAM lane
-    therefore call this exact sequence on the same dense posterior shape.
+    therefore call this exact sequence on the same dense posterior shape.  Do
+    not add a nested ``jax.jit`` boundary here: the mature big-JIT path must
+    inline these primitives into its existing graph to preserve its reduction
+    schedule.
     """
 
     batch_size = reconstruction_probs.shape[0]

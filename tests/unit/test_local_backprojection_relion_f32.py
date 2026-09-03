@@ -141,6 +141,46 @@ def test_local_noise_scalar_terms_match_dense_relion_order_exactly():
     assert np.asarray(actual[0])[-1] == np.float32(0.0)
 
 
+def test_local_noise_scalar_terms_inline_the_mature_big_jit_primitives():
+    probs = jnp.ones((3, 5, 7), dtype=jnp.float32)
+    translation_sqdist = jnp.ones((3, 7), dtype=jnp.float32)
+    valid_image_mask = jnp.asarray([True, True, False])
+
+    def inline_oracle(probs_arg, translation_sqdist_arg, valid_mask_arg):
+        batch_size = probs_arg.shape[0]
+        support_mass = jnp.sum(
+            probs_arg.reshape(batch_size, -1),
+            axis=1,
+        ).astype(jnp.float32)
+        support_mass = jnp.where(valid_mask_arg, support_mass, 0.0)
+        translation_posterior = jnp.sum(probs_arg, axis=1).astype(jnp.float32)
+        noise_sumw_offset = jnp.sum(
+            translation_posterior
+            * jnp.asarray(translation_sqdist_arg, dtype=jnp.float32)
+        )
+        retained_mass = jnp.sum(support_mass)
+        return (
+            support_mass,
+            translation_posterior,
+            noise_sumw_offset,
+            retained_mass,
+        )
+
+    helper_jaxpr = jax.make_jaxpr(compute_local_noise_scalar_terms)(
+        probs,
+        translation_sqdist,
+        valid_image_mask,
+    )
+    oracle_jaxpr = jax.make_jaxpr(inline_oracle)(
+        probs,
+        translation_sqdist,
+        valid_image_mask,
+    )
+
+    assert str(helper_jaxpr) == str(oracle_jaxpr)
+    assert "name=compute_local_noise_scalar_terms" not in str(helper_jaxpr)
+
+
 def test_local_mstep_sums_env_gate_only_changes_relion_x_half(monkeypatch):
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", "1")
     probs = np.array([[[1.0, 1.0, 1.0]]], dtype=np.float64)
