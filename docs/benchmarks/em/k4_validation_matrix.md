@@ -68,9 +68,9 @@ These run in every EM PR and should finish in minutes.
 The unit suite must include identity and nonidentity K=4 permutations, tied
 assignments, duplicated maps, missing classes, and a negative GT association.
 
-### Current-source executable K=4 controls, 2026-09-02
+### Current-source executable K=4 controls, 2026-09-03
 
-Five focused controls now cover previously implicit K=4 execution boundaries:
+Six focused controls now cover previously implicit K=4 execution boundaries:
 
 | Boundary | Executable evidence | Established scope |
 | --- | --- | --- |
@@ -79,6 +79,7 @@ Five focused controls now cover previously implicit K=4 execution boundaries:
 | Numbered global-to-local continuity | Commit `ca626914d`: `test_k4_numbered_global_to_exact_local_preserves_per_half_pose_state` | Numbered iteration 1 routes both halves through the real dense K-class orchestrator; a forced controller transition routes both halves through the real exact-local K-class orchestrator at iteration 2. Exact assertions bind each half's dense pose outputs to iteration-1 history, local rotation/translation priors and integer pre-shifts, and local pose outputs to iteration-2 history, while preserving four class means. No final all-data pass is involved. |
 | Exact-local class projectors and CUDA x-half BPref | H100 job `13366865` plus commit `43a924358`: `test_local_search_iteration_k4_forwards_relion_projectors_to_each_class_engine` | Four distinct supplied RELION projectors execute direct exact-local K=4 scoring and x-half accumulation. Every class accumulator matches an independently normalized K=1 replay. The numbered wrapper now forwards the class projector array and common `r_max`; the regression observes the correct projector in all four score probes and all four M-steps. |
 | Supplied-projector local partitioning and fp64 oracle | Commit `b4cc56162`: `test_local_k4_batch_and_rotation_blocks_match_float64_oracle` | Four distinct class means and four corresponding RELION half-projectors execute the real K=4 local engine with irregular per-image supports, nonuniform class/rotation/translation priors, corrections, pre-shifts, and two translations. Image/rotation partitioning `(3, 8)` versus `(1, 1)` preserves all discrete outputs exactly, keeps all classes alive, and satisfies the frozen f32 and fp64 numerical bounds. |
+| Production-f32 exact-local batch/block normal-wide factorial | Commit `adbe03a14`: `test_local_k4_f32_ctf_batch_block_wide_split_factorial` | A held-out deterministic fixture crosses image batches 3 and 2 with rotation blocks 128 and 64. Irregular 65/69/73-rotation supports pad to 128 in the normal fused route and 256 in the forced wide/split route. Four distinct complex64 volumes/projectors, a real nonidentity float32 CTF, nonzero translations and pre-shifts, nonuniform class priors, corrections, noise statistics, and regularized maps all traverse the production path. Input-table selections are bitwise exact; floating reductions satisfy the predeclared dtype-derived contract below. |
 
 The first three rows are CPU unit controls, not trajectory-quality, FSC, HBM,
 or performance evidence. The continuity control deliberately sets
@@ -87,8 +88,11 @@ and full-volume exact-local K-class handoff, not the GPU/CUDA x-half BPref
 implementation.  The fourth row is a direct H100 engine invariant plus a CPU
 wrapper-seam regression; it is still not a trajectory-quality or FSC result.
 The fifth row combines nonidentical supplied projectors with real local
-partitioning and the fp64 oracle on CPU.  The two partition controls each cover
-one simultaneous partition pair, not the complete Tier-1 batch/block matrix.
+partitioning and the fp64 oracle on CPU.  The sixth closes a deterministic
+two-by-two production-f32 local batch/block factorial, including the normal
+fused versus wide/split route boundary.  These controls still do not replace
+the full Tier-1 32--256-particle matrix, trajectory/FSC quality gates, peak-HBM
+measurements, or production-scale performance evidence.
 
 The following focused commands were run from
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902`
@@ -160,6 +164,119 @@ env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
   .pixi/envs/default/bin/python -m pytest -q \
   tests/unit/test_refine_relion_mode.py::test_local_k4_batch_and_rotation_blocks_match_float64_oracle
 ```
+
+Commit `adbe03a14` adds the production-f32 factorial from a clean
+`37f640c7e155` worktree.  The four arms are image batch/rotation block
+`(3, 128)`, `(2, 128)`, `(3, 64)`, and `(2, 64)`.  With the exact-local
+big-JIT ceiling fixed to 192, the first pair reports 128-rotation normal fused
+buckets and the second pair reports 256-rotation wide/split buckets.  The test
+requires all class/pose/translation winners and rotation IDs to be bitwise
+identical.  It applies numerical bounds only to reductions whose summation
+tree is allowed to change.
+
+Those numerical bounds were frozen against a seed-42 pilot before running the
+held-out seed 2909 fixture.  The initial blanket relative-L2 threshold
+`5e-5` failed, as it should: the `(2, 64)` wide/split arm changed joint Pmax by
+one float32 score ULP (`max_abs=0.0001220703125`,
+`relative_L2=0.000120560889`).  The full diagnostic's worst relative L2 was
+`0.000138780395449` for class-3 Pmax.  For float32 unit roundoff
+`u=eps(float32)/2`, the committed contract uses
+`gamma_n=n*u/(1-n*u)` with `n=256*3=768`, and budgets four explicit production
+boundaries: probe/stat quantization, posterior reduction, weighted-sum
+reduction, and adjoint/noise reduction.  Thus
+`4*gamma_768=0.00018311385103688218`.  Probability fields use that max-absolute
+bound, three-image masses use three times that bound, scores use
+`4*u*max(reference_scale,1)`, and nonzero sufficient statistics and
+reconstructed maps use it as a relative-L2 bound.  Zero sufficient-statistic
+references remain exact, and class responsibilities must normalize within
+`4*u`.
+
+A diagnostic that promoted scoring/projection operands to float64 did not
+tighten this comparison because the public probe/stat and returned M-step
+boundaries remain float32/complex64.  It was therefore not retained as a
+misleading second oracle.  The preceding
+`test_local_k4_batch_and_rotation_blocks_match_float64_oracle` remains the
+true fp64 diagnostic contract.  Seed 2909 then passed the frozen f32 contract
+unchanged in 62.71 seconds.
+
+The exact focused CPU command at `adbe03a14` was:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_factorial_gate_20260903
+env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
+  PYTHONNOUSERSITE=1 JAX_PLATFORMS=cpu RECOVAR_DISABLE_CUDA=1 \
+  CUDA_VISIBLE_DEVICES='' \
+  TMPDIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_k4_factorial_gate_20260903T084358Z/tmp \
+  PIXI_HOME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_k4_factorial_gate_20260903T084358Z/pixi_home \
+  RATTLER_CACHE_DIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_k4_factorial_gate_20260903T084358Z/rattler_cache \
+  .pixi/envs/default/bin/python -m pytest --run-slow -v \
+  tests/unit/test_refine_relion_mode.py::test_local_k4_f32_ctf_batch_block_wide_split_factorial \
+  tests/unit/test_refine_relion_mode.py::test_local_k4_batch_and_rotation_blocks_match_float64_oracle \
+  tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split \
+  tests/unit/test_sparse_pass2_bucketed_perf.py::test_compact_pair_execution_defaults_to_high_bucket_hybrid
+# 4 passed in 89.54s
+```
+
+The last sentinel confirms that the compact-pair default threshold remains
+512.  The EM fast guard was also run from the same directory and environment:
+
+```bash
+env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
+  PYTHONNOUSERSITE=1 JAX_PLATFORMS=cpu RECOVAR_DISABLE_CUDA=1 \
+  CUDA_VISIBLE_DEVICES='' \
+  TMPDIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_k4_factorial_gate_20260903T084358Z/tmp \
+  PIXI_HOME=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_k4_factorial_gate_20260903T084358Z/pixi_home \
+  RATTLER_CACHE_DIR=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_k4_factorial_gate_20260903T084358Z/rattler_cache \
+  pixi run test-em-fast-guard
+# 16 passed in 56.27s
+```
+
+Job `13380469` then ran only the new factorial at the same clean test commit on
+one NVIDIA H100 80GB HBM3.  It requested and received exactly
+`cpu=4,mem=64G,node=1,billing=5,gres/gpu=1`, with `JOB_GRES=gpu:h100:1`,
+`OverSubscribe=OK`, and no exclusive allocation.  It completed `0:0` on
+`della-h19g1` in 62 seconds; pytest passed in 55.85 seconds and the batch step
+reported `MaxRSS=1926752K`.  The gate imported RECOVAR from this worktree and
+JAX from its `.pixi/envs/default`, observed exactly one CUDA device, and
+recorded `jax_enable_x64=True`.
+
+The first allocation, job `13380448`, failed closed before pytest collection.
+The external launcher had set `JAX_PLATFORMS=cuda`, while RECOVAR also queries
+the CPU backend during import.  It therefore exited 1 after 14 seconds with
+`Unknown backend cpu`.  Changing only the external launcher to
+`JAX_PLATFORMS=cuda,cpu` fixed the harness; no repository source, fixture, or
+assertion changed between jobs.  Both allocations requested and received the
+same exact one-H100 TRES.
+
+The disposable evidence root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr158_k4_factorial_gate_20260903T084358Z`
+and both it and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/pr158_k4_factorial_h100_adbe03a14_20260903`
+contain `SAFE_TO_DELETE`.  The successful run is sealed by these SHA-256
+values:
+
+- test source: `c49abef0dc04326bd49b85fcbf9114595cd2b3cbdd5e4c7102d1cc479ca4d8eb`;
+- checkout Python: `0cd293ce2e924a6330fcb4c4845d9a5b609aff7d30c0bbf654b788cc3a4e46fe`;
+- CUDA library: `d170e5422fdaadbef678f131bb296fc8c1c2fc0023e65ceb69dc9a105567060b`;
+- corrected external launcher: `d2e8209f7a2e4e2d660a1fbe77eebc2ba66f4e66ef22d4731e5841b6cda2b5bf`;
+- successful Slurm/pytest log: `ba4bd08341652cf138b0f9822a0eef5750f7f95dfbea5cb84d08c4774a8f5105`;
+- successful `scontrol` snapshot: `6b16825a5f352a9677de031f623eda8bd329a3c1254e7bd9318b2c69dbe76b77`;
+- successful `sacct` snapshot: `35fedc25265ec65b615ce081103038c4d59c9b8d7cf379e8478f43048adab9f6`;
+- failed harness log: `5725d7905c03e3667f0551d18062df98a85439afb8f3207d99847569156ecb9b`.
+
+The exact successful submission was:
+
+```bash
+sbatch --parsable \
+  --export=ALL,EXPECTED_LAUNCHER_SHA256=d2e8209f7a2e4e2d660a1fbe77eebc2ba66f4e66ef22d4731e5841b6cda2b5bf \
+  /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr158_k4_factorial_gate_20260903T084358Z/slurm/run_h100.sbatch
+# 13380469
+```
+
+This factorial asserts the same route, discrete-selection, and frozen numeric
+contracts independently on CPU and H100.  It deliberately does not assert
+CPU-versus-GPU bitwise identity, and it makes no FSC, trajectory-quality,
+production-scale runtime, or peak-HBM claim.
 
 The disposable H100 evidence root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/k4_exact_local_xhalf_h100_f91c73f29_20260903T011014Z`
