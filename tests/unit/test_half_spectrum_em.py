@@ -34,6 +34,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
+    make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
@@ -95,6 +96,52 @@ def test_relion_normalized_cc_half_weights_keep_rectangular_x0_rows():
 def test_non_relion_scoring_half_weights_keep_hermitian_multiplicity():
     actual = make_scoring_half_image_weights(IMAGE_SHAPE, relion_half_sum=False)
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(make_half_image_weights(IMAGE_SHAPE)))
+
+
+@pytest.mark.parametrize(
+    "image_shape",
+    [(4, 6), (6, 4), (7, 7), (8, 8), (127, 127), (128, 128)],
+)
+def test_host_planned_shell_geometry_is_byte_exact_to_jax_reference(image_shape):
+    expected = np.asarray(
+        ftu.get_grid_of_radial_distances_real(
+            image_shape,
+            voxel_size=1,
+            scaled=False,
+            frequency_shift=0,
+            rounded=True,
+        ),
+        dtype=np.int32,
+    ).reshape(-1)
+    actual = np.asarray(make_shell_indices_half(image_shape), dtype=np.int32)
+
+    np.testing.assert_array_equal(actual, expected)
+
+    height, width = image_shape
+    half_width = width // 2 + 1
+    n_shells = height // 2 + 1
+    coords = np.asarray(
+        ftu.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size=1,
+            scaled=False,
+        ),
+    ).reshape(height, half_width, 2)
+    kx = np.rint(coords[..., 0]).astype(np.int32)
+    ky = np.rint(coords[..., 1]).astype(np.int32)
+    expected_grid = expected.reshape(height, half_width)
+    vertical_nyquist = (height % 2 == 0) & (ky == -(height // 2))
+    redundant_x0 = (kx == 0) & (ky < 0) & ~vertical_nyquist
+    expected_noise_shells = np.where(
+        (expected_grid < n_shells) & ~redundant_x0,
+        expected_grid,
+        n_shells,
+    ).reshape(-1)
+
+    np.testing.assert_array_equal(
+        np.asarray(make_relion_noise_shell_indices_half(image_shape)),
+        expected_noise_shells,
+    )
 
 
 def test_relion_shell_binning_drops_sentinel_indices_under_jit():

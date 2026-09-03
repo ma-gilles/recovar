@@ -243,12 +243,12 @@ def make_frequency_radius_map_half(image_shape):
 
 def make_frequency_coords_half(image_shape):
     """Return packed-half integer frequency coordinates as a JAX array."""
-    return jnp.asarray(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
+    return jnp.asarray(make_frequency_coords_half_np(image_shape))
 
 
 def make_frequency_coords_half_np(image_shape):
-    """Return packed-half integer frequency coordinates as a NumPy array."""
-    return np.asarray(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
+    """Return cached packed-half coordinates from the host geometry planner."""
+    return ftu.get_k_coordinate_of_each_pixel_half_np(image_shape, voxel_size=1, scaled=False)
 
 
 def _relion_half_layout_mask(coords, current_size, *, square=False, include_dc=False, exact_radius=False):

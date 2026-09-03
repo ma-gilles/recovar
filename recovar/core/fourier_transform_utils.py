@@ -1,3 +1,5 @@
+import functools
+
 import jax.numpy as jnp
 import numpy as np
 
@@ -210,6 +212,54 @@ def get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True):
     """Half-image frequency coords consistent with ``full_image_to_half_image``."""
     full = get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled)
     return full[_half_image_pixel_indices(image_shape)]
+
+
+@functools.lru_cache(maxsize=None)
+def _get_k_coordinate_of_each_pixel_half_np_cached(image_shape):
+    """Build immutable packed-half coordinates without dispatching JAX work."""
+
+    height, width = image_shape
+    one_d_grids = []
+    for size in image_shape:
+        half = size // 2
+        grid = np.arange(-half, size - half, dtype=np.float32)
+        one_d_grids.append(grid)
+    grids = np.meshgrid(*one_d_grids, indexing="xy")
+    full = np.stack([grid.ravel() for grid in grids], axis=-1)
+
+    half_width = width // 2
+    if width % 2 == 0:
+        packed_columns = np.asarray(list(range(half_width, width)) + [0], dtype=np.int32)
+    else:
+        packed_columns = np.arange(half_width, width, dtype=np.int32)
+    rows = np.arange(height, dtype=np.int32)[:, None]
+    packed_pixel_indices = (rows * width + packed_columns[None, :]).ravel()
+    coords = np.asarray(full[packed_pixel_indices], dtype=np.float32)
+    coords.setflags(write=False)
+    return coords
+
+
+def get_k_coordinate_of_each_pixel_half_np(image_shape, voxel_size=1, scaled=False):
+    """Host-planned unscaled packed-half frequency coordinates.
+
+    This is byte-equivalent to :func:`get_k_coordinate_of_each_pixel_half`,
+    including its packed-column ordering, but it avoids compiling a chain of
+    eager JAX indexing primitives when the coordinates are immediately used
+    by host-side Fourier-window planning.  The returned cached array is
+    read-only and must be treated as static geometry.  Scaled coordinates
+    remain device arithmetic because NumPy and XLA division are not guaranteed
+    to be byte-identical.
+    """
+
+    image_shape = tuple(int(size) for size in image_shape)
+    if len(image_shape) != 2:
+        raise ValueError(f"image_shape must have 2 dims, got {image_shape}")
+    if any(size <= 0 for size in image_shape):
+        raise ValueError(f"image_shape entries must be positive, got {image_shape}")
+    if scaled:
+        raise ValueError("host-packed half coordinates require scaled=False")
+    del voxel_size  # Unscaled frequency indices are independent of voxel size.
+    return _get_k_coordinate_of_each_pixel_half_np_cached(image_shape)
 
 
 def get_shifted_conjugate_partner_indices(n):
