@@ -73,8 +73,12 @@ K=1 has extensive unit, fast-parity, long-run, and historical trajectory
 coverage, but there is no current-source K=1 single-run or campaign JSON under
 this schema-v1 registry. `k1_box800_memory_qualification_20260901.md` is a
 qualified memory-boundary report, not a full-dataset resolution or matched
-cross-engine quality/performance result. A future K=1 completion record must
-be added rather than inferring registry admission from those tests.
+cross-engine quality/performance result. It now also records fresh local
+score-only job `13363559`: the compact K=1 planner replaced the false
+81.92-GB persistent estimate with 4.02 GB, completed on one H100 with a
+38,059-MiB sampled peak, and released the separate full-dataset job
+`13363818`. A future K=1 completion record must be added rather than inferring
+registry admission from either memory gate.
 
 ### Real particles
 

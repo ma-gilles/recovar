@@ -188,3 +188,70 @@ the corrected CPU audit is under the directory named above.  Both have
 M-step and full-size finalizer fit on an 80 GiB H100.  It remains a
 64-particle memory qualification and does not validate full-dataset
 resolution or RECOVAR-versus-RELION quality.
+
+## Accepted fresh local compact-planner gate
+
+Job `13363559` exercised the later compact local-search planner at box 800
+from a fresh physical iteration, rather than importing a prior iteration
+state.  The fixture retained the deposited set-6 particle order, poses, CTFs,
+I1 symmetry, and common reference, but deliberately used only the 32
+particles in half 1 and stopped after local-search scoring.  It is therefore
+a planner and memory-route qualification, not a reconstruction, FSC, or
+RECOVAR-versus-RELION quality result.
+
+The run used RECOVAR commit
+`8069ac01508d57bfd74a7686930ebcea66b6e328`, tree
+`bc7220a4dde5c85e4e615cae3113a05b042655fc`.  At
+`current_size=62`, the planner selected the compact K=1 RELION route and
+estimated 4.02 GB of persistent device storage instead of the historical
+81.92-GB full-cube estimate.  The observed plans were 24 images by 148
+rotations for the outer local pass, 29 by 41 and 64 by 72 for the two coarse
+workspaces, and a caller-qualified 24 by 128 for the fine pass.  Both
+score-only bucket loops completed naturally.
+
+| Measurement | Result |
+| --- | ---: |
+| Job state | `COMPLETED 0:0` |
+| Requested = allocated | `cpu=4,mem=500G,node=1,billing=40,gres/gpu=1` |
+| Node / GPU | `della-h19g2` / NVIDIA H100 80GB HBM3 |
+| Allocation elapsed | 12:08 |
+| Refinement-reported profile wall | 650.344 s |
+| Active particles | 32 in half 1; half 2 intentionally empty |
+| Symmetry / box / current size | I1 / 800 / 62 |
+| Sampled peak HBM | 38,059 MiB |
+| Scientific-step MaxRSS | 282,151,892 KiB |
+
+The exact Slurm allocation had one H100, four CPUs, 500 GB of host memory,
+and `OverSubscribe=OK`; `ReqTRES` and `AllocTRES` matched.  The run root and
+its separate runtime root both carry `SAFE_TO_DELETE` markers:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_local_planner_fresh_ff6099641_20260902`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/box800_local_planner_fresh_ff6099641_20260902`.
+
+The sealed replay identities are:
+
+- launcher SHA-256:
+  `f602d346163a181692cba87b1fd048a81568fe69201de7a0e2fe3b83c0958805`;
+- seed-builder SHA-256:
+  `280325f443650f26be848afff9a6ddc177d68d122f6b2091260fd9fbe25d4e48`;
+- exact pose-seed NPZ SHA-256:
+  `a8d5a9426f97f8080e9abedf74a726640693e8704dda7c6b4e6852724ea84177`;
+- profile/benchmark-ledger SHA-256:
+  `adb38a8f5ddc73b089adfe47f6d4f7c2cdf6030be42539accf0038dc7c83c7e2`;
+- stderr SHA-256:
+  `7d29e6c0f60ab404d9e288eb85fd2fa60f884db8330aeee0b5fce60879fbff6a`;
+- 5-second HBM trace SHA-256:
+  `44f935a5df0390e456fad239f1dc09167ec20f0e3ce2ea49148442b798eb25a6`;
+- resolved command SHA-256:
+  `fa37231676726986844a31a7906f6dd494525e48ef38913458907584ba2a447e`.
+
+To repeat this exact score-only gate, create a new empty run and runtime root,
+copy `inputs/build_seed.py` and `jobs/fresh_score_only.sbatch`, replace their
+absolute output roots, regenerate the seed with the pinned builder, verify all
+recorded input and launcher hashes, and submit the copied launcher with
+`sbatch --parsable`.  A repetition is accepted only if it logs
+`mode=compact_k1_relion_score_bpref_overlap`, completes both score-only
+passes, has matching requested and allocated resources, and produces a
+`COMPLETED` marker.  Full-dataset job `13363818` is the separate production
+quality and high-resolution gate for this planner; no final-quality claim is
+inferred from job `13363559`.

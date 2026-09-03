@@ -49,6 +49,32 @@ therefore a lower bound rather than an allocator-exact maximum. The quality
 acceptance does not imply performance parity; these workloads remain roughly
 an order of magnitude slower in RECOVAR.
 
+## Deterministic parallel audit replay
+
+The K-class trajectory auditor computes a square matrix of independent FSC
+pairs at each numbered and final boundary.  Commit
+`8069ac01508d57bfd74a7686930ebcea66b6e328` adds an explicit
+`--pair-workers` option while preserving row-major result assembly.  CPU job
+`13363579` replayed the seed-41001 K=16 audit with four workers and the same
+frozen thresholds.  The expected assignment-only audit status remained 2;
+the fail-closed wrapper then verified that JSON and Markdown were byte-for-byte
+equal to the sealed serial products and that all 288 arrays in the compressed
+shellwise archive were elementwise equal.
+
+| Measurement | Serial sealed audit | Four-worker replay |
+| --- | ---: | ---: |
+| Wall time | 2,618.92 s | 932.30 s |
+| Relative throughput | 1.00x | 2.81x |
+| Output semantics | assignment-only strict failure | identical |
+| Slurm MaxRSS | not separately sealed | 2,656,712 KiB |
+
+Job `13363579` requested and received exactly four CPUs and 64 GB on
+`della-h17n8`, used no GPU, was non-exclusive, and completed `0:0` in 15:34
+including validation.  Its isolated run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k16_audit_pair_workers_8069ac015_20260902`
+and carries `SAFE_TO_DELETE`.  The scientific results above did not change;
+this gate qualifies deterministic audit throughput only.
+
 ## Reproduction and verification
 
 The case scripts, exact environment, input hashes, source commits, Slurm
