@@ -272,10 +272,38 @@ def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
         len(origin_stack_indices) == len(set(origin_stack_indices)),
         "origin STAR image-stack indices are not unique",
     )
-    _require(
-        origin_stack_indices == source_indices.tolist(),
-        "origin STAR image-stack indices differ from immutable source-index order",
-    )
+    source_index_semantics = str(selection.get("source_index_semantics", "particle_stack_index"))
+    source_index_origin_star: Path | None = None
+    if source_index_semantics == "particle_stack_index":
+        _require(
+            origin_stack_indices == source_indices.tolist(),
+            "origin STAR image-stack indices differ from immutable source-index order",
+        )
+    elif source_index_semantics == "source_star_row_index":
+        source_index_origin_star = Path(selection["source_index_origin_particles_star"])
+        _require(
+            source_index_origin_star.is_file(),
+            f"missing source-index origin particle STAR: {source_index_origin_star}",
+        )
+        _require(
+            sha256_file(source_index_origin_star)
+            == selection["source_index_origin_particles_star_sha256"],
+            "source-index origin particle STAR hash mismatch",
+        )
+        source_index_origin_table = _particle_table(source_index_origin_star)
+        source_index_origin_names = [
+            str(value) for value in _column(source_index_origin_table, "rlnImageName")
+        ]
+        _require(
+            np.all(source_indices < len(source_index_origin_names)),
+            "immutable source indices exceed the source-index origin particle STAR",
+        )
+        _require(
+            [source_index_origin_names[index] for index in source_indices] == origin_names,
+            "immutable source indices do not reproduce the origin particle identities",
+        )
+    else:
+        raise AuditError(f"unknown source-index semantics: {source_index_semantics}")
     origin_position = {image_index: position for position, image_index in enumerate(origin_stack_indices)}
 
     selected_stack_indices = [_image_stack_index(name) for name in selected]
@@ -391,6 +419,10 @@ def validate_particle_split(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "origin_particles_star_sha256": sha256_file(origin_star),
         "source_indices_npy": str(source_indices_path.resolve()),
         "source_indices_sha256": sha256_file(source_indices_path),
+        "source_index_semantics": source_index_semantics,
+        "source_index_origin_particles_star": (
+            None if source_index_origin_star is None else str(source_index_origin_star.resolve())
+        ),
         "selected_source_indices_sha256": sha256_ints(declared_selected_source_indices),
         "particle_stack_path": str(particle_stack_path),
         "particle_stack_sha256": str(selection["particle_stack_sha256"]),

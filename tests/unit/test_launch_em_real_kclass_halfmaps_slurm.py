@@ -310,6 +310,8 @@ def test_particle_input_generation_routes_dataset_specific_fixture_and_stack(tmp
         key="test",
         label="TEST",
         source_fixture=fixture,
+        source_index_semantics="particle_stack_index",
+        source_particles_star=None,
         shared200_selection=None,
         initial_map_root=tmp_path / "maps",
         stacks={256: stack},
@@ -345,6 +347,8 @@ def test_10345_dataset_contract_is_native_grid_only() -> None:
     assert dataset.supported_profiles == frozenset({"native10k-256"})
     assert set(dataset.stacks) == {256}
     assert dataset.shared200_selection is None
+    assert dataset.source_index_semantics == "source_star_row_index"
+    assert dataset.source_particles_star is not None
     assert dataset.canonical_hashes[str(dataset.stacks[256])].startswith("7909a695")
 
 

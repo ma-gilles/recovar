@@ -153,6 +153,62 @@ def test_particle_split_rejects_origin_source_index_order_disagreement(tmp_path:
         audit.validate_particle_split(manifest)
 
 
+def test_particle_split_accepts_source_star_row_index_semantics(tmp_path: Path) -> None:
+    manifest = _split_manifest(tmp_path)
+    selection = manifest["particle_selection"]
+    source_origin = tmp_path / "source-origin.star"
+    source_names = [f"{10 + index * 3}@origin.mrcs" for index in range(12)]
+    source_indices = np.asarray([0, 2, 4, 6, 8, 10], dtype=np.int64)
+    origin_names = [source_names[index] for index in source_indices]
+    stack = Path(selection["particle_stack_path"])
+    selected = [f"{name.split('@', 1)[0]}@{stack.resolve()}" for name in origin_names]
+    _write_particles(source_origin, source_names, [1, 2] * 6)
+    _write_particles(Path(selection["origin_particles_star"]), origin_names, [1, 2] * 3)
+    np.save(Path(selection["source_indices_npy"]), source_indices)
+    _write_particles(Path(selection["source_particles_star"]), selected, [1, 2] * 3)
+    _write_particles(Path(manifest["halves"][0]["particles_star"]), selected[0::2], [1] * 3)
+    _write_particles(Path(manifest["halves"][1]["particles_star"]), selected[1::2], [2] * 3)
+    selection.update(
+        {
+            "selected_image_names": selected,
+            "ordered_image_names_sha256": audit.sha256_strings(selected),
+            "origin_particles_star_sha256": audit.sha256_file(
+                Path(selection["origin_particles_star"])
+            ),
+            "source_indices_sha256": audit.sha256_file(Path(selection["source_indices_npy"])),
+            "selected_source_indices": source_indices.tolist(),
+            "ordered_source_indices_sha256": audit.sha256_ints(source_indices.tolist()),
+            "source_index_semantics": "source_star_row_index",
+            "source_index_origin_particles_star": str(source_origin),
+            "source_index_origin_particles_star_sha256": audit.sha256_file(source_origin),
+        }
+    )
+    for row, names in zip(manifest["halves"], (selected[0::2], selected[1::2]), strict=True):
+        row["ordered_image_names_sha256"] = audit.sha256_strings(names)
+
+    result = audit.validate_particle_split(manifest)
+
+    assert result["source_index_semantics"] == "source_star_row_index"
+    assert result["source_index_origin_particles_star"] == str(source_origin.resolve())
+
+
+def test_particle_split_rejects_wrong_source_star_row_mapping(tmp_path: Path) -> None:
+    manifest = _split_manifest(tmp_path)
+    selection = manifest["particle_selection"]
+    source_origin = tmp_path / "source-origin.star"
+    _write_particles(source_origin, [f"{index}@wrong.mrcs" for index in range(1, 8)], [1] * 7)
+    selection.update(
+        {
+            "source_index_semantics": "source_star_row_index",
+            "source_index_origin_particles_star": str(source_origin),
+            "source_index_origin_particles_star_sha256": audit.sha256_file(source_origin),
+        }
+    )
+
+    with pytest.raises(audit.AuditError, match="do not reproduce the origin particle identities"):
+        audit.validate_particle_split(manifest)
+
+
 def test_particle_split_binds_shared_selection_membership_in_origin_order(tmp_path: Path) -> None:
     manifest = _split_manifest(tmp_path)
     all_names = manifest["particle_selection"]["selected_image_names"]

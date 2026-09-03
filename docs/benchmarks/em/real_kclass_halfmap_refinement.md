@@ -69,6 +69,14 @@ split, not a deposited `rlnRandomSubset` field. The native stack is
 `/projects/CRYOEM/singerlab/mg6942/10345/recovar_data/particles.256.mrcs`
 (22,089,827,328 bytes; SHA-256
 `7909a695db68b65bfe6d0391054a1b19ae37fc4cd8da5cc4eb9595d76e4116e4`).
+For this filtered dataset, `source_indices.npy` stores row indices into the
+frozen 64,174-row source STAR rather than physical MRC-stack indices. The
+launcher and auditor therefore reselect those source-STAR rows and require
+their ordered `rlnImageName` values to reproduce the fixture exactly. The
+source STAR itself is frozen at SHA-256
+`8ab202046b07914c45636df73f1e6551a20c1f4476cb72797b1df9e9cd107b12`.
+The older 10076 fixture keeps its original direct stack-index contract; the
+two conventions are explicit in each generated manifest.
 
 The four common 256-grid starting maps are the numbered iteration-0 maps in
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/relion`.

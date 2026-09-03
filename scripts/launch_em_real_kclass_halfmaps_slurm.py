@@ -88,6 +88,7 @@ CANONICAL_HASHES_10345 = {
     str(SOURCE_FIXTURE_10345 / "particles.star"): "e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5",
     str(SOURCE_FIXTURE_10345 / "source_indices.npy"): "9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3",
     str(SOURCE_FIXTURE_10345 / "fixture_manifest.json"): "175972d7911dc512ceca2668c0f9b9372d76a3828ee4e9217c9870f55cec4683",
+    "/projects/CRYOEM/singerlab/mg6942/10345/recovar_data/filt_particles.star": "8ab202046b07914c45636df73f1e6551a20c1f4476cb72797b1df9e9cd107b12",
     str(STACKS_10345[256]): "7909a695db68b65bfe6d0391054a1b19ae37fc4cd8da5cc4eb9595d76e4116e4",
     str(INITIAL_MAP_ROOT_10345 / "run_it000_class001.mrc"): "976d13ba09a2385266a3913558ad3db0b98002ae286d919177f35803a84f0d9b",
     str(INITIAL_MAP_ROOT_10345 / "run_it000_class002.mrc"): "2d07cec3661b1f7a07ba91ea38a3b0628bbcddcf08f6559a1417a7fb8643732d",
@@ -126,6 +127,8 @@ class DatasetSpec:
     key: str
     label: str
     source_fixture: Path
+    source_index_semantics: str
+    source_particles_star: Path | None
     shared200_selection: Path | None
     initial_map_root: Path
     stacks: Mapping[int, Path]
@@ -154,6 +157,8 @@ def _dataset_spec(key: str) -> DatasetSpec:
             key="10076",
             label="EMPIAR-10076",
             source_fixture=SOURCE_FIXTURE,
+            source_index_semantics="particle_stack_index",
+            source_particles_star=None,
             shared200_selection=SHARED200_SELECTION,
             initial_map_root=INITIAL_MAP_ROOT,
             stacks=STACKS,
@@ -165,6 +170,10 @@ def _dataset_spec(key: str) -> DatasetSpec:
             key="10345",
             label="EMPIAR-10345",
             source_fixture=SOURCE_FIXTURE_10345,
+            source_index_semantics="source_star_row_index",
+            source_particles_star=Path(
+                "/projects/CRYOEM/singerlab/mg6942/10345/recovar_data/filt_particles.star"
+            ),
             shared200_selection=None,
             initial_map_root=INITIAL_MAP_ROOT_10345,
             stacks=STACKS_10345,
@@ -277,6 +286,18 @@ def _particle_tables(source_fixture: Path | None = None) -> tuple[pd.DataFrame, 
     return payload["optics"].copy(), payload["particles"].copy()
 
 
+def _particle_table(path: Path) -> pd.DataFrame:
+    payload = starfile.read(path)
+    if isinstance(payload, pd.DataFrame):
+        table = payload
+    else:
+        candidates = [table for table in payload.values() if "rlnImageName" in table]
+        _require(len(candidates) == 1, f"cannot identify one particle table in {path}")
+        table = candidates[0]
+    _require("rlnImageName" in table, f"particle table has no rlnImageName: {path}")
+    return table
+
+
 def _image_stack_index(value: str) -> int:
     fields = str(value).split("@", 1)
     _require(len(fields) == 2 and fields[0].isdigit(), f"invalid RELION image identity: {value}")
@@ -386,10 +407,29 @@ def _write_particle_inputs(
         and len(origin_image_indices) == len(set(origin_image_indices)),
         "source STAR has invalid or duplicate image-stack indices",
     )
-    _require(
-        origin_image_indices == source_indices.tolist(),
-        "source STAR image-stack indices differ from immutable source-index order",
-    )
+    source_index_semantics = "particle_stack_index" if dataset is None else dataset.source_index_semantics
+    if source_index_semantics == "particle_stack_index":
+        _require(
+            origin_image_indices == source_indices.tolist(),
+            "source STAR image-stack indices differ from immutable source-index order",
+        )
+    elif source_index_semantics == "source_star_row_index":
+        _require(
+            dataset is not None and dataset.source_particles_star is not None,
+            "source-star row indices require a frozen source particle STAR",
+        )
+        source_table = _particle_table(dataset.source_particles_star)
+        _require(
+            np.all(source_indices < len(source_table)),
+            "immutable source indices exceed the frozen source particle STAR",
+        )
+        selected_source_names = source_table.iloc[source_indices]["rlnImageName"].astype(str).tolist()
+        _require(
+            selected_source_names == particles["rlnImageName"].astype(str).tolist(),
+            "fixture particle identities differ from the frozen source STAR row selection",
+        )
+    else:
+        raise LaunchError(f"unknown source-index semantics: {source_index_semantics}")
     source_position = {
         image_index: position for position, image_index in enumerate(origin_image_indices)
     }
@@ -994,6 +1034,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         source_fixture / "fixture_manifest.json",
     ):
         _verify_canonical(path, canonical_hashes)
+    if dataset.source_particles_star is not None:
+        _verify_canonical(dataset.source_particles_star, canonical_hashes)
     if profile.selection == "shared200":
         _require(dataset.shared200_selection is not None, "dataset has no qualified shared200 selection")
         _verify_canonical(dataset.shared200_selection, canonical_hashes)
@@ -1112,6 +1154,14 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         _input_record(reference_star, role="prepared_relion_reference_star"),
         _input_record(root / "data" / "selected_particles.star", role="frozen_selected_particles_star"),
     ]
+    if dataset.source_particles_star is not None:
+        input_artifacts.append(
+            _input_record(
+                dataset.source_particles_star,
+                role="source_index_origin_particles_star",
+                expected_hash=canonical_hashes[str(dataset.source_particles_star)],
+            )
+        )
     if profile.selection == "shared200":
         assert dataset.shared200_selection is not None
         input_artifacts.append(
@@ -1180,6 +1230,17 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "source_indices_sha256": canonical_hashes[
                 str(source_fixture / "source_indices.npy")
             ],
+            "source_index_semantics": dataset.source_index_semantics,
+            "source_index_origin_particles_star": (
+                str(dataset.source_particles_star.resolve())
+                if dataset.source_particles_star is not None
+                else None
+            ),
+            "source_index_origin_particles_star_sha256": (
+                canonical_hashes[str(dataset.source_particles_star)]
+                if dataset.source_particles_star is not None
+                else None
+            ),
             "selection_source_json": (
                 str(dataset.shared200_selection.resolve())
                 if dataset.shared200_selection is not None and profile.selection == "shared200"
