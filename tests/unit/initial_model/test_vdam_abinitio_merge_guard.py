@@ -1040,7 +1040,7 @@ def test_source_faithful_bpref_respects_memory_gate_without_changing_particle_or
     assert "_accumulate_relion_physical_particle_grid(" in deferred
 
 
-def test_deferred_packed_vdam_preserves_exact_denominator_and_projects_final_support():
+def test_deferred_packed_vdam_reuses_scoring_projection_and_dense_reduction():
     engine = (
         REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py"
     ).read_text()
@@ -1049,18 +1049,22 @@ def test_deferred_packed_vdam_preserves_exact_denominator_and_projects_final_sup
     ).read_text()
 
     assert "_defer_packed_vdam_enabled: bool = False" in engine
-    assert "if score_only or defer_packed_vdam_enabled:" in engine
+    assert "if score_only or defer_packed_vdam_enabled:" not in engine
+    assert "if score_only:" in engine
     assert '"big_jit_projection_pixels"' in engine
     assert "return_deferred_source_vdam_operands" in engine
     assert "packed_source_vdam_ctf_probs = jnp.take_along_axis(" in engine
     assert "source_vdam_outer_scatter = bool(" in engine
     assert "_project_packed_noise_rows(" in engine
+    assert "flat_proj_for_noise = jnp.asarray(\n                        deferred_flat_proj_for_noise," in engine
     assert "dense_proj_for_noise = scatter_flat_local_rows(" in engine
     assert "compute_local_weighted_sums(\n                        reconstruction_probs," in engine
     assert "dense_ctf_probs_for_noise = deferred_source_vdam_ctf_probs" in engine
-    assert '"packed_vdam_restores_dense_noise_reduction"' in engine
+    assert '"packed_vdam_reuses_flat_score_projection"' in engine
     assert "_relion_wavg_direct_triplet_shells(" in engine
     assert "materialize_shifted_recon = not return_deferred_source_vdam_operands" in big_jit
+    assert "deferred_flat_proj_for_noise = proj_half_flat[" in big_jit
+    assert "processed_score_half_for_return,\n            deferred_flat_proj_for_noise," in big_jit
     assert "relion_vdam_mstep_denominator_f32(" in big_jit
     assert big_jit.count("and (not accumulate_noise or return_deferred_source_vdam_operands)") == 3
 

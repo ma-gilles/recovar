@@ -5196,7 +5196,7 @@ def run_local_em_exact(
             big_jit_relion_projector_output_size = (
                 int(2 * window_spec.max_r) if window_spec.max_r is not None else 0
             )
-            if score_only or defer_packed_vdam_enabled:
+            if score_only:
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.score_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.arange(window_spec.n_score, dtype=jnp.int32)
                 big_jit_projection_recon_take_arg = jnp.zeros((1,), dtype=jnp.int32)
@@ -6084,6 +6084,7 @@ def run_local_em_exact(
                     ctf2_over_nv_recon,
                     shifted_noise_split,
                     processed_score_half,
+                    deferred_flat_proj_for_noise,
                     deferred_source_vdam_images,
                     deferred_source_vdam_ctf,
                     deferred_source_vdam_minvsigma2,
@@ -6228,6 +6229,7 @@ def run_local_em_exact(
                             ctf2_over_nv_recon,
                             shifted_noise_split,
                             processed_score_half,
+                            deferred_flat_proj_for_noise,
                             deferred_source_vdam_images,
                             deferred_source_vdam_ctf,
                             deferred_source_vdam_minvsigma2,
@@ -7328,91 +7330,32 @@ def run_local_em_exact(
                     group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
                 )
                 if preserve_dense_noise_reduction:
-                    packed_rotation_count = int(packed_rotations_np.shape[1])
-                    n_recon_pixels = (
+                    flat_row_plan = jnp.asarray(
+                        flat_local_row_argument,
+                        dtype=jnp.int32,
+                    )
+                    flat_proj_for_noise = jnp.asarray(
+                        deferred_flat_proj_for_noise,
+                        dtype=jnp.complex64,
+                    )
+                    expected_flat_projection_shape = (
+                        int(flat_row_plan.shape[0]),
                         window_spec.n_recon
                         if window_spec.use_window
-                        else int(n_half)
+                        else int(n_half),
                     )
-                    noise_projection_pixels = (
-                        int(n_half)
-                        if relion_projector_half is not None
-                        else int(n_recon_pixels)
-                    )
-                    chunk_rows = min(
-                        packed_rotation_count,
-                        _packed_noise_projection_chunk_rows(
-                            noise_projection_pixels,
-                            batch_size=unpadded_batch_size,
-                        ),
-                    )
-                    if (
-                        chunk_rows < packed_rotation_count
-                        and not logged_deferred_noise_projection_chunking
-                    ):
-                        logger.info(
-                            "Exact local VDAM dense-order noise projection chunking: "
-                            "packed_rows=%d chunk_rows=%d n_recon_pixels=%d "
-                            "projection_pixels=%d batch_size=%d",
-                            packed_rotation_count,
-                            chunk_rows,
-                            n_recon_pixels,
-                            noise_projection_pixels,
-                            unpadded_batch_size,
+                    if flat_proj_for_noise.shape != expected_flat_projection_shape:
+                        raise RuntimeError(
+                            "deferred VDAM scoring projection did not retain the "
+                            "packed reconstruction layout: "
+                            f"{flat_proj_for_noise.shape} vs "
+                            f"{expected_flat_projection_shape}",
                         )
-                        logged_deferred_noise_projection_chunking = True
-                    packed_projection_chunks = []
-                    for chunk_start in range(0, packed_rotation_count, chunk_rows):
-                        chunk_stop = min(
-                            packed_rotation_count,
-                            chunk_start + chunk_rows,
-                        )
-                        packed_projection_chunks.append(
-                            _project_packed_noise_rows(
-                                mean_for_proj=mean_for_proj,
-                                packed_flat_rotations=flatten_bucket_rotations(
-                                    jnp.asarray(
-                                        packed_rotations_np[
-                                            :, chunk_start:chunk_stop
-                                        ]
-                                    )
-                                ),
-                                packed_rotation_count=chunk_stop - chunk_start,
-                                batch_size=unpadded_batch_size,
-                                image_shape=image_shape,
-                                proj_volume_shape=proj_volume_shape,
-                                disc_type=disc_type,
-                                projection_kwargs=projection_kwargs,
-                                window_spec=window_spec,
-                                n_half=n_half,
-                                precision_policy=precision_policy,
-                                reconstruction_pack_mask_jnp=(
-                                    reconstruction_pack_mask_jnp[
-                                        :, chunk_start:chunk_stop
-                                    ]
-                                ),
-                                relion_projector_half=relion_projector_half,
-                                relion_projector_r_max=relion_projector_r_max,
-                                projection_padding_factor=(
-                                    projection_padding_factor
-                                ),
-                            )
-                        )
-                    packed_proj_for_noise = jnp.concatenate(
-                        packed_projection_chunks,
-                        axis=1,
-                    )
-                    packed_image_ids = jnp.broadcast_to(
-                        jnp.arange(unpadded_batch_size, dtype=jnp.int32)[
-                            :, None
-                        ],
-                        reconstruction_take_indices_jnp.shape,
-                    )
                     dense_proj_for_noise = scatter_flat_local_rows(
-                        flatten_bucket_rows(packed_proj_for_noise),
-                        packed_image_ids.reshape(-1),
-                        reconstruction_take_indices_jnp.reshape(-1),
-                        reconstruction_pack_mask_jnp.reshape(-1),
+                        flat_proj_for_noise,
+                        flat_row_plan[:, 0],
+                        flat_row_plan[:, 1],
+                        flat_row_plan[:, 2] != 0,
                         batch_size=int(batch_size),
                         dense_rotation_count=int(bucket.bucket_rotation_count),
                         fill_value=0.0,
@@ -9195,7 +9138,7 @@ def run_local_em_exact(
             packed_local_projection_enabled
         ),
         "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
-        "packed_vdam_restores_dense_noise_reduction": np.asarray(
+        "packed_vdam_reuses_flat_score_projection": np.asarray(
             defer_packed_vdam_enabled and accumulate_noise
         ),
         "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),

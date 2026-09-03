@@ -1847,6 +1847,30 @@ def run_local_bucket_big_jit(
         if return_deferred_source_vdam_operands:
             from recovar import cuda_backproject
 
+            if not use_packed_local_projection:
+                raise ValueError(
+                    "deferred source VDAM projection reuse requires packed local projection"
+                )
+            # Keep the projector result used by scoring.  Re-projecting the
+            # final support outside this JIT is mathematically equivalent but
+            # changes the float32 A2/XA operands enough to break same-state
+            # RELION trajectory parity.
+            if use_window:
+                if use_compact_relion_projector_projection:
+                    deferred_flat_proj_for_noise = proj_half_flat[
+                        :, projection_recon_take_indices
+                    ]
+                else:
+                    deferred_flat_proj_for_noise = proj_half_flat[
+                        :, recon_window_indices
+                    ]
+            else:
+                deferred_flat_proj_for_noise = proj_half_flat
+            deferred_flat_proj_for_noise = jnp.asarray(
+                deferred_flat_proj_for_noise,
+                dtype=jnp.complex64,
+            )
+
             deferred_source_vdam_images = jnp.asarray(
                 processed_recon_half[:, bpref_pixel_indices],
                 dtype=jnp.complex64,
@@ -1870,6 +1894,10 @@ def run_local_bucket_big_jit(
             deferred_source_vdam_ctf_probs = jnp.zeros(
                 (1, 1, 1),
                 dtype=jnp.float32,
+            )
+            deferred_flat_proj_for_noise = jnp.zeros(
+                (1, 1),
+                dtype=jnp.complex64,
             )
         result = (
             Ft_y,
@@ -1899,6 +1927,7 @@ def run_local_bucket_big_jit(
             ctf2_over_nv_recon,
             shifted_noise_for_return,
             processed_score_half_for_return,
+            deferred_flat_proj_for_noise,
             deferred_source_vdam_images,
             deferred_source_vdam_ctf,
             deferred_source_vdam_minvsigma2,
