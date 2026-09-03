@@ -60,11 +60,18 @@ STABLE_FLAT_CAPACITY_ARM_ORDER = (
     "stable_flat_on_2",
     "stable_flat_off_2",
 )
+COMPACT_POSTERIOR_ARM_ORDER = (
+    "direct_1",
+    "compact_posterior_1",
+    "compact_posterior_2",
+    "direct_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
 )
+COMPACT_POSTERIOR_ENVIRONMENT = "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR"
 FLAT_ROW_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
 STABLE_FLAT_CAPACITY_ENVIRONMENT = (
     "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
@@ -79,6 +86,7 @@ CANDIDATE_MODES = (
     "hybrid_packed_deferred",
     "stable_shapes",
     "stable_flat_capacity",
+    "compact_posterior",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -119,12 +127,15 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return STABLE_SHAPES_ARM_ORDER
     if candidate_mode == "stable_flat_capacity":
         return STABLE_FLAT_CAPACITY_ARM_ORDER
+    if candidate_mode == "compact_posterior":
+        return COMPACT_POSTERIOR_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
 def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, str]:
     values = {
         **{name: "0" for name in HYBRID_ENVIRONMENT},
+        COMPACT_POSTERIOR_ENVIRONMENT: "0",
         FLAT_ROW_ENVIRONMENT: "0",
         STABLE_FLAT_CAPACITY_ENVIRONMENT: "0",
         PACKED_PROJECTION_ENVIRONMENT: "0",
@@ -160,6 +171,9 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
             values[FLAT_ROW_ENVIRONMENT] = "1"
             values[PACKED_PROJECTION_ENVIRONMENT] = "1"
             values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        elif candidate_mode == "compact_posterior":
+            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+            values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
         else:
             raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
     return values
@@ -171,6 +185,7 @@ def _candidate_uses_hybrid(candidate_mode: str) -> bool:
         "hybrid_packed_deferred",
         "stable_shapes",
         "stable_flat_capacity",
+        "compact_posterior",
     }
 
 
@@ -230,6 +245,169 @@ def _validate_stable_flat_capacity_profiles(
         "strict_reduction_count": strict_reduction_count,
         "profiles": profiles,
     }
+
+
+def _coarse_hybrid_profiles(meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Collect every per-halfset certified-hybrid execution profile."""
+
+    result: dict[str, dict[str, Any]] = {}
+    for key, value in meta.items():
+        if not isinstance(value, dict) or "coarse_gaussian_gemm_hybrid" not in value:
+            continue
+        profile = value["coarse_gaussian_gemm_hybrid"]
+        if not isinstance(profile, dict):
+            raise RuntimeError(f"{key} hybrid execution profile is not a mapping")
+        result[key] = profile
+    return result
+
+
+def _validate_arm_execution_contract(
+    *,
+    candidate_mode: str,
+    candidate_enabled: bool,
+    requested_environment: dict[str, str],
+    effective_environment: dict[str, str | None],
+    estep_meta: dict[str, Any],
+) -> dict[str, Any]:
+    """Fail closed when a compact arm does not execute the requested profile."""
+
+    if effective_environment != requested_environment:
+        raise RuntimeError(
+            "same-state arm environment differs from its explicit request: "
+            f"requested={requested_environment}, effective={effective_environment}",
+        )
+    contract: dict[str, Any] = {
+        "requested_environment": dict(requested_environment),
+        "effective_environment": dict(effective_environment),
+        "environment_exact": True,
+        "profile_checked": candidate_mode == "compact_posterior",
+    }
+    if candidate_mode != "compact_posterior":
+        return contract
+
+    profiles = _coarse_hybrid_profiles(estep_meta)
+    contract["hybrid_profiles"] = _json_ready(profiles)
+    expected_compact = bool(candidate_enabled)
+    expected_token = "1" if expected_compact else "0"
+    if requested_environment[COMPACT_POSTERIOR_ENVIRONMENT] != expected_token:
+        raise RuntimeError("compact-posterior request token does not match the arm")
+    if not expected_compact:
+        if profiles:
+            raise RuntimeError(
+                "compact-posterior control arm unexpectedly published a hybrid profile",
+            )
+        contract.update(
+            compact_requested=False,
+            compact_effective=False,
+            profile_exact=True,
+        )
+        return contract
+
+    if not profiles:
+        raise RuntimeError(
+            "compact-posterior candidate arm did not publish a hybrid profile",
+        )
+    required_exact = {
+        "enabled": True,
+        "default_enabled": False,
+        "compact_posterior_enabled": True,
+        "compact_posterior_default_enabled": False,
+        "selected_score_layout": "fixed_capacity_source16",
+        "positive_only_scan_role": "correctness_oracle_not_runtime",
+        "published_score_source": "exact_relion_source16_or_full_rectangular",
+        "expanded_gemm_scores_published": False,
+        "whole_batch_fail_closed_fallback": True,
+        "fallback_batch_count": 0,
+        "fallback_image_count": 0,
+    }
+    for profile_name, profile in profiles.items():
+        for field, expected in required_exact.items():
+            if profile.get(field) != expected:
+                raise RuntimeError(
+                    f"{profile_name} compact profile field {field!r} is "
+                    f"{profile.get(field)!r}, expected {expected!r}",
+                )
+        positive_fields = (
+            "batch_count",
+            "selected_rescore_batch_count",
+            "selected_rescore_image_count",
+            "selected_source16_block_count",
+            "selected_exact_candidate_count",
+            "selected_score_table_capacity_candidates",
+            "dense_global_score_table_capacity_candidates",
+            "selected_score_table_capacity_bytes_f32",
+            "dense_global_score_table_capacity_bytes_f32",
+        )
+        for field in positive_fields:
+            if not isinstance(profile.get(field), int) or profile[field] <= 0:
+                raise RuntimeError(
+                    f"{profile_name} compact profile field {field!r} must be positive",
+                )
+        if profile["selected_rescore_batch_count"] != profile["batch_count"]:
+            raise RuntimeError(
+                f"{profile_name} compact profile did not select every batch",
+            )
+        table_fraction = profile.get(
+            "selected_to_dense_score_table_capacity_fraction",
+        )
+        if not isinstance(table_fraction, (float, int)) or not 0.0 < float(
+            table_fraction,
+        ) < 1.0:
+            raise RuntimeError(
+                f"{profile_name} compact table fraction must be strictly between 0 and 1",
+            )
+    contract.update(
+        compact_requested=True,
+        compact_effective=True,
+        profile_exact=True,
+    )
+    return contract
+
+
+def _arm_performance_summary(
+    *,
+    wall_s: float,
+    estep_meta: dict[str, Any],
+) -> dict[str, Any]:
+    sparse = estep_meta.get("sparse_pass2_profile_summary", {})
+    if not isinstance(sparse, dict):
+        raise RuntimeError("sparse pass-2 profile summary is not a mapping")
+    summary: dict[str, Any] = {"wall_s": float(wall_s)}
+    for field in (
+        "pass1_time_s",
+        "pass2_time_s",
+        "max_significant_samples",
+        "mean_significant_samples",
+    ):
+        if field in sparse:
+            summary[field] = _json_ready(sparse[field])
+    table_fields = (
+        "selected_rescore_batch_count",
+        "fallback_batch_count",
+        "selected_rescore_image_count",
+        "selected_source16_block_count",
+        "selected_exact_candidate_count",
+        "full_candidate_count_for_selected_images",
+        "selected_exact_candidate_fraction",
+        "selected_score_table_capacity_candidates",
+        "dense_global_score_table_capacity_candidates",
+        "selected_score_table_capacity_bytes_f32",
+        "dense_global_score_table_capacity_bytes_f32",
+        "selected_to_dense_score_table_capacity_fraction",
+        "max_selected_blocks_per_image",
+        "selected_block_capacity",
+    )
+    profiles = _coarse_hybrid_profiles(estep_meta)
+    if profiles:
+        summary["coarse_hybrid_tables"] = {
+            name: {
+                field: _json_ready(profile[field])
+                for field in table_fields
+                if field in profile
+            }
+            for name, profile in profiles.items()
+        }
+    return summary
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -606,14 +784,22 @@ def _run_transition_arm(
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(
         int(dataset.n_images)
     )
+    requested_environment = _candidate_environment(
+        candidate_mode,
+        enabled=candidate_enabled,
+    )
+    effective_environment: dict[str, str | None] = {}
     started = time.perf_counter()
     with _temporary_environment(
         {
-            **_candidate_environment(candidate_mode, enabled=candidate_enabled),
+            **requested_environment,
             "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "1",
             "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS": "1",
         }
     ):
+        effective_environment = {
+            name: os.environ.get(name) for name in requested_environment
+        }
         final_state = driver.run_vdam_iterations(
             state,
             nr_particles=int(dataset.n_images),
@@ -659,6 +845,17 @@ def _run_transition_arm(
             enabled=candidate_enabled,
             label=label,
         )
+    execution_contract = _validate_arm_execution_contract(
+        candidate_mode=candidate_mode,
+        candidate_enabled=candidate_enabled,
+        requested_environment=requested_environment,
+        effective_environment=effective_environment,
+        estep_meta=captured["estep_meta"],
+    )
+    performance_summary = _arm_performance_summary(
+        wall_s=wall_s,
+        estep_meta=captured["estep_meta"],
+    )
     return {
         "label": label,
         "candidate_mode": candidate_mode,
@@ -670,6 +867,8 @@ def _run_transition_arm(
                 or candidate_mode in {"stable_shapes", "stable_flat_capacity"}
             )
         ),
+        "execution_contract": execution_contract,
+        "performance_summary": performance_summary,
         "wall_s": wall_s,
         "stable_flat_capacity_contract": stable_flat_capacity_contract,
         "initial_state_manifest": initial_state_manifest,
@@ -692,6 +891,189 @@ def _pair_report(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         "particle_state": _dataclass_comparison(left["particle_state"], right["particle_state"]),
         "sampling_state": _dataclass_comparison(left["sampling_state"], right["sampling_state"]),
         "final_state": _dataclass_comparison(left["final_state"], right["final_state"]),
+    }
+
+
+def _comparison_fields_exact(section: dict[str, Any]) -> bool:
+    return bool(section) and all(
+        isinstance(value, dict) and value.get("exact_equal") is True
+        for value in section.values()
+    )
+
+
+def _numeric_comparison_values(
+    section: dict[str, Any],
+    *,
+    nested_entries: bool,
+) -> dict[str, float]:
+    entries = section.get("entries", []) if nested_entries else [section]
+    values: dict[str, float] = {}
+    for entry_index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        for field, comparison in entry.items():
+            if not isinstance(comparison, dict):
+                continue
+            value = comparison.get("normalized_l2_delta")
+            if value is None:
+                continue
+            numeric = float(value)
+            if not np.isfinite(numeric) or numeric < 0.0:
+                raise RuntimeError("same-state comparison contains an invalid delta")
+            prefix = f"{entry_index}." if nested_entries else ""
+            values[f"{prefix}{field}"] = numeric
+    return values
+
+
+def _repeat_envelope_report(
+    comparisons: dict[str, dict[str, Any]],
+    *,
+    repeat_pairs: tuple[str, str],
+    cross_pairs: tuple[str, ...],
+    section: str,
+    nested_entries: bool,
+) -> dict[str, Any]:
+    repeat_values = {
+        pair: _numeric_comparison_values(
+            comparisons[pair][section],
+            nested_entries=nested_entries,
+        )
+        for pair in repeat_pairs
+    }
+    cross_values = {
+        pair: _numeric_comparison_values(
+            comparisons[pair][section],
+            nested_entries=nested_entries,
+        )
+        for pair in cross_pairs
+    }
+    paths = sorted(
+        set().union(
+            *(set(values) for values in (*repeat_values.values(), *cross_values.values()))
+        )
+    )
+    rows: dict[str, Any] = {}
+    for path in paths:
+        direct_repeat = repeat_values[repeat_pairs[0]].get(path, 0.0)
+        candidate_repeat = repeat_values[repeat_pairs[1]].get(path, 0.0)
+        envelope = max(direct_repeat, candidate_repeat)
+        cross_by_pair = {
+            pair: values.get(path, 0.0) for pair, values in cross_values.items()
+        }
+        cross_max = max(cross_by_pair.values(), default=0.0)
+        within = (
+            cross_max <= float(np.nextafter(envelope, np.inf))
+            if envelope > 0.0
+            else cross_max == 0.0
+        )
+        rows[path] = {
+            "direct_repeat_normalized_l2": direct_repeat,
+            "candidate_repeat_normalized_l2": candidate_repeat,
+            "repeat_envelope_normalized_l2": envelope,
+            "cross_normalized_l2_by_pair": cross_by_pair,
+            "maximum_cross_normalized_l2": cross_max,
+            "maximum_cross_over_repeat_envelope": (
+                cross_max / envelope if envelope > 0.0 else None
+            ),
+            "within_observed_repeat_envelope": within,
+        }
+    outside = [
+        path
+        for path, row in rows.items()
+        if not row["within_observed_repeat_envelope"]
+    ]
+    return {
+        "policy": (
+            "compare each normalized-L2 field against the maximum of the "
+            "direct/direct and candidate/candidate observed repeats"
+        ),
+        "all_cross_within_observed_repeat_envelope": not outside,
+        "outside_paths": outside,
+        "rows": rows,
+    }
+
+
+def _compact_science_contract(
+    comparisons: dict[str, dict[str, Any]],
+    arm_order: tuple[str, str, str, str],
+) -> dict[str, Any]:
+    """Summarize hard discrete parity and observed continuous repeat noise."""
+
+    direct_repeat = f"{arm_order[0]}__vs__{arm_order[3]}"
+    candidate_repeat = f"{arm_order[1]}__vs__{arm_order[2]}"
+    cross_pairs = (
+        f"{arm_order[0]}__vs__{arm_order[1]}",
+        f"{arm_order[0]}__vs__{arm_order[2]}",
+        f"{arm_order[3]}__vs__{arm_order[1]}",
+        f"{arm_order[3]}__vs__{arm_order[2]}",
+    )
+    required_meta = (
+        "selected_particle_ids",
+        "best_pose_rotation_ids",
+        "pose_assignments",
+        "class_assignments",
+        "best_pose_translations",
+        "significant_counts",
+    )
+    exact_checks: dict[str, Any] = {}
+    for pair in cross_pairs:
+        comparison = comparisons[pair]
+        meta = comparison["estep_meta"]
+        missing_meta = [key for key in required_meta if key not in meta]
+        unequal_meta = [
+            key
+            for key in required_meta
+            if key in meta and meta[key].get("exact_equal") is not True
+        ]
+        exact_checks[pair] = {
+            "required_meta_present": not missing_meta,
+            "missing_meta": missing_meta,
+            "required_meta_exact": not unequal_meta,
+            "unequal_meta": unequal_meta,
+            "support_audits_exact": comparison["support_audits"].get(
+                "exact_equal",
+            )
+            is True,
+            "particle_state_exact": _comparison_fields_exact(
+                comparison["particle_state"],
+            ),
+            "sampling_state_exact": _comparison_fields_exact(
+                comparison["sampling_state"],
+            ),
+        }
+        exact_checks[pair]["pass"] = all(
+            value is True
+            for key, value in exact_checks[pair].items()
+            if key
+            not in {
+                "missing_meta",
+                "unequal_meta",
+            }
+        )
+    exact_pass = all(row["pass"] for row in exact_checks.values())
+    repeat_pairs = (direct_repeat, candidate_repeat)
+    return {
+        "hard_exact_contract_passed": exact_pass,
+        "hard_exact_policy": (
+            "all crossed pairs require exact selected IDs, pose/translation/class "
+            "decisions, significant counts, complete support audits, particle "
+            "state, and sampling state"
+        ),
+        "exact_cross_pair_checks": exact_checks,
+        "accumulator_repeat_envelope": _repeat_envelope_report(
+            comparisons,
+            repeat_pairs=repeat_pairs,
+            cross_pairs=cross_pairs,
+            section="accumulators",
+            nested_entries=True,
+        ),
+        "final_state_repeat_envelope": _repeat_envelope_report(
+            comparisons,
+            repeat_pairs=repeat_pairs,
+            cross_pairs=cross_pairs,
+            section="final_state",
+            nested_entries=False,
+        ),
     }
 
 
@@ -760,6 +1142,11 @@ def main(argv: list[str] | None = None) -> int:
         f"{left}__vs__{right}": _pair_report(arms[left], arms[right])
         for left, right in pair_labels
     }
+    compact_science_contract = (
+        _compact_science_contract(comparisons, arm_order)
+        if args.candidate_mode == "compact_posterior"
+        else None
+    )
     arm_dir = output_root / "arms"
     arm_dir.mkdir()
     arm_summaries: dict[str, Any] = {}
@@ -769,6 +1156,8 @@ def main(argv: list[str] | None = None) -> int:
             "hybrid": arm["hybrid"],
             "candidate_mode": arm["candidate_mode"],
             "candidate_enabled": arm["candidate_enabled"],
+            "execution_contract": arm["execution_contract"],
+            "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
             "stable_flat_capacity_contract": arm[
                 "stable_flat_capacity_contract"
@@ -789,6 +1178,8 @@ def main(argv: list[str] | None = None) -> int:
             "hybrid": arm["hybrid"],
             "candidate_mode": arm["candidate_mode"],
             "candidate_enabled": arm["candidate_enabled"],
+            "execution_contract": arm["execution_contract"],
+            "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
             "stable_flat_capacity_contract": payload[
                 "stable_flat_capacity_contract"
@@ -816,6 +1207,7 @@ def main(argv: list[str] | None = None) -> int:
         "acceptance_config_sha256": _sha256_bytes(acceptance_path.read_bytes()),
         "arms": arm_summaries,
         "comparisons": comparisons,
+        "compact_science_contract": compact_science_contract,
         "same_state_contract": {
             "model_state_exact_for_every_arm": True,
             "particle_state_exact_for_every_arm": True,
@@ -840,6 +1232,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             "transition_panel": "/".join(arm_order),
             "support_audit_ids_enabled_for_transition_arms": True,
+            "requested_environment_exact_for_every_arm": True,
+            "compact_profile_fail_closed": args.candidate_mode
+            == "compact_posterior",
         },
         "science_promotion_allowed": False,
     }
@@ -858,6 +1253,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
         flush=True,
     )
+    if (
+        compact_science_contract is not None
+        and not compact_science_contract["hard_exact_contract_passed"]
+    ):
+        return 1
     return 0
 
 

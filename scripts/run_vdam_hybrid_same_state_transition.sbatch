@@ -85,6 +85,9 @@ case "${CANDIDATE_MODE}" in
   stable_flat_capacity)
     expected_arm_order=stable_flat_off_1,stable_flat_on_1,stable_flat_on_2,stable_flat_off_2
     ;;
+  compact_posterior)
+    expected_arm_order=direct_1,compact_posterior_1,compact_posterior_2,direct_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -149,6 +152,7 @@ sha256sum \
   "${REPO_ROOT}/scripts/run_vdam_hybrid_same_state_transition.py" \
   "${REPO_ROOT}/scripts/run_vdam_hybrid_same_state_transition.sbatch" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py" \
+  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/oversampling.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/flat_local_rows.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/significance.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_big_jit.py" \
@@ -186,6 +190,7 @@ command=(
   "RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}"
   "RECOVAR_RELION_BIND_BUILD_DIR=${RELION_BIND_DIR}"
   "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID=0"
+  "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR=0"
   "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=0"
   "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=0"
   "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS=0"
@@ -231,6 +236,31 @@ test "$(jq -r '.candidate_mode' "${SCIENCE}/report.json")" = \
   "${CANDIDATE_MODE}"
 test "$(jq -r '.arm_order | join(",")' "${SCIENCE}/report.json")" = \
   "${expected_arm_order}"
+if [[ "${CANDIDATE_MODE}" == compact_posterior ]]; then
+  jq -e '.compact_science_contract.hard_exact_contract_passed == true' \
+    "${SCIENCE}/report.json" > /dev/null
+  for arm in direct_1 direct_2; do
+    jq -e --arg arm "${arm}" \
+      '.arms[$arm].execution_contract
+       | .environment_exact == true
+         and .profile_checked == true
+         and .compact_requested == false
+         and .compact_effective == false
+         and .profile_exact == true' \
+      "${SCIENCE}/report.json" > /dev/null
+  done
+  for arm in compact_posterior_1 compact_posterior_2; do
+    jq -e --arg arm "${arm}" \
+      '.arms[$arm].execution_contract
+       | .environment_exact == true
+         and .profile_checked == true
+         and .compact_requested == true
+         and .compact_effective == true
+         and .profile_exact == true
+         and (.hybrid_profiles | length) > 0' \
+      "${SCIENCE}/report.json" > /dev/null
+  done
+fi
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${cuda_sha256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"

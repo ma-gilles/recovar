@@ -1567,6 +1567,11 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     assert hybrid_stats["selected_rescore_image_count"] == 3
     assert hybrid_stats["selected_source16_block_count"] == 3
     assert hybrid_stats["selected_exact_candidate_fraction"] == 1.0
+    assert hybrid_stats["selected_score_table_capacity_candidates"] == 8192
+    assert hybrid_stats["dense_global_score_table_capacity_candidates"] == 128
+    assert hybrid_stats["selected_score_table_capacity_bytes_f32"] == 32768
+    assert hybrid_stats["dense_global_score_table_capacity_bytes_f32"] == 512
+    assert hybrid_stats["selected_to_dense_score_table_capacity_fraction"] == 64.0
     assert hybrid_stats["fallback_reasons"] == {}
     support_audit = result[5]["coarse_significance_support_audit"]
     assert support_audit["n_classes"] == 1

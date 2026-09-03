@@ -5461,6 +5461,8 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_hybrid_fallback_image_count = 0
     coarse_gaussian_gemm_hybrid_selected_block_count = 0
     coarse_gaussian_gemm_hybrid_max_blocks_per_image = 0
+    coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates = 0
+    coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates = 0
     coarse_gaussian_gemm_hybrid_fallback_reasons = {}
 
     start_idx = 0
@@ -6022,6 +6024,15 @@ def _compute_k_class_significance_batched(
                 coarse_gaussian_gemm_hybrid_max_blocks_per_image = max(
                     coarse_gaussian_gemm_hybrid_max_blocks_per_image,
                     int(np.max(selected_counts)),
+                )
+                coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates += (
+                    batch_size
+                    * coarse_gaussian_gemm_hybrid_capacity
+                    * SOURCE_ROTATION_BLOCK_SIZE
+                    * n_trans
+                )
+                coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates += (
+                    batch_size * n_rot * n_trans
                 )
             else:
                 coarse_gaussian_gemm_hybrid_fallback_batch_count += 1
@@ -7252,6 +7263,12 @@ def _compute_k_class_significance_batched(
         full_selected_image_candidate_count = (
             coarse_gaussian_gemm_hybrid_selected_image_count * n_rot * n_trans
         )
+        compact_table_capacity = (
+            coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates
+        )
+        dense_table_capacity = (
+            coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates
+        )
         full_stats["coarse_gaussian_gemm_hybrid"] = {
             "enabled": True,
             "default_enabled": False,
@@ -7295,6 +7312,23 @@ def _compute_k_class_significance_batched(
             "selected_exact_candidate_fraction": (
                 float(selected_candidate_count / full_selected_image_candidate_count)
                 if full_selected_image_candidate_count
+                else None
+            ),
+            "selected_score_table_capacity_candidates": int(
+                compact_table_capacity,
+            ),
+            "dense_global_score_table_capacity_candidates": int(
+                dense_table_capacity,
+            ),
+            "selected_score_table_capacity_bytes_f32": int(
+                compact_table_capacity * np.dtype(np.float32).itemsize,
+            ),
+            "dense_global_score_table_capacity_bytes_f32": int(
+                dense_table_capacity * np.dtype(np.float32).itemsize,
+            ),
+            "selected_to_dense_score_table_capacity_fraction": (
+                float(compact_table_capacity / dense_table_capacity)
+                if dense_table_capacity
                 else None
             ),
             "max_selected_blocks_per_image": int(
