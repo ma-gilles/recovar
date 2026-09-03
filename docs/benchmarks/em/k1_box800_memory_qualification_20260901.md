@@ -574,6 +574,29 @@ with SHA-256
 and
 `a748c022552f5b3e9bd34db2dd14a91dc37143097a074774024440006c78d72d`.
 
+The corrected trajectory subsequently saved matched numbered-iteration-14
+half maps and improved the direct unmasked crossing for both engines to shell
+262, or `2.4061066504 A`. Over the jointly resolved shells 1--261, direct
+cross-engine FSC-AUC is `0.9875827` merged and `0.9816448/0.9830144` for
+halves 1/2. The half-FSC RMSE is `0.0059807`, the half-band AUC difference is
+`0.0007075`, and the resolution ratio is exactly `1.0`; every predeclared
+primary gate passes. The fixed file-frame relation is the only transform and
+no operation is fitted. This is stronger intermediate evidence, not a final
+convergence claim.
+
+CPU job `13380640` completed `0:0` in 1:43 with exact
+`ReqTRES=AllocTRES=cpu=8,mem=80G,node=1,billing=20`, no GPU, and
+`OverSubscribe=OK`; batch MaxRSS was 47,355,856 KiB. The sealed root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it14_corrected_direct_fsc_20260903T0529`.
+Its result JSON, curve archive, report, accounting record, and verified
+manifest have SHA-256
+`eaae20795685282f13814a9ee9ccbeb41ec9c73a7eb52a0b57201f921c90881b`,
+`d99c2376f69e2a07f1c6b0270082a0079b4046742c1c821ff114cc00befdcbe6`,
+`645935b06b8ed85f9b4122459a146742c17b2d0add9696d54933d2a30b9338fd`,
+`1186946ca6752d1ff1208562cb16feec6f519a1bc0e6bc11e9b03cdd585a1df4`,
+and
+`5b141e0e92265881cd36744d9274c128c341ea9b02f29b4c0465843b70cf6fe9`.
+
 ## Live full-particle checkpoint-7 three-way audit
 
 A read-only three-way audit compares zero-based checkpoint `it006` (numbered

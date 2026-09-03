@@ -74,6 +74,26 @@ the result JSON and validated manifest have SHA-256
 and
 `a748c022552f5b3e9bd34db2dd14a91dc37143097a074774024440006c78d72d`.
 
+## Later corrected iteration-14 checkpoint
+
+The advancing corrected trajectory provides a later, independent matched
+checkpoint. At numbered iteration 14, both RECOVAR and RELION cross unmasked
+half-map FSC 0.143 at shell 262 (`2.4061066504 A`). The joint shells 1--261
+give direct cross-engine FSC-AUC `0.9875827` merged and
+`0.9816448/0.9830144` for halves 1/2, with half-FSC RMSE `0.0059807`,
+half-band AUC difference `0.0007075`, and resolution ratio `1.0`. No fitted
+operation was used and all frozen primary gates pass. This remains a
+diagnostic-only intermediate checkpoint until the trajectory reaches natural
+completion.
+
+CPU job `13380640` completed with exact requested/allocated
+`cpu=8,mem=80G,node=1,billing=20` and retained its complete, verified audit at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it14_corrected_direct_fsc_20260903T0529`.
+The metrics JSON and manifest SHA-256 values are
+`eaae20795685282f13814a9ee9ccbeb41ec9c73a7eb52a0b57201f921c90881b`
+and
+`5b141e0e92265881cd36744d9274c128c341ea9b02f29b4c0465843b70cf6fe9`.
+
 ## Evidence and reproduction
 
 The complete immutable, disposable audit root is

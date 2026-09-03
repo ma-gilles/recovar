@@ -448,6 +448,16 @@ phase-randomization policy, both engines cross corrected-masked FSC 0.143 at
 supporting-only evidence, as detailed in
 `k1_empiar10202_it011_direct_fsc_20260903.md`.
 
+The same corrected trajectory improves again at matched numbered iteration
+14: RECOVAR and RELION both cross unmasked half-map FSC 0.143 at shell 262
+(`2.40611 A`). Without any fitted operation, direct resolved-band
+RECOVAR-to-RELION FSC-AUC is `0.987583` merged and `0.981645/0.983014` for
+the two halves; the half-map curve RMSE is `0.005981`, and all frozen primary
+gates pass. CPU audit job `13380640` and its verified manifest are retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it14_corrected_direct_fsc_20260903T0529`.
+This remains an intermediate checkpoint; natural convergence is still the
+final admission boundary.
+
 ## EMPIAR-10345 native-grid K=4 checkpoint
 
 Three 10,000-particle, 256-grid independent-half K=4 seeds completed without a
