@@ -1050,7 +1050,7 @@ def run_em(
         # log/score buffers in float64.
         log_evidence_per_image = np.empty(n_images, dtype=np.float64)
         best_log_score_per_image = np.empty(n_images, dtype=np.float64)
-        max_posterior_per_image = np.empty(n_images, dtype=np.float32)
+        max_posterior_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
         rotation_posterior_sums = np.zeros(n_rot, dtype=np.float64)
 
     # Noise accumulation precomputation (RELION parity)

@@ -155,7 +155,7 @@ def _relion_optimizer_average_pmax(max_posterior_per_half, normalization_mass_pe
     for per-particle diagnostics.
     """
 
-    per_half = [np.asarray(pmax, dtype=np.float32).reshape(-1) for pmax in max_posterior_per_half]
+    per_half = [np.asarray(pmax).reshape(-1) for pmax in max_posterior_per_half]
     if not per_half:
         raise ValueError("RELION average Pmax requires at least one half-set")
     combined = np.concatenate(per_half, axis=0)
