@@ -35,11 +35,13 @@ CUDA_TOOLKIT=${CUDA_TOOLKIT:-/usr/local/cuda-13.1}
 CUSPARSE_LIBRARY=${CUSPARSE_LIBRARY:-${RELION_CUDA_TOOLKIT}/lib64/libcusparse.so.12}
 RELION_RUNTIME=${RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
 MPI_ROOT=${MPI_ROOT:-/usr/local/openmpi/cuda-12.6/4.1.6/gcc}
+CUDA_LIB_SOURCE=${RECOVAR_CUDA_LIB}
 PARTICLE_STACK=${VDAM_REPRESENTATION_PANEL_PARTICLE_STACK:-${DATA_DIR}/particles.128.mrcs}
 TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
 PROVENANCE=${ROOT}/provenance
 RUNTIME=${ROOT}/runtime
 PANEL=${ROOT}/panel
+CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
 
 on_error() {
   local status=$?
@@ -58,7 +60,7 @@ test -s "${CHECKPOINT}"
 test -s "${DATA_STAR}"
 test -d "${DATA_DIR}"
 test -s "${PARTICLE_STACK}"
-test -s "${RECOVAR_CUDA_LIB}"
+test -s "${CUDA_LIB_SOURCE}"
 test -d "${RECOVAR_RELION_BIND_BUILD_DIR}"
 test -s "${CUSPARSE_LIBRARY}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
@@ -82,9 +84,11 @@ source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
 vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
 selected_gpu_uuid=${VDAM_SELECTED_GPU_UUID}
 
-mkdir -p "${PROVENANCE}" "${RUNTIME}/jax_cache" "${RUNTIME}/tmp" \
+mkdir -p "${PROVENANCE}" "${RUNTIME}/cuda" "${RUNTIME}/jax_cache" "${RUNTIME}/tmp" \
   "${RUNTIME}/pixi_home" "${RUNTIME}/rattler_cache"
 touch "${ROOT}/SAFE_TO_DELETE" "${RUNTIME}/jax_cache/SAFE_TO_DELETE"
+cp --reflink=auto "${CUDA_LIB_SOURCE}" "${CUDA_BINARY}"
+test -s "${CUDA_BINARY}"
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE}/repo_head.txt"
 git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no \
   > "${PROVENANCE}/repo_status.txt"
@@ -94,7 +98,7 @@ printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/allocated_gpu_uui
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 sha256sum "${CHECKPOINT}" "${DATA_STAR}" "${PARTICLE_STACK}" \
-  "${RECOVAR_CUDA_LIB}" "${CUSPARSE_LIBRARY}" \
+  "${CUDA_LIB_SOURCE}" "${CUDA_BINARY}" "${CUSPARSE_LIBRARY}" \
   "${REPO_ROOT}/scripts/run_vdam_schedule_representation_panel.py" \
   "${REPO_ROOT}/scripts/analyze_vdam_schedule_representation_gate.py" \
   "${REPO_ROOT}/scripts/run_vdam_schedule_representation_panel.sbatch" \
@@ -107,6 +111,7 @@ export PYTHONUNBUFFERED=1
 export CUDA_VISIBLE_DEVICES=${selected_gpu_uuid}
 export CUDA_LAUNCH_BLOCKING=0
 export RECOVAR_EXPECTED_REPO_ROOT=${REPO_ROOT}
+export RECOVAR_CUDA_LIB=${CUDA_BINARY}
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export JAX_COMPILATION_CACHE_DIR=${RUNTIME}/jax_cache
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
