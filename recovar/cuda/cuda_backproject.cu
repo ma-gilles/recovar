@@ -10984,6 +10984,135 @@ ffi::Error RelionCubSortScanF32Impl(
     return ffi::Error::Success();
 }
 
+struct RelionPositiveF32
+{
+    __device__ __forceinline__ bool operator()(const float& value) const
+    {
+        return value > 0.0f;
+    }
+};
+
+cudaError_t relion_cub_positive_sort_scan_f32(
+    cudaStream_t stream,
+    const float* input,
+    float* sorted,
+    float* cumulative,
+    int count)
+{
+    float* filtered = nullptr;
+    int* selected_count_device = nullptr;
+    void* temporary = nullptr;
+    cudaError_t err = cudaSuccess;
+
+    do
+    {
+        err = cudaMalloc(reinterpret_cast<void**>(&filtered), count * sizeof(float));
+        if (err != cudaSuccess) break;
+        err = cudaMalloc(reinterpret_cast<void**>(&selected_count_device), sizeof(int));
+        if (err != cudaSuccess) break;
+
+        size_t select_bytes = 0;
+        size_t sort_bytes = 0;
+        size_t scan_bytes = 0;
+        err = cub::DeviceSelect::If(
+            nullptr, select_bytes, input, filtered, selected_count_device,
+            count, RelionPositiveF32(), stream);
+        if (err != cudaSuccess) break;
+        err = cub::DeviceRadixSort::SortKeys(
+            nullptr, sort_bytes, filtered, sorted, count,
+            0, sizeof(float) * 8, stream);
+        if (err != cudaSuccess) break;
+        err = relion_ampere_inclusive_sum_f32(
+            nullptr, scan_bytes, sorted, cumulative, count, stream);
+        if (err != cudaSuccess) break;
+
+        const size_t temporary_bytes = std::max<size_t>(
+            1, std::max(select_bytes, std::max(sort_bytes, scan_bytes)));
+        err = cudaMalloc(&temporary, temporary_bytes);
+        if (err != cudaSuccess) break;
+        err = cudaMemsetAsync(sorted, 0, count * sizeof(float), stream);
+        if (err != cudaSuccess) break;
+        err = cudaMemsetAsync(cumulative, 0, count * sizeof(float), stream);
+        if (err != cudaSuccess) break;
+
+        err = cub::DeviceSelect::If(
+            temporary, select_bytes, input, filtered, selected_count_device,
+            count, RelionPositiveF32(), stream);
+        if (err != cudaSuccess) break;
+        int selected_count = 0;
+        err = cudaMemcpyAsync(
+            &selected_count, selected_count_device, sizeof(int),
+            cudaMemcpyDeviceToHost, stream);
+        if (err != cudaSuccess) break;
+        err = cudaStreamSynchronize(stream);
+        if (err != cudaSuccess) break;
+        if (selected_count < 0 || selected_count > count)
+        {
+            err = cudaErrorInvalidValue;
+            break;
+        }
+        if (selected_count == 0) break;
+
+        const int output_offset = count - selected_count;
+        err = cub::DeviceRadixSort::SortKeys(
+            temporary, sort_bytes, filtered, sorted + output_offset,
+            selected_count, 0, sizeof(float) * 8, stream);
+        if (err != cudaSuccess) break;
+        err = relion_ampere_inclusive_sum_f32(
+            temporary, scan_bytes, sorted + output_offset,
+            cumulative + output_offset, selected_count, stream);
+    } while (false);
+
+    const cudaError_t temporary_free_error =
+        temporary == nullptr ? cudaSuccess : cudaFree(temporary);
+    const cudaError_t selected_count_free_error =
+        selected_count_device == nullptr ? cudaSuccess : cudaFree(selected_count_device);
+    const cudaError_t filtered_free_error =
+        filtered == nullptr ? cudaSuccess : cudaFree(filtered);
+    if (err != cudaSuccess) return err;
+    if (temporary_free_error != cudaSuccess) return temporary_free_error;
+    if (selected_count_free_error != cudaSuccess) return selected_count_free_error;
+    return filtered_free_error;
+}
+
+ffi::Error RelionCubPositiveSortScanF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer values,
+    ffi::Result<ffi::AnyBuffer> sorted,
+    ffi::Result<ffi::AnyBuffer> cumulative)
+{
+    if (values.element_type() != ffi::DataType::F32 ||
+        sorted->element_type() != ffi::DataType::F32 ||
+        cumulative->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionCubPositiveSortScanF32: input and outputs must be F32");
+
+    auto input_dims = values.dimensions();
+    auto sorted_dims = sorted->dimensions();
+    auto cumulative_dims = cumulative->dimensions();
+    if (input_dims.size() != 1 || input_dims[0] < 1 ||
+        sorted_dims.size() != 1 || sorted_dims[0] != input_dims[0] ||
+        cumulative_dims.size() != 1 || cumulative_dims[0] != input_dims[0])
+        return ffi::Error::InvalidArgument(
+            "RelionCubPositiveSortScanF32: input and outputs must have the same nonempty 1-D shape");
+
+    const int64_t count = input_dims[0];
+    if (count > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionCubPositiveSortScanF32: vector is too large for CUB's item count");
+
+    const cudaError_t err = relion_cub_positive_sort_scan_f32(
+        stream,
+        static_cast<const float*>(values.untyped_data()),
+        static_cast<float*>(sorted->untyped_data()),
+        static_cast<float*>(cumulative->untyped_data()),
+        static_cast<int>(count));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubPositiveSortScanF32: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
 __global__ void relion_exponentiate_f32_kernel(
     const float* values,
     const float* add,
@@ -11100,6 +11229,15 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionCubSortScanF32, RelionCubSortScanF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCubPositiveSortScanF32, RelionCubPositiveSortScanF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()

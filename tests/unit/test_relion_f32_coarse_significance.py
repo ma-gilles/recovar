@@ -1,5 +1,7 @@
 """RELION CUDA float32 coarse-posterior significance tests."""
 
+import inspect
+
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.oversampling import (
@@ -80,6 +82,32 @@ def test_relion_cuda_f32_coarse_posterior_matches_numpy_reference():
         # NumPy and XLA's expf/divide sequences can differ by two final
         # binary32 ULPs. Support, rank, and cutoff remain exact above.
         np.testing.assert_array_max_ulp(actual_value, expected_value, maxulp=2)
+
+
+def test_relion_cuda_f32_coarse_positive_filter_is_explicit_and_default_off():
+    signature = inspect.signature(relion_cuda_f32_coarse_posterior.__wrapped__)
+    assert signature.parameters["filter_positive_before_sort"].default is False
+
+    scores = np.asarray(
+        [[4.0, -40.0, -50.0, -100.0, -np.inf, 3.0]],
+        dtype=np.float32,
+    )
+    default = relion_cuda_f32_coarse_posterior(
+        scores,
+        adaptive_fraction=0.8,
+        max_significants=4,
+    )
+    positive_filter = relion_cuda_f32_coarse_posterior(
+        scores,
+        adaptive_fraction=0.8,
+        max_significants=4,
+        filter_positive_before_sort=True,
+    )
+    for default_value, filtered_value in zip(default, positive_filter):
+        np.testing.assert_array_equal(
+            np.asarray(default_value),
+            np.asarray(filtered_value),
+        )
 
 
 def test_relion_cuda_f32_coarse_posterior_expands_cutoff_ties_after_rank_cap():

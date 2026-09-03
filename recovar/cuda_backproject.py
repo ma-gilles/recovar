@@ -607,6 +607,9 @@ _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_RUNTIME_F32 = (
 _TARGET_RELION_EXPONENTIATE_F32 = "cuda_relion_exponentiate_f32"
 _TARGET_RELION_DIVIDE_F32 = "cuda_relion_divide_f32"
 _TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
+_TARGET_RELION_CUB_POSITIVE_SORT_SCAN_F32 = (
+    "cuda_relion_cub_positive_sort_scan_f32"
+)
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32 = "cuda_relion_wavg_rotation_atomic_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_add_f32"
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32 = (
@@ -742,6 +745,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_RELION_EXPONENTIATE_F32, "RelionExponentiateF32"),
     (_TARGET_RELION_DIVIDE_F32, "RelionDivideF32"),
     (_TARGET_RELION_CUB_SORT_SCAN_F32, "RelionCubSortScanF32"),
+    (
+        _TARGET_RELION_CUB_POSITIVE_SORT_SCAN_F32,
+        "RelionCubPositiveSortScanF32",
+    ),
     (
         _TARGET_RELION_WAVG_ROTATION_ATOMIC_F32,
         "RelionWavgRotationAtomicF32",
@@ -1475,6 +1482,39 @@ def relion_cub_sort_scan_f32(values: jax.Array) -> tuple[jax.Array, jax.Array]:
     output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
     return jax.ffi.ffi_call(
         _TARGET_RELION_CUB_SORT_SCAN_F32,
+        (output_type, output_type),
+        vmap_method="sequential",
+    )(values)
+
+
+@jax.jit
+def relion_cub_positive_sort_scan_f32(
+    values: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Select positive weights before RELION's CUB sort and scan.
+
+    RELION's coarse posterior passes only strictly positive weights to its
+    radix sort and inclusive scan. This explicit experimental primitive
+    mirrors that sequence while retaining fixed JAX output shapes: selected
+    values and their cumulative sums are right-aligned behind a zero prefix.
+    The existing :func:`relion_cub_sort_scan_f32` behavior is unchanged.
+    """
+
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 1 or values.shape[0] < 1:
+        raise ValueError(f"values must be a nonempty 1-D array, got {values.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION positive CUB sort/scan requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION positive CUB sort/scan was requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_CUB_POSITIVE_SORT_SCAN_F32,
         (output_type, output_type),
         vmap_method="sequential",
     )(values)

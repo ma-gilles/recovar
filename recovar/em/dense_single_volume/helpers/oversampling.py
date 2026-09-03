@@ -54,7 +54,12 @@ def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
 
 @partial(
     jax.jit,
-    static_argnames=("adaptive_fraction", "max_significants", "tie_score_ulps"),
+    static_argnames=(
+        "adaptive_fraction",
+        "max_significants",
+        "tie_score_ulps",
+        "filter_positive_before_sort",
+    ),
 )
 def relion_cuda_f32_coarse_posterior(
     scores_flat,
@@ -63,6 +68,7 @@ def relion_cuda_f32_coarse_posterior(
     max_significants=500,
     tie_score_ulps=0,
     min_diff2_offsets=None,
+    filter_positive_before_sort=False,
 ):
     """Reproduce RELION CUDA coarse-weight and significance arithmetic.
 
@@ -84,6 +90,11 @@ def relion_cuda_f32_coarse_posterior(
     ``tie_score_ulps`` optionally absorbs a small score-level atomic-rounding
     envelope below that exact cutoff. It is an explicit diagnostic control;
     production InitialModel keeps the exact threshold comparison.
+
+    ``filter_positive_before_sort`` explicitly selects RELION's native
+    positive-only CUB primitive. Its fixed-size sort/scan outputs are
+    right-aligned so all downstream indexing remains unchanged. It defaults
+    off until a separate GPU parity/performance gate accepts it.
     """
 
     tie_score_ulps = int(tie_score_ulps)
@@ -114,9 +125,12 @@ def relion_cuda_f32_coarse_posterior(
             jnp.where(finite, scores_f32, -jnp.inf),
             exponent_add,
         )
-        sorted_weights, cumulative = jax.vmap(
-            cuda_backproject.relion_cub_sort_scan_f32,
-        )(raw_weights)
+        sort_scan = (
+            cuda_backproject.relion_cub_positive_sort_scan_f32
+            if filter_positive_before_sort
+            else cuda_backproject.relion_cub_sort_scan_f32
+        )
+        sorted_weights, cumulative = jax.vmap(sort_scan)(raw_weights)
     else:
         shifted = jnp.where(
             finite,

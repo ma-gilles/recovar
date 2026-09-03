@@ -34,6 +34,18 @@ def test_relion_f32_posterior_cuda_source_pins_deployed_arithmetic():
     assert "typename cub::DeviceScanPolicy<float, cub::Sum>::Policy800" in source
     assert "#if CUB_VERSION < 300000" in source
 
+    positive_start = source.index("cudaError_t relion_cub_positive_sort_scan_f32")
+    positive_end = source.index(
+        "ffi::Error RelionCubPositiveSortScanF32Impl",
+        positive_start,
+    )
+    positive_sort_scan = source[positive_start:positive_end]
+    assert "cub::DeviceSelect::If(" in positive_sort_scan
+    assert "return value > 0.0f;" in source
+    assert "const int output_offset = count - selected_count;" in positive_sort_scan
+    assert "sorted + output_offset" in positive_sort_scan
+    assert "cumulative + output_offset" in positive_sort_scan
+
 
 @pytest.mark.gpu
 def test_relion_f32_posterior_cuda_primitives_preserve_float32_chain(
@@ -79,6 +91,72 @@ def test_relion_f32_posterior_cuda_primitives_preserve_float32_chain(
     )
 
 
+@pytest.mark.gpu
+def test_relion_positive_cub_sort_scan_matches_native_sized_input_and_right_aligns(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    values = np.asarray(
+        [0.0, 3.25, -0.0, 0.5, -1.0, 1.75, 0.25],
+        dtype=np.float32,
+    )
+    positive = values[values > np.float32(0.0)]
+    prefix_size = values.size - positive.size
+    with jax.default_device(gpu_device):
+        sorted_full, cumulative_full = (
+            cuda_backproject.relion_cub_positive_sort_scan_f32(
+                jnp.asarray(values),
+            )
+        )
+        sorted_native, cumulative_native = cuda_backproject.relion_cub_sort_scan_f32(
+            jnp.asarray(positive),
+        )
+
+    sorted_full = np.asarray(sorted_full)
+    cumulative_full = np.asarray(cumulative_full)
+    sorted_native = np.asarray(sorted_native)
+    cumulative_native = np.asarray(cumulative_native)
+    np.testing.assert_array_equal(sorted_full[:prefix_size], np.float32(0.0))
+    np.testing.assert_array_equal(cumulative_full[:prefix_size], np.float32(0.0))
+    np.testing.assert_array_equal(
+        sorted_full[prefix_size:].view(np.uint32),
+        sorted_native.view(np.uint32),
+    )
+    np.testing.assert_array_equal(
+        cumulative_full[prefix_size:].view(np.uint32),
+        cumulative_native.view(np.uint32),
+    )
+
+
+@pytest.mark.gpu
+def test_relion_positive_cub_sort_scan_zero_mass_is_all_zero(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    with jax.default_device(gpu_device):
+        sorted_weights, cumulative = (
+            cuda_backproject.relion_cub_positive_sort_scan_f32(
+                jnp.asarray([0.0, -0.0, 0.0], dtype=jnp.float32),
+            )
+        )
+    np.testing.assert_array_equal(np.asarray(sorted_weights), np.float32(0.0))
+    np.testing.assert_array_equal(np.asarray(cumulative), np.float32(0.0))
+
+
 def test_relion_f32_posterior_cuda_primitives_fail_closed_without_gpu(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
 
@@ -92,3 +170,5 @@ def test_relion_f32_posterior_cuda_primitives_fail_closed_without_gpu(monkeypatc
         cuda_backproject.relion_divide_f32.__wrapped__(values, scalar)
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
         cuda_backproject.relion_cub_sort_scan_f32.__wrapped__(values)
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_cub_positive_sort_scan_f32.__wrapped__(values)
