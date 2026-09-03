@@ -2107,13 +2107,29 @@ def _host_offload_array(value):
 
 
 def _snapshot_and_release_previous_k1_means(means):
-    """Copy K=1 half maps to host, then release their device references."""
+    """Transfer K=1 half maps to host, then clear their active references.
+
+    Box-scale reconstructions already return owning NumPy arrays.  Move those
+    arrays into the previous-reference slots instead of copying both full
+    volumes.  Device arrays still cross the host boundary through
+    ``_host_offload_array``; a shared cold-start buffer is transferred only
+    once.  Non-owning NumPy views retain the old copy behavior because their
+    backing owner is outside this transfer boundary.
+    """
 
     if len(means) != 2:
         raise ValueError(f"K=1 refinement requires exactly two half maps, got {len(means)}")
-    previous_means = [
-        np.asarray(mean).copy() if mean is not None else None for mean in means
-    ]
+    source_means = tuple(means)
+    previous_means = []
+    for half_index, mean in enumerate(source_means):
+        if mean is None:
+            previous_means.append(None)
+        elif half_index == 1 and mean is source_means[0]:
+            previous_means.append(previous_means[0])
+        elif isinstance(mean, np.ndarray) and not mean.flags.owndata:
+            previous_means.append(mean.copy())
+        else:
+            previous_means.append(_host_offload_array(mean))
     for half_index in range(2):
         means[half_index] = None
     gc.collect()
@@ -7717,9 +7733,9 @@ def _run_relion_iteration_loop(
             # code transfer only the slices it actually needs.
             previous_means = [jnp.asarray(mean) if mean is not None else None for mean in means]
         else:
-            # K=1 already owns exact host copies for later sign alignment.
-            # Release both device-backed references before FSC/tau2 work so
-            # reconstruction can reuse their two box-scale allocator bins.
+            # Transfer the K=1 references to host ownership for later sign
+            # alignment. Release both active references before FSC/tau2 work
+            # so reconstruction can reuse their box-scale allocator bins.
             previous_means = _snapshot_and_release_previous_k1_means(means)
 
         _t_unreg_first = time.time()
