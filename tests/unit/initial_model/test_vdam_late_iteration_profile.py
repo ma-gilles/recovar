@@ -448,7 +448,8 @@ def _complete_q32_profile_meta() -> dict:
         "effective_stable_flat_row_capacity": True,
         "requested_fused_pair_fine_score": False,
         "effective_fused_pair_fine_score": False,
-        "n_translations": 37,
+        "n_translations": 148,
+        "oversampling": 1,
         "halfset_0_profile_summary": local,
     }
 

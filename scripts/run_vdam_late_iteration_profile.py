@@ -349,6 +349,7 @@ def _validate_late_hybrid_image_batch(
     *,
     label: str,
     n_translations: int,
+    oversampling: int,
 ) -> dict[str, object]:
     """Prove late profiling used one real 200-image matrix-matrix batch."""
 
@@ -388,7 +389,14 @@ def _validate_late_hybrid_image_batch(
             raise RuntimeError(
                 f"{label} profile {name} has invalid certificate_chunk_count_per_batch"
             )
-        expected_streamed = 200 * chunk_rows * int(n_translations)
+        oversampling_factor = 4 ** int(oversampling)
+        if int(n_translations) % oversampling_factor:
+            raise RuntimeError(
+                f"{label} n_translations={n_translations} is not divisible by "
+                f"the oversampling factor {oversampling_factor}"
+            )
+        coarse_translation_count = int(n_translations) // oversampling_factor
+        expected_streamed = 200 * chunk_rows * coarse_translation_count
         if profile.get("streamed_certificate_candidate_count_at_effective_batch") != expected_streamed:
             raise RuntimeError(
                 f"{label} profile {name} has stale streamed certificate geometry"
@@ -396,6 +404,8 @@ def _validate_late_hybrid_image_batch(
         current.update(
             certificate_chunk_rows=chunk_rows,
             certificate_chunk_count_per_batch=chunk_count,
+            coarse_translation_count=coarse_translation_count,
+            oversampling_factor=oversampling_factor,
             streamed_certificate_candidate_count_at_effective_batch=expected_streamed,
         )
         observed[name] = current
@@ -485,10 +495,14 @@ def _validate_profile_execution_contract(
     n_translations = estep_meta.get("n_translations")
     if not isinstance(n_translations, int) or n_translations <= 0:
         raise RuntimeError("all_optimized_q32 metadata has invalid n_translations")
+    oversampling = estep_meta.get("oversampling")
+    if not isinstance(oversampling, int) or oversampling < 0:
+        raise RuntimeError("all_optimized_q32 metadata has invalid oversampling")
     image_batch = _validate_late_hybrid_image_batch(
         estep_meta,
         label="all_optimized_q32",
         n_translations=n_translations,
+        oversampling=oversampling,
     )
     rows = _validate_optimized_row_totals(
         estep_meta,
