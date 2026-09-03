@@ -103,6 +103,39 @@ def test_shell_fsc_identical_inputs_is_one() -> None:
     np.testing.assert_allclose(curve[np.isfinite(curve)], 1.0, rtol=0.0, atol=2.0e-7)
 
 
+@pytest.mark.parametrize("size", [15, 16])
+def test_shell_fsc_half_spectrum_matches_full_complex_fft(size: int) -> None:
+    rng = np.random.default_rng(10202 + size)
+    left = rng.standard_normal((size, size, size), dtype=np.float32)
+    right = rng.standard_normal((size, size, size), dtype=np.float32)
+    calculator = MODULE.ShellFscCalculator(size)
+
+    observed = calculator.curve_from_fourier(
+        calculator.fourier(left),
+        calculator.fourier(right),
+    )
+
+    frequencies = (np.fft.fftfreq(size) * size).astype(np.float32)
+    squared = frequencies[:, None] ** 2 + frequencies[None, :] ** 2
+    shells = np.empty((size, size, size), dtype=np.int16)
+    for first_axis_index, first_axis_frequency in enumerate(frequencies):
+        shells[first_axis_index] = np.rint(
+            np.sqrt(squared + first_axis_frequency * first_axis_frequency)
+        ).astype(np.int16)
+    left_full = np.fft.fftn(left)
+    right_full = np.fft.fftn(right)
+    numerator = np.bincount(
+        shells.reshape(-1),
+        weights=np.real(left_full * np.conj(right_full)).reshape(-1),
+    )
+    left_power = np.bincount(shells.reshape(-1), weights=(np.abs(left_full) ** 2).reshape(-1))
+    right_power = np.bincount(shells.reshape(-1), weights=(np.abs(right_full) ** 2).reshape(-1))
+    expected = numerator / np.sqrt(left_power * right_power)
+    expected = expected[: size // 2 - 1]
+
+    np.testing.assert_allclose(observed, expected, rtol=2.0e-6, atol=2.0e-7)
+
+
 def test_load_volume_accepts_structured_mrc_voxel_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "volume.mrc"
     path.touch()

@@ -262,41 +262,81 @@ def fit_proper_rigid_transform(
 
 
 class ShellFscCalculator:
-    """Memory-conscious signed shellwise FSC calculator for one cubic box."""
+    """Memory-bounded signed shellwise FSC calculator for one cubic box.
+
+    Real-valued maps have Hermitian Fourier transforms.  Retain only the
+    nonredundant last-axis half spectrum and weight its interior planes by
+    two when reducing shells.  The DC plane and, for an even box, the
+    Nyquist plane are self-conjugate and retain weight one.  This produces
+    the same shell sums as a full complex FFT while approximately halving
+    each transform's storage.
+    """
 
     def __init__(self, box_size: int):
         self.box_size = int(box_size)
         _require(self.box_size >= 8, "box size must be at least 8")
-        frequencies = (np.fft.fftfreq(self.box_size) * self.box_size).astype(np.float32)
-        xy_squared = frequencies[:, None] ** 2 + frequencies[None, :] ** 2
-        shells = np.empty((self.box_size, self.box_size, self.box_size), dtype=np.int16)
-        for z_index, z_frequency in enumerate(frequencies):
-            shells[z_index] = np.rint(np.sqrt(xy_squared + z_frequency * z_frequency)).astype(np.int16)
+        full_frequencies = (np.fft.fftfreq(self.box_size) * self.box_size).astype(np.float32)
+        half_frequencies = (np.fft.rfftfreq(self.box_size) * self.box_size).astype(np.float32)
+        first_two_squared = full_frequencies[:, None] ** 2 + full_frequencies[None, :] ** 2
+        shells = np.empty(
+            (self.box_size, self.box_size, half_frequencies.size),
+            dtype=np.int16,
+        )
+        for first_axis_index in range(self.box_size):
+            shells[first_axis_index] = np.rint(
+                np.sqrt(
+                    first_two_squared[first_axis_index, :, None]
+                    + half_frequencies[None, :] ** 2
+                )
+            ).astype(np.int16)
         self._shells = shells.reshape(-1)
+        self._spectrum_shape = shells.shape
+        self._last_weighted_plane = -1 if self.box_size % 2 == 0 else None
 
     def fourier(self, volume: np.ndarray) -> np.ndarray:
         array = np.asarray(volume, dtype=np.float32)
         _require(array.shape == (self.box_size,) * 3, f"unexpected FSC volume shape {array.shape}")
         _require(np.all(np.isfinite(array)), "FSC volume contains non-finite values")
-        return scipy_fft.fftn(array, workers=-1)
+        transformed = scipy_fft.rfftn(array, workers=-1)
+        _require(transformed.dtype == np.complex64, f"unexpected FSC transform dtype {transformed.dtype}")
+        return transformed
+
+    def _weighted_shell_sum(self, values: np.ndarray) -> np.ndarray:
+        weighted = np.asarray(values, dtype=np.float32)
+        _require(weighted.shape == self._spectrum_shape, "FSC half-spectrum shape changed")
+        # Callers pass disposable products/powers, so this in-place weighting
+        # avoids another box-scale allocation.
+        weighted[:, :, 1 : self._last_weighted_plane] *= np.float32(2.0)
+        return np.bincount(self._shells, weights=weighted.reshape(-1))
 
     def curve_from_fourier(self, lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
-        _require(lhs.shape == rhs.shape == (self.box_size,) * 3, "Fourier array shapes differ")
+        _require(lhs.shape == rhs.shape == self._spectrum_shape, "Fourier array shapes differ")
         product = lhs * np.conj(rhs)
-        numerator = np.bincount(self._shells, weights=np.real(product).reshape(-1))
-        lhs_power = np.bincount(self._shells, weights=(np.abs(lhs) ** 2).reshape(-1))
-        rhs_power = np.bincount(self._shells, weights=(np.abs(rhs) ** 2).reshape(-1))
+        numerator = self._weighted_shell_sum(np.real(product))
+        del product
+        lhs_absolute = np.abs(lhs)
+        np.square(lhs_absolute, out=lhs_absolute)
+        lhs_power = self._weighted_shell_sum(lhs_absolute)
+        del lhs_absolute
+        rhs_absolute = np.abs(rhs)
+        np.square(rhs_absolute, out=rhs_absolute)
+        rhs_power = self._weighted_shell_sum(rhs_absolute)
         denominator = np.sqrt(lhs_power * rhs_power)
         output = np.full(numerator.shape, np.nan, dtype=np.float64)
         np.divide(numerator, denominator, out=output, where=denominator > 0.0)
         return output[: self.box_size // 2 - 1]
 
     def curves(self, volumes: Mapping[str, np.ndarray], pairs: Mapping[str, tuple[str, str]]) -> dict[str, np.ndarray]:
-        transforms = {name: self.fourier(volume) for name, volume in volumes.items()}
-        return {
-            curve_name: self.curve_from_fourier(transforms[left], transforms[right])
-            for curve_name, (left, right) in pairs.items()
-        }
+        curves = {}
+        for curve_name, (left, right) in pairs.items():
+            # Deliberate recomputation bounds live transform storage to one
+            # pair.  This is preferable to retaining six box-scale spectra in
+            # the high-resolution real-data diagnostic.
+            left_transform = self.fourier(volumes[left])
+            right_transform = self.fourier(volumes[right])
+            curves[curve_name] = self.curve_from_fourier(left_transform, right_transform)
+            del left_transform, right_transform
+        return curves
 
 
 def construct_common_soft_mask(
