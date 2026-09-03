@@ -1,6 +1,6 @@
 # EMPIAR-10202 set-6 K=1 checkpoint equivalence
 
-This record compares the first six matching numbered checkpoints from two
+This record compares the first seven matching numbered checkpoints from two
 full-particle, box-800, I1 RECOVAR refinements.  It is an in-progress
 trajectory-equivalence gate, not a final RECOVAR-versus-RELION resolution
 result.  The control uses commit
@@ -28,7 +28,7 @@ mismatch.
 ## Completed checkpoint comparisons
 
 The checkpoint index below is zero-based; it corresponds to numbered
-iterations one through six in the refinement log.
+iterations one through seven in the refinement log.
 
 | Checkpoint | Audit job | Strict execution | Minimum pose agreement | FSC 0.5 / 0.143 shell, control = candidate | FSC RMSE | Minimum map correlation | Maximum map relative L2 |
 | ---: | ---: | --- | ---: | --- | ---: | ---: | ---: |
@@ -38,26 +38,30 @@ iterations one through six in the refinement log.
 | 3 | `13367158` | rejected | 0.9971818 | 102 / 157 | 2.27516e-4 | 0.9999988345090234 | 1.52466e-3 |
 | 4 | `13368412` | rejected | 0.9941666 | 102 / 156 | 3.95167e-4 | 0.9999974684818770 | 2.24688e-3 |
 | 5 | `13370903` | rejected | 0.9863023 | 149 / 181 | 3.82489e-4 | 0.9999868676649892 | 5.11901e-3 |
+| 6 | `13372565` | rejected | 0.9743086 | 150 / 183 | 1.89246e-3 | 0.9999485706015202 | 1.012996e-2 |
 
 All floating artifacts were finite.  Checkpoint 0 retained exact discrete
 execution state.  The later strict rejections are real: a small number of
 coarse and fine pose decisions diverged as floating-point perturbations
-accumulated.  Through checkpoint 5, however, both FSC thresholds cross at the
-same shell in the control and candidate.  At checkpoint 5, half-map
-correlations are `0.9999869` and `0.9999893`, relative L2 differences are
-`0.0051190` and `0.0046228`, the nonzero-shell FSC RMSE is `3.82489e-4`, and
-the maximum shellwise FSC difference is `0.00198059`.  This is strong positive
-evidence that compact batching has not degraded reconstruction quality through
-iteration 6, despite rejecting strict numerical trajectory identity.  It does
-not replace the final masked/unmasked half-map comparison after both
-trajectories complete.
+accumulated.  Through checkpoint 6, however, both FSC thresholds cross at the
+same shell in the control and candidate.  At checkpoint 6, half-map
+correlations are `0.9999486` and `0.9999625`, relative L2 differences are
+`0.0101300` and `0.0086531`, the nonzero-shell FSC RMSE is `0.00189246`, and
+the maximum shellwise FSC difference is `0.0334275`.  The largest
+floating-array relative L2 difference (`0.0621096`) is in the half-1 `Ft_y`
+accumulator, not a map.  This remains strong positive evidence that compact
+batching has not degraded reconstruction quality through iteration 7, despite
+rejecting strict numerical trajectory identity.  The growing drift is retained
+in the ledger and does not replace the final masked/unmasked half-map
+comparison after both trajectories complete.
 
-The six authoritative audit jobs requested and received exactly
+The seven authoritative audit jobs requested and received exactly
 `cpu=4,mem=64G,node=1,billing=16`, ran on the `cpu` partition, and completed
-`0:0` in 2:07, 3:15, 3:51, 3:39, 4:48, and 5:26.  CPU placement is
+`0:0` in 2:07, 3:15, 3:51, 3:39, 4:48, 5:26, and 3:09.  CPU placement is
 intentional: the auditor memory-maps and streams completed arrays and performs
 no refinement or GPU calculation.  Job `13370903` used 22,111,680 KiB batch
-MaxRSS and exact requested/allocated resources on `della-i13n10`.
+MaxRSS on `della-i13n10`; job `13372565` used 8,063,012 KiB and exact
+requested/allocated resources on `della-h16n18`.
 
 The unchanged pre-fix checkpoint-5 audit job `13370307` exited before the
 comparison because the original harness treated the legitimate matching
@@ -92,6 +96,17 @@ It carries a `SAFE_TO_DELETE` marker.  The committed auditor SHA-256 is
 the Slurm launcher SHA-256 is
 `d17143309cd68516441cf2daadc526bebbccfcd12593d092157115d38f751dd2`.
 
+The authoritative checkpoint-6 audit root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_it006_committed_audit_47f8fe79d_20260903`.
+Its result is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_it006_committed_audit_47f8fe79d_20260903/outputs/iteration-006-committed-equivalence.json`,
+SHA-256
+`b286db9ac8a8c0ac3775745a9c28554ff148199f38648bd40a829949aa34305e`.
+It carries a `SAFE_TO_DELETE` marker.  The Slurm launcher SHA-256 is
+`58ff042385a6aab87473ebc664e0cd2127d5e03d05bed780e9d3981f765e60f8`;
+the stable candidate file-ledger SHA-256 is
+`63b78ee0a48b1ab9728fcafc8807d772418af5a99a79ca3d8307af1a5b9b72e9`.
+
 The immutable input roots are:
 
 - control intermediates:
@@ -106,9 +121,9 @@ cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cb
 .pixi/envs/default/bin/python scripts/audit_em_k1_checkpoint_equivalence.py \
   --baseline-intermediates /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/outputs/intermediates \
   --candidate-intermediates /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_compact_8069ac015_20260902/outputs/intermediates \
-  --iteration-zero-based 5 \
+  --iteration-zero-based 6 \
   --max-relative-l2 1e-6 \
-  --output /absolute/new/output/iteration-005-equivalence.json
+  --output /absolute/new/output/iteration-006-equivalence.json
 ```
 
 Exit status 0 means strict execution equivalence was accepted; status 2 means
