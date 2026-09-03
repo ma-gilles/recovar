@@ -204,6 +204,21 @@ The result JSON and manifest SHA-256 values are
 and
 `9962a2000bf8f86e63c01131e5174aae7ef5a061f2f9c7e9a967d4afcaeddf89`.
 
+The corrected trajectory then reaches matched numbered iteration 16. Both
+RECOVAR and RELION cross direct unmasked half-map FSC 0.143 at shell 281
+(`2.2434161651 A`). Resolved shells 1--280 have merged/half-1/half-2
+cross-engine FSC-AUC `0.9858187/0.9796343/0.9803080`; the half-FSC RMSE is
+`0.0051946`, the half-band AUC difference is `0.0005905`, and all primary
+gates pass without a fitted operation. This is still an intermediate
+checkpoint. CPU job `13381233` used exact
+`ReqTRES=AllocTRES=cpu=8,mem=80G,node=1,billing=20`; its result JSON and
+verified manifest SHA-256 values are
+`c78932d1de8c6d0295820570c3e571365841e80178cabb9bbdd84e0f3106343c`
+and
+`bdb19f45bbf1ce1cea3382855184893fb509ee196315e23fa34e73c9e1f8229e`.
+The complete record is retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_direct_fsc_20260903T100833Z`.
+
 At corrected full-particle checkpoint `it006` (numbered iteration 7), the
 release, compact, and no-padding trajectories retain identical saved FSC
 crossings (0.5 at shell 150; 0.143 at shell 183). Corrected-versus-release map

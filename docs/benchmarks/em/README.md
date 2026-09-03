@@ -464,6 +464,15 @@ resolved-band masked FSC-AUC delta is `0.001808` and curve RMSE is `0.007183`.
 This supporting-only check uses the exact sealed mask and phase-randomization
 policy and cannot rescue or replace the direct unmasked pass.
 
+At matched numbered iteration 16, both engines improve again and cross direct
+unmasked half-map FSC 0.143 at shell 281 (`2.24342 A`). The jointly resolved
+band has merged/half-1/half-2 cross-engine FSC-AUC
+`0.985819/0.979634/0.980308`; half-FSC RMSE is `0.005195`, the half-band AUC
+difference is `0.000590`, and every frozen primary gate passes without a
+fitted operation. CPU job `13381233` and its verified manifest are retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_direct_fsc_20260903T100833Z`.
+This remains intermediate evidence pending natural convergence.
+
 ## EMPIAR-10345 native-grid K=4 checkpoint
 
 Three 10,000-particle, 256-grid independent-half K=4 seeds completed without a

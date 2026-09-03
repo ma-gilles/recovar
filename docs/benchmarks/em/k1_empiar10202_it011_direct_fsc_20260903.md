@@ -105,6 +105,23 @@ its result JSON and verified manifest have SHA-256
 and
 `9962a2000bf8f86e63c01131e5174aae7ef5a061f2f9c7e9a967d4afcaeddf89`.
 
+## Later corrected iteration-16 checkpoint
+
+At numbered iteration 16, both RECOVAR and RELION cross unmasked half-map FSC
+0.143 at shell 281 (`2.2434161651 A`). Joint shells 1--280 have direct
+cross-engine FSC-AUC `0.9858187` merged and `0.9796343/0.9803080` for halves
+1/2. Half-FSC RMSE is `0.0051946`, half-band AUC differs by `0.0005905`, and
+the resolution ratio is `1.0`. All frozen primary gates pass with no fitted
+operation. Natural convergence remains the final admission boundary.
+
+CPU job `13381233` completed with exact requested/allocated
+`cpu=8,mem=80G,node=1,billing=20`. Its complete verified record is at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_direct_fsc_20260903T100833Z`;
+the metrics JSON and manifest SHA-256 values are
+`c78932d1de8c6d0295820570c3e571365841e80178cabb9bbdd84e0f3106343c`
+and
+`bdb19f45bbf1ce1cea3382855184893fb509ee196315e23fa34e73c9e1f8229e`.
+
 ## Evidence and reproduction
 
 The complete immutable, disposable audit root is

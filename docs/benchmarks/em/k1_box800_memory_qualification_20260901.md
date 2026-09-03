@@ -619,6 +619,27 @@ SHA-256
 and
 `9962a2000bf8f86e63c01131e5174aae7ef5a061f2f9c7e9a967d4afcaeddf89`.
 
+The next sealed direct checkpoint, numbered iteration 16, improves the
+three-shell-sustained 0.143 crossing for both engines to shell 281, or
+`2.2434161651 A`. Over jointly resolved shells 1--280, merged and per-half
+cross-engine FSC-AUC values are `0.9858187` and `0.9796343/0.9803080`.
+Half-FSC RMSE is `0.0051946`, half-band AUC differs by `0.0005905`, resolution
+ratio is exactly `1.0`, and every predeclared primary gate passes with no
+fitted alignment. It is a numbered intermediate checkpoint, not a natural-
+convergence claim.
+
+CPU job `13381233` completed `0:0` in 1:38 with exact
+`ReqTRES=AllocTRES=cpu=8,mem=80G,node=1,billing=20`, no GPU, and
+`OverSubscribe=OK`; batch MaxRSS was 47,356,988 KiB. The sealed record at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_direct_fsc_20260903T100833Z`
+has result JSON, curves, report, accounting, and verified manifest SHA-256
+`c78932d1de8c6d0295820570c3e571365841e80178cabb9bbdd84e0f3106343c`,
+`1fe72a98203b89b7343b994d64a2bd1252c1ea5f8d79f1630277904873353e41`,
+`bec84401ed2031764909885766ba46c3936942afeb58957c57f1d19ec7409b1a`,
+`0afef005af4de6d67e926d103c4b1c0dacfb9070653eb8629df5d1ed97c0bab7`,
+and
+`bdb19f45bbf1ce1cea3382855184893fb509ee196315e23fa34e73c9e1f8229e`.
+
 ## Live full-particle checkpoint-7 three-way audit
 
 A read-only three-way audit compares zero-based checkpoint `it006` (numbered
