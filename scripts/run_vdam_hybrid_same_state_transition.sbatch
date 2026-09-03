@@ -303,7 +303,8 @@ if [[ "${CANDIDATE_MODE}" == all_optimized ]]; then
        | .execution_contract.all_optimized_profile_exact == true
          and .execution_contract.all_optimized.enabled == false
          and (.execution_contract.all_optimized.enabled_seams | length) == 0
-         and (.execution_contract.all_optimized.disabled_seams | length) == 9
+         and (.execution_contract.all_optimized.disabled_seams | length) == 10
+         and .execution_contract.all_optimized.packed_final_noise.enabled == false
          and .stable_fourier_window_contract.enabled == false
          and .stable_flat_capacity_contract == null' \
       "${SCIENCE}/report.json" > /dev/null
@@ -313,8 +314,10 @@ if [[ "${CANDIDATE_MODE}" == all_optimized ]]; then
       '.arms[$arm]
        | .execution_contract.all_optimized_profile_exact == true
          and .execution_contract.all_optimized.enabled == true
-         and (.execution_contract.all_optimized.enabled_seams | length) == 9
+         and (.execution_contract.all_optimized.enabled_seams | length) == 10
          and (.execution_contract.all_optimized.disabled_seams | length) == 0
+         and .execution_contract.all_optimized.packed_final_noise.enabled == true
+         and ([.execution_contract.all_optimized.packed_final_noise.profiles[].sum_packed_final_noise_rows] | all(. > 0))
          and (.execution_contract.all_optimized.local_profiles | length) > 0
          and .stable_fourier_window_contract.enabled == true
          and .stable_flat_capacity_contract.enabled == true
@@ -333,6 +336,40 @@ if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
     true
   test "$(jq -r '.arms.direct_oracle.backend_mode' "${SCIENCE}/report.json")" = \
     direct
+  for arm in direct_oracle; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm].execution_contract
+      | .profile_checked == true
+        and .packed_final_noise.backend_mode == "direct"
+        and .packed_final_noise.enabled == false
+        and .packed_final_noise.profile_exact == true
+        and ([.packed_final_noise.profiles[].sum_packed_final_noise_rows] | all(. == 0))
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in \
+    abba_packed_deferred_1 abba_packed_deferred_2 \
+    baab_packed_deferred_1 baab_packed_deferred_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm].execution_contract
+      | .profile_checked == true
+        and .packed_final_noise.backend_mode == "packed_deferred"
+        and .packed_final_noise.enabled == false
+        and .packed_final_noise.profile_exact == true
+        and ([.packed_final_noise.profiles[].sum_packed_final_noise_rows] | all(. == 0))
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in \
+    abba_packed_final_noise_1 abba_packed_final_noise_2 \
+    baab_packed_final_noise_1 baab_packed_final_noise_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm].execution_contract
+      | .profile_checked == true
+        and .packed_final_noise.backend_mode == "packed_final_noise"
+        and .packed_final_noise.enabled == true
+        and .packed_final_noise.profile_exact == true
+        and ([.packed_final_noise.profiles[].sum_packed_final_noise_rows] | all(. > 0))
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
   for oracle_pair in \
     direct_oracle__vs__abba_packed_deferred_1 \
     direct_oracle__vs__abba_packed_final_noise_1; do

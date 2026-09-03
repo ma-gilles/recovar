@@ -257,6 +257,7 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
             values[STABLE_FLAT_CAPACITY_ENVIRONMENT] = "1"
             values[PACKED_PROJECTION_ENVIRONMENT] = "1"
             values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+            values[PACKED_FINAL_NOISE_ENVIRONMENT] = "1"
         else:
             raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
     return values
@@ -445,6 +446,7 @@ ALL_OPTIMIZED_SEAMS = (
     "packed_vdam_deferral",
     "stable_fourier_window_shapes",
     "stable_flat_row_capacity",
+    "packed_final_noise",
 )
 
 
@@ -510,6 +512,10 @@ def _validate_all_optimized_profiles(
             enabled=True,
             label=label,
         )
+    packed_final_noise = _validate_packed_final_noise_profiles(
+        estep_meta,
+        backend_mode="packed_final_noise" if enabled else "direct",
+    )
     return {
         "enabled": bool(enabled),
         "enabled_seams": list(ALL_OPTIMIZED_SEAMS if enabled else ()),
@@ -517,6 +523,7 @@ def _validate_all_optimized_profiles(
         "profile_exact": True,
         "stable_fourier": stable_fourier,
         "stable_flat_capacity": stable_flat,
+        "packed_final_noise": packed_final_noise,
         "local_profiles": local_profiles,
     }
 
@@ -535,6 +542,98 @@ def _coarse_hybrid_profiles(meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _validate_packed_final_noise_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    backend_mode: str,
+) -> dict[str, Any]:
+    """Prove each local engine profile executed the named noise backend."""
+
+    expected_by_backend = {
+        "direct": {
+            "flat_local_rows_enabled": False,
+            "packed_local_projection_enabled": False,
+            "defer_packed_vdam_enabled": False,
+            "packed_vdam_reuses_flat_score_projection": False,
+            "packed_final_noise_enabled": False,
+            "packed_vdam_avoids_dense_noise_rows": False,
+            "packed_final_noise_preserves_dense_scalar_order": False,
+        },
+        "packed_deferred": {
+            "flat_local_rows_enabled": True,
+            "packed_local_projection_enabled": True,
+            "defer_packed_vdam_enabled": True,
+            "packed_vdam_reuses_flat_score_projection": True,
+            "packed_final_noise_enabled": False,
+            "packed_vdam_avoids_dense_noise_rows": False,
+            "packed_final_noise_preserves_dense_scalar_order": False,
+        },
+        "packed_final_noise": {
+            "flat_local_rows_enabled": True,
+            "packed_local_projection_enabled": True,
+            "defer_packed_vdam_enabled": True,
+            "packed_vdam_reuses_flat_score_projection": True,
+            "packed_final_noise_enabled": True,
+            "packed_vdam_avoids_dense_noise_rows": True,
+            "packed_final_noise_preserves_dense_scalar_order": True,
+        },
+    }
+    try:
+        expected_flags = expected_by_backend[backend_mode]
+    except KeyError as error:
+        raise RuntimeError(
+            f"unsupported packed-final gate backend {backend_mode!r}",
+        ) from error
+
+    profiles: dict[str, Any] = {}
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict) or "chunk_padded_rotations" not in value:
+            continue
+        missing = [
+            field
+            for field in (*expected_flags, "sum_packed_final_noise_rows")
+            if field not in value
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{backend_mode} profile {key} omitted packed-noise fields {missing}",
+            )
+        observed_flags = {
+            field: bool(value[field]) for field in expected_flags
+        }
+        for field, expected in expected_flags.items():
+            if observed_flags[field] is not expected:
+                raise RuntimeError(
+                    f"{backend_mode} profile {key} reported {field}="
+                    f"{observed_flags[field]!r}, expected {expected!r}",
+                )
+        packed_rows = int(value["sum_packed_final_noise_rows"])
+        if backend_mode == "packed_final_noise":
+            if packed_rows <= 0:
+                raise RuntimeError(
+                    f"{backend_mode} profile {key} reported no packed final-noise rows",
+                )
+        elif packed_rows != 0:
+            raise RuntimeError(
+                f"{backend_mode} profile {key} unexpectedly reported "
+                f"{packed_rows} packed final-noise rows",
+            )
+        profiles[key] = {
+            **observed_flags,
+            "sum_packed_final_noise_rows": packed_rows,
+        }
+    if not profiles:
+        raise RuntimeError(
+            f"{backend_mode} arm has no local engine profile to validate",
+        )
+    return {
+        "backend_mode": backend_mode,
+        "enabled": backend_mode == "packed_final_noise",
+        "profile_exact": True,
+        "profiles": profiles,
+    }
+
+
 def _validate_arm_execution_contract(
     *,
     candidate_mode: str,
@@ -542,6 +641,7 @@ def _validate_arm_execution_contract(
     requested_environment: dict[str, str],
     effective_environment: dict[str, str | None],
     estep_meta: dict[str, Any],
+    backend_mode: str | None = None,
 ) -> dict[str, Any]:
     """Fail closed when a compact arm does not execute the requested profile."""
 
@@ -550,13 +650,25 @@ def _validate_arm_execution_contract(
             "same-state arm environment differs from its explicit request: "
             f"requested={requested_environment}, effective={effective_environment}",
         )
+    check_compact_profile = _candidate_uses_compact_posterior(candidate_mode)
+    check_packed_final_profile = candidate_mode == "packed_final_noise"
     contract: dict[str, Any] = {
         "requested_environment": dict(requested_environment),
         "effective_environment": dict(effective_environment),
         "environment_exact": True,
-        "profile_checked": _candidate_uses_compact_posterior(candidate_mode),
+        "profile_checked": check_compact_profile or check_packed_final_profile,
     }
-    if not _candidate_uses_compact_posterior(candidate_mode):
+    if check_packed_final_profile:
+        resolved_backend_mode = (
+            backend_mode
+            if backend_mode is not None
+            else candidate_mode if candidate_enabled else "direct"
+        )
+        contract["packed_final_noise"] = _validate_packed_final_noise_profiles(
+            estep_meta,
+            backend_mode=resolved_backend_mode,
+        )
+    if not check_compact_profile:
         return contract
 
     profiles = _coarse_hybrid_profiles(estep_meta)
@@ -1242,6 +1354,7 @@ def _run_transition_arm(
         requested_environment=requested_environment,
         effective_environment=effective_environment,
         estep_meta=captured["estep_meta"],
+        backend_mode=resolved_backend_mode,
     )
     if candidate_mode == "all_optimized":
         all_optimized_contract = _validate_all_optimized_profiles(

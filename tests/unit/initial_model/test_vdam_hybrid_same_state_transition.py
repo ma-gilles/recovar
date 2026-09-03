@@ -460,6 +460,10 @@ def _all_optimized_estep_meta(*, enabled: bool) -> dict:
         "packed_local_projection_enabled": enabled,
         "defer_packed_vdam_enabled": enabled,
         "packed_vdam_reuses_flat_score_projection": enabled,
+        "packed_final_noise_enabled": enabled,
+        "packed_vdam_avoids_dense_noise_rows": enabled,
+        "packed_final_noise_preserves_dense_scalar_order": enabled,
+        "sum_packed_final_noise_rows": 800 if enabled else 0,
         "stable_fourier_window_shapes": enabled,
         "logical_current_size": 84,
         "physical_current_size": physical_size,
@@ -507,6 +511,7 @@ def test_all_optimized_execution_contract_proves_every_candidate_seam() -> None:
     assert composed["disabled_seams"] == []
     assert composed["stable_fourier"]["enabled"] is True
     assert composed["stable_flat_capacity"]["strict_reduction_count"] == 0
+    assert composed["packed_final_noise"]["enabled"] is True
 
 
 def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None:
@@ -533,6 +538,7 @@ def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None
     assert composed["disabled_seams"] == list(runner.ALL_OPTIMIZED_SEAMS)
     assert composed["stable_fourier"]["enabled"] is False
     assert composed["stable_flat_capacity"] is None
+    assert composed["packed_final_noise"]["enabled"] is False
 
 
 @pytest.mark.parametrize(
@@ -543,6 +549,9 @@ def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None
         "packed_local_projection_enabled",
         "defer_packed_vdam_enabled",
         "packed_vdam_reuses_flat_score_projection",
+        "packed_final_noise_enabled",
+        "packed_vdam_avoids_dense_noise_rows",
+        "packed_final_noise_preserves_dense_scalar_order",
         "stable_fourier_window_shapes",
     ],
 )
@@ -833,6 +842,96 @@ def test_same_state_incremental_gate_is_mirrored_repeated_and_backend_scoped() -
     assert ("direct_oracle", "abba_packed_final_noise_1") in pairs
 
 
+def _packed_final_noise_estep_meta(backend_mode: str) -> dict:
+    enabled = backend_mode == "packed_final_noise"
+    packed_deferred = backend_mode in {"packed_deferred", "packed_final_noise"}
+    return {
+        "halfset_0_profile_summary": {
+            "chunk_padded_rotations": [13_824],
+            "flat_local_rows_enabled": packed_deferred,
+            "packed_local_projection_enabled": packed_deferred,
+            "defer_packed_vdam_enabled": packed_deferred,
+            "packed_vdam_reuses_flat_score_projection": packed_deferred,
+            "packed_final_noise_enabled": enabled,
+            "packed_vdam_avoids_dense_noise_rows": enabled,
+            "packed_final_noise_preserves_dense_scalar_order": enabled,
+            "sum_packed_final_noise_rows": 800 if enabled else 0,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "backend_mode",
+    ["direct", "packed_deferred", "packed_final_noise"],
+)
+def test_packed_final_noise_gate_proves_each_named_backend_profile(
+    backend_mode: str,
+) -> None:
+    requested = runner._candidate_environment(
+        backend_mode if backend_mode != "direct" else "packed_final_noise",
+        enabled=backend_mode != "direct",
+    )
+    contract = runner._validate_arm_execution_contract(
+        candidate_mode="packed_final_noise",
+        candidate_enabled=backend_mode == "packed_final_noise",
+        requested_environment=requested,
+        effective_environment=dict(requested),
+        estep_meta=_packed_final_noise_estep_meta(backend_mode),
+        backend_mode=backend_mode,
+    )
+
+    assert contract["profile_checked"] is True
+    assert contract["packed_final_noise"]["backend_mode"] == backend_mode
+    assert contract["packed_final_noise"]["enabled"] is (
+        backend_mode == "packed_final_noise"
+    )
+    assert contract["packed_final_noise"]["profile_exact"] is True
+
+
+@pytest.mark.parametrize(
+    ("declared_backend", "actual_backend", "match"),
+    [
+        ("packed_final_noise", "packed_deferred", "packed_final_noise_enabled"),
+        ("packed_deferred", "direct", "flat_local_rows_enabled"),
+        ("direct", "packed_deferred", "flat_local_rows_enabled"),
+    ],
+)
+def test_packed_final_noise_gate_rejects_mislabeled_backend_profile(
+    declared_backend: str,
+    actual_backend: str,
+    match: str,
+) -> None:
+    requested = runner._candidate_environment(
+        declared_backend if declared_backend != "direct" else "packed_final_noise",
+        enabled=declared_backend != "direct",
+    )
+    with pytest.raises(RuntimeError, match=match):
+        runner._validate_arm_execution_contract(
+            candidate_mode="packed_final_noise",
+            candidate_enabled=declared_backend == "packed_final_noise",
+            requested_environment=requested,
+            effective_environment=dict(requested),
+            estep_meta=_packed_final_noise_estep_meta(actual_backend),
+            backend_mode=declared_backend,
+        )
+
+
+def test_packed_final_noise_gate_requires_observed_final_rows() -> None:
+    requested = runner._candidate_environment("packed_final_noise", enabled=True)
+    meta = _packed_final_noise_estep_meta("packed_final_noise")
+    meta["halfset_0_profile_summary"]["sum_packed_final_noise_rows"] = 0
+
+    with pytest.raises(RuntimeError, match="no packed final-noise rows"):
+        runner._validate_arm_execution_contract(
+            candidate_mode="packed_final_noise",
+            candidate_enabled=True,
+            requested_environment=requested,
+            effective_environment=dict(requested),
+            estep_meta=meta,
+            backend_mode="packed_final_noise",
+        )
+
+
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     source = SCRIPT.read_text()
     sbatch = RUNNER.read_text()
@@ -897,3 +996,7 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "del warm\n            gc.collect()" in source
     assert "direct_oracle__vs__abba_packed_deferred_1" in sbatch
     assert "direct_oracle__vs__abba_packed_final_noise_1" in sbatch
+    assert '.packed_final_noise.backend_mode == "direct"' in sbatch
+    assert '.packed_final_noise.backend_mode == "packed_deferred"' in sbatch
+    assert '.packed_final_noise.backend_mode == "packed_final_noise"' in sbatch
+    assert "sum_packed_final_noise_rows] | all(. > 0)" in sbatch
