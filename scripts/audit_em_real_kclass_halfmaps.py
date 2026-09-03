@@ -37,6 +37,8 @@ from scripts.collect_em_k1_science_diagnostics import (
 SCHEMA = "recovar.em_real_kclass_independent_halfmap_audit.v3"
 MANIFEST_SCHEMA = "recovar.em_real_kclass_independent_halfmap_submission.v2"
 ANALYSIS_POLICY_SCHEMA = "recovar.em_real_kclass_halfmap_analysis_policy.v1"
+REFERENCE_DERIVATION_SCHEMA = "recovar.real_k4_reference_derivation.v1"
+FIXTURE_DERIVATION_SCHEMA_10073 = "recovar.real_k4_10073_fixture.v1"
 N_CLASSES = 4
 EXPECTED_THRESHOLDS = {
     "fsc_threshold": 1.0 / 7.0,
@@ -60,6 +62,31 @@ RELION_MAP_RE = re.compile(r"^run_it(?P<iteration>\d{3})_class(?P<class_id>\d{3}
 RECOVAR_MAP_RE = re.compile(
     r"^it(?P<iteration>\d{3})_half(?P<replica>[12])_class(?P<class_id>\d+)_reg\.mrc$"
 )
+EXPECTED_10073_REFERENCE_SOURCE_HASHES = {
+    "5add97a9df6c12d922d5d7747229968de8662a98a9fd227debefabc997aaff4c",
+    "3c4a75c9a76936466696b6c56d502bd031fcd7cf4c634addbf81dc2e95ee1fb1",
+    "21e97f5f9e144e68f22a936083194b3292925298c569d7ceeac02b03871e6a48",
+    "8d33783d95befad4ea61452ad26c23fa1663a87d09f0902c156070ad97bc7fb2",
+}
+EXPECTED_10073_REFERENCE_GATES = {
+    "max_out_of_band_energy_fraction": 1.0e-10,
+    "max_out_of_band_peak_ratio": 1.0e-5,
+    "max_pairwise_correlation": 0.98,
+    "max_pairwise_fsc_auc": 0.97,
+    "diversity_first_shell": 1,
+    "diversity_last_shell": 16,
+}
+EXPECTED_10073_SOURCE_INDICES_BYTES_SHA256 = (
+    "3c0cb73a219a75af337f96180b693d781bd1e9395a0323c083f04c617c2bf006"
+)
+EXPECTED_10073_RANDOM_SUBSETS_BYTES_SHA256 = (
+    "9fc9212bc4b845d9c9104933533f98c8ba264825bd40de2f7d8ad97390f6ec33"
+)
+EXPECTED_10073_FIXTURE_INPUT_HASHES = {
+    "canonical_particle_stack": "d0d8a932ad76d228599fe622aa2291f613c108338007134b62226077acb6e2c9",
+    "canonical_poses_pkl": "992d7496bd340f8c1974afd17201014788bf90492b5826770dd2dfe013e7073d",
+    "canonical_ctf_pkl": "6e20b1397669dfda6c54bede2744af64354bc9e4be894ada0a034b119f57908c",
+}
 
 
 class AuditError(RuntimeError):
@@ -150,6 +177,224 @@ def validate_analysis_policy(
     }
     _require(observed == expected, "audit CLI analysis policy differs from frozen manifest policy")
     return expected
+
+
+def validate_reference_derivation(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Bind the semantic reference gates to the hashed derivation report."""
+
+    if "reference_derivation" not in manifest and manifest.get("dataset") != "EMPIAR-10073":
+        return {"status": "not_recorded_legacy_manifest", "required": False}
+    records = [
+        row
+        for row in manifest.get("input_artifacts", [])
+        if row.get("role") == "reference_derivation_report"
+    ]
+    _require(len(records) == 1, "manifest must seal exactly one reference derivation report")
+    report_path = Path(records[0]["path"])
+    _require(report_path.is_file(), f"missing reference derivation report: {report_path}")
+    report = json.loads(report_path.read_text())
+    _require(report == manifest.get("reference_derivation"), "embedded reference derivation changed")
+    _require(report.get("schema") == REFERENCE_DERIVATION_SCHEMA, "reference derivation schema changed")
+    _require(report.get("source") == manifest.get("source"), "reference derivation source changed")
+    _require(
+        report.get("derivation", {}).get("raw_source_maps_passed_to_engines") is False,
+        "raw high-frequency reference maps were passed to an engine",
+    )
+    classes = report.get("classes")
+    _require(isinstance(classes, list) and len(classes) == N_CLASSES, "reference class count changed")
+    _require(
+        [int(row["class_id"]) for row in classes] == list(range(1, N_CLASSES + 1)),
+        "reference classes are not ordered 1..4",
+    )
+    _require(
+        all(row.get("intended_reader_roundtrip_exact") is True for row in classes),
+        "a prepared reference failed its intended-reader round trip",
+    )
+    recovar_hashes = {str(row["derived_recovar"]["sha256"]) for row in classes}
+    relion_hashes = {str(row["derived_relion"]["sha256"]) for row in classes}
+    _require(
+        len(recovar_hashes) == N_CLASSES and len(relion_hashes) == N_CLASSES,
+        "prepared references are not four distinct maps in each consumer frame",
+    )
+    artifact_records = manifest.get("input_artifacts", [])
+    for row in classes:
+        class_id = int(row["class_id"])
+        for frame in ("recovar", "relion"):
+            role = f"prepared_{frame}_initial_class{class_id:03d}"
+            matches = [record for record in artifact_records if record.get("role") == role]
+            _require(len(matches) == 1, f"manifest must seal exactly one {role} artifact")
+            _require(
+                matches[0] == row[f"derived_{frame}"],
+                f"{role} differs between the reference report and input ledger",
+            )
+
+    result: dict[str, Any] = {
+        "path": str(report_path.resolve()),
+        "sha256": sha256_file(report_path),
+        "schema": REFERENCE_DERIVATION_SCHEMA,
+        "class_count": N_CLASSES,
+        "intended_reader_roundtrip_exact": True,
+        "distinct_in_each_consumer_frame": True,
+    }
+    if manifest.get("dataset") != "EMPIAR-10073":
+        return result
+
+    derivation = report["derivation"]
+    gates = report["gates"]
+    _require(derivation.get("source_frame") == "recovar", "10073 reference source frame changed")
+    _require(derivation.get("pre_lowpass_angstrom") == 30.0, "10073 reference low-pass changed")
+    _require(
+        derivation.get("estimated_from_both_external_halves") is True,
+        "10073 shared-reference claim changed",
+    )
+    _require(
+        report.get("historical_generator", {}).get("commit") is None
+        and report.get("historical_generator", {}).get("commit_status") == "unavailable",
+        "10073 historical producer commit must remain explicitly unavailable",
+    )
+    for key, expected in EXPECTED_10073_REFERENCE_GATES.items():
+        _require(gates.get(key) == expected, f"10073 reference gate changed: {key}")
+    _require(gates.get("all_pass") is True, "10073 reference derivation did not pass")
+    _require(
+        {str(row["source"]["sha256"]) for row in classes}
+        == EXPECTED_10073_REFERENCE_SOURCE_HASHES,
+        "10073 raw reference identity changed",
+    )
+    raw_source_paths = {str(row["source"]["path"]) for row in classes}
+    _require(len(raw_source_paths) == N_CLASSES, "10073 raw reference paths are not distinct")
+    halves = manifest.get("halves")
+    _require(
+        isinstance(halves, list)
+        and [int(row["half"]) for row in halves] == [1, 2],
+        "10073 engine-command half topology changed",
+    )
+    engine_tokens = [
+        str(token)
+        for half in halves
+        for command_name in ("relion_command", "recovar_command")
+        for token in half.get(command_name, [])
+    ]
+    _require(
+        all(raw_path not in token for raw_path in raw_source_paths for token in engine_tokens),
+        "a raw high-frequency 10073 reference path occurs in an engine command",
+    )
+    for row in classes:
+        spectral = row.get("spectral_leak")
+        _require(isinstance(spectral, Mapping), "10073 reference lacks spectral-leak metrics")
+        _require(
+            float(spectral["out_of_band_energy_fraction"])
+            <= EXPECTED_10073_REFERENCE_GATES["max_out_of_band_energy_fraction"],
+            "10073 reference exceeds the out-of-band energy limit",
+        )
+        _require(
+            float(spectral["out_of_band_peak_ratio"])
+            <= EXPECTED_10073_REFERENCE_GATES["max_out_of_band_peak_ratio"],
+            "10073 reference exceeds the out-of-band peak limit",
+        )
+    pairwise = report.get("pairwise_diversity")
+    _require(isinstance(pairwise, list) and len(pairwise) == 6, "10073 pairwise reference grid changed")
+    expected_pairs = set(itertools.combinations(range(1, N_CLASSES + 1), 2))
+    observed_pairs = {
+        (int(row["left_class_id"]), int(row["right_class_id"])) for row in pairwise
+    }
+    _require(observed_pairs == expected_pairs, "10073 pairwise reference identities changed")
+    _require(
+        all(
+            float(row["centered_correlation"])
+            <= EXPECTED_10073_REFERENCE_GATES["max_pairwise_correlation"]
+            and float(row["fsc_auc"])
+            <= EXPECTED_10073_REFERENCE_GATES["max_pairwise_fsc_auc"]
+            for row in pairwise
+        ),
+        "10073 reference diversity gate failed",
+    )
+
+    fixture = manifest.get("fixture_derivation")
+    _require(isinstance(fixture, Mapping), "10073 fixture derivation is missing")
+    _require(fixture.get("schema") == FIXTURE_DERIVATION_SCHEMA_10073, "10073 fixture schema changed")
+    fixture_manifest_path = Path(str(fixture.get("fixture_manifest", "")))
+    _require(fixture_manifest_path.is_file(), "10073 fixture derivation report is missing")
+    _require(
+        sha256_file(fixture_manifest_path) == fixture.get("fixture_manifest_sha256"),
+        "10073 fixture derivation report hash changed",
+    )
+    fixture_report = json.loads(fixture_manifest_path.read_text())
+    embedded_fixture_report = {
+        key: value
+        for key, value in fixture.items()
+        if key not in {"fixture_manifest", "fixture_manifest_sha256"}
+    }
+    _require(
+        fixture_report == embedded_fixture_report,
+        "embedded 10073 fixture derivation differs from its sealed report",
+    )
+    fixture_report_records = [
+        row
+        for row in artifact_records
+        if row.get("role") == "frozen_fixture_manifest"
+    ]
+    _require(
+        len(fixture_report_records) == 1
+        and fixture_report_records[0]["path"] == str(fixture_manifest_path.resolve())
+        and fixture_report_records[0]["sha256"] == fixture.get("fixture_manifest_sha256"),
+        "10073 fixture derivation report differs from the input ledger",
+    )
+    fixture_inputs = fixture.get("inputs")
+    _require(isinstance(fixture_inputs, list), "10073 fixture input ledger is missing")
+    _require(
+        {str(row["role"]): str(row["sha256"]) for row in fixture_inputs}
+        == EXPECTED_10073_FIXTURE_INPUT_HASHES,
+        "10073 fixture source inputs changed",
+    )
+    fixture_outputs = fixture.get("outputs")
+    _require(
+        isinstance(fixture_outputs, list)
+        and {row.get("role") for row in fixture_outputs}
+        == {"derived_particles_star", "derived_source_indices"},
+        "10073 fixture output ledger changed",
+    )
+    for output in fixture_outputs:
+        matches = [
+            record
+            for record in artifact_records
+            if record.get("path") == output.get("path")
+            and record.get("sha256") == output.get("sha256")
+            and record.get("size_bytes") == output.get("size_bytes")
+        ]
+        _require(len(matches) == 1, "10073 fixture output differs from the input ledger")
+    _require(fixture.get("selection_seed") == 20260903, "10073 selection seed changed")
+    _require(fixture.get("halfset_seed") == 20260904, "10073 halfset seed changed")
+    _require(fixture.get("selected_particle_count") == 10_000, "10073 fixture count changed")
+    _require(
+        fixture.get("selected_random_subset_counts") == {"1": 5_000, "2": 5_000},
+        "10073 fixture half counts changed",
+    )
+    _require(
+        fixture.get("source_indices_native_bytes_sha256")
+        == EXPECTED_10073_SOURCE_INDICES_BYTES_SHA256,
+        "10073 selected source-index bytes changed",
+    )
+    _require(
+        fixture.get("random_subsets_native_bytes_sha256")
+        == EXPECTED_10073_RANDOM_SUBSETS_BYTES_SHA256,
+        "10073 random-subset bytes changed",
+    )
+    claim = manifest.get("claim_boundary", {})
+    _require(
+        claim.get("evidence_tier") == "tier_a_single_seed_diagnostic"
+        and claim.get("accepted_registry_eligible") is False
+        and claim.get("tier_b_required_seeds") == [42001, 42002, 42003]
+        and claim.get("absolute_resolution_claim") is False,
+        "10073 Tier-A claim boundary changed",
+    )
+    return {
+        **result,
+        "pre_lowpass_angstrom": 30.0,
+        "spectral_leak_pass": True,
+        "pairwise_diversity_pass": True,
+        "fixture_derivation_pass": True,
+        "claim_scope": "tier_a_single_seed_diagnostic",
+    }
 
 
 def _jsonable(value: Any) -> Any:
@@ -1205,6 +1450,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
     _require(bool(manifest["source"]["clean"]), "source worktree was not clean at launch")
     _require(GIT_SHA_RE.fullmatch(str(manifest["source"]["commit"])) is not None, "invalid source commit")
     input_audit = validate_input_artifacts(manifest)
+    reference_audit = validate_reference_derivation(manifest)
     launcher_audit = validate_launcher_artifacts(manifest)
     command_audit = validate_commands(manifest)
     slurm_audit = validate_slurm_allocation(manifest)
@@ -1467,6 +1713,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         },
         "provenance_audit": {
             "input_artifacts": input_audit,
+            "reference_derivation": reference_audit,
             "launcher": launcher_audit,
             "commands": command_audit,
             "slurm": slurm_audit,

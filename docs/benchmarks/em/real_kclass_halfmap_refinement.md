@@ -1,7 +1,7 @@
 # Real-data K=4 independent-half refinement
 
 This is a runnable, bounded component of the Tier-6 harness for genuine
-EMPIAR-10076 and EMPIAR-10345 K=4 half-map evidence. It is execution infrastructure, not a
+EMPIAR-10073, EMPIAR-10076, and EMPIAR-10345 K=4 half-map evidence. It is execution infrastructure, not a
 completed benchmark result or the complete Tier-6 matrix. No entry may be
 added to `entries/` until the Slurm run completes, the audit passes, and the
 resulting artifacts are sealed.
@@ -100,6 +100,82 @@ than a presentation-dependent line count, is the identity.
 Every input, including each multi-gigabyte particle stack, is fully rehashed
 while preparing the run and is rehashed again inside the Slurm job before
 either engine starts.
+
+### EMPIAR-10073 prospective calibration contract
+
+The 10073 cell is deliberately narrower than a registry-admissible Tier-6
+campaign. It is a native-grid, 10,000-particle calibration run with exactly
+5,000 particles in each external half, `K=4`, `C1`, eight iterations, seed
+`42001`, three RELION MPI ranks (two followers), and a 250 A particle
+diameter. The launcher derives the fixture from the canonical 138,899-particle
+RECOVAR stack and metadata using these frozen inputs:
+
+- `/projects/CRYOEM/singerlab/mg6942/10073/recovar_data/particles.256.mrcs`,
+  SHA-256
+  `d0d8a932ad76d228599fe622aa2291f613c108338007134b62226077acb6e2c9`;
+- `/projects/CRYOEM/singerlab/mg6942/RECOVAR_datasets/10073/poses.pkl`,
+  SHA-256
+  `992d7496bd340f8c1974afd17201014788bf90492b5826770dd2dfe013e7073d`;
+  and
+- `/projects/CRYOEM/singerlab/mg6942/RECOVAR_datasets/10073/ctf.pkl`,
+  SHA-256
+  `6e20b1397669dfda6c54bede2744af64354bc9e4be894ada0a034b119f57908c`.
+
+Selection is `sort(default_rng(20260903).choice(138899, 10000,
+replace=False))`. A separate PCG64 stream, seed `20260904`, shuffles exactly
+5,000 labels of each half before they are attached in selected source-row
+order. `source_indices.npy` retains the physical zero-based MRC-stack indices.
+Euler angles are obtained with the checked-in `R_to_relion` conversion.
+Fractional RECOVAR translations are converted to Angstrom with the physical
+field of view, `380 * 1.4000112`; the 256-grid pixel size is therefore derived
+from the CTF metadata rather than the stale 1 A MRC header. The generated STAR,
+index array, selection/half-label byte streams, conversion environment, and
+all source and output hashes are sealed before submission.
+
+Four distinct heterogeneous maps are selected at fixed positions along the
+historical focused zdim-4 path: `vol000`, `vol003`, `vol006`, and `vol009`
+under
+`/projects/CRYOEM/singerlab/mg6942/10073/recovar_data/path0/all_volumes`.
+Their respective frozen SHA-256 values are
+`5add97a9df6c12d922d5d7747229968de8662a98a9fd227debefabc997aaff4c`,
+`3c4a75c9a76936466696b6c56d502bd031fcd7cf4c634addbf81dc2e95ee1fb1`,
+`21e97f5f9e144e68f22a936083194b3292925298c569d7ceeac02b03871e6a48`,
+and
+`8d33783d95befad4ea61452ad26c23fa1663a87d09f0902c156070ad97bc7fb2`.
+The exact analysis command and upstream pipeline command are retained in
+`path0/run.log` and `cont-indnocont-focmask/run.log`; the historical producer
+commit was not recorded and is reported as unavailable, never guessed. This
+is acceptable only because these maps are common hashed starting inputs, not
+an outcome being compared between engines.
+
+The raw path maps are never passed to either refiner. During clean dry-run
+preparation, the checked-in launcher loads every map in the RECOVAR frame,
+applies the same deterministic spherical hard low-pass with all Fourier
+coefficients above `1 / 30 A` set to zero, converts the result to float32, and
+writes one RECOVAR-frame and one RELION-frame representation. Intended-reader
+round trips must reproduce the same internal float32 array exactly. The
+derivation report pins the clean source commit, Python/NumPy/mrcfile versions,
+source and derived hashes, command line, cutoff, and algorithm. Before a job
+may be submitted, every derived map must satisfy both frozen spectral-leak
+limits: out-of-band Fourier-energy fraction at most `1e-10`, and maximum
+out-of-band coefficient magnitude divided by the maximum in-band magnitude at
+most `1e-5`. The four derived maps must also remain diverse: every pair's
+whole-box centered correlation must be at most `0.98`, and every pair's mean
+FSC over shells 1--16 must be at most `0.97`. All class priors in the RELION
+reference STAR are exactly 0.25, and the completed-run no-collapse gate still
+requires at least one assigned particle in every class.
+
+These references were estimated historically from particles spanning both
+new external halves. Consequently, even a passing one-seed run is a Tier-A
+relative parity diagnostic: it may establish complete execution, valid
+provenance, noncollapsed K=4 topology, and candidate per-class agreement, but
+it is not an independent absolute-resolution measurement and cannot enter the
+accepted registry. `absolute_resolution_claim=false` and
+`phase_randomization_corrected=false` remain immutable. Tier-B promotion
+requires fresh runs for all three predeclared seeds 42001, 42002, and 42003,
+every existing per-seed half-map/assignment/permutation-margin threshold, and
+the existing validated multi-seed assignment and map-stability summaries. A
+failed seed is retained; no favorable seed may be selected post hoc.
 
 ## First-iteration native score boundary
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 from pathlib import Path
 
@@ -9,6 +10,165 @@ import pytest
 import starfile
 
 from scripts import audit_em_real_kclass_halfmaps as audit
+
+
+def _reference_manifest_10073(tmp_path: Path) -> dict:
+    source = {"commit": "a" * 40, "dirty": False}
+    source_hashes = sorted(audit.EXPECTED_10073_REFERENCE_SOURCE_HASHES)
+    classes = []
+    prepared_artifacts = []
+    for class_id, source_hash in enumerate(source_hashes, start=1):
+        recovar_path = tmp_path / f"reference_init_class{class_id:03d}.mrc"
+        relion_path = tmp_path / f"reference_init_class{class_id:03d}_relion.mrc"
+        recovar_path.write_bytes(f"recovar-{class_id}".encode())
+        relion_path.write_bytes(f"relion-{class_id}".encode())
+        derived_recovar = {
+            "role": f"prepared_recovar_initial_class{class_id:03d}",
+            "path": str(recovar_path.resolve()),
+            "size_bytes": recovar_path.stat().st_size,
+            "sha256": f"{class_id:064x}",
+        }
+        derived_relion = {
+            "role": f"prepared_relion_initial_class{class_id:03d}",
+            "path": str(relion_path.resolve()),
+            "size_bytes": relion_path.stat().st_size,
+            "sha256": f"{class_id + 10:064x}",
+        }
+        prepared_artifacts.extend((derived_recovar, derived_relion))
+        classes.append(
+            {
+                "class_id": class_id,
+                "source": {
+                    "path": f"/canonical/raw/reference-{class_id}.mrc",
+                    "sha256": source_hash,
+                },
+                "derived_recovar": derived_recovar,
+                "derived_relion": derived_relion,
+                "intended_reader_roundtrip_exact": True,
+                "spectral_leak": {
+                    "out_of_band_energy_fraction": 1.0e-12,
+                    "out_of_band_peak_ratio": 1.0e-7,
+                },
+            }
+        )
+    report = {
+        "schema": audit.REFERENCE_DERIVATION_SCHEMA,
+        "source": source,
+        "derivation": {
+            "source_frame": "recovar",
+            "pre_lowpass_angstrom": 30.0,
+            "raw_source_maps_passed_to_engines": False,
+            "estimated_from_both_external_halves": True,
+        },
+        "historical_generator": {"commit": None, "commit_status": "unavailable"},
+        "gates": {**audit.EXPECTED_10073_REFERENCE_GATES, "all_pass": True},
+        "classes": classes,
+        "pairwise_diversity": [
+            {
+                "left_class_id": left,
+                "right_class_id": right,
+                "centered_correlation": 0.5,
+                "fsc_auc": 0.5,
+            }
+            for left, right in itertools.combinations(range(1, 5), 2)
+        ],
+    }
+    report_path = tmp_path / "reference_derivation.json"
+    report_path.write_text(json.dumps(report) + "\n")
+    particles_star = tmp_path / "particles.star"
+    source_indices = tmp_path / "source_indices.npy"
+    particles_star.write_bytes(b"derived-particles")
+    source_indices.write_bytes(b"derived-indices")
+    fixture_outputs = [
+        {
+            "role": "derived_particles_star",
+            "path": str(particles_star.resolve()),
+            "size_bytes": particles_star.stat().st_size,
+            "sha256": audit.sha256_file(particles_star),
+        },
+        {
+            "role": "derived_source_indices",
+            "path": str(source_indices.resolve()),
+            "size_bytes": source_indices.stat().st_size,
+            "sha256": audit.sha256_file(source_indices),
+        },
+    ]
+    fixture_payload = {
+        "schema": audit.FIXTURE_DERIVATION_SCHEMA_10073,
+        "selection_seed": 20260903,
+        "halfset_seed": 20260904,
+        "selected_particle_count": 10_000,
+        "selected_random_subset_counts": {"1": 5_000, "2": 5_000},
+        "source_indices_native_bytes_sha256": (
+            audit.EXPECTED_10073_SOURCE_INDICES_BYTES_SHA256
+        ),
+        "random_subsets_native_bytes_sha256": (
+            audit.EXPECTED_10073_RANDOM_SUBSETS_BYTES_SHA256
+        ),
+        "inputs": [
+            {"role": role, "sha256": digest}
+            for role, digest in audit.EXPECTED_10073_FIXTURE_INPUT_HASHES.items()
+        ],
+        "outputs": fixture_outputs,
+    }
+    fixture_path = tmp_path / "fixture_manifest.json"
+    fixture_path.write_text(json.dumps(fixture_payload) + "\n")
+    fixture = {
+        "fixture_manifest": str(fixture_path.resolve()),
+        "fixture_manifest_sha256": audit.sha256_file(fixture_path),
+        **fixture_payload,
+    }
+    fixture_artifacts = [
+        {
+            "role": "frozen_fixture_manifest",
+            "path": str(fixture_path.resolve()),
+            "size_bytes": fixture_path.stat().st_size,
+            "sha256": audit.sha256_file(fixture_path),
+        },
+        {
+            **fixture_outputs[0],
+            "role": "frozen_source_particles_star",
+        },
+        {
+            **fixture_outputs[1],
+            "role": "frozen_source_indices",
+        },
+    ]
+    return {
+        "dataset": "EMPIAR-10073",
+        "source": source,
+        "reference_derivation": report,
+        "input_artifacts": [
+            {
+                "role": "reference_derivation_report",
+                "path": str(report_path),
+                "size_bytes": report_path.stat().st_size,
+                "sha256": audit.sha256_file(report_path),
+            },
+            *prepared_artifacts,
+            *fixture_artifacts,
+        ],
+        "fixture_derivation": fixture,
+        "halves": [
+            {"half": half, "relion_command": ["relion"], "recovar_command": ["recovar"]}
+            for half in (1, 2)
+        ],
+        "claim_boundary": {
+            "evidence_tier": "tier_a_single_seed_diagnostic",
+            "accepted_registry_eligible": False,
+            "tier_b_required_seeds": [42001, 42002, 42003],
+            "absolute_resolution_claim": False,
+        },
+    }
+
+
+def _rewrite_reference_report(manifest: dict) -> None:
+    report_path = Path(manifest["input_artifacts"][0]["path"])
+    report_path.write_text(json.dumps(manifest["reference_derivation"]) + "\n")
+    manifest["input_artifacts"][0].update(
+        size_bytes=report_path.stat().st_size,
+        sha256=audit.sha256_file(report_path),
+    )
 
 
 def _write_particles(path: Path, names: list[str], subsets: list[int], classes=None) -> None:
@@ -21,6 +181,52 @@ def _write_particles(path: Path, names: list[str], subsets: list[int], classes=N
     if classes is not None:
         particles["rlnClassNumber"] = classes
     starfile.write({"particles": particles}, path, overwrite=True)
+
+
+def test_10073_reference_derivation_accepts_frozen_tier_a_contract(tmp_path: Path) -> None:
+    result = audit.validate_reference_derivation(_reference_manifest_10073(tmp_path))
+
+    assert result["spectral_leak_pass"] is True
+    assert result["pairwise_diversity_pass"] is True
+    assert result["fixture_derivation_pass"] is True
+    assert result["claim_scope"] == "tier_a_single_seed_diagnostic"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("spectral_leak", "out-of-band energy limit"),
+        ("duplicate_reference", "not four distinct maps"),
+        ("reference_diversity", "reference diversity gate failed"),
+    ],
+)
+def test_10073_reference_derivation_fails_closed(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    manifest = _reference_manifest_10073(tmp_path)
+    report = manifest["reference_derivation"]
+    if mutation == "spectral_leak":
+        report["classes"][0]["spectral_leak"]["out_of_band_energy_fraction"] = 1.0e-9
+    elif mutation == "duplicate_reference":
+        report["classes"][1]["derived_recovar"]["sha256"] = report["classes"][0][
+            "derived_recovar"
+        ]["sha256"]
+    else:
+        report["pairwise_diversity"][0]["centered_correlation"] = 0.99
+    _rewrite_reference_report(manifest)
+
+    with pytest.raises(audit.AuditError, match=message):
+        audit.validate_reference_derivation(manifest)
+
+
+def test_10073_reference_derivation_rejects_registry_claim(tmp_path: Path) -> None:
+    manifest = _reference_manifest_10073(tmp_path)
+    manifest["claim_boundary"]["accepted_registry_eligible"] = True
+
+    with pytest.raises(audit.AuditError, match="Tier-A claim boundary changed"):
+        audit.validate_reference_derivation(manifest)
 
 
 def _split_manifest(tmp_path: Path) -> dict:

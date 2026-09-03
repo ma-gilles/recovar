@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -114,12 +115,14 @@ def test_prepared_references_keep_recovar_and_relion_coordinate_frames_separate(
         original_require(condition, message)
 
     def load_relion(path: str, *, return_voxel_size: bool = False):
+        if Path(path).parent != source_dir:
+            return original_load_relion(path, return_voxel_size=return_voxel_size)
         class_id = int(Path(path).stem[-3:])
         result = volumes[class_id].copy()
         return (result, np.asarray([2.0], dtype=np.float32)) if return_voxel_size else result
 
     monkeypatch.setattr(launcher, "INITIAL_MAP_ROOT", source_dir)
-    monkeypatch.setattr(launcher, "_verify_canonical", lambda _path: "unused")
+    monkeypatch.setattr(launcher, "_verify_canonical", lambda _path: "0" * 64)
     monkeypatch.setattr(launcher, "_require", allow_tiny_source)
     monkeypatch.setattr(launcher.helpers, "load_relion_volume", load_relion)
 
@@ -313,7 +316,10 @@ def test_particle_input_generation_routes_dataset_specific_fixture_and_stack(tmp
         source_index_semantics="particle_stack_index",
         source_particles_star=None,
         shared200_selection=None,
-        initial_map_root=tmp_path / "maps",
+        references=launcher.ReferenceSpec(
+            source_paths=tuple(tmp_path / "maps" / f"class{index}.mrc" for index in range(4)),
+            source_frame="relion",
+        ),
         stacks={256: stack},
         canonical_hashes={},
         supported_profiles=frozenset({"tiny"}),
@@ -350,6 +356,122 @@ def test_10345_dataset_contract_is_native_grid_only() -> None:
     assert dataset.source_index_semantics == "source_star_row_index"
     assert dataset.source_particles_star is not None
     assert dataset.canonical_hashes[str(dataset.stacks[256])].startswith("7909a695")
+
+
+def test_10073_dataset_contract_freezes_distinct_recovar_references() -> None:
+    dataset = launcher._dataset_spec("10073")
+
+    assert dataset.label == "EMPIAR-10073"
+    assert dataset.source_fixture is None
+    assert dataset.supported_profiles == frozenset({"native10k-256"})
+    assert dataset.source_index_semantics == "particle_stack_index"
+    assert dataset.particle_diameter_angstrom == 250.0
+    assert dataset.required_max_iter == 8
+    assert dataset.references.source_frame == "recovar"
+    assert [path.name for path in dataset.references.source_paths] == [
+        "vol000.mrc",
+        "vol003.mrc",
+        "vol006.mrc",
+        "vol009.mrc",
+    ]
+    assert dataset.references.pre_lowpass_angstrom == 30.0
+    assert dataset.references.max_out_of_band_energy_fraction == 1.0e-10
+    assert dataset.references.max_out_of_band_peak_ratio == 1.0e-5
+    assert dataset.references.max_pairwise_correlation == 0.98
+    assert dataset.references.max_pairwise_fsc_auc == 0.97
+    assert dataset.references.diversity_first_shell == 1
+    assert dataset.references.diversity_last_shell == 16
+    assert dataset.references.historical_generator_commit is None
+
+
+def test_10073_balanced_selection_matches_independent_frozen_byte_hashes() -> None:
+    source_indices, random_subsets = launcher._derive_balanced_selection(
+        source_particle_count=138_899,
+        selected_particle_count=10_000,
+        selection_seed=launcher.FIXTURE_SELECTION_SEED_10073,
+        halfset_seed=launcher.FIXTURE_HALFSET_SEED_10073,
+    )
+
+    assert source_indices[:10].tolist() == [23, 26, 52, 55, 63, 104, 126, 144, 160, 163]
+    assert source_indices[-10:].tolist() == [
+        138778,
+        138798,
+        138813,
+        138818,
+        138823,
+        138825,
+        138830,
+        138850,
+        138880,
+        138895,
+    ]
+    assert np.bincount(random_subsets, minlength=3)[1:].tolist() == [5_000, 5_000]
+    assert hashlib.sha256(source_indices.tobytes()).hexdigest() == (
+        launcher.FIXTURE_SOURCE_INDICES_BYTES_SHA256_10073
+    )
+    assert hashlib.sha256(random_subsets.tobytes()).hexdigest() == (
+        launcher.FIXTURE_RANDOM_SUBSETS_BYTES_SHA256_10073
+    )
+
+
+def test_hard_lowpass_reference_is_deterministic_and_satisfies_spectral_leak_gate() -> None:
+    rng = np.random.default_rng(7)
+    volume = rng.standard_normal((32, 32, 32), dtype=np.float32)
+
+    first = launcher._hard_lowpass_reference(
+        volume,
+        voxel_size=2.0,
+        lowpass_angstrom=12.0,
+    )
+    second = launcher._hard_lowpass_reference(
+        volume,
+        voxel_size=2.0,
+        lowpass_angstrom=12.0,
+    )
+    metrics = launcher._spectral_leak_metrics(
+        first,
+        voxel_size=2.0,
+        lowpass_angstrom=12.0,
+    )
+
+    np.testing.assert_array_equal(first, second)
+    assert not np.array_equal(first, volume)
+    assert metrics["out_of_band_energy_fraction"] <= 1.0e-10
+    assert metrics["out_of_band_peak_ratio"] <= 1.0e-5
+
+
+@pytest.mark.parametrize(
+    ("tokens", "message"),
+    [
+        (("--particle-diameter", "200"), "particle diameter is frozen at 250 A"),
+        (("--max-iter", "7"), "max_iter is frozen at 8"),
+        (("--mpi-ranks", "2"), "topology is frozen"),
+    ],
+)
+def test_10073_rejects_nonfrozen_contract_before_creating_run_root(
+    tmp_path: Path,
+    monkeypatch,
+    tokens: tuple[str, str],
+    message: str,
+) -> None:
+    root = tmp_path / "run"
+    monkeypatch.setattr(launcher, "DEFAULT_RUN_ROOT", tmp_path)
+    args = launcher._parse_args(
+        [
+            "--output-root",
+            str(root),
+            "--dataset",
+            "10073",
+            "--profile",
+            "native10k-256",
+            *tokens,
+        ]
+    )
+
+    with pytest.raises(launcher.LaunchError, match=message):
+        launcher.prepare(args)
+
+    assert not root.exists()
 
 
 def test_10345_rejects_unqualified_128_profile_before_creating_run_root(

@@ -647,7 +647,8 @@ matched one-GPU performance. Because InitialModel does not emit independently
 refined half maps, this precursor does not satisfy the native full-run
 admission rule above.
 
-The independent-half EMPIAR-10076 and native-grid EMPIAR-10345 refinement gates are now runnable through
+The independent-half EMPIAR-10076, EMPIAR-10073 calibration, and native-grid
+EMPIAR-10345 refinement gates are now runnable through
 `scripts/launch_em_real_kclass_halfmaps_slurm.py`; see
 `real_kclass_halfmap_refinement.md`. RELION does not permit K>1 and
 `--split_random_halves` in one process, so the harness runs two independent
@@ -665,6 +666,20 @@ by SHA-256. It deliberately supports only `native10k-256`: no qualified
 before creating an output root. A first native invocation is a bounded
 diagnostic. The three required seeds have now completed, but none can enter the
 registry because the frozen per-seed gates remain red.
+
+The prospective 10073 contract freezes a deterministically derived native
+10,000-particle, 5,000/5,000 split and four distinct focused zdim-4 path maps.
+The launcher itself freshly hard-low-passes every starting map to 30 A and
+fails before submission unless intended-reader round trips are exact,
+out-of-band energy and peak-amplitude leakage are at most `1e-10` and `1e-5`,
+respectively, maximum pairwise centered correlation is at most `0.98`, and
+maximum pairwise shells-1--16 FSC-AUC is at most `0.97`. The historical path
+producer commit is unavailable and is not inferred; exact source maps,
+generator logs, current derivation code/environment, and derived outputs are
+instead hashed. Because these shared references used particles from both new
+external halves, seed 42001 is a Tier-A parity diagnostic with no
+absolute-resolution claim. Tier-B admission requires the complete frozen
+42001/42002/42003 campaign and the unchanged per-seed and multi-seed gates.
 
 That launcher is deliberately narrower than the complete Tier-6 checklist:
 it reports maps, half-map/cross-engine FSC, populations, hard-assignment
@@ -715,8 +730,8 @@ implementation:
   the existing evaluator unit tests;
 - the independent exactly generated 100k/256 release fixture; and
 - a qualified 128-grid EMPIAR-10345 pilot input (the native independent-half
-  launcher is implemented) and an optional independent-half EMPIAR-10073
-  contract; EMPIAR-10076 has a completed but rejected three-seed pilot, and
+  launcher is implemented) and Tier-B execution of the implemented native
+  EMPIAR-10073 calibration contract; EMPIAR-10076 has a completed but rejected three-seed pilot, and
   the InitialModel-only diagnostic cannot replace either real-data gate.
 
 These are deliberately documented as pending execution infrastructure, not as
