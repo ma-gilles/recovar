@@ -6886,6 +6886,285 @@ def test_local_k4_batch_and_rotation_blocks_match_float64_oracle(rng):
     )
 
 
+@pytest.mark.slow
+def test_local_k4_f32_ctf_batch_block_wide_split_factorial(monkeypatch):
+    """K=4 exact-local results survive real f32 operands across execution shapes."""
+
+    from recovar.core.relion_project import centered_full_to_relion_half
+    from recovar.reconstruction import relion_functions
+
+    # Seed 2909 was held out while the dtype-derived numerical contract below
+    # was frozen against the seed-42 pilot.
+    dataset = RawRealImageDataset(3, np.random.default_rng(2909))
+    dataset.voxel_size = 1.35
+    dataset.ctf_evaluator = core.CTFEvaluator()
+    dataset.CTF_params = np.asarray(
+        [
+            [15_000.0, 16_200.0, 13.0, 300.0, 2.7, 0.10, 7.0, 20.0, 0.91],
+            [17_500.0, 16_800.0, 47.0, 300.0, 2.7, 0.08, 13.0, 30.0, 1.07],
+            [14_200.0, 15_100.0, 83.0, 300.0, 2.7, 0.12, 19.0, 15.0, 0.84],
+        ],
+        dtype=np.float32,
+    )
+    ctf_half = np.asarray(
+        dataset.ctf_evaluator(
+            jnp.asarray(dataset.CTF_params),
+            dataset.image_shape,
+            dataset.voxel_size,
+            half_image=True,
+        ),
+    )
+    assert ctf_half.dtype == np.float32
+    assert np.all(np.isfinite(ctf_half))
+    assert np.count_nonzero(ctf_half) == ctf_half.size
+    assert not np.allclose(np.abs(ctf_half), 1.0)
+
+    means = jnp.stack(
+        [
+            _hermitian_volume(VOLUME_SHAPE, seed=seed) * np.float32(scale)
+            for seed, scale in zip(
+                (2801, 2803, 2807, 2819),
+                (7.0e-4, 8.5e-4, 1.0e-3, 1.15e-3),
+                strict=True,
+            )
+        ],
+    )
+    relion_projector_half = np.stack(
+        [
+            np.asarray(
+                centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE)),
+                dtype=np.complex64,
+            )
+            for mean in means
+        ],
+    )
+    assert np.asarray(means).dtype == np.complex64
+    assert relion_projector_half.dtype == np.complex64
+    assert len({np.asarray(mean).tobytes() for mean in means}) == 4
+    assert len({projector.tobytes() for projector in relion_projector_half}) == 4
+
+    all_rotations = _make_rotations(80, seed=2833)
+    rotation_ids = tuple(
+        np.random.default_rng(seed).choice(80, size=count, replace=False).astype(np.int32)
+        for seed, count in zip((2843, 2851, 2857), (65, 69, 73), strict=True)
+    )
+    rotation_counts = np.asarray([values.size for values in rotation_ids], dtype=np.int32)
+    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
+    rotation_ids_flat = np.concatenate(rotation_ids)
+    translations = np.asarray(
+        [[0.25, -0.50], [0.75, 0.25], [-0.50, 1.00]],
+        dtype=np.float32,
+    )
+    assert np.all(np.any(translations != 0.0, axis=1))
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=all_rotations.shape[0],
+        n_pixels=80,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=rotation_ids_flat,
+        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
+        rotation_log_priors_flat=np.concatenate(
+            [np.linspace(0.0, -1.25, count, dtype=np.float32) for count in rotation_counts],
+        ),
+        rotation_counts=rotation_counts,
+        translation_grid=translations,
+        translation_log_priors=np.asarray(
+            [[0.0, -1.0, -2.0], [-1.5, 0.0, -0.5], [-0.75, -1.25, 0.0]],
+            dtype=np.float32,
+        ),
+    )
+    mean_variance = jnp.linspace(8.0, 12.0, VOLUME_SIZE, dtype=jnp.float32)
+    noise_variance = jnp.linspace(1.5, 3.5, IMAGE_SIZE, dtype=jnp.float32)
+    class_log_priors = np.log(np.asarray([0.43, 0.29, 0.18, 0.10], dtype=np.float64))
+    image_pre_shifts = np.asarray(
+        [[0.50, -0.75], [-1.00, 0.50], [0.25, 1.00]],
+        dtype=np.float32,
+    )
+    common = dict(
+        class_log_priors=class_log_priors,
+        current_size=6,
+        reconstruct_significant_only=False,
+        return_best_pose_details=True,
+        return_profile=True,
+        accumulate_noise=True,
+        score_with_masked_images=False,
+        half_spectrum_scoring=True,
+        projection_relion_texture_interp=False,
+        relion_projector_half=relion_projector_half,
+        relion_projector_r_max=4,
+        image_corrections=np.asarray([1.3, 0.8, 1.1], dtype=np.float32),
+        scale_corrections=np.asarray([0.7, 1.2, 0.9], dtype=np.float32),
+        image_pre_shifts=image_pre_shifts,
+    )
+
+    # Counts 65--73 pad to 128 rotations for block 128, but to 256 for block
+    # 64.  The fixed 192 ceiling therefore crosses image batching with both
+    # the normal fused bucket and the production wide/split fallback.
+    monkeypatch.setenv(EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS_ENV, "192")
+    monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    arms = {
+        "normal_batch3_block128": (3, 128, 128, False),
+        "normal_batch2_block128": (2, 128, 128, False),
+        "split_batch3_block64": (3, 64, 256, True),
+        "split_batch2_block64": (2, 64, 256, True),
+    }
+
+    def run_arm(image_batch_size, rotation_block_size):
+        return run_local_k_class_em(
+            dataset,
+            means,
+            mean_variance,
+            noise_variance,
+            local_layout,
+            "linear_interp",
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+            **common,
+        )
+
+    results = {
+        name: run_arm(image_batch_size, rotation_block_size)
+        for name, (image_batch_size, rotation_block_size, _, _) in arms.items()
+    }
+    reference = results["normal_batch3_block128"]
+
+    for name, result in results.items():
+        image_batch_size, _, expected_rotation_count, expect_split = arms[name]
+        expected_bucket_count = int(np.ceil(dataset.n_images / image_batch_size))
+        assert np.all(np.asarray(result.class_posterior_sums) > 0.0)
+        assert result.profile_summary is not None
+        profiles = result.profile_summary["per_class_profile_summary"]
+        assert len(profiles) == 4
+        for profile in profiles:
+            assert str(np.asarray(profile["projection_mode"]).item()) == "relion_projector"
+            assert int(profile["big_jit_max_bucket_rotations"]) == 192
+            if expect_split:
+                assert int(profile["big_jit_bucket_count"]) == 0
+                assert int(profile["big_jit_wide_bucket_split_count"]) == expected_bucket_count
+                assert int(profile["big_jit_wide_bucket_max_rotations"]) == expected_rotation_count
+            else:
+                assert int(profile["big_jit_bucket_count"]) == expected_bucket_count
+                assert int(profile["big_jit_wide_bucket_split_count"]) == 0
+
+    # These fields are selections from identical input tables.  The fixture's
+    # winners must therefore remain bitwise-identical across execution shapes;
+    # floating reductions below deliberately use a numerical contract instead.
+    exact_fields = (
+        "per_class_hard_assignments",
+        "class_assignments",
+        "pose_assignments",
+        "per_class_best_pose_rotations",
+        "per_class_best_pose_translations",
+        "per_class_best_pose_rotation_ids",
+        "best_pose_rotations",
+        "best_pose_translations",
+        "best_pose_rotation_ids",
+    )
+    for name, result in results.items():
+        for field in exact_fields:
+            np.testing.assert_array_equal(
+                np.asarray(getattr(result, field)),
+                np.asarray(getattr(reference, field)),
+                err_msg=f"{name}: {field}",
+            )
+
+    best_scores = np.stack(
+        [np.asarray(stats.best_log_score_per_image) for stats in reference.per_class_stats],
+    )
+    class_score_margin = np.sort(best_scores, axis=0)[-1] - np.sort(best_scores, axis=0)[-2]
+    float32_unit_roundoff = np.finfo(np.float32).eps / 2.0
+    score_scale = max(float(np.max(np.abs(best_scores))), 1.0)
+    assert np.min(class_score_margin) > 32.0 * 4.0 * float32_unit_roundoff * score_scale
+
+    def continuous_fields(result):
+        yield "probability", "class_responsibilities", result.class_responsibilities
+        yield "mass", "class_posterior_sums", result.class_posterior_sums
+        yield "score", "joint_log_evidence", result.stats.log_evidence_per_image
+        yield "score", "joint_best_log_score", result.stats.best_log_score_per_image
+        yield "probability", "joint_max_posterior", result.stats.max_posterior_per_image
+        yield "mass", "joint_rotation_posterior", result.stats.rotation_posterior_sums
+        for class_index in range(4):
+            yield "sufficient", f"Ft_y[{class_index}]", result.Ft_y[class_index]
+            yield "sufficient", f"Ft_ctf[{class_index}]", result.Ft_ctf[class_index]
+            stats = result.per_class_stats[class_index]
+            yield "score", f"class_log_evidence[{class_index}]", stats.log_evidence_per_image
+            yield "score", f"class_best_log_score[{class_index}]", stats.best_log_score_per_image
+            yield "probability", f"class_max_posterior[{class_index}]", stats.max_posterior_per_image
+            yield "mass", f"class_rotation_posterior[{class_index}]", stats.rotation_posterior_sums
+            noise = result.noise_stats[class_index]
+            for field in noise._fields:
+                value = getattr(noise, field)
+                if value is not None:
+                    kind = "mass" if field == "sumw" else "sufficient"
+                    yield kind, f"noise[{class_index}].{field}", value
+
+            reconstructed_map = relion_functions.post_process_from_filter(
+                dataset,
+                result.Ft_ctf[class_index],
+                result.Ft_y[class_index],
+                tau=mean_variance,
+                disc_type="linear_interp",
+            )
+            yield "sufficient", f"reconstructed_map[{class_index}]", reconstructed_map
+
+    # With unit roundoff u=eps(f32)/2, gamma_n=n*u/(1-n*u) bounds an
+    # n-term f32 reduction.  n=256 padded rotations * 3 translations is the
+    # widest arm.  Four gamma_n budgets the explicit production boundaries:
+    # probe/stat quantization, posterior reduction, weighted-sum reduction,
+    # and adjoint/noise reduction.  This was fixed before seed 2909 was run.
+    max_reduction_terms = max(values[2] for values in arms.values()) * translations.shape[0]
+    gamma_n = (max_reduction_terms * float32_unit_roundoff) / (
+        1.0 - max_reduction_terms * float32_unit_roundoff
+    )
+    f32_reduction_bound = 4.0 * gamma_n
+
+    reference_fields = {name: (kind, value) for kind, name, value in continuous_fields(reference)}
+    for label, result in results.items():
+        actual_fields = {name: (kind, value) for kind, name, value in continuous_fields(result)}
+        assert actual_fields.keys() == reference_fields.keys()
+        for field, (kind, expected) in reference_fields.items():
+            assert actual_fields[field][0] == kind
+            expected_array = np.asarray(expected, dtype=np.complex128)
+            actual_array = np.asarray(actual_fields[field][1], dtype=np.complex128)
+            difference = actual_array - expected_array
+            max_abs = float(np.max(np.abs(difference), initial=0.0))
+            if kind == "probability":
+                assert max_abs <= f32_reduction_bound, (
+                    f"{label}: {field} max-abs {max_abs:.9g} exceeds {f32_reduction_bound:.9g}"
+                )
+            elif kind == "mass":
+                mass_bound = dataset.n_images * f32_reduction_bound
+                assert max_abs <= mass_bound, (
+                    f"{label}: {field} max-abs {max_abs:.9g} exceeds {mass_bound:.9g}"
+                )
+            elif kind == "score":
+                field_scale = max(float(np.max(np.abs(expected_array), initial=0.0)), 1.0)
+                score_bound = 4.0 * float32_unit_roundoff * field_scale
+                assert max_abs <= score_bound, (
+                    f"{label}: {field} max-abs {max_abs:.9g} exceeds {score_bound:.9g}"
+                )
+            else:
+                denominator = float(np.linalg.norm(expected_array.ravel()))
+                if denominator == 0.0:
+                    np.testing.assert_array_equal(actual_array, expected_array, err_msg=f"{label}: {field}")
+                else:
+                    relative_l2 = float(np.linalg.norm(difference.ravel()) / denominator)
+                    assert relative_l2 <= f32_reduction_bound, (
+                        f"{label}: {field} relative-L2 {relative_l2:.9g} "
+                        f"exceeds {f32_reduction_bound:.9g}"
+                    )
+
+        np.testing.assert_allclose(
+            np.sum(np.asarray(result.class_responsibilities), axis=0),
+            np.ones(dataset.n_images),
+            rtol=0.0,
+            atol=4.0 * float32_unit_roundoff,
+        )
+
+    # The preceding sibling owns the true float64-oracle contract.  This
+    # factorial intentionally locks the default production f32/c64 boundary.
+
+
 def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=160)
