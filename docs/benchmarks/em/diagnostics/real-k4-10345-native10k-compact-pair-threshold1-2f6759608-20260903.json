@@ -1,0 +1,153 @@
+{
+  "schema": "recovar.em.real_kclass_compact_pair_threshold_diagnostic.v1",
+  "admission_status": "DIAGNOSTIC_ONLY_PRODUCTION_DEFAULT_UNCHANGED",
+  "accepted_result": false,
+  "status": "complete_rejected_by_predeclared_equivalence_gate",
+  "dataset": "EMPIAR-10345",
+  "profile": "native10k-256-half1",
+  "source": {
+    "commit": "2f6759608c82356dd5c24e7b149002df8cc84f28",
+    "tree": "b2e9b35f3988ae63aae45e1dac90c0386099d97f",
+    "clean": true
+  },
+  "configuration": {
+    "K": 4,
+    "particles": 5000,
+    "grid_size": 256,
+    "iterations": 8,
+    "symmetry": "C1",
+    "seed": 42001,
+    "control_compact_pair_min_bucket_size": 512,
+    "candidate_compact_pair_min_bucket_size": 1,
+    "only_scientific_execution_override": "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE=1"
+  },
+  "predeclared_thresholds": {
+    "all_class_assignments_exact": true,
+    "all_controller_arrays_exact": true,
+    "all_significant_counts_exact": true,
+    "max_euler_absolute_delta": 1e-06,
+    "max_translation_absolute_delta": 1e-06,
+    "max_pmax_absolute_delta": 1e-05,
+    "final_map_min_signed_non_dc_fsc_auc": 0.99999,
+    "final_map_max_relative_l2": 0.001,
+    "max_sparse_group_wall_ratio": 0.95,
+    "max_sampled_hbm_ratio": 1.05,
+    "sealed_before_candidate_completion": true,
+    "sha256": "af98d2e4bb0969d9bb1a0b6f411628514902d1afdad6bfac3261f6103164b52c"
+  },
+  "trajectory": {
+    "controller_arrays_exact": true,
+    "assignment_mismatches_by_iteration": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      7
+    ],
+    "significant_count_mismatches_by_iteration": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      160
+    ],
+    "maximum_pmax_absolute_delta": 0.39379453659057617,
+    "maximum_euler_absolute_delta": 288.65748596191406,
+    "maximum_translation_absolute_delta": 5.0,
+    "first_assignment_difference_iteration": 8
+  },
+  "final_maps": [
+    {
+      "class": 1,
+      "signed_non_dc_fsc_auc": 0.9997951768317297,
+      "relative_l2": 0.003463673863373656
+    },
+    {
+      "class": 2,
+      "signed_non_dc_fsc_auc": 0.9998720619485538,
+      "relative_l2": 0.002298449499265382
+    },
+    {
+      "class": 3,
+      "signed_non_dc_fsc_auc": 0.9999058663249993,
+      "relative_l2": 0.0023732239795145366
+    },
+    {
+      "class": 4,
+      "signed_non_dc_fsc_auc": 0.9992810280909573,
+      "relative_l2": 0.004777401616140293
+    }
+  ],
+  "performance": {
+    "control_sparse_group_wall_seconds": 1109.3,
+    "candidate_sparse_group_wall_seconds": 959.0000000000005,
+    "sparse_group_wall_ratio": 0.8645091499143609,
+    "sparse_group_wall_improvement_fraction": 0.1354908500856391,
+    "control_candidate_peak_sampled_hbm_mib": [
+      33789,
+      33781
+    ],
+    "sampled_hbm_ratio": 0.9997632365562757,
+    "control_candidate_iteration_time_sum_seconds": [
+      1494.5,
+      1263.3
+    ],
+    "control_candidate_external_wall_seconds_descriptive": [
+      1681.2624533176422,
+      1457.9931972026825
+    ],
+    "external_wall_comparison_formal": false,
+    "external_wall_limitation": "The historical control also wrote extra per-iteration intermediate files."
+  },
+  "decision": {
+    "classification": "REJECTED_FAST_BUT_TRAJECTORY_NONEXACT",
+    "production_default_changed": false,
+    "passed_gates": [
+      "controller_exact",
+      "sparse_group_wall",
+      "sampled_hbm"
+    ],
+    "failed_gates": [
+      "assignments_exact",
+      "significant_counts_exact",
+      "pmax",
+      "eulers",
+      "translations",
+      "map_fsc",
+      "map_l2"
+    ],
+    "interpretation": "Threshold 1 is materially faster and the endpoint maps remain scientifically close, but the predeclared behavior-preservation gate fails after seven exact iterations. It is not accepted as a production default."
+  },
+  "slurm": {
+    "candidate_job_id": 13376529,
+    "candidate_state": "COMPLETED",
+    "candidate_exit_code": "0:0",
+    "candidate_elapsed": "00:24:41",
+    "candidate_requested_tres": "billing=10,cpu=8,gres/gpu=1,mem=128G,node=1",
+    "candidate_allocated_tres": "billing=10,cpu=8,gres/gpu=1,mem=128G,node=1",
+    "audit_job_id": 13377361,
+    "audit_state": "FAILED_EXPECTED_REJECTION",
+    "audit_exit_code": "3:0",
+    "audit_elapsed": "00:00:13",
+    "audit_requested_tres": "billing=16,cpu=4,mem=64G,node=1",
+    "audit_allocated_tres": "billing=16,cpu=4,mem=64G,node=1",
+    "exclusive": false
+  },
+  "artifacts": {
+    "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_threshold1_full8_10345_native10k_seed42001_2f6759608_20260903",
+    "audit_json_sha256": "80089b0a075fced90161e3ea274bf5ce6eaa0d14060ee7329f847e0c8f60b534",
+    "audit_markdown_sha256": "d0cdc2d47efc889b30d3b651e1fc082605b71c66fc7468068efdcdfe27bdf877",
+    "candidate_launcher_sha256": "775ed2604969460269f90605026c4e8882a632d360f7341e08cce4e84ed54bff",
+    "audit_script_sha256": "8408bbcfc5610b641d3e87ec188da2648740202c0a11d204cbab9b9cbf1bf419",
+    "candidate_stdout_sha256": "d54a50b19ce7971ee7c27b31ec507f249cd66ce10246d62ce11bc75f9567584d",
+    "candidate_stderr_sha256": "f8cc9ca68c122fd88bcd4735b566e68429ed1b3cec280093eed8a60366af9edd",
+    "audit_stdout_sha256": "52ebc16419358a1c864fb0437b20a7ad7e310b5057a5f8cbf0d310ca45844a15",
+    "audit_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

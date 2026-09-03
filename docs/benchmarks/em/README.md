@@ -461,3 +461,11 @@ raw pose exactly. All 32 numbered maps remained at signed non-DC FSC-AUC
 0.9999999951 or better. This excludes ordinary RELION execution-order noise as
 the cause of the 3.68% seed-42001 cross-engine assignment gap; see
 `real_k4_10345_relion_repeatability_20260903.md`.
+
+The first full-trajectory K=4 compact-pair tuning candidate is also sealed.
+Lowering the minimum bucket size from 512 to 1 reduced directly affected
+sparse-group wall time by 13.55% without increasing HBM, but accumulated seven
+assignment changes at iteration 8 and missed its prospective map-equivalence
+limits. It is rejected as a production default; see
+`real_k4_10345_compact_pair_threshold_20260903.md` and
+`diagnostics/real-k4-10345-native10k-compact-pair-threshold1-2f6759608-20260903.json`.
