@@ -484,18 +484,28 @@ def _write_recovar_results(
     n_images: int = 5,
     half_counts: tuple[int, int] = (5, 0),
     final_all_data_ran: bool = False,
+    convergence_has_converged: bool | None = None,
+    n_iterations: int = 8,
+    convergence_iteration: int | None = None,
+    current_sizes_count: int | None = None,
 ) -> None:
     first_count, second_count = half_counts
-    np.savez(
-        path,
+    fields = dict(
         n_images=np.asarray(n_images),
-        n_iterations=np.asarray(8),
+        n_iterations=np.asarray(n_iterations),
         half1_indices=np.arange(first_count, dtype=np.int64),
         half2_indices=np.arange(first_count, first_count + second_count, dtype=np.int64),
         hard_assignments_half0=np.zeros(first_count, dtype=np.int32),
         hard_assignments_half1=np.zeros(second_count, dtype=np.int32),
         final_all_data_ran=np.asarray(final_all_data_ran),
     )
+    if convergence_has_converged is not None:
+        fields["convergence_has_converged"] = np.asarray(convergence_has_converged)
+    if convergence_iteration is not None:
+        fields["convergence_iteration"] = np.asarray(convergence_iteration)
+    if current_sizes_count is not None:
+        fields["current_sizes"] = np.full(current_sizes_count, 56, dtype=np.int32)
+    np.savez(path, **fields)
 
 
 def test_recovar_selects_only_metadata_proven_occupied_internal_half(tmp_path: Path) -> None:
@@ -545,6 +555,72 @@ def test_recovar_final_topology_rejects_extra_class_ids(tmp_path: Path) -> None:
 
     with pytest.raises(audit.AuditError, match="missing or extra class IDs"):
         audit._latest_recovar_occupied_half_maps(root, results, 7, 5)
+
+
+def test_natural_convergence_selects_common_numbered_map_and_excludes_final_all_data(
+    tmp_path: Path,
+) -> None:
+    maps = tmp_path / "maps"
+    maps.mkdir()
+    for iteration in range(8):
+        for class_id in range(1, 5):
+            for replica in (1, 2):
+                (maps / f"it{iteration:03d}_half{replica}_class{class_id}_reg.mrc").write_bytes(
+                    f"{iteration}-{replica}-{class_id}".encode()
+                )
+    results = tmp_path / "results.npz"
+    _write_recovar_results(
+        results,
+        final_all_data_ran=True,
+        convergence_has_converged=True,
+        n_iterations=50,
+        convergence_iteration=8,
+        current_sizes_count=8,
+    )
+
+    paths, rows = audit._latest_recovar_occupied_half_maps(
+        maps,
+        results,
+        5,
+        5,
+        allow_later=True,
+        require_converged_final_all_data=True,
+        configured_max_iter=50,
+    )
+
+    assert all(path.name.startswith("it005_") for path in paths)
+    assert all(row["semantic_role"] == "occupied_internal_half_of_external_half_process" for row in rows)
+
+
+def test_natural_convergence_rejects_forced_final_all_data_without_convergence(
+    tmp_path: Path,
+) -> None:
+    maps = tmp_path / "maps"
+    maps.mkdir()
+    for iteration in range(8):
+        for class_id in range(1, 5):
+            for replica in (1, 2):
+                (maps / f"it{iteration:03d}_half{replica}_class{class_id}_reg.mrc").write_bytes(b"map")
+    results = tmp_path / "results.npz"
+    _write_recovar_results(
+        results,
+        final_all_data_ran=True,
+        convergence_has_converged=False,
+        n_iterations=50,
+        convergence_iteration=8,
+        current_sizes_count=8,
+    )
+
+    with pytest.raises(audit.AuditError, match="did not record actual convergence"):
+        audit._latest_recovar_occupied_half_maps(
+            maps,
+            results,
+            7,
+            5,
+            allow_later=True,
+            require_converged_final_all_data=True,
+            configured_max_iter=50,
+        )
 
 
 def test_cross_process_duplicate_maps_are_rejected(tmp_path: Path) -> None:
@@ -923,6 +999,105 @@ def test_setup_and_qualification_allocations_are_both_required(tmp_path: Path) -
         audit.validate_slurm_allocation(manifest)
 
 
+def test_parallel_half_and_cpu_fanin_allocations_are_all_required(tmp_path: Path) -> None:
+    setup = tmp_path / "setup.json"
+    halves = {str(half): tmp_path / f"half{half}.json" for half in (1, 2)}
+    fanin = tmp_path / "fanin.json"
+    _write_slurm_record(setup)
+    for path in halves.values():
+        _write_slurm_record(path)
+    fanin.write_text(
+        json.dumps(
+            {
+                "under_slurm": True,
+                "job_id": "fanin",
+                "ReqTRES": "cpu=16,mem=32G,node=1,billing=16",
+                "AllocTRES": "cpu=16,mem=32G,node=1,billing=16",
+                "requested_gpus": 0,
+                "allocated_gpus": 0,
+                "OverSubscribe": "OK",
+            }
+        )
+        + "\n"
+    )
+    manifest = {
+        "provenance": {
+            "setup_slurm_allocation_json": str(setup),
+            "half_slurm_allocation_jsons": {
+                key: str(value) for key, value in halves.items()
+            },
+            "fanin_slurm_allocation_json": str(fanin),
+        }
+    }
+
+    result = audit.validate_slurm_allocation(manifest)
+
+    assert result["all_valid"] is True
+    assert result["halves"]["1"]["requested_gpus"] == 1
+    assert result["fanin"]["requested_gpus"] == 0
+
+
+def test_natural_convergence_reports_choose_last_common_numbered_boundary(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "submission_manifest.json"
+    manifest_path.write_text("{}\n")
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    for half_id, recovar_iteration, relion_iteration, status in (
+        (1, 17, 18, "fail"),
+        (2, 19, 19, "pass"),
+    ):
+        report_path = audit_dir / f"half{half_id}_particle_state.json"
+        arrays_path = audit_dir / f"half{half_id}_particle_state_arrays.npz"
+        hash_path = audit_dir / f"half{half_id}_particle_state.sha256"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "schema": "em_particle_state_distribution_audit_v1",
+                    "status": status,
+                    "gating": {"require_exact_convergence": True},
+                    "convergence_topology": {
+                        "recovar": {
+                            "iteration": recovar_iteration,
+                            "has_converged": True,
+                            "final_all_data_ran": True,
+                        },
+                        "relion": {
+                            "iteration": relion_iteration,
+                            "has_converged": True,
+                            "final_data_star_present": True,
+                        },
+                    },
+                }
+            )
+            + "\n"
+        )
+        np.savez(arrays_path, placeholder=np.asarray([half_id]))
+        hash_path.write_text(
+            f"{audit.sha256_file(report_path)}  {report_path.resolve()}\n"
+            f"{audit.sha256_file(arrays_path)}  {arrays_path.resolve()}\n"
+        )
+    manifest = {
+        "dataset": "EMPIAR-10073",
+        "config": {
+            "campaign": "natural-convergence",
+            "seed": 42001,
+            "max_iter": 50,
+            "execution_topology": "parallel_external_halves_cpu_fanin",
+            "map_selection_boundary": "last_common_numbered_iteration",
+        },
+    }
+
+    result, boundary = audit.validate_natural_convergence_reports(manifest_path, manifest)
+
+    assert boundary == 17
+    assert result["last_common_numbered_iteration"] == 17
+    assert result["final_all_data_maps_used_for_fsc"] is False
+    assert result["exact_cross_engine_convergence_iteration_match"] is False
+    assert result["per_half"][0]["particle_state_audit_status"] == "fail"
+
+
 def test_engine_wall_records_must_match_qualification_job() -> None:
     performance = {
         engine: [{"slurm_job_id": "1234"}, {"slurm_job_id": "1234"}]
@@ -938,3 +1113,23 @@ def test_engine_wall_records_must_match_qualification_job() -> None:
     performance["recovar"][1]["slurm_job_id"] = "9999"
     with pytest.raises(audit.AuditError, match="not bound to qualification job 1234"):
         audit.validate_engine_job_binding(performance, qualification_job_id="1234")
+
+
+def test_parallel_engine_wall_records_are_bound_within_each_half() -> None:
+    performance = {
+        engine: [{"slurm_job_id": "half-one"}, {"slurm_job_id": "half-two"}]
+        for engine in ("relion", "recovar")
+    }
+
+    result = audit.validate_parallel_engine_job_binding(
+        performance,
+        half_job_ids={"1": "half-one", "2": "half-two"},
+    )
+
+    assert result["within_half_same_job"] is True
+    performance["recovar"][1]["slurm_job_id"] = "wrong"
+    with pytest.raises(audit.AuditError, match="not bound to their external-half jobs"):
+        audit.validate_parallel_engine_job_binding(
+            performance,
+            half_job_ids={"1": "half-one", "2": "half-two"},
+        )

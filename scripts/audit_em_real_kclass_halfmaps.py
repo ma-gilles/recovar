@@ -736,19 +736,38 @@ def validate_input_artifacts(manifest: Mapping[str, Any]) -> dict[str, Any]:
     observed_lines = {line.rstrip() for line in sha_manifest.read_text().splitlines() if line.strip()}
     _require(observed_lines == declared_lines, "input SHA-256 manifest does not match submission manifest")
 
-    check_log = Path(manifest["provenance"]["input_sha256_check_log"])
-    _require(check_log.is_file(), f"missing in-job SHA-256 verification log: {check_log}")
-    log_lines = {line.strip() for line in check_log.read_text(errors="replace").splitlines() if line.strip()}
-    missing = sorted(expected_log_lines - log_lines)
-    _require(not missing, f"in-job SHA-256 verification is incomplete: {missing}")
-    _require(not any("FAILED" in line for line in log_lines), "in-job SHA-256 verification contains failures")
+    provenance = manifest["provenance"]
+    logs_by_half = provenance.get("input_sha256_check_logs_by_half")
+    if logs_by_half:
+        _require(set(logs_by_half) == {"1", "2"}, "input verification logs must cover both halves")
+        check_logs = [Path(logs_by_half[str(half_id)]) for half_id in (1, 2)]
+    else:
+        _require(provenance.get("input_sha256_check_log"), "input verification log is undeclared")
+        check_logs = [Path(provenance["input_sha256_check_log"])]
+    verification_rows: list[dict[str, Any]] = []
+    for check_log in check_logs:
+        _require(check_log.is_file(), f"missing in-job SHA-256 verification log: {check_log}")
+        log_lines = {
+            line.strip()
+            for line in check_log.read_text(errors="replace").splitlines()
+            if line.strip()
+        }
+        missing = sorted(expected_log_lines - log_lines)
+        _require(not missing, f"in-job SHA-256 verification is incomplete: {missing}")
+        _require(
+            not any("FAILED" in line for line in log_lines),
+            "in-job SHA-256 verification contains failures",
+        )
+        verification_rows.append(
+            {"path": str(check_log.resolve()), "sha256": sha256_file(check_log)}
+        )
     return {
         "entry_count": len(records),
         "directly_rehashed_count": len(checked_directly),
         "directly_rehashed": checked_directly,
         "all_entries_verified_at_job_start": True,
-        "verification_log": str(check_log.resolve()),
-        "verification_log_sha256": sha256_file(check_log),
+        "verification_logs": verification_rows,
+        "all_half_jobs_verified_inputs": len(verification_rows) == 2,
         "sha256_manifest": str(sha_manifest.resolve()),
         "sha256_manifest_sha256": sha256_file(sha_manifest),
     }
@@ -756,18 +775,79 @@ def validate_input_artifacts(manifest: Mapping[str, Any]) -> dict[str, Any]:
 
 def validate_launcher_artifacts(manifest: Mapping[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
-    for label in ("setup", "run"):
-        path = Path(manifest["provenance"][f"{label}_script"])
+    provenance = manifest["provenance"]
+    declared: list[tuple[str, Path, str]] = [
+        (
+            "setup",
+            Path(provenance["setup_script"]),
+            str(provenance["setup_script_sha256"]),
+        )
+    ]
+    half_scripts = provenance.get("half_scripts")
+    if half_scripts:
+        half_hashes = provenance.get("half_script_sha256") or {}
+        _require(
+            set(half_scripts) == {"1", "2"} and set(half_hashes) == {"1", "2"},
+            "parallel launcher scripts must cover both halves",
+        )
+        declared.extend(
+            (f"half{half_id}", Path(half_scripts[str(half_id)]), str(half_hashes[str(half_id)]))
+            for half_id in (1, 2)
+        )
+        declared.append(
+            (
+                "fanin",
+                Path(provenance["fanin_script"]),
+                str(provenance["fanin_script_sha256"]),
+            )
+        )
+    else:
+        declared.append(
+            ("run", Path(provenance["run_script"]), str(provenance["run_script_sha256"]))
+        )
+    for label, path, expected in declared:
         _require(path.is_file(), f"missing {label} Slurm script: {path}")
         observed = sha256_file(path)
         _require(
-            observed == manifest["provenance"][f"{label}_script_sha256"],
+            observed == expected,
             f"{label} Slurm script changed",
         )
         text = path.read_text(errors="replace")
         _require("#SBATCH --exclusive" not in text, f"{label} Slurm script requests --exclusive")
         rows.append({"role": label, "path": str(path.resolve()), "sha256": observed})
-    return {"scripts": rows, "nonexclusive": True}
+    setup_products_declaration = provenance.get("setup_products_sha256_manifest")
+    if not setup_products_declaration:
+        return {
+            "scripts": rows,
+            "nonexclusive": True,
+            "setup_products": [],
+            "shared_setup_read_only": False,
+            "legacy_manifest_without_setup_product_seal": True,
+        }
+    setup_products_path = Path(setup_products_declaration)
+    _require(setup_products_path.is_file(), "shared setup-product seal is missing")
+    setup_products: list[dict[str, Any]] = []
+    for line in setup_products_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        digest, raw_path = line.split(maxsplit=1)
+        path = Path(raw_path.strip()).resolve()
+        _require(path.is_file(), f"sealed setup product is missing: {path}")
+        _require(sha256_file(path) == digest, f"sealed setup product changed: {path}")
+        _require(
+            path.stat().st_mode & 0o222 == 0,
+            f"sealed setup product remains writable: {path}",
+        )
+        setup_products.append({"path": str(path), "sha256": digest, "read_only": True})
+    _require(len(setup_products) == 3, "shared setup-product seal must contain exactly three entries")
+    return {
+        "scripts": rows,
+        "nonexclusive": True,
+        "setup_products": setup_products,
+        "setup_products_manifest": str(setup_products_path.resolve()),
+        "setup_products_manifest_sha256": sha256_file(setup_products_path),
+        "shared_setup_read_only": True,
+    }
 
 
 def validate_commands(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -792,13 +872,25 @@ def validate_commands(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return {"exact_match": True, "commands": rows}
 
 
-def _validate_slurm_allocation_record(path: Path, *, role: str) -> dict[str, Any]:
+def _validate_slurm_allocation_record(
+    path: Path,
+    *,
+    role: str,
+    expected_gpus: int = 1,
+) -> dict[str, Any]:
     _require(path.is_file(), f"missing {role} Slurm allocation record: {path}")
     row = json.loads(path.read_text())
+    expected_gpu_label = "one GPU" if expected_gpus == 1 else f"{expected_gpus} GPU(s)"
     _require(row.get("under_slurm") is True, f"{role} was not executed under Slurm")
     _require(row.get("ReqTRES") == row.get("AllocTRES"), f"{role} Slurm ReqTRES != AllocTRES")
-    _require(int(row.get("requested_gpus", -1)) == 1, f"{role} did not request exactly one GPU")
-    _require(int(row.get("allocated_gpus", -1)) == 1, f"{role} did not allocate exactly one GPU")
+    _require(
+        int(row.get("requested_gpus", -1)) == expected_gpus,
+        f"{role} did not request exactly {expected_gpu_label}",
+    )
+    _require(
+        int(row.get("allocated_gpus", -1)) == expected_gpus,
+        f"{role} did not allocate exactly {expected_gpu_label}",
+    )
     _require(row.get("OverSubscribe") == "OK", f"{role} was exclusive")
     _require(str(row.get("job_id", "")), f"{role} Slurm job ID is missing")
     return {**row, "path": str(path.resolve()), "sha256": sha256_file(path), "valid": True}
@@ -806,18 +898,40 @@ def _validate_slurm_allocation_record(path: Path, *, role: str) -> dict[str, Any
 
 def validate_slurm_allocation(manifest: Mapping[str, Any]) -> dict[str, Any]:
     provenance = manifest["provenance"]
-    return {
+    result = {
         "setup": _validate_slurm_allocation_record(
             Path(provenance["setup_slurm_allocation_json"]), role="setup job"
         ),
-        "qualification": _validate_slurm_allocation_record(
-            Path(provenance["slurm_allocation_json"]), role="qualification job"
-        ),
-        "both_valid": True,
     }
+    half_records = provenance.get("half_slurm_allocation_jsons")
+    if half_records:
+        _require(set(half_records) == {"1", "2"}, "Slurm allocation records must cover both halves")
+        result["halves"] = {
+            str(half_id): _validate_slurm_allocation_record(
+                Path(half_records[str(half_id)]), role=f"half-{half_id} job"
+            )
+            for half_id in (1, 2)
+        }
+        result["fanin"] = _validate_slurm_allocation_record(
+            Path(provenance["fanin_slurm_allocation_json"]),
+            role="fan-in job",
+            expected_gpus=0,
+        )
+        result["all_valid"] = True
+    else:
+        result["qualification"] = _validate_slurm_allocation_record(
+            Path(provenance["slurm_allocation_json"]), role="qualification job"
+        )
+        result["both_valid"] = True
+    return result
 
 
-def _latest_relion_maps(directory: Path, expected_iteration: int) -> list[Path]:
+def _latest_relion_maps(
+    directory: Path,
+    expected_iteration: int,
+    *,
+    allow_later: bool = False,
+) -> list[Path]:
     grouped: dict[int, dict[int, Path]] = {}
     for path in directory.glob("run_it*_class*.mrc"):
         match = RELION_MAP_RE.fullmatch(path.name)
@@ -827,10 +941,39 @@ def _latest_relion_maps(directory: Path, expected_iteration: int) -> list[Path]:
         class_id = int(match.group("class_id"))
         grouped.setdefault(iteration, {})[class_id] = path
     _require(grouped, f"no numbered RELION Class3D maps found in {directory}")
-    _require(max(grouped) == expected_iteration, f"RELION stopped at iteration {max(grouped)}, expected {expected_iteration}")
+    if allow_later:
+        _require(
+            max(grouped) >= expected_iteration,
+            f"RELION stopped at iteration {max(grouped)}, before common boundary {expected_iteration}",
+        )
+    else:
+        _require(
+            max(grouped) == expected_iteration,
+            f"RELION stopped at iteration {max(grouped)}, expected {expected_iteration}",
+        )
     paths = grouped[expected_iteration]
     _require(set(paths) == set(range(1, N_CLASSES + 1)), "RELION final numbered class topology is incomplete")
     return [paths[class_id] for class_id in range(1, N_CLASSES + 1)]
+
+
+def _last_relion_numbered_map_iteration(directory: Path) -> int:
+    iterations = [
+        int(match.group("iteration"))
+        for path in directory.glob("run_it*_class*.mrc")
+        if (match := RELION_MAP_RE.fullmatch(path.name)) is not None
+    ]
+    _require(iterations, f"no numbered RELION maps in {directory}")
+    return max(iterations)
+
+
+def _last_recovar_numbered_map_iteration(directory: Path) -> int:
+    iterations = [
+        int(match.group("iteration"))
+        for path in directory.glob("it*_half*_class*_reg.mrc")
+        if (match := RECOVAR_MAP_RE.fullmatch(path.name)) is not None
+    ]
+    _require(iterations, f"no numbered RECOVAR maps in {directory}")
+    return max(iterations)
 
 
 def _latest_recovar_occupied_half_maps(
@@ -838,6 +981,10 @@ def _latest_recovar_occupied_half_maps(
     results_path: Path,
     expected_iteration: int,
     expected_particle_count: int,
+    *,
+    allow_later: bool = False,
+    require_converged_final_all_data: bool = False,
+    configured_max_iter: int | None = None,
 ) -> tuple[list[Path], list[dict[str, Any]]]:
     """Return maps from the sole occupied RECOVAR internal half."""
 
@@ -851,10 +998,20 @@ def _latest_recovar_occupied_half_maps(
         grouped[key] = path
     _require(grouped, f"no numbered RECOVAR K-class maps found in {directory}")
     observed_iterations = sorted({key[0] for key in grouped})
-    _require(
-        observed_iterations[-1] == expected_iteration,
-        f"RECOVAR stopped at iteration {observed_iterations[-1]}, expected {expected_iteration}",
-    )
+    if allow_later:
+        _require(
+            observed_iterations == list(range(observed_iterations[-1] + 1)),
+            f"RECOVAR numbered map topology is not contiguous: {observed_iterations}",
+        )
+        _require(
+            observed_iterations[-1] >= expected_iteration,
+            f"RECOVAR stopped at iteration {observed_iterations[-1]}, before common boundary {expected_iteration}",
+        )
+    else:
+        _require(
+            observed_iterations[-1] == expected_iteration,
+            f"RECOVAR stopped at iteration {observed_iterations[-1]}, expected {expected_iteration}",
+        )
     expected_final_keys = {
         (expected_iteration, replica, class_id)
         for replica in (1, 2)
@@ -883,6 +1040,21 @@ def _latest_recovar_occupied_half_maps(
         n_images = int(np.asarray(payload["n_images"]).item())
         n_iterations = int(np.asarray(payload["n_iterations"]).item())
         final_all_data_ran = bool(np.asarray(payload["final_all_data_ran"]).item())
+        convergence_has_converged = (
+            bool(np.asarray(payload["convergence_has_converged"]).item())
+            if "convergence_has_converged" in payload.files
+            else None
+        )
+        convergence_iteration = (
+            int(np.asarray(payload["convergence_iteration"]).item())
+            if "convergence_iteration" in payload.files
+            else None
+        )
+        current_sizes_count = (
+            int(np.asarray(payload["current_sizes"]).reshape(-1).size)
+            if "current_sizes" in payload.files
+            else None
+        )
         half_indices = [
             np.asarray(payload["half1_indices"], dtype=np.int64).reshape(-1),
             np.asarray(payload["half2_indices"], dtype=np.int64).reshape(-1),
@@ -892,8 +1064,37 @@ def _latest_recovar_occupied_half_maps(
             int(np.asarray(payload["hard_assignments_half1"]).size),
         ]
     _require(n_images == expected_particle_count, "RECOVAR particle count differs from frozen external half")
-    _require(n_iterations == expected_iteration + 1, "RECOVAR iteration metadata differs from final map index")
-    _require(not final_all_data_ran, "RECOVAR final-all-data output cannot support an independent-half claim")
+    if require_converged_final_all_data:
+        _require(configured_max_iter is not None, "natural convergence lacks configured max_iter")
+        _require(
+            n_iterations == configured_max_iter,
+            "RECOVAR n_iterations must preserve the configured natural-convergence cap",
+        )
+        _require(
+            convergence_iteration == observed_iterations[-1] + 1,
+            "RECOVAR convergence iteration differs from latest numbered map index",
+        )
+        _require(
+            current_sizes_count == observed_iterations[-1] + 1,
+            "RECOVAR executed current-size trajectory differs from numbered maps",
+        )
+        _require(
+            convergence_has_converged is True,
+            "RECOVAR natural-convergence run did not record actual convergence",
+        )
+        _require(
+            final_all_data_ran,
+            "RECOVAR converged run did not complete its natural final-all-data pass",
+        )
+    else:
+        _require(
+            n_iterations == observed_iterations[-1] + 1,
+            "RECOVAR iteration metadata differs from latest numbered map index",
+        )
+        _require(
+            not final_all_data_ran,
+            "RECOVAR final-all-data output cannot support the fixed-iteration claim",
+        )
     for half_index, indices in enumerate(half_indices, start=1):
         _require(
             np.all((indices >= 0) & (indices < n_images)),
@@ -951,6 +1152,115 @@ def _latest_recovar_occupied_half_maps(
             }
         )
     return representatives, selections
+
+
+def validate_natural_convergence_reports(
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Validate per-half convergence gates and choose one common numbered boundary."""
+
+    campaign = str(manifest["config"].get("campaign", "fixed8"))
+    configured_iteration = int(manifest["config"]["max_iter"])
+    if campaign != "natural-convergence":
+        return {"required": False, "campaign": campaign}, configured_iteration
+    _require(manifest.get("dataset") == "EMPIAR-10073", "natural convergence is frozen to EMPIAR-10073")
+    _require(int(manifest["config"].get("seed", -1)) == 42001, "natural convergence is frozen to seed 42001")
+    _require(configured_iteration == 50, "natural convergence max_iter changed from 50")
+    _require(
+        manifest["config"].get("execution_topology") == "parallel_external_halves_cpu_fanin",
+        "natural convergence requires parallel external-half execution",
+    )
+    _require(
+        manifest["config"].get("map_selection_boundary") == "last_common_numbered_iteration",
+        "natural convergence map-selection boundary changed",
+    )
+
+    audit_dir = manifest_path.parent / "audit"
+    rows: list[dict[str, Any]] = []
+    convergence_iterations: list[int] = []
+    for half_id in (1, 2):
+        report_path = audit_dir / f"half{half_id}_particle_state.json"
+        arrays_path = audit_dir / f"half{half_id}_particle_state_arrays.npz"
+        hashes_path = audit_dir / f"half{half_id}_particle_state.sha256"
+        _require(report_path.is_file(), f"missing half-{half_id} particle-state convergence report")
+        _require(arrays_path.is_file(), f"missing half-{half_id} particle-state arrays")
+        _require(hashes_path.is_file(), f"missing half-{half_id} particle-state hash manifest")
+        expected_lines = {
+            f"{sha256_file(report_path)}  {report_path.resolve()}",
+            f"{sha256_file(arrays_path)}  {arrays_path.resolve()}",
+        }
+        observed_lines = {
+            line.rstrip() for line in hashes_path.read_text().splitlines() if line.strip()
+        }
+        _require(
+            observed_lines == expected_lines,
+            f"half-{half_id} particle-state hash manifest changed or is incomplete",
+        )
+        report = json.loads(report_path.read_text())
+        _require(
+            report.get("schema") == "em_particle_state_distribution_audit_v1",
+            f"half-{half_id} particle-state schema changed",
+        )
+        _require(
+            report.get("status") in {"pass", "fail"},
+            f"half-{half_id} particle-state convergence audit did not complete",
+        )
+        gating = report.get("gating") or {}
+        _require(
+            gating.get("require_exact_convergence") is True,
+            f"half-{half_id} did not require exact cross-engine convergence",
+        )
+        topology = report.get("convergence_topology") or {}
+        recovar = topology.get("recovar") or {}
+        relion = topology.get("relion") or {}
+        _require(
+            recovar.get("has_converged") is True and relion.get("has_converged") in (1, True),
+            f"half-{half_id} did not naturally converge in both engines",
+        )
+        recovar_iteration = int(recovar.get("iteration", -1))
+        relion_iteration = int(relion.get("iteration", -2))
+        _require(
+            1 <= recovar_iteration <= configured_iteration
+            and 1 <= relion_iteration <= configured_iteration,
+            f"half-{half_id} convergence boundary is outside the configured cap",
+        )
+        _require(
+            recovar.get("final_all_data_ran") is True
+            and relion.get("final_data_star_present") is True,
+            f"half-{half_id} converged finalization topology is incomplete",
+        )
+        convergence_iterations.extend((recovar_iteration, relion_iteration))
+        rows.append(
+            {
+                "half": half_id,
+                "recovar_convergence_iteration": recovar_iteration,
+                "relion_convergence_iteration": relion_iteration,
+                "exact_iteration_match": recovar_iteration == relion_iteration,
+                "particle_state_audit_status": report["status"],
+                "particle_state_threshold_failures": report.get("threshold_failures", []),
+                "recovar_final_all_data_ran": True,
+                "relion_final_data_star_present": True,
+                "report": str(report_path.resolve()),
+                "report_sha256": sha256_file(report_path),
+                "arrays": str(arrays_path.resolve()),
+                "arrays_sha256": sha256_file(arrays_path),
+                "hash_manifest": str(hashes_path.resolve()),
+                "hash_manifest_sha256": sha256_file(hashes_path),
+            }
+        )
+    common_iteration = min(convergence_iterations)
+    return {
+        "required": True,
+        "campaign": campaign,
+        "per_half": rows,
+        "last_common_numbered_iteration": common_iteration,
+        "selection_rule": "minimum natural convergence boundary across both engines and external halves",
+        "exact_cross_engine_convergence_iteration_match": all(
+            row["exact_iteration_match"] for row in rows
+        ),
+        "final_all_data_maps_used_for_fsc": False,
+    }, common_iteration
 
 
 def _reject_cross_process_duplicates(paths_by_half: Sequence[Sequence[Path]], *, engine: str) -> None:
@@ -1467,6 +1777,34 @@ def validate_engine_job_binding(
     }
 
 
+def validate_parallel_engine_job_binding(
+    performance: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    half_job_ids: Mapping[str, str],
+) -> dict[str, Any]:
+    """Bind RELION and RECOVAR to the same one-GPU job within each half."""
+
+    _require(set(half_job_ids) == {"1", "2"}, "parallel job binding must cover both halves")
+    observed: dict[str, list[str]] = {}
+    for engine in ("relion", "recovar"):
+        rows = list(performance.get(engine, []))
+        _require(len(rows) == 2, f"expected two {engine} engine wall records")
+        observed[engine] = [str(row.get("slurm_job_id", "")) for row in rows]
+        expected = [str(half_job_ids[str(half_id)]) for half_id in (1, 2)]
+        _require(
+            observed[engine] == expected,
+            f"{engine} wall records are not bound to their external-half jobs: "
+            f"observed={observed[engine]} expected={expected}",
+        )
+    return {
+        "half_job_ids": {str(key): str(value) for key, value in half_job_ids.items()},
+        "engine_wall_job_ids": observed,
+        "record_count": 4,
+        "within_half_same_job": True,
+        "all_bound": True,
+    }
+
+
 def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarray], np.ndarray]:
     manifest_path = args.manifest.resolve()
     _require(manifest_path.is_file(), f"missing submission manifest: {manifest_path}")
@@ -1484,7 +1822,11 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
     command_audit = validate_commands(manifest)
     slurm_audit = validate_slurm_allocation(manifest)
     split = validate_particle_split(manifest)
-    expected_iteration = int(manifest["config"]["max_iter"])
+    convergence_audit, expected_iteration = validate_natural_convergence_reports(
+        manifest_path,
+        manifest,
+    )
+    natural_convergence = bool(convergence_audit["required"])
 
     relion_paths: list[list[Path]] = []
     recovar_paths: list[list[Path]] = []
@@ -1492,19 +1834,46 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
     assignment_raw: list[tuple[np.ndarray, np.ndarray, dict[str, Any]]] = []
     performance: dict[str, Any] = {"relion": [], "recovar": []}
     for row in manifest["halves"]:
+        half_id = int(row["half"])
         relion_dir = Path(row["relion_dir"])
         recovar_dir = Path(row["recovar_dir"])
-        relion_paths.append(_latest_relion_maps(relion_dir, expected_iteration))
+        if natural_convergence:
+            half_convergence = next(
+                item
+                for item in convergence_audit["per_half"]
+                if int(item["half"]) == half_id
+            )
+            _require(
+                _last_relion_numbered_map_iteration(relion_dir)
+                == int(half_convergence["relion_convergence_iteration"]),
+                f"RELION half {half_id} latest map differs from convergence boundary",
+            )
+            _require(
+                _last_recovar_numbered_map_iteration(Path(row["recovar_intermediates_dir"]))
+                + 1
+                == int(half_convergence["recovar_convergence_iteration"]),
+                f"RECOVAR half {half_id} latest map differs from convergence boundary",
+            )
+        relion_paths.append(
+            _latest_relion_maps(
+                relion_dir,
+                expected_iteration,
+                allow_later=natural_convergence,
+            )
+        )
         representatives, selection_audit = _latest_recovar_occupied_half_maps(
             Path(row["recovar_intermediates_dir"]),
             recovar_dir / "refinement_results.npz",
             expected_iteration - 1,
             int(row["particle_count"]),
+            allow_later=natural_convergence,
+            require_converged_final_all_data=natural_convergence,
+            configured_max_iter=int(manifest["config"]["max_iter"]),
         )
         recovar_paths.append(representatives)
         internal_half_selection_audits.append(selection_audit)
-        _reject_within_process_duplicates(relion_paths[-1], engine="RELION", half=int(row["half"]))
-        _reject_within_process_duplicates(representatives, engine="RECOVAR", half=int(row["half"]))
+        _reject_within_process_duplicates(relion_paths[-1], engine="RELION", half=half_id)
+        _reject_within_process_duplicates(representatives, engine="RECOVAR", half=half_id)
         assignment_raw.append(
             _read_assignments(
                 relion_dir,
@@ -1515,19 +1884,53 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         )
         performance["relion"].append(_resource_row(relion_dir))
         performance["recovar"].append(_resource_row(recovar_dir))
-    engine_job_binding = validate_engine_job_binding(
-        performance,
-        qualification_job_id=str(slurm_audit["qualification"]["job_id"]),
-    )
+    if natural_convergence:
+        engine_job_binding = validate_parallel_engine_job_binding(
+            performance,
+            half_job_ids={
+                str(half_id): str(slurm_audit["halves"][str(half_id)]["job_id"])
+                for half_id in (1, 2)
+            },
+        )
+    else:
+        engine_job_binding = validate_engine_job_binding(
+            performance,
+            qualification_job_id=str(slurm_audit["qualification"]["job_id"]),
+        )
     _reject_cross_process_duplicates(relion_paths, engine="RELION")
     _reject_cross_process_duplicates(recovar_paths, engine="RECOVAR")
-    physical_gpu_path = Path(manifest_path.parent / "provenance" / "physical_gpu_uuid.txt")
-    _require(physical_gpu_path.is_file(), f"missing physical GPU identity: {physical_gpu_path}")
-    physical_gpu_uuid = physical_gpu_path.read_text().strip()
-    observed_gpu_uuids = {
-        row["physical_gpu_uuid"] for engine_rows in performance.values() for row in engine_rows
-    }
-    _require(observed_gpu_uuids == {physical_gpu_uuid}, "engine GPU identity changed")
+    if natural_convergence:
+        physical_gpu_uuids_by_half: dict[str, str] = {}
+        for half_index in (1, 2):
+            physical_gpu_path = manifest_path.parent / "provenance" / f"physical_gpu_uuid_half{half_index}.txt"
+            _require(
+                physical_gpu_path.is_file(),
+                f"missing half-{half_index} physical GPU identity: {physical_gpu_path}",
+            )
+            physical_gpu_uuid = physical_gpu_path.read_text().strip()
+            observed = {
+                performance[engine][half_index - 1]["physical_gpu_uuid"]
+                for engine in ("relion", "recovar")
+            }
+            _require(
+                observed == {physical_gpu_uuid},
+                f"engine GPU identity changed within half {half_index}",
+            )
+            physical_gpu_uuids_by_half[str(half_index)] = physical_gpu_uuid
+        physical_gpu_uuid = (
+            next(iter(set(physical_gpu_uuids_by_half.values())))
+            if len(set(physical_gpu_uuids_by_half.values())) == 1
+            else None
+        )
+    else:
+        physical_gpu_path = manifest_path.parent / "provenance" / "physical_gpu_uuid.txt"
+        _require(physical_gpu_path.is_file(), f"missing physical GPU identity: {physical_gpu_path}")
+        physical_gpu_uuid = physical_gpu_path.read_text().strip()
+        observed_gpu_uuids = {
+            row["physical_gpu_uuid"] for engine_rows in performance.values() for row in engine_rows
+        }
+        _require(observed_gpu_uuids == {physical_gpu_uuid}, "engine GPU identity changed")
+        physical_gpu_uuids_by_half = {"1": physical_gpu_uuid, "2": physical_gpu_uuid}
 
     relion_sets = [_load_maps(paths, frame="relion") for paths in relion_paths]
     recovar_sets = [_load_maps(paths, frame="recovar") for paths in recovar_paths]
@@ -1740,6 +2143,8 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "cli_flags_exact": True,
             "run_script_hashed": True,
         },
+        "convergence_audit": convergence_audit,
+        "selected_common_numbered_iteration": expected_iteration,
         "provenance_audit": {
             "input_artifacts": input_audit,
             "reference_derivation": reference_audit,
@@ -1747,6 +2152,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "commands": command_audit,
             "slurm": slurm_audit,
             "physical_gpu_uuid": physical_gpu_uuid,
+            "physical_gpu_uuids_by_half": physical_gpu_uuids_by_half,
         },
         "particle_split": split,
         "box_size": box_size,
@@ -1759,6 +2165,12 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
                 "particle and the other contains zero; only the occupied maps are selected"
             ),
             "final_all_data_maps_used": False,
+            "numbered_iteration": expected_iteration,
+            "boundary": (
+                "last common natural-convergence boundary across all four trajectories"
+                if natural_convergence
+                else "configured fixed-iteration boundary"
+            ),
             "within_process_duplicate_class_maps_rejected": True,
             "cross_process_duplicate_maps_rejected": True,
             "extra_final_recovar_class_ids_rejected": True,
@@ -1818,7 +2230,9 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
         "assignments_and_support": assignment_rows,
         "performance": {
             **performance,
-            "same_job_serial": True,
+            "same_job_serial": not natural_convergence,
+            "parallel_external_halves": natural_convergence,
+            "within_half_relion_then_recovar_same_gpu": True,
             "job_binding": engine_job_binding,
             "hbm_sampling": "one-second nvidia-smi lower bound",
         },
@@ -1838,7 +2252,11 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
             "This audit compares scientific half-map quality; it does not require the two independent halves to follow identical class trajectories.",
             "Class labels are matched independently to RELION half 1; a split/merge remains visible in per-class FSC and populations.",
             "The common-mask FSC is uncorrected and is used only for matched relative diagnostics, not an absolute-resolution claim.",
-            "This bounded single-seed harness does not yet report Pmax, pose/translation agreement, or the required multi-seed consensus aggregate.",
+            (
+                "This natural-convergence single-seed harness is diagnostic only and does not satisfy the required multi-seed consensus aggregate."
+                if natural_convergence
+                else "This bounded single-seed harness does not yet report Pmax, pose/translation agreement, or the required multi-seed consensus aggregate."
+            ),
             "A completed result must be admitted to the benchmark registry separately after Slurm/accounting and artifact sealing.",
         ],
     }

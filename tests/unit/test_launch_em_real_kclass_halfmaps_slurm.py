@@ -213,6 +213,105 @@ def test_rendered_job_is_nonexclusive_serial_one_gpu_and_audited(tmp_path: Path)
     assert '${ROOT}/runtime' not in text
 
 
+def test_natural_convergence_renders_two_isolated_half_jobs_and_cpu_fanin(
+    tmp_path: Path,
+) -> None:
+    rows = [_row(tmp_path, half) for half in (1, 2)]
+    common = dict(
+        root=tmp_path,
+        profile=launcher.PROFILES["native10k-256"],
+        source={"commit": "a" * 40},
+        relion_source=tmp_path / "relion_source",
+        relion_module="relion/test",
+        relion_refine_mpi=tmp_path / "relion_refine_mpi",
+        cuda_module="cuda/test",
+        halves=rows,
+        max_iter=50,
+        seed=42001,
+        mpi_ranks=3,
+        pool=3,
+        analysis_policy=launcher.expected_analysis_policy(256),
+        dataset_key="10073",
+        require_natural_convergence=True,
+    )
+    half1 = launcher.render_run_script(**common, selected_half=1)
+    half2 = launcher.render_run_script(**common, selected_half=2)
+    fanin = launcher.render_fanin_script(
+        root=tmp_path,
+        profile=launcher.PROFILES["native10k-256"],
+        source={"commit": "a" * 40},
+        relion_source=tmp_path / "relion_source",
+        cuda_module="cuda/test",
+        analysis_policy=launcher.expected_analysis_policy(256),
+        dataset_key="10073",
+        seed=42001,
+    )
+
+    assert "for half in 1; do" in half1
+    assert "for half in 2; do" in half2
+    assert "RELION_COMMAND_2=" not in half1
+    assert "RELION_COMMAND_1=" not in half2
+    assert "--require-exact-convergence" in half1
+    assert "run_it???_data.star" in half1
+    assert 'if [[ "${audit_status}" -ge 2 ]]; then' in half1
+    assert 'if [[ "${audit_status}" -eq 1 ]]; then' in half1
+    assert "exact convergence-boundary mismatch retained as a non-blocking diagnostic" in half1
+    assert 'sha256sum --check "${ROOT}/audit/half${half}_particle_state.sha256"' in half1
+    assert half1.index('local audit_status="$?"') < half1.index(
+        'if [[ "${audit_status}" -eq 1 ]]; then'
+    )
+    assert "audit_em_real_kclass_halfmaps" not in half1
+    assert '${ROOT}/jax_cache/half1' in half1
+    assert "slurm_allocation_half1.json" in half1
+    assert "physical_gpu_uuid_half1.txt" in half1
+    assert "input_sha256_check_half1.txt" in half1
+    assert "PYTHONDONTWRITEBYTECODE=1" in half1
+    assert "#SBATCH --gres=gpu:1" in half1
+    assert "#SBATCH --time=24:00:00" in half1
+    assert "#SBATCH --exclusive" not in half1 + half2 + fanin
+    assert "#SBATCH --partition=cpu" in fanin
+    assert "#SBATCH --gres" not in fanin
+    assert "slurm_allocation_fanin.json" in fanin
+    assert "audit_em_real_kclass_halfmaps" in fanin
+    assert "half1_particle_state.sha256" in fanin
+    assert "half2_particle_state.sha256" in fanin
+
+
+@pytest.mark.parametrize(
+    ("tokens", "message"),
+    [
+        (("--seed", "42002", "--max-iter", "50"), "frozen to EMPIAR-10073 seed 42001"),
+        (("--seed", "42001", "--max-iter", "49"), "max_iter is frozen at 50"),
+    ],
+)
+def test_natural_convergence_contract_rejects_drift_before_creating_root(
+    tmp_path: Path,
+    monkeypatch,
+    tokens: tuple[str, ...],
+    message: str,
+) -> None:
+    root = tmp_path / "run"
+    monkeypatch.setattr(launcher, "DEFAULT_RUN_ROOT", tmp_path)
+    args = launcher._parse_args(
+        [
+            "--output-root",
+            str(root),
+            "--dataset",
+            "10073",
+            "--profile",
+            "native10k-256",
+            "--campaign",
+            "natural-convergence",
+            *tokens,
+        ]
+    )
+
+    with pytest.raises(launcher.LaunchError, match=message):
+        launcher.prepare(args)
+
+    assert not root.exists()
+
+
 def test_setup_job_records_and_validates_exact_allocation_before_build(tmp_path: Path) -> None:
     jobs = tmp_path / "jobs"
     jobs.mkdir()
@@ -238,6 +337,13 @@ def test_setup_job_records_and_validates_exact_allocation_before_build(tmp_path:
     assert 'row["allocated_gpus"] = _gpu_count_from_tres(row["AllocTRES"])' in text
     assert text.index("row = _slurm_allocation()") < text.index("flock")
     assert "#SBATCH --exclusive" not in text
+
+    launcher.seal_setup_products_script(script, tmp_path)
+    sealed_text = script.read_text()
+    assert "setup_products.sha256" in sealed_text
+    assert "SETUP_READONLY_ROOTS" in sealed_text
+    assert "chmod a-w" in sealed_text
+    assert "shared setup products sealed read-only" in sealed_text
 
 
 def test_shared_selection_preserves_source_row_order(tmp_path: Path, monkeypatch) -> None:
@@ -629,3 +735,52 @@ def test_submit_cancels_all_new_jobs_when_run_allocation_validation_fails(
         ["scontrol", "show", "job", "-o", "102"],
     ]
     assert cancellations == [["scancel", "102"], ["scancel", "101"]]
+
+
+def test_parallel_submission_uses_setup_two_halves_then_cpu_fanin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    setup = tmp_path / "setup.sh"
+    half1 = tmp_path / "half1.sh"
+    half2 = tmp_path / "half2.sh"
+    fanin = tmp_path / "fanin.sh"
+    for path in (setup, half1, half2):
+        path.write_text("#!/usr/bin/env bash\n#SBATCH --gres=gpu:1\n")
+    fanin.write_text("#!/usr/bin/env bash\n#SBATCH --partition=cpu\n")
+    calls: list[list[str]] = []
+
+    def fake_check_output(command, **_kwargs):
+        calls.append(command)
+        if command[:2] == ["sbatch", "--parsable"]:
+            if str(setup) in command:
+                return "101\n"
+            if str(half1) in command:
+                return "102\n"
+            if str(half2) in command:
+                return "103\n"
+            if str(fanin) in command:
+                return "104\n"
+        job_id = command[-1]
+        if job_id == "104":
+            return _scontrol_line(
+                job_id=job_id,
+                requested="cpu=16,mem=32G,node=1,billing=16",
+                allocated="cpu=16,mem=32G,node=1,billing=16",
+            )
+        return _scontrol_line(job_id=job_id)
+
+    monkeypatch.setattr(launcher.subprocess, "check_output", fake_check_output)
+
+    result = launcher.submit_parallel_scripts(setup, {1: half1, 2: half2}, fanin)
+
+    assert result["setup_job_id"] == "101"
+    assert result["half_job_ids"] == {"1": "102", "2": "103"}
+    assert result["fanin_job_id"] == "104"
+    sbatch_calls = [call for call in calls if call[0] == "sbatch"]
+    assert sbatch_calls == [
+        ["sbatch", "--parsable", str(setup)],
+        ["sbatch", "--parsable", "--dependency=afterok:101", str(half1)],
+        ["sbatch", "--parsable", "--dependency=afterok:101", str(half2)],
+        ["sbatch", "--parsable", "--dependency=afterok:102:103", str(fanin)],
+    ]

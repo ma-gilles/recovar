@@ -3,9 +3,11 @@
 
 RELION forbids ``--split_random_halves`` together with multiple classes.  This
 launcher therefore creates two disjoint frozen particle STARs and runs one
-independent K=4 Class3D process per STAR for each engine.  The four processes
-run serially on one physical GPU.  Dry-run is the default; ``--submit`` is an
-explicit state-changing action.
+independent K=4 Class3D process per STAR for each engine.  The frozen fixed-8
+campaign runs all four processes serially on one physical GPU.  The explicit
+natural-convergence campaign runs the two external halves in parallel, while
+still running RELION then RECOVAR on the same GPU within each half.  Dry-run is
+the default; ``--submit`` is an explicit state-changing action.
 """
 
 from __future__ import annotations
@@ -162,6 +164,9 @@ DEFAULT_RELION_SHA256 = "01fa9cc870fdce6c19d981d6e917765753406972abcddb0311a40ef
 DEFAULT_RELION_BASE_COMMIT = "d476e6f6a4f1f37627c06ace5227fc374c0c2b05"
 DEFAULT_RELION_BASE_TREE = "1633d228e89d91ede8ad0996e727ec6ab1bc96ee"
 DEFAULT_RELION_TRACKED_DIFF_SHA256 = "6987c5ce397cbdd98835682cf1481a150c38c48cda621e006341d01a77e11c11"
+FIXED8_CAMPAIGN = "fixed8"
+NATURAL_CONVERGENCE_CAMPAIGN = "natural-convergence"
+NATURAL_CONVERGENCE_MAX_ITER = 50
 class LaunchError(RuntimeError):
     """Raised when a run cannot be prepared without weakening provenance."""
 
@@ -1397,17 +1402,31 @@ def _gpu_count_from_tres(value: str) -> int | None:
     return sum(int(item) for item in typed) if typed else None
 
 
-def validate_submitted_job(job_id: str, script: Path) -> dict[str, Any]:
+def validate_submitted_job(
+    job_id: str,
+    script: Path,
+    *,
+    expected_gpus: int = 1,
+) -> dict[str, Any]:
     """Immediately reject an exclusive or overallocated newly submitted job."""
 
     output = subprocess.check_output(["scontrol", "show", "job", "-o", job_id], text=True).strip()
     fields = _parse_scontrol_fields(output)
     requested = fields.get("ReqTRES", "")
     allocated = fields.get("AllocTRES", "")
-    _require(_gpu_count_from_tres(requested) == 1, f"job {job_id} did not request exactly one GPU")
+    requested_gpus = _gpu_count_from_tres(requested) or 0
+    expected_gpu_label = "one GPU" if expected_gpus == 1 else f"{expected_gpus} GPU(s)"
+    _require(
+        requested_gpus == expected_gpus,
+        f"job {job_id} did not request exactly {expected_gpu_label}",
+    )
     if allocated not in {"", "(null)", "N/A"}:
         _require(requested == allocated, f"job {job_id} ReqTRES != AllocTRES")
-        _require(_gpu_count_from_tres(allocated) == 1, f"job {job_id} did not allocate exactly one GPU")
+        allocated_gpus = _gpu_count_from_tres(allocated) or 0
+        _require(
+            allocated_gpus == expected_gpus,
+            f"job {job_id} did not allocate exactly {expected_gpu_label}",
+        )
     _require(fields.get("OverSubscribe") == "OK", f"job {job_id} is exclusive")
     _require("#SBATCH --exclusive" not in script.read_text(), f"job script requests --exclusive: {script}")
     _require(fields.get("JobState") not in {"CANCELLED", "FAILED", "REJECTED"}, f"job {job_id} was rejected")
@@ -1417,8 +1436,10 @@ def validate_submitted_job(job_id: str, script: Path) -> dict[str, Any]:
         "ReqTRES": requested,
         "AllocTRES": None if allocated in {"", "(null)", "N/A"} else allocated,
         "OverSubscribe": fields.get("OverSubscribe"),
-        "requested_gpus": 1,
-        "allocated_gpus": None if allocated in {"", "(null)", "N/A"} else 1,
+        "requested_gpus": requested_gpus,
+        "allocated_gpus": (
+            None if allocated in {"", "(null)", "N/A"} else (_gpu_count_from_tres(allocated) or 0)
+        ),
         "script": str(script.resolve()),
         "raw_scontrol": output,
         "valid_at_submission": True,
@@ -1455,6 +1476,152 @@ def submit_scripts(setup_script: Path, run_script: Path) -> dict[str, Any]:
     }
 
 
+def submit_parallel_scripts(
+    setup_script: Path,
+    half_scripts: Mapping[int, Path],
+    fanin_script: Path,
+) -> dict[str, Any]:
+    """Submit one setup, two parallel GPU halves, and one CPU fan-in job."""
+
+    _require(set(half_scripts) == {1, 2}, "parallel topology requires exactly half scripts 1 and 2")
+    submitted: list[str] = []
+    try:
+        setup_output = subprocess.check_output(
+            ["sbatch", "--parsable", str(setup_script)], text=True
+        ).strip()
+        setup_job = setup_output.split(";", 1)[0]
+        _require(bool(setup_job), "sbatch returned an empty setup job ID")
+        submitted.append(setup_job)
+        setup_audit = validate_submitted_job(setup_job, setup_script)
+
+        half_jobs: dict[int, str] = {}
+        half_audits: dict[int, dict[str, Any]] = {}
+        for half_id in (1, 2):
+            script = half_scripts[half_id]
+            output = subprocess.check_output(
+                ["sbatch", "--parsable", f"--dependency=afterok:{setup_job}", str(script)],
+                text=True,
+            ).strip()
+            job_id = output.split(";", 1)[0]
+            _require(bool(job_id), f"sbatch returned an empty half-{half_id} job ID")
+            submitted.append(job_id)
+            half_jobs[half_id] = job_id
+            half_audits[half_id] = validate_submitted_job(job_id, script)
+
+        dependency = ":".join(half_jobs[half_id] for half_id in (1, 2))
+        fanin_output = subprocess.check_output(
+            ["sbatch", "--parsable", f"--dependency=afterok:{dependency}", str(fanin_script)],
+            text=True,
+        ).strip()
+        fanin_job = fanin_output.split(";", 1)[0]
+        _require(bool(fanin_job), "sbatch returned an empty fan-in job ID")
+        submitted.append(fanin_job)
+        fanin_audit = validate_submitted_job(fanin_job, fanin_script, expected_gpus=0)
+    except (LaunchError, OSError, subprocess.CalledProcessError) as exc:
+        for job_id in reversed(submitted):
+            subprocess.run(["scancel", job_id], check=False, capture_output=True, text=True)
+        cancelled = ", ".join(submitted) if submitted else "none"
+        raise LaunchError(
+            f"submission validation failed; cancelled newly submitted jobs: {cancelled}: {exc}"
+        ) from exc
+    return {
+        "setup_job_id": setup_job,
+        "half_job_ids": {str(key): value for key, value in half_jobs.items()},
+        "fanin_job_id": fanin_job,
+        "submission_audit": {
+            "setup": setup_audit,
+            "halves": {str(key): value for key, value in half_audits.items()},
+            "fanin": fanin_audit,
+        },
+    }
+
+
+def _render_particle_audit_star_loop(*, max_iter: int, natural_convergence: bool) -> str:
+    if natural_convergence:
+        return """  shopt -s nullglob
+  local -a relion_stars=("${ROOT}/half${half}/relion"/run_it???_data.star)
+  shopt -u nullglob
+  if [[ "${#relion_stars[@]}" -lt 1 ]]; then
+    echo "ERROR: no numbered RELION particle STARs for half ${half}" >&2
+    return 2
+  fi
+  for star in "${relion_stars[@]}"; do
+    audit_command+=(--relion-star "${star}")
+  done
+  local common_iterations_file="${RUNTIME_ROOT}/half${half}_common_particle_audit_iterations.txt"
+  "${PIXI_PY}" - \
+    "${ROOT}/half${half}/recovar/refinement_results.npz" \
+    "${ROOT}/half${half}/relion" > "${common_iterations_file}" <<'PY'
+import pathlib
+import re
+import sys
+
+import numpy as np
+
+results = pathlib.Path(sys.argv[1])
+relion_dir = pathlib.Path(sys.argv[2])
+with np.load(results, allow_pickle=False) as payload:
+    recovar = sorted(
+        {
+            int(match.group(1))
+            for key in payload.files
+            if (match := re.fullmatch(r"class_assignments_by_image_iter_(\\d+)", key))
+        }
+    )
+relion = sorted(
+    int(match.group(1))
+    for path in relion_dir.glob("run_it???_data.star")
+    if (match := re.fullmatch(r"run_it(\\d{3})_data\\.star", path.name))
+)
+common = sorted(iteration for iteration in recovar if iteration + 1 in set(relion))
+if not common or common != list(range(common[-1] + 1)):
+    raise SystemExit(
+        f"non-contiguous or empty common particle-state boundary: "
+        f"RECOVAR={recovar} RELION={relion} common={common}"
+    )
+print("\\n".join(str(iteration) for iteration in common))
+PY
+  local -a common_recovar_iterations
+  mapfile -t common_recovar_iterations < "${common_iterations_file}"
+  for iteration in "${common_recovar_iterations[@]}"; do
+    audit_command+=(--recovar-iteration "${iteration}")
+  done
+"""
+    return f"""  for ((iteration = 1; iteration <= {max_iter}; iteration++)); do
+    printf -v padded '%03d' "${{iteration}}"
+    audit_command+=(
+      --relion-star
+      "${{ROOT}}/half${{half}}/relion/run_it${{padded}}_data.star"
+    )
+  done
+"""
+
+
+def _render_whole_audit_command(analysis_policy: Mapping[str, Any]) -> str:
+    alignment_policy = analysis_policy["alignment"]
+    fsc_policy = analysis_policy["fsc"]
+    mask_policy = analysis_policy["common_mask"]
+    refine_order_flags = "".join(
+        f"  --refine-healpix-order {int(value)} \\\n"
+        for value in alignment_policy["refine_healpix_orders"]
+    )
+    return f""""${{PIXI_PY}}" -m scripts.audit_em_real_kclass_halfmaps \\
+  --manifest "${{MANIFEST}}" \\
+  --output-dir "${{ROOT}}/audit" \\
+  --fit-max-shell {int(alignment_policy["fit_max_shell"])} \\
+  --crossing-consecutive-shells {int(fsc_policy["crossing_consecutive_shells"])} \\
+  --phase-randomization-corrected {str(bool(fsc_policy["phase_randomization_corrected"])).lower()} \\
+  --absolute-resolution-claim {str(bool(fsc_policy["absolute_resolution_claim"])).lower()} \\
+  --coarse-healpix-order {int(alignment_policy["coarse_healpix_order"])} \\
+{refine_order_flags}  --interpolation-order {int(alignment_policy["interpolation_order"])} \\
+  --mask-threshold {q(str(mask_policy["threshold"]))} \\
+  --mask-lowpass-sigma {int(mask_policy["lowpass_sigma"])} \\
+  --mask-extend {int(mask_policy["extend"])} \\
+  --mask-soft-edge {int(mask_policy["soft_edge"])} \\
+  --mask-cleanup {str(bool(mask_policy["cleanup"])).lower()}
+"""
+
+
 def render_run_script(
     *,
     root: Path,
@@ -1471,29 +1638,37 @@ def render_run_script(
     pool: int,
     analysis_policy: Mapping[str, Any],
     dataset_key: str = "10076",
+    selected_half: int | None = None,
+    require_natural_convergence: bool = False,
 ) -> str:
     _require(
         analysis_policy == expected_analysis_policy(profile.grid_size),
         "run script analysis policy differs from the frozen profile policy",
     )
-    alignment_policy = analysis_policy["alignment"]
-    fsc_policy = analysis_policy["fsc"]
-    mask_policy = analysis_policy["common_mask"]
-    refine_order_flags = "".join(
-        f"  --refine-healpix-order {int(value)} \\\n"
-        for value in alignment_policy["refine_healpix_orders"]
+    _require(selected_half in {None, 1, 2}, "selected_half must be None, 1, or 2")
+    _require(
+        not require_natural_convergence or selected_half is not None,
+        "natural convergence requires an isolated half job",
     )
     cuda_lib = root / "build" / "cuda" / "libcuda_backproject.so"
+    role_suffix = "serial" if selected_half is None else f"half{selected_half}"
     preamble = job_preamble(
         scratch_dir=root,
         cuda_lib=cuda_lib,
         cuda_module=cuda_module,
         relion_src_dir=relion_source,
-        job_name=f"real_k4_halfmap_{dataset_key}_{profile.name}_seed{seed}",
+        job_name=f"real_k4_halfmap_{dataset_key}_{profile.name}_seed{seed}_{role_suffix}",
         expected_commit=str(source["commit"]),
     )
     command_arrays = []
-    for row in halves:
+    selected_rows = [
+        row for row in halves if selected_half is None or int(row["half"]) == selected_half
+    ]
+    _require(
+        len(selected_rows) == (len(halves) if selected_half is None else 1),
+        "requested half is missing or duplicated",
+    )
+    for row in selected_rows:
         half_id = int(row["half"])
         command_arrays.extend(
             [
@@ -1501,10 +1676,40 @@ def render_run_script(
                 _shell_array(f"RECOVAR_COMMAND_{half_id}", row["recovar_command"]),
             ]
         )
+    provenance_suffix = "" if selected_half is None else f"_half{selected_half}"
+    log_stem = "qualification" if selected_half is None else f"half{selected_half}"
+    half_loop = "1 2" if selected_half is None else str(selected_half)
+    particle_audit_star_loop = _render_particle_audit_star_loop(
+        max_iter=max_iter,
+        natural_convergence=require_natural_convergence,
+    )
+    convergence_flag = "    --require-exact-convergence\n" if require_natural_convergence else ""
+    particle_audit_invocation = (
+        """  set +e
+  "${audit_command[@]}"
+  local audit_status="$?"
+  set -e
+  if [[ "${audit_status}" -ge 2 ]]; then
+    return "${audit_status}"
+  fi
+  test -s "${ROOT}/audit/half${half}_particle_state.json"
+  test -s "${ROOT}/audit/half${half}_particle_state_arrays.npz"
+  test -s "${ROOT}/audit/half${half}_particle_state.sha256"
+  sha256sum --check "${ROOT}/audit/half${half}_particle_state.sha256"
+  if [[ "${audit_status}" -eq 1 ]]; then
+    echo "Particle-state exact convergence-boundary mismatch retained as a non-blocking diagnostic" >&2
+  fi
+"""
+        if require_natural_convergence
+        else '  "${audit_command[@]}"\n'
+    )
+    whole_audit_command = (
+        _render_whole_audit_command(analysis_policy) if selected_half is None else ""
+    )
     return f"""#!/usr/bin/env bash
-#SBATCH --job-name=k4h_{dataset_key}_{profile.name[:10]}_{seed}
-#SBATCH --output={q(root / 'logs' / 'qualification-%j.out')}
-#SBATCH --error={q(root / 'logs' / 'qualification-%j.err')}
+#SBATCH --job-name=k4h_{dataset_key}_{profile.name[:8]}_{seed}_{role_suffix}
+#SBATCH --output={q(root / 'logs' / f'{log_stem}-%j.out')}
+#SBATCH --error={q(root / 'logs' / f'{log_stem}-%j.err')}
 #SBATCH --partition=cryoem
 #SBATCH --account=gilles
 #SBATCH --constraint=h100
@@ -1519,13 +1724,18 @@ def render_run_script(
 
 ROOT={q(root)}
 MANIFEST="${{ROOT}}/submission_manifest.json"
+export PYTHONDONTWRITEBYTECODE=1
+export RECOVAR_JAX_CACHE_DIR="${{ROOT}}/jax_cache/{role_suffix}"
+export JAX_COMPILATION_CACHE_DIR="${{RECOVAR_JAX_CACHE_DIR}}"
+mkdir -p "${{RECOVAR_JAX_CACHE_DIR}}"
 mkdir -p "${{ROOT}}/logs" "${{ROOT}}/provenance"
 sha256sum --check "${{ROOT}}/submission_manifest.sha256"
-sha256sum --check "${{ROOT}}/inputs.sha256" | tee "${{ROOT}}/provenance/input_sha256_check.txt"
+sha256sum --check "${{ROOT}}/inputs.sha256" | tee "${{ROOT}}/provenance/input_sha256_check{provenance_suffix}.txt"
+sha256sum --check "${{ROOT}}/provenance/setup_products.sha256"
 sha256sum --check "${{ROOT}}/relion_bind_build/shared.sha256"
 sha256sum --check "${{RECOVAR_CUDA_LIB}}.sha256"
 
-"${{PIXI_PY}}" - "${{ROOT}}/provenance/slurm_allocation.json" <<'PY'
+"${{PIXI_PY}}" - "${{ROOT}}/provenance/slurm_allocation{provenance_suffix}.json" <<'PY'
 import json
 import pathlib
 import sys
@@ -1562,8 +1772,8 @@ capture_gpu_uuid() {{
 }}
 
 PHYSICAL_GPU_UUID="$(capture_gpu_uuid)"
-printf '%s\\n' "${{PHYSICAL_GPU_UUID}}" > "${{ROOT}}/provenance/physical_gpu_uuid.txt"
-nvidia-smi --query-gpu=index,name,uuid,memory.total,driver_version --format=csv > "${{ROOT}}/provenance/gpu_inventory.csv"
+printf '%s\\n' "${{PHYSICAL_GPU_UUID}}" > "${{ROOT}}/provenance/physical_gpu_uuid{provenance_suffix}.txt"
+nvidia-smi --query-gpu=index,name,uuid,memory.total,driver_version --format=csv > "${{ROOT}}/provenance/gpu_inventory{provenance_suffix}.csv"
 
 MONITOR_PID=""
 start_monitor() {{
@@ -1667,7 +1877,7 @@ run_recovar_half() {{
 
 run_particle_state_audit_half() {{
   local half="$1"
-  local iteration padded
+  local iteration padded star
   local -a audit_command=(
     "${{PIXI_PY}}" -m scripts.audit_em_particle_state_distribution
     --recovar-results "${{ROOT}}/half${{half}}/recovar/refinement_results.npz"
@@ -1675,19 +1885,14 @@ run_particle_state_audit_half() {{
     --output-json "${{ROOT}}/audit/half${{half}}_particle_state.json"
     --output-npz "${{ROOT}}/audit/half${{half}}_particle_state_arrays.npz"
     --output-hash-manifest "${{ROOT}}/audit/half${{half}}_particle_state.sha256"
+{convergence_flag}
   )
   mkdir -p "${{ROOT}}/audit"
-  for ((iteration = 1; iteration <= {max_iter}; iteration++)); do
-    printf -v padded '%03d' "${{iteration}}"
-    audit_command+=(
-      --relion-star
-      "${{ROOT}}/half${{half}}/relion/run_it${{padded}}_data.star"
-    )
-  done
-  "${{audit_command[@]}}"
+{particle_audit_star_loop}
+{particle_audit_invocation}
 }}
 
-for half in 1 2; do
+for half in {half_loop}; do
   run_relion_half "${{half}}"
   test "$(capture_gpu_uuid)" = "${{PHYSICAL_GPU_UUID}}"
   run_recovar_half "${{half}}"
@@ -1695,20 +1900,140 @@ for half in 1 2; do
   run_particle_state_audit_half "${{half}}"
 done
 
-"${{PIXI_PY}}" -m scripts.audit_em_real_kclass_halfmaps \
-  --manifest "${{MANIFEST}}" \
-  --output-dir "${{ROOT}}/audit" \
-  --fit-max-shell {int(alignment_policy["fit_max_shell"])} \
-  --crossing-consecutive-shells {int(fsc_policy["crossing_consecutive_shells"])} \
-  --phase-randomization-corrected {str(bool(fsc_policy["phase_randomization_corrected"])).lower()} \
-  --absolute-resolution-claim {str(bool(fsc_policy["absolute_resolution_claim"])).lower()} \
-  --coarse-healpix-order {int(alignment_policy["coarse_healpix_order"])} \
-{refine_order_flags}  --interpolation-order {int(alignment_policy["interpolation_order"])} \
-  --mask-threshold {q(str(mask_policy["threshold"]))} \
-  --mask-lowpass-sigma {int(mask_policy["lowpass_sigma"])} \
-  --mask-extend {int(mask_policy["extend"])} \
-  --mask-soft-edge {int(mask_policy["soft_edge"])} \
-  --mask-cleanup {str(bool(mask_policy["cleanup"])).lower()}
+{whole_audit_command}
+"""
+
+
+def seal_setup_products_script(script: Path, root: Path) -> None:
+    """Append a fail-closed, read-only seal for products shared by half jobs."""
+
+    text = script.read_text()
+    text += rf"""
+
+mapfile -t SETUP_RELION_BIND_LIBS < <(find "${{RECOVAR_RELION_BIND_BUILD_DIR}}" -maxdepth 1 -type f -name '_relion_bind_core*.so' -print)
+if [[ "${{#SETUP_RELION_BIND_LIBS[@]}}" -ne 1 ]]; then
+  echo "ERROR: expected exactly one RELION binding while sealing setup" >&2
+  exit 2
+fi
+SETUP_PRODUCTS_SHA={q(root / 'provenance' / 'setup_products.sha256')}
+{{
+  sha256sum "${{SETUP_RELION_BIND_LIBS[0]}}"
+  sha256sum "${{RECOVAR_CUDA_LIB}}"
+  sha256sum "${{EM_KCLASS_MATRIX_VENV}}/pyvenv.cfg"
+}} > "${{SETUP_PRODUCTS_SHA}}"
+sha256sum --check "${{SETUP_PRODUCTS_SHA}}"
+SETUP_READONLY_ROOTS=(
+  "${{EM_KCLASS_MATRIX_VENV}}"
+  "${{RECOVAR_RELION_BIND_BUILD_DIR}}"
+  "$(dirname "${{RECOVAR_CUDA_LIB}}")"
+)
+find "${{SETUP_READONLY_ROOTS[@]}}" -type f -exec chmod a-w -- {{}} +
+find "${{SETUP_READONLY_ROOTS[@]}}" -depth -type d -exec chmod a-w -- {{}} +
+if find "${{SETUP_READONLY_ROOTS[@]}}" \( -type f -o -type d \) -perm /222 -print -quit | grep -q .; then
+  echo "ERROR: setup products remain writable after sealing" >&2
+  exit 2
+fi
+echo "shared setup products sealed read-only"
+"""
+    script.write_text(text)
+    script.chmod(0o755)
+
+
+def render_fanin_script(
+    *,
+    root: Path,
+    profile: Profile,
+    source: Mapping[str, Any],
+    relion_source: Path,
+    cuda_module: str,
+    analysis_policy: Mapping[str, Any],
+    dataset_key: str,
+    seed: int,
+) -> str:
+    """Render a CPU-only audit fan-in after both natural-convergence halves."""
+
+    preamble = job_preamble(
+        scratch_dir=root,
+        cuda_lib=root / "build" / "cuda" / "libcuda_backproject.so",
+        cuda_module=cuda_module,
+        relion_src_dir=relion_source,
+        job_name=f"real_k4_halfmap_{dataset_key}_{profile.name}_seed{seed}_fanin",
+        expected_commit=str(source["commit"]),
+    )
+    audit_command = _render_whole_audit_command(analysis_policy)
+    return f"""#!/usr/bin/env bash
+#SBATCH --job-name=k4h_{dataset_key}_{profile.name[:8]}_{seed}_fanin
+#SBATCH --output={q(root / 'logs' / 'fanin-%j.out')}
+#SBATCH --error={q(root / 'logs' / 'fanin-%j.err')}
+#SBATCH --partition=cpu
+#SBATCH --account=gilles
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=01:00:00
+
+{preamble}
+
+ROOT={q(root)}
+MANIFEST="${{ROOT}}/submission_manifest.json"
+export PYTHONDONTWRITEBYTECODE=1
+export JAX_PLATFORMS=cpu
+export JAX_PLATFORM_NAME=cpu
+export RECOVAR_DISABLE_CUDA=1
+export RECOVAR_JAX_CACHE_DIR="${{ROOT}}/jax_cache/fanin"
+export JAX_COMPILATION_CACHE_DIR="${{RECOVAR_JAX_CACHE_DIR}}"
+mkdir -p "${{RECOVAR_JAX_CACHE_DIR}}" "${{ROOT}}/audit" "${{ROOT}}/provenance"
+sha256sum --check "${{ROOT}}/submission_manifest.sha256"
+sha256sum --check "${{ROOT}}/provenance/setup_products.sha256"
+sha256sum --check "${{ROOT}}/audit/half1_particle_state.sha256"
+sha256sum --check "${{ROOT}}/audit/half2_particle_state.sha256"
+
+"${{PIXI_PY}}" - "${{ROOT}}/provenance/slurm_allocation_fanin.json" <<'PY'
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+from scripts.run_em_real_kclass_initialmodel_pair import _gpu_count_from_tres, _parse_scontrol_fields
+
+job_id = os.environ.get("SLURM_JOB_ID")
+if not job_id:
+    raise SystemExit("fan-in must execute under Slurm")
+result = subprocess.run(
+    ["scontrol", "show", "job", "-o", job_id],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+fields = _parse_scontrol_fields(result.stdout.strip())
+requested = fields.get("ReqTRES", "")
+allocated = fields.get("AllocTRES", "")
+if requested != allocated:
+    raise SystemExit(f"fan-in ReqTRES != AllocTRES: {{requested!r}} != {{allocated!r}}")
+requested_gpus = _gpu_count_from_tres(requested) or 0
+allocated_gpus = _gpu_count_from_tres(allocated) or 0
+if requested_gpus != 0 or allocated_gpus != 0:
+    raise SystemExit("fan-in unexpectedly requested or allocated a GPU")
+if fields.get("OverSubscribe") != "OK":
+    raise SystemExit("fan-in allocation is exclusive")
+row = {{
+    "under_slurm": True,
+    "job_id": job_id,
+    "ReqTRES": requested,
+    "AllocTRES": allocated,
+    "OverSubscribe": fields.get("OverSubscribe"),
+    "NumNodes": fields.get("NumNodes"),
+    "NodeList": fields.get("NodeList"),
+    "requested_gpus": requested_gpus,
+    "allocated_gpus": allocated_gpus,
+    "raw_scontrol": result.stdout.strip(),
+}}
+pathlib.Path(sys.argv[1]).write_text(json.dumps(row, indent=2, sort_keys=True) + "\\n")
+PY
+
+{audit_command}
 """
 
 
@@ -1719,6 +2044,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--profile", choices=sorted(PROFILES), default="shared200-128")
     parser.add_argument("--seed", type=int, choices=(42001, 42002, 42003), default=42001)
     parser.add_argument("--max-iter", type=int, default=8)
+    parser.add_argument(
+        "--campaign",
+        choices=(FIXED8_CAMPAIGN, NATURAL_CONVERGENCE_CAMPAIGN),
+        default=FIXED8_CAMPAIGN,
+    )
     parser.add_argument(
         "--particle-diameter",
         type=float,
@@ -1758,7 +2088,16 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         f"{dataset.label} particle diameter is frozen at "
         f"{dataset.particle_diameter_angstrom:g} A",
     )
-    if dataset.required_max_iter is not None:
+    if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN:
+        _require(
+            dataset.key == "10073" and args.seed == 42001,
+            "natural-convergence is frozen to EMPIAR-10073 seed 42001",
+        )
+        _require(
+            args.max_iter == NATURAL_CONVERGENCE_MAX_ITER,
+            f"natural-convergence max_iter is frozen at {NATURAL_CONVERGENCE_MAX_ITER}",
+        )
+    elif dataset.required_max_iter is not None:
         _require(
             args.max_iter == dataset.required_max_iter,
             f"{dataset.label} max_iter is frozen at {dataset.required_max_iter}",
@@ -1893,26 +2232,70 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         expected_commit=str(source["commit"]),
         setup_allocation_record=root / "provenance" / "setup_slurm_allocation.json",
     )
-    run_script = root / "jobs" / "run_k4_independent_halfmaps.sh"
-    run_script.write_text(
-        render_run_script(
-            root=root,
-            profile=profile,
-            source=source,
-            relion_source=args.relion_source_dir.resolve(),
-            relion_module=args.relion_module,
-            relion_refine_mpi=executable,
-            cuda_module=args.cuda_module,
-            halves=halves,
-            max_iter=args.max_iter,
-            seed=args.seed,
-            mpi_ranks=args.mpi_ranks,
-            pool=args.pool,
-            analysis_policy=analysis_policy,
-            dataset_key=dataset.key,
+    seal_setup_products_script(setup_script, root)
+    run_script: Path | None = None
+    half_scripts: dict[int, Path] = {}
+    fanin_script: Path | None = None
+    if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN:
+        for half_id in (1, 2):
+            half_script = root / "jobs" / f"run_k4_independent_half{half_id}.sh"
+            half_script.write_text(
+                render_run_script(
+                    root=root,
+                    profile=profile,
+                    source=source,
+                    relion_source=args.relion_source_dir.resolve(),
+                    relion_module=args.relion_module,
+                    relion_refine_mpi=executable,
+                    cuda_module=args.cuda_module,
+                    halves=halves,
+                    max_iter=args.max_iter,
+                    seed=args.seed,
+                    mpi_ranks=args.mpi_ranks,
+                    pool=args.pool,
+                    analysis_policy=analysis_policy,
+                    dataset_key=dataset.key,
+                    selected_half=half_id,
+                    require_natural_convergence=True,
+                )
+            )
+            half_script.chmod(0o755)
+            half_scripts[half_id] = half_script
+        fanin_script = root / "jobs" / "audit_k4_independent_halfmaps.sh"
+        fanin_script.write_text(
+            render_fanin_script(
+                root=root,
+                profile=profile,
+                source=source,
+                relion_source=args.relion_source_dir.resolve(),
+                cuda_module=args.cuda_module,
+                analysis_policy=analysis_policy,
+                dataset_key=dataset.key,
+                seed=args.seed,
+            )
         )
-    )
-    run_script.chmod(0o755)
+        fanin_script.chmod(0o755)
+    else:
+        run_script = root / "jobs" / "run_k4_independent_halfmaps.sh"
+        run_script.write_text(
+            render_run_script(
+                root=root,
+                profile=profile,
+                source=source,
+                relion_source=args.relion_source_dir.resolve(),
+                relion_module=args.relion_module,
+                relion_refine_mpi=executable,
+                cuda_module=args.cuda_module,
+                halves=halves,
+                max_iter=args.max_iter,
+                seed=args.seed,
+                mpi_ranks=args.mpi_ranks,
+                pool=args.pool,
+                analysis_policy=analysis_policy,
+                dataset_key=dataset.key,
+            )
+        )
+        run_script.chmod(0o755)
 
     input_artifacts = [
         _input_record(
@@ -2033,6 +2416,18 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "symmetry": "C1",
             "grid_size": profile.grid_size,
             "max_iter": args.max_iter,
+            "campaign": args.campaign,
+            "execution_topology": (
+                "parallel_external_halves_cpu_fanin"
+                if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN
+                else "serial_external_halves_single_gpu"
+            ),
+            "map_selection_boundary": (
+                "last_common_numbered_iteration"
+                if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN
+                else "configured_final_numbered_iteration"
+            ),
+            "require_natural_convergence": args.campaign == NATURAL_CONVERGENCE_CAMPAIGN,
             "seed": args.seed,
             "particle_diameter_angstrom": particle_diameter,
             "initial_lowpass_angstrom": 30.0,
@@ -2094,27 +2489,83 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "cuda_module": args.cuda_module,
             "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
             "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
             "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT": "unset",
             "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER": "unset",
         },
         "provenance": {
             "direct_rehash_max_bytes": 1_000_000_000,
             "input_sha256_manifest": str(inputs_sha.resolve()),
-            "input_sha256_check_log": str((root / "provenance" / "input_sha256_check.txt").resolve()),
+            "input_sha256_check_log": (
+                str((root / "provenance" / "input_sha256_check.txt").resolve())
+                if args.campaign == FIXED8_CAMPAIGN
+                else None
+            ),
+            "input_sha256_check_logs_by_half": (
+                {
+                    str(half_id): str(
+                        (root / "provenance" / f"input_sha256_check_half{half_id}.txt").resolve()
+                    )
+                    for half_id in (1, 2)
+                }
+                if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN
+                else None
+            ),
             "setup_slurm_allocation_json": str(
                 (root / "provenance" / "setup_slurm_allocation.json").resolve()
             ),
-            "slurm_allocation_json": str((root / "provenance" / "slurm_allocation.json").resolve()),
+            "slurm_allocation_json": (
+                str((root / "provenance" / "slurm_allocation.json").resolve())
+                if args.campaign == FIXED8_CAMPAIGN
+                else None
+            ),
+            "half_slurm_allocation_jsons": (
+                {
+                    str(half_id): str(
+                        (root / "provenance" / f"slurm_allocation_half{half_id}.json").resolve()
+                    )
+                    for half_id in (1, 2)
+                }
+                if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN
+                else None
+            ),
+            "fanin_slurm_allocation_json": (
+                str((root / "provenance" / "slurm_allocation_fanin.json").resolve())
+                if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN
+                else None
+            ),
             "setup_script": str(setup_script.resolve()),
             "setup_script_sha256": sha256_file(setup_script),
-            "run_script": str(run_script.resolve()),
-            "run_script_sha256": sha256_file(run_script),
+            "run_script": str(run_script.resolve()) if run_script is not None else None,
+            "run_script_sha256": sha256_file(run_script) if run_script is not None else None,
+            "half_scripts": (
+                {str(key): str(value.resolve()) for key, value in half_scripts.items()}
+                if half_scripts
+                else None
+            ),
+            "half_script_sha256": (
+                {str(key): sha256_file(value) for key, value in half_scripts.items()}
+                if half_scripts
+                else None
+            ),
+            "fanin_script": str(fanin_script.resolve()) if fanin_script is not None else None,
+            "fanin_script_sha256": (
+                sha256_file(fanin_script) if fanin_script is not None else None
+            ),
+            "setup_products_sha256_manifest": str(
+                (root / "provenance" / "setup_products.sha256").resolve()
+            ),
             "setup_base_pixi_python": str(base_pixi_python()),
             "runtime_root_policy": str(
                 DEFAULT_RUNTIME_ROOT
                 / f"real_k4_halfmap_{dataset.key}_{profile.name}_seed{args.seed}_<job_id>"
             ),
             "relion_tmpdir_policy": "<runtime_root>/relion_half<half>",
+            "jax_cache_policy": (
+                "<run_root>/jax_cache/half<half> plus isolated fanin cache"
+                if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN
+                else "<run_root>/jax_cache/serial"
+            ),
         },
         "claim_boundary": {
             "evidence_tier": "tier_a_single_seed_diagnostic",
@@ -2128,6 +2579,8 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "shared_historical_references_preclude_independent_absolute_resolution_claim": True,
             "phase_randomization_corrected": False,
             "absolute_resolution_claim": False,
+            "natural_convergence_required": args.campaign == NATURAL_CONVERGENCE_CAMPAIGN,
+            "last_common_numbered_maps_only": args.campaign == NATURAL_CONVERGENCE_CAMPAIGN,
         },
     }
     manifest_path = root / "submission_manifest.json"
@@ -2139,7 +2592,14 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "manifest": str(manifest_path),
         "manifest_sha256": sha256_file(manifest_path),
         "setup_script": str(setup_script),
-        "run_script": str(run_script),
+        "run_script": str(run_script) if run_script is not None else None,
+        "half_scripts": (
+            {str(key): str(value) for key, value in half_scripts.items()}
+            if half_scripts
+            else None
+        ),
+        "fanin_script": str(fanin_script) if fanin_script is not None else None,
+        "campaign": args.campaign,
         "profile": profile.name,
         "dataset": dataset.label,
         "particle_count": len(selected_names),
@@ -2147,7 +2607,12 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "submitted": False,
     }
     if args.submit:
-        submission = submit_scripts(setup_script, run_script)
+        if args.campaign == NATURAL_CONVERGENCE_CAMPAIGN:
+            assert fanin_script is not None
+            submission = submit_parallel_scripts(setup_script, half_scripts, fanin_script)
+        else:
+            assert run_script is not None
+            submission = submit_scripts(setup_script, run_script)
         result.update({"submitted": True, **submission})
         (root / "submitted_jobs.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return result
