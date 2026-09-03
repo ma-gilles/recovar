@@ -762,6 +762,9 @@ def _with_initial_model_coarse_diagnostics(
         selector_audit=selector_audit,
         support_audit=stats.get("coarse_significance_support_audit"),
         hybrid_stats=stats.get("coarse_gaussian_gemm_hybrid"),
+        exact_coarse_operand_assembly=stats.get(
+            "exact_coarse_operand_assembly",
+        ),
     )
 
 

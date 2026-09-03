@@ -207,12 +207,17 @@ def test_support_and_hybrid_diagnostics_propagate_without_losing_profile_fields(
         "selected_rescore_image_count": 500,
         "fallback_image_count": 0,
     }
+    exact_assembly = {
+        "skip_generic_effective": False,
+        "translate_score_call_count": 4,
+    }
 
     sealed = _with_coarse_significance_diagnostics(
         result,
         selector_audit=None,
         support_audit=support,
         hybrid_stats=hybrid,
+        exact_coarse_operand_assembly=exact_assembly,
     )
     meta = _estep_meta({0: SimpleNamespace(profile_summary=sealed.profile_summary)})
 
@@ -220,9 +225,14 @@ def test_support_and_hybrid_diagnostics_propagate_without_losing_profile_fields(
         "pass2_s": 1.25,
         "coarse_significance_support_audit": support,
         "coarse_gaussian_gemm_hybrid": hybrid,
+        "exact_coarse_operand_assembly": exact_assembly,
     }
     assert meta["halfset_0_profile_summary"]["coarse_significance_support_audit"] == support
     assert meta["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"] == hybrid
+    assert (
+        meta["halfset_0_profile_summary"]["exact_coarse_operand_assembly"]
+        == exact_assembly
+    )
 
 
 def test_initial_model_meta_retains_per_particle_coarse_cutoff_counts():

@@ -107,6 +107,7 @@ def _with_coarse_significance_diagnostics(
     selector_audit: dict | None,
     support_audit: dict | None,
     hybrid_stats: dict | None,
+    exact_coarse_operand_assembly: dict | None = None,
 ):
     """Propagate exact coarse-support and hybrid telemetry to InitialModel."""
 
@@ -116,6 +117,10 @@ def _with_coarse_significance_diagnostics(
         for key, value in (
             ("coarse_significance_support_audit", support_audit),
             ("coarse_gaussian_gemm_hybrid", hybrid_stats),
+            (
+                "exact_coarse_operand_assembly",
+                exact_coarse_operand_assembly,
+            ),
         )
         if value is not None
     }
@@ -3185,6 +3190,7 @@ def run_dense_k_class_em_adaptive(
     coarse_selector_audit = None
     coarse_significance_support_audit = None
     coarse_gaussian_gemm_hybrid_stats = None
+    exact_coarse_operand_assembly = None
     pass1_t0 = time.time()
     if firstiter_cc_pass2_only_best_coarse:
         # RELION firstiter_cc branch: restrict pass-2 to children of each
@@ -3322,6 +3328,9 @@ def run_dense_k_class_em_adaptive(
         coarse_gaussian_gemm_hybrid_stats = _full_coarse_stats.get(
             "coarse_gaussian_gemm_hybrid",
         )
+        exact_coarse_operand_assembly = _full_coarse_stats.get(
+            "exact_coarse_operand_assembly",
+        )
     pass1_s = time.time() - pass1_t0
 
     def _with_significant_counts(result: KClassEMResult) -> KClassEMResult:
@@ -3337,6 +3346,7 @@ def run_dense_k_class_em_adaptive(
             selector_audit=coarse_selector_audit,
             support_audit=coarse_significance_support_audit,
             hybrid_stats=coarse_gaussian_gemm_hybrid_stats,
+            exact_coarse_operand_assembly=exact_coarse_operand_assembly,
         )
 
     mask_t0 = time.time()

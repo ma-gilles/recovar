@@ -109,6 +109,10 @@ def test_sparse_adapter_propagates_real_coarse_support_hybrid_and_counts():
         "enabled": True,
         "published_score_source": "exact_relion_source16_or_full_rectangular",
     }
+    exact_assembly = {
+        "skip_generic_effective": False,
+        "translate_score_call_count": 4,
+    }
     result = _CoarseResult(
         profile_summary={"pass2_time_s": 1.25},
         significant_counts=None,
@@ -121,6 +125,7 @@ def test_sparse_adapter_propagates_real_coarse_support_hybrid_and_counts():
             "significant_cutoff_counts": np.asarray([17, 23], dtype=np.int32),
             "coarse_significance_support_audit": support,
             "coarse_gaussian_gemm_hybrid": hybrid,
+            "exact_coarse_operand_assembly": exact_assembly,
         },
         selector_audit=audit,
     )
@@ -131,6 +136,7 @@ def test_sparse_adapter_propagates_real_coarse_support_hybrid_and_counts():
         "coarse_selector_audit": audit,
         "coarse_significance_support_audit": support,
         "coarse_gaussian_gemm_hybrid": hybrid,
+        "exact_coarse_operand_assembly": exact_assembly,
     }
 
 
