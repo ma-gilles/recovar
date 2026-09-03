@@ -355,7 +355,7 @@ if [[ "${CANDIDATE_MODE}" == all_optimized && \
        | .execution_contract.all_optimized_profile_exact == true
          and .execution_contract.all_optimized.enabled == false
          and (.execution_contract.all_optimized.enabled_seams | length) == 0
-         and (.execution_contract.all_optimized.disabled_seams | length) == 10
+         and (.execution_contract.all_optimized.disabled_seams | length) == 11
          and .execution_contract.all_optimized.packed_final_noise.enabled == false
          and .stable_fourier_window_contract.enabled == false
          and .stable_flat_capacity_contract == null' \
@@ -366,7 +366,7 @@ if [[ "${CANDIDATE_MODE}" == all_optimized && \
       '.arms[$arm]
        | .execution_contract.all_optimized_profile_exact == true
          and .execution_contract.all_optimized.enabled == true
-         and (.execution_contract.all_optimized.enabled_seams | length) == 10
+         and (.execution_contract.all_optimized.enabled_seams | length) == 11
          and (.execution_contract.all_optimized.disabled_seams | length) == 0
          and .execution_contract.all_optimized.packed_final_noise.enabled == true
          and ([.execution_contract.all_optimized.packed_final_noise.profiles[].sum_packed_final_noise_rows] | all(. > 0))
@@ -673,7 +673,7 @@ if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
       and .execution_contract.compact_effective == false
       and .execution_contract.all_optimized_profile_exact == true
       and .execution_contract.all_optimized.enabled == false
-      and (.execution_contract.all_optimized.disabled_seams | length) == 10
+      and (.execution_contract.all_optimized.disabled_seams | length) == 11
   ' "${SCIENCE}/report.json" >/dev/null
   for arm in \
     abba_batch110_1 abba_batch110_2 \
@@ -688,7 +688,7 @@ if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
         and .execution_contract.compact_effective == true
         and .execution_contract.all_optimized_profile_exact == true
         and .execution_contract.all_optimized.enabled == true
-        and (.execution_contract.all_optimized.enabled_seams | length) == 10
+        and (.execution_contract.all_optimized.enabled_seams | length) == 11
         and (.execution_contract.all_optimized.disabled_seams | length) == 0
         and .execution_contract.hybrid_image_batch.requested_batch_size == 110
         and .execution_contract.hybrid_image_batch.effective_batch_size == 110
@@ -722,7 +722,7 @@ if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
         and .execution_contract.compact_effective == true
         and .execution_contract.all_optimized_profile_exact == true
         and .execution_contract.all_optimized.enabled == true
-        and (.execution_contract.all_optimized.enabled_seams | length) == 10
+        and (.execution_contract.all_optimized.enabled_seams | length) == 11
         and (.execution_contract.all_optimized.disabled_seams | length) == 0
         and .execution_contract.hybrid_image_batch.requested_batch_size == 500
         and .execution_contract.hybrid_image_batch.effective_batch_size == 200
