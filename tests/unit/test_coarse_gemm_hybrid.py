@@ -7,11 +7,13 @@ import pytest
 
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     CoarseGemmHybridBlockSelection,
+    assemble_coarse_gemm_hybrid_compact_scores_f32,
     assemble_coarse_gemm_hybrid_dense_scores_f32,
     certified_f32_dot_product_gamma,
     coarse_gemm_direct_score_intervals,
     coarse_gemm_hybrid_interval_state_bytes,
     initialize_coarse_gemm_hybrid_interval_state,
+    map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids,
     propagate_coarse_gemm_intervals_through_f32_priors,
     select_coarse_gemm_hybrid_rotation_blocks,
     update_coarse_gemm_hybrid_interval_state,
@@ -468,6 +470,157 @@ def test_exact_selected_score_ties_use_global_relion_flat_order() -> None:
     assert int(np.asarray(assembled.best_pose)[0]) < 32 * 3
 
 
+def test_compact_selected_scores_match_dense_oracle_at_global_pose_ids() -> None:
+    selection = _rescore_selection()
+    batch_size, capacity = selection.block_ids.shape
+    n_rotations, n_translations = 48, 3
+    selected_diff2 = np.full(
+        (batch_size, capacity, 16, n_translations),
+        np.inf,
+        dtype=np.float32,
+    )
+    rng = np.random.default_rng(2_609)
+    selected_diff2[0, :2] = rng.uniform(
+        0.25,
+        30.0,
+        size=(2, 16, n_translations),
+    ).astype(np.float32)
+    selected_diff2[1, :1] = rng.uniform(
+        0.25,
+        30.0,
+        size=(1, 16, n_translations),
+    ).astype(np.float32)
+    rotation_prior = np.linspace(-0.75, 0.5, n_rotations, dtype=np.float32)
+    translation_prior = np.asarray(
+        [[0.0, -0.25, 0.5], [0.125, 0.25, -0.5], [9.0, 9.0, 9.0]],
+        dtype=np.float32,
+    )
+    kwargs = dict(
+        actual_image_count=2,
+        n_rotations=n_rotations,
+        class_log_prior=np.float32(-1.125),
+        rotation_log_prior=rotation_prior,
+        translation_log_prior=translation_prior,
+    )
+
+    compact = assemble_coarse_gemm_hybrid_compact_scores_f32(
+        selected_diff2,
+        selection,
+        **kwargs,
+    )
+    dense = assemble_coarse_gemm_hybrid_dense_scores_f32(
+        selected_diff2,
+        selection,
+        **kwargs,
+    )
+    compact_scores = np.asarray(compact.posterior_scores_flat)
+    dense_scores = np.asarray(dense.posterior_scores_flat)
+    compact_mask = np.isfinite(compact_scores)
+    compact_ids = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+        compact,
+        compact_mask,
+    )
+
+    for row in range(2):
+        active_ids = compact_ids[row]
+        assert np.all(np.diff(active_ids) > 0)
+        np.testing.assert_array_equal(
+            compact_scores[row, compact_mask[row]],
+            dense_scores[row, active_ids],
+        )
+        assert np.all(np.isneginf(compact_scores[row, ~compact_mask[row]]))
+    assert compact_ids[2].size == 0
+    np.testing.assert_array_equal(
+        np.asarray(compact.raw_score_max),
+        np.asarray(dense.raw_score_max),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact.min_diff2_offsets),
+        np.asarray(dense.min_diff2_offsets),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact.best_score),
+        np.asarray(dense.best_score),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact.best_pose),
+        np.asarray(dense.best_pose),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact.selected_output_valid),
+        np.asarray(dense.selected_output_valid),
+    )
+
+
+def test_compact_selected_score_ties_follow_ascending_source16_pose_order() -> None:
+    selection = CoarseGemmHybridBlockSelection(
+        eligible=True,
+        fallback_reason=None,
+        block_ids=np.asarray([[1, 3, -1]], dtype=np.int32),
+        block_count=np.asarray([2], dtype=np.int32),
+        posterior_block_count=np.asarray([2], dtype=np.int32),
+        raw_max_block_count=np.asarray([1], dtype=np.int32),
+    )
+    diff2 = np.full((1, 3, 16, 2), np.inf, dtype=np.float32)
+    diff2[0, :2] = np.float32(20.0)
+    diff2[0, 0, 15, 1] = np.float32(1.0)
+    diff2[0, 1, 0, 0] = np.float32(1.0)
+
+    compact = assemble_coarse_gemm_hybrid_compact_scores_f32(
+        diff2,
+        selection,
+        actual_image_count=1,
+        n_rotations=64,
+        class_log_prior=0.0,
+    )
+
+    active_ids = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+        compact,
+        np.isfinite(np.asarray(compact.posterior_scores_flat)),
+    )[0]
+    assert np.all(np.diff(active_ids) > 0)
+    assert int(np.asarray(compact.best_pose)[0]) == 31 * 2 + 1
+    assert int(np.asarray(compact.best_pose)[0]) < 48 * 2
+
+
+def test_compact_support_mapping_is_sparse_ordered_and_fail_closed() -> None:
+    selection = CoarseGemmHybridBlockSelection(
+        eligible=True,
+        fallback_reason=None,
+        block_ids=np.asarray([[1, 3, -1], [2, -1, -1]], dtype=np.int32),
+        block_count=np.asarray([2, 1], dtype=np.int32),
+        posterior_block_count=np.asarray([2, 1], dtype=np.int32),
+        raw_max_block_count=np.asarray([1, 1], dtype=np.int32),
+    )
+    diff2 = np.full((2, 3, 16, 3), np.inf, dtype=np.float32)
+    diff2[0, :2] = np.float32(4.0)
+    diff2[1, :1] = np.float32(5.0)
+    compact = assemble_coarse_gemm_hybrid_compact_scores_f32(
+        diff2,
+        selection,
+        actual_image_count=2,
+        n_rotations=64,
+        class_log_prior=0.0,
+    )
+    mask = np.zeros(compact.posterior_scores_flat.shape, dtype=bool)
+    # Compact positions intentionally cross the noncontiguous source-block
+    # boundary. The mapped IDs must stay in global rotation-major order.
+    mask[0, [0, 17, 47, 48, 53]] = True
+    mask[1, [1, 31]] = True
+
+    mapped = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(compact, mask)
+
+    np.testing.assert_array_equal(mapped[0], [48, 65, 95, 144, 149])
+    np.testing.assert_array_equal(mapped[1], [97, 127])
+    invalid_mask = mask.copy()
+    invalid_mask[1, 48] = True
+    with pytest.raises(ValueError, match="inactive capacity slot"):
+        map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+            compact,
+            invalid_mask,
+        )
+
+
 @pytest.mark.parametrize(
     "mutation,match",
     [
@@ -570,6 +723,15 @@ def test_full_logical_scatter_preserves_exact_relion_posterior_and_support(
         rotation_log_prior=rotation_prior,
         translation_log_prior=translation_prior,
     )
+    compact = assemble_coarse_gemm_hybrid_compact_scores_f32(
+        selected_diff2,
+        selection,
+        actual_image_count=1,
+        n_rotations=48,
+        class_log_prior=class_prior,
+        rotation_log_prior=rotation_prior,
+        translation_log_prior=translation_prior,
+    )
     full_scores = -jnp.asarray(full_diff2)
     full_scores = full_scores + class_prior
     full_scores = full_scores + jnp.asarray(rotation_prior)[None, :, None]
@@ -587,9 +749,28 @@ def test_full_logical_scatter_preserves_exact_relion_posterior_and_support(
             min_diff2_offsets=jax.device_put(assembled.min_diff2_offsets, cpu_device),
             **kwargs,
         )
+        compact_result = relion_cuda_f32_coarse_posterior(
+            jax.device_put(compact.posterior_scores_flat, cpu_device),
+            min_diff2_offsets=jax.device_put(compact.min_diff2_offsets, cpu_device),
+            **kwargs,
+        )
 
     for expected_value, actual_value in zip(expected, actual):
         np.testing.assert_array_equal(np.asarray(actual_value), np.asarray(expected_value))
+    expected_support_ids = np.flatnonzero(np.asarray(expected[1])[0]).astype(np.int32)
+    compact_support_ids = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+        compact,
+        np.asarray(compact_result[1]),
+    )[0]
+    np.testing.assert_array_equal(compact_support_ids, expected_support_ids)
+    np.testing.assert_array_equal(
+        np.asarray(compact_result[2]),
+        np.asarray(expected[2]),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact_result[3]),
+        np.asarray(expected[3]),
+    )
 
 
 def test_compacting_exact_zero_weight_candidates_changes_float32_scan_rounding(
@@ -635,3 +816,118 @@ def test_compacting_exact_zero_weight_candidates_changes_float32_scan_rounding(
     np.testing.assert_array_equal(full_np[5], compact_np[5])
     assert not np.array_equal(full_np[4], compact_np[4])
     assert not np.array_equal(full_np[0][0, global_pose_ids], compact_np[0][0])
+
+
+@pytest.mark.gpu
+def test_compact_hybrid_gpu_positive_oracle_and_fixed_capacity_support(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+) -> None:
+    """Compact scores retain dense positive-only support on the live CUB path."""
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers import oversampling
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    selection = CoarseGemmHybridBlockSelection(
+        eligible=True,
+        fallback_reason=None,
+        block_ids=np.asarray(
+            [[0, 2, -1], [1, 3, -1], [0, -1, -1]],
+            dtype=np.int32,
+        ),
+        block_count=np.asarray([2, 2, 1], dtype=np.int32),
+        posterior_block_count=np.asarray([2, 2, 1], dtype=np.int32),
+        raw_max_block_count=np.asarray([1, 1, 1], dtype=np.int32),
+    )
+    rng = np.random.default_rng(7_331)
+    diff2 = np.full((3, 3, 16, 3), np.inf, dtype=np.float32)
+    for row, count in enumerate(selection.block_count):
+        diff2[row, :count] = rng.uniform(
+            0.25,
+            20.0,
+            size=(int(count), 16, 3),
+        ).astype(np.float32)
+    rotation_prior = np.linspace(-0.25, 0.5, 64, dtype=np.float32)
+    translation_prior = np.asarray([0.0, -0.125, 0.25], dtype=np.float32)
+    kwargs = dict(
+        actual_image_count=3,
+        n_rotations=64,
+        class_log_prior=np.float32(-0.5),
+        rotation_log_prior=rotation_prior,
+        translation_log_prior=translation_prior,
+    )
+    with jax.default_device(gpu_device):
+        compact = assemble_coarse_gemm_hybrid_compact_scores_f32(
+            jnp.asarray(diff2),
+            selection,
+            **kwargs,
+        )
+        dense = assemble_coarse_gemm_hybrid_dense_scores_f32(
+            jnp.asarray(diff2),
+            selection,
+            **kwargs,
+        )
+        posterior_kwargs = dict(
+            adaptive_fraction=0.999,
+            max_significants=7,
+            tie_score_ulps=0,
+        )
+        dense_positive = oversampling.relion_cuda_f32_coarse_posterior(
+            dense.posterior_scores_flat,
+            min_diff2_offsets=dense.min_diff2_offsets,
+            filter_positive_before_sort=True,
+            **posterior_kwargs,
+        )
+        compact_positive = oversampling.relion_cuda_f32_coarse_posterior(
+            compact.posterior_scores_flat,
+            min_diff2_offsets=compact.min_diff2_offsets,
+            filter_positive_before_sort=True,
+            **posterior_kwargs,
+        )
+        compact_fixed = oversampling.relion_cuda_f32_coarse_posterior(
+            compact.posterior_scores_flat,
+            min_diff2_offsets=compact.min_diff2_offsets,
+            filter_positive_before_sort=False,
+            **posterior_kwargs,
+        )
+        jax.block_until_ready((dense_positive, compact_positive, compact_fixed))
+
+    dense_support = tuple(
+        np.flatnonzero(row).astype(np.int32)
+        for row in np.asarray(dense_positive[1], dtype=bool)
+    )
+    compact_positive_support = (
+        map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+            compact,
+            np.asarray(compact_positive[1], dtype=bool),
+        )
+    )
+    compact_fixed_support = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+        compact,
+        np.asarray(compact_fixed[1], dtype=bool),
+    )
+    for dense_ids, positive_ids, fixed_ids in zip(
+        dense_support,
+        compact_positive_support,
+        compact_fixed_support,
+        strict=True,
+    ):
+        np.testing.assert_array_equal(positive_ids, dense_ids)
+        np.testing.assert_array_equal(fixed_ids, dense_ids)
+    for field_index in (2, 3, 5):
+        np.testing.assert_array_equal(
+            np.asarray(compact_positive[field_index]).view(np.uint32),
+            np.asarray(dense_positive[field_index]).view(np.uint32),
+        )
+    np.testing.assert_array_equal(
+        np.asarray(compact_fixed[2]),
+        np.asarray(dense_positive[2]),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(compact_fixed[3]),
+        np.asarray(dense_positive[3]),
+    )

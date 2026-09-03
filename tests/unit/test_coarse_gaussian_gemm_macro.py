@@ -1295,22 +1295,28 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     assert cache_stats["h100_observed_donated_insert_alias"] is None
 
 
-def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
+@pytest.mark.parametrize("compact_posterior", [False, True])
+def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     monkeypatch,
+    compact_posterior,
 ):
-    """The live loop must neither republish GEMM scores nor add priors twice."""
+    """Dense and compact hybrid loops must not republish or reprior scores."""
 
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers import oversampling, sparse_pass2_bucketed
     from recovar.em.dense_single_volume.helpers import projection as projection_helpers
     from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
         CoarseGemmHybridBlockSelection,
+        CoarseGemmHybridCompactScores,
     )
 
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR": (
+            "1" if compact_posterior else "0"
+        ),
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_MAX_GB": "0.001",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "0.01",
         "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
@@ -1379,6 +1385,7 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
     )
 
     helper_outputs = []
+    compact_expected = compact_posterior
 
     def fake_hybrid(
         projection_cache,
@@ -1393,6 +1400,7 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
         translation_log_prior,
         certificate_chunk_rows,
         block_capacity,
+        compact_posterior: bool,
     ):
         batch_size = int(shifted_corrected.shape[0])
         del shifted_corrected, pixel_weight, initial_diff2
@@ -1405,6 +1413,7 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
         assert translation_log_prior.shape == (2, 2)
         assert certificate_chunk_rows == 16
         assert block_capacity == 64
+        assert compact_posterior is compact_expected
 
         scores = np.full((batch_size, 16, 2), -100.0, dtype=np.float32)
         scores[:actual_image_count, 5, 1] = np.float32(3.0)
@@ -1421,15 +1430,46 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
             posterior_block_count=counts.copy(),
             raw_max_block_count=counts.copy(),
         )
+        compact = None
+        published_scores = jnp.asarray(scores)
+        if compact_posterior:
+            compact_width = block_capacity * 16 * 2
+            compact_values = np.full(
+                (batch_size, compact_width),
+                -np.inf,
+                dtype=np.float32,
+            )
+            active_width = 16 * 2
+            compact_values[:actual_image_count, :active_width] = scores[
+                :actual_image_count
+            ].reshape(actual_image_count, -1)
+            compact = CoarseGemmHybridCompactScores(
+                posterior_scores_flat=jnp.asarray(compact_values),
+                source_block_ids=jnp.asarray(block_ids),
+                block_count=jnp.asarray(counts),
+                raw_score_max=jnp.zeros(batch_size, dtype=jnp.float32),
+                min_diff2_offsets=jnp.zeros(batch_size, dtype=jnp.float32),
+                best_score=jnp.max(jnp.asarray(compact_values), axis=1),
+                best_pose=jnp.where(
+                    jnp.arange(batch_size) < actual_image_count,
+                    jnp.int32(11),
+                    jnp.int32(0),
+                ),
+                selected_output_valid=jnp.ones(batch_size, dtype=jnp.bool_),
+            )
+            published_scores = None
+            helper_outputs.append(compact_values)
+        else:
+            helper_outputs.append(np.asarray(published_scores).reshape(batch_size, -1))
         result = significance.CoarseGaussianGemmHybridBatchResult(
-            scores=jnp.asarray(scores),
+            scores=published_scores,
             raw_score_max=jnp.zeros(batch_size, dtype=jnp.float32),
             scores_include_priors=True,
             used_selected_rescore=True,
             fallback_reason=None,
             selection=selection,
+            compact_scores=compact,
         )
-        helper_outputs.append(np.asarray(result.scores))
         return result
 
     monkeypatch.setattr(
@@ -1447,8 +1487,12 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
         max_significants,
         tie_score_ulps,
         min_diff2_offsets,
+        filter_positive_before_sort=None,
     ):
         del adaptive_fraction, max_significants, tie_score_ulps
+        assert filter_positive_before_sort is (
+            False if compact_expected else None
+        )
         scores = jnp.asarray(score_values, dtype=jnp.float32)
         posterior_inputs.append(np.asarray(scores))
         np.testing.assert_array_equal(
@@ -1458,8 +1502,9 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
         best = jnp.argmax(scores, axis=1)
         rows = jnp.arange(scores.shape[0], dtype=jnp.int32)
         mask = jnp.zeros(scores.shape, dtype=jnp.bool_).at[rows, best].set(True)
-        weights = mask.astype(jnp.float32)
         has_mass = jnp.any(jnp.isfinite(scores), axis=1)
+        mask &= has_mass[:, None]
+        weights = mask.astype(jnp.float32)
         count = has_mass.astype(jnp.int32)
         total = has_mass.astype(jnp.float32)
         return weights, mask, count, count, total, total
@@ -1503,11 +1548,19 @@ def test_live_k1_hybrid_reuses_exact_dense_scores_in_both_significance_passes(
     assert projection_calls == [(16, False)]
     assert len(helper_outputs) == len(posterior_inputs) == 2
     for helper_scores, posterior_scores in zip(helper_outputs, posterior_inputs):
-        np.testing.assert_array_equal(posterior_scores, helper_scores.reshape(2, -1))
+        np.testing.assert_array_equal(posterior_scores, helper_scores)
     np.testing.assert_array_equal(result[1], np.ones(3, dtype=np.int32))
     np.testing.assert_array_equal(result[2], np.full(3, 11, dtype=np.int32))
     np.testing.assert_array_equal(result[3], np.zeros(3, dtype=np.int32))
     hybrid_stats = result[5]["coarse_gaussian_gemm_hybrid"]
+    assert hybrid_stats["compact_posterior_enabled"] is compact_posterior
+    assert hybrid_stats["compact_posterior_default_enabled"] is False
+    assert hybrid_stats["selected_score_layout"] == (
+        "fixed_capacity_source16" if compact_posterior else "dense_global"
+    )
+    assert hybrid_stats["positive_only_scan_role"] == (
+        "correctness_oracle_not_runtime" if compact_posterior else None
+    )
     assert hybrid_stats["batch_count"] == 2
     assert hybrid_stats["selected_rescore_batch_count"] == 2
     assert hybrid_stats["fallback_batch_count"] == 0

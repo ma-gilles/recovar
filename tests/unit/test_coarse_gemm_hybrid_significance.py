@@ -11,6 +11,7 @@ import pytest
 from recovar import cuda_backproject
 from recovar.em.dense_single_volume.helpers import significance
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+    map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids,
     plan_coarse_gemm_certificate_topology,
 )
 
@@ -48,6 +49,49 @@ def test_coarse_gaussian_gemm_hybrid_is_default_off_and_fail_closed(monkeypatch)
     monkeypatch.setenv(variable, "automatic")
     with pytest.raises(ValueError, match=variable):
         significance._coarse_gaussian_gemm_hybrid_enabled()
+
+
+def test_coarse_gaussian_gemm_compact_posterior_is_strict_default_off(
+    monkeypatch,
+):
+    variable = "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._coarse_gaussian_gemm_compact_posterior_enabled()
+    assert significance._coarse_gaussian_gemm_compact_posterior_enabled(default=True)
+
+    for disabled in ("0", "false", "no", "off"):
+        monkeypatch.setenv(variable, disabled)
+        assert not significance._coarse_gaussian_gemm_compact_posterior_enabled(
+            default=True,
+        )
+    for enabled in ("1", "true", "yes", "on"):
+        monkeypatch.setenv(variable, enabled)
+        assert significance._coarse_gaussian_gemm_compact_posterior_enabled()
+
+    monkeypatch.setenv(variable, "automatic")
+    with pytest.raises(ValueError, match=variable):
+        significance._coarse_gaussian_gemm_compact_posterior_enabled()
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"hybrid_enabled": False}, "GEMM_HYBRID"),
+        ({"return_class_best": True}, "return_class_best=False"),
+        ({"return_class_second": True}, "return_class_best=False"),
+    ],
+)
+def test_compact_posterior_rejects_unsupported_runtime_contracts(updates, message):
+    values = dict(
+        hybrid_enabled=True,
+        return_class_best=False,
+        return_class_second=False,
+    )
+    values.update(updates)
+    with pytest.raises(ValueError, match=message):
+        significance._validate_coarse_gaussian_gemm_compact_posterior_request(
+            **values,
+        )
 
 
 def test_coarse_significance_support_audit_is_strict_default_off(monkeypatch):
@@ -306,6 +350,66 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
     )
 
 
+def test_hybrid_compact_posterior_retains_ordered_ids_without_dense_scatter(
+    monkeypatch,
+):
+    cache, shifted, weight, initial, topology = _hybrid_operands()
+    monkeypatch.setattr(
+        significance,
+        "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
+        _selected_diff2_from_ids,
+    )
+
+    def reject_dense(*_args, **_kwargs):
+        raise AssertionError("compact opt-in must not assemble a dense selected table")
+
+    def reject_full_fallback(*_args, **_kwargs):
+        raise AssertionError("eligible compact rescore must not run full fallback")
+
+    monkeypatch.setattr(
+        significance,
+        "assemble_coarse_gemm_hybrid_dense_scores_f32",
+        reject_dense,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_coarse_diff2_rectangular_f32",
+        reject_full_fallback,
+    )
+    result = significance._compute_coarse_gaussian_gemm_hybrid_batch(
+        jnp.asarray(cache),
+        jnp.asarray(shifted),
+        jnp.asarray(weight),
+        jnp.asarray(initial),
+        topology=topology,
+        actual_image_count=1,
+        class_log_prior=np.float32(0.25),
+        certificate_chunk_rows=16,
+        block_capacity=2,
+        compact_posterior=True,
+    )
+
+    assert result.scores is None
+    assert result.compact_scores is not None
+    assert result.used_selected_rescore
+    compact = result.compact_scores
+    candidate_mask = np.isfinite(np.asarray(compact.posterior_scores_flat))
+    pose_ids = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+        compact,
+        candidate_mask,
+    )
+    np.testing.assert_array_equal(
+        pose_ids[0],
+        np.arange(cache.shape[1] * shifted.shape[1], dtype=np.int32),
+    )
+    assert not np.any(candidate_mask[1])
+    assert pose_ids[1].size == 0
+    assert compact.posterior_scores_flat.shape == (
+        shifted.shape[0],
+        2 * 16 * shifted.shape[1],
+    )
+
+
 def test_hybrid_capacity_overflow_uses_one_full_direct_batch(monkeypatch):
     cache, shifted, weight, initial, topology = _hybrid_operands()
     selected_calls = 0
@@ -366,10 +470,12 @@ def test_hybrid_capacity_overflow_uses_one_full_direct_batch(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("compact_posterior", [False, True])
 @pytest.mark.parametrize("invalid_value", [np.nan, np.float32(-1.0)])
 def test_hybrid_invalid_selected_output_falls_back_for_whole_batch(
     monkeypatch,
     invalid_value,
+    compact_posterior,
 ):
     cache, shifted, weight, initial, topology = _hybrid_operands()
     full_calls = 0
@@ -411,9 +517,11 @@ def test_hybrid_invalid_selected_output_falls_back_for_whole_batch(
         class_log_prior=np.float32(0.0),
         certificate_chunk_rows=16,
         block_capacity=2,
+        compact_posterior=compact_posterior,
     )
 
     assert not result.used_selected_rescore
+    assert result.compact_scores is None
     assert result.fallback_reason == "invalid_selected_exact_output"
     assert full_calls == 1
     np.testing.assert_array_equal(

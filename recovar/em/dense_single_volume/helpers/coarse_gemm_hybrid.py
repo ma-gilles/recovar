@@ -63,6 +63,28 @@ class CoarseGemmHybridDenseScores(NamedTuple):
     selected_output_valid: jax.Array
 
 
+class CoarseGemmHybridCompactScores(NamedTuple):
+    """Exact selected scores retained in ordered fixed-capacity layout.
+
+    Scores have shape ``[B, Q*16*T]`` in selected-source-block,
+    source-rotation, translation order. Host validation guarantees that the
+    active ``source_block_ids`` prefix is strictly increasing, so compact
+    indices map monotonically to global pose IDs and RELION's first-pose tie
+    rule is preserved without restoring the full ``R*T`` table. Keeping only
+    one ``[B,Q]`` ID table avoids replacing the removed dense score allocation
+    with equally large per-candidate ID and validity arrays.
+    """
+
+    posterior_scores_flat: jax.Array
+    source_block_ids: jax.Array
+    block_count: jax.Array
+    raw_score_max: jax.Array
+    min_diff2_offsets: jax.Array
+    best_score: jax.Array
+    best_pose: jax.Array
+    selected_output_valid: jax.Array
+
+
 class CoarseGemmExpandedF64GammaBounds(NamedTuple):
     """Upward-rounded coefficients for the promoted expanded-square bound."""
 
@@ -1053,7 +1075,7 @@ def validate_coarse_gemm_hybrid_block_selection_for_rescore(
 
 
 @jax.jit
-def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
+def _assemble_coarse_gemm_hybrid_compact_scores_f32_jit(
     selected_diff2,
     block_ids,
     block_count,
@@ -1064,7 +1086,7 @@ def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
     use_rotation_log_prior,
     use_translation_log_prior,
 ):
-    """Device implementation for exact full-layout score assembly."""
+    """Device implementation for exact ordered compact score assembly."""
 
     batch_size, capacity, _source_block_size, n_translations = selected_diff2.shape
     n_rotations = rotation_log_prior.shape[0]
@@ -1123,29 +1145,31 @@ def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
     # Invalid active values are never published.  The host caller must inspect
     # ``selected_output_valid`` and use full rectangular direct scoring for the
     # whole padded image batch when any row is false.
-    scatter_values = jnp.where(
+    compact_scores = jnp.where(
         active_candidates & jnp.isfinite(posterior_scores),
         posterior_scores,
         -jnp.inf,
     )
-    dense_scores = jnp.full(
-        (batch_size, n_rotations, n_translations),
-        -jnp.inf,
-        dtype=jnp.float32,
+    compact_scores_flat = compact_scores.reshape(batch_size, -1)
+    best_score = jnp.max(compact_scores_flat, axis=1)
+    best_compact_index = jnp.argmax(compact_scores_flat, axis=1)
+    poses_per_slot = SOURCE_ROTATION_BLOCK_SIZE * n_translations
+    best_slot = best_compact_index // jnp.int32(poses_per_slot)
+    best_within_slot = best_compact_index % jnp.int32(poses_per_slot)
+    best_source_block = jnp.take_along_axis(
+        block_ids,
+        best_slot[:, None],
+        axis=1,
+    )[:, 0]
+    best_pose = (
+        best_source_block * jnp.int32(poses_per_slot) + best_within_slot
     )
-    batch_ids = jnp.broadcast_to(
-        jnp.arange(batch_size, dtype=jnp.int32)[:, None, None],
-        rotation_ids.shape,
-    )
-    # Host validation rejects duplicate active source blocks.  ``max`` makes
-    # the many inactive slots targeting the safe block-zero index true no-ops.
-    dense_scores = dense_scores.at[batch_ids, rotation_ids, :].max(scatter_values)
-    posterior_scores_flat = dense_scores.reshape(batch_size, n_rotations * n_translations)
-    best_score = jnp.max(posterior_scores_flat, axis=1)
-    best_pose = jnp.argmax(posterior_scores_flat, axis=1).astype(jnp.int32)
+    best_pose = jnp.where(active_rows, best_pose, jnp.int32(0))
     min_diff2_offsets = jnp.where(active_rows, -raw_score_max, jnp.float32(0.0))
-    return CoarseGemmHybridDenseScores(
-        posterior_scores_flat=posterior_scores_flat,
+    return CoarseGemmHybridCompactScores(
+        posterior_scores_flat=compact_scores_flat,
+        source_block_ids=block_ids,
+        block_count=block_count,
         raw_score_max=raw_score_max,
         min_diff2_offsets=min_diff2_offsets,
         best_score=best_score,
@@ -1154,7 +1178,81 @@ def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
     )
 
 
-def assemble_coarse_gemm_hybrid_dense_scores_f32(
+@jax.jit
+def _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
+    selected_diff2,
+    block_ids,
+    block_count,
+    actual_image_count,
+    class_log_prior,
+    rotation_log_prior,
+    translation_log_prior,
+    use_rotation_log_prior,
+    use_translation_log_prior,
+):
+    """Device implementation for exact full-layout score assembly."""
+
+    compact = _assemble_coarse_gemm_hybrid_compact_scores_f32_jit(
+        selected_diff2,
+        block_ids,
+        block_count,
+        actual_image_count,
+        class_log_prior,
+        rotation_log_prior,
+        translation_log_prior,
+        use_rotation_log_prior,
+        use_translation_log_prior,
+    )
+    batch_size = selected_diff2.shape[0]
+    n_rotations = rotation_log_prior.shape[0]
+    n_translations = selected_diff2.shape[3]
+    dense_scores = jnp.full(
+        (batch_size, n_rotations * n_translations),
+        -jnp.inf,
+        dtype=jnp.float32,
+    )
+    active_slots = (
+        jnp.arange(block_ids.shape[1], dtype=jnp.int32)[None, :]
+        < block_count[:, None]
+    )
+    safe_block_ids = jnp.where(active_slots, block_ids, jnp.int32(0))
+    rotation_ids = (
+        safe_block_ids[:, :, None] * jnp.int32(SOURCE_ROTATION_BLOCK_SIZE)
+        + jnp.arange(SOURCE_ROTATION_BLOCK_SIZE, dtype=jnp.int32)[None, None, :]
+    )
+    global_pose_ids = (
+        rotation_ids[..., None] * jnp.int32(n_translations)
+        + jnp.arange(n_translations, dtype=jnp.int32)[None, None, None, :]
+    ).reshape(batch_size, -1)
+    candidate_mask = jnp.broadcast_to(
+        active_slots[:, :, None, None],
+        selected_diff2.shape,
+    ).reshape(batch_size, -1)
+    batch_ids = jnp.broadcast_to(
+        jnp.arange(batch_size, dtype=jnp.int32)[:, None],
+        global_pose_ids.shape,
+    )
+    safe_pose_ids = jnp.where(
+        candidate_mask,
+        global_pose_ids,
+        jnp.int32(0),
+    )
+    # Host validation rejects duplicate active source blocks. ``max`` makes
+    # the many inactive slots targeting safe pose zero true no-ops.
+    posterior_scores_flat = dense_scores.at[batch_ids, safe_pose_ids].max(
+        compact.posterior_scores_flat,
+    )
+    return CoarseGemmHybridDenseScores(
+        posterior_scores_flat=posterior_scores_flat,
+        raw_score_max=compact.raw_score_max,
+        min_diff2_offsets=compact.min_diff2_offsets,
+        best_score=compact.best_score,
+        best_pose=compact.best_pose,
+        selected_output_valid=compact.selected_output_valid,
+    )
+
+
+def _prepare_coarse_gemm_hybrid_score_assembly_operands(
     selected_diff2,
     selection: CoarseGemmHybridBlockSelection,
     *,
@@ -1163,16 +1261,8 @@ def assemble_coarse_gemm_hybrid_dense_scores_f32(
     class_log_prior,
     rotation_log_prior=None,
     translation_log_prior=None,
-) -> CoarseGemmHybridDenseScores:
-    """Restore selected exact diff2 values to RELION's full flat pose table.
-
-    The selected CUDA output is ``[B,Q,16,T]`` in selected-slot order, while
-    downstream support IDs and exact ties use global ``rotation*T+translation``
-    order.  This helper validates the selector's ordered source-block contract,
-    scatters by the explicit source IDs, applies priors in the production
-    class/rotation/translation float32 sequence, and reconstructs the raw-score
-    maximum needed for RELION's ``min_diff2`` offset.
-    """
+):
+    """Validate and normalize shared dense/compact assembly operands."""
 
     validate_coarse_gemm_hybrid_block_selection_for_rescore(
         selection,
@@ -1220,7 +1310,7 @@ def assemble_coarse_gemm_hybrid_dense_scores_f32(
             )
         use_translation_prior = jnp.bool_(True)
 
-    return _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(
+    return (
         diff2,
         jnp.asarray(selection.block_ids, dtype=jnp.int32),
         jnp.asarray(selection.block_count, dtype=jnp.int32),
@@ -1231,3 +1321,123 @@ def assemble_coarse_gemm_hybrid_dense_scores_f32(
         use_rotation_prior,
         use_translation_prior,
     )
+
+
+def assemble_coarse_gemm_hybrid_compact_scores_f32(
+    selected_diff2,
+    selection: CoarseGemmHybridBlockSelection,
+    *,
+    actual_image_count: int,
+    n_rotations: int,
+    class_log_prior,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+) -> CoarseGemmHybridCompactScores:
+    """Retain selected exact scores and global IDs in compact RELION order."""
+
+    operands = _prepare_coarse_gemm_hybrid_score_assembly_operands(
+        selected_diff2,
+        selection,
+        actual_image_count=actual_image_count,
+        n_rotations=n_rotations,
+        class_log_prior=class_log_prior,
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+    )
+    return _assemble_coarse_gemm_hybrid_compact_scores_f32_jit(*operands)
+
+
+def map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(
+    compact: CoarseGemmHybridCompactScores,
+    mask,
+) -> tuple[np.ndarray, ...]:
+    """Map compact posterior support to canonical global RELION pose IDs.
+
+    Mapping only the selected mask positions keeps the host transfer/output
+    proportional to the significance support (normally capped at 500 per
+    image), rather than materializing a second ``[B,Q*16*T]`` integer table.
+    """
+
+    score_shape = tuple(compact.posterior_scores_flat.shape)
+    score_dtype = np.dtype(compact.posterior_scores_flat.dtype)
+    source_block_ids = np.asarray(compact.source_block_ids)
+    block_count = np.asarray(compact.block_count)
+    support_mask = np.asarray(mask)
+    if len(score_shape) != 2 or score_dtype != np.dtype(np.float32):
+        raise TypeError("compact posterior scores must be a rank-2 float32 array")
+    if (
+        source_block_ids.ndim != 2
+        or source_block_ids.dtype != np.dtype(np.int32)
+        or source_block_ids.shape[0] != score_shape[0]
+        or source_block_ids.shape[1] <= 0
+    ):
+        raise TypeError("compact source block IDs must be a matching rank-2 int32 array")
+    if block_count.dtype != np.dtype(np.int32) or block_count.shape != score_shape[:1]:
+        raise TypeError("compact block counts must be a matching rank-1 int32 array")
+    if support_mask.dtype != np.dtype(bool) or support_mask.shape != score_shape:
+        raise TypeError("compact posterior mask must be a matching boolean array")
+    capacity = source_block_ids.shape[1]
+    denominator = capacity * SOURCE_ROTATION_BLOCK_SIZE
+    if score_shape[1] <= 0 or score_shape[1] % denominator:
+        raise ValueError("compact score width must equal Q*16*T for a positive T")
+    n_translations = score_shape[1] // denominator
+    poses_per_slot = SOURCE_ROTATION_BLOCK_SIZE * n_translations
+    mapped = []
+    for row in range(score_shape[0]):
+        count = int(block_count[row])
+        if count < 0 or count > capacity:
+            raise ValueError("compact block count is outside its fixed capacity")
+        active_ids = source_block_ids[row, :count]
+        if (
+            np.any(active_ids < 0)
+            or (active_ids.size > 1 and np.any(np.diff(active_ids) <= 0))
+            or np.any(source_block_ids[row, count:] != -1)
+        ):
+            raise ValueError("compact source block IDs are not a canonical ordered prefix")
+        compact_indices = np.flatnonzero(support_mask[row]).astype(np.int64)
+        slot_indices = compact_indices // poses_per_slot
+        if np.any(slot_indices >= count):
+            raise ValueError("compact posterior mask selects an inactive capacity slot")
+        within_slot = compact_indices % poses_per_slot
+        pose_ids = (
+            source_block_ids[row, slot_indices].astype(np.int64) * poses_per_slot
+            + within_slot
+        )
+        if pose_ids.size > 1 and np.any(np.diff(pose_ids) <= 0):
+            raise RuntimeError("mapped compact posterior pose IDs are not strictly increasing")
+        if pose_ids.size and int(pose_ids[-1]) > np.iinfo(np.int32).max:
+            raise OverflowError("mapped compact posterior pose ID exceeds int32")
+        mapped.append(pose_ids.astype(np.int32))
+    return tuple(mapped)
+
+
+def assemble_coarse_gemm_hybrid_dense_scores_f32(
+    selected_diff2,
+    selection: CoarseGemmHybridBlockSelection,
+    *,
+    actual_image_count: int,
+    n_rotations: int,
+    class_log_prior,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+) -> CoarseGemmHybridDenseScores:
+    """Restore selected exact diff2 values to RELION's full flat pose table.
+
+    The selected CUDA output is ``[B,Q,16,T]`` in selected-slot order, while
+    downstream support IDs and exact ties use global ``rotation*T+translation``
+    order.  This helper validates the selector's ordered source-block contract,
+    scatters by the explicit source IDs, applies priors in the production
+    class/rotation/translation float32 sequence, and reconstructs the raw-score
+    maximum needed for RELION's ``min_diff2`` offset.
+    """
+
+    operands = _prepare_coarse_gemm_hybrid_score_assembly_operands(
+        selected_diff2,
+        selection,
+        actual_image_count=actual_image_count,
+        n_rotations=n_rotations,
+        class_log_prior=class_log_prior,
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+    )
+    return _assemble_coarse_gemm_hybrid_dense_scores_f32_jit(*operands)
