@@ -8,16 +8,16 @@
 ## Live engineering snapshot — 2026-09-03
 
 > **LIVE RESULT:** The full GF46 hybrid remains **1.84x faster** end to end.
-> Final-support deferral job `13366669` cuts warm shared-EM time by **22.07%**
-> and local big-JIT time by **35.14%**; whole-iteration wall improves **2.14%**.
-> Every discrete decision and support digest remains exact, but the candidate
-> is **not accepted**: restoring the full dense reduction topology did not fix
-> the `sigma2_noise` delta (`1.89e-5` normalized L2). New A2/XA diagnostics
-> show that both modeled-power terms differ before shell cancellation, which
-> rejects the zero-row-reduction theory and isolates the remaining boundary to
-> recomputed projection/denominator operands. The next revision will return
-> the exact packed union projection already produced by mature EM scoring and
-> reuse it for noise. Local evidence head: `0e1b4355c` (not pushed). Frozen
+> Exact scoring-projection reuse jobs `13367167` and `13367508` close the
+> final-support deferral's noise failure: every discrete decision/support row
+> is exact, raw A2/XA return to the ordinary repeat envelope, and cross-backend
+> final `sigma2_noise` falls from `1.89e-5` to about `3e-8` normalized L2.
+> The clean panel improves warm shared-EM time by **12.79%**, local big-JIT
+> time by **24.43%**, and whole-iteration wall by **4.09%**. This is a
+> default-off one-transition quality pass, not component/trajectory promotion; the
+> clean whole-wall result is just below the predeclared 5% threshold. Next is
+> the combined certified coarse-hybrid + packed-deferred gate, followed by a
+> complete trajectory. Local evidence head: `cf9791d35` (not pushed). Frozen
 > scores remain **2/20 correctness, 0/20 runtime**.
 
 | Signal | Status | Evidence / next decision |
@@ -26,18 +26,18 @@
 | Full GF46 trajectory | **COMPLETE — 1.84x FASTER, SCIENCE DIVERGES** | Job `13354357` completed iterations `0 -> 200`: wall `2826.410 -> 1538.248 s`, expectation `2734.236 -> 1445.572 s`, and peak RSS `17673 -> 17681 MiB`. The first direct/hybrid discrete split is iteration 35; an independent direct repeat first splits at iteration 76. This is diagnostic, not a correctness pass. |
 | Same-state iteration 35 | **EXACT DECISIONS / ATOMIC-SCALE CONTINUOUS NOISE** | Job `13358712` deep-copied one exact live iteration-34 state into an ABBA panel. Every particle/pose/translation/class/posterior/significance field and all 200 exact support-ID rows agree across direct and hybrid; aggregate support SHA-256 is identical. Cross-backend reconstruction deltas are the same scale as direct/direct and hybrid/hybrid atomic-repeat noise. |
 | Root cause closed | **SHARED EM/DIRECT OPERANDS** | The pre-fix hybrid cache used `mask_current_image_disk=False` while mature EM/direct used `True`. Commit `e9a8e8256` now routes both through one shared projection helper; the previous 405 pose-assignment mismatches fell to **0 / 1,000**. |
-| Performance decomposition | **FINAL-SUPPORT PROJECTION PAYS; OPERAND REUSE OPEN** | Across 200 iterations, coarse pass 1 improves `1787.367 -> 493.504 s` (**3.62x**), while the prior pass 2 was flat. Diagnostic job `13366669` cuts warm shared EM `1.208894 -> 0.942125 s` (**22.07%**), big JIT `1.080519 -> 0.700809 s` (**35.14%**), and whole wall `2.105864 -> 2.060737 s` (**2.14%**). The timing is promising but cannot promote a noise-failing arm. |
+| Performance decomposition | **PASS 1 MATERIAL; PASS 2 NOW FASTER** | Across 200 iterations, coarse pass 1 improves `1787.367 -> 493.504 s` (**3.62x**). Clean one-transition job `13367508` now improves pass 2 `1.361618 -> 1.191266 s` (**12.51%**), shared EM **12.79%**, big JIT **24.43%**, and whole wall **4.09%**. The combined full-trajectory effect is not measured yet. |
 | Packed fine-row scorer | **EXACT PRIMITIVE; PRODUCTION HOLD** | Primitive job `13361586` is bitwise exact and cuts score/posterior call time by 32.77--54.69% across GF46 iterations 20/40/60/80. Same-state production job `13362546` preserves every discrete decision/support row and stays inside the atomic repeat envelope, but warm pass 2 changes `1.219563 -> 1.223849 s` and whole-iteration wall `2.302587 -> 2.395506 s`. Default remains off. |
 | Packed projection | **SCIENCE DECISIONS EXACT; 2.35% WARM GAIN** | Job `13363465` projects 38,016 packed rows instead of 62,208 padded rows: pass 2 `1.183086 -> 1.142239 s`, big JIT `1.023525 -> 0.998770 s`, and whole iteration `2.091715 -> 2.042595 s`. All decisions/support are exact; one tiny derived-state tail is 2.37x the largest repeat amplitude, so this remains a default-off component for the combined gate. |
-| Final-support VDAM deferral | **PERFORMANCE PASS / NOISE QUALITY FAIL** | Job `13366669` projects only 489 final-support rows, scatters them back into the full dense topology, and then calls the mature EM reductions with dense posteriors and denominator. Decisions/support remain exact and warm EM improves **22.07%**, but A2 (`2.62e-4` normalized L2) and XA (`2.13e-4`) both differ; final `sigma2_noise` remains `1.89e-5` versus `7.44e-9` direct repeat. This disproves reduction shape as the cause. Default remains off while the already-computed packed score projection is reused. |
-| Numerical classification | **NO HYBRID-SPECIFIC ERROR AT SAME STATE** | The full trajectory is sensitive to accumulated ordinary reconstruction perturbations. This explains the observed split but does not make the trajectory stable or release-ready; multi-basin stability remains a correctness requirement. |
-| Focused regression | **CHANGED SEAMS PASS** | The latest dense-order repair and diagnostic-runner slice passes `22 / 22`; the preceding final-support candidate slice passed `17 / 17`. The VDAM-only four-file slice remains `108 passed / 7 failed`: four login-node failures lack optional `recovar.relion_bind._relion_bind_core`, and three unchanged harness guards already fail at parent HEAD. No broad RECOVAR suite was run. |
+| Final-support VDAM deferral | **QUALITY PASS / PERFORMANCE HOLD / TRAJECTORY OPEN** | Jobs `13367167` and `13367508` reuse the exact 1,868-pixel packed projection made by mature EM scoring, scatter it into the original dense layout, and call shared EM denominator/noise reductions. All decisions/support are exact; raw A2/XA and maps are repeat-scale; final noise is about `3e-8` normalized L2. Clean warm wall improves **4.09%**, narrowly below the 5% component threshold. Default remains off pending the combined trajectory gate. |
+| Numerical classification | **MATHEMATICALLY EQUIVALENT REPEAT-SCALE NOISE** | Reprojection, not dense reduction order, caused the stable error. Exact projection reuse removes it; remaining float32 reduction/CUDA atomic variation is stable and nondirectional at this boundary. Full-trajectory basin stability is still required. |
+| Focused regression | **CHANGED SEAMS PASS** | Projector-reuse and Fourier-union focused checks pass `24 / 24`, plus compile, ruff, and diff checks. The VDAM-only four-file slice remains `108 passed / 7 failed`: four login-node failures lack optional `recovar.relion_bind._relion_bind_core`, and three unchanged harness guards already fail at parent HEAD. No broad RECOVAR suite was run. |
 
 ### Immediate queue
 
-1. Return the exact packed 1,868-pixel union projection already computed by the mature EM scoring JIT, scatter it through the shared flat-row mapping, and remove the separate 489-row reprojection.
-2. Requalify that operand-reuse candidate from the exact iteration-34 state, requiring exact decisions/support and `sigma2_noise` inside the direct-repeat envelope.
-3. Repeat warmed timing without split diagnostics after correctness passes, then combine the material EM gain with the coarse hybrid and rerun the representative trajectory, memory, and basin-stability gates.
+1. Run a same-state gate with both the certified coarse hybrid and the packed-deferred exact-projection path enabled.
+2. If the combined boundary preserves exact decisions/support and repeat-scale maps/noise, run the representative GF46 `0 -> 200` trajectory with runtime, memory, and basin-stability gates.
+3. Repeat blocked whole-trajectory timing if the combined path clears science; a one-transition component cannot update either frozen score.
 4. Expand across outliers, pose/noise distributions, scale, parameters, and long trajectories. K>1 and real data remain separate later gates.
 
 ## At a glance
@@ -48,7 +48,7 @@
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
 | Current correctness work | **SAME-STATE EXACT / BASIN STABILITY OPEN** | Job `13358712` rules out a deterministic hybrid decision error at the first observed split. Full direct/hybrid trajectories still enter different basins, as direct repeats eventually do too. |
-| Current performance work | **1.84x FULL TRAJECTORY / 22.07% WARM EM GAIN UNDER REPAIR** | Job `13354357` is a material end-to-end improvement with only `+8 MiB` peak RSS. Job `13366669` proves the deferral boundary is a larger shared-EM lever, but its separately recomputed noise operands fail the repeat gate and cannot be promoted yet. |
+| Current performance work | **1.84x FULL TRAJECTORY / EXACT PASS-2 COMPONENT** | Job `13354357` is a material end-to-end improvement with only `+8 MiB` peak RSS. Jobs `13367167`/`13367508` close the deferred path's quality failure and give a conservative **12.51%** warm pass-2 gain; combined trajectory speed remains unmeasured. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
@@ -141,7 +141,7 @@ before timing can authorize promotion.
 | Cache-only arm | `13277456` | Retain for repeat/scale study; not promoted. |
 | Flat-row scorer | `13361586`, `13362546` | Bitwise primitive and live science pass, but production warm big-JIT is neutral and whole iteration is 4.04% slower. Keep default off; extend packing through projection before another promotion gate. |
 | Packed projection | `13363465` | Exact decisions/support and a 2.35% warm whole-iteration gain. Retain default-off and combine with final-support noise/M-step deferral before promotion. |
-| Final-support VDAM deferral | `13364363`, `13366669` | Warm shared EM improves up to 22.07% and big JIT 35.14%, with exact decisions/support. Dense-row restoration did not repair A2/XA, so retain only as a default-off development lane and reuse the scoring JIT's exact packed projection next. |
+| Final-support VDAM deferral | `13367167`, `13367508` | Exact scoring-projection reuse restores A2/XA and final noise to repeat scale with exact decisions/support. Clean warm pass 2 improves 12.51%, big JIT 24.43%, and wall 4.09%. Advance default-off to combined hybrid/trajectory gates. |
 | Segmented fixed-capacity scan | `13360809` | Exact shared-EM execution boundary; performance rejected as the gap-closing lever (maximum 1.176x on 16 tiny calls, slower at two calls). |
 | Stable fine window | `13264981`, `13265301` | Exact primitive; forecast only, default off. |
 | Shared eight-stream coarse scheduler | `13279168`, `13279367` | Math accepted; performance hold below the runtime target. |
@@ -177,12 +177,11 @@ release gate.
 
 ## Next gates
 
-1. Extend the accepted packed projector through the existing shared-EM
-   final-support noise path while preserving the exact dense denominator,
-   source-faithful VDAM BPref ordering, and exact fine-posterior decisions.
+1. Combine the accepted exact-projection deferred path with the certified
+   coarse hybrid and qualify the exact same-state transition.
 2. Add shape-stable coarse-certificate execution to remove schedule-wide
    recompilation excess while retaining exact selected-block direct rescoring.
-3. Rerun the representative trajectory with basin-stability, FSC/scale,
+3. Rerun the representative combined trajectory with basin-stability, FSC/scale,
    selector/fallback, memory, and same-H100 runtime gates.
 4. Then rerun the frozen K=1 trajectory suite and the expanded outlier,
    pose/noise-distribution, scale, parameter, and long-trajectory matrix.
@@ -217,6 +216,7 @@ release gate.
 | Packed projection at production seam | Source `cb5855d8367b452d48b6765f7e9265ed8d076ca4`, job `13363465`, H100 `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, report JSON SHA-256 `825791a60b2e35168b807020b6bc7bc32bb149b5c82fe9c7b3be45ecb7de855c`; [report](../perf/vdam_packed_projection_same_state_it35_h100_13363465.md). |
 | Final-support VDAM deferral | Source `fea9ae567e732d013860737e2cf5f2022c548818`, job `13364363`, H100 `GPU-0d7b80c7-fef8-e346-6332-de36ae1af518`, report JSON SHA-256 `55bb5760935c5ea1314ad9591558f8ba281f71f88141201e8b58c18383459afe`; [report](../perf/vdam_packed_deferred_same_state_it35_h100_13364363.md). |
 | Dense-order final-support diagnostic | Source `0e1b4355c85b024d45b4782bdca6f7eba2656223`, job `13366669`, H100 `GPU-235ec3bc-ca9f-1c0e-88eb-c8b37c5e0480`, report JSON SHA-256 `ec6ded886dff2465a536b2c6c987092d91d40beac68b3cade57eac712764cf78`; [report](../perf/vdam_packed_deferred_dense_order_it35_h100_13366669.md). |
+| Exact scoring-projection reuse | Source `cf9791d35e2b97cd5b64426aab33b749e3b50ce3`, diagnostic job `13367167`, clean job `13367508`, H100s `GPU-990435ac-e5fe-18d9-c741-59b8fd9c9439` and `GPU-5297e2fc-3064-625f-a65a-9db11614d705`, report JSON SHA-256s `1a02a96533fbd1b7d9c111da056aef41f35ead8cbc032e05b578d8f6e10c7313` and `6a979206fdb062678862d378d25516093bdad3fe83d41e63af21eadc6633ad08`; [report](../perf/vdam_packed_deferred_projection_reuse_it35_h100_13367167_13367508.md). |
 
 Job `13329608` artifacts are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_gemm_gf46_stream_v2_6e4e0ae65_h21g4_20260901/`
