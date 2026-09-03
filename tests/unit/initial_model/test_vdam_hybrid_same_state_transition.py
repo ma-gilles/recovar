@@ -168,6 +168,9 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert hybrid[runner.FLAT_ROW_ENVIRONMENT] == "0"
     assert hybrid[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
     assert hybrid[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
+    assert runner._candidate_uses_hybrid("hybrid") is True
+    assert runner._candidate_uses_hybrid("hybrid_packed_deferred") is True
+    assert runner._candidate_uses_hybrid("packed_deferred") is False
 
 
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:

@@ -130,6 +130,10 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
     return values
 
 
+def _candidate_uses_hybrid(candidate_mode: str) -> bool:
+    return candidate_mode in {"hybrid", "hybrid_packed_deferred"}
+
+
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -538,7 +542,7 @@ def _run_transition_arm(
         "label": label,
         "candidate_mode": candidate_mode,
         "candidate_enabled": bool(candidate_enabled),
-        "hybrid": bool(candidate_enabled and candidate_mode == "hybrid"),
+        "hybrid": bool(candidate_enabled and _candidate_uses_hybrid(candidate_mode)),
         "wall_s": wall_s,
         "initial_state_manifest": initial_state_manifest,
         "initial_particle_state_manifest": initial_particle_state_manifest,
