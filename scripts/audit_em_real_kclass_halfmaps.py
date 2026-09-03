@@ -106,6 +106,11 @@ def sha256_file(path: Path, chunk_bytes: int = 8 * 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def _float32_array_sha256(array: np.ndarray) -> str:
+    payload = np.ascontiguousarray(array, dtype=np.float32)
+    return hashlib.sha256(payload.tobytes()).hexdigest()
+
+
 def sha256_strings(values: Sequence[str]) -> str:
     payload = "".join(f"{value}\n" for value in values).encode()
     return hashlib.sha256(payload).hexdigest()
@@ -212,9 +217,15 @@ def validate_reference_derivation(manifest: Mapping[str, Any]) -> dict[str, Any]
     )
     recovar_hashes = {str(row["derived_recovar"]["sha256"]) for row in classes}
     relion_hashes = {str(row["derived_relion"]["sha256"]) for row in classes}
+    internal_hashes = {str(row.get("internal_float32_c_bytes_sha256")) for row in classes}
     _require(
         len(recovar_hashes) == N_CLASSES and len(relion_hashes) == N_CLASSES,
         "prepared references are not four distinct maps in each consumer frame",
+    )
+    _require(
+        len(internal_hashes) == N_CLASSES
+        and all(SHA256_RE.fullmatch(value) is not None for value in internal_hashes),
+        "prepared reference arrays are not four distinct float32 maps",
     )
     artifact_records = manifest.get("input_artifacts", [])
     for row in classes:
@@ -227,6 +238,23 @@ def validate_reference_derivation(manifest: Mapping[str, Any]) -> dict[str, Any]
                 matches[0] == row[f"derived_{frame}"],
                 f"{role} differs between the reference report and input ledger",
             )
+        recovar_volume = np.asarray(
+            helpers.load_mrc(row["derived_recovar"]["path"]),
+            dtype=np.float32,
+        )
+        relion_volume = np.asarray(
+            helpers.load_relion_volume(row["derived_relion"]["path"]),
+            dtype=np.float32,
+        )
+        _require(
+            np.array_equal(recovar_volume, relion_volume),
+            f"class {class_id} intended-reader arrays are not exact",
+        )
+        _require(
+            _float32_array_sha256(recovar_volume)
+            == row["internal_float32_c_bytes_sha256"],
+            f"class {class_id} intended-reader array hash changed",
+        )
 
     result: dict[str, Any] = {
         "path": str(report_path.resolve()),
@@ -235,6 +263,7 @@ def validate_reference_derivation(manifest: Mapping[str, Any]) -> dict[str, Any]
         "class_count": N_CLASSES,
         "intended_reader_roundtrip_exact": True,
         "distinct_in_each_consumer_frame": True,
+        "distinct_internal_float32_arrays": True,
     }
     if manifest.get("dataset") != "EMPIAR-10073":
         return result

@@ -20,19 +20,21 @@ def _reference_manifest_10073(tmp_path: Path) -> dict:
     for class_id, source_hash in enumerate(source_hashes, start=1):
         recovar_path = tmp_path / f"reference_init_class{class_id:03d}.mrc"
         relion_path = tmp_path / f"reference_init_class{class_id:03d}_relion.mrc"
-        recovar_path.write_bytes(f"recovar-{class_id}".encode())
-        relion_path.write_bytes(f"relion-{class_id}".encode())
+        volume = np.zeros((4, 4, 4), dtype=np.float32)
+        volume[class_id - 1, class_id - 1, class_id - 1] = float(class_id)
+        audit.helpers.write_mrc(recovar_path, volume, voxel_size=2.0)
+        audit.helpers.write_relion_mrc(relion_path, volume, voxel_size=2.0)
         derived_recovar = {
             "role": f"prepared_recovar_initial_class{class_id:03d}",
             "path": str(recovar_path.resolve()),
             "size_bytes": recovar_path.stat().st_size,
-            "sha256": f"{class_id:064x}",
+            "sha256": audit.sha256_file(recovar_path),
         }
         derived_relion = {
             "role": f"prepared_relion_initial_class{class_id:03d}",
             "path": str(relion_path.resolve()),
             "size_bytes": relion_path.stat().st_size,
-            "sha256": f"{class_id + 10:064x}",
+            "sha256": audit.sha256_file(relion_path),
         }
         prepared_artifacts.extend((derived_recovar, derived_relion))
         classes.append(
@@ -45,6 +47,9 @@ def _reference_manifest_10073(tmp_path: Path) -> dict:
                 "derived_recovar": derived_recovar,
                 "derived_relion": derived_relion,
                 "intended_reader_roundtrip_exact": True,
+                "internal_float32_c_bytes_sha256": audit._float32_array_sha256(
+                    volume
+                ),
                 "spectral_leak": {
                     "out_of_band_energy_fraction": 1.0e-12,
                     "out_of_band_peak_ratio": 1.0e-7,
@@ -197,6 +202,8 @@ def test_10073_reference_derivation_accepts_frozen_tier_a_contract(tmp_path: Pat
     [
         ("spectral_leak", "out-of-band energy limit"),
         ("duplicate_reference", "not four distinct maps"),
+        ("duplicate_internal_array", "not four distinct float32 maps"),
+        ("reader_mismatch", "intended-reader arrays are not exact"),
         ("reference_diversity", "reference diversity gate failed"),
     ],
 )
@@ -213,6 +220,15 @@ def test_10073_reference_derivation_fails_closed(
         report["classes"][1]["derived_recovar"]["sha256"] = report["classes"][0][
             "derived_recovar"
         ]["sha256"]
+    elif mutation == "duplicate_internal_array":
+        report["classes"][1]["internal_float32_c_bytes_sha256"] = report["classes"][
+            0
+        ]["internal_float32_c_bytes_sha256"]
+    elif mutation == "reader_mismatch":
+        derived = report["classes"][0]["derived_relion"]
+        path = Path(derived["path"])
+        audit.helpers.write_relion_mrc(path, np.ones((4, 4, 4), dtype=np.float32), voxel_size=2.0)
+        derived.update(size_bytes=path.stat().st_size, sha256=audit.sha256_file(path))
     else:
         report["pairwise_diversity"][0]["centered_correlation"] = 0.99
     _rewrite_reference_report(manifest)

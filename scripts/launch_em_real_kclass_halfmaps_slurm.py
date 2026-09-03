@@ -328,6 +328,11 @@ def sha256_file(path: Path, chunk_bytes: int = 8 * 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
+def _float32_array_sha256(array: np.ndarray) -> str:
+    payload = np.ascontiguousarray(array, dtype=np.float32)
+    return hashlib.sha256(payload.tobytes()).hexdigest()
+
+
 def _git_text(*args: str, cwd: Path = REPO_ROOT) -> str:
     return subprocess.check_output(["git", *args], cwd=cwd, text=True).strip()
 
@@ -534,7 +539,11 @@ def _prepare_derived_source_fixture(
     _require(orthogonality_error <= 1.0e-5, "selected rotations are not orthogonal")
     _require(determinant_error <= 1.0e-5, "selected rotations are not proper")
 
-    physical_box_angstrom = native_grid * native_pixel_size
+    # Match RECOVAR's CTF loader exactly: its canonical float32 D and Apix
+    # operands are multiplied before promotion.  Promoting the operands first
+    # shifts the 256-grid pixel size by ~9e-8 A and no longer reproduces the
+    # metadata conversion used to make the downsampled particle stack.
+    physical_box_angstrom = float(np.float32(ctf[0, 0] * ctf[0, 1]))
     grid_size = 256
     pixel_size = physical_box_angstrom / grid_size
     eulers = np.asarray(helpers.R_to_relion(selected_rotations), dtype=np.float64)
@@ -626,7 +635,8 @@ def _prepare_derived_source_fixture(
             ),
             "rotation_conversion": "recovar.utils.helpers.R_to_relion",
             "translation_conversion": (
-                "fractional_translation * native_grid * native_pixel_size_angstrom"
+                "fractional_translation * float32(native_grid * native_pixel_size_angstrom), "
+                "matching recovar.data_io.load_utils.load_ctf_params"
             ),
         },
         "environment": {
@@ -992,6 +1002,9 @@ def _prepare_references(
                     role=f"prepared_relion_initial_class{class_id:03d}",
                 ),
                 "intended_reader_roundtrip_exact": True,
+                "internal_float32_c_bytes_sha256": _float32_array_sha256(
+                    recovar_roundtrip
+                ),
                 "spectral_leak": spectral_metrics,
             }
         )
@@ -1006,7 +1019,11 @@ def _prepare_references(
     _require(
         len({sha256_file(path) for path in recovar_paths}) == 4
         and len({sha256_file(path) for path in relion_paths}) == 4,
-        "prepared class references are not all byte-distinct",
+        "prepared class-reference serializations are not all byte-distinct",
+    )
+    _require(
+        len({_float32_array_sha256(volume) for volume in internal_volumes}) == 4,
+        "prepared class-reference arrays are not all distinct",
     )
 
     pairwise: list[dict[str, Any]] = []
