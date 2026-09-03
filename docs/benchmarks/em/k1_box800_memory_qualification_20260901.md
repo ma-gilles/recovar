@@ -405,9 +405,16 @@ Important replay identities are:
 - 1-second HBM trace SHA-256:
   `7cd13ee04d4874933f5f4ae41c04ff8485277858d52bb01e079c8bf65ea7d8e0`;
 - resolved command SHA-256:
-  `3359e1edcf2f20f89aaa855d7479a24d342878e895b53d5e844c070bcaa4a802`.
+  `3359e1edcf2f20f89aaa855d7479a24d342878e895b53d5e844c070bcaa4a802`;
 - diagnostic decision JSON SHA-256:
   `bc0ece73d6f68d6b12e48e0715fb5a180042c0c6dd5227576a3f2ee12af56c5c`.
+
+The input manifest captured the provided CUDA binary as `ad3b4a38...`, but
+RECOVAR rebuilt that optional library during execution from the unchanged CUDA
+source (SHA-256 `ce86b544...`), producing `60f86edf...`.  The result therefore
+pins the source and runtime log rather than claiming that the originally
+provided binary remained immutable.  The accumulator-donation gate below
+copies the rebuilt binary into a private read-only path and pins both hashes.
 
 To repeat the diagnostic, create new empty run and runtime roots, copy the
 sealed builder and launcher, replace their output roots, rebuild the seed from
@@ -415,3 +422,70 @@ the pinned iteration-4 inputs, and submit the copied launcher with its new
 SHA-256 in `EXPECTED_LAUNCHER_SHA256`.  Accept only an exact one-H100
 allocation, a clean pinned source/tree, both complete bucket-loop records, no
 fatal/OOM marker, and the output `COMPLETED` marker.
+
+## Accepted exact-local accumulator donation
+
+Commit `4749f6ad9` routes exact-local RELION x-half row updates through the
+existing donating indexed-adjoint wrapper.  All four production call sites
+consume and immediately replace their `Ft_y` or `Ft_ctf` accumulator.  Native
+full-layout updates remain non-donating.  This exposes the existing CUDA FFI
+input/output alias to XLA and prevents preservation of a second full BPref
+accumulator; no projection, score, posterior, backprojection arithmetic, or
+symmetry operation changes.
+
+The matched H100 gate uses the iteration-11-sized `current_size=498` BPref
+geometry.  Its full logical reconstruction grid is `(999,999,999)`, with
+499,000,500 stored x-half elements in `(999,999,500)`.  A complex64 numerator
+plus float32 weight pair is exactly 5,988,006,000 bytes, or 5,710.607529 MiB.
+Both arms use one indexed row and the same operands, CUDA source and read-only
+binary; the only source difference is accumulator donation.
+
+| Measurement | Job 13369477, before | Job 13369478, after | Change |
+| --- | ---: | ---: | ---: |
+| Job state / elapsed | `COMPLETED 0:0` / 18 s | `COMPLETED 0:0` / 18 s | matched |
+| Sampled peak HBM | 11,991 MiB | 6,279 MiB | -5,712 MiB (-47.64%) |
+| Numerator input deleted / pointer reused | no / no | yes / yes | donated |
+| Weight input deleted / pointer reused | no / no | yes / yes | donated |
+| Checked numerator maximum | 2.2360677719 | 2.2360677719 | exact |
+| Checked weight maximum | 3.0 | 3.0 | exact |
+
+The observed 5,712-MiB decrease is 1.000244 times the exact donatable pair,
+which is agreement to the 1-MiB sampling resolution.  Both jobs requested and
+received exactly `cpu=4,mem=64G,node=1,billing=5,gres/gpu=1`, each saw one
+H100, and each recorded `OverSubscribe=OK`.  The focused CPU row-chunk gate
+passes two tests, including native fail-closed routing and the complete
+three-chunk accumulator chain.  `pixi run test-em-fast-guard` passes all 16
+tests in 58.62 s.  A pre-existing import-order finding and two pre-existing
+unused imports prevent a clean whole-file Ruff result; Ruff passes on the
+changed code when exactly those three pristine-HEAD findings are excluded.
+
+The run, runtime, and detached-source roots are:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/exact_local_donation_cs498_9006957c6_20260903`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/exact_local_donation_cs498_9006957c6_20260903`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/source_exact_local_donation_cs498_20260903`.
+
+All carry `SAFE_TO_DELETE`.  Replay identities are:
+
+- auditor SHA-256:
+  `15fbe8929d316dd8ae70f61b3ff269f6079ce3e919d608b49d667f635afc30f7`;
+- launcher SHA-256:
+  `3af5b42b9fdd0c37a3b2dca1df57b23fe24c95bdae17e85fce7fb82de9de746f`;
+- CUDA source / binary SHA-256:
+  `ce86b544f3d831d48c63f7b9dff5c39db724925a5fa78c82c159409e879417b7` /
+  `60f86edf44153aad98fb97487e60d4e2a76c10d322c723a765d4b6764fabda67`;
+- baseline / candidate result SHA-256:
+  `a60befd8b1e92d6437796103a1f00b17ccd79756f00b0c6cf127aa907271b2ac` /
+  `2ceb70fc18b68ee17fa62b9b1eaf3552c76d02e595a58a7c5de301b965469816`;
+- accepted comparison JSON SHA-256:
+  `3c48ca363468700db17e11770650d7950ecc6899f52f23b074319f1dbc1c37d1`.
+
+The rejected jobs `13369318`, `13369320`, `13369410`, and `13369411` are
+retained as fail-closed harness attempts.  They reached neither the test
+tensors nor a memory/science decision; their two corrected harness causes are
+recorded in the run provenance.  Reproduce by copying the two detached source
+commits, auditor, launcher, and read-only CUDA binary into fresh marked roots,
+updating all absolute paths and expected hashes, and submitting one arm for
+each source.  Accept only exact resources, clean imports, both pointer-
+ownership contracts, identical checked numerical values, and an HBM decrease
+within sampler resolution of 5,710.607529 MiB.

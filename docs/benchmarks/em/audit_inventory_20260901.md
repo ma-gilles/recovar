@@ -85,7 +85,12 @@ wall from 650.344 to 124.897 s.  Full-particle checkpoint-seeded job
 at `current_size=414`, completing in 512.723 s with a 20,125-MiB whole-job and
 15,305-MiB local-window peak.  It is a score-only execution confirmation, so a
 future K=1 completion record must be added rather than inferring registry
-admission from any memory gate.
+admission from any memory gate.  Commit `4749f6ad9` additionally donates the
+consumed exact-local x-half accumulators.  Matched `current_size=498` jobs
+`13369477/13369478` preserve the checked numerical values and pointer ownership
+contract while reducing HBM from 11,991 to 6,279 MiB.  The 5,712-MiB reduction
+matches the exact 5,710.607529-MiB numerator/weight pair to sampling
+resolution; this is a memory-path gate, not a final reconstruction.
 
 `k1_empiar10202_checkpoint_equivalence_20260902.md` records the first five
 matching checkpoints from the full-particle box-800 I1 control and compact
