@@ -57,6 +57,50 @@ def test_coarse_gaussian_gemm_macro_is_default_off_and_fail_closed(monkeypatch):
         significance._coarse_gaussian_gemm_macro_enabled()
 
 
+def test_exact_coarse_skip_generic_operands_is_default_off_and_fail_closed(
+    monkeypatch,
+):
+    variable = "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS"
+    monkeypatch.delenv(variable, raising=False)
+    assert not significance._k1_relion_exact_coarse_skip_generic_operands_enabled()
+    assert significance._k1_relion_exact_coarse_skip_generic_operands_enabled(
+        default=True,
+    )
+
+    for disabled in ("0", "false", "no", "off"):
+        monkeypatch.setenv(variable, disabled)
+        assert not (
+            significance._k1_relion_exact_coarse_skip_generic_operands_enabled(
+                default=True,
+            )
+        )
+    for enabled in ("1", "true", "yes", "on"):
+        monkeypatch.setenv(variable, enabled)
+        assert significance._k1_relion_exact_coarse_skip_generic_operands_enabled()
+
+    monkeypatch.setenv(variable, "automatic")
+    with pytest.raises(ValueError, match=variable):
+        significance._k1_relion_exact_coarse_skip_generic_operands_enabled()
+
+    assert not significance._resolve_k1_relion_exact_coarse_skip_generic_operands(
+        requested=False,
+        exact_coarse_operands_enabled=False,
+    )
+    assert not significance._resolve_k1_relion_exact_coarse_skip_generic_operands(
+        requested=False,
+        exact_coarse_operands_enabled=True,
+    )
+    assert significance._resolve_k1_relion_exact_coarse_skip_generic_operands(
+        requested=True,
+        exact_coarse_operands_enabled=True,
+    )
+    with pytest.raises(ValueError, match=variable):
+        significance._resolve_k1_relion_exact_coarse_skip_generic_operands(
+            requested=True,
+            exact_coarse_operands_enabled=False,
+        )
+
+
 def test_coarse_gaussian_gemm_projection_cache_is_default_off_and_fail_closed(
     monkeypatch,
 ):
@@ -1332,6 +1376,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
         "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
         "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
+        "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS": "0",
         "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "1",
         "RECOVAR_SIGNIFICANCE_SCORE_CACHE": "0",
         "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "1",
@@ -1368,14 +1413,27 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
             dtype=jnp.float32,
         ),
     )
-    monkeypatch.setattr(
-        cuda_backproject,
-        "relion_translate_score_f32",
-        lambda images, translation_angles, pixel_indices, image_shape: jnp.repeat(
+    translation_calls = []
+
+    def fake_translate(images, translation_angles, pixel_indices, image_shape):
+        translation_calls.append(
+            (
+                np.asarray(images).copy(),
+                np.asarray(translation_angles).copy(),
+                np.asarray(pixel_indices).copy(),
+                tuple(image_shape),
+            )
+        )
+        return jnp.repeat(
             images[:, None, :],
             int(translation_angles.shape[0]),
             axis=1,
-        ).reshape(images.shape[0] * int(translation_angles.shape[0]), -1),
+        ).reshape(images.shape[0] * int(translation_angles.shape[0]), -1)
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_score_f32",
+        fake_translate,
     )
 
     projection_calls = []
@@ -1398,6 +1456,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     )
 
     helper_outputs = []
+    operand_inputs = []
     compact_expected = compact_posterior
 
     def fake_hybrid(
@@ -1416,7 +1475,13 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         compact_posterior: bool,
     ):
         batch_size = int(shifted_corrected.shape[0])
-        del shifted_corrected, pixel_weight, initial_diff2
+        operand_inputs.append(
+            (
+                np.asarray(shifted_corrected).copy(),
+                np.asarray(pixel_weight).copy(),
+                np.asarray(initial_diff2).copy(),
+            )
+        )
         assert projection_cache.shape == (1, 16, 12)
         assert topology.compact_pixel_count == 12
         assert topology.translation_count == 2
@@ -1535,30 +1600,55 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         [[0.0, 0.5], [0.25, -0.5], [-0.25, 0.75]],
         dtype=np.float32,
     )
-    result = significance._compute_k_class_significance_batched(
-        dataset,
-        jnp.zeros((1, dataset.volume_size), dtype=jnp.complex64),
-        jnp.ones(dataset.image_size, dtype=jnp.float32),
-        rotations,
-        translations,
-        "linear_interp",
-        class_log_priors=np.asarray([0.25], dtype=np.float64),
-        adaptive_fraction=0.5,
-        max_significants=1,
-        image_batch_size=2,
-        rotation_block_size=6,
-        current_size=4,
-        translation_log_prior=translation_prior,
-        half_spectrum_scoring=True,
-        relion_projector_half=jnp.ones((1, 3, 3, 2), dtype=jnp.complex64),
-        relion_projector_r_max=1,
-        relion_projector_texture_interp=True,
-        score_mode="gaussian",
-        collect_significance=True,
-        pad_final_image_batch=True,
+    def run():
+        return significance._compute_k_class_significance_batched(
+            dataset,
+            jnp.zeros((1, dataset.volume_size), dtype=jnp.complex64),
+            jnp.ones(dataset.image_size, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            class_log_priors=np.asarray([0.25], dtype=np.float64),
+            adaptive_fraction=0.5,
+            max_significants=1,
+            image_batch_size=2,
+            rotation_block_size=6,
+            current_size=4,
+            translation_log_prior=translation_prior,
+            half_spectrum_scoring=True,
+            relion_projector_half=jnp.ones(
+                (1, 3, 3, 2),
+                dtype=jnp.complex64,
+            ),
+            relion_projector_r_max=1,
+            relion_projector_texture_interp=True,
+            score_mode="gaussian",
+            collect_significance=True,
+            pad_final_image_batch=True,
+        )
+
+    control = run()
+    control_projection_calls = tuple(projection_calls)
+    control_helper_outputs = tuple(value.copy() for value in helper_outputs)
+    control_operand_inputs = tuple(
+        tuple(value.copy() for value in operands) for operands in operand_inputs
     )
+    control_posterior_inputs = tuple(value.copy() for value in posterior_inputs)
+    control_translation_calls = tuple(translation_calls)
+
+    projection_calls.clear()
+    helper_outputs.clear()
+    operand_inputs.clear()
+    posterior_inputs.clear()
+    translation_calls.clear()
+    monkeypatch.setenv(
+        "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS",
+        "1",
+    )
+    result = run()
 
     assert projection_calls == [(16, False)]
+    assert control_projection_calls == ((16, False),)
     expected_batch_count = 1 if hybrid_image_batch_size else 2
     expected_physical_rows = (
         int(hybrid_image_batch_size)
@@ -1566,8 +1656,95 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         else 2 * expected_batch_count
     )
     assert len(helper_outputs) == len(posterior_inputs) == expected_batch_count
+    assert len(operand_inputs) == expected_batch_count
+    assert len(translation_calls) == expected_batch_count
+    assert len(control_translation_calls) == 2 * expected_batch_count
+    for candidate_call, control_call in zip(
+        translation_calls,
+        control_translation_calls[1::2],
+    ):
+        for candidate_value, control_value in zip(
+            candidate_call[:3],
+            control_call[:3],
+        ):
+            np.testing.assert_array_equal(candidate_value, control_value)
+        assert candidate_call[3] == control_call[3]
     for helper_scores, posterior_scores in zip(helper_outputs, posterior_inputs):
         np.testing.assert_array_equal(posterior_scores, helper_scores)
+    for candidate_scores, control_scores in zip(
+        helper_outputs,
+        control_helper_outputs,
+    ):
+        np.testing.assert_array_equal(candidate_scores, control_scores)
+    for candidate_scores, control_scores in zip(
+        posterior_inputs,
+        control_posterior_inputs,
+    ):
+        np.testing.assert_array_equal(candidate_scores, control_scores)
+    for candidate_operands, control_operands in zip(
+        operand_inputs,
+        control_operand_inputs,
+    ):
+        for candidate_value, control_value in zip(
+            candidate_operands,
+            control_operands,
+        ):
+            np.testing.assert_array_equal(candidate_value, control_value)
+
+    for index in range(4):
+        np.testing.assert_array_equal(result[index], control[index])
+    assert len(result[4]) == len(control[4])
+    for candidate_class, control_class in zip(result[4], control[4]):
+        assert len(candidate_class) == len(control_class)
+        for candidate_support, control_support in zip(
+            candidate_class,
+            control_class,
+        ):
+            np.testing.assert_array_equal(candidate_support, control_support)
+    for key in (
+        "normalization_log_z",
+        "normalization_log_evidence",
+        "log_evidence_per_image",
+        "best_log_score_per_image",
+        "max_posterior_per_image",
+        "class_log_evidence_per_image",
+        "class_assignments",
+        "significant_cutoff_counts",
+    ):
+        np.testing.assert_array_equal(result[5][key], control[5][key])
+
+    control_assembly = control[5]["exact_coarse_operand_assembly"]
+    assert control_assembly == {
+        "skip_generic_default_enabled": False,
+        "skip_generic_requested": False,
+        "skip_generic_effective": False,
+        "exact_coarse_operands_effective": True,
+        "generic_assembly_count": expected_batch_count,
+        "exact_assembly_count": expected_batch_count,
+        "translate_score_call_site_count": 2 * expected_batch_count,
+        "downstream_operand_source": "exact_source_star",
+        "diagnostic_operand_source": "exact_source_star",
+        "raw_score_capture_changed": False,
+        "skipped_generic_outputs": [],
+    }
+    candidate_assembly = result[5]["exact_coarse_operand_assembly"]
+    assert candidate_assembly == {
+        "skip_generic_default_enabled": False,
+        "skip_generic_requested": True,
+        "skip_generic_effective": True,
+        "exact_coarse_operands_effective": True,
+        "generic_assembly_count": 0,
+        "exact_assembly_count": expected_batch_count,
+        "translate_score_call_site_count": expected_batch_count,
+        "downstream_operand_source": "exact_source_star",
+        "diagnostic_operand_source": "exact_source_star",
+        "raw_score_capture_changed": False,
+        "skipped_generic_outputs": [
+            "coarse_gaussian_shifted_corrected",
+            "coarse_gaussian_pixel_weight",
+            "coarse_gaussian_unshifted_corrected",
+        ],
+    }
     np.testing.assert_array_equal(result[1], np.ones(3, dtype=np.int32))
     np.testing.assert_array_equal(result[2], np.full(3, 11, dtype=np.int32))
     np.testing.assert_array_equal(result[3], np.zeros(3, dtype=np.int32))

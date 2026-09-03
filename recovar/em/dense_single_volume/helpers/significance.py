@@ -129,6 +129,9 @@ _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV = (
     "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 )
 _K1_RELION_EXACT_COARSE_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS"
+_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV = (
+    "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS"
+)
 _K1_RELION_F32_COARSE_SUPPORT_ENV = "RECOVAR_K1_RELION_F32_COARSE_SUPPORT"
 _SIGNIFICANCE_DUMP_STOP_AFTER_TARGET_ENV = (
     "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET"
@@ -2144,6 +2147,41 @@ def _k1_relion_exact_coarse_operands_enabled(*, default: bool = False) -> bool:
     raise ValueError(
         f"Unsupported {_K1_RELION_EXACT_COARSE_OPERANDS_ENV}={token!r}",
     )
+
+
+def _k1_relion_exact_coarse_skip_generic_operands_enabled(
+    *,
+    default: bool = False,
+) -> bool:
+    """Return whether exact coarse operands bypass overwritten generic operands."""
+
+    token = os.environ.get(
+        _K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        "Unsupported "
+        f"{_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV}={token!r}",
+    )
+
+
+def _resolve_k1_relion_exact_coarse_skip_generic_operands(
+    *,
+    requested: bool,
+    exact_coarse_operands_enabled: bool,
+) -> bool:
+    """Resolve the exact-source-only operand path, failing closed."""
+
+    if requested and not exact_coarse_operands_enabled:
+        raise ValueError(
+            f"{_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV}=1 requires "
+            f"effective {_K1_RELION_EXACT_COARSE_OPERANDS_ENV}=1 Gaussian scoring",
+        )
+    return bool(requested and exact_coarse_operands_enabled)
 
 
 def _k1_relion_f32_coarse_support_enabled(*, default: bool = False) -> bool:
@@ -4405,6 +4443,15 @@ def _compute_k_class_significance_batched(
             f"{_K1_COARSE_GAUSSIAN_FFI_ENV}=1 and "
             f"{_K1_COARSE_GAUSSIAN_SINCOSF_ENV}=1",
         )
+    exact_coarse_skip_generic_operands_requested = (
+        _k1_relion_exact_coarse_skip_generic_operands_enabled()
+    )
+    exact_coarse_skip_generic_operands_enabled = (
+        _resolve_k1_relion_exact_coarse_skip_generic_operands(
+            requested=exact_coarse_skip_generic_operands_requested,
+            exact_coarse_operands_enabled=exact_coarse_operands_enabled,
+        )
+    )
     coarse_gaussian_native_texture_requested = (
         _k1_coarse_gaussian_native_texture_enabled(
             # Keep the fused texture scorer as an explicit diagnostic.  The
@@ -4818,6 +4865,12 @@ def _compute_k_class_significance_batched(
                     else "environment override"
                 ),
             )
+            if exact_coarse_skip_generic_operands_enabled:
+                logger.warning(
+                    "Opt-in exact-coarse single-translation path enabled: "
+                    "skipping generic square operands that the exact-source "
+                    "assembly replaces before first use",
+                )
         if coarse_gaussian_score_backend in {
             _CoarseGaussianScoreBackend.FUSED,
             _CoarseGaussianScoreBackend.FUSED_CANONICAL,
@@ -5605,6 +5658,8 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_hybrid_fallback_reasons = {}
     coarse_gaussian_gemm_hybrid_actual_image_batch_sizes = []
     coarse_gaussian_gemm_hybrid_physical_image_batch_sizes = []
+    generic_coarse_operand_assembly_count = 0
+    exact_coarse_operand_assembly_count = 0
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -5958,36 +6013,39 @@ def _compute_k_class_significance_batched(
             # ``shifted_half / score_weight_half`` is the shifted image divided
             # by CTF, and RELION's square-difference weight is
             # ``score_weight_half * half_weights``.
-            if coarse_gaussian_sincosf_enabled:
-                (
-                    coarse_gaussian_shifted_corrected,
-                    coarse_gaussian_pixel_weight,
-                    coarse_gaussian_unshifted_corrected,
-                ) = _relion_coarse_gaussian_square_operands_sincosf(
-                    coarse_gaussian_unshifted_score_weighted,
-                    score_weight_half,
-                    half_weights,
-                    coarse_gaussian_score_indices,
-                    coarse_gaussian_score_active_mask,
-                    translations,
-                    image_shape,
-                    translation_phase_source=translations_source,
-                    return_unshifted=True,
-                )
-            else:
-                (
-                    coarse_gaussian_shifted_corrected,
-                    coarse_gaussian_pixel_weight,
-                ) = _relion_coarse_gaussian_square_operands(
-                    shifted_half,
-                    score_weight_half,
-                    half_weights,
-                    coarse_gaussian_score_indices,
-                    coarse_gaussian_score_active_mask,
-                    batch_size=batch_size,
-                    n_trans=n_trans,
-                )
+            if not exact_coarse_skip_generic_operands_enabled:
+                generic_coarse_operand_assembly_count += 1
+                if coarse_gaussian_sincosf_enabled:
+                    (
+                        coarse_gaussian_shifted_corrected,
+                        coarse_gaussian_pixel_weight,
+                        coarse_gaussian_unshifted_corrected,
+                    ) = _relion_coarse_gaussian_square_operands_sincosf(
+                        coarse_gaussian_unshifted_score_weighted,
+                        score_weight_half,
+                        half_weights,
+                        coarse_gaussian_score_indices,
+                        coarse_gaussian_score_active_mask,
+                        translations,
+                        image_shape,
+                        translation_phase_source=translations_source,
+                        return_unshifted=True,
+                    )
+                else:
+                    (
+                        coarse_gaussian_shifted_corrected,
+                        coarse_gaussian_pixel_weight,
+                    ) = _relion_coarse_gaussian_square_operands(
+                        shifted_half,
+                        score_weight_half,
+                        half_weights,
+                        coarse_gaussian_score_indices,
+                        coarse_gaussian_score_active_mask,
+                        batch_size=batch_size,
+                        n_trans=n_trans,
+                    )
             if exact_coarse_operands_enabled:
+                exact_coarse_operand_assembly_count += 1
                 ctf_half_rfloat_np = np.asarray(
                     _relion_exact_ctf_half_from_source_star(
                         experiment_dataset,
@@ -7363,6 +7421,43 @@ def _compute_k_class_significance_batched(
         # expand the pass-2/M-step support represented by ``n_sig_all``.
         "significant_cutoff_counts": cutoff_count_all,
         "coarse_selector_audit": coarse_selector_audit,
+    }
+    full_stats["exact_coarse_operand_assembly"] = {
+        "skip_generic_default_enabled": False,
+        "skip_generic_requested": bool(
+            exact_coarse_skip_generic_operands_requested,
+        ),
+        "skip_generic_effective": bool(
+            exact_coarse_skip_generic_operands_enabled,
+        ),
+        "exact_coarse_operands_effective": bool(exact_coarse_operands_enabled),
+        "generic_assembly_count": int(generic_coarse_operand_assembly_count),
+        "exact_assembly_count": int(exact_coarse_operand_assembly_count),
+        "translate_score_call_site_count": int(
+            generic_coarse_operand_assembly_count
+            * int(coarse_gaussian_sincosf_enabled)
+            + exact_coarse_operand_assembly_count
+        ),
+        "downstream_operand_source": (
+            "exact_source_star"
+            if exact_coarse_operands_enabled
+            else "generic"
+        ),
+        "diagnostic_operand_source": (
+            "exact_source_star"
+            if exact_coarse_operands_enabled
+            else "generic"
+        ),
+        "raw_score_capture_changed": False,
+        "skipped_generic_outputs": (
+            [
+                "coarse_gaussian_shifted_corrected",
+                "coarse_gaussian_pixel_weight",
+                "coarse_gaussian_unshifted_corrected",
+            ]
+            if exact_coarse_skip_generic_operands_enabled
+            else []
+        ),
     }
     if coarse_gaussian_gemm_resource_estimate is not None:
         full_stats["coarse_gaussian_gemm_resources"] = {
