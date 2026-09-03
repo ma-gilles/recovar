@@ -21,6 +21,12 @@ def _fma32(left, right, addend):
     )
 
 
+def _complex_normal_for_test(rng, shape):
+    return (
+        rng.normal(0.0, 0.02, shape) + 1j * rng.normal(0.0, 0.02, shape)
+    ).astype(np.complex64)
+
+
 def _fine_diff2_update_reference(
     reference,
     shifted,
@@ -2265,11 +2271,11 @@ def test_relion_fused_translate_pairs_match_rectangular_tree_bitwise(
     lookup = np.arange(pixel_count, dtype=np.int32)
     initial_diff2 = np.asarray([0.022644043, 0.03125], dtype=np.float32)
     pair_reference_rows = np.asarray(
-        [[0, 2, 1, -1], [4, 5, 3, -1]],
+        [[0, 2, 0, -1], [4, 5, 3, 3]],
         dtype=np.int32,
     )
     pair_translation_ids = np.asarray(
-        [[0, 2, 4, -1], [1, 0, 3, -1]],
+        [[0, 2, 0, 3], [1, 0, 3, -1]],
         dtype=np.int32,
     )
 
@@ -2300,7 +2306,7 @@ def test_relion_fused_translate_pairs_match_rectangular_tree_bitwise(
     pairs = np.asarray(pairs)
     expected = np.asarray(
         [
-            [dense[0, 0, 0], dense[0, 2, 2], dense[0, 1, 4]],
+            [dense[0, 0, 0], dense[0, 2, 2], dense[0, 0, 0]],
             [dense[1, 1, 1], dense[1, 2, 0], dense[1, 0, 3]],
         ],
         dtype=np.float32,
@@ -2310,6 +2316,122 @@ def test_relion_fused_translate_pairs_match_rectangular_tree_bitwise(
         expected.view(np.uint32),
     )
     assert np.all(np.isposinf(pairs[:, 3]))
+
+
+@pytest.mark.gpu
+def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_f32_fine_posterior,
+    )
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(1936)
+    current_size = 16
+    pixel_count = current_size * (current_size // 2 + 1)
+    batch_size, rotation_count, translation_count = 2, 3, 4
+    # Equal reference rows and translation angles deliberately make every
+    # admitted candidate tie at the significance cutoff.
+    one_reference = _complex_normal_for_test(rng, (batch_size, 1, pixel_count))
+    dense_reference = np.repeat(one_reference, rotation_count, axis=1)
+    flat_reference = dense_reference.reshape(-1, pixel_count)
+    image = _complex_normal_for_test(rng, (batch_size, pixel_count))
+    translation_angles = np.zeros((translation_count, 2), dtype=np.float32)
+    weight = rng.uniform(0, 150_000, (batch_size, pixel_count)).astype(np.float32)
+    lookup = np.arange(pixel_count, dtype=np.int32)
+    initial_diff2 = np.asarray([0.022644043, 0.03125], dtype=np.float32)
+    source_rotation_rows = np.repeat(
+        np.arange(rotation_count, dtype=np.int32),
+        translation_count,
+    )
+    source_translation_ids = np.tile(
+        np.arange(translation_count, dtype=np.int32),
+        rotation_count,
+    )
+    pair_reference_rows = np.stack(
+        [
+            batch * rotation_count + source_rotation_rows
+            for batch in range(batch_size)
+        ]
+    ).astype(np.int32)
+    pair_translation_ids = np.broadcast_to(
+        source_translation_ids,
+        pair_reference_rows.shape,
+    ).copy()
+    admitted = np.ones(pair_reference_rows.shape, dtype=bool)
+    # Exercise row and translation sentinels independently, at their exact
+    # source-order positions, while keeping the rectangular candidate length.
+    pair_reference_rows[0, 2] = -1
+    admitted[0, 2] = False
+    pair_translation_ids[1, 5] = -1
+    admitted[1, 5] = False
+
+    with jax.default_device(gpu_device):
+        dense_costs = (
+            cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+                jnp.asarray(dense_reference),
+                jnp.asarray(image),
+                jnp.asarray(translation_angles),
+                jnp.asarray(weight),
+                jnp.asarray(lookup),
+                jnp.asarray(initial_diff2),
+                current_size=current_size,
+            )
+        )
+        pair_costs = cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
+            jnp.asarray(flat_reference),
+            jnp.asarray(image),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(pair_reference_rows),
+            jnp.asarray(pair_translation_ids),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
+        )
+        dense_costs, pair_costs = jax.block_until_ready((dense_costs, pair_costs))
+        dense_scores = -jnp.asarray(dense_costs)
+        dense_scores = jnp.where(
+            jnp.asarray(admitted.reshape(dense_scores.shape)),
+            dense_scores,
+            -jnp.inf,
+        )
+        pair_scores = -jnp.asarray(pair_costs)
+        dense_posterior = _relion_f32_fine_posterior(
+            dense_scores,
+            adaptive_fraction=0.5,
+        )
+        pair_posterior = _relion_f32_fine_posterior(
+            pair_scores,
+            adaptive_fraction=0.5,
+        )
+        dense_posterior, pair_posterior = jax.block_until_ready(
+            (dense_posterior, pair_posterior)
+        )
+
+    expected_costs = np.asarray(dense_costs).reshape(batch_size, -1)
+    expected_costs = np.where(admitted, expected_costs, np.float32(np.inf))
+    np.testing.assert_array_equal(
+        np.asarray(pair_costs).view(np.uint32),
+        expected_costs.view(np.uint32),
+    )
+    valid_costs = np.asarray(pair_costs)[admitted]
+    for batch in range(batch_size):
+        batch_costs = np.asarray(pair_costs)[batch, admitted[batch]]
+        assert np.unique(batch_costs.view(np.uint32)).size == 1
+    assert valid_costs.size == admitted.sum()
+    np.testing.assert_array_equal(np.asarray(pair_posterior[2]), admitted)
+    for dense_value, pair_value in zip(dense_posterior, pair_posterior):
+        dense_array = np.asarray(dense_value).reshape(-1)
+        pair_array = np.asarray(pair_value).reshape(-1)
+        assert dense_array.dtype == pair_array.dtype
+        assert dense_array.tobytes() == pair_array.tobytes()
 
 
 @pytest.mark.gpu

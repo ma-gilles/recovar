@@ -100,6 +100,7 @@ PY
   "${PIXI_PY}" -m pytest -q --run-gpu \
     --junitxml="${RESULTS}/pytest.junit.xml" \
     tests/unit/test_cuda_relion_fine_diff2.py::test_relion_fused_translate_pairs_match_rectangular_tree_bitwise \
+    tests/unit/test_cuda_relion_fine_diff2.py::test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties \
     tests/unit/test_cuda_relion_fine_diff2.py::test_relion_runtime_fused_translate_pairs_reuse_physical_compile \
     tests/unit/test_cuda_relion_fine_diff2.py::test_relion_runtime_pairs_fails_closed_without_gpu
 ) > "${RESULTS}/pytest.stdout" 2> "${RESULTS}/pytest.stderr"
