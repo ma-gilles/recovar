@@ -192,6 +192,18 @@ the result JSON and manifest SHA-256 values are
 and
 `5b141e0e92265881cd36744d9274c128c341ea9b02f29b4c0465843b70cf6fe9`.
 
+The same iteration-14 maps cross the matched corrected-masked FSC threshold at
+shell 258 (`2.4434106295 A`) for both engines under the unchanged publication
+mask, phase-randomization threshold, and seed. Masked resolved-band AUC differs
+by `0.0018079` and RMSE is `0.0071828`; this is supporting-only and cannot
+replace the direct unmasked result. CPU job `13380912` and its verified
+manifest are retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it14_corrected_masked_fsc_20260903T0546`.
+The result JSON and manifest SHA-256 values are
+`04bdfb5fe7eee859dedb8bb87f38fecd12277a5d339c0d06ad7596c4f5b5fc3e`
+and
+`9962a2000bf8f86e63c01131e5174aae7ef5a061f2f9c7e9a967d4afcaeddf89`.
+
 At corrected full-particle checkpoint `it006` (numbered iteration 7), the
 release, compact, and no-padding trajectories retain identical saved FSC
 crossings (0.5 at shell 150; 0.143 at shell 183). Corrected-versus-release map

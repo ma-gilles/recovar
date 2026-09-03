@@ -458,6 +458,12 @@ gates pass. CPU audit job `13380640` and its verified manifest are retained at
 This remains an intermediate checkpoint; natural convergence is still the
 final admission boundary.
 
+The matched iteration-14 RELION-postprocess replication also gives the same
+corrected-masked crossing for both engines at shell 258 (`2.44341 A`). Its
+resolved-band masked FSC-AUC delta is `0.001808` and curve RMSE is `0.007183`.
+This supporting-only check uses the exact sealed mask and phase-randomization
+policy and cannot rescue or replace the direct unmasked pass.
+
 ## EMPIAR-10345 native-grid K=4 checkpoint
 
 Three 10,000-particle, 256-grid independent-half K=4 seeds completed without a

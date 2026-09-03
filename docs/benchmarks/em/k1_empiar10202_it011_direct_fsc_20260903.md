@@ -94,6 +94,17 @@ The metrics JSON and manifest SHA-256 values are
 and
 `5b141e0e92265881cd36744d9274c128c341ea9b02f29b4c0465843b70cf6fe9`.
 
+The exact same publication mask and phase-randomization policy give an
+iteration-14 corrected-masked crossing of shell 258 (`2.4434106295 A`) for
+both engines. Resolved shells 1--257 have masked AUC delta `0.0018079` and
+RMSE `0.0071828`. This is supporting-only evidence; the raw comparison passes
+independently. Job `13380912` and the complete sealed record are at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it14_corrected_masked_fsc_20260903T0546`;
+its result JSON and verified manifest have SHA-256
+`04bdfb5fe7eee859dedb8bb87f38fecd12277a5d339c0d06ad7596c4f5b5fc3e`
+and
+`9962a2000bf8f86e63c01131e5174aae7ef5a061f2f9c7e9a967d4afcaeddf89`.
+
 ## Evidence and reproduction
 
 The complete immutable, disposable audit root is
