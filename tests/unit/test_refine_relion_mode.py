@@ -4447,6 +4447,61 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
     np.testing.assert_allclose(np.asarray(packed[0, 1]), 0.0)
 
 
+def test_packed_vdam_noise_rows_restore_original_dense_reduction_layout():
+    from recovar.em.dense_single_volume import local_em_engine
+
+    packed_rotation_rows = jnp.array([[0, 3, 0], [1, 4, 0]], dtype=jnp.int32)
+    packed_present_mask = jnp.array(
+        [[True, True, False], [True, True, False]],
+        dtype=bool,
+    )
+    base = jnp.arange(6 * 7, dtype=jnp.float32).reshape(2, 3, 7)
+    packed_projection = (base + 1j * (base + 0.5)).astype(jnp.complex64)
+    packed_summed = (2.0 * base - 1j * base).astype(jnp.complex64)
+    packed_ctf = (base + 3.0).astype(jnp.float32)
+    packed_projection = packed_projection.at[:, 2].set(jnp.nan + 1j * jnp.nan)
+    packed_summed = packed_summed.at[:, 2].set(jnp.nan + 1j * jnp.nan)
+    packed_ctf = packed_ctf.at[:, 2].set(jnp.nan)
+
+    dense_projection, dense_summed, dense_ctf = (
+        local_em_engine._restore_packed_noise_rows_to_dense_layout(
+            packed_projection,
+            packed_summed,
+            packed_ctf,
+            packed_rotation_rows,
+            packed_present_mask,
+            dense_batch_size=3,
+            dense_rotation_count=5,
+        )
+    )
+
+    expected_projection = np.zeros((3, 5, 7), dtype=np.complex64)
+    expected_summed = np.zeros((3, 5, 7), dtype=np.complex64)
+    expected_ctf = np.zeros((3, 5, 7), dtype=np.float32)
+    for image_index, packed_row, dense_row in (
+        (0, 0, 0),
+        (0, 1, 3),
+        (1, 0, 1),
+        (1, 1, 4),
+    ):
+        expected_projection[image_index, dense_row] = np.asarray(
+            packed_projection[image_index, packed_row]
+        )
+        expected_summed[image_index, dense_row] = np.asarray(
+            packed_summed[image_index, packed_row]
+        )
+        expected_ctf[image_index, dense_row] = np.asarray(
+            packed_ctf[image_index, packed_row]
+        )
+
+    assert np.array_equal(np.asarray(dense_projection), expected_projection)
+    assert np.array_equal(np.asarray(dense_summed), expected_summed)
+    assert np.array_equal(np.asarray(dense_ctf), expected_ctf)
+    assert not np.any(np.isnan(np.asarray(dense_projection)))
+    assert not np.any(np.isnan(np.asarray(dense_summed)))
+    assert not np.any(np.isnan(np.asarray(dense_ctf)))
+
+
 def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
 
