@@ -378,7 +378,8 @@ memory qualification, not a full-dataset resolution or cross-engine quality
 result.  Its low-level persistent-texture lifetime/allocation discriminator
 passes, but the later full-particle combined candidate is rejected at
 checkpoint 12 and branches at checkpoint 13; the intended exact-local feature
-was dormant and remains unqualified.
+was dormant and remains unqualified.  Local deliverable commit `a8a3c7eb1`
+removes both candidate changes.
 
 The three completed no-CTF fixture escalations (cases 30, 35, and 36; three
 seeds each) are documented in `k4_noctf_negative_boundaries_20260901.md` and
@@ -430,6 +431,30 @@ full audit trail are under
 The preceding job `13372884` failed before collection because its launcher
 omitted the pixi NVIDIA library directories; it is retained as a harness
 failure and is not counted as a test result.
+
+## K=1 real-data evidence inventory
+
+The checked real-data inventory is
+`k1_realdata_evidence_inventory_20260903.md`, with the complete
+machine-readable lineage, map hashes, exact engine commands, resources, and
+reproduction pointers in
+`diagnostics/k1-realdata-evidence-inventory-20260903.json`.  It separates
+natural-final calibration evidence from the single frozen scoring case and
+from fixed-checkpoint diagnostics.  At this snapshot, EMPIAR-10073 and 10345
+are natural-final calibration passes; EMPIAR-10097 is within-engine-good but
+cross-engine unqualified; EMPIAR-10076 is final-incomplete because RECOVAR is
+hung; and the sole scoring case, EMPIAR-10202 set 6 under I1, remains pending
+natural RECOVAR completion.  The audit reverified 40/40 map hashes and every
+retained iteration-16 manifest entry.
+
+The immutable source audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_realdata_scorecard_audit_20260903T114754Z`
+and carries `SAFE_TO_DELETE`.  Its original report, inventory JSON, and
+validated manifest have SHA-256
+`d7aa15985348599863f20b2c110887260652fe8f626542f36ea3e279471fd854`,
+`6aec5d1c6598ea9f3e395afd4559ac28bb80e0c75eee09c99a85a04009f14213`,
+and
+`7c27bb38fafd238b36ff12ff44f81136189265e0529aaae1938c5686145e14d0`.
 
 ## EMPIAR-10202 direct high-resolution checkpoint
 

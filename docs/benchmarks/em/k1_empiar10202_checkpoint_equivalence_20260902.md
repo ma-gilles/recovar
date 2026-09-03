@@ -141,6 +141,8 @@ and
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint12_size564_deep_corrected_vs_ptex_20260903T0736/MANIFEST.sha256`
 (SHA-256
 `faf5eef53f9eb20a02110a6de4c7b424324587927460f3d14c7286566ee31b7f`).
+Local deliverable commit `a8a3c7eb1` removes both candidate changes; the
+audit remains as a fail-closed regression record.
 
 ## Evidence and reproduction
 

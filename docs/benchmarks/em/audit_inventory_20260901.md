@@ -162,6 +162,7 @@ the semantic JSON and verified manifest SHA-256 values are
 `68f7da89d582788e03b5453ac51d0b79f2671b5b03f53e0272ef3008ab05a278`
 and
 `faf5eef53f9eb20a02110a6de4c7b424324587927460f3d14c7286566ee31b7f`.
+Local deliverable commit `a8a3c7eb1` removes both unqualified changes.
 
 Corrected full-particle job `13376414` subsequently completes the historical
 box-800/current-size-564 failure boundary in both halves. Numbered iteration

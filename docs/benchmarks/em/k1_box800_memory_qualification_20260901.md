@@ -471,6 +471,9 @@ Its semantic JSON, Markdown, and validated manifest SHA-256 values are
 `1f633a904b72a5574b9a604f5a35ff427d8b9836ae5786212925893ebbab4a71`,
 and
 `faf5eef53f9eb20a02110a6de4c7b424324587927460f3d14c7286566ee31b7f`.
+Local deliverable commit `a8a3c7eb1` removes both unqualified candidate
+changes while retaining this historical evidence and all later independent
+K=4 coverage.
 
 ## Accepted unused local-padding removal
 
