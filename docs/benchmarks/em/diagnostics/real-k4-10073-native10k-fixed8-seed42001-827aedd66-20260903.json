@@ -1,0 +1,141 @@
+{
+  "schema": "recovar.em.real_kclass_native_single_seed_diagnostic.v1",
+  "admission_status": "DIAGNOSTIC_ONLY_EARLY_TRAJECTORY_NONCONVERGED",
+  "accepted_result": false,
+  "status": "complete_prospective_science_gate_rejected_early_trajectory",
+  "dataset": "EMPIAR-10073",
+  "profile": "native10k-256-tier-a-fixed8",
+  "source": {
+    "branch": "codex/pr158-k4-10073-halfmap-20260903",
+    "commit": "827aedd66b0f0abb86614380b82834077492491c",
+    "tree": "64166b17144f2c7626cd908901ae8ebce860be83",
+    "clean": true
+  },
+  "configuration": {
+    "K": 4,
+    "particles": 10000,
+    "half_counts": [5000, 5000],
+    "grid_size": 256,
+    "max_iter": 8,
+    "symmetry": "C1",
+    "seed": 42001,
+    "initial_lowpass_angstrom": 30,
+    "fourier_backend": "relion_cuda",
+    "same_job_serial": true,
+    "absolute_resolution_claim": false,
+    "phase_randomization_corrected": false,
+    "tier": "A_relative_parity_only"
+  },
+  "termination": {
+    "recovar_converged_half1_half2": [false, false],
+    "recovar_last_numbered_iteration_half1_half2": [8, 8],
+    "recovar_current_size_half1_half2": [58, 58],
+    "recovar_fraction_changed_half1_half2": [0.9324, 0.9716],
+    "recovar_final_all_data_ran_half1_half2": [false, false],
+    "interpretation": "bounded early-trajectory rejection; not a final K=4 quality verdict"
+  },
+  "class_matching": {
+    "recovar_half1_to_relion_half1": [1, 2, 3, 4],
+    "recovar_half2_to_relion_half1": [1, 2, 3, 4],
+    "relion_half2_to_relion_half1": [1, 2, 3, 4],
+    "unique_exact_optimum": true,
+    "all_frozen_objective_margin_gates_pass": true
+  },
+  "assignment": {
+    "half1_agreement": 0.9372,
+    "half2_agreement": 0.97,
+    "threshold": 0.99,
+    "half1_relion_counts": [1332, 767, 1673, 1228],
+    "half1_recovar_counts": [1360, 765, 1654, 1221],
+    "half2_relion_counts": [1935, 485, 1490, 1090],
+    "half2_recovar_counts": [1940, 485, 1502, 1073],
+    "class_collapse": false
+  },
+  "frozen_relion_unmasked_band_last_shell": 126,
+  "classes": [
+    {
+      "class": 1,
+      "unmasked_half_auc_relion_recovar_delta": [0.6524525720794225, 0.65199314331506, -0.0004594287643625572],
+      "unmasked_cross_merged_half1_half2_auc": [0.9819250349676639, 0.961545998159232, 0.9849290821693303],
+      "masked_half_auc_relion_recovar_delta": [0.6622940488201046, 0.6731711775599681, 0.010877128739863573],
+      "masked_cross_merged_half1_half2_auc": [0.9803780939961978, 0.9590831149990283, 0.985154527818525],
+      "unmasked_fsc_0p5_shell_relion_recovar": [116, 115]
+    },
+    {
+      "class": 2,
+      "unmasked_half_auc_relion_recovar_delta": [0.40672518974390465, 0.38579687782079886, -0.02092831192310579],
+      "unmasked_cross_merged_half1_half2_auc": [0.9628070214992407, 0.9475604201663833, 0.9546753753786993],
+      "masked_half_auc_relion_recovar_delta": [0.4622938852257739, 0.43291216053347115, -0.02938172469230277],
+      "masked_cross_merged_half1_half2_auc": [0.9731401563076351, 0.9588923645387183, 0.9648494246634869],
+      "unmasked_fsc_0p5_shell_relion_recovar": [12, 11]
+    },
+    {
+      "class": 3,
+      "unmasked_half_auc_relion_recovar_delta": [0.5007917942479115, 0.5017584009521087, 0.000966606704197126],
+      "unmasked_cross_merged_half1_half2_auc": [0.9941581468888417, 0.9893087646872262, 0.9969277008927807],
+      "masked_half_auc_relion_recovar_delta": [0.504173249027799, 0.5056983781241878, 0.0015251290963887998],
+      "masked_cross_merged_half1_half2_auc": [0.9945207147851991, 0.9900072638515187, 0.9971068295012353],
+      "unmasked_fsc_0p5_shell_relion_recovar": [9, 9]
+    },
+    {
+      "class": 4,
+      "unmasked_half_auc_relion_recovar_delta": [0.45409341833869926, 0.4483888455592725, -0.005704572779426764],
+      "unmasked_cross_merged_half1_half2_auc": [0.980283337689368, 0.9668639264598842, 0.9835315900171445],
+      "masked_half_auc_relion_recovar_delta": [0.6138493311197112, 0.6230455852066008, 0.009196254086889621],
+      "masked_cross_merged_half1_half2_auc": [0.9878178794216883, 0.9746001560579992, 0.989432402687218],
+      "unmasked_fsc_0p5_shell_relion_recovar": [13, 14]
+    }
+  ],
+  "prospective_science_gate": {
+    "accepted": false,
+    "failures": [
+      "class001:unmasked:cross_merged_band_fsc_auc",
+      "class002:unmasked:half_band_auc_drop",
+      "class002:common_masked:half_band_auc_drop",
+      "class002:unmasked:cross_merged_band_fsc_auc",
+      "class004:unmasked:cross_merged_band_fsc_auc",
+      "half1:class_assignment_agreement",
+      "half2:class_assignment_agreement"
+    ],
+    "qualification_exit_code": "3:0",
+    "threshold_rejection_only": true
+  },
+  "performance": {
+    "relion_wall_seconds_half1_half2": [144.25635313987732, 145.27052688598633],
+    "recovar_wall_seconds_half1_half2": [1571.5559861660004, 1656.8421308994293],
+    "relion_peak_hbm_mib_half1_half2": [79591, 79593],
+    "recovar_peak_hbm_mib_half1_half2": [33493, 33497],
+    "relion_max_rss_kib_half1_half2": [3351112, 3374348],
+    "recovar_max_rss_kib_half1_half2": [16932096, 17250200],
+    "engine_gpu_hours": 0.9772,
+    "campaign_gpu_hours_including_setup": 1.1039,
+    "serial_elapsed_minutes": 62.2167
+  },
+  "slurm": {
+    "setup_job_id": 13381089,
+    "setup_state": "COMPLETED",
+    "setup_exit_code": "0:0",
+    "setup_elapsed": "00:04:01",
+    "qualification_job_id": 13381090,
+    "qualification_state": "FAILED",
+    "qualification_exit_code": "3:0",
+    "qualification_elapsed": "01:02:13",
+    "qualification_requested_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+    "qualification_allocated_tres": "billing=24,cpu=24,gres/gpu=1,mem=256G,node=1",
+    "nonexclusive": true,
+    "compute_failures": false
+  },
+  "artifacts": {
+    "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10073_native10k_tiera_seed42001_827aedd66_submitted_20260903",
+    "submission_manifest_sha256": "1dc1a26c9b830c24d58645c01135f3203f145af3031f1a986a2a2435ac98ab30",
+    "audit_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10073_native10k_tiera_seed42001_827aedd66_submitted_20260903/audit/halfmap_audit.json",
+    "audit_sha256": "2f9faee7dc3a28484d94b1b120c4d914e5a46bb7e0f170b3e981f1c5bcd609d2",
+    "curve_archive_sha256": "8dbc064324d1321513257af49fe58adc94c28966332b01bef64413af2cc37d81",
+    "common_mask_sha256": "a6a9ecebc467bc5b290ca6494fecb396353b7c1a016d32e27cc1d929688586ce",
+    "audit_sidecar_sha256": "0cf91a5b77360d4d3cd8be4156d1941ec13d43247e4d5502aebf7a85498d769b",
+    "half1_particle_state_json_sha256": "4ca48751822637243df0ed6fc81cb32a3425ced131c86c7a0bd3757c61bc422b",
+    "half2_particle_state_json_sha256": "f63aed75a594d7ef04c28e6c97cb14643cebdeb0c58777e9aa33fbcd7c84be65",
+    "qualification_stdout_sha256": "12d7eecb1509cfda5be92172e77e1939869e5be0ea22175180131a65ed445b2d",
+    "qualification_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

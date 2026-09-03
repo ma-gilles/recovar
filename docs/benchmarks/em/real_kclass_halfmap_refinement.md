@@ -222,6 +222,8 @@ its FSC archive SHA-256 is
 `8dbc064324d1321513257af49fe58adc94c28966332b01bef64413af2cc37d81`,
 and the common-mask SHA-256 is
 `a6a9ecebc467bc5b290ca6494fecb396353b7c1a016d32e27cc1d929688586ce`.
+The compact checked-in record is
+`docs/benchmarks/em/diagnostics/real-k4-10073-native10k-fixed8-seed42001-827aedd66-20260903.json`.
 
 ## First-iteration native score boundary
 
