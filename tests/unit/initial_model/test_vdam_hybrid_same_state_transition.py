@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume import local_debug
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts/run_vdam_hybrid_same_state_transition.py"
 RUNNER = ROOT / "scripts/run_vdam_hybrid_same_state_transition.sbatch"
@@ -117,6 +119,22 @@ def test_same_state_environment_is_restored_after_each_arm(monkeypatch) -> None:
 
     assert runner.os.environ["RECOVAR_TEST_SAME_STATE_EXISTING"] == "before"
     assert "RECOVAR_TEST_SAME_STATE_MISSING" not in runner.os.environ
+
+
+def test_fused_posterior_dump_keeps_arm_label_when_score_label_is_also_set(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_LABEL", "single class")
+    monkeypatch.setenv(
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL",
+        "stable_all_on_1 single class",
+    )
+
+    assert local_debug._local_debug_dump_label_suffix() == "_single_class"
+    assert (
+        local_debug._local_fused_posterior_dump_label_suffix()
+        == "_stable_all_on_1_single_class"
+    )
 
 
 def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:

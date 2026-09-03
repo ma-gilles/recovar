@@ -167,6 +167,25 @@ def _local_debug_dump_label_suffix() -> str:
     return f"_{label}" if label else ""
 
 
+def _local_fused_posterior_dump_label_suffix() -> str:
+    """Return the fused-posterior label without losing its caller prefix.
+
+    K-class execution supplies a phase suffix to both local debug label
+    variables.  A same-state caller can additionally prefix only the fused
+    posterior label with its arm name.  Prefer that more-specific value here;
+    otherwise the generic score label silently collapses every arm onto one
+    output filename.
+    """
+
+    label = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL") or os.environ.get(
+        "RECOVAR_LOCAL_SCORE_DUMP_LABEL",
+    )
+    if not label:
+        return ""
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
+    return f"_{label}" if label else ""
+
+
 def _target_rows_to_numpy(array, target_rows: list[int], dtype):
     rows = np.asarray(target_rows, dtype=np.intp)
     try:
@@ -537,7 +556,7 @@ def maybe_write_debug_fused_posterior_dump(
             dtype=bool,
         )
         iteration_label = int(debug_iteration or -1)
-        label_suffix = _local_debug_dump_label_suffix()
+        label_suffix = _local_fused_posterior_dump_label_suffix()
         dump_path = (
             dump_dir
             / f"local_fused_posterior_it{iteration_label:03d}_image_{original_idx}{label_suffix}.npz"
