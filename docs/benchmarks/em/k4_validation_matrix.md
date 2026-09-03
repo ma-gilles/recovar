@@ -380,6 +380,17 @@ FSC-AUC was 0.9999999733 and worst per-class GT FSC-AUC delta was -8.90e-7.
 See `k4_exact_input_invariance_20260901.md` for exact jobs, HBM/wall time,
 artifact hashes, the fixture-root accounting caveat, and the rerun command.
 
+The current-source C1 case-2 baseline was requalified at commit
+`9006957c6625963ee2efe7ba90f014fa2eac7955` with 10,000 particles, box 128,
+five iterations, and seeds 41001--41003. All 72 numbered/final class cells
+pass the formal and signed-GT science contracts; minimum direct FSC-AUC is
+`0.997501`, minimum signed GT FSC-AUC delta is `-0.000186`, minimum hard-class
+agreement is `0.9951`, every permutation is identity, and no class collapses.
+See `k4_ribosembly_current_source_three_seed_20260903.md` and
+`campaigns/k4-ribosembly-three-seed-9006957c6-h100.json`. The run stopped at
+the iteration cap and correctly skipped final-all-data reconstruction, so it
+does not close the separate post-convergence gate.
+
 ## Tier 3: grid and particle scaling
 
 Run eight iterations after Tier 2 passes.

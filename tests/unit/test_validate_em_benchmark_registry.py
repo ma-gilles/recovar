@@ -60,6 +60,13 @@ K8_MULTISEED_CAMPAIGN = json.loads(
         / "k8-ribosembly-three-seed-0d85b576b-h100"
     ).with_suffix(".json").read_text()
 )
+CURRENT_K4_MULTISEED_CAMPAIGN = json.loads(
+    (
+        REGISTRY_ROOT
+        / "campaigns"
+        / "k4-ribosembly-three-seed-9006957c6-h100"
+    ).with_suffix(".json").read_text()
+)
 C4_SYMMETRY_CAMPAIGN = json.loads(
     (
         REGISTRY_ROOT
@@ -156,6 +163,7 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-expanded14-3466e7a32-h100",
         "k4-i1-three-seed-22efd8065-h100",
         "k4-o-three-seed-22efd8065-h100",
+        "k4-ribosembly-three-seed-9006957c6-h100",
         "k8-ribosembly-three-seed-0d85b576b-h100",
         "k4-noctf-collapse-cases30-35-36-h100",
     ]
@@ -238,6 +246,41 @@ def test_k2_k8_and_k16_multiseed_campaigns_preserve_science_distinction():
             row["gt_fsc_auc_delta"]
             for row in case["quality"]["final_classes"]
         ) >= -0.002
+
+
+def test_current_k4_multiseed_campaign_pins_complete_trajectory_pass():
+    campaign = CURRENT_K4_MULTISEED_CAMPAIGN
+    assert campaign["source"]["recovar"]["commit"] == (
+        "9006957c6625963ee2efe7ba90f014fa2eac7955"
+    )
+    assert [case["case_id"] for case in campaign["cases"]] == [41001, 41002, 41003]
+    assert {case["particles"] for case in campaign["cases"]} == {10_000}
+    assert {case["box_size"] for case in campaign["cases"]} == {128}
+    assert {case["configuration"]["symmetry"] for case in campaign["cases"]} == {"C1"}
+    assert sum(
+        case["quality"]["trajectory"]["evaluated_class_cells"]
+        + len(case["quality"]["final_classes"])
+        for case in campaign["cases"]
+    ) == 72
+    for case in campaign["cases"]:
+        assert case["outcome"]["classification"] == "TRAJECTORY_EXACT"
+        assert case["outcome"]["formal_status"] == "PASS"
+        assert case["outcome"]["science_status"] == "PASS"
+        assert case["quality"]["trajectory"]["status"] == "PASS"
+        assert case["quality"]["trajectory"]["passing_class_cells"] == 20
+        assert case["quality"]["occupancy"]["status"] == "CLEAR"
+        assert case["quality"]["class_assignment_agreement"] >= 0.9951
+
+    assert min(
+        row["cross_engine_fsc_auc"]
+        for case in campaign["cases"]
+        for row in case["quality"]["final_classes"]
+    ) >= 0.9975014218767904
+    assert min(
+        row["gt_fsc_auc_delta"]
+        for case in campaign["cases"]
+        for row in case["quality"]["final_classes"]
+    ) >= -0.00018636523788545523
 
 
 def test_diagnostic_registry_routing_is_explicit_and_fail_closed():

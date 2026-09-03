@@ -351,6 +351,15 @@ contract. K=2 is `TRAJECTORY_EXACT`; K=8 and K=16 are
 stricter 0.99 assignment gate without degrading per-class reconstruction
 quality.
 
+The current-source C1 K=4 requalification is summarized in
+`k4_ribosembly_current_source_three_seed_20260903.md` and sealed in
+`campaigns/k4-ribosembly-three-seed-9006957c6-h100.json`. All three
+10,000-particle, box-128 seeds pass the formal and science gates: 72/72
+numbered/final class cells, minimum direct FSC-AUC `0.997501`, minimum signed
+GT FSC-AUC delta `-0.000186`, and minimum hard-class agreement `0.9951`.
+This establishes the current C1 K=4 iteration-cap baseline; it is not a
+post-convergence final-all-data claim.
+
 The post-campaign shared-build orchestration check is documented in
 `k4_shared_cuda_setup_qualification_20260901.md`. It records the rejected
 CPU-only setup attempt, the corrected one-H100 setup/case/summary dependency
