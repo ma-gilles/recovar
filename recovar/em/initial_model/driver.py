@@ -611,11 +611,9 @@ def _load_native_vdam_continuation(
             "rlnNumberOfIterWithoutChangingAssignments",
             int,
         ),
-        last_current_resolution=_relion_star_list_value(
-            optimiser_text,
-            "rlnBestResolutionThusFar",
-            float,
-        ),
+        # updateCurrentResolution compares against mymodel.current_resolution,
+        # not best_resol_thus_far.  The former lives in the model checkpoint.
+        last_current_resolution=current_resolution,
         orientational_prior_mode=_general("rlnOrientationalPriorMode", int),
         uniform_local_orientation_prior=(
             _general("rlnOrientationalPriorMode", int) == RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
@@ -1045,16 +1043,35 @@ def _record_resolution_stall_for_sampling(
     *,
     iteration: int,
 ) -> None:
-    """Track RELION's resolution-stall counter (audit only; not used for autosampling here)."""
+    """Track RELION's post-maximization resolution-stall counter."""
     current_resolution = float(state.current_resolution)
-    if int(iteration) < 10:
-        sampling_state.nr_iter_wo_resol_gain = 0
-        sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
-    elif current_resolution <= float(sampling_state.last_current_resolution) + 0.0001:
+    if current_resolution <= float(sampling_state.last_current_resolution) + 0.0001:
         sampling_state.nr_iter_wo_resol_gain += 1
     else:
         sampling_state.nr_iter_wo_resol_gain = 0
     sampling_state.last_current_resolution = current_resolution
+
+
+def _record_native_sampling_post_iteration(
+    sampling_state: NativeSamplingState,
+    state: InitialModelState,
+    *,
+    iteration: int,
+    meta: dict,
+) -> None:
+    """Record sampling-controller state after the completed M-step.
+
+    RELION calls ``updateAngularSampling`` near the start of expectation, then
+    calls ``updateCurrentResolution`` after maximization.  Keep that ordering:
+    the sampling decision for iteration ``N`` must only see the stall counter
+    written by iteration ``N - 1``.
+    """
+    _record_resolution_stall_for_sampling(sampling_state, state, iteration=iteration)
+    meta["sampling_nr_iter_wo_resol_gain"] = int(sampling_state.nr_iter_wo_resol_gain)
+    meta["sampling_nr_iter_wo_large_hidden_variable_changes"] = int(
+        sampling_state.nr_iter_wo_large_hidden_variable_changes
+    )
+    meta["sampling_last_current_resolution"] = float(sampling_state.last_current_resolution)
 
 
 def _reset_native_sampling_change_trackers(sampling_state: NativeSamplingState) -> None:
@@ -1148,7 +1165,12 @@ def _prepare_native_sampling_for_iteration(
     iteration: int,
     do_grad: bool,
 ) -> bool:
-    _record_resolution_stall_for_sampling(sampling_state, state, iteration=iteration)
+    # MlOptimiser::iterate resets both convergence counters before expectation
+    # during the initial gradient burn-in.  The completed M-step may populate
+    # them again for the checkpoint written by this iteration.
+    if bool(do_grad) and int(iteration) < 10:
+        sampling_state.nr_iter_wo_resol_gain = 0
+        sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
     if not _should_update_native_sampling(iteration=iteration, nr_iter=int(state.nr_iter), do_grad=do_grad):
         return False
     if sampling_state.nr_iter_wo_resol_gain < RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN:
@@ -2632,6 +2654,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             opts,
             sampling_plan.rotations,
         )
+        sampling_state.last_current_resolution = float(state.current_resolution)
     else:
         state = continuation.state
         sampling_state = continuation.sampling_state
@@ -2703,26 +2726,27 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 f.write("\n")
     _record_driver_stage("initial_artifacts")
 
-    if opts.write_iter_artifacts:
-
-        def artifact_sink(current, iteration, meta):
-            if not _should_write_iteration_artifacts(
-                iteration, int(opts.nr_iter), int(opts.grad_write_iter)
-            ):
-                return
-            _write_iteration_artifacts(
-                opts.outputname,
-                current,
-                iteration,
-                meta,
-                main_star=main_star,
-                optics_star=optics_star,
-                dataset=dataset,
-                particle_state=particle_state,
-            )
-    else:
-        def artifact_sink(*args, **kwargs):
-            return None
+    def artifact_sink(current, iteration, meta):
+        _record_native_sampling_post_iteration(
+            sampling_state,
+            current,
+            iteration=iteration,
+            meta=meta,
+        )
+        if not opts.write_iter_artifacts or not _should_write_iteration_artifacts(
+            iteration, int(opts.nr_iter), int(opts.grad_write_iter)
+        ):
+            return
+        _write_iteration_artifacts(
+            opts.outputname,
+            current,
+            iteration,
+            meta,
+            main_star=main_star,
+            optics_star=optics_star,
+            dataset=dataset,
+            particle_state=particle_state,
+        )
 
     post_mstep_update = None
     solvent_mask = None

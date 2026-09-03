@@ -1016,6 +1016,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
     assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
 
+    sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
@@ -1030,6 +1031,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.effective_offset_step_angstrom == pytest.approx(1.5)
 
     sampling_state.current_changes_optimal_offsets_angstrom = 2.614243
+    sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
@@ -1043,6 +1045,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
 
     sampling_state.current_changes_optimal_offsets_angstrom = 2.0
+    sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
@@ -1067,7 +1070,7 @@ def test_native_sampling_waits_for_hidden_variable_stability():
         nr_iter=200,
         n_directions=1,
     )
-    sampling_state.last_current_resolution = float(state.current_resolution)
+    sampling_state.nr_iter_wo_resol_gain = 1
 
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
@@ -1088,6 +1091,89 @@ def test_native_sampling_waits_for_hidden_variable_stability():
     assert sampling_state.healpix_order == 2
     assert sampling_state.nr_iter_wo_resol_gain == 0
     assert sampling_state.nr_iter_wo_large_hidden_variable_changes == 0
+
+
+def test_native_sampling_uses_previous_completed_resolution_counter():
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    state = initialise_denovo_state(
+        ori_size=128,
+        pixel_size=2.125,
+        K=1,
+        nr_iter=200,
+        n_directions=1,
+    )
+    sampling_state.last_current_resolution = 0.045956
+    sampling_state.nr_iter_wo_resol_gain = 0
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 15
+
+    # RELION's iteration-39 checkpoint has a zero stall counter.  Iteration 40
+    # therefore stays at HEALPix 2 even though its completed M-step will be the
+    # first no-gain observation.
+    sampling_state.healpix_order = 2
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=40,
+        do_grad=True,
+    ) is False
+    assert sampling_state.healpix_order == 2
+
+    state.current_resolution = 0.045956
+    meta = {}
+    driver._record_native_sampling_post_iteration(
+        sampling_state,
+        state,
+        iteration=40,
+        meta=meta,
+    )
+    assert sampling_state.nr_iter_wo_resol_gain == 1
+    assert meta["sampling_nr_iter_wo_resol_gain"] == 1
+
+    # By iteration 49 RELION has accumulated another stall.  The decision at
+    # iteration 50 consumes that already-recorded value and refines the grid.
+    sampling_state.nr_iter_wo_resol_gain = 2
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 9
+    sampling_state.acc_rot = 0.768
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=50,
+        do_grad=True,
+    ) is True
+    assert sampling_state.healpix_order == 3
+
+
+def test_native_sampling_burnin_resets_before_decision_then_records_checkpoint():
+    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    state = initialise_denovo_state(
+        ori_size=128,
+        pixel_size=2.125,
+        K=1,
+        nr_iter=200,
+        n_directions=1,
+    )
+    sampling_state.last_current_resolution = float(state.current_resolution)
+    sampling_state.nr_iter_wo_resol_gain = 4
+    sampling_state.nr_iter_wo_large_hidden_variable_changes = 3
+
+    assert driver._prepare_native_sampling_for_iteration(
+        sampling_state,
+        state,
+        iteration=9,
+        do_grad=True,
+    ) is False
+    assert sampling_state.nr_iter_wo_resol_gain == 0
+    assert sampling_state.nr_iter_wo_large_hidden_variable_changes == 0
+
+    driver._record_native_sampling_post_iteration(
+        sampling_state,
+        state,
+        iteration=9,
+        meta={},
+    )
+    assert sampling_state.nr_iter_wo_resol_gain == 1
 
 
 def test_native_sampling_change_monitor_reuses_relion_em_predicate():
@@ -1639,7 +1725,7 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
     state.iter = 10
-    sampling_state.last_current_resolution = float(state.current_resolution)
+    sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
     expectation_step = driver._native_expectation_step(
@@ -1749,6 +1835,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     state.iter = 10
     state.tau2_fudge_factor = 3.995253
     sampling_state.last_current_resolution = float(state.current_resolution)
+    sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
     optics_state = driver.NativeOpticsState(
