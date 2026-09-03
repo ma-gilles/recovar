@@ -1254,6 +1254,10 @@ def finalize(
     if native:
         execution_binding["launch_manifest_schema"] = NATIVE_LAUNCH_SCHEMA
         execution_binding["replacement_records"] = [_file_record(path.resolve()) for path in replacement_records]
+        if "selected_standalone_replacement_profiles" in audit:
+            execution_binding["selected_standalone_replacement_profiles"] = audit[
+                "selected_standalone_replacement_profiles"
+            ]
     evidence = {
         "schema": EVIDENCE_SCHEMA,
         "case_id": CASE_ID,

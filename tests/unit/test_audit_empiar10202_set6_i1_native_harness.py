@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 SCRIPT = Path(__file__).parents[2] / "scripts/audit_empiar10202_set6_i1_native_harness.py"
@@ -16,6 +17,13 @@ assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+BUILDER_SCRIPT = Path(__file__).parents[2] / "scripts/build_empiar10202_set6_i1_standalone_replacement.py"
+BUILDER_SPEC = importlib.util.spec_from_file_location("standalone_replacement_builder_for_test", BUILDER_SCRIPT)
+assert BUILDER_SPEC is not None and BUILDER_SPEC.loader is not None
+BUILDER = importlib.util.module_from_spec(BUILDER_SPEC)
+sys.modules[BUILDER_SPEC.name] = BUILDER
+BUILDER_SPEC.loader.exec_module(BUILDER)
 
 FINALIZER_SCRIPT = Path(__file__).parents[2] / "scripts/finalize_empiar10202_set6_i1_evidence.py"
 FINALIZER_SPEC = importlib.util.spec_from_file_location("native_evidence_finalizer_for_test", FINALIZER_SCRIPT)
@@ -365,6 +373,789 @@ def _fixture(
     return manifest, job_ids, states, runner
 
 
+def _standalone_scontrol(
+    *,
+    profile,
+    script: Path,
+    allocated: bool,
+) -> str:
+    tres = "cpu=4,mem=500G,node=1,billing=40,gres/gpu=1"
+    alloc = tres if allocated else "(null)"
+    nodes = "1" if allocated else "1-1"
+    state = "RUNNING" if allocated else "PENDING"
+    return (
+        f"JobId={profile.job_id} JobName={profile.job_name} Account=gilles QOS=della-cryoem "
+        f"JobState={state} Dependency=(null) Restarts=0 Partition=cryoem TimeLimit=5-00:00:00 "
+        f"NumNodes={nodes} NumCPUs=4 NumTasks=1 CPUs/Task=4 Features=h100 OverSubscribe=OK "
+        f"Command={script} StdOut={profile.run_root}/logs/recovar-full-{profile.job_id}.out "
+        f"StdErr={profile.run_root}/logs/recovar-full-{profile.job_id}.err "
+        f"ReqTRES={tres} AllocTRES={alloc} TresPerNode=gres/gpu:h100:1\n"
+    )
+
+
+def _standalone_npz(path: Path, profile, data_dir: Path, **overrides) -> None:
+    convergence_iteration = 3
+    values = {
+        "n_iterations": np.int64(50),
+        "convergence_iteration": np.int64(convergence_iteration),
+        "convergence_has_converged": np.bool_(True),
+        "final_all_data_ran": np.bool_(True),
+        "final_all_data_grid_correct": np.bool_(False),
+        "current_sizes": np.asarray([128, 256, 512]),
+        "fsc_final_all_data": np.asarray([1.0, 0.8, 0.2]),
+        "n_images": np.int64(profile.particle_count),
+        "half1_indices": np.asarray([0, 2, 4]),
+        "half2_indices": np.asarray([1, 3, 5]),
+        "symmetry_label": np.asarray("I1"),
+        "symmetry_family": np.asarray("icosahedral"),
+        "symmetry_operator_count": np.int64(60),
+        "symmetry_operator_sha256": np.asarray(
+            "093a0876b93610ec141c87840ae3ff4dc4491b27dec87143558358ef556557b8"
+        ),
+        "firstiter_cc_effective": np.bool_(True),
+        "tau2_fudge": np.float64(1.0),
+        "tau2_fudge_source": np.asarray("explicit CLI"),
+        "initial_pose_source_requested": np.asarray("input-star"),
+        "initial_pose_source_resolved": np.asarray("input_star"),
+        "initial_pose_source_path": np.asarray(str(data_dir / "particles.star")),
+        "initial_pose_source_sha256": np.asarray(MODULE.FULL_STAR_SHA256),
+        "git_commit": np.asarray(profile.source_commit),
+        "git_branch": np.asarray("<detached>"),
+        "git_dirty_count": np.int64(0),
+        "git_diff_sha256": np.asarray(MODULE.EMPTY_SHA256),
+        "git_status_porcelain": np.asarray(""),
+        "perturb_replay_restart_state_iterations": np.asarray([], dtype=np.int64),
+        "diagnostic_final_manifest_paths": np.asarray([], dtype=str),
+        "diagnostic_final_manifest_sha256": np.asarray([], dtype=str),
+        "state_swap_probe_applied_relion_iterations": np.asarray([], dtype=np.int64),
+        "state_swap_probe_replay_override_keys": np.asarray([], dtype=str),
+        "state_swap_probe_required_replay_override_keys": np.asarray([], dtype=str),
+        "perturb_replay_restart_provenance_path": np.asarray(""),
+        "perturb_replay_restart_provenance_sha256": np.asarray(""),
+        "relion_projector_source_manifest_sha256": np.asarray(""),
+        "relion_projector_capture_dir": np.asarray(""),
+        "relion_projector_capture_manifest": np.asarray(""),
+        "frozen_boundary_dir": np.asarray(""),
+        "frozen_boundary_manifest_sha256": np.asarray(""),
+        "frozen_boundary_sha256": np.asarray(""),
+        "diagnostic_final_source_results_path": np.asarray(""),
+        "diagnostic_final_source_results_sha256": np.asarray(""),
+        "diagnostic_final_source_git_commit": np.asarray(""),
+        "state_swap_probe_variant": np.asarray(""),
+        "relion_projector_replay_slot": np.int64(-1),
+        "frozen_boundary_completed_relion_iteration": np.int64(-1),
+        "diagnostic_final_source_completed_relion_iteration": np.int64(-1),
+        "state_swap_probe_target_relion_iteration": np.int64(-1),
+        "state_swap_probe_loop_index": np.int64(-1),
+    }
+    values.update(overrides)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, **values)
+
+
+def _standalone_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict:
+    manifest, job_ids, _, base_runner = _fixture(tmp_path, monkeypatch, completed_full=True)
+    parent_payload = json.loads(manifest.read_text())
+    run_root = tmp_path / "standalone"
+    runtime_root = tmp_path / "runtime/standalone"
+    source_repo = tmp_path / "standalone-source/checkout"
+    python = _write(tmp_path / "toolchain/.pixi/envs/default/bin/python", "python\n")
+    python.chmod(0o755)
+    driver = _write(source_repo / "scripts/run_full_refinement.py", "# standalone driver\n")
+    cuda_source = _write(source_repo / "recovar/cuda/cuda_backproject.cu", "// standalone cuda\n")
+    cuda_library = _write(run_root / "sealed_input/libcuda.so", "postbuild cuda\n")
+    for directory in (
+        run_root / "jobs",
+        run_root / "logs",
+        run_root / "provenance",
+        run_root / "outputs/recovar_full",
+        run_root / "outputs/intermediates",
+        runtime_root / "recovar_full_999",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    _write(run_root / "SAFE_TO_DELETE", "")
+    _write(runtime_root / "SAFE_TO_DELETE", "")
+    _write(runtime_root / "recovar_full_999/SAFE_TO_DELETE", "")
+    script = _write(
+        run_root / "jobs/recovar_full.sbatch",
+        "#!/usr/bin/env bash\n#SBATCH --job-name=10202-s6-nopad-fixture\n"
+        "#SBATCH --gres=gpu:h100:1\n",
+    )
+    preflight_readme = _write(run_root / "README.md", "launch-time readme\n")
+    preflight_readme_sha = MODULE.sha256_file(preflight_readme)
+    preflight_cuda_sha = MODULE.hashlib.sha256(b"preflight cuda bytes").hexdigest()
+    source_commit = "e" * 40
+    source_tree = "f" * 40
+    profile_template = next(iter(MODULE.STANDALONE_REPLACEMENT_PROFILES.values()))
+    profile = dataclasses.replace(
+        profile_template,
+        name="fixture_standalone_999",
+        job_id="999",
+        job_name="10202-s6-nopad-fixture",
+        run_root=run_root,
+        runtime_root=runtime_root,
+        script_sha256=MODULE.sha256_file(script),
+        source_repo=source_repo,
+        source_commit=source_commit,
+        source_tree=source_tree,
+        python=python,
+        driver_sha256=MODULE.sha256_file(driver),
+        cuda_source_sha256=MODULE.sha256_file(cuda_source),
+        cuda_library_relative_path=Path("sealed_input/libcuda.so"),
+        cuda_preflight_sha256=preflight_cuda_sha,
+        cuda_postbuild_sha256=MODULE.sha256_file(cuda_library),
+        cuda_postbuild_size_bytes=cuda_library.stat().st_size,
+        preflight_readme_sha256=preflight_readme_sha,
+        particle_count=6,
+        half1_count=3,
+        half2_count=3,
+    )
+
+    base_git_output = MODULE._git_output
+
+    def git_output(repo: Path, *arguments: str) -> str:
+        if repo != source_repo:
+            return base_git_output(repo, *arguments)
+        values = {
+            ("rev-parse", "HEAD"): profile.source_commit,
+            ("rev-parse", "HEAD^{tree}"): profile.source_tree,
+            ("rev-parse", "--abbrev-ref", "HEAD"): "HEAD",
+            ("status", "--porcelain=v1", "--untracked-files=all"): "",
+        }
+        return values[arguments]
+
+    monkeypatch.setattr(MODULE, "_git_output", git_output)
+
+    data_dir = tmp_path / "standalone-inputs/full"
+    data_dir.mkdir(parents=True)
+    for name in ("particles.star", "reference_init.mrc", "reference_init_relion.mrc"):
+        _write(data_dir / name, (manifest.parent / "inputs/full" / name).read_text())
+    particle_stack = _write(tmp_path / "standalone-inputs/alternate-particles.mrcs", "particles\n")
+
+    subject = {
+        "source_repo": str(profile.source_repo),
+        "source_commit": profile.source_commit,
+        "source_tree": profile.source_tree,
+        "allocator": "platform",
+        "preallocate": "false",
+        "big_jit_max_bucket_rotations": "256",
+        "unused_native_projection_padding": "skipped_when_relion_projector_supplied",
+        "symmetry": "I1",
+        "particle_count": str(profile.particle_count),
+        "half1_count": str(profile.half1_count),
+        "half2_count": str(profile.half2_count),
+    }
+    _write(
+        run_root / "provenance/subject-999.txt",
+        "".join(f"{name}={value}\n" for name, value in subject.items()),
+    )
+    bind_dir = Path(parent_payload["immutable_native_artifacts"]["relion_binding"]["path"]).parent
+    relion_source = Path(parent_payload["immutable_native_artifacts"]["relion_binding_source"]["path"])
+    job_runtime = runtime_root / "recovar_full_999"
+    environment = {
+        "JAX_COMPILATION_CACHE_DIR": str(job_runtime / "jax_cache"),
+        "RECOVAR_CUDA_LIB": str(cuda_library),
+        "RECOVAR_EXACT_LOCAL_BIG_JIT_MAX_BUCKET_ROTATIONS": "256",
+        "RECOVAR_RELION_BIND_BUILD_DIR": str(bind_dir),
+        "RELION_SRC_DIR": str(relion_source / "src"),
+        "XLA_PYTHON_CLIENT_ALLOCATOR": "platform",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMPDIR": str(job_runtime / "tmp"),
+        "PIXI_HOME": str(job_runtime / "pixi_home"),
+        "RATTLER_CACHE_DIR": str(job_runtime / "rattler_cache"),
+    }
+    _write(
+        run_root / "provenance/environment-999.txt",
+        "".join(f"{name}={value}\n" for name, value in sorted(environment.items())),
+    )
+    _write(
+        run_root / "provenance/import-999.txt",
+        f"recovar={source_repo}/recovar/__init__.py\n"
+        f"jax={python.parent.parent}/lib/python3.11/site-packages/jax/__init__.py\n"
+        "devices=[CudaDevice(id=0)]\n",
+    )
+    _write(run_root / "provenance/nvidia-smi-999.txt", _gpu_inventory(1))
+    for name in ("ldd-cuda-pre-submit.txt", "ldd-cuda-999.txt", "ldd-relion-bind-999.txt"):
+        _write(run_root / "provenance" / name, "all resolved\n")
+    _write(run_root / "provenance/job_id.txt", "999\n")
+    _write(
+        run_root / "provenance/submitted_scontrol_retry.txt",
+        _standalone_scontrol(profile=profile, script=script, allocated=False),
+    )
+    _write(
+        run_root / "provenance/scontrol-999.txt",
+        _standalone_scontrol(profile=profile, script=script, allocated=True),
+    )
+    launcher = MODULE._load_launcher()
+    command = list(
+        launcher._recovar_command(
+            profile.source_repo,
+            data_dir,
+            run_root / "outputs/recovar_full",
+            smoke=False,
+        )
+    )
+    command[4] = str(profile.python)
+    command.extend(
+        [
+            "--save_intermediates_dir",
+            str(run_root / "outputs/intermediates"),
+            "--save_intermediates_skip_unregularized",
+        ]
+    )
+    _write(run_root / "provenance/command-999.sh", shlex.join(command) + "\n")
+
+    preflight_ledger = _write(
+        run_root / "provenance/pre_submission_retry_sha256.txt",
+        f"{profile.script_sha256}  {script}\n"
+        f"{profile.preflight_readme_sha256}  {preflight_readme}\n"
+        f"{profile.cuda_preflight_sha256}  {cuda_library}\n",
+    )
+    profile = dataclasses.replace(profile, preflight_ledger_sha256=MODULE.sha256_file(preflight_ledger))
+    postbuild = _write(
+        run_root / "provenance/cuda-postbuild-999.txt",
+        "job_id=999\n"
+        f"path={cuda_library}\n"
+        f"preflight_sha256={profile.cuda_preflight_sha256}\n"
+        f"postbuild_sha256={profile.cuda_postbuild_sha256}\n"
+        f"postbuild_size_bytes={profile.cuda_postbuild_size_bytes}\n"
+        "postbuild_mtime=2026-09-03T01:54:48.530225457-04:00\n"
+        f"source_cuda_sha256={profile.cuda_source_sha256}\n"
+        f"reason={profile.postbuild_reason}\n",
+    )
+    profile = dataclasses.replace(profile, postbuild_record_sha256=MODULE.sha256_file(postbuild))
+    monkeypatch.setattr(MODULE, "STANDALONE_REPLACEMENT_PROFILES", {profile.name: profile})
+    # The launch-time README hash remains bound through the ledger even if the
+    # explanatory README is amended after submission.
+    preflight_readme.write_text("post-launch explanation\n")
+
+    output_dir = run_root / "outputs/recovar_full"
+    results = output_dir / "refinement_results.npz"
+    _standalone_npz(results, profile, data_dir)
+    for name in ("final_merged.mrc", "final_half1_unfil.mrc", "final_half2_unfil.mrc"):
+        _write(output_dir / name, f"{name}\n")
+    walltime = _write(
+        output_dir / "slurm_walltime.json",
+        json.dumps(
+            {
+                "schema": "recovar.em.walltime.v1",
+                "job_id": "999",
+                "start_epoch": 100,
+                "end_epoch": 125,
+                "wall_s": 25,
+            }
+        )
+        + "\n",
+    )
+    output_paths = [
+        results,
+        output_dir / "final_merged.mrc",
+        output_dir / "final_half1_unfil.mrc",
+        output_dir / "final_half2_unfil.mrc",
+        walltime,
+    ]
+    _write(
+        output_dir / "output_sha256.txt",
+        "".join(f"{MODULE.sha256_file(path)}  {path}\n" for path in output_paths),
+    )
+    _write(output_dir / "COMPLETED", "")
+    uuid = "GPU-00000000-0000-0000-0000-000000000000"
+    _write(
+        run_root / "logs/recovar-full-999-hbm.csv",
+        "timestamp,index,uuid,memory_used_mib,memory_free_mib,gpu_utilization_percent\n"
+        f"2026-09-03T01:00:00-04:00,0,{uuid},10,81000,5\n"
+        f"2026-09-03T01:00:05-04:00,0,{uuid},42,80968,80\n",
+    )
+    _write(output_dir / "hbm_summary.txt", "peak_hbm_mib=42\n")
+    _write(run_root / "logs/recovar-full-999-time-v.txt", "\tExit status: 0\n")
+    _write(
+        run_root / "logs/recovar-full-999.out",
+        f"nvcc -o {cuda_library} cuda_backproject.cu\n",
+    )
+    _write(
+        run_root / "logs/recovar-full-999.err",
+        f"{cuda_library} is older than its source\n"
+        f"Building {cuda_library}\n"
+        "CUDA backproject/project kernels enabled\n"
+        "Convergence reached at iteration 3.\n"
+        "=== RELION final all-data Nyquist iteration ===\n"
+        "Final iter complete: current_size=800\n",
+    )
+
+    def record(path: Path, *, nonempty: bool = True) -> dict:
+        return MODULE._file_record(path, nonempty=nonempty)
+
+    artifact_paths = MODULE._standalone_artifact_paths(profile)
+    empty_artifacts = {
+        "run_safe_to_delete",
+        "runtime_safe_to_delete",
+        "job_runtime_safe_to_delete",
+        "completed_marker",
+    }
+    artifacts = {
+        name: record(path, nonempty=name not in empty_artifacts)
+        for name, path in artifact_paths.items()
+    }
+    payload = {
+        "schema": MODULE.STANDALONE_REPLACEMENT_SCHEMA,
+        "profile": profile.name,
+        "parent_launch_manifest": {"path": str(manifest), "sha256": MODULE.sha256_file(manifest)},
+        "run_key": "recovar_full",
+        "replaces_job_id": job_ids["recovar_full"],
+        "job_id": profile.job_id,
+        "run_root": str(run_root),
+        "script": record(script),
+        "source": {
+            "repo": str(profile.source_repo),
+            "commit": profile.source_commit,
+            "tree": profile.source_tree,
+            "python": str(profile.python),
+            "driver_sha256": profile.driver_sha256,
+            "cuda_source_sha256": profile.cuda_source_sha256,
+        },
+        "inputs": {
+            "data_dir": str(data_dir),
+            "particles_star": record(data_dir / "particles.star"),
+            "recovar_reference": record(data_dir / "reference_init.mrc"),
+            "relion_reference": record(data_dir / "reference_init_relion.mrc"),
+            "particle_stack": record(particle_stack),
+        },
+        "cuda_rebuild": {
+            "library": {
+                "path": str(cuda_library),
+                "preflight_sha256": profile.cuda_preflight_sha256,
+                "postbuild_sha256": profile.cuda_postbuild_sha256,
+                "postbuild_size_bytes": profile.cuda_postbuild_size_bytes,
+            },
+            "preflight_ledger_sha256": profile.preflight_ledger_sha256,
+            "postbuild_record_sha256": profile.postbuild_record_sha256,
+            "reason": profile.postbuild_reason,
+        },
+        "artifacts": artifacts,
+        "reason": "replace the failed parent recovar_full with the corrected standalone run",
+    }
+    replacement = _write(tmp_path / "standalone-replacement.json", json.dumps(payload))
+
+    def runner(command, **kwargs):
+        job_id = command[command.index("--jobs") + 1]
+        if job_id != profile.job_id:
+            return base_runner(command, **kwargs)
+        tres = "cpu=4,mem=500G,node=1,billing=40,gres/gpu=1"
+        return SimpleNamespace(
+            stdout=f"{profile.job_id}|COMPLETED|0:0|{tres}|{tres}|1024K\n",
+            returncode=0,
+        )
+
+    return {
+        "manifest": manifest,
+        "replacement": replacement,
+        "runner": runner,
+        "profile": profile,
+        "data_dir": data_dir,
+        "run_root": run_root,
+    }
+
+
+def _reseal_standalone_artifact(fixture: dict, name: str) -> None:
+    replacement = fixture["replacement"]
+    payload = json.loads(replacement.read_text())
+    path = Path(payload["artifacts"][name]["path"])
+    payload["artifacts"][name] = MODULE._file_record(
+        path,
+        nonempty=name
+        not in {
+            "run_safe_to_delete",
+            "runtime_safe_to_delete",
+            "job_runtime_safe_to_delete",
+            "completed_marker",
+        },
+    )
+    replacement.write_text(json.dumps(payload))
+
+
+def _reseal_standalone_outputs(fixture: dict) -> None:
+    output_dir = fixture["run_root"] / "outputs/recovar_full"
+    paths = [
+        output_dir / "refinement_results.npz",
+        output_dir / "final_merged.mrc",
+        output_dir / "final_half1_unfil.mrc",
+        output_dir / "final_half2_unfil.mrc",
+        output_dir / "slurm_walltime.json",
+    ]
+    (output_dir / "output_sha256.txt").write_text(
+        "".join(f"{MODULE.sha256_file(path)}  {path}\n" for path in paths)
+    )
+    _reseal_standalone_artifact(fixture, "refinement_results")
+    _reseal_standalone_artifact(fixture, "walltime")
+    _reseal_standalone_artifact(fixture, "output_sha256")
+
+
+def test_standalone_recovar_full_replacement_is_content_bound_and_science_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+
+    normalized, audit = MODULE.audit_native_launch(
+        fixture["manifest"],
+        replacement_records=(fixture["replacement"],),
+        runner=fixture["runner"],
+        require_science_ready=True,
+    )
+
+    selected = audit["jobs"]["recovar_full"]
+    assert selected["source"] == "standalone_replacement"
+    assert selected["replacement_profile"] == fixture["profile"].name
+    assert selected["cuda_rebuild"]["preflight_sha256"] == fixture["profile"].cuda_preflight_sha256
+    assert selected["cuda_rebuild"]["postbuild_sha256"] == fixture["profile"].cuda_postbuild_sha256
+    assert selected["refinement"] == {
+        "n_iterations_cap": 50,
+        "numbered_iterations": 3,
+        "converged": True,
+        "final_all_data_ran": True,
+        "final_all_data_grid_correct": False,
+        "final_fsc_shells": 3,
+    }
+    assert normalized["runs"]["recovar_full"]["data_dir"] == str(fixture["data_dir"])
+    assert normalized["runs"]["recovar_full"]["data_dir"] != str(
+        fixture["manifest"].parent / "inputs/full"
+    )
+    profile_binding = audit["selected_standalone_replacement_profiles"]["recovar_full"]
+    assert profile_binding["profile"] == fixture["profile"].name
+    assert profile_binding["cuda_postbuild_sha256"] == fixture["profile"].cuda_postbuild_sha256
+
+
+def test_standalone_replacement_builder_is_deterministic_and_refuses_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(BUILDER, "_load_adapter", lambda: MODULE)
+    output = tmp_path / "built-replacement.json"
+    arguments = [
+        "--parent-launch-manifest",
+        str(fixture["manifest"]),
+        "--profile",
+        fixture["profile"].name,
+        "--data-dir",
+        str(fixture["data_dir"]),
+        "--particle-stack",
+        str(tmp_path / "standalone-inputs/alternate-particles.mrcs"),
+        "--reason",
+        "replace the failed parent recovar_full with the corrected standalone run",
+        "--output",
+        str(output),
+    ]
+
+    assert BUILDER.main(arguments) == 0
+    assert json.loads(output.read_text()) == json.loads(fixture["replacement"].read_text())
+    with pytest.raises(FileExistsError):
+        BUILDER.main(arguments)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("profile", "profile is not accepted"),
+        ("parent", "parent binding changed"),
+        ("job", "job ID changed"),
+        ("extra", "record fields changed"),
+    ),
+)
+def test_standalone_replacement_rejects_contract_mutation(
+    mutation: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    payload = json.loads(fixture["replacement"].read_text())
+    if mutation == "profile":
+        payload["profile"] = "unaccepted-run"
+    elif mutation == "parent":
+        payload["parent_launch_manifest"]["sha256"] = "0" * 64
+    elif mutation == "job":
+        payload["job_id"] = "1000"
+    else:
+        payload["unexpected"] = True
+    fixture["replacement"].write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=message):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("artifact", "old", "new", "message"),
+    (
+        ("executed_command", "\n", " --skip_final_iteration\n", "executed command changed"),
+        (
+            "environment",
+            "PYTHONNOUSERSITE=1\n",
+            "PYTHONNOUSERSITE=1\nRECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER=1\n",
+            "sensitive environment changed",
+        ),
+        (
+            "scontrol_runtime",
+            "AllocTRES=cpu=4,mem=500G",
+            "AllocTRES=cpu=4,mem=400G",
+            "wrong standalone TRES",
+        ),
+    ),
+)
+def test_standalone_replacement_rejects_self_consistent_execution_tamper(
+    artifact: str,
+    old: str,
+    new: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    payload = json.loads(fixture["replacement"].read_text())
+    path = Path(payload["artifacts"][artifact]["path"])
+    text = path.read_text()
+    assert old in text
+    path.write_text(text.replace(old, new))
+    _reseal_standalone_artifact(fixture, artifact)
+
+    with pytest.raises(ValueError, match=message):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("artifact", "old", "new", "message"),
+    (
+        ("preflight_ledger", "  /", "0  /", "preflight ledger changed"),
+        ("cuda_postbuild", "reason=", "reason=tampered-", "CUDA postbuild record changed"),
+    ),
+)
+def test_standalone_replacement_rejects_cuda_chain_tamper(
+    artifact: str,
+    old: str,
+    new: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    payload = json.loads(fixture["replacement"].read_text())
+    path = Path(payload["artifacts"][artifact]["path"])
+    path.write_text(path.read_text().replace(old, new, 1))
+    _reseal_standalone_artifact(fixture, artifact)
+
+    with pytest.raises(ValueError, match=message):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+@pytest.mark.parametrize("artifact", ("preflight_ledger", "cuda_postbuild"))
+def test_standalone_cuda_chain_semantics_survive_a_resealed_record_digest(
+    artifact: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    payload = json.loads(fixture["replacement"].read_text())
+    path = Path(payload["artifacts"][artifact]["path"])
+    if artifact == "preflight_ledger":
+        old = fixture["profile"].preflight_readme_sha256
+        path.write_text(path.read_text().replace(old, "1" * 64))
+        _reseal_standalone_artifact(fixture, artifact)
+        payload = json.loads(fixture["replacement"].read_text())
+        new_digest = payload["artifacts"][artifact]["sha256"]
+        profile = dataclasses.replace(fixture["profile"], preflight_ledger_sha256=new_digest)
+        payload["cuda_rebuild"]["preflight_ledger_sha256"] = new_digest
+        message = "preflight digest chain changed"
+    else:
+        path.write_text(path.read_text().replace("reason=", "reason=tampered-", 1))
+        _reseal_standalone_artifact(fixture, artifact)
+        payload = json.loads(fixture["replacement"].read_text())
+        new_digest = payload["artifacts"][artifact]["sha256"]
+        profile = dataclasses.replace(fixture["profile"], postbuild_record_sha256=new_digest)
+        payload["cuda_rebuild"]["postbuild_record_sha256"] = new_digest
+        message = "CUDA postbuild reason changed"
+    monkeypatch.setattr(MODULE, "STANDALONE_REPLACEMENT_PROFILES", {profile.name: profile})
+    fixture["replacement"].write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=message):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    (
+        ({"convergence_has_converged": np.bool_(False)}, "did not converge naturally"),
+        ({"n_iterations": np.int64(3)}, "iteration cap changed"),
+        ({"final_all_data_ran": np.bool_(False)}, "lacks final all-data"),
+        ({"relion_projector_replay_slot": np.int64(2)}, "replay field relion_projector_replay_slot"),
+        ({"half2_indices": np.asarray([0, 1, 3])}, "not a disjoint full partition"),
+    ),
+)
+def test_standalone_replacement_rejects_refinement_semantic_tamper(
+    overrides: dict,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    result_path = fixture["run_root"] / "outputs/recovar_full/refinement_results.npz"
+    _standalone_npz(result_path, fixture["profile"], fixture["data_dir"], **overrides)
+    _reseal_standalone_outputs(fixture)
+
+    with pytest.raises(ValueError, match=message):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+def test_standalone_replacement_rejects_unsealed_or_missing_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    merged = fixture["run_root"] / "outputs/recovar_full/final_merged.mrc"
+    merged.write_text("changed after replacement record creation\n")
+
+    with pytest.raises(ValueError, match="declared file record does not match artifact"):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("artifact", "mutate", "message"),
+    (
+        ("hbm_summary", lambda text: text.replace("42", "41"), "HBM summary changed"),
+        ("scontrol_runtime", lambda text: text.replace("OverSubscribe=OK", "OverSubscribe=EXCLUSIVE"), "OverSubscribe mismatch"),
+    ),
+)
+def test_standalone_replacement_rejects_resource_telemetry_tamper(
+    artifact: str,
+    mutate,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    payload = json.loads(fixture["replacement"].read_text())
+    path = Path(payload["artifacts"][artifact]["path"])
+    path.write_text(mutate(path.read_text()))
+    _reseal_standalone_artifact(fixture, artifact)
+
+    with pytest.raises(ValueError, match=message):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+def test_standalone_replacement_rejects_walltime_arithmetic_tamper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    walltime = fixture["run_root"] / "outputs/recovar_full/slurm_walltime.json"
+    payload = json.loads(walltime.read_text())
+    payload["wall_s"] -= 1
+    walltime.write_text(json.dumps(payload) + "\n")
+    _reseal_standalone_outputs(fixture)
+
+    with pytest.raises(ValueError, match="walltime arithmetic changed"):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+def test_standalone_replacement_rejects_content_changed_at_alternate_input_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    star = fixture["data_dir"] / "particles.star"
+    star.write_text("different input bytes\n")
+    payload = json.loads(fixture["replacement"].read_text())
+    payload["inputs"]["particles_star"] = {
+        "path": str(star),
+        "size_bytes": star.stat().st_size,
+        "sha256": MODULE.sha256_file(star),
+    }
+    fixture["replacement"].write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="input SHA-256 changed"):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+def test_standalone_replacement_rejects_resealed_script_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    payload = json.loads(fixture["replacement"].read_text())
+    script = Path(payload["script"]["path"])
+    script.write_text(script.read_text() + "#SBATCH --exclusive\n")
+    payload["script"] = MODULE._file_record(script)
+    fixture["replacement"].write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="Slurm script SHA-256 changed"):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
+def test_standalone_replacement_rejects_non_detached_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture = _standalone_fixture(tmp_path, monkeypatch)
+    base_git_output = MODULE._git_output
+
+    def attached_git_output(repo: Path, *arguments: str) -> str:
+        if repo == fixture["profile"].source_repo and arguments == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "dev"
+        return base_git_output(repo, *arguments)
+
+    monkeypatch.setattr(MODULE, "_git_output", attached_git_output)
+    with pytest.raises(ValueError, match="not detached"):
+        MODULE.audit_native_launch(
+            fixture["manifest"],
+            replacement_records=(fixture["replacement"],),
+            runner=fixture["runner"],
+        )
+
+
 def test_native_audit_classifies_oom_and_dependencies_without_promoting_smoke(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -563,6 +1354,14 @@ def test_finalizer_dispatches_native_adapter_and_binds_replacement_records(
             "sha256": FINALIZER.sha256_file(manifest),
         },
         "jobs": {},
+        "selected_standalone_replacement_profiles": {
+            "recovar_full": {
+                "profile": "fixture-profile",
+                "job_id": "999",
+                "cuda_preflight_sha256": "b" * 64,
+                "cuda_postbuild_sha256": "c" * 64,
+            }
+        },
     }
 
     class Adapter:
@@ -591,6 +1390,12 @@ def test_finalizer_dispatches_native_adapter_and_binds_replacement_records(
     assert binding["launch_manifest_schema"] == FINALIZER.NATIVE_LAUNCH_SCHEMA
     assert binding["replacement_records"][0]["sha256"] == FINALIZER.sha256_file(replacement)
     assert binding["finalizer_argv"][-2:] == ["--replacement-record", str(replacement)]
+    assert binding["selected_standalone_replacement_profiles"]["recovar_full"] == {
+        "profile": "fixture-profile",
+        "job_id": "999",
+        "cuda_preflight_sha256": "b" * 64,
+        "cuda_postbuild_sha256": "c" * 64,
+    }
 
 
 def _native_binding_fixture(tmp_path: Path) -> dict:
