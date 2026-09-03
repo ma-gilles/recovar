@@ -7,6 +7,15 @@
 
 ## Live engineering snapshot — 2026-09-03
 
+> **LATEST — OPTIMIZED TRAJECTORY:** Four fresh processes through iteration 50
+> show that stable Fourier/row capacities cut the complete optimized stack from
+> median `500.604 -> 274.569 s` (**45.15% faster**) and expectation from
+> `471.249 -> 239.133 s` (**49.26% faster**) at +0.04% memory (`13392701`).
+> Runtime passes, but strict science does not: one of two optimized repeats
+> changes one translation/pose at iterations 48 and 50, while the other remains
+> hard-state identical to both controls. This is a trajectory hold, not a
+> promotion. [Focused report.](../perf/vdam_runtime_stack_trajectory_h100_13392701.md)
+>
 > **LATEST — STATIC GEOMETRY:** Comparable H100 job `13393276` removes **41
 > XLA compilations (-9.43%)** and **0.677 s of recorded compile-miss time
 > (-3.00%)** from the optimized iteration-48 replay by moving immutable
@@ -48,6 +57,7 @@
 | Signal | Status | Evidence / next decision |
 |---|---|---|
 | Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
+| Complete optimized `0 -> 50` stack | **45.15% FASTER / STRICT SCIENCE HOLD** | Job `13392701` changes median fresh wall `500.604 -> 274.569 s`, expectation `471.249 -> 239.133 s`, and memory +0.04%. Candidate 1 stays hard-state exact; candidate 2 changes one pose at iterations 48 and 50. Runtime passes, defaults and frozen scores do not; [report](../perf/vdam_runtime_stack_trajectory_h100_13392701.md). |
 | Shared static half-spectrum geometry | **23 / 23 EXACT / 41 FEWER COMPILES** | Comparable optimized H100 replay `13393276` changes stderr compile count `435 -> 394`, recorded miss time `22.596 -> 21.918 s`, cold wall `30.069 -> 29.915 s`, and warm wall `5.144 -> 4.569 s`. Strict atomic diagnostics are only 14/21 at nondeterministic scale and are not promoted; [report](../perf/vdam_static_half_geometry_h100_13393276.md). |
 | Full combined GF46 sentinel | **COMPLETE — 1.639x FASTER / NON-SCORING DIVERGENCE** | Job `13369646` completed both `0 -> 200` arms: wall `2810.434 -> 1714.290 s` (-39.00%), expectation `2718.193 -> 1621.030 s` (-40.37%), peak RSS `17673 -> 17643 MiB`. First hard split is one pose at iteration 48. Both final maps remain inside the broad native-repeat quality envelope, but two arms cannot establish basin equivalence. |
 | Same-state iteration 35 | **EXACT DECISIONS / ATOMIC-SCALE CONTINUOUS NOISE** | Job `13358712` deep-copied one exact live iteration-34 state into an ABBA panel. Every particle/pose/translation/class/posterior/significance field and all 200 exact support-ID rows agree across direct and hybrid; aggregate support SHA-256 is identical. Cross-backend reconstruction deltas are the same scale as direct/direct and hybrid/hybrid atomic-repeat noise. |
@@ -74,22 +84,26 @@
 
 ### Immediate queue
 
-1. Continue compile-boundary attribution from the now-host-planned static
+1. Replay the exact iteration-47-to-48 state from each `13392701` arm in a
+   repeat-controlled same-state panel. The target is the one candidate-2
+   translation switch; compare its score margin and support boundary against
+   control/control variation before changing any math.
+2. Continue compile-boundary attribution from the now-host-planned static
    geometry: the remaining cold profile is 394 compilations / 22.72 seconds,
    led by the coarse certificate, local big JIT, and eager controller
    primitives. Require exact hard state and repeat-controlled atomics for each
    retained boundary.
-2. Finish the literal mature-EM direct-oracle packed-noise gate `13378581` and
+3. Finish the literal mature-EM direct-oracle packed-noise gate `13378581` and
    the shared scatter-boundary fresh-process gate `13378757`; retain only
    oracle-exact seams with measured cold or composed value.
-3. Prove and gate a shared stable RELION-projector storage/radius ABI. Shape
+4. Prove and gate a shared stable RELION-projector storage/radius ABI. Shape
    attribution shows 73.5% zero-GPU-util samples and 317/348 seconds of
    expectation time in iterations that create new executables.
-4. Then run a fresh
+5. Then run a fresh
    repeat-controlled `0 -> 200` sentinel for the qualified complete
    stack, with direct/direct variability, FSC/scale, selector/fallback, memory,
    compile-count, and runtime audits. A two-arm basin split cannot update a score.
-5. Expand across outliers, pose/noise distributions, scale, parameters, and
+6. Expand across outliers, pose/noise distributions, scale, parameters, and
    long trajectories. K>1 and real data remain later independent gates.
 
 ## At a glance
@@ -99,8 +113,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **SAME-STATE EXACT / REPEAT-CONTROLLED BASIN GATE OPEN** | Job `13372936` rules out a reproducible combined-backend error at the sentinel's first hard split, iteration 48. The remaining question is whether full-run divergence exceeds direct/direct stochastic basin spread. |
-| Current performance work | **25.90% FRESH 0->50 / 2.553x COMPLETE-STACK TRANSITION** | Combined stable ABIs cut fresh trajectory wall 25.90% but choose an alternate basin at iteration 35, so remain default-off. Flat rows alone account for 9.37% wall / 9.58% expectation and also fail strict trajectory identity. Job `13378175` proves the complete nine-seam stack exact for iteration 47->48: 8.124x pass 1, 1.204x pass 2, 2.553x wall. Direct-oracle packed noise and shared scatter JIT gates are active. |
+| Current correctness work | **ONE OF TWO OPTIMIZED REPEATS SPLITS AT ITERATION 48** | In `13392701`, both controls and optimized repeat 1 retain exact pose/class state through iteration 50; optimized repeat 2 changes one translation/pose at iterations 48 and 50. The iteration-47-to-48 same-state replay is the next boundary. |
+| Current performance work | **45.15% FRESH 0->50 / 2.553x SAME-STATE TRANSITION** | On the complete optimized stack, stable Fourier/row capacities change median fresh trajectory wall `500.604 -> 274.569 s` and expectation `471.249 -> 239.133 s` (`13392701`). Strict science remains on hold. Job `13378175` independently proves the complete nine-seam iteration-47-to-48 stack exact at 2.553x warm speed. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
