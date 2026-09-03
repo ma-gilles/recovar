@@ -119,6 +119,40 @@ It requested and received exactly one H100, four CPUs, and 80 GiB, completed
 `0:0` in 19 s, and is retained at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_persistent_texture_arithmetic_20260903`.
 
+At the clean integrated run's numbered checkpoint 1, commit `37f640c7e`
+reproduces the corrected no-padding run's controller and next-size decision,
+all 30,515 coarse and fine particle assignments, rotation/translation grids,
+complete saved particle state, and FSC curve bit-for-bit. The maps are not
+bitwise equal: their relative-L2 differences are `7.96e-8` and `7.91e-8`,
+with a maximum observed floating-array difference of `1.03e-7`. This is exact
+discrete/controller/FSC equivalence with very small floating drift, not a
+strict floating-equivalence claim. Iteration wall time falls from 999.8 to
+795.6 s (20.42%) at essentially unchanged sampled peak HBM. The hardened
+semantic JSON and Markdown are sealed at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint1_corrected_vs_ptex_20260903T0450`
+with SHA-256
+`432277018307aedd8bb1ff27fdad50c690f95f1dea8237b2d21619c5220a99ff`
+and
+`a259db52a9634d71cf6b879af7ff6691cc8fff02c06432b77309f23a1706ea1b`.
+
+Corrected full-particle job `13376414` subsequently completes the historical
+box-800/current-size-564 failure boundary in both halves. Numbered iteration
+12 saves both maps and particle-state archives after `1266/1266` and
+`1263/1263` fine chunks, including every 512-rotation split bucket, and peaks
+at 47,275 MiB sampled HBM versus 79,259 MiB before the old failure. Its
+numbered iteration-11 maps also pass the direct shared-frame RELION scorecard:
+both half-map FSC curves cross 0.143 at shell 250 (`2.5215997696 A`), merged
+cross-engine FSC-AUC is `0.9911398`, half-map cross-engine AUC is
+`0.9868918/0.9869988`, and half-FSC RMSE is `0.0050346`. No fitted operation
+is used. This is an interim matched-iteration high-resolution result because
+the trajectory is still advancing, not a final convergence record. CPU audit
+job `13380196` and its exact-resource provenance are retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it11_corrected_direct_fsc_20260903T0501`;
+the result JSON and verified manifest SHA-256 values are
+`a89bf4b106e2f6943e3ea001e022afd910f4fe8d6d6d371bbace74eb3b1936f2`
+and
+`ae7b2157bc951fb31dc472b396828f933638bf0d62edddc75174052a94c0219d`.
+
 At corrected full-particle checkpoint `it006` (numbered iteration 7), the
 release, compact, and no-padding trajectories retain identical saved FSC
 crossings (0.5 at shell 150; 0.143 at shell 183). Corrected-versus-release map

@@ -373,6 +373,39 @@ transferred once, and non-owning NumPy views are copied. Its five lifecycle
 tests, 16-test EM fast guard, scoped Ruff, and `git diff --check` pass. This is
 a host-ownership change only; it does not alter map arithmetic.
 
+## Fresh integrated checkpoint-1 equivalence
+
+The first durable full-particle checkpoint from the clean integrated run at
+commit `37f640c7e1553ce2b6ed95b061aed4c9e16552b8` was compared with the
+corrected no-padding trajectory at commit
+`b31f7bb3a88b96885e568fa4a12d5ec265ab4aab`. Both used all 30,515
+EMPIAR-10202 set-6 particles, the same I1 reference and operators, and the
+same command. At numbered iteration 1, the controller state, subsequent
+size-242 decision, coarse and fine hard assignments for every particle,
+rotation and translation grids, complete saved particle-state archives, and
+401-shell FSC curve are all bit-for-bit equal.
+
+The floating accumulators and half-maps are not bitwise equal. Their largest
+observed floating-array relative-L2 difference is `1.0288762e-7`; half-map
+relative-L2 differences are `7.9595834e-8` and `7.9122086e-8`, with centered
+correlations above `0.999999999999996`. A `2e-7` limit is retained only as a
+retrospective posthoc diagnostic, not as a preregistered acceptance gate.
+Thus this checkpoint establishes exact discrete/controller/FSC equivalence
+with approximately `8e-8` map-level floating drift, not overall bitwise
+equivalence.
+
+Numbered iteration 1 took 999.8 s in the corrected run and 795.6 s in the
+integrated run, a 20.42% reduction (1.2567x speedup), while sampled peak HBM
+was essentially unchanged at 31,991 versus 31,987 MiB. The semantic JSON and
+Markdown are sealed under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint1_corrected_vs_ptex_20260903T0450`
+with `SAFE_TO_DELETE`; their SHA-256 values are
+`432277018307aedd8bb1ff27fdad50c690f95f1dea8237b2d21619c5220a99ff`
+and
+`a259db52a9634d71cf6b879af7ff6691cc8fff02c06432b77309f23a1706ea1b`.
+The retained raw tool report is explicitly non-authoritative for strict
+floating equivalence because it used a loose threshold-dependent label.
+
 ## Accepted unused local-padding removal
 
 Commit `f91c73f2907ccea635782814d0cbde1d4f8ed4c2` (tree
@@ -459,6 +492,51 @@ cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cb
 This remains a score-only memory/performance qualification.  The advancing
 full-particle trajectories and their checkpoint/FSC audits separately decide
 final scientific quality.
+
+## Corrected full-particle iteration-11/12 milestone
+
+Full-particle job `13376414` uses all 30,515 EMPIAR-10202 set-6 particles,
+their deposited halves, one common I1 reference, and source commit
+`b31f7bb3a88b96885e568fa4a12d5ec265ab4aab` (tree
+`e4a9c5e05700ea5a89177627fa48da48fae53b0a`). It requested and received
+exactly one H100, four CPUs, and 500 GiB without `--exclusive`; its corrected
+compact local path skips the unused padded native mean but does not include
+the later persistent-texture commit.
+
+At numbered iteration 11, a fresh direct shared-file-frame comparison against
+the matching RELION iteration passes every primary scorecard gate. Both
+split-half FSC curves cross 0.143 at shell 250, or `2.5215997696 A`. The
+resolved-band merged, half-1, and half-2 cross-engine FSC-AUC values are
+`0.9911398`, `0.9868918`, and `0.9869988`; the half-FSC RMSE is `0.0050346`,
+the normalized half-FSC AUC difference is `2.47495e-6`, and the half-resolution
+ratio is exactly `1.0`. The comparison uses only the fixed RECOVAR-to-RELION
+file-frame sign convention. It fits no rotation, translation, reflection,
+sign, or scale. This is a matched-iteration high-resolution result, not a
+claim of final convergence.
+
+The same trajectory then completed numbered iteration 12 at
+`current_size=564`, the precise stage where compact job `13363818` failed.
+Both fine M-step loops completed all `1266/1266` and `1263/1263` chunks,
+including five 512-rotation split-route buckets in each half. The iteration
+saved both half-maps and particle-state archives, reported `3.41 A`,
+`ave_Pmax=0.8972`, and took 701.3 s. Its full iteration-12 sampled HBM peak was
+47,275 MiB, 31,984 MiB (40.35%) below the old 79,259-MiB failure sample; the
+half-1 fine-loop window itself peaked at 39,723 MiB. The run proceeded to
+iteration 13 rather than terminating at the historical boundary.
+
+The direct FSC audit is CPU Slurm job `13380196`, which completed `0:0` in
+6:41 with exact `ReqTRES=AllocTRES=cpu=8,mem=96G,node=1,billing=24`, no GPU,
+and `OverSubscribe=OK`. Its immutable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it11_corrected_direct_fsc_20260903T0501`
+with `SAFE_TO_DELETE`. The primary JSON and curve archive have SHA-256
+`a89bf4b106e2f6943e3ea001e022afd910f4fe8d6d6d371bbace74eb3b1936f2`
+and
+`a3ba9535c56ffa5464b1357b6478a50136f79cfcaeabeeb3f3c31beb250f64bf`.
+The human-readable result and final 12-entry manifest have SHA-256
+`f5cf3451d82c32af19589932cba5c3db268a4edd776a60850f8c2bdf4125dcfc`
+and
+`ae7b2157bc951fb31dc472b396828f933638bf0d62edddc75174052a94c0219d`;
+the complete manifest and semantic assertions both validate.
 
 ## Live full-particle checkpoint-7 three-way audit
 
