@@ -8007,7 +8007,8 @@ void relion_coarse_diff2_rectangular_f32_kernel(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
-    int64_t full_pixel_count)
+    int64_t full_pixel_capacity,
+    const int32_t* runtime_full_pixel_count)
 {
     const int64_t rotation_blocks =
         (rotation_count + kRelionCoarseEulersPerBlock - 1) /
@@ -8017,6 +8018,25 @@ void relion_coarse_diff2_rectangular_f32_kernel(
     const int64_t rotation_start =
         (flat_block - batch * rotation_blocks) * kRelionCoarseEulersPerBlock;
     if (batch >= batch_size) return;
+    const int64_t full_pixel_count = runtime_full_pixel_count == nullptr
+        ? full_pixel_capacity
+        : static_cast<int64_t>(runtime_full_pixel_count[0]);
+    if (full_pixel_count < 0 || full_pixel_count > full_pixel_capacity) {
+        if (threadIdx.x < translation_count) {
+            #pragma unroll
+            for (int rotation_offset = 0;
+                 rotation_offset < kRelionCoarseEulersPerBlock;
+                 ++rotation_offset) {
+                const int64_t rotation = rotation_start + rotation_offset;
+                if (rotation >= rotation_count) continue;
+                atomicAdd(
+                    &output[(batch * rotation_count + rotation) *
+                                translation_count + threadIdx.x],
+                    __int_as_float(0x7fc00000));
+            }
+        }
+        return;
+    }
 
     relion_coarse_diff2_rotation_block_f32(
         reference,
@@ -8047,7 +8067,8 @@ void relion_coarse_diff2_rotation_blocks_f32_kernel(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
-    int64_t full_pixel_count)
+    int64_t full_pixel_capacity,
+    const int32_t* runtime_full_pixel_count)
 {
     const int64_t flat_block = static_cast<int64_t>(blockIdx.x);
     const int64_t batch = flat_block / selected_block_count;
@@ -8061,6 +8082,32 @@ void relion_coarse_diff2_rotation_blocks_f32_kernel(
         (rotation_count + kRelionCoarseEulersPerBlock - 1) /
         kRelionCoarseEulersPerBlock;
     if (source_block < 0 || source_block >= available_blocks) return;
+    const int64_t full_pixel_count = runtime_full_pixel_count == nullptr
+        ? full_pixel_capacity
+        : static_cast<int64_t>(runtime_full_pixel_count[0]);
+    if (full_pixel_count < 0 || full_pixel_count > full_pixel_capacity) {
+        if (threadIdx.x < translation_count) {
+            #pragma unroll
+            for (int rotation_offset = 0;
+                 rotation_offset < kRelionCoarseEulersPerBlock;
+                 ++rotation_offset) {
+                const int64_t source_rotation =
+                    static_cast<int64_t>(source_block) *
+                        kRelionCoarseEulersPerBlock + rotation_offset;
+                if (source_rotation >= rotation_count) continue;
+                const int64_t output_rotation =
+                    selected_block * kRelionCoarseEulersPerBlock +
+                    rotation_offset;
+                atomicAdd(
+                    &output[(batch * selected_block_count *
+                                 kRelionCoarseEulersPerBlock +
+                             output_rotation) * translation_count +
+                            threadIdx.x],
+                    __int_as_float(0x7fc00000));
+            }
+        }
+        return;
+    }
 
     relion_coarse_diff2_rotation_block_f32(
         reference,
@@ -9116,7 +9163,8 @@ cudaError_t launch_relion_coarse_diff2_rectangular_f32(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
-    int64_t full_pixel_count)
+    int64_t full_pixel_capacity,
+    const int32_t* runtime_full_pixel_count)
 {
     const int64_t output_count =
         batch_size * rotation_count * translation_count;
@@ -9154,7 +9202,8 @@ cudaError_t launch_relion_coarse_diff2_rectangular_f32(
             rotation_count,
             translation_count,
             compact_pixel_count,
-            full_pixel_count);
+            full_pixel_capacity,
+            runtime_full_pixel_count);
     return cudaGetLastError();
 }
 
@@ -9172,7 +9221,8 @@ cudaError_t launch_relion_coarse_diff2_rotation_blocks_f32(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
-    int64_t full_pixel_count)
+    int64_t full_pixel_capacity,
+    const int32_t* runtime_full_pixel_count)
 {
     const int64_t output_count =
         batch_size * selected_block_count * kRelionCoarseEulersPerBlock *
@@ -9213,7 +9263,8 @@ cudaError_t launch_relion_coarse_diff2_rotation_blocks_f32(
             rotation_count,
             translation_count,
             compact_pixel_count,
-            full_pixel_count);
+            full_pixel_capacity,
+            runtime_full_pixel_count);
     return cudaGetLastError();
 }
 
@@ -12518,8 +12569,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
-ffi::Error RelionCoarseDiff2RectangularF32Impl(
+ffi::Error RelionCoarseDiff2RectangularF32Common(
     cudaStream_t stream,
+    const ffi::AnyBuffer* runtime_full_pixel_count,
     ffi::AnyBuffer reference,
     ffi::AnyBuffer shifted_image,
     ffi::AnyBuffer weight,
@@ -12536,9 +12588,12 @@ ffi::Error RelionCoarseDiff2RectangularF32Impl(
         output->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
             "RelionCoarseDiff2RectangularF32: weight/initial/output must be F32");
-    if (full_to_compact.element_type() != ffi::DataType::S32)
+    if (full_to_compact.element_type() != ffi::DataType::S32 ||
+        (runtime_full_pixel_count != nullptr &&
+         (runtime_full_pixel_count->element_type() != ffi::DataType::S32 ||
+          runtime_full_pixel_count->dimensions().size() != 0)))
         return ffi::Error::InvalidArgument(
-            "RelionCoarseDiff2RectangularF32: lookup must be S32");
+            "RelionCoarseDiff2RectangularF32: lookup/count must be S32");
 
     const auto reference_dims = reference.dimensions();
     const auto image_dims = shifted_image.dimensions();
@@ -12582,11 +12637,56 @@ ffi::Error RelionCoarseDiff2RectangularF32Impl(
         reference_dims[0],
         image_dims[1],
         reference_dims[1],
-        lookup_dims[0]);
+        lookup_dims[0],
+        runtime_full_pixel_count == nullptr
+            ? nullptr
+            : static_cast<const int32_t*>(
+                  runtime_full_pixel_count->untyped_data()));
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
+}
+
+ffi::Error RelionCoarseDiff2RectangularF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer shifted_image,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionCoarseDiff2RectangularF32Common(
+        stream,
+        nullptr,
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        output);
+}
+
+ffi::Error RelionCoarseDiff2RectangularRuntimeF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer shifted_image,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer logical_full_pixel_count,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionCoarseDiff2RectangularF32Common(
+        stream,
+        &logical_full_pixel_count,
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        output);
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -12601,8 +12701,23 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
-ffi::Error RelionCoarseDiff2RotationBlocksF32Impl(
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCoarseDiff2RectangularRuntimeF32,
+    RelionCoarseDiff2RectangularRuntimeF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionCoarseDiff2RotationBlocksF32Common(
     cudaStream_t stream,
+    const ffi::AnyBuffer* runtime_full_pixel_count,
     ffi::AnyBuffer reference,
     ffi::AnyBuffer shifted_image,
     ffi::AnyBuffer weight,
@@ -12621,9 +12736,12 @@ ffi::Error RelionCoarseDiff2RotationBlocksF32Impl(
         return ffi::Error::InvalidArgument(
             "RelionCoarseDiff2RotationBlocksF32: weight/initial/output must be F32");
     if (rotation_block_ids.element_type() != ffi::DataType::S32 ||
-        full_to_compact.element_type() != ffi::DataType::S32)
+        full_to_compact.element_type() != ffi::DataType::S32 ||
+        (runtime_full_pixel_count != nullptr &&
+         (runtime_full_pixel_count->element_type() != ffi::DataType::S32 ||
+          runtime_full_pixel_count->dimensions().size() != 0)))
         return ffi::Error::InvalidArgument(
-            "RelionCoarseDiff2RotationBlocksF32: block IDs/lookup must be S32");
+            "RelionCoarseDiff2RotationBlocksF32: block IDs/lookup/count must be S32");
 
     const auto reference_dims = reference.dimensions();
     const auto image_dims = shifted_image.dimensions();
@@ -12679,11 +12797,60 @@ ffi::Error RelionCoarseDiff2RotationBlocksF32Impl(
         reference_dims[0],
         image_dims[1],
         reference_dims[1],
-        lookup_dims[0]);
+        lookup_dims[0],
+        runtime_full_pixel_count == nullptr
+            ? nullptr
+            : static_cast<const int32_t*>(
+                  runtime_full_pixel_count->untyped_data()));
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
+}
+
+ffi::Error RelionCoarseDiff2RotationBlocksF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer shifted_image,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer rotation_block_ids,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionCoarseDiff2RotationBlocksF32Common(
+        stream,
+        nullptr,
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        rotation_block_ids,
+        full_to_compact,
+        output);
+}
+
+ffi::Error RelionCoarseDiff2RotationBlocksRuntimeF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer shifted_image,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer rotation_block_ids,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer logical_full_pixel_count,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionCoarseDiff2RotationBlocksF32Common(
+        stream,
+        &logical_full_pixel_count,
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        rotation_block_ids,
+        full_to_compact,
+        output);
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -12691,6 +12858,21 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionCoarseDiff2RotationBlocksF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCoarseDiff2RotationBlocksRuntimeF32,
+    RelionCoarseDiff2RotationBlocksRuntimeF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

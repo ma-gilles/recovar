@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+    plan_coarse_gemm_certificate_topology,
+)
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_indices_np,
     make_stable_fourier_window_shape_plan,
@@ -14,16 +17,13 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     crop_relion_x_half_accumulator,
 )
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
-    plan_coarse_gemm_certificate_topology,
-)
 from recovar.em.dense_single_volume.helpers.significance import (
     _plan_coarse_gaussian_square_layout,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_cuda_fine_full_to_compact_lookup,
     _make_relion_wavg_rectangle,
     _make_stable_relion_wavg_rectangle,
+    _relion_cuda_fine_full_to_compact_lookup,
 )
 from recovar.em.dense_single_volume.shape_buckets import pad_axis
 
@@ -848,6 +848,26 @@ def test_runtime_bpref_ffi_abi_keeps_default_static_target_separate():
     assert "runtime_current_size->untyped_data()" in common
     assert "runtime_current_size != nullptr &&" in cuda_source
     assert "exact_native_ptx_requested || exact_wavg_predecessor_requested" in cuda_source
+
+
+def test_runtime_coarse_ffi_abi_keeps_static_targets_separate():
+    root = Path(__file__).resolve().parents[3]
+    python_source = (root / "recovar" / "cuda_backproject.py").read_text()
+    cuda_source = (root / "recovar" / "cuda" / "cuda_backproject.cu").read_text()
+
+    for stem in ("Rectangular", "RotationBlocks"):
+        assert f"cuda_relion_coarse_diff2_{'rectangular' if stem == 'Rectangular' else 'rotation_blocks'}_runtime_f32" in python_source
+        assert f"RelionCoarseDiff2{stem}F32Common(" in cuda_source
+        assert f"RelionCoarseDiff2{stem}RuntimeF32Impl(" in cuda_source
+        binding_start = cuda_source.index(
+            "XLA_FFI_DEFINE_HANDLER_SYMBOL(\n"
+            f"    RelionCoarseDiff2{stem}RuntimeF32,"
+        )
+        binding = cuda_source[binding_start : binding_start + 800]
+        expected_args = 6 if stem == "Rectangular" else 7
+        assert binding.count(".Arg<ffi::AnyBuffer>()") == expected_args
+    assert "const ffi::AnyBuffer* runtime_full_pixel_count" in cuda_source
+    assert "runtime_full_pixel_count->untyped_data()" in cuda_source
     assert 'denominator[output] = nanf("")' in cuda_source
 
 

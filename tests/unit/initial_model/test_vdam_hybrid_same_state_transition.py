@@ -844,8 +844,10 @@ def _all_optimized_estep_meta(*, enabled: bool) -> dict:
                 "physical_current_size": 88,
                 "logical_square_pixels": 84 * 43,
                 "physical_square_pixels": 88 * 45,
+                "executed_square_pixels": 84 * 43,
                 "logical_issue_stream_is_prefix": True,
                 "physical_tail_zero_weighted": True,
+                "physical_tail_skipped_by_runtime_count": True,
             },
         )
     return {
@@ -948,8 +950,10 @@ def test_all_optimized_stable_pair_profile_keeps_other_seams_on(
         "physical_current_size": 96 if enabled else 84,
         "logical_square_pixels": 84 * 43,
         "physical_square_pixels": (96 * 49) if enabled else (84 * 43),
+        "executed_square_pixels": 84 * 43,
         "logical_issue_stream_is_prefix": True,
         "physical_tail_zero_weighted": True,
+        "physical_tail_skipped_by_runtime_count": enabled,
     }
 
     contract = runner._validate_all_optimized_stable_pair_profiles(

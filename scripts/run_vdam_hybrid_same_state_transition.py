@@ -654,8 +654,12 @@ def _validate_stable_coarse_square_profiles(
             "physical_current_size": physical_size,
             "logical_square_pixels": logical_size * (logical_size // 2 + 1),
             "physical_square_pixels": physical_size * (physical_size // 2 + 1),
+            "executed_square_pixels": logical_size * (logical_size // 2 + 1),
             "logical_issue_stream_is_prefix": True,
             "physical_tail_zero_weighted": True,
+            "physical_tail_skipped_by_runtime_count": bool(
+                enabled and physical_size != logical_size
+            ),
         }
         observed = {field: _json_ready(layout.get(field)) for field in expected}
         if observed != expected:

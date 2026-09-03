@@ -561,8 +561,14 @@ _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF = (
 _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_F32 = (
     "cuda_relion_coarse_diff2_rectangular_f32"
 )
+_TARGET_RELION_COARSE_DIFF2_RECTANGULAR_RUNTIME_F32 = (
+    "cuda_relion_coarse_diff2_rectangular_runtime_f32"
+)
 _TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_F32 = (
     "cuda_relion_coarse_diff2_rotation_blocks_f32"
+)
+_TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_RUNTIME_F32 = (
+    "cuda_relion_coarse_diff2_rotation_blocks_runtime_f32"
 )
 _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32 = (
     "cuda_relion_coarse_diff2_projector_f32"
@@ -698,8 +704,16 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionCoarseDiff2RectangularF32",
     ),
     (
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_RUNTIME_F32,
+        "RelionCoarseDiff2RectangularRuntimeF32",
+    ),
+    (
         _TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_F32,
         "RelionCoarseDiff2RotationBlocksF32",
+    ),
+    (
+        _TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_RUNTIME_F32,
+        "RelionCoarseDiff2RotationBlocksRuntimeF32",
     ),
     (
         _TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32,
@@ -2604,6 +2618,78 @@ def relion_coarse_diff2_rectangular_f32(
 
 
 @jax.jit
+def relion_coarse_diff2_rectangular_runtime_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    logical_full_pixel_count: jax.Array,
+) -> jax.Array:
+    """Evaluate a stable-capacity coarse table over its logical pixel prefix.
+
+    The array shapes and lookup capacity remain static while the scalar logical
+    count limits the CUDA traversal.  This preserves the exact RELION lane
+    assignment and avoids executing zero-weight capacity rows.
+    """
+
+    logical_full_pixel_count = jnp.asarray(
+        logical_full_pixel_count,
+        dtype=jnp.int32,
+    )
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    if initial_diff2.dtype != jnp.float32:
+        raise TypeError(
+            f"initial_diff2 must be float32, got {initial_diff2.dtype}"
+        )
+    if logical_full_pixel_count.shape != ():
+        raise ValueError("logical_full_pixel_count must be an int32 scalar")
+    if reference.ndim != 2 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "runtime rectangular coarse diff2 expects reference rank 2, "
+            f"shifted rank 3, and weight rank 2, got {reference.shape}, "
+            f"{shifted_image.shape}, {weight.shape}"
+        )
+    if (
+        shifted_image.shape[0] != weight.shape[0]
+        or reference.shape[1] != shifted_image.shape[2]
+        or reference.shape[1] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[0] <= 0
+        or shifted_image.shape[1] <= 0
+        or shifted_image.shape[1] > 128
+        or initial_diff2.shape != (shifted_image.shape[0],)
+    ):
+        raise ValueError(
+            "runtime rectangular coarse diff2 operands have inconsistent "
+            f"shapes or more than 128 translations: {reference.shape}, "
+            f"{shifted_image.shape}, {weight.shape}"
+        )
+    out_type = jax.ShapeDtypeStruct(
+        (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_RUNTIME_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        logical_full_pixel_count,
+    )
+
+
+@jax.jit
 def relion_coarse_diff2_rotation_blocks_f32(
     reference: jax.Array,
     shifted_image: jax.Array,
@@ -2693,6 +2779,90 @@ def relion_coarse_diff2_rotation_blocks_f32(
         initial_diff2,
         rotation_block_ids,
         full_to_compact,
+    )
+
+
+@jax.jit
+def relion_coarse_diff2_rotation_blocks_runtime_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    rotation_block_ids: jax.Array,
+    full_to_compact: jax.Array,
+    logical_full_pixel_count: jax.Array,
+) -> jax.Array:
+    """Rescore source-16 blocks over a dynamic logical pixel prefix."""
+
+    logical_full_pixel_count = jnp.asarray(
+        logical_full_pixel_count,
+        dtype=jnp.int32,
+    )
+    if initial_diff2.dtype != jnp.float32:
+        raise TypeError(
+            f"initial_diff2 must be float32, got {initial_diff2.dtype}"
+        )
+    if rotation_block_ids.dtype != jnp.int32:
+        raise TypeError(
+            "rotation_block_ids must be int32, got "
+            f"{rotation_block_ids.dtype}"
+        )
+    if logical_full_pixel_count.shape != ():
+        raise ValueError("logical_full_pixel_count must be an int32 scalar")
+    if (
+        reference.ndim != 2
+        or shifted_image.ndim != 3
+        or weight.ndim != 2
+        or rotation_block_ids.ndim != 2
+    ):
+        raise ValueError(
+            "runtime rotation-block coarse diff2 operands have invalid ranks"
+        )
+    if (
+        shifted_image.shape[0] != weight.shape[0]
+        or rotation_block_ids.shape[0] != shifted_image.shape[0]
+        or reference.shape[1] != shifted_image.shape[2]
+        or reference.shape[1] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[0] <= 0
+        or shifted_image.shape[1] <= 0
+        or shifted_image.shape[1] > 128
+        or rotation_block_ids.shape[1] <= 0
+        or initial_diff2.shape != (shifted_image.shape[0],)
+    ):
+        raise ValueError(
+            "runtime rotation-block coarse diff2 operands have inconsistent "
+            f"shapes or counts: {reference.shape}, {shifted_image.shape}, "
+            f"{weight.shape}, {initial_diff2.shape}, {rotation_block_ids.shape}"
+        )
+    _validate_relion_fine_diff2_inputs(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+    )
+    out_type = jax.ShapeDtypeStruct(
+        (
+            shifted_image.shape[0],
+            rotation_block_ids.shape[1],
+            16,
+            shifted_image.shape[1],
+        ),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_RUNTIME_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        rotation_block_ids,
+        full_to_compact,
+        logical_full_pixel_count,
     )
 
 

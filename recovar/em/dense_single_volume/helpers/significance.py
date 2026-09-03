@@ -1596,6 +1596,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     block_capacity: int = DEFAULT_ROTATION_BLOCK_CAPACITY,
     compact_posterior: bool = False,
     force_static_dense_after_overflow: bool = False,
+    logical_full_pixel_count=None,
 ) -> CoarseGaussianGemmHybridBatchResult:
     """Certify, exactly rescore, and restore one K=1 coarse score table.
 
@@ -1731,13 +1732,18 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         )
     fallback_reason = selection.fallback_reason
     if selection.eligible:
+        selected_rescore_kwargs = {"topology": topology}
+        if logical_full_pixel_count is not None:
+            selected_rescore_kwargs["logical_full_pixel_count"] = (
+                logical_full_pixel_count
+            )
         selected_diff2 = _relion_coarse_diff2_rotation_blocks_from_topology_f32(
             cache[0],
             shifted,
             weight,
             initial,
             jnp.asarray(selection.block_ids, dtype=jnp.int32),
-            topology=topology,
+            **selected_rescore_kwargs,
         )
         assemble = (
             assemble_coarse_gemm_hybrid_compact_scores_f32
@@ -1782,13 +1788,22 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     elif score_representation != "dense_full_direct_static_capacity":
         score_representation = "dense_full_direct_dynamic_fallback"
 
-    full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+    full_operands = (
         cache[0],
         shifted,
         weight,
         initial,
         jnp.asarray(topology.full_to_compact),
     )
+    if logical_full_pixel_count is None:
+        full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+            *full_operands,
+        )
+    else:
+        full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_runtime_f32(
+            *full_operands,
+            jnp.asarray(logical_full_pixel_count, dtype=jnp.int32),
+        )
     raw_scores = -full_diff2
     return CoarseGaussianGemmHybridBatchResult(
         scores=raw_scores,
@@ -6668,6 +6683,11 @@ def _compute_k_class_significance_batched(
                     force_static_dense_after_overflow=(
                         force_static_dense_after_overflow
                     ),
+                    logical_full_pixel_count=(
+                        coarse_gaussian_square_layout.logical_square_count
+                        if stable_fourier_window_shapes
+                        else None
+                    ),
                 )
             )
             coarse_gaussian_gemm_hybrid_batch_count += 1
@@ -7926,8 +7946,18 @@ def _compute_k_class_significance_batched(
             "physical_square_pixels": int(
                 coarse_gaussian_square_layout.physical_square_count
             ),
+            "executed_square_pixels": int(
+                coarse_gaussian_square_layout.logical_square_count
+                if stable_fourier_window_shapes
+                else coarse_gaussian_square_layout.physical_square_count
+            ),
             "logical_issue_stream_is_prefix": True,
             "physical_tail_zero_weighted": True,
+            "physical_tail_skipped_by_runtime_count": bool(
+                stable_fourier_window_shapes
+                and coarse_gaussian_square_layout.physical_square_count
+                != coarse_gaussian_square_layout.logical_square_count
+            ),
         }
     if exact_coarse_assembly_profile_enabled:
         full_stats["exact_coarse_operand_assembly"] = {

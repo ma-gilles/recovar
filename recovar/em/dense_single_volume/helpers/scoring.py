@@ -228,6 +228,7 @@ def _relion_coarse_diff2_rotation_blocks_from_topology_f32(
     rotation_block_ids,
     *,
     topology,
+    logical_full_pixel_count=None,
 ):
     """Rescore source16 blocks using only the certificate-owned lookup.
 
@@ -305,13 +306,24 @@ def _relion_coarse_diff2_rotation_blocks_from_topology_f32(
             "certificate topology does not match selected source-16 operands",
         )
 
-    return cuda_backproject.relion_coarse_diff2_rotation_blocks_f32(
+    scorer = (
+        cuda_backproject.relion_coarse_diff2_rotation_blocks_f32
+        if logical_full_pixel_count is None
+        else cuda_backproject.relion_coarse_diff2_rotation_blocks_runtime_f32
+    )
+    operands = (
         reference,
         shifted_image,
         weight,
         initial_diff2,
         rotation_block_ids,
         jnp.asarray(topology.full_to_compact),
+    )
+    if logical_full_pixel_count is None:
+        return scorer(*operands)
+    return scorer(
+        *operands,
+        jnp.asarray(logical_full_pixel_count, dtype=jnp.int32),
     )
 
 

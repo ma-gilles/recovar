@@ -37,10 +37,12 @@ from recovar.em.dense_single_volume.helpers.flat_local_rows import (
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM,
-    STABLE_FOURIER_WINDOW_QUANTUM_ENV,
     centered_half_indices_to_fftw_half_indices,
     make_stable_fourier_window_shape_plan,
     stable_fourier_window_quantum,
+)
+from recovar.em.dense_single_volume.helpers.fourier_window import (
+    STABLE_FOURIER_WINDOW_QUANTUM_ENV as STABLE_FOURIER_WINDOW_QUANTUM_ENV,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
