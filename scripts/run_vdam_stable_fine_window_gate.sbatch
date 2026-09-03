@@ -73,6 +73,7 @@ export RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1
 if [[ "${RUN_GPU_PYTEST}" == 1 ]]; then
   "${PIXI_PY}" -m pytest --run-gpu -q \
     tests/unit/test_cuda_relion_fine_diff2.py::test_relion_runtime_cutoff_fine_diff2_matches_static_paths_and_reuses_compile \
+    tests/unit/test_cuda_relion_fine_diff2.py::test_relion_runtime_flat_rows_match_shared_rectangular_tree_and_reuse_compile \
     | tee "${OUTPUT_ROOT}/analysis/gpu_pytest.txt"
 fi
 
