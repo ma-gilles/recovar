@@ -154,6 +154,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         runner._arm_order("exact_compact_preprocess")
         == runner.EXACT_COMPACT_PREPROCESS_ARM_ORDER
     )
+    assert (
+        runner._arm_order("fused_pair_fine_score")
+        == runner.FUSED_PAIR_FINE_SCORE_ARM_ORDER
+    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -208,6 +212,14 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     compact_preprocess_on = runner._candidate_environment(
         "exact_compact_preprocess",
+        enabled=True,
+    )
+    pair_fine_off = runner._candidate_environment(
+        "fused_pair_fine_score",
+        enabled=False,
+    )
+    pair_fine_on = runner._candidate_environment(
+        "fused_pair_fine_score",
         enabled=True,
     )
 
@@ -293,7 +305,19 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert compact_packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
     assert compact_packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
     assert all(value == "0" for value in all_optimized_control.values())
-    assert all(value == "1" for value in all_optimized.values())
+    assert all(all_optimized[name] == "1" for name in runner.HYBRID_ENVIRONMENT)
+    for name in (
+        runner.COMPACT_POSTERIOR_ENVIRONMENT,
+        runner.FLAT_ROW_ENVIRONMENT,
+        runner.STABLE_FLAT_CAPACITY_ENVIRONMENT,
+        runner.PACKED_PROJECTION_ENVIRONMENT,
+        runner.PACKED_DEFERRED_ENVIRONMENT,
+        runner.PACKED_FINAL_NOISE_ENVIRONMENT,
+    ):
+        assert all_optimized[name] == "1"
+    assert all_optimized[runner.EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] == "0"
+    assert all_optimized[runner.EXACT_COMPACT_PREPROCESS_ENVIRONMENT] == "0"
+    assert all_optimized[runner.FUSED_PAIR_FINE_SCORE_ENVIRONMENT] == "0"
     assert runner.HYBRID_IMAGE_BATCH_ENVIRONMENT not in all_optimized_control
     assert runner.HYBRID_IMAGE_BATCH_ENVIRONMENT not in all_optimized
     assert runner._candidate_uses_hybrid("compact_posterior") is True
@@ -357,11 +381,18 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         for key, value in single_translate_on.items()
         if key != isolated_environment
     }
-    assert all(
-        value == "1"
-        for key, value in single_translate_on.items()
-        if key != isolated_environment
-    )
+    for key in (
+        *runner.HYBRID_ENVIRONMENT,
+        runner.COMPACT_POSTERIOR_ENVIRONMENT,
+        runner.FLAT_ROW_ENVIRONMENT,
+        runner.STABLE_FLAT_CAPACITY_ENVIRONMENT,
+        runner.PACKED_PROJECTION_ENVIRONMENT,
+        runner.PACKED_DEFERRED_ENVIRONMENT,
+        runner.PACKED_FINAL_NOISE_ENVIRONMENT,
+    ):
+        assert single_translate_on[key] == "1"
+    assert single_translate_on[runner.EXACT_COMPACT_PREPROCESS_ENVIRONMENT] == "0"
+    assert single_translate_on[runner.FUSED_PAIR_FINE_SCORE_ENVIRONMENT] == "0"
     assert not runner._arm_candidate_enabled(
         "single_translate_off_1",
         "exact_coarse_single_translate",
@@ -391,6 +422,27 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert runner._arm_candidate_enabled(
         "compact_preprocess_on_1",
         "exact_compact_preprocess",
+    )
+    pair_environment = runner.FUSED_PAIR_FINE_SCORE_ENVIRONMENT
+    assert pair_fine_off[runner.EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] == "1"
+    assert pair_fine_off[runner.EXACT_COMPACT_PREPROCESS_ENVIRONMENT] == "1"
+    assert pair_fine_off[pair_environment] == "0"
+    assert pair_fine_on[pair_environment] == "1"
+    assert {
+        key: value for key, value in pair_fine_off.items() if key != pair_environment
+    } == {
+        key: value for key, value in pair_fine_on.items() if key != pair_environment
+    }
+    assert runner._candidate_uses_hybrid("fused_pair_fine_score") is True
+    assert runner._candidate_uses_compact_posterior("fused_pair_fine_score") is True
+    assert runner._candidate_uses_packed_deferred("fused_pair_fine_score") is True
+    assert not runner._arm_candidate_enabled(
+        "pair_fine_off_1",
+        "fused_pair_fine_score",
+    )
+    assert runner._arm_candidate_enabled(
+        "pair_fine_on_1",
+        "fused_pair_fine_score",
     )
 
 
@@ -737,6 +789,60 @@ def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None
     assert composed["packed_final_noise"]["enabled"] is False
 
 
+def _fused_pair_fine_meta(*, enabled: bool) -> dict:
+    meta = _all_optimized_estep_meta(enabled=True)
+    meta["requested_fused_pair_fine_score"] = enabled
+    meta["effective_fused_pair_fine_score"] = enabled
+    profile = meta["halfset_0_profile_summary"]
+    profile.update(
+        fused_pair_fine_score_enabled=enabled,
+        fused_pair_fine_score_default_enabled=False,
+        fused_pair_fine_uses_shared_compact_order=enabled,
+        fused_pair_fine_avoids_pair_pixel_gathers=enabled,
+        fused_pair_fine_restores_dense_posterior_order=enabled,
+        chunk_fused_pair_capacities=[5000, 5000] if enabled else [],
+        chunk_fused_pair_counts=[7000, 8000] if enabled else [],
+        chunk_fused_pair_dense_capacities=[5_000_000, 5_000_000]
+        if enabled
+        else [],
+        sum_fused_pair_candidates=15_000 if enabled else 0,
+        sum_fused_pair_capacity=2_000_000 if enabled else 0,
+        sum_fused_pair_dense_capacity=10_000_000 if enabled else 0,
+        fused_pair_valid_fraction_of_dense=0.0015 if enabled else 0.0,
+        fused_pair_padded_fraction_of_dense=0.2 if enabled else 0.0,
+    )
+    return meta
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_fused_pair_fine_profile_proves_shared_compact_execution(
+    enabled: bool,
+) -> None:
+    contract = runner._validate_fused_pair_fine_profiles(
+        _fused_pair_fine_meta(enabled=enabled),
+        enabled=enabled,
+        label="arm",
+    )
+
+    assert contract["profile_exact"] is True
+    assert contract["enabled"] is enabled
+    assert contract["pair_pixel_gathers_materialized"] is False
+    assert contract["compile_shape_capacity_family_count"] == (1 if enabled else 0)
+    assert contract["sum_candidates"] == (15_000 if enabled else 0)
+
+
+def test_fused_pair_fine_profile_fails_closed_on_candidate_geometry() -> None:
+    meta = _fused_pair_fine_meta(enabled=True)
+    meta["halfset_0_profile_summary"]["sum_fused_pair_capacity"] = 10_000
+
+    with pytest.raises(RuntimeError, match="invalid fused-pair totals"):
+        runner._validate_fused_pair_fine_profiles(
+            meta,
+            enabled=True,
+            label="arm",
+        )
+
+
 def _exact_coarse_single_translate_meta(*, enabled: bool) -> dict:
     meta = _all_optimized_estep_meta(enabled=True)
     batch_count = meta["halfset_0_profile_summary"][
@@ -1036,6 +1142,7 @@ def _science_pair(normalized_l2: float) -> dict:
                 "class_assignments",
                 "best_pose_translations",
                 "significant_counts",
+                "cutoff_counts",
             )
         },
         "support_audits": {"exact_equal": True},
@@ -1247,6 +1354,119 @@ def test_exact_compact_preprocess_runtime_contract_is_balanced_and_isolated() ->
         "profile_free_wall_timing": True,
         "profile_counter_device_synchronization": False,
     }
+
+
+def _cache_state(count: int) -> dict:
+    counts = {
+        family: (count if family == "jit_run_local_bucket_big_jit" else 0)
+        for family in runner.PERSISTENT_CACHE_TARGET_FAMILIES
+    }
+    return {
+        "available": True,
+        "root": "/tmp/cache",
+        "file_count": count,
+        "bytes": count * 10,
+        "target_family_counts": counts,
+        "target_family_bytes": {family: value * 10 for family, value in counts.items()},
+    }
+
+
+def test_fused_pair_fine_runtime_contract_is_warmed_balanced_and_isolated() -> None:
+    arms = {}
+    for index, label in enumerate(runner.FUSED_PAIR_FINE_SCORE_ARM_ORDER):
+        enabled = "_on_" in label
+        requested = runner._candidate_environment(
+            "fused_pair_fine_score",
+            enabled=enabled,
+        )
+        cache_state = _cache_state(7)
+        cache = {
+            "before": cache_state,
+            "after": cache_state,
+            "delta": runner._persistent_cache_delta(cache_state, cache_state),
+        }
+        performance = {
+            "pass1_time_s": 0.4 + index * 0.001,
+            "pass2_time_s": (0.5 if enabled else 0.8) + index * 0.001,
+            "local_em_time_s": (0.4 if enabled else 0.7) + index * 0.001,
+            "local_big_jit_bucket_s": (0.2 if enabled else 0.5) + index * 0.001,
+            "local_pack_s": 0.01,
+            "local_noise_s": 0.05,
+            "local_postprocess_s": 0.01,
+            "local_final_accumulator_s": 0.02,
+            "local_unattributed_em_time_s": 0.01,
+        }
+        arms[label] = {
+            "wall_s": (0.75 if enabled else 1.0) + index * 0.001,
+            "performance_summary": performance,
+            "persistent_cache": cache,
+            "execution_contract": {
+                "requested_environment": requested,
+                "fused_pair_fine_score": {
+                    "enabled": enabled,
+                    "profile_exact": True,
+                },
+            },
+        }
+
+    contract = runner._fused_pair_fine_runtime_contract(arms)
+
+    assert contract["pair_off"]["repeat_count"] == 2
+    assert contract["pair_on"]["repeat_count"] == 2
+    assert contract["pair_on_vs_pair_off"]["wall_s"]["speedup"] > 1.05
+    assert contract["material_speedup_passed"] is True
+    assert contract["persistent_cache_contract"][
+        "timed_arms_add_no_target_family_programs_after_prewarm"
+    ] is True
+    assert contract["isolated_environment_contract"]["only_difference"] == (
+        runner.FUSED_PAIR_FINE_SCORE_ENVIRONMENT
+    )
+
+
+def test_persistent_cache_snapshot_counts_selected_local_families(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    family = "jit_run_local_bucket_big_jit"
+    (tmp_path / f"{family}-{'a' * 64}-cache").write_bytes(b"1234")
+    (tmp_path / f"{family}-{'b' * 64}-cache").write_bytes(b"12")
+    (tmp_path / f"jit_unrelated-{'c' * 64}-cache").write_bytes(b"1")
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(tmp_path))
+
+    snapshot = runner._persistent_cache_snapshot()
+
+    assert snapshot["available"] is True
+    assert snapshot["file_count"] == 3
+    assert snapshot["target_family_counts"][family] == 2
+    assert snapshot["target_family_bytes"][family] == 6
+
+
+def test_gpu_memory_report_attributes_samples_to_arm_windows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monitor = tmp_path / "gpu.csv"
+    monitor.write_text(
+        "timestamp, index, name, uuid, memory.used [MiB], memory.total [MiB], utilization.gpu [%]\n"
+        "2026/09/03 12:00:00.000, 0, H100, GPU-x, 100 MiB, 81559 MiB, 20 %\n"
+        "2026/09/03 12:00:01.000, 0, H100, GPU-x, 120 MiB, 81559 MiB, 80 %\n"
+    )
+    monkeypatch.setenv(runner.GPU_MONITOR_ENVIRONMENT, str(monitor))
+    start = runner.dt.datetime(2026, 9, 3, 12, 0, 0).timestamp()
+    report = runner._gpu_memory_report(
+        {
+            "arm": {
+                "wall_clock_started_epoch_s": start,
+                "wall_clock_ended_epoch_s": start + 1.1,
+            },
+        },
+    )
+
+    assert report["available"] is True
+    assert report["all_arms_sampled"] is True
+    assert report["arms"]["arm"]["sample_count"] == 2
+    assert report["arms"]["arm"]["peak_memory_used_mib"] == 120
+    assert report["arms"]["arm"]["peak_utilization_percent"] == 80
 
 
 def test_arm_performance_summary_exposes_compact_table_geometry() -> None:
@@ -1461,6 +1681,10 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         "compact_preprocess_on_2,compact_preprocess_off_2"
         in sbatch
     )
+    assert (
+        "pair_fine_off_1,pair_fine_on_1,pair_fine_on_2,pair_fine_off_2"
+        in sbatch
+    )
     assert "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE" in source
     assert "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS" in source
     assert "profile_free_wall_timing" in sbatch
@@ -1469,6 +1693,11 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "exact_source_preprocess_count" in sbatch
     assert "generic_full_translation_count" in sbatch
     assert "raise_before_generic_score_fallback" in sbatch
+    assert "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE" in source
+    assert "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE=0" in sbatch
+    assert "timed_arms_add_no_target_family_programs_after_prewarm" in sbatch
+    assert "pair_pixel_gathers_materialized == false" in sbatch
+    assert "stdbuf -oL nvidia-smi" in sbatch
     assert "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR=0" in sbatch
     assert ".compact_effective == true" in sbatch
     assert ".packed_deferred_effective == true" in sbatch

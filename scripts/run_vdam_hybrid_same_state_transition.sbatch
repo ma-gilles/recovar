@@ -108,6 +108,9 @@ case "${CANDIDATE_MODE}" in
   exact_compact_preprocess)
     expected_arm_order=compact_preprocess_off_1,compact_preprocess_on_1,compact_preprocess_on_2,compact_preprocess_off_2
     ;;
+  fused_pair_fine_score)
+    expected_arm_order=pair_fine_off_1,pair_fine_on_1,pair_fine_on_2,pair_fine_off_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -188,6 +191,7 @@ sha256sum \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/flat_local_rows.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/fourier_window.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/significance.py" \
+  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_backprojection.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_big_jit.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_em_engine.py" \
@@ -195,6 +199,7 @@ sha256sum \
   "${REPO_ROOT}/recovar/em/initial_model/driver.py" \
   "${REPO_ROOT}/recovar/em/initial_model/iteration_loop.py" \
   "${REPO_ROOT}/recovar/cuda/cuda_backproject.cu" \
+  "${REPO_ROOT}/recovar/cuda_backproject.py" \
   "${ACCEPTANCE}" "${LAUNCH_MANIFEST}" "${PIXI_PY}" "${CUDA_BINARY}" \
   "${RELION_BIND_BINARY}" "${CUSPARSE_LIBRARY}" "${FIXTURE}/particles.star" \
   "${FIXTURE}/particles.128.mrcs" > "${PROVENANCE}/static_inputs.sha256"
@@ -232,6 +237,10 @@ command=(
   "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION=0"
   "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM=0"
   "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE=0"
+  "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS=0"
+  "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS=0"
+  "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE=0"
+  "RECOVAR_SAME_STATE_GPU_MONITOR_CSV=${PROVENANCE}/gpu_monitor.csv"
   "TMPDIR=${RUNTIME}/tmp"
   "PIXI_HOME=${RUNTIME}/pixi_home"
   "RATTLER_CACHE_DIR=${RUNTIME}/rattler_cache"
@@ -255,7 +264,7 @@ env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 
 mkdir -p "${RUNTIME}/jax_cache"
 touch "${RUNTIME}/jax_cache/SAFE_TO_DELETE"
-nvidia-smi -i "${selected_gpu_uuid}" \
+stdbuf -oL nvidia-smi -i "${selected_gpu_uuid}" \
   --query-gpu=timestamp,index,name,uuid,memory.used,memory.total,utilization.gpu \
   --format=csv -l 1 > "${PROVENANCE}/gpu_monitor.csv" &
 monitor_pid=$!
@@ -273,7 +282,7 @@ find "${RUNTIME}/jax_cache" -maxdepth 1 -type f -name '*-cache' -printf '%f\n' \
   | LC_ALL=C sort | uniq -c | sort -nr \
   > "${PROVENANCE}/jax_cache_name_counts.txt"
 grep -E \
-  'coarse|prepare_relion|assemble_coarse|update_logsumexp|posterior|translate_score|gather|where|take_along_axis' \
+  'coarse|prepare_relion|assemble_coarse|update_logsumexp|posterior|translate_score|run_local_bucket_big_jit|fine_diff2_fused_translate_runtime_(flat_rows|pairs)|relion_vdam_mstep_fused_projector|gather|where|take_along_axis' \
   "${PROVENANCE}/jax_cache_name_counts.txt" \
   > "${PROVENANCE}/pass1_jax_cache_name_counts.txt" || true
 
@@ -498,6 +507,78 @@ if [[ "${CANDIDATE_MODE}" == exact_compact_preprocess ]]; then
        and .generic_fallback_policy == "raise_before_generic_score_fallback"
        and .translate_score_call_count == .batch_count] | all
   ' "${SCIENCE}/report.json" >/dev/null
+fi
+if [[ "${CANDIDATE_MODE}" == fused_pair_fine_score ]]; then
+  test "$(jq -r '.prewarm | keys | join(",")' "${SCIENCE}/report.json")" = \
+    pair_off,pair_on
+  test "$(jq -r '.same_state_contract.baseline_trajectory_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_fused_pair_fine_score_off
+  test "$(jq -r '.same_state_contract.candidate_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_fused_pair_fine_score_on
+  jq -e '
+    .compact_science_contract.hard_exact_contract_passed == true
+      and .fused_pair_fine_atomic_contract_passed == true
+      and .compact_science_contract.atomic_repeat_envelope_passed == true
+      and .compact_science_contract.accumulator_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .compact_science_contract.scalar_meta_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .compact_science_contract.final_state_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .same_state_contract.both_compared_backends_prewarmed == true
+      and .same_state_contract.all_optimized_profile_fail_closed == true
+      and .same_state_contract.fused_pair_fine_score_profile_fail_closed == true
+      and .same_state_contract.persistent_cache_family_counts_recorded == true
+      and .same_state_contract.gpu_hbm_samples_recorded == true
+      and .gpu_memory.available == true
+      and .gpu_memory.all_arms_sampled == true
+      and .fused_pair_fine_runtime_contract.pair_off.repeat_count == 2
+      and .fused_pair_fine_runtime_contract.pair_on.repeat_count == 2
+      and .fused_pair_fine_runtime_contract.material_speedup_passed == true
+      and .fused_pair_fine_runtime_contract.persistent_cache_contract.timed_arms_add_no_target_family_programs_after_prewarm == true
+      and ([.fused_pair_fine_runtime_contract.pair_off.measurements[],
+            .fused_pair_fine_runtime_contract.pair_on.measurements[]]
+           | all(length == 2 and all(. >= 0)))
+      and .fused_pair_fine_runtime_contract.isolated_environment_contract.all_other_environment_exact == true
+      and .fused_pair_fine_runtime_contract.isolated_environment_contract.profile_free_wall_timing == true
+      and .fused_pair_fine_runtime_contract.isolated_environment_contract.profile_counter_device_synchronization == false
+      and .prewarm.pair_off.fused_pair_fine_score.profile_exact == true
+      and .prewarm.pair_off.fused_pair_fine_score.enabled == false
+      and .prewarm.pair_on.fused_pair_fine_score.profile_exact == true
+      and .prewarm.pair_on.fused_pair_fine_score.enabled == true
+      and .prewarm.pair_on.fused_pair_fine_score.compile_shape_capacity_family_count > 0
+  ' "${SCIENCE}/report.json" >/dev/null
+  for arm in pair_fine_off_1 pair_fine_off_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == false
+        and .execution_contract.all_optimized.enabled == true
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.fused_pair_fine_score.enabled == false
+        and .execution_contract.fused_pair_fine_score.profile_exact == true
+        and .execution_contract.fused_pair_fine_score.compile_shape_capacity_family_count == 0
+        and .persistent_cache.delta.no_new_target_family_programs == true
+        and .gpu_memory.sample_count > 0
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in pair_fine_on_1 pair_fine_on_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == true
+        and .execution_contract.all_optimized.enabled == true
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.fused_pair_fine_score.enabled == true
+        and .execution_contract.fused_pair_fine_score.profile_exact == true
+        and .execution_contract.fused_pair_fine_score.shared_compact_pair_order == true
+        and .execution_contract.fused_pair_fine_score.pair_pixel_gathers_materialized == false
+        and .execution_contract.fused_pair_fine_score.dense_posterior_order_restored == true
+        and .execution_contract.fused_pair_fine_score.compile_shape_capacity_family_count > 0
+        and .execution_contract.fused_pair_fine_score.sum_candidates > 0
+        and .execution_contract.fused_pair_fine_score.sum_candidates <= .execution_contract.fused_pair_fine_score.sum_capacity
+        and .execution_contract.fused_pair_fine_score.sum_capacity <= .execution_contract.fused_pair_fine_score.sum_dense_capacity
+        and .persistent_cache.delta.no_new_target_family_programs == true
+        and .gpu_memory.sample_count > 0
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
 fi
 if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
   test "$(jq -r '.prewarm | keys | join(",")' "${SCIENCE}/report.json")" = \

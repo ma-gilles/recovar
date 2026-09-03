@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import dataclasses
+import datetime as dt
 import gc
 import hashlib
 import json
@@ -138,6 +140,12 @@ EXACT_COMPACT_PREPROCESS_ARM_ORDER = (
     "compact_preprocess_on_2",
     "compact_preprocess_off_2",
 )
+FUSED_PAIR_FINE_SCORE_ARM_ORDER = (
+    "pair_fine_off_1",
+    "pair_fine_on_1",
+    "pair_fine_on_2",
+    "pair_fine_off_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
@@ -163,6 +171,14 @@ EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT = (
 EXACT_COMPACT_PREPROCESS_ENVIRONMENT = (
     "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS"
 )
+FUSED_PAIR_FINE_SCORE_ENVIRONMENT = "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"
+GPU_MONITOR_ENVIRONMENT = "RECOVAR_SAME_STATE_GPU_MONITOR_CSV"
+PERSISTENT_CACHE_TARGET_FAMILIES = (
+    "jit_run_local_bucket_big_jit",
+    "jit_relion_fine_diff2_fused_translate_runtime_flat_rows_f32",
+    "jit_relion_fine_diff2_fused_translate_runtime_pairs_f32",
+    "jit_relion_vdam_mstep_fused_projector_x_half",
+)
 HYBRID_IMAGE_BATCH_CONTROL_REQUEST = 110
 HYBRID_IMAGE_BATCH_CANDIDATE_REQUEST = 500
 HYBRID_IMAGE_BATCH_CONTROL_EFFECTIVE = 110
@@ -185,6 +201,7 @@ CANDIDATE_MODES = (
     "all_optimized",
     "exact_coarse_single_translate",
     "exact_compact_preprocess",
+    "fused_pair_fine_score",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -259,6 +276,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
     if candidate_mode == "exact_compact_preprocess":
         return EXACT_COMPACT_PREPROCESS_ARM_ORDER
+    if candidate_mode == "fused_pair_fine_score":
+        return FUSED_PAIR_FINE_SCORE_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -271,10 +290,14 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         PACKED_PROJECTION_ENVIRONMENT: "0",
         PACKED_DEFERRED_ENVIRONMENT: "0",
         PACKED_FINAL_NOISE_ENVIRONMENT: "0",
+        EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT: "0",
+        EXACT_COMPACT_PREPROCESS_ENVIRONMENT: "0",
+        FUSED_PAIR_FINE_SCORE_ENVIRONMENT: "0",
     }
     if candidate_mode in {
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
+        "fused_pair_fine_score",
     }:
         values.update({name: "1" for name in HYBRID_ENVIRONMENT})
         values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
@@ -288,10 +311,13 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
             values[EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] = (
                 "1" if enabled else "0"
             )
-        else:
+        elif candidate_mode == "exact_compact_preprocess":
             values[EXACT_COMPACT_PREPROCESS_ENVIRONMENT] = (
                 "1" if enabled else "0"
             )
+        else:
+            values[EXACT_COMPACT_PREPROCESS_ENVIRONMENT] = "1"
+            values[FUSED_PAIR_FINE_SCORE_ENVIRONMENT] = "1" if enabled else "0"
         return values
     if candidate_mode == "stable_shapes":
         values.update({name: "1" for name in HYBRID_ENVIRONMENT})
@@ -361,6 +387,7 @@ def _candidate_uses_hybrid(candidate_mode: str) -> bool:
         "all_optimized",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
+        "fused_pair_fine_score",
     }
 
 
@@ -371,6 +398,7 @@ def _candidate_uses_compact_posterior(candidate_mode: str) -> bool:
         "all_optimized",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
+        "fused_pair_fine_score",
     }
 
 
@@ -380,6 +408,7 @@ def _candidate_uses_packed_deferred(candidate_mode: str) -> bool:
         "all_optimized",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
+        "fused_pair_fine_score",
     }
 
 
@@ -391,6 +420,7 @@ def _arm_candidate_enabled(label: str, candidate_mode: str) -> bool:
     if candidate_mode in {
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
+        "fused_pair_fine_score",
     }:
         return "_on_" in label
     return not label.startswith("direct")
@@ -823,6 +853,150 @@ def _validate_exact_compact_preprocess_profiles(
     }
 
 
+def _validate_fused_pair_fine_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+) -> dict[str, Any]:
+    """Prove the shared compact-pair ABI reached every exact-local profile."""
+
+    for key in (
+        "requested_fused_pair_fine_score",
+        "effective_fused_pair_fine_score",
+    ):
+        if key not in estep_meta:
+            raise RuntimeError(f"{label} did not report {key}")
+        if bool(estep_meta[key]) != bool(enabled):
+            raise RuntimeError(
+                f"{label} reported {key}={estep_meta[key]!r}, expected {enabled!r}",
+            )
+
+    expected_flags = {
+        "fused_pair_fine_score_enabled": bool(enabled),
+        "fused_pair_fine_score_default_enabled": False,
+        "fused_pair_fine_uses_shared_compact_order": bool(enabled),
+        "fused_pair_fine_avoids_pair_pixel_gathers": bool(enabled),
+        "fused_pair_fine_restores_dense_posterior_order": bool(enabled),
+    }
+    profiles: dict[str, Any] = {}
+    capacity_families: set[int] = set()
+    total_candidates = 0
+    total_capacity = 0
+    total_dense_capacity = 0
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict) or "chunk_padded_rotations" not in value:
+            continue
+        missing = [field for field in expected_flags if field not in value]
+        if missing:
+            raise RuntimeError(
+                f"{label} profile {key} omitted fused-pair flags {missing}",
+            )
+        observed_flags = {field: bool(value[field]) for field in expected_flags}
+        for field, expected in expected_flags.items():
+            if observed_flags[field] is not expected:
+                raise RuntimeError(
+                    f"{label} profile {key} reported {field}="
+                    f"{observed_flags[field]!r}, expected {expected!r}",
+                )
+
+        array_fields = (
+            "chunk_fused_pair_capacities",
+            "chunk_fused_pair_counts",
+            "chunk_fused_pair_dense_capacities",
+        )
+        missing = [field for field in array_fields if field not in value]
+        if missing:
+            raise RuntimeError(
+                f"{label} profile {key} omitted fused-pair arrays {missing}",
+            )
+        capacities, counts, dense_capacities = (
+            np.asarray(value[field], dtype=np.int64) for field in array_fields
+        )
+        if not (
+            capacities.ndim == counts.ndim == dense_capacities.ndim == 1
+            and capacities.shape == counts.shape == dense_capacities.shape
+        ):
+            raise RuntimeError(f"{label} profile {key} fused-pair arrays do not align")
+
+        sum_fields = (
+            "sum_fused_pair_candidates",
+            "sum_fused_pair_capacity",
+            "sum_fused_pair_dense_capacity",
+            "fused_pair_valid_fraction_of_dense",
+            "fused_pair_padded_fraction_of_dense",
+        )
+        missing = [field for field in sum_fields if field not in value]
+        if missing:
+            raise RuntimeError(
+                f"{label} profile {key} omitted fused-pair totals {missing}",
+            )
+        candidates = int(value["sum_fused_pair_candidates"])
+        capacity = int(value["sum_fused_pair_capacity"])
+        dense_capacity = int(value["sum_fused_pair_dense_capacity"])
+        valid_fraction = float(value["fused_pair_valid_fraction_of_dense"])
+        padded_fraction = float(value["fused_pair_padded_fraction_of_dense"])
+        if enabled:
+            if capacities.size == 0 or np.any(capacities <= 0):
+                raise RuntimeError(f"{label} profile {key} has no pair capacity")
+            if np.any(counts < 0) or np.any(dense_capacities <= 0):
+                raise RuntimeError(f"{label} profile {key} has invalid pair counts")
+            if not (0 < candidates <= capacity <= dense_capacity):
+                raise RuntimeError(
+                    f"{label} profile {key} has invalid fused-pair totals: "
+                    f"{candidates}, {capacity}, {dense_capacity}",
+                )
+            expected_valid = candidates / dense_capacity
+            expected_padded = capacity / dense_capacity
+            if not np.isclose(valid_fraction, expected_valid, rtol=1e-15, atol=0.0):
+                raise RuntimeError(
+                    f"{label} profile {key} valid-pair fraction is inconsistent",
+                )
+            if not np.isclose(padded_fraction, expected_padded, rtol=1e-15, atol=0.0):
+                raise RuntimeError(
+                    f"{label} profile {key} padded-pair fraction is inconsistent",
+                )
+            capacity_families.update(int(item) for item in capacities.tolist())
+        elif capacities.size or counts.size or dense_capacities.size:
+            raise RuntimeError(
+                f"{label} profile {key} disabled fused-pair arm published chunks",
+            )
+        elif any((candidates, capacity, dense_capacity, valid_fraction, padded_fraction)):
+            raise RuntimeError(
+                f"{label} profile {key} disabled fused-pair arm published totals",
+            )
+
+        profiles[key] = {
+            **observed_flags,
+            "chunk_count": int(capacities.size),
+            "capacity_families": sorted(set(int(item) for item in capacities.tolist())),
+            "sum_candidates": candidates,
+            "sum_capacity": capacity,
+            "sum_dense_capacity": dense_capacity,
+            "valid_fraction_of_dense": valid_fraction,
+            "padded_fraction_of_dense": padded_fraction,
+        }
+        total_candidates += candidates
+        total_capacity += capacity
+        total_dense_capacity += dense_capacity
+    if not profiles:
+        raise RuntimeError(f"{label} has no local engine profile to validate")
+    return {
+        "enabled": bool(enabled),
+        "profile_exact": True,
+        "profile_count": len(profiles),
+        "shared_compact_pair_order": bool(enabled),
+        "pair_pixel_gathers_materialized": False,
+        "dense_posterior_order_restored": bool(enabled),
+        "compile_shape_capacity_families": sorted(capacity_families),
+        "compile_shape_capacity_family_count": len(capacity_families),
+        "sum_candidates": total_candidates,
+        "sum_capacity": total_capacity,
+        "sum_dense_capacity": total_dense_capacity,
+        "profiles": profiles,
+    }
+
+
 def _validate_hybrid_image_batch_profiles(
     estep_meta: dict[str, Any],
     *,
@@ -1047,6 +1221,7 @@ def _validate_arm_execution_contract(
         in {
             "exact_coarse_single_translate",
             "exact_compact_preprocess",
+            "fused_pair_fine_score",
         }
     )
     expected_token = "1" if expected_compact else "0"
@@ -1159,10 +1334,123 @@ def _validate_arm_execution_contract(
     return contract
 
 
+def _persistent_cache_snapshot() -> dict[str, Any]:
+    """Count persistent JAX programs, including the local-score families."""
+
+    raw_root = os.environ.get("JAX_COMPILATION_CACHE_DIR", "").strip()
+    empty_counts = {family: 0 for family in PERSISTENT_CACHE_TARGET_FAMILIES}
+    if not raw_root:
+        return {
+            "available": False,
+            "root": None,
+            "file_count": 0,
+            "bytes": 0,
+            "target_family_counts": dict(empty_counts),
+            "target_family_bytes": dict(empty_counts),
+        }
+    root = Path(raw_root)
+    family_counts = dict(empty_counts)
+    family_bytes = dict(empty_counts)
+    file_count = 0
+    total_bytes = 0
+    if root.is_dir():
+        for path in root.iterdir():
+            if not path.is_file() or not path.name.endswith("-cache"):
+                continue
+            try:
+                size = int(path.stat().st_size)
+            except FileNotFoundError:
+                continue
+            file_count += 1
+            total_bytes += size
+            stem = path.name[: -len("-cache")]
+            family, separator, digest = stem.rpartition("-")
+            if separator and len(digest) == 64 and family in family_counts:
+                family_counts[family] += 1
+                family_bytes[family] += size
+    return {
+        "available": True,
+        "root": str(root.resolve()),
+        "file_count": file_count,
+        "bytes": total_bytes,
+        "target_family_counts": family_counts,
+        "target_family_bytes": family_bytes,
+    }
+
+
+def _persistent_cache_delta(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    counts = {
+        family: int(after["target_family_counts"][family])
+        - int(before["target_family_counts"][family])
+        for family in PERSISTENT_CACHE_TARGET_FAMILIES
+    }
+    byte_deltas = {
+        family: int(after["target_family_bytes"][family])
+        - int(before["target_family_bytes"][family])
+        for family in PERSISTENT_CACHE_TARGET_FAMILIES
+    }
+    return {
+        "available": bool(before["available"] and after["available"]),
+        "file_count_delta": int(after["file_count"]) - int(before["file_count"]),
+        "bytes_delta": int(after["bytes"]) - int(before["bytes"]),
+        "target_family_count_delta": counts,
+        "target_family_bytes_delta": byte_deltas,
+        "no_new_target_family_programs": all(value == 0 for value in counts.values()),
+    }
+
+
+LOCAL_TIMING_FIELDS = (
+    "em_time_s",
+    "accounted_em_time_s",
+    "unattributed_em_time_s",
+    "preprocess_time_s",
+    "batch_fetch_time_s",
+    "bucket_build_time_s",
+    "projection_time_s",
+    "big_jit_bucket_s",
+    "local_score_s",
+    "local_normalize_s",
+    "local_significance_s",
+    "local_pack_s",
+    "local_noise_s",
+    "local_mstep_s",
+    "local_postprocess_s",
+    "local_final_accumulator_s",
+    "transfer_total_to_host_s",
+)
+
+
+def _local_timing_summary(estep_meta: dict[str, Any]) -> dict[str, Any]:
+    by_profile: dict[str, dict[str, float]] = {}
+    totals = {field: 0.0 for field in LOCAL_TIMING_FIELDS}
+    for name, profile in sorted(estep_meta.items()):
+        if not isinstance(profile, dict) or "em_time_s" not in profile:
+            continue
+        timings = {
+            field: float(profile[field])
+            for field in LOCAL_TIMING_FIELDS
+            if field in profile
+        }
+        if not timings:
+            continue
+        by_profile[name] = timings
+        for field, value in timings.items():
+            totals[field] += value
+    return {
+        "profile_count": len(by_profile),
+        "totals_s": totals,
+        "by_profile_s": by_profile,
+    }
+
+
 def _arm_performance_summary(
     *,
     wall_s: float,
     estep_meta: dict[str, Any],
+    persistent_cache: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sparse = estep_meta.get("sparse_pass2_profile_summary", {})
     if not isinstance(sparse, dict):
@@ -1176,6 +1464,12 @@ def _arm_performance_summary(
     ):
         if field in sparse:
             summary[field] = _json_ready(sparse[field])
+    local_timing = _local_timing_summary(estep_meta)
+    summary["local_timing"] = local_timing
+    for field, value in local_timing["totals_s"].items():
+        summary[f"local_{field}"] = value
+    if persistent_cache is not None:
+        summary["persistent_cache"] = persistent_cache
     table_fields = (
         "selected_rescore_batch_count",
         "fallback_batch_count",
@@ -1640,6 +1934,7 @@ def _run_transition_arm(
         "all_optimized",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
+        "fused_pair_fine_score",
     }:
         opts = dataclasses.replace(
             opts,
@@ -1649,6 +1944,7 @@ def _run_transition_arm(
                 in {
                     "exact_coarse_single_translate",
                     "exact_compact_preprocess",
+                    "fused_pair_fine_score",
                 }
             ),
         )
@@ -1705,6 +2001,12 @@ def _run_transition_arm(
             if candidate_enabled
             else "all_optimized_exact_compact_preprocess_off"
         )
+    elif candidate_mode == "fused_pair_fine_score":
+        resolved_backend_mode = (
+            "all_optimized_fused_pair_fine_score_on"
+            if candidate_enabled
+            else "all_optimized_fused_pair_fine_score_off"
+        )
     else:
         resolved_backend_mode = candidate_mode if candidate_enabled else "direct"
     if backend_mode is None:
@@ -1731,6 +2033,8 @@ def _run_transition_arm(
             "1" if exact_coarse_profile_enabled else "0"
         )
     effective_environment: dict[str, str | None] = {}
+    persistent_cache_before = _persistent_cache_snapshot()
+    wall_clock_started_epoch_s = time.time()
     started = time.perf_counter()
     with _temporary_environment(
         {
@@ -1765,6 +2069,16 @@ def _run_transition_arm(
             diagnostic_stop_after_iteration=checkpoint_iteration + 1,
         )
     wall_s = float(time.perf_counter() - started)
+    wall_clock_ended_epoch_s = time.time()
+    persistent_cache_after = _persistent_cache_snapshot()
+    persistent_cache = {
+        "before": persistent_cache_before,
+        "after": persistent_cache_after,
+        "delta": _persistent_cache_delta(
+            persistent_cache_before,
+            persistent_cache_after,
+        ),
+    }
     if int(final_state.iter) != checkpoint_iteration + 1:
         raise RuntimeError(f"{label} stopped at the wrong iteration")
     if "accumulators" not in captured or "estep_meta" not in captured:
@@ -1807,6 +2121,7 @@ def _run_transition_arm(
         "all_optimized",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
+        "fused_pair_fine_score",
     }:
         all_optimized_enabled = bool(
             candidate_enabled
@@ -1874,6 +2189,14 @@ def _run_transition_arm(
                 "profile_checked": False,
                 "profile_free_wall_timing": True,
             }
+    if candidate_mode == "fused_pair_fine_score":
+        execution_contract["fused_pair_fine_score"] = (
+            _validate_fused_pair_fine_profiles(
+                captured["estep_meta"],
+                enabled=candidate_enabled,
+                label=label,
+            )
+        )
     if hybrid_image_batch_request is not None:
         execution_contract["hybrid_image_batch"] = (
             _validate_hybrid_image_batch_profiles(
@@ -1885,6 +2208,7 @@ def _run_transition_arm(
     performance_summary = _arm_performance_summary(
         wall_s=wall_s,
         estep_meta=captured["estep_meta"],
+        persistent_cache=persistent_cache,
     )
     return {
         "label": label,
@@ -1904,6 +2228,7 @@ def _run_transition_arm(
                         "stable_flat_capacity",
                         "exact_coarse_single_translate",
                         "exact_compact_preprocess",
+                        "fused_pair_fine_score",
                     }
                 )
             )
@@ -1912,6 +2237,9 @@ def _run_transition_arm(
         "execution_contract": execution_contract,
         "performance_summary": performance_summary,
         "wall_s": wall_s,
+        "wall_clock_started_epoch_s": wall_clock_started_epoch_s,
+        "wall_clock_ended_epoch_s": wall_clock_ended_epoch_s,
+        "persistent_cache": persistent_cache,
         "stable_fourier_window_contract": stable_fourier_window_contract,
         "stable_flat_capacity_contract": stable_flat_capacity_contract,
         "initial_state_manifest": initial_state_manifest,
@@ -2057,6 +2385,7 @@ def _compact_science_contract(
         "class_assignments",
         "best_pose_translations",
         "significant_counts",
+        "cutoff_counts",
     )
     exact_checks: dict[str, Any] = {}
     for pair in cross_pairs:
@@ -2095,7 +2424,7 @@ def _compact_science_contract(
         )
     exact_pass = all(row["pass"] for row in exact_checks.values())
     repeat_pairs = (direct_repeat, candidate_repeat)
-    return {
+    result = {
         "hard_exact_contract_passed": exact_pass,
         "hard_exact_policy": (
             "all crossed pairs require exact selected IDs, pose/translation/class "
@@ -2118,6 +2447,25 @@ def _compact_science_contract(
             nested_entries=False,
         ),
     }
+    result["scalar_meta_repeat_envelope"] = _repeat_envelope_report(
+        comparisons,
+        repeat_pairs=repeat_pairs,
+        cross_pairs=cross_pairs,
+        section="estep_meta",
+        nested_entries=False,
+    )
+    result["atomic_repeat_envelope_passed"] = bool(
+        result["accumulator_repeat_envelope"][
+            "all_cross_within_observed_repeat_envelope"
+        ]
+        and result["scalar_meta_repeat_envelope"][
+            "all_cross_within_observed_repeat_envelope"
+        ]
+        and result["final_state_repeat_envelope"][
+            "all_cross_within_observed_repeat_envelope"
+        ]
+    )
+    return result
 
 
 def _exact_coarse_single_translate_runtime_contract(
@@ -2568,6 +2916,172 @@ def _hybrid_image_batch_runtime_contract(
     return result
 
 
+def _fused_pair_fine_runtime_contract(
+    arms: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare warmed selected-pair scoring with all other seams frozen on."""
+
+    metrics = (
+        "wall_s",
+        "pass1_time_s",
+        "pass2_time_s",
+        "local_em_time_s",
+        "local_big_jit_bucket_s",
+        "local_pack_s",
+        "local_noise_s",
+        "local_postprocess_s",
+        "local_final_accumulator_s",
+        "local_unattributed_em_time_s",
+    )
+    result: dict[str, Any] = {}
+    environments: dict[str, dict[str, str]] = {}
+    timed_cache_stable = True
+    for backend, token in (("pair_off", "_off_"), ("pair_on", "_on_")):
+        labels = tuple(
+            label for label in FUSED_PAIR_FINE_SCORE_ARM_ORDER if token in label
+        )
+        measurements: dict[str, list[float]] = {}
+        for metric in metrics:
+            values = []
+            for label in labels:
+                source = arms[label] if metric == "wall_s" else arms[label][
+                    "performance_summary"
+                ]
+                if metric not in source:
+                    raise RuntimeError(f"{label} omitted runtime metric {metric}")
+                values.append(float(source[metric]))
+            measurements[metric] = values
+        cache = {}
+        pair_profiles = {}
+        for label in labels:
+            cache[label] = arms[label]["persistent_cache"]
+            timed_cache_stable = bool(
+                timed_cache_stable
+                and cache[label]["delta"]["no_new_target_family_programs"]
+            )
+            pair_profiles[label] = arms[label]["execution_contract"][
+                "fused_pair_fine_score"
+            ]
+            requested = dict(
+                arms[label]["execution_contract"]["requested_environment"],
+            )
+            requested.pop(FUSED_PAIR_FINE_SCORE_ENVIRONMENT)
+            environments[label] = requested
+        result[backend] = {
+            "labels": list(labels),
+            "repeat_count": len(labels),
+            "measurements": measurements,
+            "median": {
+                metric: float(np.median(values))
+                for metric, values in measurements.items()
+            },
+            "persistent_cache": cache,
+            "pair_profiles": pair_profiles,
+        }
+
+    distinct_environments = {
+        json.dumps(environment, sort_keys=True, separators=(",", ":"))
+        for environment in environments.values()
+    }
+    if len(distinct_environments) != 1:
+        raise RuntimeError(
+            "fused-pair arms differ outside the isolated environment flag",
+        )
+    changes = {}
+    for metric in metrics:
+        control = result["pair_off"]["median"][metric]
+        candidate = result["pair_on"]["median"][metric]
+        changes[metric] = {
+            "pair_off_median": control,
+            "pair_on_median": candidate,
+            "fractional_change": candidate / control - 1.0 if control else None,
+            "speedup": control / candidate if candidate else None,
+        }
+    final_snapshot = arms[FUSED_PAIR_FINE_SCORE_ARM_ORDER[-1]][
+        "persistent_cache"
+    ]["after"]
+    result["pair_on_vs_pair_off"] = changes
+    result["material_speedup_threshold"] = 1.05
+    result["material_speedup_passed"] = bool(
+        changes["wall_s"]["speedup"] is not None
+        and changes["wall_s"]["speedup"] >= result["material_speedup_threshold"]
+    )
+    result["persistent_cache_contract"] = {
+        "target_families": list(PERSISTENT_CACHE_TARGET_FAMILIES),
+        "timed_arms_add_no_target_family_programs_after_prewarm": (
+            timed_cache_stable
+        ),
+        "final_target_family_counts": final_snapshot["target_family_counts"],
+        "final_target_family_bytes": final_snapshot["target_family_bytes"],
+    }
+    result["isolated_environment_contract"] = {
+        "only_difference": FUSED_PAIR_FINE_SCORE_ENVIRONMENT,
+        "all_other_environment_exact": True,
+        "profile_free_wall_timing": True,
+        "profile_counter_device_synchronization": False,
+    }
+    return result
+
+
+def _gpu_memory_report(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Attribute the line-buffered one-second nvidia-smi samples to each arm."""
+
+    raw_path = os.environ.get(GPU_MONITOR_ENVIRONMENT, "").strip()
+    if not raw_path:
+        return {"available": False, "path": None, "arms": {}}
+    path = Path(raw_path)
+    if not path.is_file():
+        return {"available": False, "path": str(path), "arms": {}}
+    samples: list[tuple[float, int, int, int]] = []
+    with path.open(newline="") as handle:
+        for raw_row in csv.DictReader(handle):
+            row = {str(key).strip(): str(value).strip() for key, value in raw_row.items()}
+            try:
+                timestamp = dt.datetime.strptime(
+                    row["timestamp"],
+                    "%Y/%m/%d %H:%M:%S.%f",
+                ).timestamp()
+                used_mib = int(row["memory.used [MiB]"].split()[0])
+                total_mib = int(row["memory.total [MiB]"].split()[0])
+                utilization = int(row["utilization.gpu [%]"].split()[0])
+            except (KeyError, ValueError):
+                continue
+            samples.append((timestamp, used_mib, total_mib, utilization))
+    arm_rows: dict[str, Any] = {}
+    for label, arm in arms.items():
+        start = float(arm["wall_clock_started_epoch_s"])
+        end = float(arm["wall_clock_ended_epoch_s"])
+        selected = [sample for sample in samples if start <= sample[0] <= end]
+        arm_rows[label] = {
+            "sample_count": len(selected),
+            "peak_memory_used_mib": (
+                max(sample[1] for sample in selected) if selected else None
+            ),
+            "minimum_memory_used_mib": (
+                min(sample[1] for sample in selected) if selected else None
+            ),
+            "memory_total_mib": selected[0][2] if selected else None,
+            "peak_utilization_percent": (
+                max(sample[3] for sample in selected) if selected else None
+            ),
+            "window_started_epoch_s": start,
+            "window_ended_epoch_s": end,
+        }
+    return {
+        "available": bool(samples),
+        "path": str(path.resolve()),
+        "sampling_period_s": 1,
+        "allocator_caveat": (
+            "JAX retains allocations, so later-arm HBM is a process high-water "
+            "comparison rather than isolated allocation accounting"
+        ),
+        "all_arms_sampled": bool(arm_rows)
+        and all(row["sample_count"] > 0 for row in arm_rows.values()),
+        "total_sample_count": len(samples),
+        "arms": arm_rows,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if HYBRID_IMAGE_BATCH_ENVIRONMENT in os.environ:
@@ -2787,6 +3301,45 @@ def main(argv: list[str] | None = None) -> int:
             (label, None)
             for label in EXACT_COMPACT_PREPROCESS_ARM_ORDER
         )
+    elif args.candidate_mode == "fused_pair_fine_score":
+        for backend, enabled in (("pair_off", False), ("pair_on", True)):
+            warm = _run_transition_arm(
+                checkpoint,
+                label=f"prewarm_{backend}",
+                candidate_mode=args.candidate_mode,
+                candidate_enabled=enabled,
+                checkpoint_iteration=args.checkpoint_iteration,
+            )
+            for key, expected in expected_manifests.items():
+                if warm[key]["manifest_sha256"] != expected:
+                    raise RuntimeError(
+                        f"prewarm_{backend} did not start from the exact shared {key}",
+                    )
+            prewarm[backend] = {
+                "label": warm["label"],
+                "backend_mode": warm["backend_mode"],
+                "wall_s": warm["wall_s"],
+                "performance_summary": warm["performance_summary"],
+                "persistent_cache": warm["persistent_cache"],
+                "fused_pair_fine_score": warm["execution_contract"][
+                    "fused_pair_fine_score"
+                ],
+                "initial_state_manifest_sha256": warm[
+                    "initial_state_manifest"
+                ]["manifest_sha256"],
+                "initial_particle_state_manifest_sha256": warm[
+                    "initial_particle_state_manifest"
+                ]["manifest_sha256"],
+                "initial_sampling_state_manifest_sha256": warm[
+                    "initial_sampling_state_manifest"
+                ]["manifest_sha256"],
+            }
+            del warm
+            gc.collect()
+        arm_specs = tuple(
+            (label, None)
+            for label in FUSED_PAIR_FINE_SCORE_ARM_ORDER
+        )
     else:
         legacy_arm_order = _arm_order(args.candidate_mode)
         arm_specs = tuple(
@@ -2891,6 +3444,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.candidate_mode == "exact_compact_preprocess"
         else None
     )
+    fused_pair_fine_runtime_contract = (
+        _fused_pair_fine_runtime_contract(arms)
+        if args.candidate_mode == "fused_pair_fine_score"
+        else None
+    )
+    fused_pair_fine_atomic_contract_passed = (
+        bool(compact_science_contract["atomic_repeat_envelope_passed"])
+        if args.candidate_mode == "fused_pair_fine_score"
+        else None
+    )
+    gpu_memory = _gpu_memory_report(arms)
     arm_dir = output_root / "arms"
     arm_dir.mkdir()
     arm_summaries: dict[str, Any] = {}
@@ -2904,6 +3468,10 @@ def main(argv: list[str] | None = None) -> int:
             "execution_contract": arm["execution_contract"],
             "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
+            "wall_clock_started_epoch_s": arm["wall_clock_started_epoch_s"],
+            "wall_clock_ended_epoch_s": arm["wall_clock_ended_epoch_s"],
+            "persistent_cache": arm["persistent_cache"],
+            "gpu_memory": gpu_memory["arms"].get(label),
             "stable_fourier_window_contract": arm[
                 "stable_fourier_window_contract"
             ],
@@ -2930,6 +3498,10 @@ def main(argv: list[str] | None = None) -> int:
             "execution_contract": arm["execution_contract"],
             "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
+            "wall_clock_started_epoch_s": arm["wall_clock_started_epoch_s"],
+            "wall_clock_ended_epoch_s": arm["wall_clock_ended_epoch_s"],
+            "persistent_cache": arm["persistent_cache"],
+            "gpu_memory": payload["gpu_memory"],
             "stable_fourier_window_contract": payload[
                 "stable_fourier_window_contract"
             ],
@@ -2990,6 +3562,11 @@ def main(argv: list[str] | None = None) -> int:
         "exact_compact_preprocess_atomic_contract_passed": (
             exact_compact_preprocess_atomic_contract_passed
         ),
+        "fused_pair_fine_runtime_contract": fused_pair_fine_runtime_contract,
+        "fused_pair_fine_atomic_contract_passed": (
+            fused_pair_fine_atomic_contract_passed
+        ),
+        "gpu_memory": gpu_memory,
         "hybrid_image_batch_science_contract": (
             hybrid_image_batch_science_contract
         ),
@@ -3009,6 +3586,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.candidate_mode == "exact_coarse_single_translate"
                 else "all_optimized_exact_compact_preprocess_off"
                 if args.candidate_mode == "exact_compact_preprocess"
+                else "all_optimized_fused_pair_fine_score_off"
+                if args.candidate_mode == "fused_pair_fine_score"
                 else (
                     "hybrid_packed_deferred_stable_fourier_off"
                     if args.candidate_mode == "stable_shapes"
@@ -3026,6 +3605,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.candidate_mode == "exact_coarse_single_translate"
                 else "all_optimized_exact_compact_preprocess_on"
                 if args.candidate_mode == "exact_compact_preprocess"
+                else "all_optimized_fused_pair_fine_score_on"
+                if args.candidate_mode == "fused_pair_fine_score"
                 else (
                     "hybrid_packed_deferred_stable_fourier_on"
                     if args.candidate_mode == "stable_shapes"
@@ -3052,6 +3633,7 @@ def main(argv: list[str] | None = None) -> int:
                 in {
                     "exact_coarse_single_translate",
                     "exact_compact_preprocess",
+                    "fused_pair_fine_score",
                 }
             ),
             "both_incremental_backends_prewarmed": bool(
@@ -3072,12 +3654,24 @@ def main(argv: list[str] | None = None) -> int:
                 "all_optimized",
                 "exact_coarse_single_translate",
                 "exact_compact_preprocess",
+                "fused_pair_fine_score",
             },
             "exact_coarse_single_translate_profile_fail_closed": (
                 args.candidate_mode == "exact_coarse_single_translate"
             ),
             "exact_compact_preprocess_profile_fail_closed": (
                 args.candidate_mode == "exact_compact_preprocess"
+            ),
+            "fused_pair_fine_score_profile_fail_closed": (
+                args.candidate_mode == "fused_pair_fine_score"
+            ),
+            "persistent_cache_family_counts_recorded": (
+                args.candidate_mode == "fused_pair_fine_score"
+            ),
+            "gpu_hbm_samples_recorded": bool(
+                args.candidate_mode == "fused_pair_fine_score"
+                and gpu_memory["available"]
+                and gpu_memory["all_arms_sampled"]
             ),
             "hybrid_image_batch_profile_fail_closed": bool(
                 args.mirrored_hybrid_image_batch_panels,
@@ -3118,6 +3712,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.candidate_mode == "exact_compact_preprocess" and not (
         compact_science_contract["hard_exact_contract_passed"]
         and exact_compact_preprocess_atomic_contract_passed
+    ):
+        return 1
+    if args.candidate_mode == "fused_pair_fine_score" and not (
+        compact_science_contract["hard_exact_contract_passed"]
+        and fused_pair_fine_atomic_contract_passed
+        and fused_pair_fine_runtime_contract["persistent_cache_contract"][
+            "timed_arms_add_no_target_family_programs_after_prewarm"
+        ]
+        and fused_pair_fine_runtime_contract["material_speedup_passed"]
+        and gpu_memory["available"]
+        and gpu_memory["all_arms_sampled"]
     ):
         return 1
     return 0
