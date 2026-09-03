@@ -12,6 +12,7 @@ from scripts.analyze_vdam_stable_shape_trajectory import (
     normalized_l2,
     summarize_pair_distances,
     summarize_runtime_panel,
+    summarize_size_schedule,
     validate_stable_flat_capacity_execution,
 )
 
@@ -162,3 +163,21 @@ def test_stable_flat_execution_rejects_candidate_with_data_dependent_rows():
             arm="stable_on_1",
             iteration=9,
         )
+
+
+def test_schedule_divergence_is_a_science_failure_not_a_setup_error():
+    """A basin split must still produce a complete diagnostic report."""
+
+    metas = {
+        arm: {"current_size": 84 if arm == "stable_on_1" else 78}
+        for arm in ARM_ORDER
+    }
+    sizes, failure = summarize_size_schedule(metas, 46)
+
+    assert sizes["stable_on_1"] == 84
+    assert sizes["stable_off_1"] == 78
+    assert failure == {
+        "iteration": 46,
+        "feature": "current_size_schedule",
+        "values": sizes,
+    }

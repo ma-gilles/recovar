@@ -92,6 +92,26 @@ def summarize_pair_distances(
     }
 
 
+def summarize_size_schedule(
+    metas: dict[str, dict[str, Any]], iteration: int
+) -> tuple[dict[str, int], dict[str, Any] | None]:
+    """Return every arm's size and classify a split as science evidence.
+
+    A late trajectory split is a failed parity result, not malformed input.  It
+    must therefore survive into the report rather than aborting the analyzer.
+    """
+
+    _require(set(metas) == set(ARM_ORDER), "size-schedule panel has the wrong arms")
+    sizes = {arm: int(metas[arm]["current_size"]) for arm in ARM_ORDER}
+    if len(set(sizes.values())) == 1:
+        return sizes, None
+    return sizes, {
+        "iteration": int(iteration),
+        "feature": "current_size_schedule",
+        "values": sizes,
+    }
+
+
 def summarize_runtime_panel(
     rows: dict[str, dict[str, float]],
     *,
@@ -332,8 +352,8 @@ def analyze(
     uniformly_absent_identity_columns: set[str] = set()
     checkpoint_rows: list[dict[str, Any]] = []
     map_squared_sum = {f"{left}__vs__{right}": 0.0 for left in ARM_ORDER for right in ARM_ORDER if left < right}
-    logical_sizes: list[int] = []
-    physical_sizes: list[int] = []
+    logical_sizes_by_arm: dict[str, list[int]] = {arm: [] for arm in ARM_ORDER}
+    physical_sizes_by_arm: dict[str, list[int]] = {arm: [] for arm in ARM_ORDER}
     flat_capacity_execution = {
         arm: {
             "enabled": bool(stable_flat_row_capacity and arm in CANDIDATE_ARMS),
@@ -360,20 +380,27 @@ def analyze(
             maps[arm] = _load_relion_volume(output / f"{tag}_class001.mrc")
 
         logical_size = None
-        plan = None
+        physical_size = None
+        logical_sizes: dict[str, int] | None = None
+        physical_sizes: dict[str, int] | None = None
         if iteration > 0:
-            sizes = {int(metas[arm]["current_size"]) for arm in ARM_ORDER}
-            _require(len(sizes) == 1, f"iteration {iteration} current-size schedule differs")
-            logical_size = sizes.pop()
-            logical_sizes.append(logical_size)
-            plan = make_stable_fourier_window_shape_plan(
-                maps[ARM_ORDER[0]].shape[:2],
-                logical_size,
-                maps[ARM_ORDER[0]].shape[0] * (maps[ARM_ORDER[0]].shape[0] // 2 + 1),
-                enabled=stable_fourier_window_shapes,
+            logical_sizes, schedule_failure = summarize_size_schedule(
+                metas, iteration
             )
-            physical_sizes.append(int(plan.physical_current_size))
+            if schedule_failure is not None:
+                exact_failures.append(schedule_failure)
+            logical_size = logical_sizes[ARM_ORDER[0]]
+            physical_sizes = {}
             for arm in ARM_ORDER:
+                logical_sizes_by_arm[arm].append(logical_sizes[arm])
+                plan = make_stable_fourier_window_shape_plan(
+                    maps[arm].shape[:2],
+                    logical_sizes[arm],
+                    maps[arm].shape[0] * (maps[arm].shape[0] // 2 + 1),
+                    enabled=stable_fourier_window_shapes,
+                )
+                physical_sizes[arm] = int(plan.physical_current_size)
+                physical_sizes_by_arm[arm].append(physical_sizes[arm])
                 candidate_enabled = arm in CANDIDATE_ARMS
                 stable_shapes_enabled = bool(
                     candidate_enabled and stable_fourier_window_shapes
@@ -412,6 +439,7 @@ def analyze(
                         "padded_row_sum",
                     ):
                         flat_capacity_execution[arm][key] += int(observation[key])
+            physical_size = physical_sizes[ARM_ORDER[0]]
 
         numeric_max = 0.0
         if iteration > 0:
@@ -482,7 +510,9 @@ def analyze(
             {
                 "iteration": iteration,
                 "logical_current_size": logical_size,
-                "physical_current_size": (None if plan is None else int(plan.physical_current_size)),
+                "physical_current_size": physical_size,
+                "logical_current_sizes": logical_sizes,
+                "physical_current_sizes": physical_sizes,
                 "map": map_distances,
                 "maximum_numeric_state_distance": numeric_max,
             }
@@ -562,10 +592,16 @@ def analyze(
         "acceptance_config": str(acceptance_path.resolve()),
         "acceptance_config_sha256": _sha256(acceptance_path),
         "last_iteration": int(last_iteration),
-        "logical_current_size_sequence": logical_sizes,
-        "physical_current_size_sequence": physical_sizes,
-        "unique_logical_current_sizes": sorted(set(logical_sizes)),
-        "unique_physical_current_sizes": sorted(set(physical_sizes)),
+        "logical_current_size_sequence": logical_sizes_by_arm[ARM_ORDER[0]],
+        "physical_current_size_sequence": physical_sizes_by_arm[ARM_ORDER[0]],
+        "logical_current_size_sequences": logical_sizes_by_arm,
+        "physical_current_size_sequences": physical_sizes_by_arm,
+        "unique_logical_current_sizes": sorted(
+            {size for sizes in logical_sizes_by_arm.values() for size in sizes}
+        ),
+        "unique_physical_current_sizes": sorted(
+            {size for sizes in physical_sizes_by_arm.values() for size in sizes}
+        ),
         "native_options": native_options,
         "flat_row_capacity_execution": (
             flat_capacity_execution if stable_flat_row_capacity else None
