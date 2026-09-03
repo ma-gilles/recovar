@@ -571,6 +571,40 @@ def test_box800_soft_k1_compact_plan_adds_overlapping_projector_and_bpref():
     assert plan.rotation_block_size == 576
 
 
+def test_box800_soft_k1_compact_plan_preserves_headroom_at_10202_size564_boundary():
+    common = dict(
+        n_rot=416,
+        n_trans=84,
+        current_size=564,
+        gpu_memory_gb=80,
+        runtime_free_memory_gb=72.72,
+        use_float64_scoring=False,
+    )
+    historical = _box800_plan(**common)
+    compact = _box800_plan(
+        **common,
+        compact_k1_relion_layout=True,
+        compact_k1_relion_score_bpref_overlap=True,
+        model_current_size=564,
+    )
+
+    # Full-particle job 13356985 failed at this exact boundary after the
+    # historical estimate collapsed the tunable plan to 1/4, while five
+    # 512-wide tail buckets still had to execute.  Pin the fail-closed compact
+    # envelope used by its successor so local wrapper changes cannot silently
+    # reintroduce that planner mismatch.
+    assert historical.persistent_estimate_mode == "historical_full_cube"
+    assert historical.persistent_estimate_gb == pytest.approx(81.92)
+    assert (historical.image_batch_size, historical.rotation_block_size) == (1, 4)
+    assert historical.usable_estimate_gb == pytest.approx(1.0)
+
+    assert compact.persistent_estimate_mode == "compact_k1_relion_score_bpref_overlap"
+    assert compact.persistent_estimate_gb == pytest.approx(18.48010252)
+    assert compact.pending_score_persistent_gb == pytest.approx(14.48010252)
+    assert compact.usable_estimate_gb == pytest.approx(46.591917984)
+    assert (compact.image_batch_size, compact.rotation_block_size) == (13, 26)
+
+
 @pytest.mark.parametrize(
     ("score_size", "model_size", "n_rot", "n_trans", "live_free_gb", "image_batch", "rotation_block"),
     [
