@@ -454,6 +454,22 @@ def _validate_late_hybrid_image_batch(
         static_dense_batches = profile.get("static_dense_batch_count")
         selected_images = profile.get("selected_rescore_image_count")
         static_dense_images = profile.get("static_dense_image_count")
+        adaptive_counts = {
+            "selected_rescore_batch_count": selected_batches,
+            "static_dense_batch_count": static_dense_batches,
+            "selected_rescore_image_count": selected_images,
+            "static_dense_image_count": static_dense_images,
+        }
+        invalid_adaptive_counts = [
+            field
+            for field, value in adaptive_counts.items()
+            if not isinstance(value, int) or value < 0
+        ]
+        if invalid_adaptive_counts:
+            raise RuntimeError(
+                f"{label} profile {name} has invalid adaptive counts "
+                f"{invalid_adaptive_counts}"
+            )
         if selected_batches + static_dense_batches != 1:
             raise RuntimeError(
                 f"{label} profile {name} did not represent the profiled batch"

@@ -1158,6 +1158,20 @@ def test_all_optimized_execution_contract_fails_closed_on_shape_or_row_abi() -> 
             "table fraction",
         ),
         (
+            _compact_profile(
+                score_representation_batch_counts={"compact_selected_exact": 1},
+            ),
+            "representation counts",
+        ),
+        (
+            _compact_profile(
+                static_preferred_score_representation=(
+                    "dense_full_direct_static_capacity"
+                ),
+            ),
+            "static preference",
+        ),
+        (
             _compact_profile(certificate_chunk_count_per_batch=0),
             "certificate_chunk_count_per_batch",
         ),

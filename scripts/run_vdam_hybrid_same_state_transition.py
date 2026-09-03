@@ -1579,9 +1579,14 @@ def _arm_performance_summary(
     if persistent_cache is not None:
         summary["persistent_cache"] = persistent_cache
     table_fields = (
+        "score_representation_policy",
+        "static_preferred_score_representation",
+        "score_representation_batch_counts",
         "selected_rescore_batch_count",
+        "static_dense_batch_count",
         "fallback_batch_count",
         "selected_rescore_image_count",
+        "static_dense_image_count",
         "selected_source16_block_count",
         "selected_exact_candidate_count",
         "full_candidate_count_for_selected_images",
@@ -1591,6 +1596,7 @@ def _arm_performance_summary(
         "selected_score_table_capacity_bytes_f32",
         "dense_global_score_table_capacity_bytes_f32",
         "selected_to_dense_score_table_capacity_fraction",
+        "static_compact_to_dense_capacity_fraction",
         "max_selected_blocks_per_image",
         "selected_block_capacity",
     )
