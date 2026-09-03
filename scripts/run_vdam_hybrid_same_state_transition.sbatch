@@ -31,6 +31,22 @@ MIRRORED_INCREMENTAL_PANELS=${VDAM_SAME_STATE_MIRRORED_INCREMENTAL_PANELS:-0}
 MIRRORED_HYBRID_IMAGE_BATCH_PANELS=${VDAM_SAME_STATE_MIRRORED_HYBRID_IMAGE_BATCH_PANELS:-0}
 FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX=${VDAM_SAME_STATE_FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX:-}
 COARSE_PREFIX_DUMP_ORIGINAL_INDEX=${VDAM_SAME_STATE_COARSE_PREFIX_DUMP_ORIGINAL_INDEX:-}
+NATIVE_CHECKPOINT_OPTIMISER=${VDAM_SAME_STATE_NATIVE_CHECKPOINT_OPTIMISER:-}
+NATIVE_CHECKPOINT_DATA_STAR=${VDAM_SAME_STATE_NATIVE_CHECKPOINT_DATA_STAR:-}
+NATIVE_DATA_DIR=${VDAM_SAME_STATE_NATIVE_DATA_DIR:-}
+TARGET_IMAGE_NAME=${VDAM_SAME_STATE_TARGET_IMAGE_NAME:-}
+NATIVE_CHECKPOINT_MODE=0
+if [[ -n "${NATIVE_CHECKPOINT_OPTIMISER}" || \
+      -n "${NATIVE_CHECKPOINT_DATA_STAR}" || \
+      -n "${NATIVE_DATA_DIR}" ]]; then
+  test -n "${NATIVE_CHECKPOINT_OPTIMISER}"
+  test -n "${NATIVE_CHECKPOINT_DATA_STAR}"
+  test -n "${NATIVE_DATA_DIR}"
+  NATIVE_CHECKPOINT_OPTIMISER=$(realpath -e -- "${NATIVE_CHECKPOINT_OPTIMISER}")
+  NATIVE_CHECKPOINT_DATA_STAR=$(realpath -e -- "${NATIVE_CHECKPOINT_DATA_STAR}")
+  NATIVE_DATA_DIR=$(realpath -e -- "${NATIVE_DATA_DIR}")
+  NATIVE_CHECKPOINT_MODE=1
+fi
 PIXI_PY=$(jq -er '.files.interpreter.path' "${LAUNCH_MANIFEST}")
 RELION_BIND_SOURCE=$(jq -er '.files.relion_bind.path' "${LAUNCH_MANIFEST}")
 CUSPARSE_LIBRARY=$(jq -er '.files.cusparse_library.resolved_path' "${LAUNCH_MANIFEST}")
@@ -122,6 +138,9 @@ case "${CANDIDATE_MODE}" in
   fused_pair_fine_score)
     expected_arm_order=pair_fine_off_1,pair_fine_on_1,pair_fine_on_2,pair_fine_off_2
     ;;
+  fused_coarse_projector)
+    expected_arm_order=fused_coarse_off_1,fused_coarse_on_1,fused_coarse_on_2,fused_coarse_off_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -143,6 +162,11 @@ test -s "${CUSPARSE_LIBRARY}"
 test -s "${FIXTURE}/particles.star"
 test -s "${FIXTURE}/particles.128.mrcs"
 test -s "${ACCEPTANCE}"
+if [[ "${NATIVE_CHECKPOINT_MODE}" = 1 ]]; then
+  test -s "${NATIVE_CHECKPOINT_OPTIMISER}"
+  test -s "${NATIVE_CHECKPOINT_DATA_STAR}"
+  test -d "${NATIVE_DATA_DIR}"
+fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)"
 test "$(sha256sum "${PIXI_PY}" | awk '{print $1}')" = "${EXPECTED_INTERPRETER_SHA256}"
@@ -195,6 +219,14 @@ printf '%s\n' "${FUSED_POSTERIOR_DUMP_ORIGINAL_INDEX}" \
   > "${PROVENANCE}/fused_posterior_dump_original_index.txt"
 printf '%s\n' "${COARSE_PREFIX_DUMP_ORIGINAL_INDEX}" \
   > "${PROVENANCE}/coarse_prefix_dump_original_index.txt"
+printf '%s\n' "${NATIVE_CHECKPOINT_MODE}" \
+  > "${PROVENANCE}/native_checkpoint_mode.txt"
+printf '%s\n' "${NATIVE_CHECKPOINT_OPTIMISER}" \
+  > "${PROVENANCE}/native_checkpoint_optimiser.txt"
+printf '%s\n' "${NATIVE_CHECKPOINT_DATA_STAR}" \
+  > "${PROVENANCE}/native_checkpoint_data_star.txt"
+printf '%s\n' "${NATIVE_DATA_DIR}" > "${PROVENANCE}/native_data_dir.txt"
+printf '%s\n' "${TARGET_IMAGE_NAME}" > "${PROVENANCE}/target_image_name.txt"
 printf '%s\n' "${CUDA_ARCH_FLAGS}" > "${PROVENANCE}/cuda_arch_flags.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
@@ -218,6 +250,10 @@ sha256sum \
   "${ACCEPTANCE}" "${LAUNCH_MANIFEST}" "${PIXI_PY}" "${CUDA_BINARY}" \
   "${RELION_BIND_BINARY}" "${CUSPARSE_LIBRARY}" "${FIXTURE}/particles.star" \
   "${FIXTURE}/particles.128.mrcs" > "${PROVENANCE}/static_inputs.sha256"
+if [[ "${NATIVE_CHECKPOINT_MODE}" = 1 ]]; then
+  sha256sum "${NATIVE_CHECKPOINT_OPTIMISER}" "${NATIVE_CHECKPOINT_DATA_STAR}" \
+    > "${PROVENANCE}/native_checkpoint_primary_inputs.sha256"
+fi
 
 mapfile -d '' -t fixed_environment < <(
   jq -j '.runtime_contract.fixed_science_environment | to_entries[] | .key, "=", .value, "\u0000"' \
@@ -282,6 +318,16 @@ if [[ -n "${COARSE_PREFIX_DUMP_ORIGINAL_INDEX}" ]]; then
     "${COARSE_PREFIX_DUMP_ORIGINAL_INDEX}"
   )
 fi
+if [[ "${NATIVE_CHECKPOINT_MODE}" = 1 ]]; then
+  command+=(
+    --native-checkpoint-optimiser "${NATIVE_CHECKPOINT_OPTIMISER}"
+    --native-checkpoint-data-star "${NATIVE_CHECKPOINT_DATA_STAR}"
+    --native-data-dir "${NATIVE_DATA_DIR}"
+  )
+fi
+if [[ -n "${TARGET_IMAGE_NAME}" ]]; then
+  command+=(--target-image-name "${TARGET_IMAGE_NAME}")
+fi
 printf '%q ' "${command[@]}" > "${PROVENANCE}/command.sh"
 printf '\n' >> "${PROVENANCE}/command.sh"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
@@ -323,12 +369,40 @@ test "$(jq -r '.mirrored_hybrid_image_batch_panels' "${SCIENCE}/report.json")" =
   "$([[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]] && printf true || printf false)"
 test "$(jq -r '.arm_order | join(",")' "${SCIENCE}/report.json")" = \
   "${expected_arm_order}"
+if [[ "${NATIVE_CHECKPOINT_MODE}" = 1 ]]; then
+  jq -e --arg target "${TARGET_IMAGE_NAME}" '
+    .checkpoint_source == "native_relion"
+      and .checkpoint_execution_contract.source == "native_relion"
+      and .checkpoint_execution_contract.transition_executed_during_capture == false
+      and .checkpoint_execution_contract.load_only_call.start_iteration == .checkpoint_iteration
+      and .checkpoint_execution_contract.load_only_call.diagnostic_stop_after_iteration == (.checkpoint_iteration + 1)
+      and (.checkpoint_execution_contract.input_files | length) >= 9
+      and ([.checkpoint_execution_contract.input_files | keys[]
+            | startswith("particle_stack_")] | any)
+      and ([.checkpoint_execution_contract.input_files[].sha256
+            | length == 64] | all)
+      and .same_state_contract.checkpoint_trajectory_backend == "native_relion_load_only"
+      and (if ($target | length) > 0 then
+             .target_particle.image_name == $target
+             and (.target_particle.checkpoint_row_index | type) == "number"
+             and (.target_particle.arms | length) == (.arm_order | length)
+           else .target_particle == null end)
+  ' "${SCIENCE}/report.json" >/dev/null
+else
+  jq -e '
+    .checkpoint_source == "recovar_direct"
+      and .checkpoint_execution_contract.source == "recovar_direct"
+      and .checkpoint_execution_contract.transition_executed_during_capture == true
+  ' "${SCIENCE}/report.json" >/dev/null
+fi
 if [[ "${CANDIDATE_MODE}" == compact_posterior || \
       "${CANDIDATE_MODE}" == compact_packed_deferred || \
       "${CANDIDATE_MODE}" == all_optimized ]] && \
    [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 0 ]]; then
-  jq -e '.compact_science_contract.hard_exact_contract_passed == true' \
-    "${SCIENCE}/report.json" > /dev/null
+  if [[ "${NATIVE_CHECKPOINT_MODE}" = 0 ]]; then
+    jq -e '.compact_science_contract.hard_exact_contract_passed == true' \
+      "${SCIENCE}/report.json" > /dev/null
+  fi
   for arm in direct_1 direct_2; do
     jq -e --arg arm "${arm}" \
       '.arms[$arm].execution_contract
@@ -387,6 +461,59 @@ if [[ "${CANDIDATE_MODE}" == all_optimized && \
          and .stable_flat_capacity_contract.enabled == true
          and .stable_flat_capacity_contract.strict_reduction_count == 0' \
       "${SCIENCE}/report.json" > /dev/null
+  done
+fi
+if [[ "${CANDIDATE_MODE}" == fused_coarse_projector ]]; then
+  jq -e '
+    .science_divergence_is_observational_not_exit_gate == true
+      and .same_state_contract.only_transition_differences
+        == ["RECOVAR_K1_COARSE_FUSED_PROJECTOR"]
+      and .same_state_contract.baseline_trajectory_backend
+        == "rectangular_preprojected_coarse_scorer"
+      and .same_state_contract.candidate_backend
+        == "shared_relion_fused_coarse_projector"
+      and .same_state_contract.fused_coarse_projector_profile_fail_closed == true
+      and .same_state_contract.both_compared_backends_prewarmed == true
+      and (.prewarm | keys) == ["fused_off", "fused_on"]
+  ' "${SCIENCE}/report.json" >/dev/null
+  for arm in fused_coarse_off_1 fused_coarse_off_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == false
+        and .execution_contract.environment_exact == true
+        and .execution_contract.profile_checked == true
+        and .execution_contract.effective_environment.RECOVAR_K1_COARSE_FUSED_PROJECTOR == "0"
+        and .execution_contract.effective_environment.RECOVAR_K1_COARSE_GAUSSIAN_FFI == "1"
+        and .execution_contract.effective_environment.RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF == "1"
+        and .execution_contract.fused_coarse_projector.enabled == false
+        and .execution_contract.fused_coarse_projector.profile_exact == true
+        and ([.execution_contract.fused_coarse_projector.profiles[]
+              | .requested_fused == false
+                and .effective_fused == false
+                and .wrapper == null
+                and .target == null
+                and ([.counts[]] | all(. == 0))] | all)
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in fused_coarse_on_1 fused_coarse_on_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == true
+        and .execution_contract.environment_exact == true
+        and .execution_contract.profile_checked == true
+        and .execution_contract.effective_environment.RECOVAR_K1_COARSE_FUSED_PROJECTOR == "1"
+        and .execution_contract.effective_environment.RECOVAR_K1_COARSE_GAUSSIAN_FFI == "1"
+        and .execution_contract.effective_environment.RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF == "1"
+        and .execution_contract.fused_coarse_projector.enabled == true
+        and .execution_contract.fused_coarse_projector.profile_exact == true
+        and ([.execution_contract.fused_coarse_projector.profiles[]
+              | .requested_fused == true
+                and .effective_fused == true
+                and .wrapper == "relion_coarse_diff2_projector_f32"
+                and .target == "cuda_relion_coarse_diff2_projector_f32"
+                and .counts.fused_calls > 0
+                and .counts.actual_rows > 0] | all)
+    ' "${SCIENCE}/report.json" >/dev/null
   done
 fi
 if [[ "${CANDIDATE_MODE}" == all_optimized_stable_shapes ]]; then

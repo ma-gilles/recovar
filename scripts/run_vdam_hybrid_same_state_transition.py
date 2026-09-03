@@ -152,6 +152,12 @@ FUSED_PAIR_FINE_SCORE_ARM_ORDER = (
     "pair_fine_on_2",
     "pair_fine_off_2",
 )
+FUSED_COARSE_PROJECTOR_ARM_ORDER = (
+    "fused_coarse_off_1",
+    "fused_coarse_on_1",
+    "fused_coarse_on_2",
+    "fused_coarse_off_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
@@ -178,6 +184,17 @@ EXACT_COMPACT_PREPROCESS_ENVIRONMENT = (
     "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS"
 )
 FUSED_PAIR_FINE_SCORE_ENVIRONMENT = "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"
+FUSED_COARSE_PROJECTOR_ENVIRONMENT = "RECOVAR_K1_COARSE_FUSED_PROJECTOR"
+FUSED_COARSE_FIXED_ENVIRONMENT = {
+    "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
+    "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
+    "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
+    "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
+    "RECOVAR_K1_COARSE_PREHALF_WEIGHT": "0",
+    "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
+    "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
+    "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
+}
 BATCHED_POSTERIOR_ENVIRONMENT = "RECOVAR_RELION_BATCHED_POSTERIOR_PRIMITIVES"
 STABLE_FOURIER_QUANTUM_ENVIRONMENT = (
     "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"
@@ -214,6 +231,7 @@ CANDIDATE_MODES = (
     "exact_coarse_single_translate",
     "exact_compact_preprocess",
     "fused_pair_fine_score",
+    "fused_coarse_projector",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -239,6 +257,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fixture-dir", type=Path, required=True)
     parser.add_argument("--acceptance-config", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--native-checkpoint-optimiser",
+        type=Path,
+        default=None,
+        help="load one exact native RELION VDAM checkpoint instead of replaying RECOVAR",
+    )
+    parser.add_argument(
+        "--native-checkpoint-data-star",
+        type=Path,
+        default=None,
+        help="exact data STAR named by --native-checkpoint-optimiser",
+    )
+    parser.add_argument(
+        "--native-data-dir",
+        type=Path,
+        default=None,
+        help="particle-stack directory for a native RELION checkpoint",
+    )
+    parser.add_argument(
+        "--target-image-name",
+        default=None,
+        help="unique _rlnImageName whose one-transition hard state is summarized",
+    )
     parser.add_argument("--checkpoint-iteration", type=int, default=34)
     parser.add_argument("--image-batch-size", type=int, default=500)
     parser.add_argument("--candidate-mode", choices=CANDIDATE_MODES, default="hybrid")
@@ -276,6 +317,42 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _resolve_native_checkpoint_inputs(
+    *,
+    optimiser: Path | None,
+    data_star: Path | None,
+    data_dir: Path | None,
+) -> dict[str, Path] | None:
+    """Resolve the all-or-none native checkpoint input contract."""
+
+    supplied = {
+        "native-checkpoint-optimiser": optimiser,
+        "native-checkpoint-data-star": data_star,
+        "native-data-dir": data_dir,
+    }
+    if not any(value is not None for value in supplied.values()):
+        return None
+    missing = [name for name, value in supplied.items() if value is None]
+    if missing:
+        raise ValueError(
+            "native checkpoint mode requires all three inputs; missing "
+            + ", ".join(missing)
+        )
+    assert optimiser is not None and data_star is not None and data_dir is not None
+    resolved = {
+        "optimiser": optimiser.expanduser().resolve(strict=True),
+        "data_star": data_star.expanduser().resolve(strict=True),
+        "data_dir": data_dir.expanduser().resolve(strict=True),
+    }
+    if not resolved["optimiser"].is_file():
+        raise ValueError("native checkpoint optimiser must be a file")
+    if not resolved["data_star"].is_file():
+        raise ValueError("native checkpoint data STAR must be a file")
+    if not resolved["data_dir"].is_dir():
+        raise ValueError("native checkpoint data directory must be a directory")
+    return resolved
+
+
 def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
     if candidate_mode == "hybrid":
         return ARM_ORDER
@@ -307,6 +384,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return EXACT_COMPACT_PREPROCESS_ARM_ORDER
     if candidate_mode == "fused_pair_fine_score":
         return FUSED_PAIR_FINE_SCORE_ARM_ORDER
+    if candidate_mode == "fused_coarse_projector":
+        return FUSED_COARSE_PROJECTOR_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -322,7 +401,12 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT: "0",
         EXACT_COMPACT_PREPROCESS_ENVIRONMENT: "0",
         FUSED_PAIR_FINE_SCORE_ENVIRONMENT: "0",
+        FUSED_COARSE_PROJECTOR_ENVIRONMENT: "0",
     }
+    if candidate_mode == "fused_coarse_projector":
+        values.update(FUSED_COARSE_FIXED_ENVIRONMENT)
+        values[FUSED_COARSE_PROJECTOR_ENVIRONMENT] = "1" if enabled else "0"
+        return values
     if candidate_mode == "all_optimized_stable_shapes":
         values.update({name: "1" for name in HYBRID_ENVIRONMENT})
         values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
@@ -470,6 +554,7 @@ def _arm_candidate_enabled(label: str, candidate_mode: str) -> bool:
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
         "fused_pair_fine_score",
+        "fused_coarse_projector",
     }:
         return "_on_" in label
     return not label.startswith("direct")
@@ -1418,6 +1503,69 @@ def _validate_packed_final_noise_profiles(
     }
 
 
+def _validate_fused_coarse_projector_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+) -> dict[str, Any]:
+    """Prove that the shared RELION fused projector did or did not execute."""
+
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _validate_coarse_selector_audit,
+    )
+
+    halfset_profiles = {
+        key: value
+        for key, value in sorted(estep_meta.items())
+        if key.startswith("halfset_") and key.endswith("_profile_summary")
+    }
+    if not halfset_profiles:
+        raise RuntimeError(f"{label} has no halfset execution profile")
+    profiles: dict[str, Any] = {}
+    for key, value in halfset_profiles.items():
+        if not isinstance(value, dict) or "coarse_selector_audit" not in value:
+            raise RuntimeError(f"{label} profile {key} lacks coarse_selector_audit")
+        try:
+            audit = _validate_coarse_selector_audit(value["coarse_selector_audit"])
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                f"{label} profile {key} has an invalid coarse-selector audit"
+            ) from error
+        if audit["score_mode"] != "gaussian":
+            raise RuntimeError(
+                f"{label} profile {key} is not a Gaussian coarse transition"
+            )
+        if bool(audit["requested_fused"]) != bool(enabled):
+            raise RuntimeError(
+                f"{label} profile {key} requested_fused="
+                f"{audit['requested_fused']!r}, expected {enabled!r}"
+            )
+        if bool(audit["effective_fused"]) != bool(enabled):
+            raise RuntimeError(
+                f"{label} profile {key} effective_fused="
+                f"{audit['effective_fused']!r}, expected {enabled!r}"
+            )
+        if audit["requested_workers"] != 0 or audit["effective_workers"] != 0:
+            raise RuntimeError(f"{label} changed the fixed zero-worker contract")
+        if audit["requested_atomic"] or audit["effective_atomic"]:
+            raise RuntimeError(f"{label} changed the fixed non-atomic contract")
+        if audit.get("requested_prehalf", False) or audit.get(
+            "effective_prehalf",
+            False,
+        ):
+            raise RuntimeError(f"{label} changed the fixed no-prehalf contract")
+        profiles[key] = _json_ready(audit)
+    if not profiles:
+        raise RuntimeError(f"{label} has no Gaussian coarse-selector audit")
+    return {
+        "enabled": bool(enabled),
+        "profile_exact": True,
+        "profile_count": len(profiles),
+        "profiles": profiles,
+    }
+
+
 def _validate_arm_execution_contract(
     *,
     candidate_mode: str,
@@ -1436,11 +1584,16 @@ def _validate_arm_execution_contract(
         )
     check_compact_profile = _candidate_uses_compact_posterior(candidate_mode)
     check_packed_final_profile = candidate_mode == "packed_final_noise"
+    check_fused_coarse_profile = candidate_mode == "fused_coarse_projector"
     contract: dict[str, Any] = {
         "requested_environment": dict(requested_environment),
         "effective_environment": dict(effective_environment),
         "environment_exact": True,
-        "profile_checked": check_compact_profile or check_packed_final_profile,
+        "profile_checked": (
+            check_compact_profile
+            or check_packed_final_profile
+            or check_fused_coarse_profile
+        ),
     }
     if check_packed_final_profile:
         resolved_backend_mode = (
@@ -1451,6 +1604,14 @@ def _validate_arm_execution_contract(
         contract["packed_final_noise"] = _validate_packed_final_noise_profiles(
             estep_meta,
             backend_mode=resolved_backend_mode,
+        )
+    if check_fused_coarse_profile:
+        contract["fused_coarse_projector"] = (
+            _validate_fused_coarse_projector_profiles(
+                estep_meta,
+                enabled=candidate_enabled,
+                label=backend_mode or candidate_mode,
+            )
         )
     if not check_compact_profile:
         return contract
@@ -1921,6 +2082,270 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _file_manifest(path: Path) -> dict[str, Any]:
+    resolved = path.resolve(strict=True)
+    digest = hashlib.sha256()
+    with resolved.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return {
+        "path": str(resolved),
+        "size_bytes": int(resolved.stat().st_size),
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _native_checkpoint_file_manifests(
+    continuation,
+    *,
+    data_dir: Path,
+) -> dict[str, Any]:
+    """Hash every STAR, reference, and gradient moment consumed by restart."""
+
+    import starfile
+
+    import recovar.em.initial_model.driver as driver
+    from recovar.data_io.starfile import read_star
+
+    files: dict[str, Path] = {
+        "optimiser_star": continuation.optimiser_star,
+        "model_star": continuation.model_star,
+        "data_star": continuation.data_star,
+        "sampling_star": continuation.sampling_star,
+    }
+    model = starfile.read(continuation.model_star, always_dict=True)
+    classes = model.get("model_classes")
+    if classes is None or len(classes) != int(continuation.state.K):
+        raise RuntimeError("native checkpoint model class table changed after load")
+    for class_offset, (_row_index, row) in enumerate(classes.iterrows()):
+        class_number = class_offset + 1
+        reference = driver._resolve_relion_checkpoint_path(
+            str(row["rlnReferenceImage"]),
+            owner=continuation.model_star,
+        )
+        moment1 = driver._resolve_relion_checkpoint_path(
+            str(row["rlnGradMoment1"]),
+            owner=continuation.model_star,
+        )
+        moment2 = driver._resolve_relion_checkpoint_path(
+            str(row["rlnGradMoment2"]),
+            owner=continuation.model_star,
+        )
+        files[f"class_{class_number:03d}_reference"] = reference
+        files[f"class_{class_number:03d}_grad_moment1_half1"] = moment1
+        files[f"class_{class_number:03d}_grad_moment1_half2"] = (
+            driver._second_pseudo_half_moment_path(
+                moment1,
+                nr_classes=int(continuation.state.K),
+            )
+        )
+        files[f"class_{class_number:03d}_grad_moment2"] = moment2
+    main_star, _optics_star = read_star(str(continuation.data_star))
+    image_column = next(
+        (
+            name
+            for name in ("_rlnImageName", "rlnImageName")
+            if name in main_star.columns
+        ),
+        None,
+    )
+    if image_column is None:
+        raise RuntimeError("native checkpoint data STAR lacks _rlnImageName")
+    stack_paths: set[Path] = set()
+    for image_name in main_star[image_column].astype(str).to_numpy():
+        if "@" not in image_name:
+            raise RuntimeError(
+                f"native checkpoint image name lacks stack index: {image_name!r}"
+            )
+        stack_token = image_name.split("@", 1)[1]
+        stack_path = Path(stack_token).expanduser()
+        if not stack_path.is_absolute():
+            stack_path = data_dir / stack_path
+        stack_paths.add(stack_path.resolve(strict=True))
+    if not stack_paths:
+        raise RuntimeError("native checkpoint data STAR has no particle stacks")
+    for stack_number, stack_path in enumerate(sorted(stack_paths), start=1):
+        files[f"particle_stack_{stack_number:03d}"] = stack_path
+    return {name: _file_manifest(path) for name, path in sorted(files.items())}
+
+
+def _resolve_target_particle_index(main_star, image_name: str) -> int:
+    """Resolve one checkpoint-local particle row by exact RELION image name."""
+
+    image_name = str(image_name).strip()
+    if not image_name:
+        raise ValueError("target-image-name must be non-empty")
+    column_name = next(
+        (
+            name
+            for name in ("_rlnImageName", "rlnImageName")
+            if name in main_star.columns
+        ),
+        None,
+    )
+    if column_name is None:
+        raise ValueError("target checkpoint STAR lacks _rlnImageName")
+    names = np.asarray(main_star[column_name].astype(str).to_numpy(), dtype=str)
+    matches = np.flatnonzero(names == image_name)
+    if matches.size != 1:
+        raise ValueError(
+            f"target image {image_name!r} must match exactly one checkpoint row; "
+            f"found {int(matches.size)}"
+        )
+    return int(matches[0])
+
+
+def _target_star_metadata(main_star, row_index: int) -> dict[str, Any]:
+    """Return a small source-STAR snapshot for one checkpoint-local row."""
+
+    row_index = int(row_index)
+    if row_index < 0 or row_index >= len(main_star):
+        raise IndexError("target checkpoint row is outside the STAR table")
+    row = main_star.iloc[row_index]
+
+    def _value(*names: str, cast=None):
+        for name in names:
+            if name in main_star.columns:
+                value = row[name]
+                return cast(value) if cast is not None else value
+        return None
+
+    eulers = [
+        _value("_rlnAngleRot", "rlnAngleRot", cast=float),
+        _value("_rlnAngleTilt", "rlnAngleTilt", cast=float),
+        _value("_rlnAnglePsi", "rlnAnglePsi", cast=float),
+    ]
+    origins_angstrom = [
+        _value("_rlnOriginXAngst", "rlnOriginXAngst", cast=float),
+        _value("_rlnOriginYAngst", "rlnOriginYAngst", cast=float),
+    ]
+    return {
+        "checkpoint_row_index": row_index,
+        "image_name": _value("_rlnImageName", "rlnImageName", cast=str),
+        "euler_degrees": eulers if all(value is not None for value in eulers) else None,
+        "origin_angstrom": (
+            origins_angstrom
+            if all(value is not None for value in origins_angstrom)
+            else None
+        ),
+        "class_number": _value("_rlnClassNumber", "rlnClassNumber", cast=int),
+        "max_posterior": _value(
+            "_rlnMaxValueProbDistribution",
+            "rlnMaxValueProbDistribution",
+            cast=float,
+        ),
+        "significant_count": _value(
+            "_rlnNrOfSignificantSamples",
+            "rlnNrOfSignificantSamples",
+            cast=int,
+        ),
+    }
+
+
+def _target_particle_summary(
+    particle_state,
+    estep_meta: dict[str, Any] | None,
+    *,
+    row_index: int,
+    pixel_size: float,
+) -> dict[str, Any]:
+    """Summarize one particle's hard decision after a transition."""
+
+    from recovar.utils.helpers import R_to_relion
+
+    row_index = int(row_index)
+    n_particles = int(np.asarray(particle_state.translation_offsets).shape[0])
+    if row_index < 0 or row_index >= n_particles:
+        raise IndexError("target particle row is outside the particle state")
+    visited = bool(
+        np.asarray(particle_state.visited, dtype=bool)[row_index]
+        if particle_state.visited is not None
+        else float(np.asarray(particle_state.max_posterior)[row_index]) > 0.0
+    )
+
+    def _optional_row(name: str):
+        value = getattr(particle_state, name)
+        if value is None:
+            return None
+        return np.asarray(value)[row_index]
+
+    rotation = _optional_row("best_pose_rotations")
+    eulers = (
+        None
+        if rotation is None
+        else np.asarray(
+            R_to_relion(np.asarray(rotation)[None, ...], degrees=True),
+            dtype=np.float64,
+        )[0].tolist()
+    )
+    selected_position = None
+    significant_count = None
+    if estep_meta is not None and estep_meta.get("selected_particle_ids") is not None:
+        selected_ids = np.asarray(
+            estep_meta["selected_particle_ids"],
+            dtype=np.int64,
+        ).reshape(-1)
+        positions = np.flatnonzero(selected_ids == row_index)
+        if positions.size > 1:
+            raise RuntimeError("target particle appeared more than once in the E-step subset")
+        if positions.size == 1:
+            selected_position = int(positions[0])
+            counts = estep_meta.get("significant_counts")
+            if counts is not None:
+                counts = np.asarray(counts).reshape(-1)
+                if counts.shape != selected_ids.shape:
+                    raise RuntimeError(
+                        "significant_counts does not align with selected_particle_ids"
+                    )
+                significant_count = int(counts[selected_position])
+
+    origin_px = np.asarray(particle_state.translation_offsets, dtype=np.float64)[
+        row_index
+    ]
+    best_translation = _optional_row("best_pose_translations")
+    rotation_id = _optional_row("best_pose_rotation_ids")
+    pose_assignment = _optional_row("pose_assignments")
+    class_index = int(np.asarray(particle_state.class_assignments)[row_index])
+    summary = {
+        "checkpoint_row_index": row_index,
+        "selected_in_transition": selected_position is not None,
+        "selected_position": selected_position,
+        "visited": visited,
+        "class_index_zero_based": class_index,
+        "class_number": class_index + 1 if visited else 0,
+        "pose_assignment": None if pose_assignment is None else int(pose_assignment),
+        "best_pose_rotation_id": None if rotation_id is None else int(rotation_id),
+        "best_pose_translation_px": (
+            None
+            if best_translation is None
+            else np.asarray(best_translation, dtype=np.float64).tolist()
+        ),
+        "origin_offset_px": origin_px.tolist(),
+        "origin_offset_angstrom": (origin_px * float(pixel_size)).tolist(),
+        "euler_degrees": eulers,
+        "max_posterior": float(np.asarray(particle_state.max_posterior)[row_index]),
+        "significant_count": significant_count,
+    }
+    hard_state = {
+        key: summary[key]
+        for key in (
+            "visited",
+            "class_number",
+            "pose_assignment",
+            "best_pose_rotation_id",
+            "best_pose_translation_px",
+            "origin_offset_px",
+            "euler_degrees",
+            "max_posterior",
+            "significant_count",
+        )
+    }
+    summary["hard_state_sha256"] = _sha256_bytes(
+        json.dumps(hard_state, sort_keys=True, separators=(",", ":")).encode()
+    )
+    return summary
+
+
 def _array_sha256(value: Any) -> str:
     array = np.ascontiguousarray(np.asarray(value))
     digest = hashlib.sha256()
@@ -2150,33 +2575,64 @@ def _capture_direct_checkpoint(
     image_batch_size: int,
     checkpoint_candidate_mode: str = "hybrid",
     checkpoint_candidate_enabled: bool = False,
+    native_checkpoint_optimiser: Path | None = None,
+    native_checkpoint_data_star: Path | None = None,
+    native_data_dir: Path | None = None,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from scripts import run_ab_initio
     from scripts.run_vdam_relion_parity_case import build_recovar_command
 
-    input_star = fixture_dir / "particles.star"
+    native_mode = native_checkpoint_optimiser is not None
+    if native_mode != (
+        native_checkpoint_data_star is not None and native_data_dir is not None
+    ):
+        raise ValueError("native checkpoint capture requires all native inputs")
+    input_star = (
+        native_checkpoint_data_star
+        if native_mode
+        else fixture_dir / "particles.star"
+    )
+    command_data_dir = native_data_dir if native_mode else fixture_dir
+    assert input_star is not None and command_data_dir is not None
     definition = acceptance["science_contract"]["definition"]
     command = build_recovar_command(
         input_star=input_star,
         output_prefix=output_root / "checkpoint" / "run",
-        fixture_dir=fixture_dir,
+        fixture_dir=command_data_dir,
         definition=definition,
         image_batch_size=image_batch_size,
     )
     argv = list(command[3:])
     write_index = argv.index("--grad_write_iter") + 1
     argv[write_index] = str(checkpoint_iteration)
-    argv.extend(("--diagnostic_stop_after_iteration", str(checkpoint_iteration)))
+    if native_mode:
+        argv.extend(
+            (
+                "--diagnostic_continue_optimiser",
+                str(native_checkpoint_optimiser),
+                "--diagnostic_stop_after_iteration",
+                str(checkpoint_iteration + 1),
+                "--no_iter_artifacts",
+            )
+        )
+    else:
+        argv.extend(("--diagnostic_stop_after_iteration", str(checkpoint_iteration)))
     if (
         checkpoint_candidate_mode == "all_optimized_stable_shapes"
         and checkpoint_candidate_enabled
     ):
         argv.append("--stable-fourier-window-shapes")
 
-    captured: dict[str, Any] = {"argv": argv, "output_root": output_root}
+    captured: dict[str, Any] = {
+        "argv": argv,
+        "output_root": output_root,
+        "checkpoint_source": "native_relion" if native_mode else "recovar_direct",
+    }
     original_expectation_factory = driver._native_expectation_step
     original_run = driver.run_native_initial_model
+    original_continuation_loader = driver._load_native_vdam_continuation
+    original_iteration_loop = driver.run_vdam_iterations
 
     def capture_expectation_factory(dataset, opts, noise_variance, particle_state, sampling_state=None, optics_state=None):
         captured.update(
@@ -2201,6 +2657,22 @@ def _capture_direct_checkpoint(
         captured["result"] = result
         return result
 
+    def capture_continuation(*args, **kwargs):
+        continuation = original_continuation_loader(*args, **kwargs)
+        captured["continuation"] = continuation
+        return continuation
+
+    def capture_loaded_state(state, *positional, **kwargs):
+        if positional:
+            raise RuntimeError("native checkpoint loader received unexpected positional args")
+        captured["load_only_iteration_call"] = {
+            "start_iteration": int(kwargs["start_iteration"]),
+            "diagnostic_stop_after_iteration": int(
+                kwargs["diagnostic_stop_after_iteration"]
+            ),
+        }
+        return state
+
     checkpoint_environment = {
         **_candidate_environment(
             checkpoint_candidate_mode,
@@ -2211,6 +2683,9 @@ def _capture_direct_checkpoint(
     }
     driver._native_expectation_step = capture_expectation_factory
     driver.run_native_initial_model = capture_run
+    if native_mode:
+        driver._load_native_vdam_continuation = capture_continuation
+        driver.run_vdam_iterations = capture_loaded_state
     try:
         with _temporary_environment(
             checkpoint_environment
@@ -2222,6 +2697,8 @@ def _capture_direct_checkpoint(
     finally:
         driver._native_expectation_step = original_expectation_factory
         driver.run_native_initial_model = original_run
+        driver._load_native_vdam_continuation = original_continuation_loader
+        driver.run_vdam_iterations = original_iteration_loop
     if status != 0:
         raise RuntimeError(f"direct checkpoint trajectory exited with status {status}")
     required = {
@@ -2241,17 +2718,47 @@ def _capture_direct_checkpoint(
     if captured["effective_environment"] != checkpoint_environment:
         raise RuntimeError("checkpoint trajectory environment was not exact")
     expected_stable = bool(
-        checkpoint_candidate_mode == "all_optimized_stable_shapes"
+        not native_mode
+        and checkpoint_candidate_mode == "all_optimized_stable_shapes"
         and checkpoint_candidate_enabled
     )
     if bool(captured["opts"].stable_fourier_window_shapes) != expected_stable:
         raise RuntimeError("checkpoint trajectory stable-Fourier option was not exact")
     captured["checkpoint_execution_contract"] = {
+        "source": captured["checkpoint_source"],
         "requested_environment": checkpoint_environment,
         "effective_environment": captured["effective_environment"],
         "environment_exact": True,
         "stable_fourier_window_shapes": expected_stable,
+        "transition_executed_during_capture": not native_mode,
     }
+    if native_mode:
+        required_native = {"continuation", "load_only_iteration_call"}
+        missing_native = required_native - set(captured)
+        if missing_native:
+            raise RuntimeError(
+                "native checkpoint capture is incomplete: "
+                f"{sorted(missing_native)}"
+            )
+        continuation = captured["continuation"]
+        if int(continuation.iteration) != checkpoint_iteration:
+            raise RuntimeError("native continuation has the wrong iteration")
+        expected_call = {
+            "start_iteration": checkpoint_iteration,
+            "diagnostic_stop_after_iteration": checkpoint_iteration + 1,
+        }
+        if captured["load_only_iteration_call"] != expected_call:
+            raise RuntimeError("native checkpoint load-only call contract changed")
+        captured["checkpoint_execution_contract"].update(
+            {
+                "load_only_call": captured["load_only_iteration_call"],
+                "input_files": _native_checkpoint_file_manifests(
+                    continuation,
+                    data_dir=native_data_dir,
+                ),
+                "data_dir": str(native_data_dir.resolve(strict=True)),
+            }
+        )
     captured["expectation_factory"] = original_expectation_factory
     return captured
 
@@ -2326,6 +2833,12 @@ def _run_transition_arm(
 
     def capture_artifact(_current, _iteration, meta):
         captured["post_iteration_meta"] = copy.deepcopy(meta)
+        driver._record_native_sampling_post_iteration(
+            sampling_state,
+            _current,
+            iteration=int(_iteration),
+            meta=meta,
+        )
 
     post_mstep_update = None
     if opts.do_solvent:
@@ -3514,6 +4027,16 @@ def main(argv: list[str] | None = None) -> int:
     fixture_dir = args.fixture_dir.resolve(strict=True)
     acceptance_path = args.acceptance_config.resolve(strict=True)
     output_root = args.output_root.resolve()
+    native_checkpoint = _resolve_native_checkpoint_inputs(
+        optimiser=args.native_checkpoint_optimiser,
+        data_star=args.native_checkpoint_data_star,
+        data_dir=args.native_data_dir,
+    )
+    target_image_name = (
+        None if args.target_image_name is None else str(args.target_image_name).strip()
+    )
+    if args.target_image_name is not None and not target_image_name:
+        raise ValueError("target-image-name must be non-empty")
     if args.checkpoint_iteration < 1:
         raise ValueError("checkpoint-iteration must be positive")
     if args.image_batch_size < 1:
@@ -3530,6 +4053,13 @@ def main(argv: list[str] | None = None) -> int:
     ):
         raise ValueError(
             "mirrored hybrid image-batch panels require --candidate-mode all_optimized",
+        )
+    if (
+        args.candidate_mode == "fused_coarse_projector"
+        and args.coarse_prefix_dump_original_index is not None
+    ):
+        raise ValueError(
+            "fused-coarse projector mode does not support compact-hybrid coarse-prefix dumps"
         )
     if output_root.exists():
         raise FileExistsError(f"output root already exists: {output_root}")
@@ -3548,14 +4078,49 @@ def main(argv: list[str] | None = None) -> int:
         image_batch_size=args.image_batch_size,
         checkpoint_candidate_mode=(
             "all_optimized_stable_shapes"
-            if args.candidate_mode == "all_optimized_stable_shapes"
+            if native_checkpoint is None
+            and args.candidate_mode == "all_optimized_stable_shapes"
             else "hybrid"
         ),
         checkpoint_candidate_enabled=(
-            args.candidate_mode == "all_optimized_stable_shapes"
+            native_checkpoint is None
+            and args.candidate_mode == "all_optimized_stable_shapes"
+        ),
+        native_checkpoint_optimiser=(
+            None if native_checkpoint is None else native_checkpoint["optimiser"]
+        ),
+        native_checkpoint_data_star=(
+            None if native_checkpoint is None else native_checkpoint["data_star"]
+        ),
+        native_data_dir=(
+            None if native_checkpoint is None else native_checkpoint["data_dir"]
         ),
     )
     checkpoint_wall_s = float(time.perf_counter() - checkpoint_started)
+    target_checkpoint: dict[str, Any] | None = None
+    target_row_index: int | None = None
+    if target_image_name is not None:
+        from recovar.data_io.starfile import read_star
+
+        checkpoint_star, _checkpoint_optics = read_star(checkpoint["opts"].fn_img)
+        target_row_index = _resolve_target_particle_index(
+            checkpoint_star,
+            target_image_name,
+        )
+        target_checkpoint = {
+            "image_name": target_image_name,
+            "checkpoint_row_index": target_row_index,
+            "source_star": _target_star_metadata(
+                checkpoint_star,
+                target_row_index,
+            ),
+            "particle_state": _target_particle_summary(
+                checkpoint["particle_state"],
+                None,
+                row_index=target_row_index,
+                pixel_size=float(checkpoint["dataset"].voxel_size),
+            ),
+        }
     checkpoint_manifest = {
         "state": _dataclass_manifest(checkpoint["result"].state),
         "particle_state": _dataclass_manifest(checkpoint["particle_state"]),
@@ -3755,6 +4320,44 @@ def main(argv: list[str] | None = None) -> int:
             (label, None)
             for label in FUSED_PAIR_FINE_SCORE_ARM_ORDER
         )
+    elif args.candidate_mode == "fused_coarse_projector":
+        for backend, enabled in (("fused_off", False), ("fused_on", True)):
+            warm = _run_transition_arm(
+                checkpoint,
+                label=f"prewarm_{backend}",
+                candidate_mode=args.candidate_mode,
+                candidate_enabled=enabled,
+                checkpoint_iteration=args.checkpoint_iteration,
+            )
+            for key, expected in expected_manifests.items():
+                if warm[key]["manifest_sha256"] != expected:
+                    raise RuntimeError(
+                        f"prewarm_{backend} did not start from the exact shared {key}",
+                    )
+            prewarm[backend] = {
+                "label": warm["label"],
+                "backend_mode": warm["backend_mode"],
+                "wall_s": warm["wall_s"],
+                "persistent_cache": warm["persistent_cache"],
+                "fused_coarse_projector": warm["execution_contract"][
+                    "fused_coarse_projector"
+                ],
+                "initial_state_manifest_sha256": warm[
+                    "initial_state_manifest"
+                ]["manifest_sha256"],
+                "initial_particle_state_manifest_sha256": warm[
+                    "initial_particle_state_manifest"
+                ]["manifest_sha256"],
+                "initial_sampling_state_manifest_sha256": warm[
+                    "initial_sampling_state_manifest"
+                ]["manifest_sha256"],
+            }
+            del warm
+            gc.collect()
+        arm_specs = tuple(
+            (label, None)
+            for label in FUSED_COARSE_PROJECTOR_ARM_ORDER
+        )
     else:
         legacy_arm_order = _arm_order(args.candidate_mode)
         arm_specs = tuple(
@@ -3876,6 +4479,17 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
     gpu_memory = _gpu_memory_report(arms)
+    target_arm_summaries: dict[str, Any] | None = None
+    if target_row_index is not None:
+        target_arm_summaries = {
+            label: _target_particle_summary(
+                arm["particle_state"],
+                arm["estep_meta"],
+                row_index=target_row_index,
+                pixel_size=float(checkpoint["dataset"].voxel_size),
+            )
+            for label, arm in arms.items()
+        }
     arm_dir = output_root / "arms"
     arm_dir.mkdir()
     arm_summaries: dict[str, Any] = {}
@@ -3908,6 +4522,11 @@ def main(argv: list[str] | None = None) -> int:
             "sampling_state_manifest": _dataclass_manifest(arm["sampling_state"]),
             "estep_meta": _json_ready(arm["estep_meta"]),
             "post_iteration_meta": _json_ready(arm["post_iteration_meta"]),
+            "target_particle": (
+                None
+                if target_arm_summaries is None
+                else target_arm_summaries[label]
+            ),
         }
         arm_path = arm_dir / f"{label}.json"
         arm_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -3935,6 +4554,7 @@ def main(argv: list[str] | None = None) -> int:
             "final_state_manifest": payload["final_state_manifest"],
             "particle_state_manifest": payload["particle_state_manifest"],
             "sampling_state_manifest": payload["sampling_state_manifest"],
+            "target_particle": payload["target_particle"],
         }
 
     report = {
@@ -3943,6 +4563,15 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoint_iteration": int(args.checkpoint_iteration),
         "profiled_iteration": int(args.checkpoint_iteration) + 1,
         "candidate_mode": args.candidate_mode,
+        "checkpoint_source": checkpoint["checkpoint_source"],
+        "target_particle": (
+            None
+            if target_checkpoint is None
+            else {
+                **target_checkpoint,
+                "arms": target_arm_summaries,
+            }
+        ),
         "fused_posterior_dump_original_index": (
             args.fused_posterior_dump_original_index
         ),
@@ -4018,13 +4647,17 @@ def main(argv: list[str] | None = None) -> int:
             "particle_state_exact_for_every_arm": True,
             "sampling_state_exact_for_every_arm": True,
             "checkpoint_trajectory_backend": (
-                "all_optimized_stable_shapes_on_q32_batched"
+                "native_relion_load_only"
+                if native_checkpoint is not None
+                else "all_optimized_stable_shapes_on_q32_batched"
                 if args.candidate_mode == "all_optimized_stable_shapes"
                 else "direct"
             ),
             "only_transition_differences": (
                 ["stable_fourier_window_shapes", "stable_flat_row_capacity"]
                 if args.candidate_mode == "all_optimized_stable_shapes"
+                else [FUSED_COARSE_PROJECTOR_ENVIRONMENT]
+                if args.candidate_mode == "fused_coarse_projector"
                 else None
             ),
             "baseline_trajectory_backend": (
@@ -4038,6 +4671,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.candidate_mode == "exact_compact_preprocess"
                 else "all_optimized_fused_pair_fine_score_off"
                 if args.candidate_mode == "fused_pair_fine_score"
+                else "rectangular_preprojected_coarse_scorer"
+                if args.candidate_mode == "fused_coarse_projector"
                 else "all_optimized_stable_shapes_off_q32_batched"
                 if args.candidate_mode == "all_optimized_stable_shapes"
                 else (
@@ -4059,6 +4694,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.candidate_mode == "exact_compact_preprocess"
                 else "all_optimized_fused_pair_fine_score_on"
                 if args.candidate_mode == "fused_pair_fine_score"
+                else "shared_relion_fused_coarse_projector"
+                if args.candidate_mode == "fused_coarse_projector"
                 else "all_optimized_stable_shapes_on_q32_batched"
                 if args.candidate_mode == "all_optimized_stable_shapes"
                 else (
@@ -4088,6 +4725,7 @@ def main(argv: list[str] | None = None) -> int:
                     "exact_coarse_single_translate",
                     "exact_compact_preprocess",
                     "fused_pair_fine_score",
+                    "fused_coarse_projector",
                 }
             ),
             "both_incremental_backends_prewarmed": bool(
@@ -4119,6 +4757,9 @@ def main(argv: list[str] | None = None) -> int:
             "fused_pair_fine_score_profile_fail_closed": (
                 args.candidate_mode == "fused_pair_fine_score"
             ),
+            "fused_coarse_projector_profile_fail_closed": (
+                args.candidate_mode == "fused_coarse_projector"
+            ),
             "persistent_cache_family_counts_recorded": (
                 args.candidate_mode == "fused_pair_fine_score"
             ),
@@ -4131,6 +4772,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.mirrored_hybrid_image_batch_panels,
             ),
         },
+        "science_divergence_is_observational_not_exit_gate": bool(
+            native_checkpoint is not None
+            or args.candidate_mode == "fused_coarse_projector"
+        ),
         "science_promotion_allowed": False,
     }
     report_path = output_root / "report.json"
@@ -4148,37 +4793,42 @@ def main(argv: list[str] | None = None) -> int:
         ),
         flush=True,
     )
-    if (
-        compact_science_contract is not None
-        and not compact_science_contract["hard_exact_contract_passed"]
-    ):
-        return 1
-    if hybrid_image_batch_science_contract is not None and not (
-        hybrid_image_batch_science_contract["hard_exact_contract_passed"]
-        and hybrid_image_batch_science_contract["atomic_repeat_envelope_passed"]
-    ):
-        return 1
-    if args.candidate_mode == "exact_coarse_single_translate" and not (
-        compact_science_contract["hard_exact_contract_passed"]
-        and exact_coarse_single_translate_atomic_contract_passed
-    ):
-        return 1
-    if args.candidate_mode == "exact_compact_preprocess" and not (
-        compact_science_contract["hard_exact_contract_passed"]
-        and exact_compact_preprocess_atomic_contract_passed
-    ):
-        return 1
-    if args.candidate_mode == "fused_pair_fine_score" and not (
-        compact_science_contract["hard_exact_contract_passed"]
-        and fused_pair_fine_atomic_contract_passed
-        and fused_pair_fine_runtime_contract["persistent_cache_contract"][
-            "timed_arms_add_no_target_family_programs_after_prewarm"
-        ]
-        and fused_pair_fine_runtime_contract["material_speedup_passed"]
-        and gpu_memory["available"]
-        and gpu_memory["all_arms_sampled"]
-    ):
-        return 1
+    enforce_science_exit_gate = not bool(
+        native_checkpoint is not None
+        or args.candidate_mode == "fused_coarse_projector"
+    )
+    if enforce_science_exit_gate:
+        if (
+            compact_science_contract is not None
+            and not compact_science_contract["hard_exact_contract_passed"]
+        ):
+            return 1
+        if hybrid_image_batch_science_contract is not None and not (
+            hybrid_image_batch_science_contract["hard_exact_contract_passed"]
+            and hybrid_image_batch_science_contract["atomic_repeat_envelope_passed"]
+        ):
+            return 1
+        if args.candidate_mode == "exact_coarse_single_translate" and not (
+            compact_science_contract["hard_exact_contract_passed"]
+            and exact_coarse_single_translate_atomic_contract_passed
+        ):
+            return 1
+        if args.candidate_mode == "exact_compact_preprocess" and not (
+            compact_science_contract["hard_exact_contract_passed"]
+            and exact_compact_preprocess_atomic_contract_passed
+        ):
+            return 1
+        if args.candidate_mode == "fused_pair_fine_score" and not (
+            compact_science_contract["hard_exact_contract_passed"]
+            and fused_pair_fine_atomic_contract_passed
+            and fused_pair_fine_runtime_contract["persistent_cache_contract"][
+                "timed_arms_add_no_target_family_programs_after_prewarm"
+            ]
+            and fused_pair_fine_runtime_contract["material_speedup_passed"]
+            and gpu_memory["available"]
+            and gpu_memory["all_arms_sampled"]
+        ):
+            return 1
     return 0
 
 

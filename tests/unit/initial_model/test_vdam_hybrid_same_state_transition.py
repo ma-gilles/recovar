@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from recovar.em.dense_single_volume import local_debug
@@ -176,6 +177,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         runner._arm_order("fused_pair_fine_score")
         == runner.FUSED_PAIR_FINE_SCORE_ARM_ORDER
     )
+    assert (
+        runner._arm_order("fused_coarse_projector")
+        == runner.FUSED_COARSE_PROJECTOR_ARM_ORDER
+    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -238,6 +243,14 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     pair_fine_on = runner._candidate_environment(
         "fused_pair_fine_score",
+        enabled=True,
+    )
+    fused_coarse_off = runner._candidate_environment(
+        "fused_coarse_projector",
+        enabled=False,
+    )
+    fused_coarse_on = runner._candidate_environment(
+        "fused_coarse_projector",
         enabled=True,
     )
 
@@ -462,6 +475,31 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         "pair_fine_on_1",
         "fused_pair_fine_score",
     )
+    assert {
+        key
+        for key in fused_coarse_off
+        if fused_coarse_off[key] != fused_coarse_on[key]
+    } == {runner.FUSED_COARSE_PROJECTOR_ENVIRONMENT}
+    assert fused_coarse_off[runner.FUSED_COARSE_PROJECTOR_ENVIRONMENT] == "0"
+    assert fused_coarse_on[runner.FUSED_COARSE_PROJECTOR_ENVIRONMENT] == "1"
+    assert all(
+        fused_coarse_on[name] == value
+        for name, value in runner.FUSED_COARSE_FIXED_ENVIRONMENT.items()
+    )
+    assert runner._arm_candidate_enabled(
+        "fused_coarse_off_1",
+        "fused_coarse_projector",
+    ) is False
+    assert runner._arm_candidate_enabled(
+        "fused_coarse_on_1",
+        "fused_coarse_projector",
+    ) is True
+    assert runner._candidate_uses_hybrid("fused_coarse_projector") is False
+    assert (
+        runner._candidate_uses_compact_posterior("fused_coarse_projector")
+        is False
+    )
+    assert runner._candidate_uses_packed_deferred("fused_coarse_projector") is False
 
 
 def test_all_optimized_stable_pair_changes_only_the_two_stable_abis() -> None:
@@ -506,6 +544,174 @@ def test_same_state_accepts_a_focused_posterior_dump_target(tmp_path) -> None:
 
     assert args.fused_posterior_dump_original_index == 2798
     assert args.coarse_prefix_dump_original_index == 35
+
+
+def test_same_state_accepts_native_checkpoint_and_named_target(tmp_path) -> None:
+    optimiser = tmp_path / "run_it006_optimiser.star"
+    data_star = tmp_path / "run_it006_data.star"
+    optimiser.touch()
+    data_star.touch()
+    args = runner._parse_args(
+        [
+            "--fixture-dir",
+            str(tmp_path),
+            "--acceptance-config",
+            str(tmp_path / "acceptance.json"),
+            "--output-root",
+            str(tmp_path / "out"),
+            "--native-checkpoint-optimiser",
+            str(optimiser),
+            "--native-checkpoint-data-star",
+            str(data_star),
+            "--native-data-dir",
+            str(tmp_path),
+            "--target-image-name",
+            "2519@particles.128.mrcs",
+        ]
+    )
+
+    resolved = runner._resolve_native_checkpoint_inputs(
+        optimiser=args.native_checkpoint_optimiser,
+        data_star=args.native_checkpoint_data_star,
+        data_dir=args.native_data_dir,
+    )
+    assert resolved == {
+        "optimiser": optimiser.resolve(),
+        "data_star": data_star.resolve(),
+        "data_dir": tmp_path.resolve(),
+    }
+    assert args.target_image_name == "2519@particles.128.mrcs"
+
+
+def test_same_state_native_checkpoint_inputs_are_all_or_none(tmp_path) -> None:
+    assert (
+        runner._resolve_native_checkpoint_inputs(
+            optimiser=None,
+            data_star=None,
+            data_dir=None,
+        )
+        is None
+    )
+    optimiser = tmp_path / "run_it006_optimiser.star"
+    optimiser.touch()
+    with pytest.raises(ValueError, match="requires all three inputs"):
+        runner._resolve_native_checkpoint_inputs(
+            optimiser=optimiser,
+            data_star=None,
+            data_dir=tmp_path,
+        )
+
+
+def test_same_state_target_row_resolution_is_unique() -> None:
+    particles = pd.DataFrame(
+        {
+            "_rlnImageName": [
+                "1@particles.128.mrcs",
+                "2519@particles.128.mrcs",
+                "3@particles.128.mrcs",
+            ],
+            "_rlnClassNumber": [1, 0, 1],
+        }
+    )
+    assert (
+        runner._resolve_target_particle_index(
+            particles,
+            "2519@particles.128.mrcs",
+        )
+        == 1
+    )
+    with pytest.raises(ValueError, match="found 0"):
+        runner._resolve_target_particle_index(particles, "missing")
+    duplicated = pd.concat([particles, particles.iloc[[1]]], ignore_index=True)
+    with pytest.raises(ValueError, match="found 2"):
+        runner._resolve_target_particle_index(
+            duplicated,
+            "2519@particles.128.mrcs",
+        )
+
+
+def _fused_coarse_selector_audit(enabled: bool) -> dict:
+    return {
+        "score_mode": "gaussian",
+        "translation_count": 29,
+        "requested_fused": enabled,
+        "effective_fused": enabled,
+        "requested_workers": 0,
+        "effective_workers": 0,
+        "requested_atomic": False,
+        "effective_atomic": False,
+        "requested_prehalf": False,
+        "effective_prehalf": False,
+        "wrapper": "relion_coarse_diff2_projector_f32" if enabled else None,
+        "target": "cuda_relion_coarse_diff2_projector_f32" if enabled else None,
+        "counts": {
+            "fused_calls": 2 if enabled else 0,
+            "actual_rows": 200 if enabled else 0,
+            "multistream_calls": 0,
+            "native_atomic_selected_calls": 0,
+            "prehalf_selected_calls": 0,
+        },
+    }
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_fused_coarse_projector_contract_proves_the_executed_selector(
+    enabled: bool,
+) -> None:
+    meta = {
+        "halfset_0_profile_summary": {
+            "coarse_selector_audit": _fused_coarse_selector_audit(enabled),
+        }
+    }
+    requested = runner._candidate_environment(
+        "fused_coarse_projector",
+        enabled=enabled,
+    )
+
+    contract = runner._validate_arm_execution_contract(
+        candidate_mode="fused_coarse_projector",
+        candidate_enabled=enabled,
+        requested_environment=requested,
+        effective_environment=dict(requested),
+        estep_meta=meta,
+    )
+
+    assert contract["profile_checked"] is True
+    assert contract["fused_coarse_projector"]["enabled"] is enabled
+    assert contract["fused_coarse_projector"]["profile_exact"] is True
+
+
+def test_fused_coarse_projector_contract_fails_closed() -> None:
+    requested = runner._candidate_environment(
+        "fused_coarse_projector",
+        enabled=True,
+    )
+    with pytest.raises(RuntimeError, match="lacks coarse_selector_audit"):
+        runner._validate_arm_execution_contract(
+            candidate_mode="fused_coarse_projector",
+            candidate_enabled=True,
+            requested_environment=requested,
+            effective_environment=dict(requested),
+            estep_meta={"halfset_0_profile_summary": {}},
+        )
+
+    invalid = _fused_coarse_selector_audit(True)
+    invalid["counts"]["fused_calls"] = 0
+    with pytest.raises(RuntimeError, match="invalid coarse-selector audit"):
+        runner._validate_fused_coarse_projector_profiles(
+            {"halfset_0_profile_summary": {"coarse_selector_audit": invalid}},
+            enabled=True,
+            label="fused_on",
+        )
+
+    wrong_mode = _fused_coarse_selector_audit(False)
+    wrong_mode["score_mode"] = "normalized_cc"
+    with pytest.raises(RuntimeError, match="not a Gaussian coarse transition"):
+        runner._validate_fused_coarse_projector_profiles(
+            {"halfset_0_profile_summary": {"coarse_selector_audit": wrong_mode}},
+            enabled=False,
+            label="fused_off",
+        )
 
 
 def test_hybrid_image_batch_gate_uses_one_oracle_and_mirrored_four_repeats() -> None:
@@ -1981,6 +2187,21 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         "pair_fine_off_1,pair_fine_on_1,pair_fine_on_2,pair_fine_off_2"
         in sbatch
     )
+    assert (
+        "fused_coarse_off_1,fused_coarse_on_1,"
+        "fused_coarse_on_2,fused_coarse_off_2"
+        in sbatch
+    )
+    assert "RECOVAR_K1_COARSE_FUSED_PROJECTOR" in source
+    assert "cuda_relion_coarse_diff2_projector_f32" in sbatch
+    assert "fused_coarse_projector_profile_fail_closed" in sbatch
+    assert "science_divergence_is_observational_not_exit_gate" in source
+    assert "VDAM_SAME_STATE_NATIVE_CHECKPOINT_OPTIMISER" in sbatch
+    assert "VDAM_SAME_STATE_NATIVE_CHECKPOINT_DATA_STAR" in sbatch
+    assert "VDAM_SAME_STATE_NATIVE_DATA_DIR" in sbatch
+    assert "VDAM_SAME_STATE_TARGET_IMAGE_NAME" in sbatch
+    assert "--native-checkpoint-optimiser" in source
+    assert "native_relion_load_only" in source
     assert "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE" in source
     assert "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS" in source
     assert "profile_free_wall_timing" in sbatch
