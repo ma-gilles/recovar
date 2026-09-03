@@ -26,7 +26,12 @@ class FlatLocalRowPlan:
 
 
 def encode_flat_local_row_plan(plan: FlatLocalRowPlan) -> np.ndarray:
-    """Encode row/image/presence metadata as one JAX-friendly int32 array."""
+    """Encode row/image/validity metadata as one JAX-friendly int32 array.
+
+    Pool and static-capacity padding rows remain in the physical array so JIT
+    shapes stay unchanged, but downstream kernels can reject them before doing
+    any pixel work.  Scatters likewise only publish logical rotation rows.
+    """
 
     if not isinstance(plan, FlatLocalRowPlan):
         raise TypeError("flat local row encoding requires a FlatLocalRowPlan")
@@ -34,7 +39,7 @@ def encode_flat_local_row_plan(plan: FlatLocalRowPlan) -> np.ndarray:
         (
             plan.image_indices,
             plan.rotation_rows,
-            plan.present_mask.astype(np.int32),
+            plan.valid_mask.astype(np.int32),
         ),
         axis=1,
     ).astype(np.int32, copy=False)

@@ -43,7 +43,8 @@ def test_pool_flat_rows_preserve_source_chronology_and_static_tail():
     assert encoded.shape == (plan.packed_row_count, 3)
     assert np.array_equal(encoded[:, 0], plan.image_indices)
     assert np.array_equal(encoded[:, 1], plan.rotation_rows)
-    assert np.array_equal(encoded[:, 2] != 0, plan.present_mask)
+    assert np.array_equal(encoded[:, 2] != 0, plan.valid_mask)
+    assert np.count_nonzero(encoded[:, 2]) == int(np.sum(counts))
 
 
 @pytest.mark.unit
@@ -118,7 +119,9 @@ def test_flat_row_capacity_reuses_one_shape_per_dense_bucket_abi():
 
     assert capacities == {(4, 256): 256}
     assert encoded.shape == (256, 3)
-    assert np.count_nonzero(encoded[:, 2]) == 192
+    assert np.count_nonzero(encoded[:, 2]) == int(
+        np.sum(first.actual_rotation_counts),
+    )
 
 
 @pytest.mark.unit

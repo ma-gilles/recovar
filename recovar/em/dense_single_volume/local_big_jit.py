@@ -1415,11 +1415,11 @@ def run_local_bucket_big_jit(
     if use_flat_local_rows:
         flat_row_image_ids = flat_local_row_plan[:, 0]
         flat_row_rotation_rows = flat_local_row_plan[:, 1]
-        flat_row_present_mask = flat_local_row_plan[:, 2] != 0
+        flat_row_valid_mask = flat_local_row_plan[:, 2] != 0
     else:
         flat_row_image_ids = jnp.zeros((1,), dtype=jnp.int32)
         flat_row_rotation_rows = jnp.zeros((1,), dtype=jnp.int32)
-        flat_row_present_mask = jnp.ones((1,), dtype=bool)
+        flat_row_valid_mask = jnp.ones((1,), dtype=bool)
     if packed_local_projection:
         flat_rotations = local_rotations[
             flat_row_image_ids,
@@ -1494,7 +1494,7 @@ def run_local_bucket_big_jit(
                         proj_half_flat[:, projection_recon_take_indices],
                         flat_row_image_ids,
                         flat_row_rotation_rows,
-                        flat_row_present_mask,
+                        flat_row_valid_mask,
                         batch_size=batch_size,
                         dense_rotation_count=int(local_rotations.shape[1]),
                         fill_value=0.0,
@@ -1517,7 +1517,7 @@ def run_local_bucket_big_jit(
                         proj_half_flat[:, recon_window_indices],
                         flat_row_image_ids,
                         flat_row_rotation_rows,
-                        flat_row_present_mask,
+                        flat_row_valid_mask,
                         batch_size=batch_size,
                         dense_rotation_count=int(local_rotations.shape[1]),
                         fill_value=0.0,
@@ -1545,7 +1545,7 @@ def run_local_bucket_big_jit(
                     proj_half_flat,
                     flat_row_image_ids,
                     flat_row_rotation_rows,
-                    flat_row_present_mask,
+                    flat_row_valid_mask,
                     batch_size=batch_size,
                     dense_rotation_count=int(local_rotations.shape[1]),
                     fill_value=0.0,
@@ -1586,7 +1586,11 @@ def run_local_bucket_big_jit(
             direct_diff2_flat = (
                 cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
                     jnp.asarray(flat_score_projection, dtype=jnp.complex64),
-                    flat_row_image_ids,
+                    jnp.where(
+                        flat_row_valid_mask,
+                        flat_row_image_ids,
+                        jnp.int32(-1),
+                    ),
                     corrected_score,
                     jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
                     direct_weight,
@@ -1599,7 +1603,7 @@ def run_local_bucket_big_jit(
                 direct_diff2_flat,
                 flat_row_image_ids,
                 flat_row_rotation_rows,
-                flat_row_present_mask,
+                flat_row_valid_mask,
                 batch_size=batch_size,
                 dense_rotation_count=int(local_rotations.shape[1]),
                 fill_value=jnp.inf,

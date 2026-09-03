@@ -9470,16 +9470,21 @@ void relion_fine_diff2_fused_translate_rows_f32_kernel(
     const int64_t row = flat_block / translation_chunks;
     const int64_t translation_chunk = flat_block % translation_chunks;
     if (row >= row_count) return;
-    const int64_t batch = FlatRows
-        ? static_cast<int64_t>(row_image_ids[row])
-        : row / rotation_count;
-    if (batch < 0 || batch >= batch_size) return;
-
     const int64_t translation_start =
         translation_chunk * kRelionFineDiff2Ref3dJobChunk;
     const int translation_in_chunk = static_cast<int>(min(
         static_cast<int64_t>(kRelionFineDiff2Ref3dJobChunk),
         translation_count - translation_start));
+    const int64_t batch = FlatRows
+        ? static_cast<int64_t>(row_image_ids[row])
+        : row / rotation_count;
+    if (batch < 0 || batch >= batch_size) {
+        if (threadIdx.x < translation_in_chunk) {
+            const int64_t translation = translation_start + threadIdx.x;
+            output[row * translation_count + translation] = CUDART_INF_F;
+        }
+        return;
+    }
     __shared__ float lane_sums[
         kRelionFineDiff2BlockSize * kRelionFineDiff2TranslationCapacity];
     for (int translation_offset = 0;

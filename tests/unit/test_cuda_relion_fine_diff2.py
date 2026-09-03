@@ -1984,6 +1984,63 @@ def test_relion_fused_translate_fine_diff2_adds_highres_in_native_order(
 
 
 @pytest.mark.gpu
+def test_relion_flat_rows_skip_invalid_rows_with_positive_infinity(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(1933)
+    current_size = 16
+    pixel_count = current_size * (current_size // 2 + 1)
+    row_image_ids = np.asarray([0, -1, 1, -1], dtype=np.int32)
+    reference = (
+        rng.normal(0, 0.02, (4, pixel_count))
+        + 1j * rng.normal(0, 0.02, (4, pixel_count))
+    ).astype(np.complex64)
+    image = (
+        rng.normal(0, 0.02, (2, pixel_count))
+        + 1j * rng.normal(0, 0.02, (2, pixel_count))
+    ).astype(np.complex64)
+    translation_angles = rng.normal(0, 0.2, (5, 2)).astype(np.float32)
+    weight = rng.uniform(0, 150_000, (2, pixel_count)).astype(np.float32)
+    lookup = np.arange(pixel_count, dtype=np.int32)
+    initial_diff2 = np.asarray([0.03125, 0.0625], dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        actual = cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
+            jnp.asarray(reference),
+            jnp.asarray(row_image_ids),
+            jnp.asarray(image),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
+        )
+        expected = cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
+            jnp.asarray(reference[[0, 2]]),
+            jnp.asarray([0, 1], dtype=jnp.int32),
+            jnp.asarray(image),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
+        )
+        actual, expected = jax.block_until_ready((actual, expected))
+
+    actual = np.asarray(actual)
+    expected = np.asarray(expected)
+    np.testing.assert_array_equal(actual[[0, 2]].view(np.uint32), expected.view(np.uint32))
+    assert np.all(np.isposinf(actual[[1, 3]]))
+
+
+@pytest.mark.gpu
 def test_relion_fine_diff2_pairs_matches_production_tree_bitwise(
     monkeypatch,
     custom_cuda_lib,
