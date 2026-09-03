@@ -39,11 +39,14 @@ def _open_persistent_relion_projector_texture(
     *,
     relion_projector_r_max,
     projection_padding_factor,
+    relion_texture_interp=None,
+    log_label="Sparse pass-2",
 ):
     """Upload an eligible host ``PPref`` slab without staging it through JAX.
 
-    This is deliberately a narrow fast path for fine sparse pass-2.  Other
-    inputs retain the established transient texture/JAX behavior.
+    This is deliberately a narrow fast path for external bucket loops that
+    keep a supplied host PPref alive. Other inputs retain the established
+    transient texture/JAX behavior.
     """
 
     if (
@@ -61,13 +64,15 @@ def _open_persistent_relion_projector_texture(
         relion_projector_half,
         r_max=int(relion_projector_r_max),
         padding_factor=int(projection_padding_factor),
+        enabled=relion_texture_interp,
     ):
         return None
 
     from recovar.cuda_backproject import RelionPersistentHalfTextureF32
 
     logger.info(
-        "Sparse pass-2 persistent RELION projector texture: shape=%s host=%.2f GiB",
+        "%s persistent RELION projector texture: shape=%s host=%.2f GiB",
+        str(log_label),
         tuple(relion_projector_half.shape),
         relion_projector_half.nbytes / float(1024**3),
     )

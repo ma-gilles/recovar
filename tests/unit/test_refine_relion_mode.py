@@ -4283,6 +4283,67 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
     assert block.proj_for_noise.shape == (1, 2, window_spec.n_recon)
 
 
+def test_project_local_bucket_routes_persistent_texture_without_projector_slab(monkeypatch):
+    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+
+    bucket = LocalBucketSpec(
+        image_indices=np.array([0], dtype=np.int32),
+        bucket_image_count=1,
+        bucket_rotation_count=2,
+        actual_rotation_counts=np.array([2], dtype=np.int32),
+        local_rotation_ids=np.array([[0, 1]], dtype=np.int32),
+        local_rotations=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (1, 2, 3, 3),
+        ).copy(),
+        local_rotation_log_prior=np.zeros((1, 2), dtype=np.float32),
+        local_rotation_mask=np.ones((1, 2), dtype=bool),
+        translation_log_prior=np.zeros((1, 1), dtype=np.float32),
+    )
+    texture = object()
+    calls = []
+
+    def fake_projector(projector_half, rotations, image_shape, **kwargs):
+        calls.append((projector_half, tuple(rotations.shape), image_shape, kwargs))
+        n_values = int(np.asarray(kwargs["pixel_indices"]).shape[0])
+        return jnp.ones((rotations.shape[0], n_values), dtype=jnp.complex64), None
+
+    monkeypatch.setattr(
+        local_em_engine,
+        "_compute_relion_projector_projections_block",
+        fake_projector,
+    )
+    window_spec = make_fourier_window_spec(
+        (8, 8),
+        6,
+        40,
+        include_recon_window=True,
+    )
+    block = local_em_engine._project_local_bucket(
+        mean_for_proj=jnp.zeros((8, 8, 8), dtype=jnp.complex64),
+        bucket=bucket,
+        image_shape=(8, 8),
+        proj_volume_shape=(8, 8, 8),
+        disc_type="linear_interp",
+        projection_kwargs={"relion_texture_interp": True},
+        window_spec=window_spec,
+        n_half=40,
+        half_weights=jnp.ones(40, dtype=jnp.float32),
+        precision_policy=DensePrecisionPolicy(use_float64_scoring=False),
+        relion_projector_texture=texture,
+        relion_projector_r_max=4,
+        projection_padding_factor=1,
+    )
+
+    assert calls[0][0] is None
+    assert calls[0][1] == (2, 3, 3)
+    assert calls[0][3]["persistent_texture"] is texture
+    assert block.proj_weighted.shape == (1, 2, window_spec.n_score)
+    assert block.proj_for_noise.shape == (1, 2, window_spec.n_recon)
+
+
 def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
     from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
@@ -4452,12 +4513,11 @@ def test_exact_local_relion_projector_noise_projection_materializes_once():
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     defer_src = src[src.index("can_defer_local_noise_projection = (") :]
     defer_src = defer_src[: defer_src.index("if accumulate_noise:")]
-    assert "relion_projector_half is None" in defer_src
-    assert "relion_projector_half is not None or" not in defer_src
+    assert "not use_relion_projector" in defer_src
     assert "need_local_recon_projection = require_materialized_recon_projection or (" in src
     assert "accumulate_noise and not defer_local_noise_projection" in src
     assert "materialize_recon_projection=need_local_recon_projection" in src
-    assert "noise_projection_pixels = int(n_half) if relion_projector_half is not None else int(n_recon_pixels)" in src
+    assert "noise_projection_pixels = int(n_half) if use_relion_projector else int(n_recon_pixels)" in src
     assert "_packed_noise_projection_chunk_rows(noise_projection_pixels, batch_size=batch_size)" in src
 
 

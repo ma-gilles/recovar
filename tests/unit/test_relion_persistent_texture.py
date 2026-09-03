@@ -338,6 +338,136 @@ def test_sparse_pass2_routes_host_projector_and_always_closes(
     assert texture.close_count == 1
 
 
+@pytest.mark.parametrize("raise_from_engine", [False, True])
+def test_exact_local_routes_host_projector_and_always_closes(
+    monkeypatch,
+    raise_from_engine,
+):
+    from recovar.em.dense_single_volume import local_search_iteration
+
+    projector = _projector()
+    events = []
+
+    class FakeTexture:
+        def close(self):
+            events.append("close")
+
+    texture = FakeTexture()
+
+    def fake_open(value, **kwargs):
+        assert value is projector
+        assert kwargs == {
+            "relion_projector_r_max": 1,
+            "projection_padding_factor": 1,
+            "relion_texture_interp": None,
+            "log_label": "Exact local",
+        }
+        events.append("open")
+        return texture
+
+    def fake_engine(*args, **kwargs):
+        events.append("engine")
+        assert args == ("dataset",)
+        assert kwargs["relion_projector_half"] is None
+        assert kwargs["relion_projector_texture"] is texture
+        if raise_from_engine:
+            raise RuntimeError("synthetic exact-local failure")
+        return "exact-local-result"
+
+    monkeypatch.setattr(
+        local_search_iteration._oversampling,
+        "_open_persistent_relion_projector_texture",
+        fake_open,
+    )
+
+    def call():
+        return local_search_iteration._call_exact_local_engine_with_projector_texture(
+            fake_engine,
+            "dataset",
+            relion_projector_half=projector,
+            relion_projector_r_max=1,
+            projection_padding_factor=1,
+            projection_relion_texture_interp=None,
+        )
+
+    if raise_from_engine:
+        with pytest.raises(RuntimeError, match="synthetic exact-local failure"):
+            call()
+    else:
+        assert call() == "exact-local-result"
+    assert events == ["open", "engine", "close"]
+
+
+def test_exact_local_manual_projector_does_not_open_texture(monkeypatch):
+    from recovar.em.dense_single_volume import local_search_iteration
+
+    projector = _projector()
+
+    def fail_open(*args, **kwargs):
+        raise AssertionError("manual projection must not open a CUDA texture")
+
+    def fake_engine(**kwargs):
+        assert kwargs["relion_projector_half"] is projector
+        assert "relion_projector_texture" not in kwargs
+        return "manual-result"
+
+    monkeypatch.setattr(
+        local_search_iteration._oversampling,
+        "_open_persistent_relion_projector_texture",
+        fail_open,
+    )
+    assert (
+        local_search_iteration._call_exact_local_engine_with_projector_texture(
+            fake_engine,
+            relion_projector_half=projector,
+            relion_projector_r_max=1,
+            projection_padding_factor=1,
+            projection_relion_texture_interp=False,
+        )
+        == "manual-result"
+    )
+
+
+def test_compiled_local_projection_routes_dynamic_persistent_handle(monkeypatch):
+    from recovar.em.dense_single_volume import local_big_jit
+
+    handle = jnp.asarray(73, dtype=jnp.uint64)
+    rotations = jnp.eye(3, dtype=jnp.float32)[None]
+    calls = []
+
+    def fake_projector(projector_half, rotations_arg, image_shape, **kwargs):
+        calls.append((projector_half, rotations_arg, image_shape, kwargs))
+        return jnp.ones((1, 6), dtype=jnp.complex64), None
+
+    monkeypatch.setattr(
+        local_big_jit,
+        "compute_relion_projector_projections_block",
+        fake_projector,
+    )
+    result = local_big_jit._project_local_half_spectrum(
+        jnp.zeros(1, dtype=jnp.complex64),
+        jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+        rotations,
+        None,
+        (2, 2),
+        (1, 1, 1),
+        "linear_interp",
+        relion_projector_texture_handle=handle,
+        projection_half_volume=False,
+        projection_max_r=1,
+        relion_projector_output_size=2,
+        projection_relion_texture_interp=True,
+        projection_force_jax=False,
+        use_relion_projector=True,
+        use_persistent_relion_texture=True,
+        relion_projector_r_max=1,
+        projection_padding_factor=1,
+    )
+    assert result.shape == (1, 6)
+    assert calls[0][0].shape == (1, 1, 1)
+    assert calls[0][3]["persistent_texture_handle"] is handle
+
+
 def test_persistent_texture_source_pins_dynamic_token_and_scoring_lifetime():
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
@@ -571,4 +701,97 @@ def test_persistent_host_texture_matches_transient_and_rejects_stale_token(
                     projector_max_r=7,
                 )
             )
+        with pytest.raises(Exception, match="owner handle is not live"):
+            jax.block_until_ready(
+                cuda_backproject.relion_projector_persistent_half_texture_f32_from_handle(
+                    jnp.asarray(0, dtype=jnp.uint64),
+                    same_shape,
+                    current_size=16,
+                    padding_factor=2,
+                    projector_max_r=7,
+                )
+            )
         second_texture.close()
+
+
+@pytest.mark.gpu
+def test_dynamic_texture_handle_compiles_through_local_big_jit_projection(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume import local_big_jit
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    projector = _projector(r_max=7, padding_factor=2)
+    rotations = _rotations()[:4]
+    pixel_indices = jnp.asarray([0, 1, 9, 17, 26, 63], dtype=jnp.int32)
+
+    def project(projector_half, rotations_arg, *, handle, persistent):
+        return local_big_jit._project_local_half_spectrum(
+            jnp.zeros(1, dtype=jnp.complex64),
+            projector_half,
+            rotations_arg,
+            pixel_indices,
+            (16, 16),
+            (1, 1, 1),
+            "linear_interp",
+            relion_projector_texture_handle=handle,
+            projection_half_volume=False,
+            projection_max_r=7,
+            relion_projector_output_size=16,
+            projection_relion_texture_interp=True,
+            projection_force_jax=False,
+            use_relion_projector=True,
+            use_persistent_relion_texture=persistent,
+            relion_projector_r_max=7,
+            projection_padding_factor=2,
+        )
+
+    @jax.jit
+    def project_persistent(handle, rotations_arg):
+        return project(
+            jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+            rotations_arg,
+            handle=handle,
+            persistent=True,
+        )
+
+    with jax.default_device(gpu_device):
+        rotations_jax = jnp.asarray(rotations)
+        transient = project(
+            jnp.asarray(projector),
+            rotations_jax,
+            handle=None,
+            persistent=False,
+        )
+        texture = cuda_backproject.RelionPersistentHalfTextureF32(
+            projector,
+            padding_factor=2,
+            projector_max_r=7,
+            device=gpu_device,
+        )
+        first = project_persistent(texture.handle_array, rotations_jax)
+        np.testing.assert_array_equal(
+            np.asarray(first).view(np.uint32),
+            np.asarray(transient).view(np.uint32),
+        )
+        assert project_persistent._cache_size() == 1
+        texture.close()
+
+        replacement = cuda_backproject.RelionPersistentHalfTextureF32(
+            projector,
+            padding_factor=2,
+            projector_max_r=7,
+            device=gpu_device,
+        )
+        second = project_persistent(replacement.handle_array, rotations_jax)
+        np.testing.assert_array_equal(
+            np.asarray(second).view(np.uint32),
+            np.asarray(transient).view(np.uint32),
+        )
+        assert project_persistent._cache_size() == 1
+        replacement.close()

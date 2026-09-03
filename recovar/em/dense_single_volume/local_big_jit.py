@@ -546,12 +546,14 @@ def _project_local_half_spectrum(
     proj_volume_shape,
     disc_type,
     *,
+    relion_projector_texture_handle=None,
     projection_half_volume: bool,
     projection_max_r,
     relion_projector_output_size: int,
     projection_relion_texture_interp: bool,
     projection_force_jax: bool,
     use_relion_projector: bool,
+    use_persistent_relion_texture: bool = False,
     relion_projector_r_max: int,
     projection_padding_factor: int,
 ):
@@ -563,6 +565,10 @@ def _project_local_half_spectrum(
             projector_kwargs["projector_output_size"] = int(relion_projector_output_size)
         if projection_pixel_indices is not None:
             projector_kwargs["pixel_indices"] = projection_pixel_indices
+        if use_persistent_relion_texture:
+            projector_kwargs["persistent_texture_handle"] = (
+                relion_projector_texture_handle
+            )
         proj_half, _ = compute_relion_projector_projections_block(
             relion_projector_half,
             flat_rotations,
@@ -639,6 +645,7 @@ def _project_local_half_spectrum(
         "has_reconstruction_probability_threshold",
         "score_only",
         "use_relion_projector",
+        "use_persistent_relion_texture",
         "relion_projector_r_max",
         "projection_padding_factor",
         "return_debug_arrays",
@@ -699,6 +706,7 @@ def run_local_bucket_big_jit(
     reconstruction_probability_threshold,
     config,
     *,
+    relion_projector_texture_handle=None,
     mask_mode: str,
     score_with_masked_images: bool,
     apply_integer_pre_shift: bool,
@@ -741,6 +749,7 @@ def run_local_bucket_big_jit(
     has_reconstruction_probability_threshold: bool,
     score_only: bool = False,
     use_relion_projector: bool = False,
+    use_persistent_relion_texture: bool = False,
     relion_projector_r_max: int = 0,
     projection_padding_factor: int = 1,
     return_debug_arrays: bool = False,
@@ -959,12 +968,14 @@ def run_local_bucket_big_jit(
             image_shape,
             proj_volume_shape,
             disc_type,
+            relion_projector_texture_handle=relion_projector_texture_handle,
             projection_half_volume=projection_half_volume,
             projection_max_r=projection_max_r,
             relion_projector_output_size=relion_projector_output_size,
             projection_relion_texture_interp=projection_relion_texture_interp,
             projection_force_jax=projection_force_jax,
             use_relion_projector=use_relion_projector,
+            use_persistent_relion_texture=use_persistent_relion_texture,
             relion_projector_r_max=relion_projector_r_max,
             projection_padding_factor=projection_padding_factor,
         )
