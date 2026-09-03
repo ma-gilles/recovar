@@ -5801,6 +5801,16 @@ def test_sparse_adjoint_row_chunks_match_single_windowed_adjoint(rng, monkeypatc
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     from recovar.em.dense_single_volume.helpers.adjoint import adjoint_slice_volume_maybe_windowed
 
+    def fail_donating_adjoint(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("native half-volume row updates must stay non-donating")
+
+    monkeypatch.setattr(
+        local_em_engine_module,
+        "_adjoint_slice_volume_windowed_donating",
+        fail_donating_adjoint,
+    )
+
     window_indices = jnp.asarray([0, 1, 2, 5, 8, 13, 21, 30], dtype=jnp.int32)
     n_rows = 5
     rotations = jnp.asarray(_make_rotations(n_rows, seed=219), dtype=jnp.float32)
@@ -5841,6 +5851,77 @@ def test_sparse_adjoint_row_chunks_match_single_windowed_adjoint(rng, monkeypatc
 
     assert n_chunks == 3
     np.testing.assert_allclose(np.asarray(Ft_chunked), np.asarray(Ft_single), atol=1e-5, rtol=1e-5)
+
+
+def test_relion_x_half_sparse_adjoint_row_chunks_consume_accumulator(monkeypatch):
+    rows = jnp.arange(10, dtype=jnp.float32).reshape(5, 2).astype(jnp.complex64)
+    rotations = jnp.arange(45, dtype=jnp.float32).reshape(5, 3, 3)
+    calls = []
+
+    def fake_donating_adjoint(
+        half_block,
+        window_indices,
+        rotations_block,
+        volume,
+        image_shape,
+        volume_shape,
+        disc_type,
+        half_image,
+        half_volume=False,
+        max_r=None,
+        relion_x_half=False,
+    ):
+        del image_shape, volume_shape, disc_type, max_r
+        assert half_image is True
+        assert half_volume is True
+        assert relion_x_half is True
+        calls.append(
+            (
+                np.asarray(half_block).copy(),
+                np.asarray(window_indices).copy(),
+                np.asarray(rotations_block).copy(),
+                float(np.asarray(volume)),
+            )
+        )
+        return volume + jnp.sum(jnp.real(half_block))
+
+    def fail_non_donating_adjoint(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("RELION x-half row updates must use the donating wrapper")
+
+    monkeypatch.setattr(
+        local_em_engine_module,
+        "_adjoint_slice_volume_windowed_donating",
+        fake_donating_adjoint,
+    )
+    monkeypatch.setattr(
+        local_em_engine_module,
+        "_adjoint_slice_volume_maybe_windowed",
+        fail_non_donating_adjoint,
+    )
+
+    updated, n_chunks = _adjoint_slice_volume_maybe_windowed_row_chunks(
+        rows,
+        None,
+        rotations,
+        jnp.asarray(7.0, dtype=jnp.float32),
+        (2, 2),
+        (4, 4, 4),
+        "linear_interp",
+        use_window=False,
+        max_r=1.0,
+        relion_x_half=True,
+        target_rows=2,
+    )
+
+    assert n_chunks == 3
+    assert [call[0].shape[0] for call in calls] == [2, 2, 1]
+    np.testing.assert_array_equal(calls[0][1], np.arange(4, dtype=np.int32))
+    np.testing.assert_array_equal(calls[0][2], np.asarray(rotations[:2]))
+    np.testing.assert_array_equal(calls[1][2], np.asarray(rotations[2:4]))
+    np.testing.assert_array_equal(calls[2][2], np.asarray(rotations[4:]))
+    np.testing.assert_allclose([call[3] for call in calls], [7.0, 13.0, 35.0])
+    np.testing.assert_allclose(np.asarray(updated), 52.0)
 
 
 def test_run_em_dense_can_return_half_volume_accumulators(rng, monkeypatch):

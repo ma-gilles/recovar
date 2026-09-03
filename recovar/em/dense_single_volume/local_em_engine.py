@@ -19,6 +19,9 @@ from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _spa
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
+from recovar.em.dense_single_volume.helpers.adjoint import (
+    adjoint_slice_volume_windowed_donating as _adjoint_slice_volume_windowed_donating,
+)
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.fourier_window import (
@@ -956,17 +959,41 @@ def _adjoint_slice_volume_maybe_windowed_row_chunks(
     relion_x_half: bool,
     target_rows: int,
 ):
-    """Apply an exact-local sparse adjoint in row chunks when requested."""
+    """Apply an exact-local sparse adjoint in row chunks when requested.
 
-    n_rows = int(half_rows.shape[0])
-    target_rows = int(target_rows)
-    if target_rows <= 0 or n_rows <= target_rows:
-        return (
-            _adjoint_slice_volume_maybe_windowed(
-                half_rows,
+    RELION x-half updates consume ``volume``: every caller replaces its
+    accumulator with the returned array.  Exposing that ownership to the
+    indexed-backprojection JIT avoids preserving a second full accumulator.
+    """
+
+    if relion_x_half:
+        if window_indices is None:
+            n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+            window_indices = jnp.arange(n_half, dtype=jnp.int32)
+
+        def update_volume(rows, rotations_block, accumulator):
+            return _adjoint_slice_volume_windowed_donating(
+                rows,
                 window_indices,
-                rotations,
-                volume,
+                rotations_block,
+                accumulator,
+                image_shape,
+                volume_shape,
+                disc_type,
+                True,
+                True,
+                max_r,
+                True,
+            )
+
+    else:
+
+        def update_volume(rows, rotations_block, accumulator):
+            return _adjoint_slice_volume_maybe_windowed(
+                rows,
+                window_indices,
+                rotations_block,
+                accumulator,
                 image_shape,
                 volume_shape,
                 disc_type,
@@ -974,29 +1001,19 @@ def _adjoint_slice_volume_maybe_windowed_row_chunks(
                 True,
                 use_window=use_window,
                 max_r=max_r,
-                relion_x_half=relion_x_half,
-            ),
-            1,
-        )
+                relion_x_half=False,
+            )
+
+    n_rows = int(half_rows.shape[0])
+    target_rows = int(target_rows)
+    if target_rows <= 0 or n_rows <= target_rows:
+        return update_volume(half_rows, rotations, volume), 1
 
     updated = volume
     n_chunks = 0
     for start in range(0, n_rows, target_rows):
         stop = min(n_rows, start + target_rows)
-        updated = _adjoint_slice_volume_maybe_windowed(
-            half_rows[start:stop],
-            window_indices,
-            rotations[start:stop],
-            updated,
-            image_shape,
-            volume_shape,
-            disc_type,
-            True,
-            True,
-            use_window=use_window,
-            max_r=max_r,
-            relion_x_half=relion_x_half,
-        )
+        updated = update_volume(half_rows[start:stop], rotations[start:stop], updated)
         n_chunks += 1
     return updated, n_chunks
 
