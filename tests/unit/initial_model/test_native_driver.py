@@ -480,6 +480,112 @@ def test_particle_state_from_star_preserves_class_and_pmax_columns():
     assert state.best_pose_rotations is None
 
 
+def test_particle_state_from_star_keeps_class_zero_strict_for_fresh_inputs():
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnClassNumber": ["1", "0"],
+            "_rlnMaxValueProbDistribution": ["0.75", "0"],
+            "_rlnNrOfSignificantSamples": ["5", "0"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="one-indexed positive class ids"):
+        driver._particle_state_from_star(
+            main,
+            SimpleNamespace(voxel_size=1.0, n_images=2),
+        )
+
+
+def test_particle_state_from_star_normalizes_verified_k1_restart_sentinels():
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"],
+            "_rlnClassNumber": ["1", "0", "1"],
+            "_rlnMaxValueProbDistribution": ["0.75", "0", "0.25"],
+            "_rlnNrOfSignificantSamples": ["5", "0", "2"],
+        }
+    )
+
+    state = driver._particle_state_from_star(
+        main,
+        SimpleNamespace(voxel_size=1.0, n_images=3),
+        allow_unvisited_class_zero=True,
+        nr_classes=1,
+    )
+
+    np.testing.assert_array_equal(state.class_assignments, [0, 0, 0])
+    np.testing.assert_array_equal(state.visited, [True, False, True])
+    np.testing.assert_allclose(state.max_posterior, [0.75, 0.0, 0.25])
+
+
+@pytest.mark.parametrize(
+    ("pmax", "significant"),
+    [
+        ([0.75, 0.25], [5, 0]),
+        ([0.75, 0.0], [5, 1]),
+    ],
+)
+def test_particle_state_from_star_rejects_visited_class_zero_restart_rows(
+    pmax,
+    significant,
+):
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnClassNumber": ["1", "0"],
+            "_rlnMaxValueProbDistribution": pmax,
+            "_rlnNrOfSignificantSamples": significant,
+        }
+    )
+
+    with pytest.raises(ValueError, match="sentinels disagree with unvisited particle state"):
+        driver._particle_state_from_star(
+            main,
+            SimpleNamespace(voxel_size=1.0, n_images=2),
+            allow_unvisited_class_zero=True,
+            nr_classes=1,
+        )
+
+
+def test_particle_state_from_star_rejects_positive_class_for_unvisited_restart_row():
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnClassNumber": ["1", "1"],
+            "_rlnMaxValueProbDistribution": ["0.75", "0"],
+            "_rlnNrOfSignificantSamples": ["5", "0"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="sentinels disagree with unvisited particle state"):
+        driver._particle_state_from_star(
+            main,
+            SimpleNamespace(voxel_size=1.0, n_images=2),
+            allow_unvisited_class_zero=True,
+            nr_classes=1,
+        )
+
+
+def test_particle_state_from_star_rejects_class_zero_for_k_greater_than_one():
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnClassNumber": ["1", "0"],
+            "_rlnMaxValueProbDistribution": ["0.75", "0"],
+            "_rlnNrOfSignificantSamples": ["5", "0"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="only for a verified K=1"):
+        driver._particle_state_from_star(
+            main,
+            SimpleNamespace(voxel_size=1.0, n_images=2),
+            allow_unvisited_class_zero=True,
+            nr_classes=2,
+        )
+
+
 def test_particle_state_from_star_seeds_input_euler_orientations_for_all_particles():
     main = pd.DataFrame(
         {

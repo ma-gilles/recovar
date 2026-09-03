@@ -793,25 +793,103 @@ def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
     return relion_round_away_from_zero(_image_origin_offsets_pixels_from_star(main_star, dataset))
 
 
-def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
+def _particle_state_from_star(
+    main_star,
+    dataset,
+    *,
+    allow_unvisited_class_zero: bool = False,
+    nr_classes: int | None = None,
+) -> NativeParticleState:
+    """Load particle state, optionally accepting RELION's K=1 restart sentinel.
+
+    Fresh production inputs retain the ordinary one-indexed positive-class
+    contract.  Native InitialModel continuation STARs use class zero only for
+    particles that the stochastic gradient schedule has not visited yet.
+    """
+
+    if allow_unvisited_class_zero and nr_classes != 1:
+        raise ValueError(
+            "unvisited _rlnClassNumber=0 is supported only for a verified K=1 "
+            "diagnostic continuation",
+        )
     n_images = int(getattr(dataset, "n_images", len(main_star)))
     if len(main_star) != n_images:
         raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
     class_col = _star_column(main_star, "_rlnClassNumber")
     if class_col is None:
+        if allow_unvisited_class_zero:
+            raise ValueError(
+                "K=1 diagnostic continuation requires _rlnClassNumber",
+            )
+        class_numbers = None
         class_assignments = np.zeros(n_images, dtype=np.int32)
     else:
-        class_assignments = np.asarray(class_col.astype(int).to_numpy(), dtype=np.int32) - 1
-        if np.any(class_assignments < 0):
+        class_numbers = np.asarray(class_col.astype(int).to_numpy(), dtype=np.int32)
+        if allow_unvisited_class_zero:
+            if np.any((class_numbers < 0) | (class_numbers > 1)):
+                raise ValueError(
+                    "K=1 diagnostic continuation _rlnClassNumber values must be 0 or 1",
+                )
+            class_assignments = np.zeros(n_images, dtype=np.int32)
+        else:
+            class_assignments = class_numbers - 1
+        if not allow_unvisited_class_zero and np.any(class_assignments < 0):
             raise ValueError("_rlnClassNumber values must be one-indexed positive class ids")
 
     pmax_col = _star_column(main_star, "_rlnMaxValueProbDistribution")
     if pmax_col is None:
         max_posterior = np.zeros(n_images, dtype=np.float32)
+        max_posterior_values = None
     else:
-        max_posterior = np.asarray(pmax_col.astype(float).to_numpy(), dtype=np.float32)
-        if not np.all(np.isfinite(max_posterior)):
+        max_posterior_values = np.asarray(
+            pmax_col.astype(float).to_numpy(),
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(max_posterior_values)):
             raise ValueError("_rlnMaxValueProbDistribution values must be finite")
+        max_posterior = max_posterior_values.astype(np.float32)
+
+    if allow_unvisited_class_zero:
+        assert class_numbers is not None
+        zero_state_evidence: list[np.ndarray] = []
+        if max_posterior_values is not None:
+            if np.any(max_posterior_values < 0.0):
+                raise ValueError(
+                    "diagnostic continuation probability values must be non-negative",
+                )
+            zero_state_evidence.append(max_posterior_values == 0.0)
+        significant_col = _star_column(main_star, "_rlnNrOfSignificantSamples")
+        if significant_col is not None:
+            significant_samples = np.asarray(
+                significant_col.astype(float).to_numpy(),
+                dtype=np.float64,
+            )
+            if (
+                not np.all(np.isfinite(significant_samples))
+                or np.any(significant_samples < 0.0)
+                or np.any(significant_samples != np.floor(significant_samples))
+            ):
+                raise ValueError(
+                    "diagnostic continuation significant-sample counts must be "
+                    "finite non-negative integers",
+                )
+            zero_state_evidence.append(significant_samples == 0.0)
+        if not zero_state_evidence:
+            raise ValueError(
+                "K=1 diagnostic continuation cannot validate unvisited class-zero rows "
+                "without posterior or significant-sample state",
+            )
+        state_is_unvisited = np.logical_and.reduce(zero_state_evidence)
+        class_is_unvisited = class_numbers == 0
+        if not np.array_equal(class_is_unvisited, state_is_unvisited):
+            mismatched_rows = np.flatnonzero(class_is_unvisited != state_is_unvisited)
+            raise ValueError(
+                "K=1 diagnostic continuation class-zero sentinels disagree with "
+                f"unvisited particle state at rows {mismatched_rows[:8].tolist()}",
+            )
+        visited = ~class_is_unvisited
+    else:
+        visited = max_posterior > 0.0
 
     angle_names = ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi")
     angle_columns = tuple(_star_column(main_star, name) for name in angle_names)
@@ -836,7 +914,7 @@ def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
         max_posterior=max_posterior,
         pose_assignments=np.full(n_images, -1, dtype=np.int32),
         best_pose_rotations=best_pose_rotations,
-        visited=max_posterior > 0.0,
+        visited=visited,
     )
 
 
@@ -2378,19 +2456,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
 
     _configure_relion_image_mask(dataset, opts)
     optics_state = _native_optics_state(main_star, optics_star, dataset)
-    particle_state = _particle_state_from_star(main_star, dataset)
     continuation = None
-    if opts.diagnostic_continue_optimiser is None:
-        sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
-        sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
-        state, optics_group_by_particle = _initial_state_from_particles(
-            dataset,
-            main_star,
-            optics_star,
-            opts,
-            sampling_plan.rotations,
-        )
-    else:
+    if opts.diagnostic_continue_optimiser is not None:
         continuation = _load_native_vdam_continuation(
             opts.diagnostic_continue_optimiser,
             expected_data_star=opts.fn_img,
@@ -2403,6 +2470,23 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 f"checkpoint={continuation.iteration}, "
                 f"stop={opts.diagnostic_stop_after_iteration}"
             )
+    particle_state = _particle_state_from_star(
+        main_star,
+        dataset,
+        allow_unvisited_class_zero=continuation is not None,
+        nr_classes=int(opts.nr_classes),
+    )
+    if continuation is None:
+        sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
+        sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
+        state, optics_group_by_particle = _initial_state_from_particles(
+            dataset,
+            main_star,
+            optics_star,
+            opts,
+            sampling_plan.rotations,
+        )
+    else:
         state = continuation.state
         sampling_state = continuation.sampling_state
         optics_group_by_particle = _optics_group_indices(main_star)
