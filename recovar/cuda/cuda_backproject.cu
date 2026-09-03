@@ -8007,6 +8007,43 @@ void relion_coarse_diff2_rectangular_f32_kernel(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
+    int64_t full_pixel_count)
+{
+    const int64_t rotation_blocks =
+        (rotation_count + kRelionCoarseEulersPerBlock - 1) /
+        kRelionCoarseEulersPerBlock;
+    const int64_t flat_block = static_cast<int64_t>(blockIdx.x);
+    const int64_t batch = flat_block / rotation_blocks;
+    const int64_t rotation_start =
+        (flat_block - batch * rotation_blocks) * kRelionCoarseEulersPerBlock;
+    if (batch >= batch_size) return;
+
+    relion_coarse_diff2_rotation_block_f32(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+        output,
+        batch,
+        rotation_start,
+        rotation_start,
+        rotation_count,
+        rotation_count,
+        translation_count,
+        compact_pixel_count,
+        full_pixel_count);
+}
+
+__global__ __launch_bounds__(kRelionCoarseDiff2BlockSize)
+void relion_coarse_diff2_rectangular_runtime_f32_kernel(
+    const float2* reference,
+    const float2* shifted_image,
+    const float* weight,
+    const int32_t* full_to_compact,
+    float* output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
     int64_t full_pixel_capacity,
     const int32_t* runtime_full_pixel_count)
 {
@@ -8018,9 +8055,8 @@ void relion_coarse_diff2_rectangular_f32_kernel(
     const int64_t rotation_start =
         (flat_block - batch * rotation_blocks) * kRelionCoarseEulersPerBlock;
     if (batch >= batch_size) return;
-    const int64_t full_pixel_count = runtime_full_pixel_count == nullptr
-        ? full_pixel_capacity
-        : static_cast<int64_t>(runtime_full_pixel_count[0]);
+    const int64_t full_pixel_count =
+        static_cast<int64_t>(runtime_full_pixel_count[0]);
     if (full_pixel_count < 0 || full_pixel_count > full_pixel_capacity) {
         if (threadIdx.x < translation_count) {
             #pragma unroll
@@ -8050,7 +8086,7 @@ void relion_coarse_diff2_rectangular_f32_kernel(
         rotation_count,
         rotation_count,
         translation_count,
-        compact_pixel_count,
+        full_pixel_count,
         full_pixel_count);
 }
 
@@ -8067,6 +8103,49 @@ void relion_coarse_diff2_rotation_blocks_f32_kernel(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
+    int64_t full_pixel_count)
+{
+    const int64_t flat_block = static_cast<int64_t>(blockIdx.x);
+    const int64_t batch = flat_block / selected_block_count;
+    const int64_t selected_block =
+        flat_block - batch * selected_block_count;
+    if (batch >= batch_size) return;
+
+    const int32_t source_block =
+        rotation_block_ids[batch * selected_block_count + selected_block];
+    const int64_t available_blocks =
+        (rotation_count + kRelionCoarseEulersPerBlock - 1) /
+        kRelionCoarseEulersPerBlock;
+    if (source_block < 0 || source_block >= available_blocks) return;
+
+    relion_coarse_diff2_rotation_block_f32(
+        reference,
+        shifted_image,
+        weight,
+        full_to_compact,
+        output,
+        batch,
+        static_cast<int64_t>(source_block) * kRelionCoarseEulersPerBlock,
+        selected_block * kRelionCoarseEulersPerBlock,
+        rotation_count,
+        selected_block_count * kRelionCoarseEulersPerBlock,
+        translation_count,
+        compact_pixel_count,
+        full_pixel_count);
+}
+
+__global__ __launch_bounds__(kRelionCoarseDiff2BlockSize)
+void relion_coarse_diff2_rotation_blocks_runtime_f32_kernel(
+    const float2* reference,
+    const float2* shifted_image,
+    const float* weight,
+    const int32_t* rotation_block_ids,
+    const int32_t* full_to_compact,
+    float* output,
+    int64_t batch_size,
+    int64_t selected_block_count,
+    int64_t rotation_count,
+    int64_t translation_count,
     int64_t full_pixel_capacity,
     const int32_t* runtime_full_pixel_count)
 {
@@ -8082,9 +8161,8 @@ void relion_coarse_diff2_rotation_blocks_f32_kernel(
         (rotation_count + kRelionCoarseEulersPerBlock - 1) /
         kRelionCoarseEulersPerBlock;
     if (source_block < 0 || source_block >= available_blocks) return;
-    const int64_t full_pixel_count = runtime_full_pixel_count == nullptr
-        ? full_pixel_capacity
-        : static_cast<int64_t>(runtime_full_pixel_count[0]);
+    const int64_t full_pixel_count =
+        static_cast<int64_t>(runtime_full_pixel_count[0]);
     if (full_pixel_count < 0 || full_pixel_count > full_pixel_capacity) {
         if (threadIdx.x < translation_count) {
             #pragma unroll
@@ -8121,7 +8199,7 @@ void relion_coarse_diff2_rotation_blocks_f32_kernel(
         rotation_count,
         selected_block_count * kRelionCoarseEulersPerBlock,
         translation_count,
-        compact_pixel_count,
+        full_pixel_count,
         full_pixel_count);
 }
 
@@ -9188,22 +9266,39 @@ cudaError_t launch_relion_coarse_diff2_rectangular_f32(
         (rotation_count + kRelionCoarseEulersPerBlock - 1) /
         kRelionCoarseEulersPerBlock;
     const int64_t block_count = batch_size * rotation_blocks;
-    relion_coarse_diff2_rectangular_f32_kernel<<<
-        static_cast<unsigned int>(block_count),
-        kRelionCoarseDiff2BlockSize,
-        0,
-        stream>>>(
-            reference,
-            shifted_image,
-            weight,
-            full_to_compact,
-            output,
-            batch_size,
-            rotation_count,
-            translation_count,
-            compact_pixel_count,
-            full_pixel_capacity,
-            runtime_full_pixel_count);
+    if (runtime_full_pixel_count == nullptr) {
+        relion_coarse_diff2_rectangular_f32_kernel<<<
+            static_cast<unsigned int>(block_count),
+            kRelionCoarseDiff2BlockSize,
+            0,
+            stream>>>(
+                reference,
+                shifted_image,
+                weight,
+                full_to_compact,
+                output,
+                batch_size,
+                rotation_count,
+                translation_count,
+                compact_pixel_count,
+                full_pixel_capacity);
+    } else {
+        relion_coarse_diff2_rectangular_runtime_f32_kernel<<<
+            static_cast<unsigned int>(block_count),
+            kRelionCoarseDiff2BlockSize,
+            0,
+            stream>>>(
+                reference,
+                shifted_image,
+                weight,
+                full_to_compact,
+                output,
+                batch_size,
+                rotation_count,
+                translation_count,
+                full_pixel_capacity,
+                runtime_full_pixel_count);
+    }
     return cudaGetLastError();
 }
 
@@ -9247,24 +9342,43 @@ cudaError_t launch_relion_coarse_diff2_rotation_blocks_f32(
     if (err != cudaSuccess) return err;
 
     const int64_t block_count = batch_size * selected_block_count;
-    relion_coarse_diff2_rotation_blocks_f32_kernel<<<
-        static_cast<unsigned int>(block_count),
-        kRelionCoarseDiff2BlockSize,
-        0,
-        stream>>>(
-            reference,
-            shifted_image,
-            weight,
-            rotation_block_ids,
-            full_to_compact,
-            output,
-            batch_size,
-            selected_block_count,
-            rotation_count,
-            translation_count,
-            compact_pixel_count,
-            full_pixel_capacity,
-            runtime_full_pixel_count);
+    if (runtime_full_pixel_count == nullptr) {
+        relion_coarse_diff2_rotation_blocks_f32_kernel<<<
+            static_cast<unsigned int>(block_count),
+            kRelionCoarseDiff2BlockSize,
+            0,
+            stream>>>(
+                reference,
+                shifted_image,
+                weight,
+                rotation_block_ids,
+                full_to_compact,
+                output,
+                batch_size,
+                selected_block_count,
+                rotation_count,
+                translation_count,
+                compact_pixel_count,
+                full_pixel_capacity);
+    } else {
+        relion_coarse_diff2_rotation_blocks_runtime_f32_kernel<<<
+            static_cast<unsigned int>(block_count),
+            kRelionCoarseDiff2BlockSize,
+            0,
+            stream>>>(
+                reference,
+                shifted_image,
+                weight,
+                rotation_block_ids,
+                full_to_compact,
+                output,
+                batch_size,
+                selected_block_count,
+                rotation_count,
+                translation_count,
+                full_pixel_capacity,
+                runtime_full_pixel_count);
+    }
     return cudaGetLastError();
 }
 

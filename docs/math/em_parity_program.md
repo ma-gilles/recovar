@@ -52,6 +52,42 @@ if any, requires a separate same-binary/toggle or crossed-commit H100 M-step
 runtime and peak-memory gate; fixed-capacity speed and default promotion remain
 unqualified.
 
+### 2026-09-03 stable coarse logical-prefix gate
+
+Validation scope is performance-only and default-off.  Stable coarse square
+capacities remove recompilations across changing logical Fourier windows, but
+the CUDA scorer must still execute only RELION's logical pixel prefix.  H100
+trajectory job `13395892` established the opportunity and rejected the first
+implementation scientifically: checkpoint construction through iteration 47
+fell from `269.649 s` to `239.072 s` (`-11.34%`), while one of 200 particles
+selected an adjacent translation and eight significant counts moved by one.
+This result remains an explicit performance win and hard-state failure.
+
+The first runtime-prefix primitive test (`13397454`) found `31--38%` of raw
+score words different, at most two float32 ULPs, despite skipping every padded
+pixel.  ABBA job `13397690` localized the change to native atomic admission:
+the runtime scorer itself moved within the same two-ULP band, while posterior,
+cutoff, support, significant count, and best pose were wordwise exact.  A
+compact-row experiment then showed that even the accepted static scorer has
+multiple legal raw-score realizations.  In split-kernel ABBA job `13398261`,
+the two crossed static/runtime pairs were bitwise identical while both
+static/static and runtime/runtime pairs differed by at most two ULPs.  Raw
+score bitwise equality is therefore not a valid gate for this native-atomic
+primitive.
+
+The fail-closed replacement does not use a tolerance or an empirical repeat
+diameter.  The default VDAM geometry maps 128 threads over 29 translations,
+giving exactly four active lane partials for each score; inactive threads add
+exact zero.  Enumerating all `4!` serialized atomic orders is therefore the
+complete legal arithmetic set.  Focused H100 job `13398365` passes both the
+rectangular and selected-source-16 scorers against that exhaustive set and
+keeps posterior, cutoff, support, significant count, and argmin wordwise
+exact.  The active next gate is the existing shared-state
+off/on/on/off iteration-47 transition.  No fresh trajectory may start until
+that gate preserves every hard decision/support field and bounds continuous
+state by the established native-repeat contract; runtime must also retain the
+compile-shape win after compact-row packing cost.
+
 ### 2026-08-31 late-trajectory one-iteration performance gate
 
 Validation scope is diagnostic/performance-only: it cannot promote science,

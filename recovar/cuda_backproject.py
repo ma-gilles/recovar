@@ -2617,6 +2617,37 @@ def relion_coarse_diff2_rectangular_f32(
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
 
 
+def _pack_runtime_logical_prefix_rows(
+    values: jax.Array,
+    logical_count: jax.Array,
+) -> jax.Array:
+    """Pack fixed-capacity rows at their dynamic logical stride.
+
+    The coarse CUDA kernel's native atomic admission order depends on operand
+    memory timing.  Leaving capacity padding between logical rows can move a
+    legal atomic sum by a few float32 ULPs.  Pack each logical row contiguously
+    at the front of the same fixed-size buffer so the runtime kernel observes
+    the exact compact strides of the unpadded scorer without changing its XLA
+    shape.
+    """
+
+    physical_count = values.shape[-1]
+    flat = values.reshape(-1)
+    flat_index = jnp.arange(flat.size, dtype=jnp.int32)
+    safe_count = jnp.maximum(logical_count, jnp.int32(1))
+    logical_total = jnp.int32(flat.size // physical_count) * logical_count
+    logical_row = flat_index // safe_count
+    logical_column = flat_index - logical_row * safe_count
+    source = logical_row * jnp.int32(physical_count) + logical_column
+    source = jnp.minimum(source, jnp.int32(flat.size - 1))
+    packed = jnp.where(
+        flat_index < logical_total,
+        flat[source],
+        jnp.zeros((), dtype=values.dtype),
+    )
+    return packed.reshape(values.shape)
+
+
 @jax.jit
 def relion_coarse_diff2_rectangular_runtime_f32(
     reference: jax.Array,
@@ -2674,6 +2705,18 @@ def relion_coarse_diff2_rectangular_runtime_f32(
     out_type = jax.ShapeDtypeStruct(
         (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
         jnp.float32,
+    )
+    reference = _pack_runtime_logical_prefix_rows(
+        reference,
+        logical_full_pixel_count,
+    )
+    shifted_image = _pack_runtime_logical_prefix_rows(
+        shifted_image,
+        logical_full_pixel_count,
+    )
+    weight = _pack_runtime_logical_prefix_rows(
+        weight,
+        logical_full_pixel_count,
     )
     return jax.ffi.ffi_call(
         _TARGET_RELION_COARSE_DIFF2_RECTANGULAR_RUNTIME_F32,
@@ -2850,6 +2893,18 @@ def relion_coarse_diff2_rotation_blocks_runtime_f32(
             shifted_image.shape[1],
         ),
         jnp.float32,
+    )
+    reference = _pack_runtime_logical_prefix_rows(
+        reference,
+        logical_full_pixel_count,
+    )
+    shifted_image = _pack_runtime_logical_prefix_rows(
+        shifted_image,
+        logical_full_pixel_count,
+    )
+    weight = _pack_runtime_logical_prefix_rows(
+        weight,
+        logical_full_pixel_count,
     )
     return jax.ffi.ffi_call(
         _TARGET_RELION_COARSE_DIFF2_ROTATION_BLOCKS_RUNTIME_F32,
