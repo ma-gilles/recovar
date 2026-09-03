@@ -80,8 +80,12 @@ score-only job `13363559`: the compact K=1 planner replaced the false
 `13363818`.  Commit `f91c73f29` then removed an unused 31.25-GiB padded mean
 from the supplied-projector local path.  Matched job `13366512` preserved all
 audited plans and support counts while reducing peak HBM to 20,123 MiB and
-wall from 650.344 to 124.897 s.  A future K=1 completion record must be added
-rather than inferring registry admission from either memory gate.
+wall from 650.344 to 124.897 s.  Full-particle checkpoint-seeded job
+`13368258` then crossed both local passes for all 15,258 particles in one half
+at `current_size=414`, completing in 512.723 s with a 20,125-MiB whole-job and
+15,305-MiB local-window peak.  It is a score-only execution confirmation, so a
+future K=1 completion record must be added rather than inferring registry
+admission from any memory gate.
 
 `k1_empiar10202_checkpoint_equivalence_20260902.md` records the first five
 matching checkpoints from the full-particle box-800 I1 control and compact

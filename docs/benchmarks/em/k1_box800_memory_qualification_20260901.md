@@ -342,3 +342,76 @@ cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cb
 This remains a score-only memory/performance qualification.  The advancing
 full-particle trajectories and their checkpoint/FSC audits separately decide
 final scientific quality.
+
+## Full-particle checkpoint-seeded local confirmation
+
+Job `13368258` confirms that the accepted supplied-projector path also crosses
+the local-search boundary with a realistic particle count and a mature
+box-800 state.  It used all 15,258 particles from half 1 of EMPIAR-10202 set 6,
+the release control's zero-based iteration-4 half map, deposited particle
+poses and CTFs, radialized iteration-4 noise, I1 symmetry, and
+`current_size=414`.  Half 2 was intentionally empty and M-step accumulation
+was disabled so that this remains a bounded local-search execution and memory
+diagnostic, not a reconstruction or FSC result.
+
+The run used source commit
+`f297d7218258e1ef9e461cb0591e6a7dcdc1c436`, tree
+`0f70ac2f6ff49d5197f488c78f7c6518e320404f`, which includes the unused
+local-padding removal.  It requested and received exactly
+`cpu=4,mem=500G,node=1,billing=40,gres/gpu=1`, ran non-exclusively on one H100
+on `della-h19g3`, and completed `0:0` in 11:38.  Its scientific step used
+`MaxRSS=173601468K`.
+
+| Measurement | Result |
+| --- | ---: |
+| Active particles | 15,258 in half 1 |
+| Symmetry / box / current size | I1 / 800 / 414 |
+| Staged particle stack | 78.12 GB |
+| Projector build | 104.61 s |
+| Projector-ready to parent-loop start | 2.546 s |
+| Parent pass | 2,245,686 local rotations; 241.0 s |
+| Fine pass | 161,016 local rotations; 44.5 s |
+| Refinement-reported wall | 512.723 s |
+| Whole-job sampled peak HBM | 20,125 MiB |
+| Exact-local-window sampled peak HBM | 15,305 MiB |
+
+As a contemporaneous diagnostic, the older full-particle compact trajectory
+at commit `8069ac015` spent 457.167 s between its iteration-6 projector-ready
+record and parent-loop start, while constructing the dead padded mean, and
+reached 44,793 MiB in that interval.  This is not a formal A/B: its
+parent-pass Fourier size and evolving state differ from job `13368258`.
+Accordingly, the accepted quantitative before/after claim remains the matched
+64-particle gate above.  The full-particle result establishes the narrower
+fact that the fixed path starts both local loops promptly, completes every
+particle without OOM, and stays far below the H100 memory limit.
+
+The immutable run and runtime roots both carry `SAFE_TO_DELETE` markers:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/box800_fullhalf_local_checkpoint_f297d7218_20260903`;
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/box800_fullhalf_local_checkpoint_f297d7218_20260903`.
+
+Important replay identities are:
+
+- launcher SHA-256:
+  `47e39b5055ceced5491e106b227ea4479a50593199c462b02ea66456b386ddfd`;
+- seed-builder SHA-256:
+  `a1afcea5b4994a406d0e7aba62945ce1e6068b4dff1a960b4b2064e8f4ce52cd`;
+- checkpoint pose/noise seed SHA-256:
+  `445fc2d866fa6ef2e68090cd5caf2fc5b993cf3bff8b7b72575beb5aef46100c`;
+- benchmark ledger SHA-256:
+  `1bd969556347cdca1da1093427f65b053ed8d3e10454d3826eae9adb78021da1`;
+- stderr SHA-256:
+  `923327503857eed5e99d2da300d5a245b079a9d68045f1cc3bef31ae8198950a`;
+- 1-second HBM trace SHA-256:
+  `7cd13ee04d4874933f5f4ae41c04ff8485277858d52bb01e079c8bf65ea7d8e0`;
+- resolved command SHA-256:
+  `3359e1edcf2f20f89aaa855d7479a24d342878e895b53d5e844c070bcaa4a802`.
+- diagnostic decision JSON SHA-256:
+  `bc0ece73d6f68d6b12e48e0715fb5a180042c0c6dd5227576a3f2ee12af56c5c`.
+
+To repeat the diagnostic, create new empty run and runtime roots, copy the
+sealed builder and launcher, replace their output roots, rebuild the seed from
+the pinned iteration-4 inputs, and submit the copied launcher with its new
+SHA-256 in `EXPECTED_LAUNCHER_SHA256`.  Accept only an exact one-H100
+allocation, a clean pinned source/tree, both complete bucket-loop records, no
+fatal/OOM marker, and the output `COMPLETED` marker.
