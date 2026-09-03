@@ -293,7 +293,7 @@ record have SHA-256
 and `bf4ca493ce3ac35406a934c94f371661e4e730ace499b9906378040080e9d1e8`,
 respectively.  The exact terminal block is stderr lines 26415--26472.
 
-## Accepted persistent PPref texture lifetime gate
+## Persistent PPref texture lifetime/allocation gate
 
 Commit `530eba051e8cf14d21be1563027d2b189ff40741` removes the device-side
 duplication at the exact failure geometry. Exact local search now opens one
@@ -351,8 +351,11 @@ Markdown have SHA-256
 `4375dc5e723a7e423c50db449a01b6ae7f0eb0436a66a6b711d93f7706d427e9`,
 `cc5e9eeac48c4c880c6179bdb54475640249fb38228796b00be837cc2cb89e6e`,
 and `2edf9fc84cc2dd30568f90b45c67cb69c2d1db0d9d390ddb3c2c39af7d46e177`.
-This accepts the exact allocation/lifetime boundary, not final reconstruction
-quality; a full advancing trajectory remains the quality gate.
+This accepts only the exact allocation/lifetime boundary, not final
+reconstruction quality.  The full advancing trajectory described below
+rejects the combined production candidate, and the intended exact-local
+persistent-texture route was dormant in that run.  This low-level result must
+therefore not be cited as an accepted production optimization.
 
 The arithmetic discriminator is sealed under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_persistent_texture_arithmetic_20260903`
@@ -370,8 +373,11 @@ instead of copying them. At box 800 this removes a deterministic transient of
 `2 * 800^3 * sizeof(complex128)` = 16,384,000,000 bytes (15.258789 GiB).
 Device arrays still offload explicitly, shared cold-start device buffers are
 transferred once, and non-owning NumPy views are copied. Its five lifecycle
-tests, 16-test EM fast guard, scoped Ruff, and `git diff --check` pass. This is
-a host-ownership change only; it does not alter map arithmetic.
+tests, 16-test EM fast guard, scoped Ruff, and `git diff --check` pass.  The
+source-level intent is a host-ownership change, but the combined live
+trajectory already has approximately `8e-8` half-map relative-L2 drift at its
+first saved checkpoint.  Without an isolated production A/B, this change must
+not be described as trajectory-neutral.
 
 ## Fresh integrated checkpoint-1 equivalence
 
@@ -421,6 +427,50 @@ its JSON, Markdown, and manifest SHA-256 values are
 `76f2f9e9db74fcaea0811e16ebe037519dde9efad132175aa4aa73ed6996859d`,
 and
 `397247a65cd97789db0d31506f40a4fa373a0d48cf32c00f49eb7651d8955f22`.
+
+## Combined production candidate rejected at checkpoint 12
+
+The same live comparison later gives a decisive negative result.  At numbered
+iteration 12, the corrected/no-padding control at commit `b31f7bb3a` and the
+combined owned-mean plus persistent-texture candidate at commit `37f640c7e`
+still have identical persisted controller geometry, the same next size 570,
+and the same FSC 0.5/0.143 crossing shells 186/221.  Nevertheless, each half
+has 1,976 differing coarse and fine assignments: agreement is only
+`87.0494%/87.0486%`.  Half-map relative-L2 differences have grown to
+`0.032883/0.032615`, while `Ft_y` relative-L2 differences are
+`0.176446/0.176019`.  The FSC curve RMSE is `0.00181986`, with maximum
+shellwise difference `0.00837472`.
+
+This is an amplifying, not stabilizing, trajectory.  From numbered iteration
+7 to 12, map relative-L2 grows by `3.16x/3.29x` and `Ft_y` relative-L2 by
+`2.80x/2.85x`.  Numbered iteration 13 then produces the first durable
+controller branch: the control and candidate cross FSC 0.5 at shells 188 and
+189 and choose next sizes 574 and 576, respectively.  The combined candidate
+is therefore rejected; science-close intermediate FSC curves do not override
+the accumulating execution and controller divergence.
+
+The result does **not** causally implicate the intended exact-local persistent
+texture.  Neither run emits an exact-local activation line, all 24 candidate
+device-signature records say `active=false`, and both runs instead emit the
+same ten older sparse-pass-2 persistent-texture lines.  Commit `37f640c7e`
+also changes live wrappers and fallback plumbing, while parent commit
+`14625e6fd` changes owned K=1 mean transfer.  The combined run cannot isolate
+the cause.  Accordingly, exact-local persistent texture is dormant and
+unqualified, not accepted or blamed.
+
+Numbered iteration 12 takes 701.3 s in the control and 698.0 s in the
+candidate (`-0.47%`), and both peak at 47,275 MiB in the matched sampled
+window.  These measurements provide no material production-performance win
+and do not qualify the dormant feature.  Exact CPU audit job `13382769`
+completed `0:0` in 9:01 with
+`ReqTRES=AllocTRES=cpu=4,mem=48G,node=1,billing=12`, no GPU, and no exclusive
+allocation.  The immutable record is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint12_size564_deep_corrected_vs_ptex_20260903T0736`.
+Its semantic JSON, Markdown, and validated manifest SHA-256 values are
+`68f7da89d582788e03b5453ac51d0b79f2671b5b03f53e0272ef3008ab05a278`,
+`1f633a904b72a5574b9a604f5a35ff427d8b9836ae5786212925893ebbab4a71`,
+and
+`faf5eef53f9eb20a02110a6de4c7b424324587927460f3d14c7286566ee31b7f`.
 
 ## Accepted unused local-padding removal
 

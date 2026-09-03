@@ -375,7 +375,10 @@ M-step output cap, one-H100 resources, timings, HBM, hashes, and reproduction
 procedure. It also records the separately sealed CPU re-audit of the
 finalizer run's validator-only false negative. It is explicitly a 64-particle
 memory qualification, not a full-dataset resolution or cross-engine quality
-result.
+result.  Its low-level persistent-texture lifetime/allocation discriminator
+passes, but the later full-particle combined candidate is rejected at
+checkpoint 12 and branches at checkpoint 13; the intended exact-local feature
+was dormant and remains unqualified.
 
 The three completed no-CTF fixture escalations (cases 30, 35, and 36; three
 seeds each) are documented in `k4_noctf_negative_boundaries_20260901.md` and

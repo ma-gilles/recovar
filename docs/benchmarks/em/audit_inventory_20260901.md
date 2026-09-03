@@ -147,6 +147,22 @@ with SHA-256
 and
 `397247a65cd97789db0d31506f40a4fa373a0d48cf32c00f49eb7651d8955f22`.
 
+The later checkpoint-12 audit rejects this combined candidate.  Pose
+agreement falls to `87.0494%/87.0486%`, map relative-L2 drift reaches
+`0.032883/0.032615`, and `Ft_y` relative-L2 reaches
+`0.176446/0.176019`.  The same FSC crossings and next-size decision at
+checkpoint 12 split into different FSC 0.5 shells and next sizes 574/576 at
+checkpoint 13.  The intended exact-local persistent texture is dormant in
+the comparison (zero activation lines and 24 candidate `active=false`
+signatures), so the run rejects the combined source but neither qualifies nor
+causally blames that feature.  CPU audit job `13382769` and its immutable
+record are at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint12_size564_deep_corrected_vs_ptex_20260903T0736`;
+the semantic JSON and verified manifest SHA-256 values are
+`68f7da89d582788e03b5453ac51d0b79f2671b5b03f53e0272ef3008ab05a278`
+and
+`faf5eef53f9eb20a02110a6de4c7b424324587927460f3d14c7286566ee31b7f`.
+
 Corrected full-particle job `13376414` subsequently completes the historical
 box-800/current-size-564 failure boundary in both halves. Numbered iteration
 12 saves both maps and particle-state archives after `1266/1266` and

@@ -75,13 +75,14 @@ comparison because the original harness treated the legitimate matching
 that report byte-for-byte.  These two harness events are not scientific
 failures and did not alter either running refinement.
 
-## Corrected/no-pad versus persistent-texture checkpoint
+## Corrected/no-pad versus combined candidate checkpoints
 
 A separate full-particle experiment compares the corrected/no-padding source
-at commit `b31f7bb3a88b96885e568fa4a12d5ec265ab4aab` with the integrated
-persistent-texture source at commit
+at commit `b31f7bb3a88b96885e568fa4a12d5ec265ab4aab` with the combined
+owned-mean plus persistent-texture source at commit
 `37f640c7e1553ce2b6ed95b061aed4c9e16552b8`.  This comparison is distinct from
-the release-versus-compact experiment above.  At numbered iteration 7
+the release-versus-compact experiment above and does not isolate either
+candidate change.  At numbered iteration 7
 (zero-based checkpoint 6), the controller metadata, logged resolution
 (`4.23` A), FSC crossing shells (`150` at 0.5 and `183` at 0.143), and next
 quantized size (`498`) agree.  The execution state is not exact: pose
@@ -110,6 +111,36 @@ has no scientific result.  The sealed semantic summary is
 `ab85f97d7dde5592d4bf1e7b0a97ce5b551b9e18ff821350e0fa001556192e51`).
 The root carries a complete manifest with SHA-256
 `ccc3978c30dbaf11c5bd958fa29a99b734a71d10b3532231fa935f1431e810fc`.
+
+At numbered iteration 12, the intermediate science indicators have not
+collapsed, but the trajectory divergence is no longer small enough to carry
+the candidate.  The two FSC curves still cross 0.5 and 0.143 at the same
+shells 186 and 221, and the controller still chooses next size 570.  However,
+coarse and fine pose agreement is only `87.0494%/87.0486%`, half-map
+relative-L2 differences are `0.032883/0.032615`, and `Ft_y` relative-L2
+differences are `0.176446/0.176019`.  FSC RMSE is `0.00181986` and maximum
+shellwise difference is `0.00837472`.  At numbered iteration 13 the FSC 0.5
+crossing differs by one shell and the next-size decisions split to 574 versus
+576.  This rejects the combined candidate rather than extending the earlier
+"science-close" observation into an acceptance.
+
+Activation telemetry is equally important to interpreting the result.  The
+intended exact-local persistent-texture route emits zero activation lines;
+all 24 candidate device-signature records say `active=false`.  Both runs use
+the same pre-existing sparse-pass-2 persistent-texture path.  The comparison
+therefore neither qualifies nor causally blames exact-local persistent
+texture.  It also cannot isolate the owned-mean transfer from the wrapper and
+fallback changes in the child commit.
+
+Audit job `13382769` completed `0:0` in 9:01 with exact CPU-only resources.
+The sealed semantic JSON and validated manifest are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint12_size564_deep_corrected_vs_ptex_20260903T0736/checkpoint12_size564_deep_corrected_vs_ptex.json`
+(SHA-256
+`68f7da89d582788e03b5453ac51d0b79f2671b5b03f53e0272ef3008ab05a278`)
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint12_size564_deep_corrected_vs_ptex_20260903T0736/MANIFEST.sha256`
+(SHA-256
+`faf5eef53f9eb20a02110a6de4c7b424324587927460f3d14c7286566ee31b7f`).
 
 ## Evidence and reproduction
 
