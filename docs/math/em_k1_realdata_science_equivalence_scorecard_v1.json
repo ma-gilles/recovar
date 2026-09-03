@@ -454,9 +454,59 @@
         "replacement_full_run": {
           "subject_commit": "6e414838463e30e977114f3f5ffe93a2e232766c",
           "job_id": 13356985,
-          "status_at_capture": "RUNNING",
+          "status_at_capture": "FAILED",
+          "captured_at_utc": "2026-09-03T04:55:17Z",
+          "terminal_state": "FAILED_CUDA_OOM_DURING_ITERATION_12",
+          "exit_code": "1:0",
+          "elapsed": "08:43:50",
+          "last_complete_numbered_iteration": 11,
+          "failed_numbered_iteration": 12,
+          "failed_current_size": 564,
+          "requested_tres": "billing=40,cpu=4,gres/gpu=1,mem=500G,node=1",
+          "allocated_tres": "billing=40,cpu=4,gres/gpu=1,mem=500G,node=1",
           "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902",
-          "purpose": "uninterrupted final scoring run after releasing wide split bucket buffers"
+          "purpose": "attempted uninterrupted final scoring run after releasing wide split bucket buffers",
+          "failure_boundary": {
+            "planner_mode": "historical_full_cube",
+            "persistent_estimated_gb": 81.92,
+            "image_batch_size": 1,
+            "rotation_block_size": 4,
+            "wide_tail_bucket_rotations": 512,
+            "wide_tail_bucket_count": 5,
+            "sampled_peak_hbm_used_mib": 76329,
+            "sampled_minimum_hbm_free_mib": 4744,
+            "failing_operation": "relion_projector_half_texture_f32",
+            "diagnosis": "local planner routing/headroom failure at the size-564 wide-tail shape; not evidence of a generic per-bucket leak"
+          },
+          "artifacts": {
+            "stderr": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/logs/recovar_full-13356985.err",
+              "sha256": "1d676dd5c82ecb1616ebf88da737dd82e44c354e731e0c8828daf2c6932a82f8"
+            },
+            "hbm_trace": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/logs/recovar_full-13356985-hbm.csv",
+              "sha256": "5d6eec794cae8a215b8c7eb3da00061882ce4b4c25fc8adc06d6399a63b62ec1"
+            },
+            "scontrol": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/provenance/scontrol_13356985.txt",
+              "sha256": "c09bdcfb5e44d79bac40f1e8b21b4e7c4476be70e96c6fbebf33c0b69e18d647"
+            },
+            "command": {
+              "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/provenance/command_13356985.sh",
+              "sha256": "0397337bf52d040799c9fb60ceab9ecc3a4b080d4bec221e739853d80087d48f"
+            }
+          },
+          "successor_validation": {
+            "subject_commit": "8069ac01508d57bfd74a7686930ebcea66b6e328",
+            "job_id": 13363818,
+            "status_at_capture": "RUNNING",
+            "last_complete_numbered_iteration": 8,
+            "current_numbered_iteration": 9,
+            "current_size": 516,
+            "last_resolution_angstrom": 3.99,
+            "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_compact_8069ac015_20260902",
+            "required_closure_boundary": "complete numbered iteration 12 at current_size 564, then produce sealed final independent half maps"
+          }
         },
         "artifacts": {
           "recovar_partial_summary": {

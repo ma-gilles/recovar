@@ -96,6 +96,11 @@ TARGET_INTERIM_RECOVAR_POSTPROCESS_JOB_ID = 13355910
 TARGET_INTERIM_RELION_POSTPROCESS_JOB_ID = 13356820
 TARGET_INTERIM_RAW_RESOLUTION_ANGSTROM = 2.521599769592285
 TARGET_INTERIM_CORRECTED_MASKED_RESOLUTION_ANGSTROM = 2.541935251605126
+TARGET_REPLACEMENT_JOB_ID = 13356985
+TARGET_REPLACEMENT_CAPTURE_UTC = "2026-09-03T04:55:17Z"
+TARGET_REPLACEMENT_ARTIFACT_KEYS = ("stderr", "hbm_trace", "scontrol", "command")
+TARGET_COMPACT_SUCCESSOR_COMMIT = "8069ac01508d57bfd74a7686930ebcea66b6e328"
+TARGET_COMPACT_SUCCESSOR_JOB_ID = 13363818
 TARGET_INTERIM_ARTIFACT_KEYS = (
     "recovar_partial_summary",
     "recovar_postprocess_star",
@@ -606,9 +611,54 @@ def _validate_target_interim_iteration11_diagnostic(case: Mapping[str, Any]) -> 
 
     replacement = diagnostic.get("replacement_full_run", {})
     _require(replacement.get("subject_commit") == case.get("expected_subject_commit"), "target replacement subject changed")
-    _require(replacement.get("job_id") == 13356985, "target replacement job changed")
-    _require(replacement.get("status_at_capture") == "RUNNING", "target replacement capture status changed")
+    _require(replacement.get("job_id") == TARGET_REPLACEMENT_JOB_ID, "target replacement job changed")
+    _require(replacement.get("status_at_capture") == "FAILED", "target replacement capture status changed")
+    _require(replacement.get("captured_at_utc") == TARGET_REPLACEMENT_CAPTURE_UTC, "target replacement capture time changed")
+    _require(
+        replacement.get("terminal_state") == "FAILED_CUDA_OOM_DURING_ITERATION_12",
+        "target replacement terminal state changed",
+    )
+    _require(replacement.get("exit_code") == "1:0", "target replacement exit code changed")
+    _require(replacement.get("elapsed") == "08:43:50", "target replacement elapsed time changed")
+    _require(replacement.get("last_complete_numbered_iteration") == 11, "target replacement checkpoint changed")
+    _require(replacement.get("failed_numbered_iteration") == 12, "target replacement failed iteration changed")
+    _require(replacement.get("failed_current_size") == 564, "target replacement failed size changed")
+    _require(
+        replacement.get("requested_tres") == replacement.get("allocated_tres"),
+        "target replacement allocation changed",
+    )
     _require(Path(replacement.get("run_root", "")).is_absolute(), "target replacement run root is not absolute")
+
+    boundary = replacement.get("failure_boundary", {})
+    _require(boundary.get("planner_mode") == "historical_full_cube", "target replacement planner mode changed")
+    _require(float(boundary.get("persistent_estimated_gb", float("nan"))) == 81.92, "target replacement memory estimate changed")
+    _require(boundary.get("image_batch_size") == 1, "target replacement image batch changed")
+    _require(boundary.get("rotation_block_size") == 4, "target replacement rotation block changed")
+    _require(boundary.get("wide_tail_bucket_rotations") == 512, "target replacement wide-tail shape changed")
+    _require(boundary.get("wide_tail_bucket_count") == 5, "target replacement wide-tail count changed")
+    _require(boundary.get("sampled_peak_hbm_used_mib") == 76329, "target replacement peak HBM changed")
+    _require(boundary.get("sampled_minimum_hbm_free_mib") == 4744, "target replacement free HBM changed")
+    _require(
+        boundary.get("failing_operation") == "relion_projector_half_texture_f32",
+        "target replacement failing operation changed",
+    )
+
+    replacement_artifacts = replacement.get("artifacts", {})
+    _require(
+        tuple(replacement_artifacts) == TARGET_REPLACEMENT_ARTIFACT_KEYS,
+        "target replacement artifact set changed",
+    )
+    for name, artifact in replacement_artifacts.items():
+        _validate_frozen_artifact(artifact, f"target replacement {name}")
+
+    successor = replacement.get("successor_validation", {})
+    _require(successor.get("subject_commit") == TARGET_COMPACT_SUCCESSOR_COMMIT, "target successor subject changed")
+    _require(successor.get("job_id") == TARGET_COMPACT_SUCCESSOR_JOB_ID, "target successor job changed")
+    _require(successor.get("status_at_capture") == "RUNNING", "target successor capture status changed")
+    _require(successor.get("last_complete_numbered_iteration") == 8, "target successor checkpoint changed")
+    _require(successor.get("current_numbered_iteration") == 9, "target successor iteration changed")
+    _require(successor.get("current_size") == 516, "target successor size changed")
+    _require(Path(successor.get("run_root", "")).is_absolute(), "target successor run root is not absolute")
 
     artifacts = diagnostic.get("artifacts", {})
     _require(tuple(artifacts) == TARGET_INTERIM_ARTIFACT_KEYS, "target interim artifact set changed")
@@ -2412,10 +2462,17 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 "",
                 f"RECOVAR checkpoint/postprocess jobs: `{interim['recovar']['trajectory_job_id']}` / "
                 f"`{interim['recovar']['postprocess_job_id']}`. Matched RELION iteration-11",
-                f"postprocess job: `{interim['relion']['postprocess_job_id']}`. The replacement",
-                f"full run was captured as `{interim['replacement_full_run']['status_at_capture'].lower()}` in job "
-                f"`{interim['replacement_full_run']['job_id']}` at subject commit "
-                f"`{interim['replacement_full_run']['subject_commit'][:12]}`.",
+                f"postprocess job: `{interim['relion']['postprocess_job_id']}`. Replacement",
+                f"full-run job `{interim['replacement_full_run']['job_id']}` at subject commit "
+                f"`{interim['replacement_full_run']['subject_commit'][:12]}` failed in numbered iteration "
+                f"{interim['replacement_full_run']['failed_numbered_iteration']} at current size "
+                f"{interim['replacement_full_run']['failed_current_size']} with a CUDA OOM after completing "
+                f"numbered iteration {interim['replacement_full_run']['last_complete_numbered_iteration']}.",
+                "The failure is recorded as a compact-planner routing/headroom defect,",
+                "not as a scientific-resolution failure. The fail-closed compact-planner",
+                f"successor was captured running in job `{interim['replacement_full_run']['successor_validation']['job_id']}`",
+                f"at commit `{interim['replacement_full_run']['successor_validation']['subject_commit'][:12]}`, "
+                f"after completing numbered iteration {interim['replacement_full_run']['successor_validation']['last_complete_numbered_iteration']}.",
                 "",
                 f"Matched iteration-11 summary SHA-256: `{interim['artifacts']['matched_relion_summary']['sha256']}`.",
                 f"Resolved curve comparison SHA-256: `{interim['artifacts']['matched_relion_curve_comparison']['sha256']}`.",

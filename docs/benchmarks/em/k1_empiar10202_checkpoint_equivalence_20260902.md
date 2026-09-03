@@ -1,6 +1,6 @@
 # EMPIAR-10202 set-6 K=1 checkpoint equivalence
 
-This record compares the first seven matching numbered checkpoints from two
+This record compares the first eight matching numbered checkpoints from two
 full-particle, box-800, I1 RECOVAR refinements.  It is an in-progress
 trajectory-equivalence gate, not a final RECOVAR-versus-RELION resolution
 result.  The control uses commit
@@ -28,7 +28,7 @@ mismatch.
 ## Completed checkpoint comparisons
 
 The checkpoint index below is zero-based; it corresponds to numbered
-iterations one through seven in the refinement log.
+iterations one through eight in the refinement log.
 
 | Checkpoint | Audit job | Strict execution | Minimum pose agreement | FSC 0.5 / 0.143 shell, control = candidate | FSC RMSE | Minimum map correlation | Maximum map relative L2 |
 | ---: | ---: | --- | ---: | --- | ---: | ---: | ---: |
@@ -39,30 +39,34 @@ iterations one through seven in the refinement log.
 | 4 | `13368412` | rejected | 0.9941666 | 102 / 156 | 3.95167e-4 | 0.9999974684818770 | 2.24688e-3 |
 | 5 | `13370903` | rejected | 0.9863023 | 149 / 181 | 3.82489e-4 | 0.9999868676649892 | 5.11901e-3 |
 | 6 | `13372565` | rejected | 0.9743086 | 150 / 183 | 1.89246e-3 | 0.9999485706015202 | 1.012996e-2 |
+| 7 | `13374865` | rejected | 0.9564818 | 159 / 192 | 1.02527e-3 | 0.9999027478619030 | 1.393356e-2 |
 
 All floating artifacts were finite.  Checkpoint 0 retained exact discrete
-execution state.  The later strict rejections are real: a small number of
+execution state.  The later strict rejections are real: a growing minority of
 coarse and fine pose decisions diverged as floating-point perturbations
-accumulated.  Through checkpoint 6, however, both FSC thresholds cross at the
-same shell in the control and candidate.  At checkpoint 6, half-map
-correlations are `0.9999486` and `0.9999625`, relative L2 differences are
-`0.0101300` and `0.0086531`, the nonzero-shell FSC RMSE is `0.00189246`, and
-the maximum shellwise FSC difference is `0.0334275`.  The largest
-floating-array relative L2 difference (`0.0621096`) is in the half-1 `Ft_y`
-accumulator, not a map.  This remains strong positive evidence that compact
-batching has not degraded reconstruction quality through iteration 7, despite
-rejecting strict numerical trajectory identity.  The growing drift is retained
-in the ledger and does not replace the final masked/unmasked half-map
-comparison after both trajectories complete.
+accumulated.  Through checkpoint 7, however, both FSC thresholds cross at the
+same shell in the control and candidate.  At checkpoint 7, half-map
+correlations are `0.9999027` and `0.9999241`, relative L2 differences are
+`0.0139336` and `0.0123057`, the nonzero-shell FSC RMSE is `0.00102527`, and
+the maximum shellwise FSC difference is `0.00600702`.  Coarse/fine pose
+agreement is `0.9564818` for half 1 and `0.9623124` for half 2.  The largest
+floating-array relative L2 difference (`0.0788678`) remains in the half-1
+`Ft_y` accumulator, not a map.  This is strong positive evidence that compact
+batching has not degraded reconstruction quality through numbered iteration
+8, despite rejecting strict numerical trajectory identity.  The growing drift
+is retained in the ledger and does not replace the final masked/unmasked
+half-map comparison after both trajectories complete.
 
-The seven authoritative audit jobs requested and received exactly
+The eight authoritative audit jobs requested and received exactly
 `cpu=4,mem=64G,node=1,billing=16`, ran on the `cpu` partition, and completed
-`0:0` in 2:07, 3:15, 3:51, 3:39, 4:48, 5:26, and 3:09.  CPU placement is
+`0:0` in 2:07, 3:15, 3:51, 3:39, 4:48, 5:26, 3:09, and 2:57.  CPU placement is
 intentional: the auditor memory-maps and streams completed arrays and performs
 no refinement or GPU calculation.  Job `13370903` used 22,111,680 KiB batch
 MaxRSS on `della-i13n10`; job `13372565` used 8,063,012 KiB
 `/usr/bin/time` maximum RSS (Slurm batch MaxRSS 35,789,204 KiB) with exact
-requested/allocated resources on `della-h16n18`.
+requested/allocated resources on `della-h16n18`.  Job `13374865` used
+8,178,116 KiB `/usr/bin/time` maximum RSS (Slurm batch MaxRSS 36,043,200 KiB)
+on `della-h14n1` with the same exact requested/allocated resources.
 
 The unchanged pre-fix checkpoint-5 audit job `13370307` exited before the
 comparison because the original harness treated the legitimate matching
@@ -108,6 +112,23 @@ It carries a `SAFE_TO_DELETE` marker.  The Slurm launcher SHA-256 is
 the stable candidate file-ledger SHA-256 is
 `63b78ee0a48b1ab9728fcafc8807d772418af5a99a79ca3d8307af1a5b9b72e9`.
 
+The authoritative checkpoint-7 audit root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_it007_committed_audit_1dd067bd7_20260903`.
+Its result is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_it007_committed_audit_1dd067bd7_20260903/outputs/iteration-007-committed-equivalence.json`,
+SHA-256
+`fc41fe9c4b1ba5875ecec0860a1d8e03a3a355012accf5e401c7ceedeb3ebd52`.
+The run and runtime roots both carry `SAFE_TO_DELETE` markers.  The committed
+auditor SHA-256 is
+`a8b280b94bb0eee6cb829adc7b3cb46d748f18ca6fb0dcca9846e85459ced5a0`;
+the Slurm launcher SHA-256 is
+`f8e7bfccc8610de0bf6effb7c7c813e6dcc40447e86db65cabf07b15bcafa34e`.
+The baseline and candidate file-ledger SHA-256 values are
+`124befbc8ade7c80583da88fd5983ca2cabf80fa294adc739057ee866752f324`
+and
+`f40ade466237d7ae0e643b39472ac57d45b562ca31fcb7d32327c68bd8139bab`,
+respectively.
+
 The immutable input roots are:
 
 - control intermediates:
@@ -122,9 +143,9 @@ cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cb
 .pixi/envs/default/bin/python scripts/audit_em_k1_checkpoint_equivalence.py \
   --baseline-intermediates /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_release_6e4148384_20260902/outputs/intermediates \
   --candidate-intermediates /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_compact_8069ac015_20260902/outputs/intermediates \
-  --iteration-zero-based 6 \
+  --iteration-zero-based 7 \
   --max-relative-l2 1e-6 \
-  --output /absolute/new/output/iteration-006-equivalence.json
+  --output /absolute/new/output/iteration-007-equivalence.json
 ```
 
 Exit status 0 means strict execution equivalence was accepted; status 2 means

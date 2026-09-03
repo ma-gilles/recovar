@@ -374,6 +374,26 @@ def test_fixed_scorecard_is_valid_and_markdown_is_fresh() -> None:
     assert interim["resolved_band_curve_comparison"]["raw_unmasked"][
         "normalized_auc_absolute_delta"
     ] == pytest.approx(0.00026045161290322305)
+    replacement = interim["replacement_full_run"]
+    assert replacement["status_at_capture"] == "FAILED"
+    assert replacement["terminal_state"] == "FAILED_CUDA_OOM_DURING_ITERATION_12"
+    assert replacement["last_complete_numbered_iteration"] == 11
+    assert replacement["failed_numbered_iteration"] == 12
+    assert replacement["failed_current_size"] == 564
+    assert replacement["requested_tres"] == replacement["allocated_tres"]
+    assert replacement["failure_boundary"]["planner_mode"] == "historical_full_cube"
+    assert replacement["failure_boundary"]["sampled_peak_hbm_used_mib"] == 76329
+    assert replacement["successor_validation"] == {
+        "subject_commit": "8069ac01508d57bfd74a7686930ebcea66b6e328",
+        "job_id": 13363818,
+        "status_at_capture": "RUNNING",
+        "last_complete_numbered_iteration": 8,
+        "current_numbered_iteration": 9,
+        "current_size": 516,
+        "last_resolution_angstrom": 3.99,
+        "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_compact_8069ac015_20260902",
+        "required_closure_boundary": "complete numbered iteration 12 at current_size 564, then produce sealed final independent half maps",
+    }
     assert MODULE.DEFAULT_MARKDOWN.read_text() == MODULE.render_markdown(report)
 
 

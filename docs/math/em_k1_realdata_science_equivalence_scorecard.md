@@ -146,8 +146,12 @@ equivalence and the <=3.0-A gate remain pending until an uninterrupted
 trajectory produces sealed final half maps.
 
 RECOVAR checkpoint/postprocess jobs: `13339556` / `13355910`. Matched RELION iteration-11
-postprocess job: `13356820`. The replacement
-full run was captured as `running` in job `13356985` at subject commit `6e414838463e`.
+postprocess job: `13356820`. Replacement
+full-run job `13356985` at subject commit `6e414838463e` failed in numbered iteration 12 at current size 564 with a CUDA OOM after completing numbered iteration 11.
+The failure is recorded as a compact-planner routing/headroom defect,
+not as a scientific-resolution failure. The fail-closed compact-planner
+successor was captured running in job `13363818`
+at commit `8069ac01508d`, after completing numbered iteration 8.
 
 Matched iteration-11 summary SHA-256: `cb60a01c3e293817c39b745d3e42d8e2c47f440d231001983ccc2e7577250704`.
 Resolved curve comparison SHA-256: `1bb1bf853d9e7403a49fa3771017773ff26ef178b22258f4d26ffb420f6ccf2e`.
