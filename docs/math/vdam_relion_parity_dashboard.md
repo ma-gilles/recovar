@@ -7,6 +7,15 @@
 
 ## Live engineering snapshot — 2026-09-03
 
+> **LATEST — SHARED BATCHED POSTERIOR COMPOSITION:** H100 job `13393862`
+> composes the shared EM/VDAM batched exact-posterior CUDA primitives with
+> static host-planned geometry.  Relative to static geometry alone, it removes
+> exactly **2,040 kernel launches (-15.42%)** and improves warm wall by **4.02%**.
+> Relative to the original optimized replay, the composition improves warm wall
+> **14.75%**, reduces the Nsight span **13.91%**, and removes **2,410 launches**.
+> All **23/23** deterministic science fields are exact; atomic diagnostics stay
+> at repeat-scale noise. [Focused report.](../perf/vdam_static_geometry_batched_posterior_h100_13393862.md)
+>
 > **LATEST — OPTIMIZED TRAJECTORY:** Four fresh processes through iteration 50
 > show that stable Fourier/row capacities cut the complete optimized stack from
 > median `500.604 -> 274.569 s` (**45.15% faster**) and expectation from
@@ -57,6 +66,7 @@
 | Signal | Status | Evidence / next decision |
 |---|---|---|
 | Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
+| Static geometry + shared batched posterior | **23/23 EXACT / 2,410 FEWER KERNELS** | Job `13393862` improves warm replay `5.144 -> 4.386 s` (-14.75%) and Nsight span `1.689 -> 1.454 s` (-13.91%) versus `13391819`. The shared posterior primitives remove exactly 2,040 launches on top of static geometry; [report](../perf/vdam_static_geometry_batched_posterior_h100_13393862.md). |
 | Complete optimized `0 -> 50` stack | **45.15% FASTER / STRICT SCIENCE HOLD** | Job `13392701` changes median fresh wall `500.604 -> 274.569 s`, expectation `471.249 -> 239.133 s`, and memory +0.04%. Candidate 1 stays hard-state exact; candidate 2 changes one pose at iterations 48 and 50. Runtime passes, defaults and frozen scores do not; [report](../perf/vdam_runtime_stack_trajectory_h100_13392701.md). |
 | Shared static half-spectrum geometry | **23 / 23 EXACT / 41 FEWER COMPILES** | Comparable optimized H100 replay `13393276` changes stderr compile count `435 -> 394`, recorded miss time `22.596 -> 21.918 s`, cold wall `30.069 -> 29.915 s`, and warm wall `5.144 -> 4.569 s`. Strict atomic diagnostics are only 14/21 at nondeterministic scale and are not promoted; [report](../perf/vdam_static_half_geometry_h100_13393276.md). |
 | Full combined GF46 sentinel | **COMPLETE — 1.639x FASTER / NON-SCORING DIVERGENCE** | Job `13369646` completed both `0 -> 200` arms: wall `2810.434 -> 1714.290 s` (-39.00%), expectation `2718.193 -> 1621.030 s` (-40.37%), peak RSS `17673 -> 17643 MiB`. First hard split is one pose at iteration 48. Both final maps remain inside the broad native-repeat quality envelope, but two arms cannot establish basin equivalence. |
@@ -84,10 +94,10 @@
 
 ### Immediate queue
 
-1. Replay the exact iteration-47-to-48 state from each `13392701` arm in a
-   repeat-controlled same-state panel. The target is the one candidate-2
-   translation switch; compare its score margin and support boundary against
-   control/control variation before changing any math.
+1. Finish H100 job `13394494`: it reconstructs the `13392701` optimized/q32/
+   batched state through iteration 47, deep-copies that exact live state, then
+   runs stable-off/on/on/off while changing only stable Fourier and flat-row
+   capacity. Inspect particle 2798's iteration-48 pose/translation margin.
 2. Continue compile-boundary attribution from the now-host-planned static
    geometry: the remaining cold profile is 394 compilations / 22.72 seconds,
    led by the coarse certificate, local big JIT, and eager controller
@@ -113,8 +123,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **ONE OF TWO OPTIMIZED REPEATS SPLITS AT ITERATION 48** | In `13392701`, both controls and optimized repeat 1 retain exact pose/class state through iteration 50; optimized repeat 2 changes one translation/pose at iterations 48 and 50. The iteration-47-to-48 same-state replay is the next boundary. |
-| Current performance work | **45.15% FRESH 0->50 / 2.553x SAME-STATE TRANSITION** | On the complete optimized stack, stable Fourier/row capacities change median fresh trajectory wall `500.604 -> 274.569 s` and expectation `471.249 -> 239.133 s` (`13392701`). Strict science remains on hold. Job `13378175` independently proves the complete nine-seam iteration-47-to-48 stack exact at 2.553x warm speed. |
+| Current correctness work | **IT47->48 SAME-STATE BLOCKER ACTIVE** | Job `13394494` starts from the optimized/q32/batched live state and changes only the two stable ABIs in an off/on/on/off panel. This directly targets particle 2798's iteration-48 split in `13392701`. |
+| Current performance work | **45.15% FRESH 0->50 / 14.75% FOCUSED COMPOSITION** | The complete optimized stack changes fresh trajectory wall `500.604 -> 274.569 s` (`13392701`). Static geometry plus shared batched posterior separately changes the comparable warm replay `5.144 -> 4.386 s` and removes 2,410 launches (`13393862`). Strict trajectory science remains on hold. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
