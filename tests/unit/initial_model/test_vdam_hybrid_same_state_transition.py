@@ -446,6 +446,30 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
 
 
+def test_all_optimized_stable_pair_changes_only_the_two_stable_abis() -> None:
+    mode = "all_optimized_stable_shapes"
+    assert runner._arm_order(mode) == runner.ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER
+    assert runner._arm_candidate_enabled("stable_all_off_1", mode) is False
+    assert runner._arm_candidate_enabled("stable_all_on_1", mode) is True
+
+    stable_off = runner._candidate_environment(mode, enabled=False)
+    stable_on = runner._candidate_environment(mode, enabled=True)
+    assert {
+        key for key in stable_off if stable_off[key] != stable_on[key]
+    } == {runner.STABLE_FLAT_CAPACITY_ENVIRONMENT}
+    assert stable_off[runner.STABLE_FLAT_CAPACITY_ENVIRONMENT] == "0"
+    assert stable_on[runner.STABLE_FLAT_CAPACITY_ENVIRONMENT] == "1"
+    assert stable_on[runner.STABLE_FOURIER_QUANTUM_ENVIRONMENT] == "32"
+    assert stable_on[runner.HYBRID_IMAGE_BATCH_ENVIRONMENT] == "200"
+    assert stable_on[runner.BATCHED_POSTERIOR_ENVIRONMENT] == "1"
+    assert stable_on[runner.EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] == "1"
+    assert stable_on[runner.EXACT_COMPACT_PREPROCESS_ENVIRONMENT] == "1"
+    assert stable_on[runner.FUSED_PAIR_FINE_SCORE_ENVIRONMENT] == "0"
+    assert runner._candidate_uses_hybrid(mode) is True
+    assert runner._candidate_uses_compact_posterior(mode) is True
+    assert runner._candidate_uses_packed_deferred(mode) is True
+
+
 def test_hybrid_image_batch_gate_uses_one_oracle_and_mirrored_four_repeats() -> None:
     specs = runner._hybrid_image_batch_arm_specs()
     assert tuple(label for label, _request in specs) == (
@@ -841,6 +865,42 @@ def test_all_optimized_execution_contract_validates_q32_capacity() -> None:
     assert stable["profiles"]["halfset_0_profile_summary"][
         "physical_current_size"
     ] == 96
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_all_optimized_stable_pair_profile_keeps_other_seams_on(
+    enabled: bool,
+) -> None:
+    meta = _all_optimized_estep_meta(enabled=True)
+    profile = meta["halfset_0_profile_summary"]
+    meta["requested_stable_fourier_window_shapes"] = enabled
+    meta["effective_stable_fourier_window_shapes"] = enabled
+    meta["requested_stable_flat_row_capacity"] = enabled
+    meta["effective_stable_flat_row_capacity"] = enabled
+    profile.update(
+        stable_fourier_window_shapes=enabled,
+        stable_fourier_window_quantum=32,
+        physical_current_size=96 if enabled else 84,
+        physical_reconstruction_pixels=3691 if enabled else 2835,
+        n_windowed=3690 if enabled else 2834,
+        n_projection_windowed=3691 if enabled else 2835,
+        big_jit_projection_pixels=3691 if enabled else 2835,
+        stable_flat_row_capacity_enabled=enabled,
+        chunk_flat_score_rows=[13824 if enabled else 4752],
+    )
+
+    contract = runner._validate_all_optimized_stable_pair_profiles(
+        meta,
+        enabled=enabled,
+        label=f"stable_all_{'on' if enabled else 'off'}",
+        image_shape=(128, 128),
+    )
+
+    assert contract["profile_exact"] is True
+    assert contract["stable_representation_enabled"] is enabled
+    assert contract["all_other_optimized_seams_enabled"] is True
+    assert contract["batched_posterior_primitives_enabled"] is True
+    assert contract["packed_final_noise"]["enabled"] is True
 
 
 def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None:
@@ -1811,6 +1871,12 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         in sbatch
     )
     assert "direct_1,all_optimized_1,all_optimized_2,direct_2" in sbatch
+    assert (
+        "stable_all_off_1,stable_all_on_1,stable_all_on_2,stable_all_off_2"
+        in sbatch
+    )
+    assert "all_optimized_stable_shapes_on_q32_batched" in source
+    assert 'values[BATCHED_POSTERIOR_ENVIRONMENT] = "1"' in source
     assert (
         "single_translate_off_1,single_translate_on_1,"
         "single_translate_on_2,single_translate_off_2"

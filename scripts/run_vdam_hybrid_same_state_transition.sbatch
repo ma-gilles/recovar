@@ -102,6 +102,9 @@ case "${CANDIDATE_MODE}" in
   all_optimized)
     expected_arm_order=direct_1,all_optimized_1,all_optimized_2,direct_2
     ;;
+  all_optimized_stable_shapes)
+    expected_arm_order=stable_all_off_1,stable_all_on_1,stable_all_on_2,stable_all_off_2
+    ;;
   exact_coarse_single_translate)
     expected_arm_order=single_translate_off_1,single_translate_on_1,single_translate_on_2,single_translate_off_2
     ;;
@@ -360,6 +363,44 @@ if [[ "${CANDIDATE_MODE}" == all_optimized && \
          and .stable_flat_capacity_contract.enabled == true
          and .stable_flat_capacity_contract.strict_reduction_count == 0' \
       "${SCIENCE}/report.json" > /dev/null
+  done
+fi
+if [[ "${CANDIDATE_MODE}" == all_optimized_stable_shapes ]]; then
+  jq -e '
+    .compact_science_contract.hard_exact_contract_passed == true
+      and .checkpoint_execution_contract.environment_exact == true
+      and .checkpoint_execution_contract.stable_fourier_window_shapes == true
+      and .checkpoint_execution_contract.effective_environment.RECOVAR_RELION_BATCHED_POSTERIOR_PRIMITIVES == "1"
+      and .checkpoint_execution_contract.effective_environment.RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM == "32"
+      and .checkpoint_execution_contract.effective_environment.RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY == "1"
+      and .same_state_contract.checkpoint_trajectory_backend
+        == "all_optimized_stable_shapes_on_q32_batched"
+      and .same_state_contract.only_transition_differences
+        == ["stable_fourier_window_shapes", "stable_flat_row_capacity"]
+  ' "${SCIENCE}/report.json" >/dev/null
+  for arm in stable_all_off_1 stable_all_off_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == false
+        and .execution_contract.environment_exact == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.all_optimized_stable_pair.profile_exact == true
+        and .execution_contract.all_optimized_stable_pair.stable_representation_enabled == false
+        and .execution_contract.all_optimized_stable_pair.batched_posterior_primitives_enabled == true
+        and .execution_contract.all_optimized_stable_pair.hybrid_image_batch_size == 200
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in stable_all_on_1 stable_all_on_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == true
+        and .execution_contract.environment_exact == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.all_optimized_stable_pair.profile_exact == true
+        and .execution_contract.all_optimized_stable_pair.stable_representation_enabled == true
+        and .execution_contract.all_optimized_stable_pair.batched_posterior_primitives_enabled == true
+        and .execution_contract.all_optimized_stable_pair.hybrid_image_batch_size == 200
+    ' "${SCIENCE}/report.json" >/dev/null
   done
 fi
 if [[ "${CANDIDATE_MODE}" == exact_coarse_single_translate ]]; then

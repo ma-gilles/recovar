@@ -128,6 +128,12 @@ ALL_OPTIMIZED_ARM_ORDER = (
     "all_optimized_2",
     "direct_2",
 )
+ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER = (
+    "stable_all_off_1",
+    "stable_all_on_1",
+    "stable_all_on_2",
+    "stable_all_off_2",
+)
 EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER = (
     "single_translate_off_1",
     "single_translate_on_1",
@@ -172,6 +178,10 @@ EXACT_COMPACT_PREPROCESS_ENVIRONMENT = (
     "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS"
 )
 FUSED_PAIR_FINE_SCORE_ENVIRONMENT = "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"
+BATCHED_POSTERIOR_ENVIRONMENT = "RECOVAR_RELION_BATCHED_POSTERIOR_PRIMITIVES"
+STABLE_FOURIER_QUANTUM_ENVIRONMENT = (
+    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"
+)
 GPU_MONITOR_ENVIRONMENT = "RECOVAR_SAME_STATE_GPU_MONITOR_CSV"
 PERSISTENT_CACHE_TARGET_FAMILIES = (
     "jit_run_local_bucket_big_jit",
@@ -200,6 +210,7 @@ CANDIDATE_MODES = (
     "compact_posterior",
     "compact_packed_deferred",
     "all_optimized",
+    "all_optimized_stable_shapes",
     "exact_coarse_single_translate",
     "exact_compact_preprocess",
     "fused_pair_fine_score",
@@ -273,6 +284,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return COMPACT_PACKED_DEFERRED_ARM_ORDER
     if candidate_mode == "all_optimized":
         return ALL_OPTIMIZED_ARM_ORDER
+    if candidate_mode == "all_optimized_stable_shapes":
+        return ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER
     if candidate_mode == "exact_coarse_single_translate":
         return EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
     if candidate_mode == "exact_compact_preprocess":
@@ -295,6 +308,21 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         EXACT_COMPACT_PREPROCESS_ENVIRONMENT: "0",
         FUSED_PAIR_FINE_SCORE_ENVIRONMENT: "0",
     }
+    if candidate_mode == "all_optimized_stable_shapes":
+        values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+        values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
+        values[FLAT_ROW_ENVIRONMENT] = "1"
+        values[STABLE_FLAT_CAPACITY_ENVIRONMENT] = "1" if enabled else "0"
+        values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+        values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        values[PACKED_FINAL_NOISE_ENVIRONMENT] = "1"
+        values[EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] = "1"
+        values[EXACT_COMPACT_PREPROCESS_ENVIRONMENT] = "1"
+        values[FUSED_PAIR_FINE_SCORE_ENVIRONMENT] = "0"
+        values[HYBRID_IMAGE_BATCH_ENVIRONMENT] = "200"
+        values[BATCHED_POSTERIOR_ENVIRONMENT] = "1"
+        values[STABLE_FOURIER_QUANTUM_ENVIRONMENT] = "32"
+        return values
     if candidate_mode in {
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
@@ -386,6 +414,7 @@ def _candidate_uses_hybrid(candidate_mode: str) -> bool:
         "compact_posterior",
         "compact_packed_deferred",
         "all_optimized",
+        "all_optimized_stable_shapes",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
         "fused_pair_fine_score",
@@ -397,6 +426,7 @@ def _candidate_uses_compact_posterior(candidate_mode: str) -> bool:
         "compact_posterior",
         "compact_packed_deferred",
         "all_optimized",
+        "all_optimized_stable_shapes",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
         "fused_pair_fine_score",
@@ -407,6 +437,7 @@ def _candidate_uses_packed_deferred(candidate_mode: str) -> bool:
     return candidate_mode in {
         "compact_packed_deferred",
         "all_optimized",
+        "all_optimized_stable_shapes",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
         "fused_pair_fine_score",
@@ -414,6 +445,8 @@ def _candidate_uses_packed_deferred(candidate_mode: str) -> bool:
 
 
 def _arm_candidate_enabled(label: str, candidate_mode: str) -> bool:
+    if candidate_mode == "all_optimized_stable_shapes":
+        return label.startswith("stable_all_on_")
     if candidate_mode == "stable_shapes":
         return label.startswith("stable_on_")
     if candidate_mode == "stable_flat_capacity":
@@ -665,6 +698,83 @@ def _validate_all_optimized_profiles(
         "enabled": bool(enabled),
         "enabled_seams": list(ALL_OPTIMIZED_SEAMS if enabled else ()),
         "disabled_seams": list(() if enabled else ALL_OPTIMIZED_SEAMS),
+        "profile_exact": True,
+        "stable_fourier": stable_fourier,
+        "stable_flat_capacity": stable_flat,
+        "packed_final_noise": packed_final_noise,
+        "local_profiles": local_profiles,
+    }
+
+
+def _validate_all_optimized_stable_pair_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+    image_shape: tuple[int, int],
+) -> dict[str, Any]:
+    """Validate the q32/stable-flat pair while every other seam stays on."""
+
+    stable_fourier = _validate_stable_fourier_profiles(
+        estep_meta,
+        enabled=enabled,
+        label=label,
+        image_shape=image_shape,
+        stable_fourier_window_quantum=32,
+    )
+    for key in (
+        "requested_stable_flat_row_capacity",
+        "effective_stable_flat_row_capacity",
+    ):
+        if key not in estep_meta or bool(estep_meta[key]) != bool(enabled):
+            raise RuntimeError(
+                f"{label} reported {key}={estep_meta.get(key)!r}, "
+                f"expected {enabled!r}"
+            )
+
+    expected_flags = {
+        "flat_local_rows_enabled": True,
+        "stable_flat_row_capacity_enabled": bool(enabled),
+        "packed_local_projection_enabled": True,
+        "defer_packed_vdam_enabled": True,
+        "packed_vdam_reuses_flat_score_projection": True,
+    }
+    local_profiles: dict[str, Any] = {}
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict) or "chunk_padded_rotations" not in value:
+            continue
+        missing = [field for field in expected_flags if field not in value]
+        if missing:
+            raise RuntimeError(
+                f"{label} profile {key} omitted stable-pair fields {missing}"
+            )
+        observed = {field: bool(value[field]) for field in expected_flags}
+        if observed != expected_flags:
+            raise RuntimeError(
+                f"{label} stable-pair local profile differs: "
+                f"observed={observed}, expected={expected_flags}"
+            )
+        local_profiles[key] = observed
+    if not local_profiles:
+        raise RuntimeError(f"{label} has no local engine profile to validate")
+
+    stable_flat = _validate_stable_flat_capacity_profiles(
+        estep_meta,
+        enabled=enabled,
+        label=label,
+    )
+    packed_final_noise = _validate_packed_final_noise_profiles(
+        estep_meta,
+        backend_mode="packed_final_noise",
+    )
+    return {
+        "stable_representation_enabled": bool(enabled),
+        "all_other_optimized_seams_enabled": True,
+        "batched_posterior_primitives_enabled": True,
+        "hybrid_image_batch_size": 200,
+        "exact_coarse_skip_generic_operands": True,
+        "exact_compact_preprocess": True,
+        "fused_pair_fine_score": False,
         "profile_exact": True,
         "stable_fourier": stable_fourier,
         "stable_flat_capacity": stable_flat,
@@ -1253,6 +1363,7 @@ def _validate_arm_execution_contract(
         candidate_enabled
         or candidate_mode
         in {
+            "all_optimized_stable_shapes",
             "exact_coarse_single_translate",
             "exact_compact_preprocess",
             "fused_pair_fine_score",
@@ -1939,6 +2050,8 @@ def _capture_direct_checkpoint(
     output_root: Path,
     checkpoint_iteration: int,
     image_batch_size: int,
+    checkpoint_candidate_mode: str = "hybrid",
+    checkpoint_candidate_enabled: bool = False,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from scripts import run_ab_initio
@@ -1957,6 +2070,11 @@ def _capture_direct_checkpoint(
     write_index = argv.index("--grad_write_iter") + 1
     argv[write_index] = str(checkpoint_iteration)
     argv.extend(("--diagnostic_stop_after_iteration", str(checkpoint_iteration)))
+    if (
+        checkpoint_candidate_mode == "all_optimized_stable_shapes"
+        and checkpoint_candidate_enabled
+    ):
+        argv.append("--stable-fourier-window-shapes")
 
     captured: dict[str, Any] = {"argv": argv}
     original_expectation_factory = driver._native_expectation_step
@@ -1985,16 +2103,23 @@ def _capture_direct_checkpoint(
         captured["result"] = result
         return result
 
+    checkpoint_environment = {
+        **_candidate_environment(
+            checkpoint_candidate_mode,
+            enabled=checkpoint_candidate_enabled,
+        ),
+        "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "0",
+        "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS": "0",
+    }
     driver._native_expectation_step = capture_expectation_factory
     driver.run_native_initial_model = capture_run
     try:
         with _temporary_environment(
-            {
-                **_candidate_environment("hybrid", enabled=False),
-                "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "0",
-                "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS": "0",
-            }
+            checkpoint_environment
         ):
+            captured["effective_environment"] = {
+                name: os.environ.get(name) for name in checkpoint_environment
+            }
             status = int(run_ab_initio.main(argv))
     finally:
         driver._native_expectation_step = original_expectation_factory
@@ -2015,6 +2140,20 @@ def _capture_direct_checkpoint(
         raise RuntimeError(f"direct checkpoint capture is incomplete: {sorted(missing)}")
     if int(captured["result"].state.iter) != checkpoint_iteration:
         raise RuntimeError("direct checkpoint stopped at the wrong iteration")
+    if captured["effective_environment"] != checkpoint_environment:
+        raise RuntimeError("checkpoint trajectory environment was not exact")
+    expected_stable = bool(
+        checkpoint_candidate_mode == "all_optimized_stable_shapes"
+        and checkpoint_candidate_enabled
+    )
+    if bool(captured["opts"].stable_fourier_window_shapes) != expected_stable:
+        raise RuntimeError("checkpoint trajectory stable-Fourier option was not exact")
+    captured["checkpoint_execution_contract"] = {
+        "requested_environment": checkpoint_environment,
+        "effective_environment": captured["effective_environment"],
+        "environment_exact": True,
+        "stable_fourier_window_shapes": expected_stable,
+    }
     captured["expectation_factory"] = original_expectation_factory
     return captured
 
@@ -2051,6 +2190,7 @@ def _run_transition_arm(
     if candidate_mode in {
         "stable_shapes",
         "all_optimized",
+        "all_optimized_stable_shapes",
         "exact_coarse_single_translate",
         "exact_compact_preprocess",
         "fused_pair_fine_score",
@@ -2203,6 +2343,7 @@ def _run_transition_arm(
     if "accumulators" not in captured or "estep_meta" not in captured:
         raise RuntimeError(f"{label} did not capture its E-step boundary")
     stable_fourier_window_contract = None
+    stable_flat_capacity_contract = None
     if candidate_mode == "stable_shapes":
         stable_fourier_window_contract = _validate_stable_fourier_profiles(
             captured["estep_meta"],
@@ -2210,7 +2351,19 @@ def _run_transition_arm(
             label=label,
             image_shape=tuple(int(value) for value in dataset.image_shape),
         )
-    stable_flat_capacity_contract = None
+    if candidate_mode == "all_optimized_stable_shapes":
+        stable_pair_contract = _validate_all_optimized_stable_pair_profiles(
+            captured["estep_meta"],
+            enabled=candidate_enabled,
+            label=label,
+            image_shape=tuple(int(value) for value in dataset.image_shape),
+        )
+        stable_fourier_window_contract = stable_pair_contract[
+            "stable_fourier"
+        ]
+        stable_flat_capacity_contract = stable_pair_contract[
+            "stable_flat_capacity"
+        ]
     if candidate_mode == "stable_flat_capacity":
         for key in (
             "requested_stable_flat_row_capacity",
@@ -2236,6 +2389,9 @@ def _run_transition_arm(
         estep_meta=captured["estep_meta"],
         backend_mode=resolved_backend_mode,
     )
+    if candidate_mode == "all_optimized_stable_shapes":
+        execution_contract["all_optimized_stable_pair"] = stable_pair_contract
+        execution_contract["all_optimized_stable_pair_profile_exact"] = True
     if candidate_mode in {
         "all_optimized",
         "exact_coarse_single_translate",
@@ -3262,6 +3418,14 @@ def main(argv: list[str] | None = None) -> int:
         output_root=output_root,
         checkpoint_iteration=args.checkpoint_iteration,
         image_batch_size=args.image_batch_size,
+        checkpoint_candidate_mode=(
+            "all_optimized_stable_shapes"
+            if args.candidate_mode == "all_optimized_stable_shapes"
+            else "hybrid"
+        ),
+        checkpoint_candidate_enabled=(
+            args.candidate_mode == "all_optimized_stable_shapes"
+        ),
     )
     checkpoint_wall_s = float(time.perf_counter() - checkpoint_started)
     checkpoint_manifest = {
@@ -3667,6 +3831,9 @@ def main(argv: list[str] | None = None) -> int:
         "prewarm": prewarm,
         "checkpoint_wall_s": checkpoint_wall_s,
         "checkpoint_manifest": checkpoint_manifest,
+        "checkpoint_execution_contract": checkpoint[
+            "checkpoint_execution_contract"
+        ],
         "fixture_dir": str(fixture_dir),
         "acceptance_config": str(acceptance_path),
         "acceptance_config_sha256": _sha256_bytes(acceptance_path.read_bytes()),
@@ -3700,6 +3867,16 @@ def main(argv: list[str] | None = None) -> int:
             "model_state_exact_for_every_arm": True,
             "particle_state_exact_for_every_arm": True,
             "sampling_state_exact_for_every_arm": True,
+            "checkpoint_trajectory_backend": (
+                "all_optimized_stable_shapes_on_q32_batched"
+                if args.candidate_mode == "all_optimized_stable_shapes"
+                else "direct"
+            ),
+            "only_transition_differences": (
+                ["stable_fourier_window_shapes", "stable_flat_row_capacity"]
+                if args.candidate_mode == "all_optimized_stable_shapes"
+                else None
+            ),
             "baseline_trajectory_backend": (
                 "packed_deferred"
                 if args.mirrored_incremental_panels
@@ -3711,6 +3888,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.candidate_mode == "exact_compact_preprocess"
                 else "all_optimized_fused_pair_fine_score_off"
                 if args.candidate_mode == "fused_pair_fine_score"
+                else "all_optimized_stable_shapes_off_q32_batched"
+                if args.candidate_mode == "all_optimized_stable_shapes"
                 else (
                     "hybrid_packed_deferred_stable_fourier_off"
                     if args.candidate_mode == "stable_shapes"
@@ -3730,6 +3909,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.candidate_mode == "exact_compact_preprocess"
                 else "all_optimized_fused_pair_fine_score_on"
                 if args.candidate_mode == "fused_pair_fine_score"
+                else "all_optimized_stable_shapes_on_q32_batched"
+                if args.candidate_mode == "all_optimized_stable_shapes"
                 else (
                     "hybrid_packed_deferred_stable_fourier_on"
                     if args.candidate_mode == "stable_shapes"
