@@ -220,6 +220,7 @@ def _attach_science_diagnostics(
     masked_fsc: float = 0.99,
     rotation_matrix: np.ndarray | None = None,
     alignment_overrides: dict[str, object] | None = None,
+    producer_path: Path | None = None,
 ) -> None:
     evidence = json.loads(evidence_path.read_text())
     output_dir = evidence_path.parent / "proper_so3"
@@ -241,12 +242,18 @@ def _attach_science_diagnostics(
     mask_sha256 = MODULE.sha256_file(mask_path)
     curves_sha256 = MODULE.sha256_file(curves_path)
     fields = sorted(curve_payload)
+    if producer_path is None:
+        producer_path = REPO_ROOT / scorecard["diagnostic_producer"]["path"]
+        producer_sha256 = scorecard["diagnostic_producer"]["sha256"]
+    else:
+        producer_path = producer_path.resolve()
+        producer_sha256 = MODULE.sha256_file(producer_path)
     diagnostics = {
         "schema": MODULE.SCIENCE_DIAGNOSTICS_SCHEMA,
         "case_id": MODULE.TARGET_CASE_ID,
         "producer": {
-            "path": str(REPO_ROOT / scorecard["diagnostic_producer"]["path"]),
-            "sha256": scorecard["diagnostic_producer"]["sha256"],
+            "path": str(producer_path),
+            "sha256": producer_sha256,
         },
         "inputs": {
             name: {
@@ -320,6 +327,35 @@ def _attach_science_diagnostics(
     }
     _reseal_execution_envelope(evidence)
     evidence_path.write_text(json.dumps(evidence))
+
+
+def _validate_attached_science_diagnostics(
+    evidence_path: Path,
+    scorecard: dict,
+    *,
+    expected_producer_sha256: str,
+) -> tuple[dict, list[str]]:
+    evidence = json.loads(evidence_path.read_text())
+    case = _target(scorecard)
+    metrics = json.loads(Path(evidence["collector"]["metrics_json"]).read_text())
+    with np.load(evidence["collector"]["fsc_curves_npz"], allow_pickle=False) as archive:
+        curves = {key: np.asarray(archive[key], dtype=np.float64) for key in MODULE.CURVE_KEYS}
+    scored = MODULE.score_curves(
+        curves,
+        box_size=int(case["input_contract"]["box_size"]),
+        voxel_size_angstrom=float(case["input_contract"]["voxel_size_angstrom"]),
+        thresholds=scorecard["thresholds"],
+    )
+    return MODULE._validate_science_diagnostics(
+        scorecard,
+        case,
+        evidence,
+        metrics,
+        expected_producer_sha256=expected_producer_sha256,
+        first_shell=int(scored["jointly_resolved_band"]["first_shell"]),
+        last_shell=int(scored["jointly_resolved_band"]["last_shell"]),
+        expected_curve_length=int(curves[MODULE.CURVE_KEYS[0]].size),
+    )
 
 
 def test_fixed_scorecard_is_valid_and_markdown_is_fresh() -> None:
@@ -687,6 +723,72 @@ def test_science_inputs_must_match_external_collector_artifact_hashes(tmp_path: 
 
     assert result["status"] == "invalid"
     assert "science_diagnostics:recovar_merged_collector_artifact_sha256" in result["provenance_failures"]
+
+
+def test_historical_diagnostic_producer_is_accepted_with_explicit_pin(tmp_path: Path) -> None:
+    scorecard = _frozen_target_scorecard()
+    evidence_path = _write_evidence(tmp_path, scorecard)
+    historical_producer = tmp_path / "historical_science_diagnostic_producer.py"
+    historical_producer.write_text("# sealed historical producer fixture\n")
+    historical_sha256 = MODULE.sha256_file(historical_producer)
+    _attach_science_diagnostics(
+        evidence_path,
+        scorecard,
+        producer_path=historical_producer,
+    )
+
+    diagnostics, failures = _validate_attached_science_diagnostics(
+        evidence_path,
+        scorecard,
+        expected_producer_sha256=historical_sha256,
+    )
+
+    assert failures == []
+    assert diagnostics["status"] == "pass"
+
+
+def test_historical_calibration_producer_pin_is_required_and_exact(tmp_path: Path) -> None:
+    scorecard = _frozen_target_scorecard()
+    calibration = next(case for case in scorecard["cases"] if case["id"] == "empiar-10097-native-c1")
+    producer_sha256 = calibration["proper_so3_diagnostics"].pop("producer_sha256")
+    with pytest.raises(ValueError, match="diagnostic producer SHA-256 is invalid"):
+        MODULE._validate_calibration_route_contract(calibration, scorecard["thresholds"])
+    calibration["proper_so3_diagnostics"]["producer_sha256"] = producer_sha256
+
+    evidence_path = _write_evidence(tmp_path, scorecard)
+    historical_producer = tmp_path / "historical_science_diagnostic_producer.py"
+    historical_producer.write_text("# sealed historical producer fixture\n")
+    _attach_science_diagnostics(
+        evidence_path,
+        scorecard,
+        producer_path=historical_producer,
+    )
+
+    _, failures = _validate_attached_science_diagnostics(
+        evidence_path,
+        scorecard,
+        expected_producer_sha256="0" * 64,
+    )
+
+    assert failures == ["science_diagnostics:producer_sha256"]
+
+
+def test_live_evidence_rejects_historical_diagnostic_producer(tmp_path: Path) -> None:
+    scorecard = _frozen_target_scorecard()
+    evidence_path = _write_evidence(tmp_path, scorecard)
+    historical_producer = tmp_path / "historical_science_diagnostic_producer.py"
+    historical_producer.write_text("# sealed historical producer fixture\n")
+    _attach_science_diagnostics(
+        evidence_path,
+        scorecard,
+        producer_path=historical_producer,
+    )
+
+    result = MODULE.score_case_evidence(scorecard, evidence_path)
+
+    assert result["status"] == "invalid"
+    assert "science_diagnostics:producer_sha256" in result["provenance_failures"]
+    assert "science_diagnostics:producer_file_sha256" not in result["provenance_failures"]
 
 
 @pytest.mark.parametrize(

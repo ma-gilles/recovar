@@ -663,6 +663,7 @@
       "proper_so3_diagnostics": {
         "slurm_job_id": 13276576,
         "subject_commit": "915470fb5b9b733035b09e44d9c911a4cab9302f",
+        "producer_sha256": "fff385a6ec362679798b588d5a8a4684d47b46b1dfd9be9e5bd2d5c640436428",
         "launch_script": {
           "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/realdata_10097_proper_so3_identity_915470fb5_20260831/scripts/run_proper_so3_identity.sbatch",
           "sha256": "47539fc253d4a9db56b6559e534ddcd37811cba3436ee727acc98449b01c2f92"

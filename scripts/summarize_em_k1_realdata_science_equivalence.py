@@ -866,6 +866,10 @@ def _validate_calibration_route_contract(
     _require(raw_failures, f"{case_id} proper-SO3 route supplied despite a passing raw route")
     _require(isinstance(diagnostics, Mapping), f"{case_id} proper-SO3 diagnostics are missing")
     _require(_is_git_sha(diagnostics.get("subject_commit")), f"{case_id} diagnostic commit is invalid")
+    _require(
+        _is_sha256(diagnostics.get("producer_sha256")),
+        f"{case_id} diagnostic producer SHA-256 is invalid",
+    )
     _require(int(diagnostics.get("slurm_job_id", 0)) > 0, f"{case_id} diagnostic job is invalid")
     for name in ("launch_script", "slurm_stdout", "slurm_stderr"):
         artifact = diagnostics.get(name, {})
@@ -1240,6 +1244,7 @@ def replay_calibration_case(
             case,
             {"analysis_artifacts": diagnostic_spec["artifacts"]},
             metrics,
+            expected_producer_sha256=diagnostic_spec["producer_sha256"],
             first_shell=int(scored["jointly_resolved_band"]["first_shell"]),
             last_shell=int(scored["jointly_resolved_band"]["last_shell"]),
             expected_curve_length=int(curves[CURVE_KEYS[0]].size),
@@ -1665,6 +1670,7 @@ def _validate_science_diagnostics(
     evidence: Mapping[str, Any],
     collector_metrics: Mapping[str, Any],
     *,
+    expected_producer_sha256: str,
     first_shell: int,
     last_shell: int,
     expected_curve_length: int,
@@ -1718,7 +1724,7 @@ def _validate_science_diagnostics(
     check(payload.get("case_id") == case["id"], "case_id")
     producer = payload.get("producer", {})
     check(
-        producer.get("sha256") == scorecard["diagnostic_producer"]["sha256"],
+        producer.get("sha256") == expected_producer_sha256,
         "producer_sha256",
     )
     check(_is_sha256(producer.get("sha256")), "producer_sha256_format")
@@ -1979,6 +1985,7 @@ def score_case_evidence(
                 case,
                 evidence,
                 metrics,
+                expected_producer_sha256=scorecard["diagnostic_producer"]["sha256"],
                 first_shell=int(scored["jointly_resolved_band"]["first_shell"]),
                 last_shell=int(scored["jointly_resolved_band"]["last_shell"]),
                 expected_curve_length=curve_length,
