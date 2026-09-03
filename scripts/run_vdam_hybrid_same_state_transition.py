@@ -2385,7 +2385,6 @@ def _compact_science_contract(
         "class_assignments",
         "best_pose_translations",
         "significant_counts",
-        "cutoff_counts",
     )
     exact_checks: dict[str, Any] = {}
     for pair in cross_pairs:
