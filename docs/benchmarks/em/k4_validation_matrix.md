@@ -511,6 +511,15 @@ seed-matched cross-engine map agreement exceeds within-engine cross-seed
 agreement. It still cannot be described as complete Tier-6 evidence while the
 frozen per-seed quality and assignment gates remain red; see
 `real_k4_10345_native10k_multiseed_20260903.md`.
+
+Same-engine repeatability is now measured rather than assumed. RELION job
+`13376810` changed timing-dependent follower ownership for 31,104/40,000
+particle visits but preserved every class assignment and pose exactly; the
+minimum FSC-AUC over 32 numbered maps was 0.999999995094. That scale cannot
+explain the seed-42001 RECOVAR/RELION 184/5,000 assignment disagreement or
+worst direct map FSC-AUC 0.973209. See
+`real_k4_10345_relion_repeatability_20260903.md`.
+
 The final-map analysis has a separate cross-CPU reproduction contract: inputs,
 discrete class mappings, and decisions must match exactly; every reported
 FSC-AUC may move by at most 0.005 under the continuous proper-rigid fit; and the

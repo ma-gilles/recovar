@@ -178,6 +178,35 @@
       "max": 33795
     }
   },
+  "same_engine_repeatability": {
+    "engine": "RELION",
+    "seed": 42001,
+    "half": 1,
+    "job_id": 13376810,
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:04:29",
+    "relion_wall_seconds_original_repeat": [
+      147.48314142227173,
+      150.4221429824829
+    ],
+    "particle_iteration_rows": 40000,
+    "mpi_follower_assignment_mismatches": 31104,
+    "class_assignment_mismatches": 0,
+    "raw_euler_row_mismatches": 0,
+    "raw_translation_row_mismatches": 0,
+    "significant_support_row_events": 5,
+    "maximum_pmax_absolute_difference": 0.006006,
+    "minimum_numbered_map_signed_non_dc_fsc_auc": 0.9999999950938837,
+    "maximum_numbered_map_relative_l2": 1.019096848330404e-05,
+    "final_class_map_signed_non_dc_fsc_auc": [
+      0.9999999985970948,
+      0.999999998288308,
+      0.9999999991248231,
+      0.9999999976313183
+    ],
+    "conclusion": "Timing-dependent MPI ownership changed substantially, but all class assignments and poses remained exact and every numbered map stayed above FSC-AUC 0.999999995. Ordinary same-engine execution-order noise cannot explain the cross-engine endpoint gap."
+  },
   "aggregate_analysis_job": {
     "job_id": 13375384,
     "state": "COMPLETED",
@@ -194,7 +223,7 @@
     "limitations": [
       "All three predeclared per-seed science gates remain rejected and are not retroactively weakened.",
       "The run uses 10,000 particles for eight iterations and makes no absolute-resolution claim.",
-      "An independent exact RELION same-seed repeat is required to quantify same-engine nondeterminism separately from seed sensitivity."
+      "The same-engine repeat calibrates ordinary RELION execution-order noise for half 1 and seed 42001 only; it is not a cross-engine bitwise-equivalence claim."
     ]
   },
   "artifacts": {
@@ -202,6 +231,11 @@
     "assignment_and_quality_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_multiseed_2f6759608_20260903/analysis/assignment_and_quality_stability.json",
     "assignment_and_quality_sha256": "cf47aeb5b6f1e4901d58b68d6e0a810abaea9f9bca1a1d97aa86d0154aed9066",
     "map_stability_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_multiseed_2f6759608_20260903/analysis/map_stability.json",
-    "map_stability_sha256": "4b9288f1ade5726d53bde8dc3a4e41ee78fa1a722a23dc60dffc290350558a9b"
+    "map_stability_sha256": "4b9288f1ade5726d53bde8dc3a4e41ee78fa1a722a23dc60dffc290350558a9b",
+    "relion_repeat_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_relion_half1_repeat_10345_native10k_seed42001_20260903T055128Z",
+    "relion_repeat_audit_sha256": "af7ef651f3eefe6c043f3c938c92dd0d701e673e60d87b9cd96eb37b6cdde313",
+    "relion_repeat_fsc_curves_sha256": "7bdb6fc0caf992cef331bd8b3732177b790ef4eb4c919742f8991b924b776460",
+    "relion_repeat_dispatch_audit_sha256": "f446a2411e469bf1fd4bb9720f529d200ffc328721af27d26a42761be0269379",
+    "relion_repeat_sealed_manifest_sha256": "408a55a8545e4e13b43fd1296608977c57c831bb7ec2235acea886c78647967d"
   }
 }

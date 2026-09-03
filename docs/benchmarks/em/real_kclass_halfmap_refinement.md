@@ -419,6 +419,15 @@ seed-sensitive local optimum, while all three prospective per-seed gates
 remain rejected. See `real_k4_10345_native10k_multiseed_20260903.md` and
 `diagnostics/real-k4-10345-native10k-multiseed-2f6759608-20260903.json`.
 
+An exact same-seed RELION half-1 repeat then calibrated execution-order noise.
+Although MPI follower ownership changed for 31,104/40,000 particle visits, all
+class assignments and raw poses were exact and all 32 numbered maps had signed
+non-DC FSC-AUC at least 0.999999995094. This rules out ordinary same-engine
+dispatch/reduction-order variability as the explanation for the much larger
+cross-engine endpoint difference. See
+`real_k4_10345_relion_repeatability_20260903.md` for the frozen launcher,
+command, resource audit, and artifact hashes.
+
 ## Reproduction
 
 The launcher is dry-run by default. Use a fresh root for every retry:

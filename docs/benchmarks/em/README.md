@@ -454,3 +454,10 @@ retroactively weakened. The full result and exact reproduction contract are
 in `real_k4_10345_native10k_multiseed_20260903.md`,
 `real_kclass_halfmap_refinement.md`, and
 `diagnostics/real-k4-10345-native10k-multiseed-2f6759608-20260903.json`.
+
+A same-binary RELION half-1 repeat changed MPI follower ownership on 31,104 of
+40,000 particle/iteration visits while preserving every class assignment and
+raw pose exactly. All 32 numbered maps remained at signed non-DC FSC-AUC
+0.9999999951 or better. This excludes ordinary RELION execution-order noise as
+the cause of the 3.68% seed-42001 cross-engine assignment gap; see
+`real_k4_10345_relion_repeatability_20260903.md`.

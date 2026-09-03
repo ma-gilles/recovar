@@ -44,9 +44,17 @@ therefore a complete diagnostic with classification
 `SHARED_SEED_SENSITIVE_LOCAL_OPTIMUM_BOUNDARY`, not an accepted Tier-6
 registry entry.
 
-An independent same-input, same-seed RELION repeat is being used to measure
-same-engine nondeterminism directly. Until that finishes, this report makes no
-claim that every residual 3--4% assignment difference is unavoidable.
+An independent same-input, same-seed RELION half-1 repeat completed after this
+aggregate. Timing-dependent MPI follower ownership changed for 31,104 of
+40,000 particle/iteration visits, but all 40,000 class assignments, Euler
+rows, and translations remained exact. Across all 32 numbered class maps, the
+minimum signed non-DC FSC-AUC was 0.999999995094; the worst map relative L2 was
+1.02e-5. Ordinary same-engine dispatch/reduction-order noise therefore cannot
+explain the original 184/5,000 half-1 cross-engine assignment disagreements or
+worst direct map FSC-AUC 0.973209. It does calibrate isolated Pmax differences:
+one unchanged particle reached a 0.006006 Pmax delta. Full details and the
+sealed reproduction artifacts are in
+`real_k4_10345_relion_repeatability_20260903.md`.
 
 ## Performance and reproduction
 
