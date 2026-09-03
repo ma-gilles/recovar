@@ -3017,8 +3017,16 @@ def _plan_flat_local_row_capacities(
     *,
     rotation_block_size: int,
     exact_local_bucket_radix: int,
+    stable_rectangular_capacity: bool = False,
 ) -> dict[tuple[int, int], int]:
-    """Choose one packed-row shape for every existing dense bucket ABI."""
+    """Choose one packed-row shape for every existing dense bucket ABI.
+
+    The stable policy deliberately reuses the mature rectangular ``B x R``
+    ABI. Logical pool rows still occupy the exact same source-ordered prefix;
+    only a score-inert physical tail is appended. The shared projector still
+    evaluates that tail, but validity-aware fine CUDA returns ``+inf`` before
+    pixel work while repeated iterations can reuse the same compiled shape.
+    """
 
     capacities: dict[tuple[int, int], int] = {}
     for bucket in bucket_specs:
@@ -3037,7 +3045,10 @@ def _plan_flat_local_row_capacities(
             dense_batch_size=dense_batch_size,
         )
         key = (dense_batch_size, dense_rotation_count)
-        capacities[key] = max(capacities.get(key, 0), int(plan.packed_row_count))
+        required_capacity = int(plan.packed_row_count)
+        if stable_rectangular_capacity:
+            required_capacity = dense_batch_size * dense_rotation_count
+        capacities[key] = max(capacities.get(key, 0), required_capacity)
     return capacities
 
 
@@ -4246,6 +4257,7 @@ def run_local_em_exact(
     _fixed_capacity_class_count: int | None = None,
     _fixed_capacity_whole_boundary_enabled: bool = False,
     _flat_local_rows_enabled: bool = False,
+    _stable_flat_row_capacity_enabled: bool = False,
     _packed_local_projection_enabled: bool = False,
     _defer_packed_vdam_enabled: bool = False,
 ):
@@ -4258,6 +4270,9 @@ def run_local_em_exact(
         _fixed_capacity_whole_boundary_enabled
     )
     flat_local_rows_enabled = bool(_flat_local_rows_enabled)
+    stable_flat_row_capacity_enabled = bool(
+        _stable_flat_row_capacity_enabled
+    )
     packed_local_projection_enabled = bool(_packed_local_projection_enabled)
     defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
@@ -4284,6 +4299,8 @@ def run_local_em_exact(
         raise ValueError(
             "flat local rows require exact RELION fine diff2"
         )
+    if stable_flat_row_capacity_enabled and not flat_local_rows_enabled:
+        raise ValueError("stable flat-row capacity requires flat local rows")
     if packed_local_projection_enabled and not flat_local_rows_enabled:
         raise ValueError(
             "packed local projection requires flat local rows"
@@ -4935,6 +4952,7 @@ def run_local_em_exact(
             bucket_specs,
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+            stable_rectangular_capacity=stable_flat_row_capacity_enabled,
         )
         if flat_local_rows_enabled
         else {}
@@ -9134,6 +9152,9 @@ def run_local_em_exact(
         "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
         "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
         "flat_local_rows_enabled": np.asarray(flat_local_rows_enabled),
+        "stable_flat_row_capacity_enabled": np.asarray(
+            stable_flat_row_capacity_enabled
+        ),
         "packed_local_projection_enabled": np.asarray(
             packed_local_projection_enabled
         ),

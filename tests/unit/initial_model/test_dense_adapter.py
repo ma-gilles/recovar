@@ -929,6 +929,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     calls = {}
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", raising=False)
 
@@ -1021,6 +1022,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         ]
         calls["local_relion_exact_fine_diff2"] = kwargs["relion_exact_fine_diff2"]
         calls["local_flat_local_rows"] = kwargs["_flat_local_rows_enabled"]
+        calls["local_stable_flat_row_capacity"] = kwargs[
+            "_stable_flat_row_capacity_enabled"
+        ]
         calls["local_packed_local_projection"] = kwargs[
             "_packed_local_projection_enabled"
         ]
@@ -1184,6 +1188,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_preserve_bpref_particle_order"] is False
     assert calls["local_relion_exact_fine_diff2"] is True
     assert calls["local_flat_local_rows"] is False
+    assert calls["local_stable_flat_row_capacity"] is False
     assert calls["local_packed_local_projection"] is False
     assert calls["local_defer_packed_vdam"] is False
     assert calls["local_relion_exact_score_translation"] is True
@@ -1194,9 +1199,11 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert result.meta["sparse_pass2"] is True
     assert result.meta["requested_relion_wavg_sequential_cuda"] is True
     assert result.meta["requested_exact_local_bucket_radix"] == 4
+    assert result.meta["requested_stable_flat_row_capacity"] is False
     assert result.meta["requested_exact_local_physical_order_chunk_size"] == 0
     assert result.meta["effective_relion_wavg_sequential_cuda"] is True
     assert result.meta["effective_exact_local_bucket_radix"] == 4
+    assert result.meta["effective_stable_flat_row_capacity"] is False
     assert result.meta["effective_exact_local_physical_order_chunk_size"] is None
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
@@ -1222,6 +1229,22 @@ def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
     for value in ("0", "false", "NO", "Off"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", value)
         assert _flat_local_rows_enabled() is False
+
+
+def test_initial_model_stable_flat_row_capacity_is_explicit_opt_in(monkeypatch):
+    from recovar.em.initial_model.dense_adapter import (
+        _stable_flat_row_capacity_enabled,
+    )
+
+    variable = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
+    monkeypatch.delenv(variable, raising=False)
+    assert _stable_flat_row_capacity_enabled() is False
+    for value in ("1", "true", "YES", "On"):
+        monkeypatch.setenv(variable, value)
+        assert _stable_flat_row_capacity_enabled() is True
+    for value in ("0", "false", "NO", "Off"):
+        monkeypatch.setenv(variable, value)
+        assert _stable_flat_row_capacity_enabled() is False
 
 
 def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):

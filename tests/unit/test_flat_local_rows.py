@@ -125,6 +125,76 @@ def test_flat_row_capacity_reuses_one_shape_per_dense_bucket_abi():
 
 
 @pytest.mark.unit
+def test_stable_flat_row_capacity_reuses_mature_rectangular_bucket_abi():
+    first = SimpleNamespace(
+        image_indices=np.arange(3, dtype=np.int32),
+        bucket_image_count=4,
+        bucket_rotation_count=256,
+        actual_rotation_counts=np.asarray([3, 17, 5], dtype=np.int32),
+    )
+    second = SimpleNamespace(
+        image_indices=np.arange(2, dtype=np.int32),
+        bucket_image_count=4,
+        bucket_rotation_count=256,
+        actual_rotation_counts=np.asarray([65, 9], dtype=np.int32),
+    )
+
+    capacities = local_em_engine._plan_flat_local_row_capacities(
+        (first, second),
+        rotation_block_size=128,
+        exact_local_bucket_radix=4,
+        stable_rectangular_capacity=True,
+    )
+    first_encoded = local_em_engine._build_flat_local_row_argument(
+        first,
+        capacities,
+        dense_batch_size=4,
+        rotation_block_size=128,
+        exact_local_bucket_radix=4,
+    )
+    second_encoded = local_em_engine._build_flat_local_row_argument(
+        second,
+        capacities,
+        dense_batch_size=4,
+        rotation_block_size=128,
+        exact_local_bucket_radix=4,
+    )
+    ordinary_capacities = local_em_engine._plan_flat_local_row_capacities(
+        (first, second),
+        rotation_block_size=128,
+        exact_local_bucket_radix=4,
+    )
+    ordinary_first = local_em_engine._build_flat_local_row_argument(
+        first,
+        ordinary_capacities,
+        dense_batch_size=4,
+        rotation_block_size=128,
+        exact_local_bucket_radix=4,
+    )
+    first_required_rows = build_pool_flat_local_row_plan(
+        first.actual_rotation_counts,
+        first.bucket_rotation_count,
+        pool_size=3,
+        rotation_block_size=128,
+        exact_local_bucket_radix=4,
+        dense_batch_size=4,
+    ).packed_row_count
+
+    assert capacities == {(4, 256): 4 * 256}
+    assert first_encoded.shape == second_encoded.shape == (4 * 256, 3)
+    np.testing.assert_array_equal(
+        first_encoded[: ordinary_first.shape[0]],
+        ordinary_first,
+    )
+    assert np.count_nonzero(first_encoded[:, 2]) == 25
+    assert np.count_nonzero(second_encoded[:, 2]) == 74
+    np.testing.assert_array_equal(
+        first_encoded[first_required_rows:],
+        np.zeros_like(first_encoded[first_required_rows:]),
+    )
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("counts", "dense_rotation_count", "kwargs", "message"),
     [

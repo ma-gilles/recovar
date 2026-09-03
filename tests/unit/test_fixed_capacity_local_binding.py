@@ -884,6 +884,7 @@ def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_c
     assert signature.parameters["_fixed_capacity_class_count"].default is None
     assert signature.parameters["_fixed_capacity_whole_boundary_enabled"].default is False
     assert signature.parameters["_flat_local_rows_enabled"].default is False
+    assert signature.parameters["_stable_flat_row_capacity_enabled"].default is False
     assert signature.parameters["_packed_local_projection_enabled"].default is False
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert source.count("_invoke_local_bucket_big_jit(") == 1
@@ -893,6 +894,22 @@ def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_c
     assert source.index("_fetch_and_validate_fixed_capacity_call_operands(") < source.index(
         "_invoke_local_bucket_big_jit(",
     )
+
+
+def test_stable_flat_row_capacity_requires_flat_rows():
+    with pytest.raises(ValueError, match="stable flat-row capacity requires flat local rows"):
+        local_em_engine.run_local_em_exact(
+            None,
+            None,
+            None,
+            None,
+            None,
+            "nearest",
+            image_batch_size=1,
+            rotation_block_size=1,
+            current_size=2,
+            _stable_flat_row_capacity_enabled=True,
+        )
 
 
 def test_whole_local_call_preparation_removes_only_invariant_carry_positions():

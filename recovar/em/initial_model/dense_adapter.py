@@ -28,7 +28,6 @@ from recovar.em.dense_single_volume.k_class import (
     _coarse_selector_audit_from_full_stats,
     _run_sparse_k_class_adaptive_pass2,
     _with_coarse_significance_diagnostics,
-    _with_coarse_selector_audit,
     run_dense_k_class_em,
     run_local_k_class_em,
 )
@@ -71,6 +70,7 @@ _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 _FLAT_LOCAL_ROWS_ENV = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
+_STABLE_FLAT_ROW_CAPACITY_ENV = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
 _PACKED_LOCAL_PROJECTION_ENV = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
 _DEFER_PACKED_VDAM_ENV = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
@@ -118,6 +118,13 @@ def _flat_local_rows_enabled() -> bool:
     """Enable the packed-row exact scorer for controlled InitialModel A/B runs."""
 
     setting = os.environ.get(_FLAT_LOCAL_ROWS_ENV, "0").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _stable_flat_row_capacity_enabled() -> bool:
+    """Use the mature dense bucket ABI as the packed-row physical capacity."""
+
+    setting = os.environ.get(_STABLE_FLAT_ROW_CAPACITY_ENV, "0").strip().lower()
     return setting not in {"0", "false", "no", "off"}
 
 
@@ -934,6 +941,8 @@ def _run_sparse_pass2_initial_model_estep(
     pass1_time_s = 0.0
     pass2_time_s = 0.0
     exact_local_runtime_policy_active = False
+    requested_stable_flat_row_capacity = _stable_flat_row_capacity_enabled()
+    effective_stable_flat_row_capacity = False
     coarse_gemm_aggregate_manifest_path = None
     coarse_gemm_stream_aggregate_manifest_path = None
     n_significant_by_image: list[np.ndarray] = []
@@ -1256,6 +1265,18 @@ def _run_sparse_pass2_initial_model_estep(
             and use_exact_local_relion_operands
             and _exact_relion_fine_diff2_enabled()
         )
+        use_flat_local_rows = bool(
+            use_exact_fine_diff2 and _flat_local_rows_enabled()
+        )
+        use_stable_flat_row_capacity = bool(
+            use_flat_local_rows and requested_stable_flat_row_capacity
+        )
+        effective_stable_flat_row_capacity = bool(
+            effective_stable_flat_row_capacity or use_stable_flat_row_capacity
+        )
+        use_packed_local_projection = bool(
+            use_flat_local_rows and _packed_local_projection_enabled()
+        )
         sparse_diagnostics.set_bpref_contribution_dump_context(
             iteration=int(group_kwargs.get("debug_iteration", -1)),
             half=int(halfset_idx) + 1,
@@ -1417,18 +1438,13 @@ def _run_sparse_pass2_initial_model_estep(
                     ),
                     relion_exact_fine_diff2=use_exact_fine_diff2,
                     relion_exact_score_translation=use_exact_fine_diff2,
-                    _flat_local_rows_enabled=bool(
-                        use_exact_fine_diff2 and _flat_local_rows_enabled()
+                    _flat_local_rows_enabled=use_flat_local_rows,
+                    _stable_flat_row_capacity_enabled=(
+                        use_stable_flat_row_capacity
                     ),
-                    _packed_local_projection_enabled=bool(
-                        use_exact_fine_diff2
-                        and _flat_local_rows_enabled()
-                        and _packed_local_projection_enabled()
-                    ),
+                    _packed_local_projection_enabled=use_packed_local_projection,
                     _defer_packed_vdam_enabled=bool(
-                        use_exact_fine_diff2
-                        and _flat_local_rows_enabled()
-                        and _packed_local_projection_enabled()
+                        use_packed_local_projection
                         and _defer_packed_vdam_enabled()
                     ),
                     relion_wavg_sequential_cuda=(
@@ -1506,6 +1522,12 @@ def _run_sparse_pass2_initial_model_estep(
     meta["requested_exact_local_bucket_radix"] = int(
         config.exact_local_bucket_radix
     )
+    meta["requested_stable_fourier_window_shapes"] = bool(
+        config.stable_fourier_window_shapes
+    )
+    meta["requested_stable_flat_row_capacity"] = bool(
+        requested_stable_flat_row_capacity
+    )
     meta["requested_exact_local_physical_order_chunk_size"] = int(
         config.exact_local_physical_order_chunk_size
     )
@@ -1516,6 +1538,13 @@ def _run_sparse_pass2_initial_model_estep(
         int(config.exact_local_bucket_radix)
         if exact_local_runtime_policy_active
         else None
+    )
+    meta["effective_stable_fourier_window_shapes"] = bool(
+        exact_local_runtime_policy_active
+        and config.stable_fourier_window_shapes
+    )
+    meta["effective_stable_flat_row_capacity"] = bool(
+        effective_stable_flat_row_capacity
     )
     meta["effective_exact_local_physical_order_chunk_size"] = (
         int(config.exact_local_physical_order_chunk_size)
