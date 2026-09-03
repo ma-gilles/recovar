@@ -132,6 +132,9 @@ _K1_RELION_EXACT_COARSE_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS"
 _K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV = (
     "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS"
 )
+_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE_ENV = (
+    "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE"
+)
 _K1_RELION_F32_COARSE_SUPPORT_ENV = "RECOVAR_K1_RELION_F32_COARSE_SUPPORT"
 _SIGNIFICANCE_DUMP_STOP_AFTER_TARGET_ENV = (
     "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET"
@@ -2182,6 +2185,25 @@ def _resolve_k1_relion_exact_coarse_skip_generic_operands(
             f"effective {_K1_RELION_EXACT_COARSE_OPERANDS_ENV}=1 Gaussian scoring",
         )
     return bool(requested and exact_coarse_operands_enabled)
+
+
+def _k1_relion_exact_coarse_assembly_profile_enabled(
+    *,
+    default: bool = False,
+) -> bool:
+    """Return whether exact-coarse call-count diagnostics are published."""
+
+    token = os.environ.get(
+        _K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE_ENV,
+        "1" if default else "0",
+    ).strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(
+        f"Unsupported {_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE_ENV}={token!r}",
+    )
 
 
 def _k1_relion_f32_coarse_support_enabled(*, default: bool = False) -> bool:
@@ -4452,6 +4474,9 @@ def _compute_k_class_significance_batched(
             exact_coarse_operands_enabled=exact_coarse_operands_enabled,
         )
     )
+    exact_coarse_assembly_profile_enabled = (
+        _k1_relion_exact_coarse_assembly_profile_enabled()
+    )
     coarse_gaussian_native_texture_requested = (
         _k1_coarse_gaussian_native_texture_enabled(
             # Keep the fused texture scorer as an explicit diagnostic.  The
@@ -6014,7 +6039,8 @@ def _compute_k_class_significance_batched(
             # by CTF, and RELION's square-difference weight is
             # ``score_weight_half * half_weights``.
             if not exact_coarse_skip_generic_operands_enabled:
-                generic_coarse_operand_assembly_count += 1
+                if exact_coarse_assembly_profile_enabled:
+                    generic_coarse_operand_assembly_count += 1
                 if coarse_gaussian_sincosf_enabled:
                     (
                         coarse_gaussian_shifted_corrected,
@@ -6045,7 +6071,8 @@ def _compute_k_class_significance_batched(
                         n_trans=n_trans,
                     )
             if exact_coarse_operands_enabled:
-                exact_coarse_operand_assembly_count += 1
+                if exact_coarse_assembly_profile_enabled:
+                    exact_coarse_operand_assembly_count += 1
                 ctf_half_rfloat_np = np.asarray(
                     _relion_exact_ctf_half_from_source_star(
                         experiment_dataset,
@@ -7422,43 +7449,49 @@ def _compute_k_class_significance_batched(
         "significant_cutoff_counts": cutoff_count_all,
         "coarse_selector_audit": coarse_selector_audit,
     }
-    full_stats["exact_coarse_operand_assembly"] = {
-        "skip_generic_default_enabled": False,
-        "skip_generic_requested": bool(
-            exact_coarse_skip_generic_operands_requested,
-        ),
-        "skip_generic_effective": bool(
-            exact_coarse_skip_generic_operands_enabled,
-        ),
-        "exact_coarse_operands_effective": bool(exact_coarse_operands_enabled),
-        "generic_assembly_count": int(generic_coarse_operand_assembly_count),
-        "exact_assembly_count": int(exact_coarse_operand_assembly_count),
-        "translate_score_call_site_count": int(
-            generic_coarse_operand_assembly_count
-            * int(coarse_gaussian_sincosf_enabled)
-            + exact_coarse_operand_assembly_count
-        ),
-        "downstream_operand_source": (
-            "exact_source_star"
-            if exact_coarse_operands_enabled
-            else "generic"
-        ),
-        "diagnostic_operand_source": (
-            "exact_source_star"
-            if exact_coarse_operands_enabled
-            else "generic"
-        ),
-        "raw_score_capture_changed": False,
-        "skipped_generic_outputs": (
-            [
-                "coarse_gaussian_shifted_corrected",
-                "coarse_gaussian_pixel_weight",
-                "coarse_gaussian_unshifted_corrected",
-            ]
-            if exact_coarse_skip_generic_operands_enabled
-            else []
-        ),
-    }
+    if exact_coarse_assembly_profile_enabled:
+        full_stats["exact_coarse_operand_assembly"] = {
+            "skip_generic_default_enabled": False,
+            "skip_generic_requested": bool(
+                exact_coarse_skip_generic_operands_requested,
+            ),
+            "skip_generic_effective": bool(
+                exact_coarse_skip_generic_operands_enabled,
+            ),
+            "exact_coarse_operands_effective": bool(exact_coarse_operands_enabled),
+            "generic_assembly_count": int(generic_coarse_operand_assembly_count),
+            "exact_assembly_count": int(exact_coarse_operand_assembly_count),
+            "translate_score_call_site_count": int(
+                generic_coarse_operand_assembly_count
+                * int(coarse_gaussian_sincosf_enabled)
+                + exact_coarse_operand_assembly_count
+            ),
+            "translate_score_call_count": int(
+                generic_coarse_operand_assembly_count
+                * int(coarse_gaussian_sincosf_enabled)
+                + exact_coarse_operand_assembly_count
+            ),
+            "downstream_operand_source": (
+                "exact_source_star"
+                if exact_coarse_operands_enabled
+                else "generic"
+            ),
+            "diagnostic_operand_source": (
+                "exact_source_star"
+                if exact_coarse_operands_enabled
+                else "generic"
+            ),
+            "raw_score_capture_changed": False,
+            "skipped_generic_outputs": (
+                [
+                    "coarse_gaussian_shifted_corrected",
+                    "coarse_gaussian_pixel_weight",
+                    "coarse_gaussian_unshifted_corrected",
+                ]
+                if exact_coarse_skip_generic_operands_enabled
+                else []
+            ),
+        }
     if coarse_gaussian_gemm_resource_estimate is not None:
         full_stats["coarse_gaussian_gemm_resources"] = {
             field: int(value)

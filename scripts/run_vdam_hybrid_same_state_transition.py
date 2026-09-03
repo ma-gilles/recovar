@@ -126,6 +126,12 @@ ALL_OPTIMIZED_ARM_ORDER = (
     "all_optimized_2",
     "direct_2",
 )
+EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER = (
+    "single_translate_off_1",
+    "single_translate_on_1",
+    "single_translate_on_2",
+    "single_translate_off_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
@@ -141,6 +147,12 @@ PACKED_DEFERRED_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
 PACKED_FINAL_NOISE_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE"
 HYBRID_IMAGE_BATCH_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE"
+)
+EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT = (
+    "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS"
+)
+EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT = (
+    "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE"
 )
 HYBRID_IMAGE_BATCH_CONTROL_REQUEST = 110
 HYBRID_IMAGE_BATCH_CANDIDATE_REQUEST = 500
@@ -162,6 +174,7 @@ CANDIDATE_MODES = (
     "compact_posterior",
     "compact_packed_deferred",
     "all_optimized",
+    "exact_coarse_single_translate",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -232,6 +245,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return COMPACT_PACKED_DEFERRED_ARM_ORDER
     if candidate_mode == "all_optimized":
         return ALL_OPTIMIZED_ARM_ORDER
+    if candidate_mode == "exact_coarse_single_translate":
+        return EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -245,6 +260,18 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         PACKED_DEFERRED_ENVIRONMENT: "0",
         PACKED_FINAL_NOISE_ENVIRONMENT: "0",
     }
+    if candidate_mode == "exact_coarse_single_translate":
+        values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+        values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
+        values[FLAT_ROW_ENVIRONMENT] = "1"
+        values[STABLE_FLAT_CAPACITY_ENVIRONMENT] = "1"
+        values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+        values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        values[PACKED_FINAL_NOISE_ENVIRONMENT] = "1"
+        values[EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] = (
+            "1" if enabled else "0"
+        )
+        return values
     if candidate_mode == "stable_shapes":
         values.update({name: "1" for name in HYBRID_ENVIRONMENT})
         values[FLAT_ROW_ENVIRONMENT] = "1"
@@ -311,6 +338,7 @@ def _candidate_uses_hybrid(candidate_mode: str) -> bool:
         "compact_posterior",
         "compact_packed_deferred",
         "all_optimized",
+        "exact_coarse_single_translate",
     }
 
 
@@ -319,6 +347,7 @@ def _candidate_uses_compact_posterior(candidate_mode: str) -> bool:
         "compact_posterior",
         "compact_packed_deferred",
         "all_optimized",
+        "exact_coarse_single_translate",
     }
 
 
@@ -326,6 +355,7 @@ def _candidate_uses_packed_deferred(candidate_mode: str) -> bool:
     return candidate_mode in {
         "compact_packed_deferred",
         "all_optimized",
+        "exact_coarse_single_translate",
     }
 
 
@@ -334,6 +364,8 @@ def _arm_candidate_enabled(label: str, candidate_mode: str) -> bool:
         return label.startswith("stable_on_")
     if candidate_mode == "stable_flat_capacity":
         return label.startswith("stable_flat_on_")
+    if candidate_mode == "exact_coarse_single_translate":
+        return label.startswith("single_translate_on_")
     return not label.startswith("direct")
 
 
@@ -581,6 +613,96 @@ def _coarse_hybrid_profiles(meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _validate_exact_coarse_single_translate_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+) -> dict[str, Any]:
+    """Prove the exact path issued one rather than two translations per batch."""
+
+    expected_skipped_outputs = (
+        [
+            "coarse_gaussian_shifted_corrected",
+            "coarse_gaussian_pixel_weight",
+            "coarse_gaussian_unshifted_corrected",
+        ]
+        if enabled
+        else []
+    )
+    profiles: dict[str, Any] = {}
+    total_batch_count = 0
+    total_translate_score_call_count = 0
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict):
+            continue
+        profile = value.get("exact_coarse_operand_assembly")
+        if profile is None:
+            continue
+        if not isinstance(profile, dict):
+            raise RuntimeError(
+                f"{label} profile {key} exact-coarse assembly is not a mapping",
+            )
+        hybrid = value.get("coarse_gaussian_gemm_hybrid")
+        if not isinstance(hybrid, dict) or not isinstance(
+            hybrid.get("batch_count"),
+            int,
+        ):
+            raise RuntimeError(
+                f"{label} profile {key} omitted the matching hybrid batch count",
+            )
+        batch_count = int(hybrid["batch_count"])
+        expected = {
+            "skip_generic_default_enabled": False,
+            "skip_generic_requested": bool(enabled),
+            "skip_generic_effective": bool(enabled),
+            "exact_coarse_operands_effective": True,
+            "generic_assembly_count": 0 if enabled else batch_count,
+            "exact_assembly_count": batch_count,
+            "translate_score_call_site_count": (
+                batch_count if enabled else 2 * batch_count
+            ),
+            "translate_score_call_count": (
+                batch_count if enabled else 2 * batch_count
+            ),
+            "downstream_operand_source": "exact_source_star",
+            "diagnostic_operand_source": "exact_source_star",
+            "raw_score_capture_changed": False,
+            "skipped_generic_outputs": expected_skipped_outputs,
+        }
+        observed = {field: _json_ready(profile.get(field)) for field in expected}
+        if observed != expected:
+            raise RuntimeError(
+                f"{label} profile {key} exact-coarse assembly mismatch: "
+                f"observed={observed!r}, expected={expected!r}",
+            )
+        profiles[key] = {
+            "batch_count": batch_count,
+            **observed,
+        }
+        total_batch_count += batch_count
+        total_translate_score_call_count += int(
+            observed["translate_score_call_count"],
+        )
+    if not profiles:
+        raise RuntimeError(
+            f"{label} did not publish an exact-coarse operand profile",
+        )
+    return {
+        "enabled": bool(enabled),
+        "profile_exact": True,
+        "profile_count": len(profiles),
+        "total_batch_count": total_batch_count,
+        "total_translate_score_call_count": total_translate_score_call_count,
+        "expected_calls_per_batch": 1 if enabled else 2,
+        "wall_timing_policy": (
+            "outer transition wall; profile counters add no device synchronization"
+        ),
+        "profile_counter_device_synchronization": False,
+        "profiles": profiles,
+    }
+
+
 def _validate_hybrid_image_batch_profiles(
     estep_meta: dict[str, Any],
     *,
@@ -799,7 +921,9 @@ def _validate_arm_execution_contract(
 
     profiles = _coarse_hybrid_profiles(estep_meta)
     contract["hybrid_profiles"] = _json_ready(profiles)
-    expected_compact = bool(candidate_enabled)
+    expected_compact = bool(
+        candidate_enabled or candidate_mode == "exact_coarse_single_translate"
+    )
     expected_token = "1" if expected_compact else "0"
     if requested_environment[COMPACT_POSTERIOR_ENVIRONMENT] != expected_token:
         raise RuntimeError("compact-posterior request token does not match the arm")
@@ -1366,6 +1490,7 @@ def _run_transition_arm(
     checkpoint_iteration: int,
     backend_mode: str | None = None,
     hybrid_image_batch_request: int | None = None,
+    exact_coarse_profile_enabled: bool = False,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from recovar.data_io.starfile import read_star
@@ -1385,10 +1510,17 @@ def _run_transition_arm(
     initial_particle_state_manifest = _dataclass_manifest(particle_state)
     initial_sampling_state_manifest = _dataclass_manifest(sampling_state)
     opts = checkpoint["opts"]
-    if candidate_mode in {"stable_shapes", "all_optimized"}:
+    if candidate_mode in {
+        "stable_shapes",
+        "all_optimized",
+        "exact_coarse_single_translate",
+    }:
         opts = dataclasses.replace(
             opts,
-            stable_fourier_window_shapes=bool(candidate_enabled),
+            stable_fourier_window_shapes=bool(
+                candidate_enabled
+                or candidate_mode == "exact_coarse_single_translate"
+            ),
         )
     dataset = checkpoint["dataset"]
     expectation_step = checkpoint["expectation_factory"](
@@ -1430,7 +1562,13 @@ def _run_transition_arm(
         int(dataset.n_images)
     )
     resolved_backend_mode = (
-        candidate_mode if candidate_enabled else "direct"
+        (
+            "all_optimized_exact_coarse_single_translate_on"
+            if candidate_enabled
+            else "all_optimized_exact_coarse_single_translate_off"
+        )
+        if candidate_mode == "exact_coarse_single_translate"
+        else candidate_mode if candidate_enabled else "direct"
     ) if backend_mode is None else backend_mode
     if backend_mode is None:
         requested_environment = _candidate_environment(
@@ -1447,6 +1585,10 @@ def _run_transition_arm(
     if hybrid_image_batch_request is not None:
         requested_environment[HYBRID_IMAGE_BATCH_ENVIRONMENT] = str(
             hybrid_image_batch_request,
+        )
+    if candidate_mode == "exact_coarse_single_translate":
+        requested_environment[EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT] = (
+            "1" if exact_coarse_profile_enabled else "0"
         )
     effective_environment: dict[str, str | None] = {}
     started = time.perf_counter()
@@ -1521,20 +1663,52 @@ def _run_transition_arm(
         estep_meta=captured["estep_meta"],
         backend_mode=resolved_backend_mode,
     )
-    if candidate_mode == "all_optimized":
+    if candidate_mode in {
+        "all_optimized",
+        "exact_coarse_single_translate",
+    }:
+        all_optimized_enabled = bool(
+            candidate_enabled
+            if candidate_mode == "all_optimized"
+            else True
+        )
         all_optimized_contract = _validate_all_optimized_profiles(
             captured["estep_meta"],
-            enabled=candidate_enabled,
+            enabled=all_optimized_enabled,
             label=label,
             image_shape=tuple(int(value) for value in dataset.image_shape),
         )
         execution_contract["all_optimized"] = all_optimized_contract
         execution_contract["all_optimized_profile_exact"] = True
         stable_fourier_window_contract = all_optimized_contract["stable_fourier"]
-        if candidate_enabled:
+        if all_optimized_enabled:
             stable_flat_capacity_contract = all_optimized_contract[
                 "stable_flat_capacity"
             ]
+    if candidate_mode == "exact_coarse_single_translate":
+        if exact_coarse_profile_enabled:
+            execution_contract["exact_coarse_single_translate"] = (
+                _validate_exact_coarse_single_translate_profiles(
+                    captured["estep_meta"],
+                    enabled=candidate_enabled,
+                    label=label,
+                )
+            )
+        else:
+            if any(
+                isinstance(value, dict)
+                and "exact_coarse_operand_assembly" in value
+                for value in captured["estep_meta"].values()
+            ):
+                raise RuntimeError(
+                    f"{label} profile-off timing arm published call-count metadata",
+                )
+            execution_contract["exact_coarse_single_translate"] = {
+                "enabled": bool(candidate_enabled),
+                "profile_enabled": False,
+                "profile_checked": False,
+                "profile_free_wall_timing": True,
+            }
     if hybrid_image_batch_request is not None:
         execution_contract["hybrid_image_batch"] = (
             _validate_hybrid_image_batch_profiles(
@@ -1559,7 +1733,12 @@ def _run_transition_arm(
                 candidate_enabled
                 or (
                     backend_mode is None
-                    and candidate_mode in {"stable_shapes", "stable_flat_capacity"}
+                    and candidate_mode
+                    in {
+                        "stable_shapes",
+                        "stable_flat_capacity",
+                        "exact_coarse_single_translate",
+                    }
                 )
             )
         ),
@@ -1773,6 +1952,76 @@ def _compact_science_contract(
             nested_entries=False,
         ),
     }
+
+
+def _exact_coarse_single_translate_runtime_contract(
+    arms: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare warmed ABBA timings with all other optimized seams fixed."""
+
+    result: dict[str, Any] = {}
+    environments: dict[str, dict[str, str]] = {}
+    for backend, token in (("skip_off", "_off_"), ("skip_on", "_on_")):
+        labels = tuple(
+            label
+            for label in EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
+            if token in label
+        )
+        measurements: dict[str, list[float]] = {}
+        for metric in ("wall_s", "pass1_time_s", "pass2_time_s"):
+            values = []
+            for label in labels:
+                source = (
+                    arms[label]
+                    if metric == "wall_s"
+                    else arms[label]["performance_summary"]
+                )
+                if metric not in source:
+                    raise RuntimeError(f"{label} omitted runtime metric {metric}")
+                values.append(float(source[metric]))
+            measurements[metric] = values
+        result[backend] = {
+            "labels": list(labels),
+            "repeat_count": len(labels),
+            "measurements": measurements,
+            "median": {
+                metric: float(np.median(values))
+                for metric, values in measurements.items()
+            },
+        }
+        for label in labels:
+            requested = dict(
+                arms[label]["execution_contract"]["requested_environment"],
+            )
+            requested.pop(EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT)
+            environments[label] = requested
+
+    distinct_environments = {
+        json.dumps(environment, sort_keys=True, separators=(",", ":"))
+        for environment in environments.values()
+    }
+    if len(distinct_environments) != 1:
+        raise RuntimeError(
+            "single-translate arms differ outside the isolated environment flag",
+        )
+    changes = {}
+    for metric in ("wall_s", "pass1_time_s", "pass2_time_s"):
+        control = result["skip_off"]["median"][metric]
+        candidate = result["skip_on"]["median"][metric]
+        changes[metric] = {
+            "skip_off_median": control,
+            "skip_on_median": candidate,
+            "fractional_change": candidate / control - 1.0,
+            "speedup": control / candidate,
+        }
+    result["skip_on_vs_skip_off"] = changes
+    result["isolated_environment_contract"] = {
+        "only_difference": EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT,
+        "all_other_environment_exact": True,
+        "profile_free_wall_timing": True,
+        "profile_counter_device_synchronization": False,
+    }
+    return result
 
 
 HYBRID_IMAGE_BATCH_REQUIRED_META = (
@@ -2087,6 +2336,16 @@ def main(argv: list[str] | None = None) -> int:
             f"{HYBRID_IMAGE_BATCH_ENVIRONMENT} must be absent from the outer "
             "environment; the mirrored harness scopes it per arm",
         )
+    if EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT in os.environ:
+        raise ValueError(
+            f"{EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT} must be absent from "
+            "the outer environment; the same-state harness scopes it per arm",
+        )
+    if EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT in os.environ:
+        raise ValueError(
+            f"{EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT} must be absent from "
+            "the outer environment; the same-state harness scopes it per arm",
+        )
     fixture_dir = args.fixture_dir.resolve(strict=True)
     acceptance_path = args.acceptance_config.resolve(strict=True)
     output_root = args.output_root.resolve()
@@ -2205,6 +2464,44 @@ def main(argv: list[str] | None = None) -> int:
             del warm
             gc.collect()
         arm_specs = _hybrid_image_batch_arm_specs()
+    elif args.candidate_mode == "exact_coarse_single_translate":
+        for backend, enabled in (("skip_off", False), ("skip_on", True)):
+            warm = _run_transition_arm(
+                checkpoint,
+                label=f"prewarm_{backend}",
+                candidate_mode=args.candidate_mode,
+                candidate_enabled=enabled,
+                checkpoint_iteration=args.checkpoint_iteration,
+                exact_coarse_profile_enabled=True,
+            )
+            for key, expected in expected_manifests.items():
+                if warm[key]["manifest_sha256"] != expected:
+                    raise RuntimeError(
+                        f"prewarm_{backend} did not start from the exact shared {key}",
+                    )
+            prewarm[backend] = {
+                "label": warm["label"],
+                "backend_mode": warm["backend_mode"],
+                "wall_s": warm["wall_s"],
+                "exact_coarse_single_translate": warm["execution_contract"][
+                    "exact_coarse_single_translate"
+                ],
+                "initial_state_manifest_sha256": warm[
+                    "initial_state_manifest"
+                ]["manifest_sha256"],
+                "initial_particle_state_manifest_sha256": warm[
+                    "initial_particle_state_manifest"
+                ]["manifest_sha256"],
+                "initial_sampling_state_manifest_sha256": warm[
+                    "initial_sampling_state_manifest"
+                ]["manifest_sha256"],
+            }
+            del warm
+            gc.collect()
+        arm_specs = tuple(
+            (label, None)
+            for label in EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
+        )
     else:
         legacy_arm_order = _arm_order(args.candidate_mode)
         arm_specs = tuple(
@@ -2275,6 +2572,23 @@ def main(argv: list[str] | None = None) -> int:
         and _candidate_uses_compact_posterior(args.candidate_mode)
     ):
         compact_science_contract = _compact_science_contract(comparisons, arm_order)
+    exact_coarse_single_translate_runtime_contract = (
+        _exact_coarse_single_translate_runtime_contract(arms)
+        if args.candidate_mode == "exact_coarse_single_translate"
+        else None
+    )
+    exact_coarse_single_translate_atomic_contract_passed = (
+        bool(
+            compact_science_contract["accumulator_repeat_envelope"][
+                "all_cross_within_observed_repeat_envelope"
+            ]
+            and compact_science_contract["final_state_repeat_envelope"][
+                "all_cross_within_observed_repeat_envelope"
+            ]
+        )
+        if args.candidate_mode == "exact_coarse_single_translate"
+        else None
+    )
     arm_dir = output_root / "arms"
     arm_dir.mkdir()
     arm_summaries: dict[str, Any] = {}
@@ -2362,6 +2676,12 @@ def main(argv: list[str] | None = None) -> int:
         "arms": arm_summaries,
         "comparisons": comparisons,
         "compact_science_contract": compact_science_contract,
+        "exact_coarse_single_translate_runtime_contract": (
+            exact_coarse_single_translate_runtime_contract
+        ),
+        "exact_coarse_single_translate_atomic_contract_passed": (
+            exact_coarse_single_translate_atomic_contract_passed
+        ),
         "hybrid_image_batch_science_contract": (
             hybrid_image_batch_science_contract
         ),
@@ -2377,6 +2697,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.mirrored_incremental_panels
                 else "all_optimized_hybrid_image_batch_110"
                 if args.mirrored_hybrid_image_batch_panels
+                else "all_optimized_exact_coarse_single_translate_off"
+                if args.candidate_mode == "exact_coarse_single_translate"
                 else (
                     "hybrid_packed_deferred_stable_fourier_off"
                     if args.candidate_mode == "stable_shapes"
@@ -2390,6 +2712,8 @@ def main(argv: list[str] | None = None) -> int:
             "candidate_backend": (
                 "all_optimized_hybrid_image_batch_200"
                 if args.mirrored_hybrid_image_batch_panels
+                else "all_optimized_exact_coarse_single_translate_on"
+                if args.candidate_mode == "exact_coarse_single_translate"
                 else (
                     "hybrid_packed_deferred_stable_fourier_on"
                     if args.candidate_mode == "stable_shapes"
@@ -2412,6 +2736,7 @@ def main(argv: list[str] | None = None) -> int:
             "both_compared_backends_prewarmed": bool(
                 args.mirrored_incremental_panels
                 or args.mirrored_hybrid_image_batch_panels
+                or args.candidate_mode == "exact_coarse_single_translate"
             ),
             "both_incremental_backends_prewarmed": bool(
                 args.mirrored_incremental_panels,
@@ -2427,7 +2752,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.candidate_mode,
             ),
             "all_optimized_profile_fail_closed": args.candidate_mode
-            == "all_optimized",
+            in {"all_optimized", "exact_coarse_single_translate"},
+            "exact_coarse_single_translate_profile_fail_closed": (
+                args.candidate_mode == "exact_coarse_single_translate"
+            ),
             "hybrid_image_batch_profile_fail_closed": bool(
                 args.mirrored_hybrid_image_batch_panels,
             ),
@@ -2457,6 +2785,11 @@ def main(argv: list[str] | None = None) -> int:
     if hybrid_image_batch_science_contract is not None and not (
         hybrid_image_batch_science_contract["hard_exact_contract_passed"]
         and hybrid_image_batch_science_contract["atomic_repeat_envelope_passed"]
+    ):
+        return 1
+    if args.candidate_mode == "exact_coarse_single_translate" and not (
+        compact_science_contract["hard_exact_contract_passed"]
+        and exact_coarse_single_translate_atomic_contract_passed
     ):
         return 1
     return 0

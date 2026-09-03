@@ -146,6 +146,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         == runner.COMPACT_PACKED_DEFERRED_ARM_ORDER
     )
     assert runner._arm_order("all_optimized") == runner.ALL_OPTIMIZED_ARM_ORDER
+    assert (
+        runner._arm_order("exact_coarse_single_translate")
+        == runner.EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
+    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -184,6 +188,14 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     all_optimized = runner._candidate_environment(
         "all_optimized",
+        enabled=True,
+    )
+    single_translate_off = runner._candidate_environment(
+        "exact_coarse_single_translate",
+        enabled=False,
+    )
+    single_translate_on = runner._candidate_environment(
+        "exact_coarse_single_translate",
         enabled=True,
     )
 
@@ -275,6 +287,7 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert runner._candidate_uses_hybrid("compact_posterior") is True
     assert runner._candidate_uses_hybrid("compact_packed_deferred") is True
     assert runner._candidate_uses_hybrid("all_optimized") is True
+    assert runner._candidate_uses_hybrid("exact_coarse_single_translate") is True
     assert runner._candidate_uses_hybrid("packed_deferred") is False
     assert runner._candidate_uses_compact_posterior("compact_posterior") is True
     assert (
@@ -283,7 +296,19 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     assert runner._candidate_uses_compact_posterior("hybrid") is False
     assert runner._candidate_uses_compact_posterior("all_optimized") is True
+    assert (
+        runner._candidate_uses_compact_posterior(
+            "exact_coarse_single_translate"
+        )
+        is True
+    )
     assert runner._candidate_uses_packed_deferred("all_optimized") is True
+    assert (
+        runner._candidate_uses_packed_deferred(
+            "exact_coarse_single_translate"
+        )
+        is True
+    )
     assert runner._candidate_uses_packed_deferred("compact_posterior") is False
     assert runner._arm_candidate_enabled("stable_off_1", "stable_shapes") is False
     assert runner._arm_candidate_enabled("stable_on_1", "stable_shapes") is True
@@ -298,6 +323,31 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
             "stable_flat_on_1", "stable_flat_capacity"
         )
         is True
+    )
+    isolated_environment = runner.EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT
+    assert single_translate_off[isolated_environment] == "0"
+    assert single_translate_on[isolated_environment] == "1"
+    assert {
+        key: value
+        for key, value in single_translate_off.items()
+        if key != isolated_environment
+    } == {
+        key: value
+        for key, value in single_translate_on.items()
+        if key != isolated_environment
+    }
+    assert all(
+        value == "1"
+        for key, value in single_translate_on.items()
+        if key != isolated_environment
+    )
+    assert not runner._arm_candidate_enabled(
+        "single_translate_off_1",
+        "exact_coarse_single_translate",
+    )
+    assert runner._arm_candidate_enabled(
+        "single_translate_on_1",
+        "exact_coarse_single_translate",
     )
 
 
@@ -642,6 +692,72 @@ def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None
     assert composed["stable_fourier"]["enabled"] is False
     assert composed["stable_flat_capacity"] is None
     assert composed["packed_final_noise"]["enabled"] is False
+
+
+def _exact_coarse_single_translate_meta(*, enabled: bool) -> dict:
+    meta = _all_optimized_estep_meta(enabled=True)
+    batch_count = meta["halfset_0_profile_summary"][
+        "coarse_gaussian_gemm_hybrid"
+    ]["batch_count"]
+    meta["halfset_0_profile_summary"]["exact_coarse_operand_assembly"] = {
+        "skip_generic_default_enabled": False,
+        "skip_generic_requested": enabled,
+        "skip_generic_effective": enabled,
+        "exact_coarse_operands_effective": True,
+        "generic_assembly_count": 0 if enabled else batch_count,
+        "exact_assembly_count": batch_count,
+        "translate_score_call_site_count": (
+            batch_count if enabled else 2 * batch_count
+        ),
+        "translate_score_call_count": (
+            batch_count if enabled else 2 * batch_count
+        ),
+        "downstream_operand_source": "exact_source_star",
+        "diagnostic_operand_source": "exact_source_star",
+        "raw_score_capture_changed": False,
+        "skipped_generic_outputs": (
+            [
+                "coarse_gaussian_shifted_corrected",
+                "coarse_gaussian_pixel_weight",
+                "coarse_gaussian_unshifted_corrected",
+            ]
+            if enabled
+            else []
+        ),
+    }
+    return meta
+
+
+@pytest.mark.parametrize(("enabled", "expected_calls"), [(False, 4), (True, 2)])
+def test_exact_coarse_single_translate_profile_proves_actual_calls(
+    enabled: bool,
+    expected_calls: int,
+) -> None:
+    contract = runner._validate_exact_coarse_single_translate_profiles(
+        _exact_coarse_single_translate_meta(enabled=enabled),
+        enabled=enabled,
+        label="arm",
+    )
+
+    assert contract["profile_exact"] is True
+    assert contract["total_batch_count"] == 2
+    assert contract["total_translate_score_call_count"] == expected_calls
+    assert contract["expected_calls_per_batch"] == (1 if enabled else 2)
+    assert contract["profile_counter_device_synchronization"] is False
+
+
+def test_exact_coarse_single_translate_profile_fails_closed() -> None:
+    meta = _exact_coarse_single_translate_meta(enabled=True)
+    meta["halfset_0_profile_summary"]["exact_coarse_operand_assembly"][
+        "translate_score_call_count"
+    ] = 4
+
+    with pytest.raises(RuntimeError, match="assembly mismatch"):
+        runner._validate_exact_coarse_single_translate_profiles(
+            meta,
+            enabled=True,
+            label="arm",
+        )
 
 
 @pytest.mark.parametrize(
@@ -1188,6 +1304,14 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         in sbatch
     )
     assert "direct_1,all_optimized_1,all_optimized_2,direct_2" in sbatch
+    assert (
+        "single_translate_off_1,single_translate_on_1,"
+        "single_translate_on_2,single_translate_off_2"
+        in sbatch
+    )
+    assert "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE" in source
+    assert "profile_free_wall_timing" in sbatch
+    assert "translate_score_call_count" in sbatch
     assert "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR=0" in sbatch
     assert ".compact_effective == true" in sbatch
     assert ".packed_deferred_effective == true" in sbatch

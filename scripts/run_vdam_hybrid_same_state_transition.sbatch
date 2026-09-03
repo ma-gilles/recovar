@@ -102,6 +102,9 @@ case "${CANDIDATE_MODE}" in
   all_optimized)
     expected_arm_order=direct_1,all_optimized_1,all_optimized_2,direct_2
     ;;
+  exact_coarse_single_translate)
+    expected_arm_order=single_translate_off_1,single_translate_on_1,single_translate_on_2,single_translate_off_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -349,6 +352,75 @@ if [[ "${CANDIDATE_MODE}" == all_optimized && \
          and .stable_flat_capacity_contract.strict_reduction_count == 0' \
       "${SCIENCE}/report.json" > /dev/null
   done
+fi
+if [[ "${CANDIDATE_MODE}" == exact_coarse_single_translate ]]; then
+  test "$(jq -r '.prewarm | keys | join(",")' "${SCIENCE}/report.json")" = \
+    skip_off,skip_on
+  test "$(jq -r '.same_state_contract.baseline_trajectory_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_exact_coarse_single_translate_off
+  test "$(jq -r '.same_state_contract.candidate_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_exact_coarse_single_translate_on
+  jq -e '
+    .compact_science_contract.hard_exact_contract_passed == true
+      and .exact_coarse_single_translate_atomic_contract_passed == true
+      and .compact_science_contract.accumulator_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .compact_science_contract.final_state_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .same_state_contract.both_compared_backends_prewarmed == true
+      and .same_state_contract.all_optimized_profile_fail_closed == true
+      and .same_state_contract.exact_coarse_single_translate_profile_fail_closed == true
+      and .exact_coarse_single_translate_runtime_contract.skip_off.repeat_count == 2
+      and .exact_coarse_single_translate_runtime_contract.skip_on.repeat_count == 2
+      and ([.exact_coarse_single_translate_runtime_contract.skip_off.measurements[],
+            .exact_coarse_single_translate_runtime_contract.skip_on.measurements[]]
+           | all(length == 2 and all(. > 0)))
+      and .exact_coarse_single_translate_runtime_contract.isolated_environment_contract.all_other_environment_exact == true
+      and .exact_coarse_single_translate_runtime_contract.isolated_environment_contract.profile_free_wall_timing == true
+      and .exact_coarse_single_translate_runtime_contract.isolated_environment_contract.profile_counter_device_synchronization == false
+      and .prewarm.skip_off.exact_coarse_single_translate.profile_exact == true
+      and .prewarm.skip_off.exact_coarse_single_translate.expected_calls_per_batch == 2
+      and .prewarm.skip_on.exact_coarse_single_translate.profile_exact == true
+      and .prewarm.skip_on.exact_coarse_single_translate.expected_calls_per_batch == 1
+  ' "${SCIENCE}/report.json" >/dev/null
+  for arm in single_translate_off_1 single_translate_off_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == false
+        and .execution_contract.all_optimized.enabled == true
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.exact_coarse_single_translate.enabled == false
+        and .execution_contract.exact_coarse_single_translate.profile_enabled == false
+        and .execution_contract.exact_coarse_single_translate.profile_checked == false
+        and .execution_contract.exact_coarse_single_translate.profile_free_wall_timing == true
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in single_translate_on_1 single_translate_on_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == true
+        and .execution_contract.all_optimized.enabled == true
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.exact_coarse_single_translate.enabled == true
+        and .execution_contract.exact_coarse_single_translate.profile_enabled == false
+        and .execution_contract.exact_coarse_single_translate.profile_checked == false
+        and .execution_contract.exact_coarse_single_translate.profile_free_wall_timing == true
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  jq -e '
+    [.prewarm.skip_off.exact_coarse_single_translate.profiles[]
+     | .skip_generic_effective == false
+       and .generic_assembly_count == .batch_count
+       and .exact_assembly_count == .batch_count
+       and .translate_score_call_count == (2 * .batch_count)] | all
+  ' "${SCIENCE}/report.json" >/dev/null
+  jq -e '
+    [.prewarm.skip_on.exact_coarse_single_translate.profiles[]
+     | .skip_generic_effective == true
+       and .generic_assembly_count == 0
+       and .exact_assembly_count == .batch_count
+       and .translate_score_call_count == .batch_count] | all
+  ' "${SCIENCE}/report.json" >/dev/null
 fi
 if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
   test "$(jq -r '.prewarm | keys | join(",")' "${SCIENCE}/report.json")" = \

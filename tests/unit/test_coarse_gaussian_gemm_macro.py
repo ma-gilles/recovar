@@ -100,6 +100,15 @@ def test_exact_coarse_skip_generic_operands_is_default_off_and_fail_closed(
             exact_coarse_operands_enabled=False,
         )
 
+    profile_variable = "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE"
+    monkeypatch.delenv(profile_variable, raising=False)
+    assert not significance._k1_relion_exact_coarse_assembly_profile_enabled()
+    monkeypatch.setenv(profile_variable, "1")
+    assert significance._k1_relion_exact_coarse_assembly_profile_enabled()
+    monkeypatch.setenv(profile_variable, "automatic")
+    with pytest.raises(ValueError, match=profile_variable):
+        significance._k1_relion_exact_coarse_assembly_profile_enabled()
+
 
 def test_coarse_gaussian_gemm_projection_cache_is_default_off_and_fail_closed(
     monkeypatch,
@@ -1377,6 +1386,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
         "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
         "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS": "0",
+        "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE": "1",
         "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "1",
         "RECOVAR_SIGNIFICANCE_SCORE_CACHE": "0",
         "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "1",
@@ -1722,6 +1732,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "generic_assembly_count": expected_batch_count,
         "exact_assembly_count": expected_batch_count,
         "translate_score_call_site_count": 2 * expected_batch_count,
+        "translate_score_call_count": 2 * expected_batch_count,
         "downstream_operand_source": "exact_source_star",
         "diagnostic_operand_source": "exact_source_star",
         "raw_score_capture_changed": False,
@@ -1736,6 +1747,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "generic_assembly_count": 0,
         "exact_assembly_count": expected_batch_count,
         "translate_score_call_site_count": expected_batch_count,
+        "translate_score_call_count": expected_batch_count,
         "downstream_operand_source": "exact_source_star",
         "diagnostic_operand_source": "exact_source_star",
         "raw_score_capture_changed": False,
