@@ -18,6 +18,7 @@ underlying CUDA image grid.
 See ``docs/math/plan_relion_parity.md``, Phase 3.
 """
 
+import os
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -30,6 +31,31 @@ from recovar.em.dense_single_volume.shape_buckets import round_up_to_multiple
 # Representative sizes kept for explicit callers that still want a bounded set.
 ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
 _DEFAULT_PROJECTION_MAX_R = object()
+STABLE_FOURIER_WINDOW_QUANTUM_ENV = (
+    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"
+)
+DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM = 8
+
+
+def stable_fourier_window_quantum() -> int:
+    """Return the shared physical-size quantum for stable EM windows."""
+
+    raw = os.environ.get(STABLE_FOURIER_WINDOW_QUANTUM_ENV, "").strip()
+    if not raw:
+        return DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM
+    try:
+        quantum = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        ) from exc
+    if quantum < 2 or quantum % 2:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        )
+    return quantum
 
 
 @dataclass(frozen=True)

@@ -618,6 +618,62 @@ def _validate_stable_fourier_profiles(
     }
 
 
+def _validate_stable_coarse_square_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+    image_size: int,
+    stable_fourier_window_quantum: int,
+) -> dict[str, Any]:
+    """Prove coarse significance used the same physical/logical size policy."""
+
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        stable_fourier_window_current_size,
+    )
+
+    profiles: dict[str, Any] = {}
+    for key, hybrid in sorted(_coarse_hybrid_profiles(estep_meta).items()):
+        layout = hybrid.get("coarse_square_layout")
+        if not isinstance(layout, dict):
+            raise RuntimeError(
+                f"{label} profile {key} omitted coarse_square_layout"
+            )
+        logical_size = int(layout.get("logical_current_size", -1))
+        physical_size = stable_fourier_window_current_size(
+            logical_size,
+            int(image_size),
+            quantum=int(stable_fourier_window_quantum),
+        ) if enabled else logical_size
+        expected = {
+            "stable_fourier_window_shapes_requested": bool(enabled),
+            "stable_fourier_window_shapes_effective": bool(
+                enabled and physical_size != logical_size
+            ),
+            "logical_current_size": logical_size,
+            "physical_current_size": physical_size,
+            "logical_square_pixels": logical_size * (logical_size // 2 + 1),
+            "physical_square_pixels": physical_size * (physical_size // 2 + 1),
+            "logical_issue_stream_is_prefix": True,
+            "physical_tail_zero_weighted": True,
+        }
+        observed = {field: _json_ready(layout.get(field)) for field in expected}
+        if observed != expected:
+            raise RuntimeError(
+                f"{label} profile {key} coarse stable-square mismatch: "
+                f"observed={observed!r}, expected={expected!r}"
+            )
+        profiles[key] = observed
+    if not profiles:
+        raise RuntimeError(f"{label} has no coarse hybrid profile to validate")
+    return {
+        "enabled": bool(enabled),
+        "stable_fourier_window_quantum": int(stable_fourier_window_quantum),
+        "profile_exact": True,
+        "profiles": profiles,
+    }
+
+
 ALL_OPTIMIZED_SEAMS = (
     "certified_coarse_hybrid",
     "coarse_gemm_macro",
@@ -627,6 +683,7 @@ ALL_OPTIMIZED_SEAMS = (
     "packed_local_projection",
     "packed_vdam_deferral",
     "stable_fourier_window_shapes",
+    "stable_coarse_significance_shapes",
     "stable_flat_row_capacity",
     "packed_final_noise",
 )
@@ -648,6 +705,17 @@ def _validate_all_optimized_profiles(
         label=label,
         image_shape=image_shape,
         stable_fourier_window_quantum=stable_fourier_window_quantum,
+    )
+    stable_coarse = (
+        _validate_stable_coarse_square_profiles(
+            estep_meta,
+            enabled=True,
+            label=label,
+            image_size=int(image_shape[0]),
+            stable_fourier_window_quantum=stable_fourier_window_quantum,
+        )
+        if enabled
+        else None
     )
     for key in (
         "requested_stable_flat_row_capacity",
@@ -706,6 +774,7 @@ def _validate_all_optimized_profiles(
         "disabled_seams": list(() if enabled else ALL_OPTIMIZED_SEAMS),
         "profile_exact": True,
         "stable_fourier": stable_fourier,
+        "stable_coarse_significance": stable_coarse,
         "stable_flat_capacity": stable_flat,
         "packed_final_noise": packed_final_noise,
         "local_profiles": local_profiles,
@@ -728,6 +797,13 @@ def _validate_all_optimized_stable_pair_profiles(
         image_shape=image_shape,
         # The inactive adapter intentionally reports its canonical default
         # quantum; q32 becomes an effective ABI only when stable shapes are on.
+        stable_fourier_window_quantum=32 if enabled else 8,
+    )
+    stable_coarse = _validate_stable_coarse_square_profiles(
+        estep_meta,
+        enabled=enabled,
+        label=label,
+        image_size=int(image_shape[0]),
         stable_fourier_window_quantum=32 if enabled else 8,
     )
     for key in (
@@ -785,6 +861,7 @@ def _validate_all_optimized_stable_pair_profiles(
         "fused_pair_fine_score": False,
         "profile_exact": True,
         "stable_fourier": stable_fourier,
+        "stable_coarse_significance": stable_coarse,
         "stable_flat_capacity": stable_flat,
         "packed_final_noise": packed_final_noise,
         "local_profiles": local_profiles,

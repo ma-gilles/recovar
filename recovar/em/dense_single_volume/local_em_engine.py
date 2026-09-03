@@ -36,8 +36,11 @@ from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     scatter_flat_local_rows,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
+    DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM,
+    STABLE_FOURIER_WINDOW_QUANTUM_ENV,
     centered_half_indices_to_fftw_half_indices,
     make_stable_fourier_window_shape_plan,
+    stable_fourier_window_quantum,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -196,12 +199,6 @@ from recovar.reconstruction import noise as noise_utils
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
-
-STABLE_FOURIER_WINDOW_QUANTUM_ENV = (
-    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"
-)
-DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM = 8
-
 
 def _noise_wsum_initial_dtype(*, relion_exact_fine_diff2: bool, use_window: bool):
     """Match the initial carry to the direct-Wavg post-bucket dtype."""
@@ -2036,22 +2033,7 @@ def _optional_nonnegative_int_env(name: str) -> int | None:
 def _stable_fourier_window_quantum() -> int:
     """Return the diagnostic physical-size quantum for stable VDAM windows."""
 
-    raw = os.environ.get(STABLE_FOURIER_WINDOW_QUANTUM_ENV, "").strip()
-    if not raw:
-        return DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM
-    try:
-        quantum = int(raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
-            f"got {raw!r}"
-        ) from exc
-    if quantum < 2 or quantum % 2:
-        raise ValueError(
-            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
-            f"got {raw!r}"
-        )
-    return quantum
+    return stable_fourier_window_quantum()
 
 
 def _env_flag(name: str) -> bool:

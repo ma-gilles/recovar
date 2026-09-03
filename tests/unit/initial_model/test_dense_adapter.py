@@ -1979,9 +1979,12 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
     calls = {"significance": [], "local": []}
 
     def fake_significance(dataset, means, noise_variance, rotations, translations, disc_type, **kwargs):
-        del means, noise_variance, translations, disc_type, kwargs
+        del means, noise_variance, translations, disc_type
         n_images = int(dataset.n_images)
         calls["significance"].append(n_images)
+        calls.setdefault("significance_stable_shapes", []).append(
+            kwargs["stable_fourier_window_shapes"]
+        )
         return (
             np.ones((1, int(np.asarray(rotations).shape[0])), dtype=bool),
             np.ones(n_images, dtype=np.int32),
@@ -2118,6 +2121,7 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
     )
 
     assert calls["significance"] == [4]
+    assert calls["significance_stable_shapes"] == [True]
     assert len(calls["local"]) == 1
     np.testing.assert_array_equal(calls["local"][0]["group_ids"], halfset_ids)
     assert calls["local"][0]["group_count"] == 2

@@ -228,6 +228,123 @@ def _compact_projection_window_positions(compact_indices, window_indices) -> np.
     return np.asarray([position_by_index[int(index)] for index in window], dtype=np.int32)
 
 
+class CoarseGaussianSquareLayout(NamedTuple):
+    """Logical RELION square issue stream inside a stable physical capacity."""
+
+    logical_current_size: int
+    physical_current_size: int
+    logical_square_count: int
+    physical_square_count: int
+    score_indices_np: np.ndarray
+    score_active_mask_np: np.ndarray
+    full_to_compact_np: np.ndarray
+
+
+def _plan_coarse_gaussian_square_layout(
+    image_shape,
+    logical_current_size: int,
+    active_score_indices,
+    *,
+    stable_fourier_window_shapes: bool,
+) -> CoarseGaussianSquareLayout:
+    """Plan coarse storage without changing RELION's logical pixel traversal.
+
+    The physical compact table is ordered as the complete logical square
+    followed by physical-only capacity rows.  The direct CUDA lookup retains
+    the old logical full-pixel permutation as its prefix; its tail visits only
+    zero-weight capacity rows.  Consequently exact rescoring keeps every
+    logical lane assignment and appends only fused multiply-adds by zero.
+    """
+
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        make_fourier_window_indices_np,
+        stable_fourier_window_current_size,
+        stable_fourier_window_quantum,
+    )
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_cuda_fine_full_to_compact_lookup,
+    )
+
+    image_shape = tuple(int(value) for value in image_shape)
+    logical_current_size = int(logical_current_size)
+    physical_current_size = (
+        stable_fourier_window_current_size(
+            logical_current_size,
+            image_shape[0],
+            quantum=stable_fourier_window_quantum(),
+        )
+        if stable_fourier_window_shapes
+        else logical_current_size
+    )
+    logical_indices, logical_count = make_fourier_window_indices_np(
+        image_shape,
+        logical_current_size,
+        square=True,
+        include_dc=True,
+    )
+    physical_indices, physical_count = make_fourier_window_indices_np(
+        image_shape,
+        physical_current_size,
+        square=True,
+        include_dc=True,
+    )
+    logical_indices = np.asarray(logical_indices, dtype=np.int32)
+    physical_indices = np.asarray(physical_indices, dtype=np.int32)
+    logical_count = int(logical_count)
+    physical_count = int(physical_count)
+    expected_logical_count = logical_current_size * (logical_current_size // 2 + 1)
+    expected_physical_count = physical_current_size * (physical_current_size // 2 + 1)
+    if logical_count != expected_logical_count or physical_count != expected_physical_count:
+        raise ValueError(
+            "RELION coarse Gaussian square crop has an unexpected size: "
+            f"logical={logical_count}/{expected_logical_count}, "
+            f"physical={physical_count}/{expected_physical_count}"
+        )
+    if np.setdiff1d(logical_indices, physical_indices, assume_unique=True).size:
+        raise ValueError("stable coarse physical square does not contain logical support")
+
+    physical_tail = np.setdiff1d(
+        physical_indices,
+        logical_indices,
+        assume_unique=True,
+    ).astype(np.int32, copy=False)
+    score_indices_np = np.concatenate((logical_indices, physical_tail)).astype(
+        np.int32,
+        copy=False,
+    )
+    if score_indices_np.size != physical_count or np.unique(score_indices_np).size != physical_count:
+        raise ValueError("stable coarse compact score rows are not a unique physical square")
+
+    logical_lookup = np.asarray(
+        _relion_cuda_fine_full_to_compact_lookup(
+            image_shape,
+            logical_current_size,
+            logical_indices,
+        ),
+        dtype=np.int32,
+    )
+    full_to_compact_np = np.concatenate(
+        (
+            logical_lookup,
+            np.arange(logical_count, physical_count, dtype=np.int32),
+        )
+    )
+    active_score_indices = np.asarray(active_score_indices, dtype=np.int32).reshape(-1)
+    score_active_mask_np = np.isin(score_indices_np, active_score_indices)
+    if physical_count > logical_count:
+        score_active_mask_np[logical_count:] = False
+
+    return CoarseGaussianSquareLayout(
+        logical_current_size=logical_current_size,
+        physical_current_size=physical_current_size,
+        logical_square_count=logical_count,
+        physical_square_count=physical_count,
+        score_indices_np=score_indices_np,
+        score_active_mask_np=np.asarray(score_active_mask_np, dtype=np.bool_),
+        full_to_compact_np=full_to_compact_np,
+    )
+
+
 class SignificanceDumpComplete(RuntimeError):
     """Raised after an explicitly targeted coarse-significance dump is durable."""
 
@@ -2486,6 +2603,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
     half_weights,
     powerclass,
     current_size,
+    runtime_current_size=None,
 ) -> RelionExactCoarseGaussianOperands:
     """Assemble the single exact-source operand set without generic formulas."""
 
@@ -2558,6 +2676,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
             processed_direct,
             image_shape=image_shape,
             current_size=current_size,
+            runtime_current_size=runtime_current_size,
         ),
         translation_angles=translation_angles,
     )
@@ -4379,6 +4498,7 @@ def _compute_k_class_significance_batched(
     relion_coarse_gaussian_default: bool = False,
     relion_f32_coarse_tie_ulps: int = 0,
     pad_final_image_batch: bool = False,
+    stable_fourier_window_shapes: bool = False,
     coarse_gemm_diagnostic_scope: CoarseGaussianGemmDiagnosticScope | None = None,
 ):
     """Find significant samples from one posterior over ``class x rotation x translation``."""
@@ -4389,7 +4509,6 @@ def _compute_k_class_significance_batched(
     from recovar import core
     from recovar.core.configs import ForwardModelConfig
     from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_fourier_window_indices_np,
         make_fourier_window_spec,
         relion_fftw_order_for_square_score_window,
     )
@@ -4953,6 +5072,7 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_resource_estimate = None
     coarse_gaussian_gemm_projection_cache_plan = None
     coarse_gaussian_gemm_certificate_topology = None
+    coarse_gaussian_square_layout = None
     if coarse_gaussian_ffi_enabled:
         if use_float64_scoring:
             raise ValueError(
@@ -4978,7 +5098,6 @@ def _compute_k_class_significance_batched(
         )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             _relion_cuda_corr_img_from_rfloat_ctf,
-            _relion_cuda_fine_full_to_compact_lookup,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
             _relion_cuda_powerclass_highres_xi2_half,
             _relion_exact_ctf_half_from_source_star,
@@ -4990,18 +5109,22 @@ def _compute_k_class_significance_batched(
                 f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires the custom CUDA backend"
             )
         score_size = int(image_shape[0]) if current_size is None else int(current_size)
-        square_score_indices_np, square_score_count = make_fourier_window_indices_np(
+        active_score_indices_np = (
+            np.arange(n_half, dtype=np.int32)
+            if window_spec.score_indices_np is None
+            else np.asarray(window_spec.score_indices_np, dtype=np.int32)
+        )
+        coarse_gaussian_square_layout = _plan_coarse_gaussian_square_layout(
             image_shape,
             score_size,
-            square=True,
-            include_dc=True,
+            active_score_indices_np,
+            stable_fourier_window_shapes=bool(stable_fourier_window_shapes),
         )
-        expected_square_count = score_size * (score_size // 2 + 1)
-        if square_score_count != expected_square_count:
-            raise ValueError(
-                "RELION coarse Gaussian square crop has an unexpected size: "
-                f"{square_score_count} != {expected_square_count}"
-            )
+        square_score_indices_np = coarse_gaussian_square_layout.score_indices_np
+        square_score_count = coarse_gaussian_square_layout.physical_square_count
+        coarse_gaussian_projector_output_size = (
+            coarse_gaussian_square_layout.physical_current_size
+        )
         coarse_gaussian_score_indices_np = np.asarray(
             square_score_indices_np,
             dtype=np.int32,
@@ -5010,13 +5133,8 @@ def _compute_k_class_significance_batched(
             coarse_gaussian_score_indices_np,
             dtype=jnp.int32,
         )
-        active_score_indices_np = (
-            np.arange(n_half, dtype=np.int32)
-            if window_spec.score_indices_np is None
-            else np.asarray(window_spec.score_indices_np, dtype=np.int32)
-        )
         coarse_gaussian_score_active_mask = jnp.asarray(
-            np.isin(square_score_indices_np, active_score_indices_np),
+            coarse_gaussian_square_layout.score_active_mask_np,
             dtype=jnp.bool_,
         )
         coarse_gaussian_window_positions = jnp.asarray(
@@ -5027,11 +5145,7 @@ def _compute_k_class_significance_batched(
             dtype=jnp.int32,
         )
         coarse_gaussian_full_to_compact_np = np.asarray(
-            _relion_cuda_fine_full_to_compact_lookup(
-                image_shape,
-                score_size,
-                square_score_indices_np,
-            ),
+            coarse_gaussian_square_layout.full_to_compact_np,
             dtype=np.int32,
         )
         coarse_gaussian_full_to_compact = jnp.asarray(
@@ -5125,7 +5239,8 @@ def _compute_k_class_significance_batched(
             rotation_block_size = n_rot
         logger.warning(
             "RELION coarse Gaussian FFI enabled (%s): "
-            "classes=%d current_size=%d square_pixels=%d translations=%d",
+            "classes=%d current_size=%d physical_size=%d square_pixels=%d "
+            "translations=%d stable_shapes=%s",
             (
                 "guarded fresh InitialModel default"
                 if relion_coarse_gaussian_default
@@ -5134,8 +5249,10 @@ def _compute_k_class_significance_batched(
             ),
             n_classes,
             score_size,
+            coarse_gaussian_projector_output_size,
             square_score_count,
             n_trans,
+            bool(stable_fourier_window_shapes),
         )
         if coarse_gaussian_sincosf_enabled:
             logger.warning(
@@ -5498,7 +5615,7 @@ def _compute_k_class_significance_batched(
             return_abs2=return_abs2,
             centered_rows=True,
             dense_scale=True,
-            projector_output_size=int(score_size),
+            projector_output_size=int(coarse_gaussian_projector_output_size),
             # Keep the already-host-resident table on the host so validation
             # cannot materialize its JAX mirror once per score block.
             pixel_indices=coarse_gaussian_score_indices_np,
@@ -6411,7 +6528,16 @@ def _compute_k_class_significance_batched(
                     scale_corrections_enabled=scale_corrections is not None,
                     half_weights=half_weights,
                     powerclass=coarse_gaussian_powerclass,
-                    current_size=current_size,
+                    current_size=(
+                        coarse_gaussian_square_layout.physical_current_size
+                        if stable_fourier_window_shapes
+                        else current_size
+                    ),
+                    runtime_current_size=(
+                        jnp.asarray(score_size, dtype=jnp.int32)
+                        if stable_fourier_window_shapes
+                        else None
+                    ),
                 )
                 coarse_gaussian_shifted_corrected = exact_operands.shifted_corrected
                 coarse_gaussian_pixel_weight = exact_operands.pixel_weight
@@ -6422,7 +6548,16 @@ def _compute_k_class_significance_batched(
                 coarse_gaussian_initial_diff2 = coarse_gaussian_powerclass(
                     processed_for_powerclass,
                     image_shape=image_shape,
-                    current_size=current_size,
+                    current_size=(
+                        coarse_gaussian_square_layout.physical_current_size
+                        if stable_fourier_window_shapes
+                        else current_size
+                    ),
+                    runtime_current_size=(
+                        jnp.asarray(score_size, dtype=jnp.int32)
+                        if stable_fourier_window_shapes
+                        else None
+                    ),
                 )
 
         # Identify per-batch dump target rows so we can record raw scores
@@ -7769,6 +7904,31 @@ def _compute_k_class_significance_batched(
         "significant_cutoff_counts": cutoff_count_all,
         "coarse_selector_audit": coarse_selector_audit,
     }
+    if coarse_gaussian_square_layout is not None:
+        full_stats["coarse_gaussian_square_layout"] = {
+            "stable_fourier_window_shapes_requested": bool(
+                stable_fourier_window_shapes
+            ),
+            "stable_fourier_window_shapes_effective": bool(
+                stable_fourier_window_shapes
+                and coarse_gaussian_square_layout.physical_current_size
+                != coarse_gaussian_square_layout.logical_current_size
+            ),
+            "logical_current_size": int(
+                coarse_gaussian_square_layout.logical_current_size
+            ),
+            "physical_current_size": int(
+                coarse_gaussian_square_layout.physical_current_size
+            ),
+            "logical_square_pixels": int(
+                coarse_gaussian_square_layout.logical_square_count
+            ),
+            "physical_square_pixels": int(
+                coarse_gaussian_square_layout.physical_square_count
+            ),
+            "logical_issue_stream_is_prefix": True,
+            "physical_tail_zero_weighted": True,
+        }
     if exact_coarse_assembly_profile_enabled:
         full_stats["exact_coarse_operand_assembly"] = {
             "skip_generic_default_enabled": False,
@@ -7884,6 +8044,9 @@ def _compute_k_class_significance_batched(
         full_stats["coarse_gaussian_gemm_hybrid"] = {
             "enabled": True,
             "default_enabled": False,
+            "coarse_square_layout": dict(
+                full_stats["coarse_gaussian_square_layout"]
+            ),
             "compact_posterior_enabled": bool(
                 coarse_gaussian_gemm_compact_posterior_requested,
             ),

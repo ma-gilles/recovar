@@ -1191,6 +1191,12 @@ def _run_sparse_pass2_initial_model_estep(
             # coarse scorer's image axis fixed so JAX reuses one executable
             # instead of compiling each tail mini-batch shape.
             pad_final_image_batch=True,
+            # Reuse the same physical/logical Fourier-window policy in the
+            # shared coarse significance path and exact-local pass 2.  The
+            # flag remains default-off until trajectory parity is qualified.
+            stable_fourier_window_shapes=bool(
+                config.stable_fourier_window_shapes
+            ),
             coarse_gemm_diagnostic_scope=coarse_gemm_diagnostic_scopes.get(
                 processing_index,
             ),

@@ -14,7 +14,14 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     crop_relion_x_half_accumulator,
 )
+from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+    plan_coarse_gemm_certificate_topology,
+)
+from recovar.em.dense_single_volume.helpers.significance import (
+    _plan_coarse_gaussian_square_layout,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_cuda_fine_full_to_compact_lookup,
     _make_relion_wavg_rectangle,
     _make_stable_relion_wavg_rectangle,
 )
@@ -126,6 +133,118 @@ def test_stable_window_runtime_quantum_is_diagnostic_and_fail_closed(monkeypatch
         monkeypatch.setenv(STABLE_FOURIER_WINDOW_QUANTUM_ENV, invalid)
         with pytest.raises(ValueError, match=STABLE_FOURIER_WINDOW_QUANTUM_ENV):
             _stable_fourier_window_quantum()
+
+
+def _active_coarse_score_indices(current_size: int) -> np.ndarray:
+    plan = make_stable_fourier_window_shape_plan(
+        _IMAGE_SHAPE,
+        current_size,
+        _N_HALF,
+        enabled=False,
+    )
+    return np.asarray(plan.logical_spec.score_indices_np, dtype=np.int32)
+
+
+def test_stable_coarse_square_preserves_logical_issue_prefix(monkeypatch):
+    monkeypatch.setenv(
+        "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM",
+        "32",
+    )
+    logical_size = 70
+    layout = _plan_coarse_gaussian_square_layout(
+        _IMAGE_SHAPE,
+        logical_size,
+        _active_coarse_score_indices(logical_size),
+        stable_fourier_window_shapes=True,
+    )
+    logical_indices, logical_count = make_fourier_window_indices_np(
+        _IMAGE_SHAPE,
+        logical_size,
+        square=True,
+        include_dc=True,
+    )
+    logical_lookup = _relion_cuda_fine_full_to_compact_lookup(
+        _IMAGE_SHAPE,
+        logical_size,
+        logical_indices,
+    )
+
+    assert layout.physical_current_size == 96
+    assert layout.logical_square_count == logical_count == 70 * 36
+    assert layout.physical_square_count == 96 * 49
+    np.testing.assert_array_equal(
+        layout.score_indices_np[:logical_count],
+        logical_indices,
+    )
+    np.testing.assert_array_equal(
+        layout.full_to_compact_np[:logical_count],
+        logical_lookup,
+    )
+    np.testing.assert_array_equal(
+        layout.full_to_compact_np[logical_count:],
+        np.arange(logical_count, layout.physical_square_count, dtype=np.int32),
+    )
+    assert not np.any(layout.score_active_mask_np[logical_count:])
+
+    topology = plan_coarse_gemm_certificate_topology(
+        layout.full_to_compact_np,
+        compact_pixel_count=layout.physical_square_count,
+        translation_count=29,
+    )
+    assert topology.full_position_count == layout.physical_square_count
+
+
+def test_stable_coarse_square_has_one_shape_across_q32_class(monkeypatch):
+    monkeypatch.setenv(
+        "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM",
+        "32",
+    )
+    layouts = [
+        _plan_coarse_gaussian_square_layout(
+            _IMAGE_SHAPE,
+            current_size,
+            _active_coarse_score_indices(current_size),
+            stable_fourier_window_shapes=True,
+        )
+        for current_size in (70, 72, 76, 78, 84, 96)
+    ]
+
+    assert {layout.physical_current_size for layout in layouts} == {96}
+    assert {layout.score_indices_np.shape for layout in layouts} == {(96 * 49,)}
+    assert {layout.full_to_compact_np.shape for layout in layouts} == {(96 * 49,)}
+    assert len({layout.logical_square_count for layout in layouts}) == 6
+
+
+def test_disabled_coarse_square_layout_is_legacy_exact(monkeypatch):
+    monkeypatch.setenv(
+        "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM",
+        "32",
+    )
+    current_size = 70
+    active = _active_coarse_score_indices(current_size)
+    layout = _plan_coarse_gaussian_square_layout(
+        _IMAGE_SHAPE,
+        current_size,
+        active,
+        stable_fourier_window_shapes=False,
+    )
+    legacy_indices, legacy_count = make_fourier_window_indices_np(
+        _IMAGE_SHAPE,
+        current_size,
+        square=True,
+        include_dc=True,
+    )
+    legacy_lookup = _relion_cuda_fine_full_to_compact_lookup(
+        _IMAGE_SHAPE,
+        current_size,
+        legacy_indices,
+    )
+
+    assert layout.logical_current_size == layout.physical_current_size == current_size
+    assert layout.logical_square_count == layout.physical_square_count == legacy_count
+    np.testing.assert_array_equal(layout.score_indices_np, legacy_indices)
+    np.testing.assert_array_equal(layout.score_active_mask_np, np.isin(legacy_indices, active))
+    np.testing.assert_array_equal(layout.full_to_compact_np, legacy_lookup)
 
 
 def test_shape_policy_is_default_off():

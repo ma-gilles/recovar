@@ -836,7 +836,18 @@ def _all_optimized_estep_meta(*, enabled: bool) -> dict:
         "chunk_padded_rotations": [13824],
     }
     if enabled:
-        profile["coarse_gaussian_gemm_hybrid"] = _compact_profile()
+        profile["coarse_gaussian_gemm_hybrid"] = _compact_profile(
+            coarse_square_layout={
+                "stable_fourier_window_shapes_requested": True,
+                "stable_fourier_window_shapes_effective": True,
+                "logical_current_size": 84,
+                "physical_current_size": 88,
+                "logical_square_pixels": 84 * 43,
+                "physical_square_pixels": 88 * 45,
+                "logical_issue_stream_is_prefix": True,
+                "physical_tail_zero_weighted": True,
+            },
+        )
     return {
         "requested_stable_fourier_window_shapes": enabled,
         "effective_stable_fourier_window_shapes": enabled,
@@ -886,6 +897,13 @@ def test_all_optimized_execution_contract_validates_q32_capacity() -> None:
         n_projection_windowed=3691,
         big_jit_projection_pixels=3691,
     )
+    coarse_layout = profile["coarse_gaussian_gemm_hybrid"][
+        "coarse_square_layout"
+    ]
+    coarse_layout.update(
+        physical_current_size=96,
+        physical_square_pixels=96 * 49,
+    )
 
     contract = runner._validate_all_optimized_profiles(
         meta,
@@ -923,6 +941,16 @@ def test_all_optimized_stable_pair_profile_keeps_other_seams_on(
         stable_flat_row_capacity_enabled=enabled,
         chunk_flat_score_rows=[13824 if enabled else 4752],
     )
+    profile["coarse_gaussian_gemm_hybrid"]["coarse_square_layout"] = {
+        "stable_fourier_window_shapes_requested": enabled,
+        "stable_fourier_window_shapes_effective": enabled,
+        "logical_current_size": 84,
+        "physical_current_size": 96 if enabled else 84,
+        "logical_square_pixels": 84 * 43,
+        "physical_square_pixels": (96 * 49) if enabled else (84 * 43),
+        "logical_issue_stream_is_prefix": True,
+        "physical_tail_zero_weighted": True,
+    }
 
     contract = runner._validate_all_optimized_stable_pair_profiles(
         meta,
@@ -935,6 +963,7 @@ def test_all_optimized_stable_pair_profile_keeps_other_seams_on(
     assert contract["stable_representation_enabled"] is enabled
     assert contract["all_other_optimized_seams_enabled"] is True
     assert contract["batched_posterior_primitives_enabled"] is True
+    assert contract["stable_coarse_significance"]["profile_exact"] is True
     assert contract["packed_final_noise"]["enabled"] is True
 
 
@@ -1235,11 +1264,28 @@ def test_all_optimized_execution_contract_fails_closed_on_shape_or_row_abi() -> 
             image_shape=(128, 128),
         )
 
+
     wrong_rows = _all_optimized_estep_meta(enabled=True)
     wrong_rows["halfset_0_profile_summary"]["chunk_flat_score_rows"] = [4752]
     with pytest.raises(RuntimeError, match="mature B.R ABI"):
         runner._validate_all_optimized_profiles(
             wrong_rows,
+            enabled=True,
+            label="all_optimized_1",
+            image_shape=(128, 128),
+        )
+
+
+def test_all_optimized_execution_contract_fails_closed_on_coarse_shape_abi() -> None:
+    meta = _all_optimized_estep_meta(enabled=True)
+    coarse_layout = meta["halfset_0_profile_summary"][
+        "coarse_gaussian_gemm_hybrid"
+    ]["coarse_square_layout"]
+    coarse_layout["physical_current_size"] = 84
+
+    with pytest.raises(RuntimeError, match="coarse stable-square mismatch"):
+        runner._validate_all_optimized_profiles(
+            meta,
             enabled=True,
             label="all_optimized_1",
             image_shape=(128, 128),
