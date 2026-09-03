@@ -165,6 +165,19 @@ the result JSON and verified manifest SHA-256 values are
 and
 `ae7b2157bc951fb31dc472b396828f933638bf0d62edddc75174052a94c0219d`.
 
+The supporting publication-mask replication uses the same corrected maps,
+the sealed mask, and the same RELION phase-randomization policy and seed as
+the matched control. Both engines cross corrected-masked FSC 0.143 at shell
+248 (`2.5419352516 A`); resolved-band AUC differs by `0.0009232` and RMSE is
+`0.0119231`. It is explicitly not an acceptance or rescue metric. Exact CPU
+job `13380452` and the command, mask, input, executable, environment, and
+accounting seals are retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it11_corrected_masked_fsc_20260903T0518`.
+The result JSON and validated manifest SHA-256 values are
+`6799bfefff1ec370828ec292be0dd69d799df83dda7eda3ed10e0f80566bd7a2`
+and
+`a748c022552f5b3e9bd34db2dd14a91dc37143097a074774024440006c78d72d`.
+
 At corrected full-particle checkpoint `it006` (numbered iteration 7), the
 release, compact, and no-padding trajectories retain identical saved FSC
 crossings (0.5 at shell 150; 0.143 at shell 183). Corrected-versus-release map

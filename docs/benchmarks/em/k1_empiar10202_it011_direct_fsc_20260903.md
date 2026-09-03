@@ -47,6 +47,33 @@ KiB.  The production diagnostic now uses float32 real input, complex64 rFFT
 storage, exact Hermitian plane weights, and releases each transform pair before
 the next FSC.  Even- and odd-sized equivalence to a full FFT is unit tested.
 
+## Corrected-run replication and masked support
+
+The memory-corrected full-particle trajectory independently replicated this
+matched checkpoint at source commit
+`b31f7bb3a88b96885e568fa4a12d5ec265ab4aab`. Its direct shared-frame audit
+again requires no fitted operation: both half-map FSC curves cross at shell
+250 (`2.5215997696 A`), with merged/half-1/half-2 cross-engine FSC-AUC
+`0.9911398/0.9868918/0.9869988`. The sealed direct-replication root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it11_corrected_direct_fsc_20260903T0501`;
+its primary JSON and validated-manifest SHA-256 values are
+`a89bf4b106e2f6943e3ea001e022afd910f4fe8d6d6d371bbace74eb3b1936f2`
+and
+`ae7b2157bc951fb31dc472b396828f933638bf0d62edddc75174052a94c0219d`.
+
+A separate RELION-postprocess replication applies the sealed publication
+mask, `--randomize_at_fsc 0.8`, and seed 42 to those corrected maps. Both
+engines cross the corrected-masked curve at shell 248 (`2.5419352516 A`);
+resolved shells 1--247 have normalized-AUC delta `0.0009232` and RMSE
+`0.0119231`. Masked FSC remains supporting only and cannot rescue or replace
+the unmasked comparison. Exact command, resources, source hashes, and output
+seals are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it11_corrected_masked_fsc_20260903T0518`;
+the result JSON and validated manifest have SHA-256
+`6799bfefff1ec370828ec292be0dd69d799df83dda7eda3ed10e0f80566bd7a2`
+and
+`a748c022552f5b3e9bd34db2dd14a91dc37143097a074774024440006c78d72d`.
+
 ## Evidence and reproduction
 
 The complete immutable, disposable audit root is

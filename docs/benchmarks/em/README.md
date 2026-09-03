@@ -441,6 +441,13 @@ gate; see `k1_empiar10202_it011_direct_fsc_20260903.md` and
 interim high-resolution evidence, while the final claim remains gated on the
 live RECOVAR trajectory reaching natural completion.
 
+The memory-corrected trajectory independently reproduces the same unmasked
+crossing at 2.5216 A and, under the sealed publication mask and matched
+phase-randomization policy, both engines cross corrected-masked FSC 0.143 at
+2.54194 A. The masked AUC delta is 0.000923 and RMSE is 0.0119; it is
+supporting-only evidence, as detailed in
+`k1_empiar10202_it011_direct_fsc_20260903.md`.
+
 ## EMPIAR-10345 native-grid K=4 checkpoint
 
 Three 10,000-particle, 256-grid independent-half K=4 seeds completed without a

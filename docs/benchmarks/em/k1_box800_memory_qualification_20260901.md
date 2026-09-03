@@ -554,6 +554,26 @@ and
 `ae7b2157bc951fb31dc472b396828f933638bf0d62edddc75174052a94c0219d`;
 the complete manifest and semantic assertions both validate.
 
+The same corrected maps were also passed through RELION postprocessing with
+the sealed publication-shell mask and exactly the matched phase-randomization
+policy (`--randomize_at_fsc 0.8 --random_seed 42`). Corrected RECOVAR and
+RELION both cross the phase-randomized masked FSC 0.143 threshold at shell
+248, or `2.5419352516 A`. Over resolved shells 1--247, normalized AUC is
+`0.8784344` versus `0.8793576` (absolute delta `0.0009232`) and curve RMSE is
+`0.0119231`. This is supporting-only evidence: it cannot rescue, replace, or
+change the already-passing direct unmasked result. CPU job `13380452`
+completed `0:0` with exact
+`ReqTRES=AllocTRES=cpu=4,mem=64G,node=1,billing=16`, no GPU, and
+`OverSubscribe=OK`. Its result JSON, human report, accounting record, and
+validated manifest are retained under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_it11_corrected_masked_fsc_20260903T0518`
+with SHA-256
+`6799bfefff1ec370828ec292be0dd69d799df83dda7eda3ed10e0f80566bd7a2`,
+`c6aa4d42758f357ce2bd24e9b2c7754abf8f98ee69bed161c53de4638dd31699`,
+`f6f9c99ab7d15ca142d916b320ee7ae919b740b86422f57201dfa5e2be8af53a`,
+and
+`a748c022552f5b3e9bd34db2dd14a91dc37143097a074774024440006c78d72d`.
+
 ## Live full-particle checkpoint-7 three-way audit
 
 A read-only three-way audit compares zero-based checkpoint `it006` (numbered
