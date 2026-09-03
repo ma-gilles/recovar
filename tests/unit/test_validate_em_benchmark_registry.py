@@ -15,6 +15,7 @@ from scripts.validate_em_benchmark_registry import (
     validate_campaign,
     validate_diagnostic,
     validate_record,
+    validate_registered_diagnostic,
     validate_registry,
     verify_campaign_files,
     verify_diagnostic_files,
@@ -144,6 +145,20 @@ REAL_K4_MULTISEED_DIAGNOSTIC = json.loads(
         / "real-k4-pilot10k-multiseed-stability-7136e5c8d-20260902"
     ).with_suffix(".json").read_text()
 )
+K1_DIRECT_FSC_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "k1-empiar10202-it011-direct-fsc-20260903"
+    ).with_suffix(".json").read_text()
+)
+REAL_K4_SINGLE_SEED_DIAGNOSTIC = json.loads(
+    (
+        REGISTRY_ROOT
+        / "diagnostics"
+        / "real-k4-10345-native10k-seed42001-2f6759608-20260903"
+    ).with_suffix(".json").read_text()
+)
 
 
 def test_checked_in_em_benchmark_registry_is_valid():
@@ -165,7 +180,9 @@ def test_checked_in_em_benchmark_registry_is_valid():
         "k4-o-three-seed-22efd8065-h100",
         "k4-ribosembly-three-seed-9006957c6-h100",
         "k8-ribosembly-three-seed-0d85b576b-h100",
+        "k1-empiar10202-it011-direct-fsc-20260903",
         "k4-noctf-collapse-cases30-35-36-h100",
+        "real-k4-10345-native10k-seed42001-2f6759608-20260903",
     ]
     assert [case["case_id"] for case in CAMPAIGN["cases"]] == list(range(16, 30))
     classifications = {case["case_id"]: case["outcome"]["classification"] for case in CAMPAIGN["cases"]}
@@ -332,8 +349,153 @@ def test_diagnostic_registry_routing_is_explicit_and_fail_closed():
         registry_validator._diagnostic_registry_route(REAL_K4_MULTISEED_DIAGNOSTIC)
         == "separate"
     )
+    assert (
+        registry_validator._diagnostic_registry_route(K1_DIRECT_FSC_DIAGNOSTIC)
+        == "k1_direct_fsc"
+    )
+    assert (
+        registry_validator._diagnostic_registry_route(REAL_K4_SINGLE_SEED_DIAGNOSTIC)
+        == "real_kclass_single_seed"
+    )
     with pytest.raises(RegistryValidationError, match="unrecognized diagnostic family"):
         registry_validator._diagnostic_registry_route({"schema": "unknown.v1"})
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [K1_DIRECT_FSC_DIAGNOSTIC, REAL_K4_SINGLE_SEED_DIAGNOSTIC],
+    ids=["k1-direct-fsc", "real-k4-single-seed"],
+)
+def test_inline_diagnostic_validators_accept_exact_checked_in_records(diagnostic):
+    validate_registered_diagnostic(diagnostic)
+
+
+def _mutate_path(record: dict, path: tuple[str | int, ...], value) -> dict:
+    mutated = copy.deepcopy(record)
+    target = mutated
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    return mutated
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("admission_status",), "ACCEPTED", "admission_status"),
+        (("status",), "final_pass", "status"),
+        (("within_engine_halfmap", "pass"), False, "pass conflicts"),
+        (("direct_cross_engine", "raw_unaligned_pass"), False, "raw_unaligned_pass conflicts"),
+        (("direct_cross_engine", "proper_rigid_rescue_run"), True, "fitted rigid rescue"),
+        (("diagnostic_centered_correlation", "acceptance_metric"), True, "acceptance_metric"),
+        (("full_vs_hermitian_half_spectrum", "all_gates_identical"), False, "all_gates_identical"),
+        (("source", "analysis_clean"), False, "analysis_clean"),
+        (("source", "analysis_commit"), "0" * 40, "sealed Git SHA"),
+        (("geometry", "voxel_size_angstrom"), 0.0, "voxel_size_angstrom must be positive"),
+        (("artifacts", "full_metrics", "sha256"), "0" * 64, "sealed SHA-256"),
+        (("slurm", "allocated_tres"), "cpu=8,mem=32G,node=1,billing=8", "allocated_tres"),
+        (("slurm", "nonexclusive"), False, "nonexclusive"),
+        (("slurm", "gpu_count"), 1, "gpu_count"),
+    ],
+    ids=[
+        "admission",
+        "status",
+        "within-engine-gate",
+        "raw-gate",
+        "rigid-rescue",
+        "correlation-role",
+        "fft-crosscheck-gate",
+        "dirty-source",
+        "source-commit",
+        "zero-voxel-size",
+        "artifact-hash",
+        "allocation",
+        "exclusive",
+        "gpu-count",
+    ],
+)
+def test_k1_direct_fsc_diagnostic_rejects_boundary_mutations(path, value, message):
+    diagnostic = _mutate_path(K1_DIRECT_FSC_DIAGNOSTIC, path, value)
+
+    with pytest.raises(RegistryValidationError, match=message):
+        validate_registered_diagnostic(diagnostic)
+
+
+def test_k1_direct_fsc_diagnostic_recomputes_primary_gate() -> None:
+    diagnostic = copy.deepcopy(K1_DIRECT_FSC_DIAGNOSTIC)
+    diagnostic["direct_cross_engine"]["merged_band_fsc_auc"] = 0.94
+
+    with pytest.raises(RegistryValidationError, match="raw_unaligned_pass conflicts"):
+        validate_registered_diagnostic(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("admission_status",), "ACCEPTED", "admission_status"),
+        (("accepted_result",), True, "accepted_result"),
+        (("status",), "complete_prospective_science_gate_passed", "status"),
+        (("prospective_science_gate", "accepted"), True, "prospective_science_gate.accepted"),
+        (("prospective_science_gate", "failures"), [], "prospective_science_gate.failures"),
+        (("prospective_science_gate", "threshold_rejection_only"), False, "threshold_rejection_only"),
+        (("source", "clean"), False, "source.clean"),
+        (("source", "tree"), "0" * 40, "sealed Git SHA"),
+        (("artifacts", "audit_sha256"), "0" * 64, "sealed SHA-256"),
+        (("slurm", "qualification_state"), "COMPLETED", "qualification_state"),
+        (("slurm", "qualification_exit_code"), "0:0", "qualification_exit_code"),
+        (
+            ("slurm", "qualification_allocated_tres"),
+            "cpu=24,mem=256G,node=1,billing=48,gres/gpu=2",
+            "qualification_allocated_tres",
+        ),
+        (("slurm", "nonexclusive"), False, "nonexclusive"),
+        (("slurm", "compute_failures"), True, "compute_failures"),
+    ],
+    ids=[
+        "admission",
+        "accepted-result",
+        "status",
+        "gate-accepted",
+        "gate-failures",
+        "threshold-only",
+        "dirty-source",
+        "source-tree",
+        "artifact-hash",
+        "slurm-state",
+        "slurm-exit",
+        "allocation",
+        "exclusive",
+        "compute-failure",
+    ],
+)
+def test_real_k4_single_seed_diagnostic_rejects_boundary_mutations(path, value, message):
+    diagnostic = _mutate_path(REAL_K4_SINGLE_SEED_DIAGNOSTIC, path, value)
+
+    with pytest.raises(RegistryValidationError, match=message):
+        validate_registered_diagnostic(diagnostic)
+
+
+def test_real_k4_single_seed_diagnostic_recomputes_gate_and_metric_deltas() -> None:
+    diagnostic = copy.deepcopy(REAL_K4_SINGLE_SEED_DIAGNOSTIC)
+    diagnostic["classes"][1]["unmasked_cross_merged_half1_half2_auc"][0] = 0.995
+
+    with pytest.raises(RegistryValidationError, match="failures conflict with frozen thresholds"):
+        validate_registered_diagnostic(diagnostic)
+
+    diagnostic = copy.deepcopy(REAL_K4_SINGLE_SEED_DIAGNOSTIC)
+    diagnostic["classes"][0]["unmasked_half_auc_relion_recovar_delta"][2] = 0.0
+
+    with pytest.raises(RegistryValidationError, match="signed delta is inconsistent"):
+        validate_registered_diagnostic(diagnostic)
+
+
+def test_inline_diagnostic_schemas_are_closed_to_unreviewed_fields() -> None:
+    for record in (K1_DIRECT_FSC_DIAGNOSTIC, REAL_K4_SINGLE_SEED_DIAGNOSTIC):
+        diagnostic = copy.deepcopy(record)
+        diagnostic["accepted"] = True
+
+        with pytest.raises(RegistryValidationError, match="unexpected keys"):
+            validate_registered_diagnostic(diagnostic)
 
 
 def test_native_coarse_score_diagnostic_pins_causal_and_admission_boundaries():

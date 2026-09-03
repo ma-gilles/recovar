@@ -359,6 +359,58 @@ verification report is
 (SHA-256
 `2e59490b389e750a1f9fbbc4bd0e86e52e4b2263c7b0d6a03e4d39bc2a1b189c`).
 
+## Native-grid EMPIAR-10345 seed-42001 outcome
+
+The first `native10k-256` independent-half run completed all four engine
+processes and the schema-v3 audit at RECOVAR commit `2f6759608`.  This is a
+substantially stronger outcome than the 10076 128-grid pilot: every class has
+an unambiguous identity match, no class collapses, all four unmasked
+RECOVAR-minus-RELION half-map FSC-AUC differences lie between `-0.00993` and
+`+0.00392`, and each class has exactly the same RELION and RECOVAR unmasked
+FSC=0.5 crossing shell.
+
+It is nevertheless retained as a rejected single-seed diagnostic.  Two
+unmasked merged cross-engine AUC values narrowly miss the frozen 0.99 gate,
+class 4 misses the supporting masked half-map-delta gate, and hard assignment
+agreement remains below 0.99.  The Slurm `FAILED` state and exit 3 therefore
+mean threshold rejection only: both RELION and RECOVAR half processes exited
+zero, stderr is empty, and no OOM, traceback, or fatal error occurred.
+
+| Class | Unmasked half-map AUC, RELION / RECOVAR / delta | Direct merged / half-1 / half-2 AUC | Masked half-map delta | Unmasked FSC=0.5 shell, RELION / RECOVAR |
+| ---: | --- | --- | ---: | --- |
+| 1 | 0.605533 / 0.595606 / -0.009926 | 0.990280 / 0.980715 / 0.991829 | -0.003782 | 14 / 14 |
+| 2 | 0.560829 / 0.564745 / +0.003916 | 0.989566 / 0.979865 / 0.989358 | +0.002089 | 13 / 13 |
+| 3 | 0.653398 / 0.644528 / -0.008871 | 0.993138 / 0.988423 / 0.991162 | +0.002256 | 15 / 15 |
+| 4 | 0.548895 / 0.539679 / -0.009216 | 0.987446 / 0.973209 / 0.988749 | -0.013877 | 12 / 12 |
+
+Every AUC above uses the frozen RELION-unmasked band through shell 126.  All
+registered 0.143 crossings remain beyond that measured band for both engines,
+so this bounded run makes no absolute-resolution claim.  The matching 0.5
+crossings correspond to 24.59, 26.49, 22.95, and 28.69 A.  Assignment
+agreement is 0.9632 in half 1 and 0.9730 in half 2; corresponding class counts
+are `[1124,1023,2023,830]` versus `[1118,1014,2034,834]`, and
+`[1473,948,1658,921]` versus `[1463,962,1649,926]`.
+
+The serial same-H100 wall times are 147.48/145.06 s for RELION and
+1681.26/1708.03 s for RECOVAR.  Sampled peak HBM is 79,577/79,573 MiB for
+RELION and 33,789/33,795 MiB for RECOVAR.  Thus RECOVAR uses about 42.5% of
+RELION's HBM in this profile but is about 11.6 times slower; performance work
+remains open independently of the close reconstruction-quality result.
+
+Setup job `13371068` completed `0:0`.  Qualification job `13371069` requested
+and received exactly `cpu=24,mem=256G,node=1,billing=24,gres/gpu=1`, without
+exclusive allocation, and ended `3:0` after 1:04:34 solely because the frozen
+gate rejected the five conditions above.  The authoritative audit is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_seed42001_2f6759608_20260903/audit/halfmap_audit.json`
+(SHA-256
+`84217ddbc0f5cf20967a14d2a1d29e12f1a5006114200e31659b4490c8ae9e5a`).
+The adjacent curve archive has SHA-256
+`cd497fe6c7731a9d97ff8c86fb4faf55917dd2d5bc68a8fbb71541124a23a620`.
+The compact checked-in record is
+`docs/benchmarks/em/diagnostics/real-k4-10345-native10k-seed42001-2f6759608-20260903.json`.
+Seeds 42002 and 42003 remain required before a native-grid multi-seed claim or
+registry admission.
+
 ## Reproduction
 
 The launcher is dry-run by default. Use a fresh root for every retry:

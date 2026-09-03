@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,16 @@ class RegistryValidationError(ValueError):
 
 
 _SYNTHETIC_NEGATIVE_RECORD_TYPE = "synthetic_kclass_negative_campaign_collection"
+_K1_DIRECT_FSC_SCHEMA = "recovar.em.k1_empiar10202_it011_direct_fsc.v1"
+_REAL_KCLASS_SINGLE_SEED_SCHEMA = "recovar.em.real_kclass_native_single_seed_diagnostic.v1"
+_INLINE_DIAGNOSTIC_ROUTES = {
+    _K1_DIRECT_FSC_SCHEMA: "k1_direct_fsc",
+    _REAL_KCLASS_SINGLE_SEED_SCHEMA: "real_kclass_single_seed",
+}
+_INLINE_DIAGNOSTIC_FILENAMES = {
+    _K1_DIRECT_FSC_SCHEMA: "k1-empiar10202-it011-direct-fsc-20260903",
+    _REAL_KCLASS_SINGLE_SEED_SCHEMA: "real-k4-10345-native10k-seed42001-2f6759608-20260903",
+}
 _SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS = {
     "recovar.em.real_kclass_halfmap_multiseed_stability.v1",
     "recovar.em.real_kclass_selected_fine_diagnostic.v1",
@@ -36,17 +47,655 @@ def _diagnostic_registry_route(diagnostic: dict[str, Any]) -> str:
     if diagnostic.get("record_type") == _SYNTHETIC_NEGATIVE_RECORD_TYPE:
         return "synthetic_negative"
     external_schema = diagnostic.get("schema")
+    if external_schema in _INLINE_DIAGNOSTIC_ROUTES:
+        return _INLINE_DIAGNOSTIC_ROUTES[external_schema]
     if external_schema in _SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS:
         return "separate"
     raise RegistryValidationError(
         "unrecognized diagnostic family: expected record_type "
-        f"{_SYNTHETIC_NEGATIVE_RECORD_TYPE!r} or one of the separately "
+        f"{_SYNTHETIC_NEGATIVE_RECORD_TYPE!r}, one of the inline schemas "
+        f"{sorted(_INLINE_DIAGNOSTIC_ROUTES)!r}, or one of the separately "
         f"validated schemas {sorted(_SEPARATELY_VALIDATED_DIAGNOSTIC_SCHEMAS)!r}"
     )
 
 
 def _json_path(parts: list[Any]) -> str:
     return ".".join(str(part) for part in parts) or "<record>"
+
+
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_K1_SOURCE = {
+    "recovar_trajectory_commit": "4ea288467debbcba97cfaee6d2742ebc66c637f0",
+    "analysis_commit": "47f8fe79d5556cf43ad921db503afa59929a6d56",
+    "analysis_tree": "cb36870934dd846c10af646f400e508b6ba51c6a",
+    "analysis_clean": True,
+}
+_K1_RUN_ROOT = Path(
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "10202_it11_direct_fsc_20260903T040436Z"
+)
+_K1_ARTIFACT_SEALS = {
+    "full_metrics": (
+        "outputs/raw/raw_direct_metrics.json",
+        "a412be7ebcb713a01a577548c92115a3c7bb192fbff23106cf4cf8b479c642ca",
+    ),
+    "full_curves": (
+        "outputs/raw/raw_direct_curves.npz",
+        "0d6fb5112fd5c2fff887753003ac6041640b57b672684870229d70cd430de7fc",
+    ),
+    "half_spectrum_metrics": (
+        "outputs/raw_rfft_preview/raw_rfft_preview_metrics.json",
+        "f6aa025df37c68e5f89c1e5264759981d0a0a5bfccee28599ce230ee1faf7b54",
+    ),
+    "half_spectrum_curves": (
+        "outputs/raw_rfft_preview/raw_rfft_preview_curves.npz",
+        "1111a203290596ce997de6b79896577a69c0c95e7d30f450711f35c144d257dc",
+    ),
+    "crosscheck": (
+        "outputs/raw_fft_crosscheck_v2.json",
+        "0215314416f1946a3f096867aeccc7fd7dd038b0e333456df30a689f6e4c6c46",
+    ),
+}
+_REAL_K4_SOURCE = {
+    "branch": "codex/pr158-10345-native10k-source-2f6759608",
+    "commit": "2f6759608c82356dd5c24e7b149002df8cc84f28",
+    "tree": "b2e9b35f3988ae63aae45e1dac90c0386099d97f",
+    "clean": True,
+}
+_REAL_K4_RUN_ROOT = Path(
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "real_k4_halfmap_10345_native10k_seed42001_2f6759608_20260903"
+)
+_REAL_K4_ARTIFACT_SEALS = {
+    "submission_manifest_sha256": "9931f94c44fa7ff5627e17c04eefeee04f7aa1b64c587af7bb1783cbcf5a184c",
+    "audit_sha256": "84217ddbc0f5cf20967a14d2a1d29e12f1a5006114200e31659b4490c8ae9e5a",
+    "curve_archive_sha256": "cd497fe6c7731a9d97ff8c86fb4faf55917dd2d5bc68a8fbb71541124a23a620",
+    "common_mask_sha256": "a8256cd679a9c4fad3044c4e98cfb1517eef287bf1f9c7095d99b4fdfce8cd9d",
+    "qualification_stdout_sha256": "35d2483aaabb0ed6a76fb62f978d233529fd19dd55914f9f07d85623d98fdcd4",
+    "qualification_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+}
+_REAL_K4_GATE_FAILURES = [
+    "class002:unmasked:cross_merged_band_fsc_auc",
+    "class004:common_masked:half_band_auc_drop",
+    "class004:unmasked:cross_merged_band_fsc_auc",
+    "half1:class_assignment_agreement",
+    "half2:class_assignment_agreement",
+]
+
+
+def _require_diagnostic(condition: bool, message: str) -> None:
+    if not condition:
+        raise RegistryValidationError(message)
+
+
+def _require_exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    _require_diagnostic(isinstance(value, dict), f"{label} must be an object")
+    missing = sorted(expected - value.keys())
+    unexpected = sorted(value.keys() - expected)
+    _require_diagnostic(not missing, f"{label} is missing keys: {missing}")
+    _require_diagnostic(not unexpected, f"{label} has unexpected keys: {unexpected}")
+    return value
+
+
+def _require_exact(value: Any, expected: Any, label: str) -> None:
+    _require_diagnostic(
+        type(value) is type(expected) and value == expected,
+        f"{label} must equal the sealed value {expected!r}",
+    )
+
+
+def _require_number(
+    value: Any,
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+    _require_diagnostic(valid and math.isfinite(value), f"{label} must be a finite number")
+    numeric = float(value)
+    if minimum is not None:
+        _require_diagnostic(numeric >= minimum, f"{label} must be >= {minimum}")
+    if maximum is not None:
+        _require_diagnostic(numeric <= maximum, f"{label} must be <= {maximum}")
+    return numeric
+
+
+def _require_integer(value: Any, label: str, *, minimum: int = 0) -> int:
+    _require_diagnostic(
+        isinstance(value, int) and not isinstance(value, bool) and value >= minimum,
+        f"{label} must be an integer >= {minimum}",
+    )
+    return value
+
+
+def _require_numeric_list(
+    value: Any,
+    length: int,
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> list[float]:
+    _require_diagnostic(isinstance(value, list) and len(value) == length, f"{label} must contain {length} values")
+    return [
+        _require_number(item, f"{label}[{index}]", minimum=minimum, maximum=maximum)
+        for index, item in enumerate(value)
+    ]
+
+
+def _require_integer_list(value: Any, length: int, label: str) -> list[int]:
+    _require_diagnostic(isinstance(value, list) and len(value) == length, f"{label} must contain {length} values")
+    return [_require_integer(item, f"{label}[{index}]") for index, item in enumerate(value)]
+
+
+def _require_sealed_hash(value: Any, expected: str, label: str, *, git: bool = False) -> None:
+    pattern = _GIT_SHA_RE if git else _SHA256_RE
+    kind = "Git SHA" if git else "SHA-256"
+    _require_diagnostic(isinstance(value, str) and pattern.fullmatch(value) is not None, f"{label} must be a lowercase {kind}")
+    _require_diagnostic(value == expected, f"{label} differs from the sealed {kind}")
+
+
+def _validate_sealed_source(value: Any, expected: dict[str, Any], label: str) -> None:
+    source = _require_exact_keys(value, set(expected), label)
+    for key, sealed_value in expected.items():
+        if key in {"commit", "tree", "recovar_trajectory_commit", "analysis_commit", "analysis_tree"}:
+            _require_sealed_hash(source[key], sealed_value, f"{label}.{key}", git=True)
+        else:
+            _require_exact(source[key], sealed_value, f"{label}.{key}")
+
+
+def _validate_k1_direct_fsc_diagnostic(diagnostic: dict[str, Any]) -> None:
+    top = _require_exact_keys(
+        diagnostic,
+        {
+            "schema",
+            "admission_status",
+            "status",
+            "case_id",
+            "reported_iteration",
+            "fitted_operations",
+            "comparison_frame",
+            "source",
+            "geometry",
+            "within_engine_halfmap",
+            "direct_cross_engine",
+            "diagnostic_centered_correlation",
+            "full_vs_hermitian_half_spectrum",
+            "slurm",
+            "artifacts",
+        },
+        "K1 direct-FSC diagnostic",
+    )
+    for key, expected in {
+        "schema": _K1_DIRECT_FSC_SCHEMA,
+        "admission_status": "INTERIM_DIAGNOSTIC_ONLY_FINAL_REFINEMENT_PENDING",
+        "status": "pass",
+        "case_id": "empiar-10202-set06-k1-I1",
+        "reported_iteration": 11,
+        "fitted_operations": [],
+        "comparison_frame": "shared RELION on-disk file frame",
+    }.items():
+        _require_exact(top[key], expected, f"K1 direct-FSC diagnostic.{key}")
+    _validate_sealed_source(top["source"], _K1_SOURCE, "K1 direct-FSC diagnostic.source")
+
+    geometry = _require_exact_keys(
+        top["geometry"],
+        {"box_size", "voxel_size_angstrom", "symmetry", "joint_band_first_shell", "joint_band_last_shell"},
+        "K1 direct-FSC diagnostic.geometry",
+    )
+    _require_exact(geometry["box_size"], 800, "K1 direct-FSC diagnostic.geometry.box_size")
+    voxel_size = _require_number(
+        geometry["voxel_size_angstrom"],
+        "K1 direct-FSC diagnostic.geometry.voxel_size_angstrom",
+        minimum=0.0,
+    )
+    _require_diagnostic(voxel_size > 0.0, "K1 direct-FSC diagnostic.geometry.voxel_size_angstrom must be positive")
+    _require_exact(geometry["symmetry"], "I1", "K1 direct-FSC diagnostic.geometry.symmetry")
+    _require_exact(geometry["joint_band_first_shell"], 1, "K1 direct-FSC diagnostic.geometry.joint_band_first_shell")
+    _require_exact(geometry["joint_band_last_shell"], 249, "K1 direct-FSC diagnostic.geometry.joint_band_last_shell")
+
+    halfmap = _require_exact_keys(
+        top["within_engine_halfmap"],
+        {
+            "recovar_crossing_shell",
+            "relion_crossing_shell",
+            "recovar_resolution_angstrom",
+            "relion_resolution_angstrom",
+            "resolution_ratio",
+            "curve_rmse",
+            "band_auc_abs_delta",
+            "pass",
+        },
+        "K1 direct-FSC diagnostic.within_engine_halfmap",
+    )
+    recovar_shell = _require_integer(halfmap["recovar_crossing_shell"], "within_engine_halfmap.recovar_crossing_shell", minimum=1)
+    relion_shell = _require_integer(halfmap["relion_crossing_shell"], "within_engine_halfmap.relion_crossing_shell", minimum=1)
+    _require_diagnostic(
+        recovar_shell == relion_shell == geometry["joint_band_last_shell"] + 1,
+        "within-engine crossing shells must both terminate the frozen joint band",
+    )
+    recovar_resolution = _require_number(halfmap["recovar_resolution_angstrom"], "within_engine_halfmap.recovar_resolution_angstrom", minimum=0.0)
+    relion_resolution = _require_number(halfmap["relion_resolution_angstrom"], "within_engine_halfmap.relion_resolution_angstrom", minimum=0.0)
+    _require_diagnostic(
+        recovar_resolution > 0.0 and relion_resolution > 0.0,
+        "within-engine resolutions must be positive",
+    )
+    for label, resolution, shell in (
+        ("recovar", recovar_resolution, recovar_shell),
+        ("relion", relion_resolution, relion_shell),
+    ):
+        expected_resolution = geometry["box_size"] * voxel_size / shell
+        _require_diagnostic(
+            math.isclose(resolution, expected_resolution, rel_tol=0.0, abs_tol=1e-12),
+            f"within_engine_halfmap.{label}_resolution_angstrom conflicts with geometry",
+        )
+    ratio = _require_number(halfmap["resolution_ratio"], "within_engine_halfmap.resolution_ratio", minimum=1.0)
+    expected_ratio = max(recovar_resolution, relion_resolution) / min(recovar_resolution, relion_resolution)
+    _require_diagnostic(
+        math.isclose(ratio, expected_ratio, rel_tol=0.0, abs_tol=1e-12),
+        "within_engine_halfmap.resolution_ratio is inconsistent",
+    )
+    curve_rmse = _require_number(halfmap["curve_rmse"], "within_engine_halfmap.curve_rmse", minimum=0.0)
+    auc_delta = _require_number(halfmap["band_auc_abs_delta"], "within_engine_halfmap.band_auc_abs_delta", minimum=0.0)
+    halfmap_pass = ratio <= 1.05 and curve_rmse <= 0.02 and auc_delta <= 0.02
+    _require_diagnostic(halfmap["pass"] is halfmap_pass, "within_engine_halfmap.pass conflicts with frozen thresholds")
+    _require_diagnostic(max(recovar_resolution, relion_resolution) <= 3.0, "interim K1 record no longer passes its high-resolution gate")
+
+    direct = _require_exact_keys(
+        top["direct_cross_engine"],
+        {"merged_band_fsc_auc", "half1_band_fsc_auc", "half2_band_fsc_auc", "raw_unaligned_pass", "proper_rigid_rescue_run"},
+        "K1 direct-FSC diagnostic.direct_cross_engine",
+    )
+    merged = _require_number(direct["merged_band_fsc_auc"], "direct_cross_engine.merged_band_fsc_auc", minimum=-1.0, maximum=1.0)
+    half1 = _require_number(direct["half1_band_fsc_auc"], "direct_cross_engine.half1_band_fsc_auc", minimum=-1.0, maximum=1.0)
+    half2 = _require_number(direct["half2_band_fsc_auc"], "direct_cross_engine.half2_band_fsc_auc", minimum=-1.0, maximum=1.0)
+    raw_pass = merged >= 0.95 and min(half1, half2) >= 0.90
+    _require_diagnostic(direct["raw_unaligned_pass"] is raw_pass, "direct_cross_engine.raw_unaligned_pass conflicts with frozen thresholds")
+    _require_diagnostic(direct["proper_rigid_rescue_run"] is False, "a passing raw comparison cannot claim a fitted rigid rescue")
+    _require_diagnostic(halfmap_pass and raw_pass, "status=pass requires every primary K1 gate to pass")
+
+    correlations = _require_exact_keys(
+        top["diagnostic_centered_correlation"],
+        {"merged", "half1", "half2", "acceptance_metric"},
+        "K1 direct-FSC diagnostic.diagnostic_centered_correlation",
+    )
+    for key in ("merged", "half1", "half2"):
+        _require_number(correlations[key], f"diagnostic_centered_correlation.{key}", minimum=-1.0, maximum=1.0)
+    _require_exact(correlations["acceptance_metric"], False, "diagnostic_centered_correlation.acceptance_metric")
+
+    crosscheck = _require_exact_keys(
+        top["full_vs_hermitian_half_spectrum"],
+        {
+            "maximum_joint_band_curve_abs_delta",
+            "maximum_all_shell_curve_abs_delta",
+            "maximum_primary_metric_abs_delta",
+            "crossing_shells_identical",
+            "selected_band_identical",
+            "all_gates_identical",
+            "full_fft_batch_max_rss_kib",
+            "half_spectrum_batch_max_rss_kib",
+        },
+        "K1 direct-FSC diagnostic.full_vs_hermitian_half_spectrum",
+    )
+    for key in (
+        "maximum_joint_band_curve_abs_delta",
+        "maximum_all_shell_curve_abs_delta",
+        "maximum_primary_metric_abs_delta",
+    ):
+        _require_number(crosscheck[key], f"full_vs_hermitian_half_spectrum.{key}", minimum=0.0)
+    for key in ("crossing_shells_identical", "selected_band_identical", "all_gates_identical"):
+        _require_exact(crosscheck[key], True, f"full_vs_hermitian_half_spectrum.{key}")
+    full_rss = _require_integer(crosscheck["full_fft_batch_max_rss_kib"], "full_vs_hermitian_half_spectrum.full_fft_batch_max_rss_kib", minimum=1)
+    half_rss = _require_integer(crosscheck["half_spectrum_batch_max_rss_kib"], "full_vs_hermitian_half_spectrum.half_spectrum_batch_max_rss_kib", minimum=1)
+    _require_diagnostic(half_rss < full_rss, "Hermitian half-spectrum RSS must remain below full-FFT RSS")
+
+    slurm = _require_exact_keys(
+        top["slurm"],
+        {
+            "half_spectrum_job_id",
+            "half_spectrum_state",
+            "half_spectrum_exit_code",
+            "half_spectrum_elapsed",
+            "full_fft_job_id",
+            "full_fft_state",
+            "full_fft_exit_code",
+            "full_fft_elapsed",
+            "requested_tres",
+            "allocated_tres",
+            "nonexclusive",
+            "gpu_count",
+        },
+        "K1 direct-FSC diagnostic.slurm",
+    )
+    for key, expected in {
+        "half_spectrum_job_id": 13373204,
+        "half_spectrum_state": "COMPLETED",
+        "half_spectrum_exit_code": "0:0",
+        "half_spectrum_elapsed": "00:01:22",
+        "full_fft_job_id": 13373359,
+        "full_fft_state": "COMPLETED",
+        "full_fft_exit_code": "0:0",
+        "full_fft_elapsed": "00:02:04",
+        "requested_tres": "cpu=8,mem=64G,node=1,billing=16",
+        "allocated_tres": "cpu=8,mem=64G,node=1,billing=16",
+        "nonexclusive": True,
+        "gpu_count": 0,
+    }.items():
+        _require_exact(slurm[key], expected, f"K1 direct-FSC diagnostic.slurm.{key}")
+
+    artifacts = _require_exact_keys(
+        top["artifacts"], {"run_root", *_K1_ARTIFACT_SEALS}, "K1 direct-FSC diagnostic.artifacts"
+    )
+    _require_exact(artifacts["run_root"], str(_K1_RUN_ROOT), "K1 direct-FSC diagnostic.artifacts.run_root")
+    for role, (relative_path, sealed_hash) in _K1_ARTIFACT_SEALS.items():
+        reference = _require_exact_keys(artifacts[role], {"path", "sha256"}, f"artifacts.{role}")
+        _require_exact(reference["path"], str(_K1_RUN_ROOT / relative_path), f"artifacts.{role}.path")
+        _require_sealed_hash(reference["sha256"], sealed_hash, f"artifacts.{role}.sha256")
+
+
+def _validate_real_kclass_single_seed_diagnostic(diagnostic: dict[str, Any]) -> None:
+    top = _require_exact_keys(
+        diagnostic,
+        {
+            "schema",
+            "admission_status",
+            "accepted_result",
+            "status",
+            "dataset",
+            "profile",
+            "source",
+            "configuration",
+            "class_matching",
+            "assignment",
+            "frozen_relion_unmasked_band_last_shell",
+            "classes",
+            "resolution",
+            "prospective_science_gate",
+            "performance",
+            "slurm",
+            "artifacts",
+        },
+        "real K-class single-seed diagnostic",
+    )
+    for key, expected in {
+        "schema": _REAL_KCLASS_SINGLE_SEED_SCHEMA,
+        "admission_status": "DIAGNOSTIC_ONLY_MULTI_SEED_REQUIRED",
+        "accepted_result": False,
+        "status": "complete_prospective_science_gate_rejected",
+        "dataset": "EMPIAR-10345",
+        "profile": "native10k-256",
+    }.items():
+        _require_exact(top[key], expected, f"real K-class single-seed diagnostic.{key}")
+    _validate_sealed_source(top["source"], _REAL_K4_SOURCE, "real K-class single-seed diagnostic.source")
+
+    configuration = _require_exact_keys(
+        top["configuration"],
+        {
+            "K",
+            "particles",
+            "half_counts",
+            "grid_size",
+            "max_iter",
+            "symmetry",
+            "seed",
+            "initial_lowpass_angstrom",
+            "fourier_backend",
+            "same_job_serial",
+            "absolute_resolution_claim",
+            "phase_randomization_corrected",
+        },
+        "real K-class single-seed diagnostic.configuration",
+    )
+    for key, expected in {
+        "K": 4,
+        "particles": 10000,
+        "grid_size": 256,
+        "max_iter": 8,
+        "symmetry": "C1",
+        "seed": 42001,
+        "initial_lowpass_angstrom": 30,
+        "fourier_backend": "relion_cuda",
+        "same_job_serial": True,
+        "absolute_resolution_claim": False,
+        "phase_randomization_corrected": False,
+    }.items():
+        _require_exact(configuration[key], expected, f"configuration.{key}")
+    half_counts = _require_integer_list(configuration["half_counts"], 2, "configuration.half_counts")
+    _require_diagnostic(sum(half_counts) == configuration["particles"], "configuration.half_counts must sum to particles")
+    k = configuration["K"]
+
+    matching = _require_exact_keys(
+        top["class_matching"],
+        {
+            "recovar_half1_to_relion_half1",
+            "recovar_half2_to_relion_half1",
+            "relion_half2_to_relion_half1",
+            "unique_exact_optimum",
+            "all_frozen_objective_margin_gates_pass",
+        },
+        "real K-class single-seed diagnostic.class_matching",
+    )
+    expected_classes = list(range(1, k + 1))
+    for key in (
+        "recovar_half1_to_relion_half1",
+        "recovar_half2_to_relion_half1",
+        "relion_half2_to_relion_half1",
+    ):
+        values = _require_integer_list(matching[key], k, f"class_matching.{key}")
+        _require_diagnostic(sorted(values) == expected_classes, f"class_matching.{key} must be a permutation of 1..K")
+    _require_exact(matching["unique_exact_optimum"], True, "class_matching.unique_exact_optimum")
+    _require_exact(
+        matching["all_frozen_objective_margin_gates_pass"],
+        True,
+        "class_matching.all_frozen_objective_margin_gates_pass",
+    )
+
+    assignment = _require_exact_keys(
+        top["assignment"],
+        {
+            "half1_agreement",
+            "half2_agreement",
+            "threshold",
+            "half1_relion_counts",
+            "half1_recovar_counts",
+            "half2_relion_counts",
+            "half2_recovar_counts",
+            "class_collapse",
+        },
+        "real K-class single-seed diagnostic.assignment",
+    )
+    _require_exact(assignment["threshold"], 0.99, "assignment.threshold")
+    agreements = {
+        half: _require_number(assignment[f"half{half}_agreement"], f"assignment.half{half}_agreement", minimum=0.0, maximum=1.0)
+        for half in (1, 2)
+    }
+    all_counts: dict[tuple[int, str], list[int]] = {}
+    for half in (1, 2):
+        for engine in ("relion", "recovar"):
+            key = f"half{half}_{engine}_counts"
+            counts = _require_integer_list(assignment[key], k, f"assignment.{key}")
+            _require_diagnostic(sum(counts) == half_counts[half - 1], f"assignment.{key} must sum to its frozen half count")
+            all_counts[(half, engine)] = counts
+    expected_collapse = any(min(counts) < 1 for counts in all_counts.values())
+    _require_diagnostic(assignment["class_collapse"] is expected_collapse, "assignment.class_collapse conflicts with hard counts")
+
+    _require_exact(
+        top["frozen_relion_unmasked_band_last_shell"],
+        configuration["grid_size"] // 2 - 2,
+        "real K-class single-seed diagnostic.frozen_relion_unmasked_band_last_shell",
+    )
+    classes = top["classes"]
+    _require_diagnostic(isinstance(classes, list) and len(classes) == k, "classes must contain exactly K rows")
+    failures: list[str] = []
+    class_ids: list[int] = []
+    shell_pairs: list[list[int]] = []
+    for index, row_value in enumerate(classes):
+        row = _require_exact_keys(
+            row_value,
+            {
+                "class",
+                "unmasked_half_auc_relion_recovar_delta",
+                "unmasked_cross_merged_half1_half2_auc",
+                "masked_half_auc_relion_recovar_delta",
+                "masked_cross_merged_half1_half2_auc",
+                "unmasked_fsc_0p5_shell_relion_recovar",
+            },
+            f"classes[{index}]",
+        )
+        class_id = _require_integer(row["class"], f"classes[{index}].class", minimum=1)
+        class_ids.append(class_id)
+        for route in ("unmasked", "masked"):
+            key = f"{route}_half_auc_relion_recovar_delta"
+            relion_auc, recovar_auc, delta = _require_numeric_list(
+                row[key], 3, f"classes[{index}].{key}", minimum=-1.0, maximum=1.0
+            )
+            _require_diagnostic(
+                math.isclose(delta, recovar_auc - relion_auc, rel_tol=0.0, abs_tol=1e-12),
+                f"classes[{index}].{key} signed delta is inconsistent",
+            )
+            if delta < -0.01:
+                gate_route = "common_masked" if route == "masked" else route
+                failures.append(f"class{class_id:03d}:{gate_route}:half_band_auc_drop")
+        unmasked_cross = _require_numeric_list(
+            row["unmasked_cross_merged_half1_half2_auc"],
+            3,
+            f"classes[{index}].unmasked_cross_merged_half1_half2_auc",
+            minimum=-1.0,
+            maximum=1.0,
+        )
+        _require_numeric_list(
+            row["masked_cross_merged_half1_half2_auc"],
+            3,
+            f"classes[{index}].masked_cross_merged_half1_half2_auc",
+            minimum=-1.0,
+            maximum=1.0,
+        )
+        if unmasked_cross[0] < 0.99:
+            failures.append(f"class{class_id:03d}:unmasked:cross_merged_band_fsc_auc")
+        if min(unmasked_cross[1:]) < 0.90:
+            failures.append(f"class{class_id:03d}:unmasked:cross_each_half_band_fsc_auc")
+        shells = _require_integer_list(
+            row["unmasked_fsc_0p5_shell_relion_recovar"],
+            2,
+            f"classes[{index}].unmasked_fsc_0p5_shell_relion_recovar",
+        )
+        _require_diagnostic(shells[0] == shells[1] > 0, f"classes[{index}] must retain equal positive FSC=0.5 shells")
+        shell_pairs.append(shells)
+    _require_diagnostic(sorted(class_ids) == expected_classes, "classes.class must be a permutation of 1..K")
+    for half, agreement in agreements.items():
+        if agreement < assignment["threshold"]:
+            failures.append(f"half{half}:class_assignment_agreement")
+    _require_diagnostic(not expected_collapse, "single-seed diagnostic must retain its no-collapse boundary")
+
+    resolution = _require_exact_keys(
+        top["resolution"],
+        {
+            "registered_unmasked_fsc_0p143",
+            "registered_common_masked_fsc_0p143",
+            "better_than_angstrom",
+            "unmasked_fsc_0p5_angstrom_relion_equals_recovar",
+        },
+        "real K-class single-seed diagnostic.resolution",
+    )
+    beyond_range = "all RELION and RECOVAR classes beyond measured range"
+    _require_exact(resolution["registered_unmasked_fsc_0p143"], beyond_range, "resolution.registered_unmasked_fsc_0p143")
+    _require_exact(resolution["registered_common_masked_fsc_0p143"], beyond_range, "resolution.registered_common_masked_fsc_0p143")
+    better_than = _require_number(resolution["better_than_angstrom"], "resolution.better_than_angstrom", minimum=0.0)
+    fsc_0p5_resolutions = _require_numeric_list(
+        resolution["unmasked_fsc_0p5_angstrom_relion_equals_recovar"],
+        k,
+        "resolution.unmasked_fsc_0p5_angstrom_relion_equals_recovar",
+        minimum=0.0,
+    )
+    voxel_size = better_than * top["frozen_relion_unmasked_band_last_shell"] / configuration["grid_size"]
+    for index, (shells, observed) in enumerate(zip(shell_pairs, fsc_0p5_resolutions, strict=True)):
+        expected = configuration["grid_size"] * voxel_size / shells[0]
+        _require_diagnostic(
+            math.isclose(observed, expected, rel_tol=0.0, abs_tol=1e-6),
+            f"resolution.unmasked_fsc_0p5_angstrom_relion_equals_recovar[{index}] conflicts with its shell",
+        )
+
+    gate = _require_exact_keys(
+        top["prospective_science_gate"],
+        {"accepted", "failures", "qualification_exit_code", "threshold_rejection_only"},
+        "real K-class single-seed diagnostic.prospective_science_gate",
+    )
+    _require_exact(gate["accepted"], False, "prospective_science_gate.accepted")
+    _require_exact(gate["failures"], _REAL_K4_GATE_FAILURES, "prospective_science_gate.failures")
+    _require_diagnostic(failures == gate["failures"], "prospective_science_gate.failures conflict with frozen thresholds")
+    _require_exact(gate["qualification_exit_code"], "3:0", "prospective_science_gate.qualification_exit_code")
+    _require_exact(gate["threshold_rejection_only"], True, "prospective_science_gate.threshold_rejection_only")
+
+    performance = _require_exact_keys(
+        top["performance"],
+        {
+            "relion_wall_seconds_half1_half2",
+            "recovar_wall_seconds_half1_half2",
+            "relion_peak_hbm_mib_half1_half2",
+            "recovar_peak_hbm_mib_half1_half2",
+            "relion_max_rss_kib_half1_half2",
+            "recovar_max_rss_kib_half1_half2",
+        },
+        "real K-class single-seed diagnostic.performance",
+    )
+    for key in performance:
+        _require_numeric_list(performance[key], 2, f"performance.{key}", minimum=0.0)
+
+    slurm = _require_exact_keys(
+        top["slurm"],
+        {
+            "setup_job_id",
+            "setup_state",
+            "setup_exit_code",
+            "qualification_job_id",
+            "qualification_state",
+            "qualification_exit_code",
+            "qualification_elapsed",
+            "qualification_requested_tres",
+            "qualification_allocated_tres",
+            "nonexclusive",
+            "compute_failures",
+        },
+        "real K-class single-seed diagnostic.slurm",
+    )
+    for key, expected in {
+        "setup_job_id": 13371068,
+        "setup_state": "COMPLETED",
+        "setup_exit_code": "0:0",
+        "qualification_job_id": 13371069,
+        "qualification_state": "FAILED",
+        "qualification_exit_code": gate["qualification_exit_code"],
+        "qualification_elapsed": "01:04:34",
+        "qualification_requested_tres": "cpu=24,mem=256G,node=1,billing=24,gres/gpu=1",
+        "qualification_allocated_tres": "cpu=24,mem=256G,node=1,billing=24,gres/gpu=1",
+        "nonexclusive": True,
+        "compute_failures": False,
+    }.items():
+        _require_exact(slurm[key], expected, f"real K-class single-seed diagnostic.slurm.{key}")
+
+    artifacts = _require_exact_keys(
+        top["artifacts"],
+        {"run_root", "audit_path", *_REAL_K4_ARTIFACT_SEALS},
+        "real K-class single-seed diagnostic.artifacts",
+    )
+    _require_exact(artifacts["run_root"], str(_REAL_K4_RUN_ROOT), "artifacts.run_root")
+    _require_exact(artifacts["audit_path"], str(_REAL_K4_RUN_ROOT / "audit/halfmap_audit.json"), "artifacts.audit_path")
+    for key, sealed_hash in _REAL_K4_ARTIFACT_SEALS.items():
+        _require_sealed_hash(artifacts[key], sealed_hash, f"artifacts.{key}")
+
+
+def validate_registered_diagnostic(diagnostic: dict[str, Any]) -> None:
+    """Validate diagnostic schemas owned directly by this registry validator."""
+
+    schema = diagnostic.get("schema") if isinstance(diagnostic, dict) else None
+    if schema == _K1_DIRECT_FSC_SCHEMA:
+        _validate_k1_direct_fsc_diagnostic(diagnostic)
+    elif schema == _REAL_KCLASS_SINGLE_SEED_SCHEMA:
+        _validate_real_kclass_single_seed_diagnostic(diagnostic)
+    else:
+        raise RegistryValidationError(f"unsupported inline diagnostic schema: {schema!r}")
 
 
 def _semantic_errors(record: dict[str, Any]) -> list[str]:
@@ -818,6 +1467,50 @@ def verify_diagnostic_files(diagnostic: dict[str, Any], digest_cache: dict[Path,
         raise RegistryValidationError("\n".join(errors))
 
 
+def _registered_diagnostic_file_references(diagnostic: dict[str, Any]) -> list[dict[str, str]]:
+    schema = diagnostic["schema"]
+    artifacts = diagnostic["artifacts"]
+    if schema == _K1_DIRECT_FSC_SCHEMA:
+        return [artifacts[role] for role in _K1_ARTIFACT_SEALS]
+    if schema == _REAL_KCLASS_SINGLE_SEED_SCHEMA:
+        run_root = Path(artifacts["run_root"])
+        return [
+            {
+                "path": str(run_root / relative_path),
+                "sha256": artifacts[hash_key],
+            }
+            for hash_key, relative_path in (
+                ("submission_manifest_sha256", "submission_manifest.json"),
+                ("audit_sha256", "audit/halfmap_audit.json"),
+                ("curve_archive_sha256", "audit/halfmap_fsc_curves.npz"),
+                ("common_mask_sha256", "audit/common_soft_mask.mrc"),
+                ("qualification_stdout_sha256", "logs/qualification-13371069.out"),
+                ("qualification_stderr_sha256", "logs/qualification-13371069.err"),
+            )
+        ]
+    raise RegistryValidationError(f"unsupported inline diagnostic schema: {schema!r}")
+
+
+def verify_registered_diagnostic_files(
+    diagnostic: dict[str, Any], digest_cache: dict[Path, str]
+) -> None:
+    """Verify compact artifacts for an inline-validated diagnostic."""
+
+    errors: list[str] = []
+    for reference in _registered_diagnostic_file_references(diagnostic):
+        path = Path(reference["path"])
+        if not path.is_file():
+            errors.append(f"missing file: {path}")
+            continue
+        if path not in digest_cache:
+            digest_cache[path] = _sha256(path)
+        digest = digest_cache[path]
+        if digest != reference["sha256"]:
+            errors.append(f"checksum mismatch: {path}: expected {reference['sha256']}, got {digest}")
+    if errors:
+        raise RegistryValidationError("\n".join(errors))
+
+
 def validate_registry(registry_root: Path, *, verify_files: bool = False) -> list[Path]:
     """Validate all registry entries and return their paths."""
     schema_path = registry_root / "schema_v1.json"
@@ -890,14 +1583,24 @@ def validate_registry(registry_root: Path, *, verify_files: bool = False) -> lis
         if route == "separate":
             continue
         try:
-            validate_diagnostic(diagnostic, diagnostic_schema)
-            if verify_files:
-                verify_diagnostic_files(diagnostic, digest_cache)
+            if route == "synthetic_negative":
+                validate_diagnostic(diagnostic, diagnostic_schema)
+                if verify_files:
+                    verify_diagnostic_files(diagnostic, digest_cache)
+                diagnostic_id = diagnostic["diagnostic_id"]
+                if path.stem != diagnostic_id:
+                    raise RegistryValidationError(f"{path}: filename must equal diagnostic_id")
+            else:
+                validate_registered_diagnostic(diagnostic)
+                if verify_files:
+                    verify_registered_diagnostic_files(diagnostic, digest_cache)
+                diagnostic_id = _INLINE_DIAGNOSTIC_FILENAMES[diagnostic["schema"]]
+                if path.stem != diagnostic_id:
+                    raise RegistryValidationError(
+                        f"{path}: filename must equal the sealed diagnostic filename {diagnostic_id}"
+                    )
         except RegistryValidationError as error:
             raise RegistryValidationError(f"{path}:\n{error}") from error
-        diagnostic_id = diagnostic["diagnostic_id"]
-        if path.stem != diagnostic_id:
-            raise RegistryValidationError(f"{path}: filename must equal diagnostic_id")
         if diagnostic_id in diagnostic_ids:
             raise RegistryValidationError(f"duplicate diagnostic_id: {diagnostic_id}")
         diagnostic_ids.add(diagnostic_id)

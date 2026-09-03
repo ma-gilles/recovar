@@ -427,3 +427,26 @@ full audit trail are under
 The preceding job `13372884` failed before collection because its launcher
 omitted the pixi NVIDIA library directories; it is retained as a harness
 failure and is not counted as a test result.
+
+## EMPIAR-10202 direct high-resolution checkpoint
+
+The matched set-6 I1 iteration-11 maps now pass the complete unaligned
+RECOVAR-versus-RELION scorecard: both within-engine half-map curves cross
+FSC=0.143 at shell 250 (2.5216 A), their resolved-band RMSE is 0.00463, and
+direct merged/half-1/half-2 FSC-AUC values are 0.99122/0.98721/0.98692.  No
+rotation or translation fit is needed.  An independent full-complex FFT
+reproduces the exact Hermitian half-spectrum calculation without changing any
+gate; see `k1_empiar10202_it011_direct_fsc_20260903.md` and
+`diagnostics/k1-empiar10202-it011-direct-fsc-20260903.json`.  This is strong
+interim high-resolution evidence, while the final claim remains gated on the
+live RECOVAR trajectory reaching natural completion.
+
+## EMPIAR-10345 native-grid K=4 checkpoint
+
+The first 10,000-particle, 256-grid independent-half K=4 run completed without
+a compute failure.  All four unmasked half-map FSC-AUC differences are within
+0.01 and all FSC=0.5 shells match, but the prospective gate remains rejected
+on two direct-map cells, one masked delta, and 96.3%/97.3% assignment
+agreement.  The full result and exact reproduction contract are in
+`real_kclass_halfmap_refinement.md` and
+`diagnostics/real-k4-10345-native10k-seed42001-2f6759608-20260903.json`.

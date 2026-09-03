@@ -1,0 +1,129 @@
+{
+  "schema": "recovar.em.real_kclass_native_single_seed_diagnostic.v1",
+  "admission_status": "DIAGNOSTIC_ONLY_MULTI_SEED_REQUIRED",
+  "accepted_result": false,
+  "status": "complete_prospective_science_gate_rejected",
+  "dataset": "EMPIAR-10345",
+  "profile": "native10k-256",
+  "source": {
+    "branch": "codex/pr158-10345-native10k-source-2f6759608",
+    "commit": "2f6759608c82356dd5c24e7b149002df8cc84f28",
+    "tree": "b2e9b35f3988ae63aae45e1dac90c0386099d97f",
+    "clean": true
+  },
+  "configuration": {
+    "K": 4,
+    "particles": 10000,
+    "half_counts": [5000, 5000],
+    "grid_size": 256,
+    "max_iter": 8,
+    "symmetry": "C1",
+    "seed": 42001,
+    "initial_lowpass_angstrom": 30,
+    "fourier_backend": "relion_cuda",
+    "same_job_serial": true,
+    "absolute_resolution_claim": false,
+    "phase_randomization_corrected": false
+  },
+  "class_matching": {
+    "recovar_half1_to_relion_half1": [1, 2, 3, 4],
+    "recovar_half2_to_relion_half1": [1, 2, 3, 4],
+    "relion_half2_to_relion_half1": [1, 2, 3, 4],
+    "unique_exact_optimum": true,
+    "all_frozen_objective_margin_gates_pass": true
+  },
+  "assignment": {
+    "half1_agreement": 0.9632,
+    "half2_agreement": 0.973,
+    "threshold": 0.99,
+    "half1_relion_counts": [1124, 1023, 2023, 830],
+    "half1_recovar_counts": [1118, 1014, 2034, 834],
+    "half2_relion_counts": [1473, 948, 1658, 921],
+    "half2_recovar_counts": [1463, 962, 1649, 926],
+    "class_collapse": false
+  },
+  "frozen_relion_unmasked_band_last_shell": 126,
+  "classes": [
+    {
+      "class": 1,
+      "unmasked_half_auc_relion_recovar_delta": [0.6055326228430522, 0.5956064055094001, -0.009926217333652065],
+      "unmasked_cross_merged_half1_half2_auc": [0.9902798930539084, 0.9807150541001027, 0.9918285483694421],
+      "masked_half_auc_relion_recovar_delta": [0.7977226424894994, 0.7939407550567592, -0.0037818874327402163],
+      "masked_cross_merged_half1_half2_auc": [0.9985010566276487, 0.9954584899501112, 0.9986569488220237],
+      "unmasked_fsc_0p5_shell_relion_recovar": [14, 14]
+    },
+    {
+      "class": 2,
+      "unmasked_half_auc_relion_recovar_delta": [0.5608287203790273, 0.5647451214966567, 0.0039164011176293645],
+      "unmasked_cross_merged_half1_half2_auc": [0.9895660774787021, 0.9798654809872206, 0.9893582720512628],
+      "masked_half_auc_relion_recovar_delta": [0.8503862650415485, 0.85247560434204, 0.0020893393004914884],
+      "masked_cross_merged_half1_half2_auc": [0.9989570742424503, 0.9974706545985305, 0.9985780924829],
+      "unmasked_fsc_0p5_shell_relion_recovar": [13, 13]
+    },
+    {
+      "class": 3,
+      "unmasked_half_auc_relion_recovar_delta": [0.6533984171640064, 0.6445278694453552, -0.008870547718651145],
+      "unmasked_cross_merged_half1_half2_auc": [0.9931382920836855, 0.9884230836314096, 0.9911622691002671],
+      "masked_half_auc_relion_recovar_delta": [0.7700864437363788, 0.7723429419685893, 0.0022564982322105243],
+      "masked_cross_merged_half1_half2_auc": [0.9984704964043815, 0.9967009762651828, 0.9980252088819392],
+      "unmasked_fsc_0p5_shell_relion_recovar": [15, 15]
+    },
+    {
+      "class": 4,
+      "unmasked_half_auc_relion_recovar_delta": [0.5488946904562607, 0.53967886581585, -0.009215824640410708],
+      "unmasked_cross_merged_half1_half2_auc": [0.9874464738889801, 0.9732088220706514, 0.9887487556146477],
+      "masked_half_auc_relion_recovar_delta": [0.7032345453631053, 0.6893580115040469, -0.013876533859058404],
+      "masked_cross_merged_half1_half2_auc": [0.9974991809855038, 0.9942529612388198, 0.997717255008174],
+      "unmasked_fsc_0p5_shell_relion_recovar": [12, 12]
+    }
+  ],
+  "resolution": {
+    "registered_unmasked_fsc_0p143": "all RELION and RECOVAR classes beyond measured range",
+    "registered_common_masked_fsc_0p143": "all RELION and RECOVAR classes beyond measured range",
+    "better_than_angstrom": 2.732698470827133,
+    "unmasked_fsc_0p5_angstrom_relion_equals_recovar": [24.594286, 26.486154, 22.954667, 28.693334]
+  },
+  "prospective_science_gate": {
+    "accepted": false,
+    "failures": [
+      "class002:unmasked:cross_merged_band_fsc_auc",
+      "class004:common_masked:half_band_auc_drop",
+      "class004:unmasked:cross_merged_band_fsc_auc",
+      "half1:class_assignment_agreement",
+      "half2:class_assignment_agreement"
+    ],
+    "qualification_exit_code": "3:0",
+    "threshold_rejection_only": true
+  },
+  "performance": {
+    "relion_wall_seconds_half1_half2": [147.48314142227173, 145.06196427345276],
+    "recovar_wall_seconds_half1_half2": [1681.2624533176422, 1708.0267224311829],
+    "relion_peak_hbm_mib_half1_half2": [79577, 79573],
+    "recovar_peak_hbm_mib_half1_half2": [33789, 33795],
+    "relion_max_rss_kib_half1_half2": [3267432, 3276996],
+    "recovar_max_rss_kib_half1_half2": [17175496, 17145016]
+  },
+  "slurm": {
+    "setup_job_id": 13371068,
+    "setup_state": "COMPLETED",
+    "setup_exit_code": "0:0",
+    "qualification_job_id": 13371069,
+    "qualification_state": "FAILED",
+    "qualification_exit_code": "3:0",
+    "qualification_elapsed": "01:04:34",
+    "qualification_requested_tres": "cpu=24,mem=256G,node=1,billing=24,gres/gpu=1",
+    "qualification_allocated_tres": "cpu=24,mem=256G,node=1,billing=24,gres/gpu=1",
+    "nonexclusive": true,
+    "compute_failures": false
+  },
+  "artifacts": {
+    "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_seed42001_2f6759608_20260903",
+    "submission_manifest_sha256": "9931f94c44fa7ff5627e17c04eefeee04f7aa1b64c587af7bb1783cbcf5a184c",
+    "audit_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_seed42001_2f6759608_20260903/audit/halfmap_audit.json",
+    "audit_sha256": "84217ddbc0f5cf20967a14d2a1d29e12f1a5006114200e31659b4490c8ae9e5a",
+    "curve_archive_sha256": "cd497fe6c7731a9d97ff8c86fb4faf55917dd2d5bc68a8fbb71541124a23a620",
+    "common_mask_sha256": "a8256cd679a9c4fad3044c4e98cfb1517eef287bf1f9c7095d99b4fdfce8cd9d",
+    "qualification_stdout_sha256": "35d2483aaabb0ed6a76fb62f978d233529fd19dd55914f9f07d85623d98fdcd4",
+    "qualification_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

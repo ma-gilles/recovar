@@ -1,0 +1,92 @@
+{
+  "schema": "recovar.em.k1_empiar10202_it011_direct_fsc.v1",
+  "admission_status": "INTERIM_DIAGNOSTIC_ONLY_FINAL_REFINEMENT_PENDING",
+  "status": "pass",
+  "case_id": "empiar-10202-set06-k1-I1",
+  "reported_iteration": 11,
+  "fitted_operations": [],
+  "comparison_frame": "shared RELION on-disk file frame",
+  "source": {
+    "recovar_trajectory_commit": "4ea288467debbcba97cfaee6d2742ebc66c637f0",
+    "analysis_commit": "47f8fe79d5556cf43ad921db503afa59929a6d56",
+    "analysis_tree": "cb36870934dd846c10af646f400e508b6ba51c6a",
+    "analysis_clean": true
+  },
+  "geometry": {
+    "box_size": 800,
+    "voxel_size_angstrom": 0.7879999279975891,
+    "symmetry": "I1",
+    "joint_band_first_shell": 1,
+    "joint_band_last_shell": 249
+  },
+  "within_engine_halfmap": {
+    "recovar_crossing_shell": 250,
+    "relion_crossing_shell": 250,
+    "recovar_resolution_angstrom": 2.521599769592285,
+    "relion_resolution_angstrom": 2.521599769592285,
+    "resolution_ratio": 1.0,
+    "curve_rmse": 0.00463413977962714,
+    "band_auc_abs_delta": 0.00025150263593076705,
+    "pass": true
+  },
+  "direct_cross_engine": {
+    "merged_band_fsc_auc": 0.9912247650279307,
+    "half1_band_fsc_auc": 0.9872068098779474,
+    "half2_band_fsc_auc": 0.9869153991473308,
+    "raw_unaligned_pass": true,
+    "proper_rigid_rescue_run": false
+  },
+  "diagnostic_centered_correlation": {
+    "merged": 0.9994502954953957,
+    "half1": 0.9989154187133659,
+    "half2": 0.9989023210283551,
+    "acceptance_metric": false
+  },
+  "full_vs_hermitian_half_spectrum": {
+    "maximum_joint_band_curve_abs_delta": 2.6449546997042717e-9,
+    "maximum_all_shell_curve_abs_delta": 2.8037785843038066e-7,
+    "maximum_primary_metric_abs_delta": 6.86206994005012e-11,
+    "crossing_shells_identical": true,
+    "selected_band_identical": true,
+    "all_gates_identical": true,
+    "full_fft_batch_max_rss_kib": 55189160,
+    "half_spectrum_batch_max_rss_kib": 27676436
+  },
+  "slurm": {
+    "half_spectrum_job_id": 13373204,
+    "half_spectrum_state": "COMPLETED",
+    "half_spectrum_exit_code": "0:0",
+    "half_spectrum_elapsed": "00:01:22",
+    "full_fft_job_id": 13373359,
+    "full_fft_state": "COMPLETED",
+    "full_fft_exit_code": "0:0",
+    "full_fft_elapsed": "00:02:04",
+    "requested_tres": "cpu=8,mem=64G,node=1,billing=16",
+    "allocated_tres": "cpu=8,mem=64G,node=1,billing=16",
+    "nonexclusive": true,
+    "gpu_count": 0
+  },
+  "artifacts": {
+    "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/10202_it11_direct_fsc_20260903T040436Z",
+    "full_metrics": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/10202_it11_direct_fsc_20260903T040436Z/outputs/raw/raw_direct_metrics.json",
+      "sha256": "a412be7ebcb713a01a577548c92115a3c7bb192fbff23106cf4cf8b479c642ca"
+    },
+    "full_curves": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/10202_it11_direct_fsc_20260903T040436Z/outputs/raw/raw_direct_curves.npz",
+      "sha256": "0d6fb5112fd5c2fff887753003ac6041640b57b672684870229d70cd430de7fc"
+    },
+    "half_spectrum_metrics": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/10202_it11_direct_fsc_20260903T040436Z/outputs/raw_rfft_preview/raw_rfft_preview_metrics.json",
+      "sha256": "f6aa025df37c68e5f89c1e5264759981d0a0a5bfccee28599ce230ee1faf7b54"
+    },
+    "half_spectrum_curves": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/10202_it11_direct_fsc_20260903T040436Z/outputs/raw_rfft_preview/raw_rfft_preview_curves.npz",
+      "sha256": "1111a203290596ce997de6b79896577a69c0c95e7d30f450711f35c144d257dc"
+    },
+    "crosscheck": {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/10202_it11_direct_fsc_20260903T040436Z/outputs/raw_fft_crosscheck_v2.json",
+      "sha256": "0215314416f1946a3f096867aeccc7fd7dd038b0e333456df30a689f6e4c6c46"
+    }
+  }
+}
