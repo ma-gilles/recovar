@@ -52,6 +52,7 @@ RELION_BIND_DIR=${RUNTIME}/relion_bind
 EXACT_LOCAL_BUCKET_RADIX=${EXACT_LOCAL_BUCKET_RADIX:-4}
 EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE=${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE:-0}
 STABLE_FOURIER_WINDOW_SHAPES=${STABLE_FOURIER_WINDOW_SHAPES:-0}
+AUDIT_RAW_IMAGE_CACHE=${AUDIT_RAW_IMAGE_CACHE:-0}
 REUSE_NATIVE_ROOT=${VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT:-}
 EXPECTED_REUSED_NATIVE_NSYS_SHA256=${EXPECTED_REUSED_NATIVE_NSYS_SHA256:-}
 
@@ -80,6 +81,7 @@ test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${EXACT_LOCAL_BUCKET_RADIX}" =~ ^(2|4)$ ]]
 [[ "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}" =~ ^[0-9]+$ ]]
 [[ "${STABLE_FOURIER_WINDOW_SHAPES}" =~ ^[01]$ ]]
+[[ "${AUDIT_RAW_IMAGE_CACHE}" =~ ^[01]$ ]]
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
@@ -110,6 +112,9 @@ printf 'exact_local_bucket_radix=%s\nexact_local_physical_order_chunk_size=%s\n'
   > "${PROVENANCE}/candidate_parameters.txt"
 printf 'stable_fourier_window_shapes=%s\n' \
   "${STABLE_FOURIER_WINDOW_SHAPES}" \
+  >> "${PROVENANCE}/candidate_parameters.txt"
+printf 'audit_raw_image_cache=%s\n' \
+  "${AUDIT_RAW_IMAGE_CACHE}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
@@ -375,6 +380,9 @@ RECOVAR_COMMAND=(
 )
 if [[ "${STABLE_FOURIER_WINDOW_SHAPES}" = 1 ]]; then
   RECOVAR_COMMAND+=(--stable-fourier-window-shapes)
+fi
+if [[ "${AUDIT_RAW_IMAGE_CACHE}" = 1 ]]; then
+  RECOVAR_COMMAND+=(--audit-raw-image-cache)
 fi
 printf '%q ' "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
   --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \

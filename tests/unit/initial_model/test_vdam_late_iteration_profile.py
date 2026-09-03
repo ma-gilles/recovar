@@ -347,6 +347,8 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     )
     assert "VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT" in launcher
     assert "EXPECTED_REUSED_NATIVE_NSYS_SHA256" in launcher
+    assert 'AUDIT_RAW_IMAGE_CACHE=${AUDIT_RAW_IMAGE_CACHE:-0}' in launcher
+    assert 'RECOVAR_COMMAND+=(--audit-raw-image-cache)' in launcher
     assert "status --porcelain=v1 --untracked-files=no" in launcher
     assert "test ! -e" in launcher
     assert 'test ! -e "${NATIVE_PROFILE}/run_it' in launcher
