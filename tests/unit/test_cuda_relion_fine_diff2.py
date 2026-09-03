@@ -2235,6 +2235,171 @@ def test_relion_runtime_flat_rows_match_shared_rectangular_tree_and_reuse_compil
 
 
 @pytest.mark.gpu
+def test_relion_fused_translate_pairs_match_rectangular_tree_bitwise(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(1934)
+    current_size = 16
+    pixel_count = current_size * (current_size // 2 + 1)
+    batch_size, rotation_count, translation_count = 2, 3, 5
+    dense_reference = (
+        rng.normal(0, 0.02, (batch_size, rotation_count, pixel_count))
+        + 1j * rng.normal(0, 0.02, (batch_size, rotation_count, pixel_count))
+    ).astype(np.complex64)
+    flat_reference = dense_reference.reshape(-1, pixel_count)
+    image = (
+        rng.normal(0, 0.02, (batch_size, pixel_count))
+        + 1j * rng.normal(0, 0.02, (batch_size, pixel_count))
+    ).astype(np.complex64)
+    translation_angles = rng.normal(0, 0.2, (translation_count, 2)).astype(
+        np.float32
+    )
+    weight = rng.uniform(0, 150_000, (batch_size, pixel_count)).astype(np.float32)
+    lookup = np.arange(pixel_count, dtype=np.int32)
+    initial_diff2 = np.asarray([0.022644043, 0.03125], dtype=np.float32)
+    pair_reference_rows = np.asarray(
+        [[0, 2, 1, -1], [4, 5, 3, -1]],
+        dtype=np.int32,
+    )
+    pair_translation_ids = np.asarray(
+        [[0, 2, 4, -1], [1, 0, 3, -1]],
+        dtype=np.int32,
+    )
+
+    with jax.default_device(gpu_device):
+        dense = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+            jnp.asarray(dense_reference),
+            jnp.asarray(image),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
+        )
+        pairs = cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
+            jnp.asarray(flat_reference),
+            jnp.asarray(image),
+            jnp.asarray(translation_angles),
+            jnp.asarray(weight),
+            jnp.asarray(pair_reference_rows),
+            jnp.asarray(pair_translation_ids),
+            jnp.asarray(lookup),
+            jnp.asarray(initial_diff2),
+            current_size=current_size,
+        )
+        dense, pairs = jax.block_until_ready((dense, pairs))
+
+    dense = np.asarray(dense)
+    pairs = np.asarray(pairs)
+    expected = np.asarray(
+        [
+            [dense[0, 0, 0], dense[0, 2, 2], dense[0, 1, 4]],
+            [dense[1, 1, 1], dense[1, 2, 0], dense[1, 0, 3]],
+        ],
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(
+        pairs[:, :3].view(np.uint32),
+        expected.view(np.uint32),
+    )
+    assert np.all(np.isposinf(pairs[:, 3]))
+
+
+@pytest.mark.gpu
+def test_relion_runtime_fused_translate_pairs_reuse_physical_compile(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(1935)
+    physical_size = 32
+    physical_pixels = physical_size * (physical_size // 2 + 1)
+    translation_angles = rng.normal(0, 0.2, (4, 2)).astype(np.float32)
+    pair_reference_rows = np.asarray([[0, 2], [3, 1]], dtype=np.int32)
+    pair_translation_ids = np.asarray([[0, 3], [2, 1]], dtype=np.int32)
+    initial_diff2 = np.asarray([0.022644043, 0.03125], dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        runtime_function = (
+            cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32
+        )
+        runtime_function.clear_cache()
+        for logical_size in (30, 32):
+            logical_pixels = logical_size * (logical_size // 2 + 1)
+            reference = (
+                rng.normal(0, 0.02, (4, logical_pixels))
+                + 1j * rng.normal(0, 0.02, (4, logical_pixels))
+            ).astype(np.complex64)
+            image = (
+                rng.normal(0, 0.02, (2, logical_pixels))
+                + 1j * rng.normal(0, 0.02, (2, logical_pixels))
+            ).astype(np.complex64)
+            weight = rng.uniform(0, 150_000, (2, logical_pixels)).astype(np.float32)
+            lookup = np.arange(logical_pixels, dtype=np.int32)
+            pad = physical_pixels - logical_pixels
+            physical_reference = np.pad(
+                reference,
+                ((0, 0), (0, pad)),
+                constant_values=np.complex64(7 + 3j),
+            )
+            physical_image = np.pad(
+                image,
+                ((0, 0), (0, pad)),
+                constant_values=np.complex64(5 + 2j),
+            )
+            physical_weight = np.pad(
+                weight,
+                ((0, 0), (0, pad)),
+                constant_values=np.float32(1.25e5),
+            )
+            physical_lookup = np.pad(lookup, (0, pad), constant_values=0)
+            expected = cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
+                jnp.asarray(reference),
+                jnp.asarray(image),
+                jnp.asarray(translation_angles),
+                jnp.asarray(weight),
+                jnp.asarray(pair_reference_rows),
+                jnp.asarray(pair_translation_ids),
+                jnp.asarray(lookup),
+                jnp.asarray(initial_diff2),
+                current_size=logical_size,
+            )
+            actual = runtime_function(
+                jnp.asarray(physical_reference),
+                jnp.asarray(physical_image),
+                jnp.asarray(translation_angles),
+                jnp.asarray(physical_weight),
+                jnp.asarray(pair_reference_rows),
+                jnp.asarray(pair_translation_ids),
+                jnp.asarray(physical_lookup),
+                jnp.asarray(logical_size, dtype=jnp.int32),
+                jnp.asarray(initial_diff2),
+            )
+            expected, actual = jax.block_until_ready((expected, actual))
+            np.testing.assert_array_equal(
+                np.asarray(actual).view(np.uint32),
+                np.asarray(expected).view(np.uint32),
+            )
+            cache_size = runtime_function._cache_size()
+            if logical_size == 30:
+                first_cache_size = cache_size
+            else:
+                assert cache_size == first_cache_size
+
+
+@pytest.mark.gpu
 def test_relion_fine_diff2_pairs_matches_production_tree_bitwise(
     monkeypatch,
     custom_cuda_lib,
@@ -2416,6 +2581,23 @@ def test_relion_runtime_flat_rows_fails_closed_without_gpu(monkeypatch):
             jnp.zeros((1, 1), dtype=jnp.complex64),
             jnp.zeros((1, 2), dtype=jnp.float32),
             jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            jnp.asarray(2, dtype=jnp.int32),
+        )
+
+
+def test_relion_runtime_pairs_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32.__wrapped__(
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.zeros((1, 1), dtype=jnp.int32),
+            jnp.zeros((1, 1), dtype=jnp.int32),
             jnp.asarray([0], dtype=jnp.int32),
             jnp.asarray(2, dtype=jnp.int32),
         )

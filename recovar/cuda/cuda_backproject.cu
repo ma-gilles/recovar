@@ -9856,6 +9856,96 @@ void relion_fine_diff2_fused_translate_rows_f32_kernel(
     }
 }
 
+__global__ __launch_bounds__(kRelionFineDiff2BlockSize)
+void relion_fine_diff2_fused_translate_pairs_f32_kernel(
+    const float2* reference,
+    const float2* image,
+    const float* translation_angles,
+    const float* weight,
+    const float* initial_diff2,
+    const int32_t* pair_reference_rows,
+    const int32_t* pair_translation_ids,
+    const int32_t* full_to_compact,
+    float* output,
+    int64_t batch_size,
+    int64_t reference_row_count,
+    int64_t pair_count,
+    int64_t translation_count,
+    int64_t compact_pixel_count,
+    int64_t full_pixel_capacity,
+    int current_size,
+    const int32_t* runtime_current_size)
+{
+    const int64_t hypothesis = static_cast<int64_t>(blockIdx.x);
+    const int64_t total_hypotheses = batch_size * pair_count;
+    if (hypothesis >= total_hypotheses) return;
+
+    const int64_t batch = hypothesis / pair_count;
+    const int64_t pair = hypothesis % pair_count;
+    const int32_t reference_row = pair_reference_rows[hypothesis];
+    const int32_t translation = pair_translation_ids[hypothesis];
+    if (reference_row < 0 || reference_row >= reference_row_count ||
+        translation < 0 || translation >= translation_count) {
+        if (threadIdx.x == 0)
+            output[hypothesis] = __int_as_float(0x7f800000);
+        return;
+    }
+
+    const int logical_current_size = runtime_current_size == nullptr
+        ? current_size
+        : runtime_current_size[0];
+    const int64_t logical_full_pixel_count =
+        static_cast<int64_t>(logical_current_size) *
+        (logical_current_size / 2 + 1);
+    if (logical_current_size <= 0 || (logical_current_size & 1) != 0 ||
+        logical_full_pixel_count > full_pixel_capacity) {
+        if (threadIdx.x == 0) output[hypothesis] = nanf("");
+        return;
+    }
+
+    __shared__ float lane_sums[kRelionFineDiff2BlockSize];
+    float lane_sum = 0.0f;
+    const int current_half_width = logical_current_size / 2 + 1;
+    const int pass_count = static_cast<int>(
+        (logical_full_pixel_count + kRelionFineDiff2BlockSize - 1) /
+        kRelionFineDiff2BlockSize);
+    for (int pass = 0; pass < pass_count; ++pass) {
+        const int64_t full_pixel =
+            static_cast<int64_t>(pass) * kRelionFineDiff2BlockSize +
+            threadIdx.x;
+        if (full_pixel < logical_full_pixel_count) {
+            const int32_t compact_pixel = full_to_compact[full_pixel];
+            if (compact_pixel >= 0 && compact_pixel < compact_pixel_count) {
+                const int x = static_cast<int>(full_pixel % current_half_width);
+                int y = static_cast<int>(full_pixel / current_half_width);
+                if (y > logical_current_size / 2) y -= logical_current_size;
+                const int64_t reference_index =
+                    static_cast<int64_t>(reference_row) * compact_pixel_count +
+                    compact_pixel;
+                const int64_t image_index =
+                    batch * compact_pixel_count + compact_pixel;
+                const float2 shifted = relion_score_translate_f32(
+                    image[image_index], x, y,
+                    translation_angles[2 * translation],
+                    translation_angles[2 * translation + 1]);
+                lane_sum = relion_fine_diff2_update_f32(
+                    reference[reference_index], shifted,
+                    weight[image_index], lane_sum);
+            }
+        }
+    }
+    lane_sums[threadIdx.x] = lane_sum;
+    __syncthreads();
+    for (int width = kRelionFineDiff2BlockSize / 2; width > 0; width /= 2) {
+        if (threadIdx.x < width)
+            lane_sums[threadIdx.x] = __fadd_rn(
+                lane_sums[threadIdx.x], lane_sums[threadIdx.x + width]);
+        __syncthreads();
+    }
+    if (threadIdx.x == 0)
+        output[hypothesis] = __fadd_rn(lane_sums[0], initial_diff2[batch]);
+}
+
 cudaError_t launch_relion_fine_diff2_rectangular_f32(
     cudaStream_t stream,
     const float2* reference,
@@ -10183,6 +10273,53 @@ cudaError_t launch_relion_fine_diff2_fused_translate_flat_rows_f32(
             batch_size,
             0,
             row_count,
+            translation_count,
+            compact_pixel_count,
+            full_pixel_count,
+            current_size,
+            runtime_current_size);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_relion_fine_diff2_fused_translate_pairs_f32(
+    cudaStream_t stream,
+    const float2* reference,
+    const float2* image,
+    const float* translation_angles,
+    const float* weight,
+    const float* initial_diff2,
+    const int32_t* pair_reference_rows,
+    const int32_t* pair_translation_ids,
+    const int32_t* full_to_compact,
+    float* output,
+    int64_t batch_size,
+    int64_t reference_row_count,
+    int64_t pair_count,
+    int64_t translation_count,
+    int64_t compact_pixel_count,
+    int64_t full_pixel_count,
+    int current_size,
+    const int32_t* runtime_current_size)
+{
+    const int64_t total_hypotheses = batch_size * pair_count;
+    if (total_hypotheses == 0) return cudaSuccess;
+    relion_fine_diff2_fused_translate_pairs_f32_kernel<<<
+        static_cast<unsigned int>(total_hypotheses),
+        kRelionFineDiff2BlockSize,
+        0,
+        stream>>>(
+            reference,
+            image,
+            translation_angles,
+            weight,
+            initial_diff2,
+            pair_reference_rows,
+            pair_translation_ids,
+            full_to_compact,
+            output,
+            batch_size,
+            reference_row_count,
+            pair_count,
             translation_count,
             compact_pixel_count,
             full_pixel_count,
@@ -13668,6 +13805,183 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionFineDiff2FusedTranslateRuntimeFlatRowsF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionFineDiff2FusedTranslatePairsF32Common(
+    cudaStream_t stream,
+    int64_t current_size,
+    const ffi::AnyBuffer* runtime_current_size,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer pair_reference_rows,
+    ffi::AnyBuffer pair_translation_ids,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (reference.element_type() != ffi::DataType::C64 ||
+        image.element_type() != ffi::DataType::C64)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslatePairsF32: reference/image must be C64");
+    if (translation_angles.element_type() != ffi::DataType::F32 ||
+        weight.element_type() != ffi::DataType::F32 ||
+        initial_diff2.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslatePairsF32: angles/weight/initial/output must be F32");
+    if (pair_reference_rows.element_type() != ffi::DataType::S32 ||
+        pair_translation_ids.element_type() != ffi::DataType::S32 ||
+        full_to_compact.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslatePairsF32: pair ids/lookup must be S32");
+    if (runtime_current_size != nullptr &&
+        (runtime_current_size->element_type() != ffi::DataType::S32 ||
+         runtime_current_size->dimensions().size() != 0))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateRuntimePairsF32: "
+            "logical_current_size must be an S32 scalar");
+    if (runtime_current_size == nullptr &&
+        (current_size <= 0 || current_size > std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslatePairsF32: invalid current_size");
+
+    const auto reference_dims = reference.dimensions();
+    const auto image_dims = image.dimensions();
+    const auto translation_dims = translation_angles.dimensions();
+    const auto weight_dims = weight.dimensions();
+    const auto initial_dims = initial_diff2.dimensions();
+    const auto pair_reference_dims = pair_reference_rows.dimensions();
+    const auto pair_translation_dims = pair_translation_ids.dimensions();
+    const auto lookup_dims = full_to_compact.dimensions();
+    const auto output_dims = output->dimensions();
+    const bool lookup_shape_valid = lookup_dims.size() == 1 && lookup_dims[0] > 0;
+    const int64_t expected_full_pixels = runtime_current_size == nullptr
+        ? current_size * (current_size / 2 + 1)
+        : (lookup_shape_valid ? lookup_dims[0] : 0);
+    if (reference_dims.size() != 2 || image_dims.size() != 2 ||
+        translation_dims.size() != 2 || translation_dims[1] != 2 ||
+        weight_dims.size() != 2 || initial_dims.size() != 1 ||
+        pair_reference_dims.size() != 2 || pair_translation_dims.size() != 2 ||
+        !lookup_shape_valid || output_dims.size() != 2 ||
+        reference_dims[0] <= 0 || reference_dims[1] <= 0 ||
+        image_dims[0] <= 0 || image_dims[1] != reference_dims[1] ||
+        translation_dims[0] <= 0 || weight_dims[0] != image_dims[0] ||
+        weight_dims[1] != reference_dims[1] ||
+        initial_dims[0] != image_dims[0] ||
+        pair_reference_dims[0] != image_dims[0] ||
+        pair_reference_dims[1] <= 0 ||
+        pair_translation_dims[0] != pair_reference_dims[0] ||
+        pair_translation_dims[1] != pair_reference_dims[1] ||
+        lookup_dims[0] != expected_full_pixels ||
+        output_dims[0] != pair_reference_dims[0] ||
+        output_dims[1] != pair_reference_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslatePairsF32: inconsistent operand shapes");
+
+    const int64_t total_hypotheses =
+        pair_reference_dims[0] * pair_reference_dims[1];
+    if (total_hypotheses > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslatePairsF32: hypothesis count exceeds CUDA grid");
+    cudaError_t err = launch_relion_fine_diff2_fused_translate_pairs_f32(
+        stream,
+        reinterpret_cast<const float2*>(reference.untyped_data()),
+        reinterpret_cast<const float2*>(image.untyped_data()),
+        static_cast<const float*>(translation_angles.untyped_data()),
+        static_cast<const float*>(weight.untyped_data()),
+        static_cast<const float*>(initial_diff2.untyped_data()),
+        static_cast<const int32_t*>(pair_reference_rows.untyped_data()),
+        static_cast<const int32_t*>(pair_translation_ids.untyped_data()),
+        static_cast<const int32_t*>(full_to_compact.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        image_dims[0],
+        reference_dims[0],
+        pair_reference_dims[1],
+        translation_dims[0],
+        reference_dims[1],
+        lookup_dims[0],
+        static_cast<int>(current_size),
+        runtime_current_size == nullptr
+            ? nullptr
+            : static_cast<const int32_t*>(runtime_current_size->untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+ffi::Error RelionFineDiff2FusedTranslatePairsF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer pair_reference_rows,
+    ffi::AnyBuffer pair_translation_ids,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslatePairsF32Common(
+        stream, current_size, nullptr, reference, image, translation_angles,
+        weight, initial_diff2, pair_reference_rows, pair_translation_ids,
+        full_to_compact, output);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2FusedTranslatePairsF32,
+    RelionFineDiff2FusedTranslatePairsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionFineDiff2FusedTranslateRuntimePairsF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer pair_reference_rows,
+    ffi::AnyBuffer pair_translation_ids,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer logical_current_size,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslatePairsF32Common(
+        stream, 0, &logical_current_size, reference, image,
+        translation_angles, weight, initial_diff2, pair_reference_rows,
+        pair_translation_ids, full_to_compact, output);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2FusedTranslateRuntimePairsF32,
+    RelionFineDiff2FusedTranslateRuntimePairsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
