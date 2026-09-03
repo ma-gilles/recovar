@@ -104,6 +104,9 @@ _COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV = (
 _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR"
 )
+_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE"
+)
 _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV = (
     "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT"
 )
@@ -733,6 +736,90 @@ def _coarse_gaussian_gemm_compact_posterior_enabled(
     raise ValueError(
         f"Unsupported {_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV}={token!r}",
     )
+
+
+def _coarse_gaussian_gemm_hybrid_image_batch_size_request() -> int | None:
+    """Return the explicit compact-hybrid image-batch override, if any."""
+
+    token = os.environ.get(_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV)
+    if token is None:
+        return None
+    token = token.strip()
+    try:
+        batch_size = int(token)
+    except ValueError as error:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV} must be a "
+            f"positive integer, got {token!r}",
+        ) from error
+    if batch_size <= 0:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV} must be a "
+            f"positive integer, got {token!r}",
+        )
+    return batch_size
+
+
+def _resolve_coarse_gaussian_gemm_hybrid_image_batch_size(
+    input_batch_size: int,
+    *,
+    requested_batch_size: int | None,
+    n_images: int,
+    certificate_chunk_rows: int,
+    n_translations: int,
+    hybrid_enabled: bool,
+    compact_posterior_enabled: bool,
+    score_float_budget: int | None = None,
+) -> int:
+    """Resolve a guarded shared image batch for the compact score hybrid.
+
+    InitialModel currently caps pass-1 batches against the full
+    ``B*R*T`` score cube.  The compact hybrid never materializes that cube: its
+    largest score-dependent tile is streamed over ``certificate_chunk_rows``.
+    An explicit override can therefore coalesce logical image batches while
+    retaining the mature shared matrix-matrix scorer and every per-image
+    arithmetic/reduction order.
+    """
+
+    input_size = operator.index(input_batch_size)
+    image_count = operator.index(n_images)
+    chunk_rows = operator.index(certificate_chunk_rows)
+    translation_count = operator.index(n_translations)
+    if min(input_size, image_count, chunk_rows, translation_count) <= 0:
+        raise ValueError("compact-hybrid image-batch dimensions must be positive")
+    if requested_batch_size is None:
+        return input_size
+    requested = operator.index(requested_batch_size)
+    prefix = f"{_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV} requires"
+    if not hybrid_enabled:
+        raise ValueError(f"{prefix} {_COARSE_GAUSSIAN_GEMM_HYBRID_ENV}=1")
+    if not compact_posterior_enabled:
+        raise ValueError(
+            f"{prefix} {_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV}=1",
+        )
+    if requested <= 0:
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV} must be a "
+            f"positive integer, got {requested!r}",
+        )
+    if score_float_budget is None:
+        from recovar.em.dense_single_volume.batch_planning import (
+            RELION_SCORE_TENSOR_FLOAT_BUDGET,
+        )
+
+        score_float_budget = RELION_SCORE_TENSOR_FLOAT_BUDGET
+    score_budget = operator.index(score_float_budget)
+    if score_budget <= 0:
+        raise ValueError("compact-hybrid score-float budget must be positive")
+
+    effective = min(requested, image_count)
+    streamed_candidate_count = effective * chunk_rows * translation_count
+    if streamed_candidate_count > score_budget:
+        raise MemoryError(
+            "compact-hybrid image-batch override exceeds the mature EM score "
+            f"tile budget: {streamed_candidate_count} > {score_budget} floats",
+        )
+    return effective
 
 
 def _validate_coarse_gaussian_gemm_compact_posterior_request(
@@ -4067,6 +4154,10 @@ def _compute_k_class_significance_batched(
     n_rot = int(rotations.shape[0])
     n_trans = int(translations.shape[0])
     n_images = int(experiment_dataset.n_units)
+    input_image_batch_size = operator.index(image_batch_size)
+    if input_image_batch_size <= 0:
+        raise ValueError("image_batch_size must be positive")
+    image_batch_size = input_image_batch_size
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
@@ -4337,6 +4428,9 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_compact_posterior_requested = (
         _coarse_gaussian_gemm_compact_posterior_enabled()
     )
+    coarse_gaussian_gemm_hybrid_image_batch_size_request = (
+        _coarse_gaussian_gemm_hybrid_image_batch_size_request()
+    )
     if coarse_gaussian_gemm_compact_posterior_requested:
         _validate_coarse_gaussian_gemm_compact_posterior_request(
             hybrid_enabled=coarse_gaussian_gemm_hybrid_requested,
@@ -4477,6 +4571,16 @@ def _compute_k_class_significance_batched(
             collect_significance=collect_significance,
             any_diagnostic_requested=coarse_gaussian_gemm_any_diagnostic,
         )
+    if coarse_gaussian_gemm_hybrid_image_batch_size_request is not None:
+        prefix = (
+            f"{_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV} requires"
+        )
+        if not coarse_gaussian_gemm_hybrid_requested:
+            raise ValueError(f"{prefix} {_COARSE_GAUSSIAN_GEMM_HYBRID_ENV}=1")
+        if not coarse_gaussian_gemm_compact_posterior_requested:
+            raise ValueError(
+                f"{prefix} {_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV}=1",
+            )
     if relion_f32_coarse_support_enabled:
         if use_float64_scoring:
             raise ValueError(
@@ -4615,6 +4719,41 @@ def _compute_k_class_significance_batched(
                         _coarse_gaussian_gemm_projection_cache_budget_bytes()
                     ),
                 )
+            )
+        if coarse_gaussian_gemm_hybrid_image_batch_size_request is not None:
+            image_batch_size = _resolve_coarse_gaussian_gemm_hybrid_image_batch_size(
+                input_image_batch_size,
+                requested_batch_size=(
+                    coarse_gaussian_gemm_hybrid_image_batch_size_request
+                ),
+                n_images=n_images,
+                certificate_chunk_rows=(
+                    1
+                    if coarse_gaussian_gemm_projection_cache_plan is None
+                    else coarse_gaussian_gemm_projection_cache_plan.chunk_rows
+                ),
+                n_translations=n_trans,
+                hybrid_enabled=coarse_gaussian_gemm_hybrid_requested,
+                compact_posterior_enabled=(
+                    coarse_gaussian_gemm_compact_posterior_requested
+                ),
+            )
+            if coarse_gaussian_gemm_projection_cache_plan is None:
+                raise RuntimeError(
+                    "compact-hybrid image-batch override is missing its "
+                    "projection-cache plan",
+                )
+            logger.warning(
+                "Opt-in shared compact-hybrid image batching enabled: "
+                "input=%d requested=%d effective=%d images=%d; each streamed "
+                "certificate tile retains at most %d candidate values",
+                input_image_batch_size,
+                coarse_gaussian_gemm_hybrid_image_batch_size_request,
+                image_batch_size,
+                n_images,
+                image_batch_size
+                * coarse_gaussian_gemm_projection_cache_plan.chunk_rows
+                * n_trans,
             )
         coarse_gaussian_projector_full_by_class = None
         coarse_gaussian_translation_angles = None
@@ -7290,6 +7429,18 @@ def _compute_k_class_significance_batched(
             "expanded_gemm_scores_published": False,
             "whole_batch_fail_closed_fallback": True,
             "batch_count": int(coarse_gaussian_gemm_hybrid_batch_count),
+            "input_image_batch_size": int(input_image_batch_size),
+            "requested_hybrid_image_batch_size": (
+                None
+                if coarse_gaussian_gemm_hybrid_image_batch_size_request is None
+                else int(coarse_gaussian_gemm_hybrid_image_batch_size_request)
+            ),
+            "effective_image_batch_size": int(image_batch_size),
+            "streamed_certificate_candidate_count_at_effective_batch": int(
+                image_batch_size
+                * coarse_gaussian_gemm_projection_cache_plan.chunk_rows
+                * n_trans
+            ),
             "selected_rescore_batch_count": int(
                 coarse_gaussian_gemm_hybrid_selected_batch_count,
             ),

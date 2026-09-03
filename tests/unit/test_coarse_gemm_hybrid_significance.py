@@ -73,6 +73,79 @@ def test_coarse_gaussian_gemm_compact_posterior_is_strict_default_off(
         significance._coarse_gaussian_gemm_compact_posterior_enabled()
 
 
+def test_compact_hybrid_image_batch_override_is_explicit_and_strict(monkeypatch):
+    variable = "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE"
+    monkeypatch.delenv(variable, raising=False)
+    assert significance._coarse_gaussian_gemm_hybrid_image_batch_size_request() is None
+
+    monkeypatch.setenv(variable, "200")
+    assert significance._coarse_gaussian_gemm_hybrid_image_batch_size_request() == 200
+
+    for invalid in ("", "0", "-1", "1.5", "many"):
+        monkeypatch.setenv(variable, invalid)
+        with pytest.raises(ValueError, match=variable):
+            significance._coarse_gaussian_gemm_hybrid_image_batch_size_request()
+
+
+def test_compact_hybrid_image_batch_override_coalesces_streamed_matmul_rows():
+    resolved = significance._resolve_coarse_gaussian_gemm_hybrid_image_batch_size(
+        110,
+        requested_batch_size=500,
+        n_images=200,
+        certificate_chunk_rows=4_608,
+        n_translations=49,
+        hybrid_enabled=True,
+        compact_posterior_enabled=True,
+        score_float_budget=200_000_000,
+    )
+
+    assert resolved == 200
+    assert resolved * 4_608 * 49 == 45_158_400
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"hybrid_enabled": False}, "GEMM_HYBRID"),
+        ({"compact_posterior_enabled": False}, "COMPACT_POSTERIOR"),
+    ],
+)
+def test_compact_hybrid_image_batch_override_requires_compact_hybrid(
+    updates,
+    message,
+):
+    values = dict(
+        requested_batch_size=8,
+        n_images=8,
+        certificate_chunk_rows=16,
+        n_translations=3,
+        hybrid_enabled=True,
+        compact_posterior_enabled=True,
+        score_float_budget=1_000,
+    )
+    values.update(updates)
+
+    with pytest.raises(ValueError, match=message):
+        significance._resolve_coarse_gaussian_gemm_hybrid_image_batch_size(
+            2,
+            **values,
+        )
+
+
+def test_compact_hybrid_image_batch_override_fails_closed_on_streamed_tile_budget():
+    with pytest.raises(MemoryError, match="240 > 239 floats"):
+        significance._resolve_coarse_gaussian_gemm_hybrid_image_batch_size(
+            2,
+            requested_batch_size=5,
+            n_images=5,
+            certificate_chunk_rows=16,
+            n_translations=3,
+            hybrid_enabled=True,
+            compact_posterior_enabled=True,
+            score_float_budget=239,
+        )
+
+
 @pytest.mark.parametrize(
     ("updates", "message"),
     [

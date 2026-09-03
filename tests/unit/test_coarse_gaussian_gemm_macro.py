@@ -1295,10 +1295,14 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     assert cache_stats["h100_observed_donated_insert_alias"] is None
 
 
-@pytest.mark.parametrize("compact_posterior", [False, True])
+@pytest.mark.parametrize(
+    ("compact_posterior", "hybrid_image_batch_size"),
+    [(False, None), (True, None), (True, 3)],
+)
 def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     monkeypatch,
     compact_posterior,
+    hybrid_image_batch_size,
 ):
     """Dense and compact hybrid loops must not republish or reprior scores."""
 
@@ -1333,6 +1337,15 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT": "1",
     }.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.delenv(
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE",
+        raising=False,
+    )
+    if hybrid_image_batch_size is not None:
+        monkeypatch.setenv(
+            "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE",
+            str(hybrid_image_batch_size),
+        )
 
     monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
@@ -1407,10 +1420,10 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         assert projection_cache.shape == (1, 16, 12)
         assert topology.compact_pixel_count == 12
         assert topology.translation_count == 2
-        assert actual_image_count in (1, 2)
+        assert actual_image_count in ((3,) if hybrid_image_batch_size else (1, 2))
         assert np.float32(class_log_prior) == np.float32(0.25)
         assert rotation_log_prior is None
-        assert translation_log_prior.shape == (2, 2)
+        assert translation_log_prior.shape == (batch_size, 2)
         assert certificate_chunk_rows == 16
         assert block_capacity == 64
         assert compact_posterior is compact_expected
@@ -1546,7 +1559,13 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     )
 
     assert projection_calls == [(16, False)]
-    assert len(helper_outputs) == len(posterior_inputs) == 2
+    expected_batch_count = 1 if hybrid_image_batch_size else 2
+    expected_physical_rows = (
+        int(hybrid_image_batch_size)
+        if hybrid_image_batch_size
+        else 2 * expected_batch_count
+    )
+    assert len(helper_outputs) == len(posterior_inputs) == expected_batch_count
     for helper_scores, posterior_scores in zip(helper_outputs, posterior_inputs):
         np.testing.assert_array_equal(posterior_scores, helper_scores)
     np.testing.assert_array_equal(result[1], np.ones(3, dtype=np.int32))
@@ -1561,16 +1580,32 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     assert hybrid_stats["positive_only_scan_role"] == (
         "correctness_oracle_not_runtime" if compact_posterior else None
     )
-    assert hybrid_stats["batch_count"] == 2
-    assert hybrid_stats["selected_rescore_batch_count"] == 2
+    assert hybrid_stats["batch_count"] == expected_batch_count
+    assert hybrid_stats["selected_rescore_batch_count"] == expected_batch_count
     assert hybrid_stats["fallback_batch_count"] == 0
     assert hybrid_stats["selected_rescore_image_count"] == 3
     assert hybrid_stats["selected_source16_block_count"] == 3
     assert hybrid_stats["selected_exact_candidate_fraction"] == 1.0
-    assert hybrid_stats["selected_score_table_capacity_candidates"] == 8192
-    assert hybrid_stats["dense_global_score_table_capacity_candidates"] == 128
-    assert hybrid_stats["selected_score_table_capacity_bytes_f32"] == 32768
-    assert hybrid_stats["dense_global_score_table_capacity_bytes_f32"] == 512
+    assert hybrid_stats["input_image_batch_size"] == 2
+    assert hybrid_stats["requested_hybrid_image_batch_size"] == hybrid_image_batch_size
+    assert hybrid_stats["effective_image_batch_size"] == (
+        hybrid_image_batch_size or 2
+    )
+    assert hybrid_stats[
+        "streamed_certificate_candidate_count_at_effective_batch"
+    ] == (hybrid_image_batch_size or 2) * 16 * 2
+    assert hybrid_stats["selected_score_table_capacity_candidates"] == (
+        expected_physical_rows * 64 * 16 * 2
+    )
+    assert hybrid_stats["dense_global_score_table_capacity_candidates"] == (
+        expected_physical_rows * 16 * 2
+    )
+    assert hybrid_stats["selected_score_table_capacity_bytes_f32"] == (
+        expected_physical_rows * 64 * 16 * 2 * 4
+    )
+    assert hybrid_stats["dense_global_score_table_capacity_bytes_f32"] == (
+        expected_physical_rows * 16 * 2 * 4
+    )
     assert hybrid_stats["selected_to_dense_score_table_capacity_fraction"] == 64.0
     assert hybrid_stats["fallback_reasons"] == {}
     support_audit = result[5]["coarse_significance_support_audit"]
