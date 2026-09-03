@@ -9481,7 +9481,8 @@ void relion_fine_diff2_fused_translate_rows_f32_kernel(
     if (batch < 0 || batch >= batch_size) {
         if (threadIdx.x < translation_in_chunk) {
             const int64_t translation = translation_start + threadIdx.x;
-            output[row * translation_count + translation] = CUDART_INF_F;
+            output[row * translation_count + translation] =
+                __int_as_float(0x7f800000);
         }
         return;
     }
