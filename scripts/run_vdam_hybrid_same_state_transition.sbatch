@@ -105,6 +105,9 @@ case "${CANDIDATE_MODE}" in
   exact_coarse_single_translate)
     expected_arm_order=single_translate_off_1,single_translate_on_1,single_translate_on_2,single_translate_off_2
     ;;
+  exact_compact_preprocess)
+    expected_arm_order=compact_preprocess_off_1,compact_preprocess_on_1,compact_preprocess_on_2,compact_preprocess_off_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -419,6 +422,80 @@ if [[ "${CANDIDATE_MODE}" == exact_coarse_single_translate ]]; then
      | .skip_generic_effective == true
        and .generic_assembly_count == 0
        and .exact_assembly_count == .batch_count
+       and .translate_score_call_count == .batch_count] | all
+  ' "${SCIENCE}/report.json" >/dev/null
+fi
+if [[ "${CANDIDATE_MODE}" == exact_compact_preprocess ]]; then
+  test "$(jq -r '.prewarm | keys | join(",")' "${SCIENCE}/report.json")" = \
+    preprocess_off,preprocess_on
+  test "$(jq -r '.same_state_contract.baseline_trajectory_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_exact_compact_preprocess_off
+  test "$(jq -r '.same_state_contract.candidate_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_exact_compact_preprocess_on
+  jq -e '
+    .compact_science_contract.hard_exact_contract_passed == true
+      and .exact_compact_preprocess_atomic_contract_passed == true
+      and .compact_science_contract.accumulator_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .compact_science_contract.final_state_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .same_state_contract.both_compared_backends_prewarmed == true
+      and .same_state_contract.all_optimized_profile_fail_closed == true
+      and .same_state_contract.exact_compact_preprocess_profile_fail_closed == true
+      and .exact_compact_preprocess_runtime_contract.preprocess_off.repeat_count == 2
+      and .exact_compact_preprocess_runtime_contract.preprocess_on.repeat_count == 2
+      and ([.exact_compact_preprocess_runtime_contract.preprocess_off.measurements[],
+            .exact_compact_preprocess_runtime_contract.preprocess_on.measurements[]]
+           | all(length == 2 and all(. > 0)))
+      and .exact_compact_preprocess_runtime_contract.isolated_environment_contract.all_other_environment_exact == true
+      and .exact_compact_preprocess_runtime_contract.isolated_environment_contract.profile_free_wall_timing == true
+      and .exact_compact_preprocess_runtime_contract.isolated_environment_contract.profile_counter_device_synchronization == false
+      and .prewarm.preprocess_off.exact_compact_preprocess.profile_exact == true
+      and .prewarm.preprocess_off.exact_compact_preprocess.expected_process_half_image_calls_per_batch == 2
+      and .prewarm.preprocess_on.exact_compact_preprocess.profile_exact == true
+      and .prewarm.preprocess_on.exact_compact_preprocess.expected_process_half_image_calls_per_batch == 1
+  ' "${SCIENCE}/report.json" >/dev/null
+  for arm in compact_preprocess_off_1 compact_preprocess_off_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == false
+        and .execution_contract.all_optimized.enabled == true
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.exact_compact_preprocess.enabled == false
+        and .execution_contract.exact_compact_preprocess.profile_enabled == false
+        and .execution_contract.exact_compact_preprocess.profile_checked == false
+        and .execution_contract.exact_compact_preprocess.profile_free_wall_timing == true
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in compact_preprocess_on_1 compact_preprocess_on_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == true
+        and .execution_contract.all_optimized.enabled == true
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.exact_compact_preprocess.enabled == true
+        and .execution_contract.exact_compact_preprocess.profile_enabled == false
+        and .execution_contract.exact_compact_preprocess.profile_checked == false
+        and .execution_contract.exact_compact_preprocess.profile_free_wall_timing == true
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  jq -e '
+    [.prewarm.preprocess_off.exact_compact_preprocess.profiles[]
+     | .exact_compact_preprocess_effective == false
+       and .generic_score_preprocess_count == .batch_count
+       and .exact_source_preprocess_count == .batch_count
+       and .generic_ctf_evaluation_count == .batch_count
+       and .generic_full_translation_count == .batch_count
+       and .translate_score_call_count == .batch_count] | all
+  ' "${SCIENCE}/report.json" >/dev/null
+  jq -e '
+    [.prewarm.preprocess_on.exact_compact_preprocess.profiles[]
+     | .exact_compact_preprocess_effective == true
+       and .generic_score_preprocess_count == 0
+       and .exact_source_preprocess_count == .batch_count
+       and .generic_ctf_evaluation_count == 0
+       and .generic_full_translation_count == 0
+       and .generic_fallback_policy == "raise_before_generic_score_fallback"
        and .translate_score_call_count == .batch_count] | all
   ' "${SCIENCE}/report.json" >/dev/null
 fi

@@ -150,6 +150,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         runner._arm_order("exact_coarse_single_translate")
         == runner.EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
     )
+    assert (
+        runner._arm_order("exact_compact_preprocess")
+        == runner.EXACT_COMPACT_PREPROCESS_ARM_ORDER
+    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -196,6 +200,14 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     single_translate_on = runner._candidate_environment(
         "exact_coarse_single_translate",
+        enabled=True,
+    )
+    compact_preprocess_off = runner._candidate_environment(
+        "exact_compact_preprocess",
+        enabled=False,
+    )
+    compact_preprocess_on = runner._candidate_environment(
+        "exact_compact_preprocess",
         enabled=True,
     )
 
@@ -288,6 +300,7 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert runner._candidate_uses_hybrid("compact_packed_deferred") is True
     assert runner._candidate_uses_hybrid("all_optimized") is True
     assert runner._candidate_uses_hybrid("exact_coarse_single_translate") is True
+    assert runner._candidate_uses_hybrid("exact_compact_preprocess") is True
     assert runner._candidate_uses_hybrid("packed_deferred") is False
     assert runner._candidate_uses_compact_posterior("compact_posterior") is True
     assert (
@@ -302,11 +315,19 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         )
         is True
     )
+    assert (
+        runner._candidate_uses_compact_posterior("exact_compact_preprocess")
+        is True
+    )
     assert runner._candidate_uses_packed_deferred("all_optimized") is True
     assert (
         runner._candidate_uses_packed_deferred(
             "exact_coarse_single_translate"
         )
+        is True
+    )
+    assert (
+        runner._candidate_uses_packed_deferred("exact_compact_preprocess")
         is True
     )
     assert runner._candidate_uses_packed_deferred("compact_posterior") is False
@@ -348,6 +369,28 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert runner._arm_candidate_enabled(
         "single_translate_on_1",
         "exact_coarse_single_translate",
+    )
+    compact_preprocess_environment = runner.EXACT_COMPACT_PREPROCESS_ENVIRONMENT
+    assert compact_preprocess_off[runner.EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] == "1"
+    assert compact_preprocess_on[runner.EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] == "1"
+    assert compact_preprocess_off[compact_preprocess_environment] == "0"
+    assert compact_preprocess_on[compact_preprocess_environment] == "1"
+    assert {
+        key: value
+        for key, value in compact_preprocess_off.items()
+        if key != compact_preprocess_environment
+    } == {
+        key: value
+        for key, value in compact_preprocess_on.items()
+        if key != compact_preprocess_environment
+    }
+    assert not runner._arm_candidate_enabled(
+        "compact_preprocess_off_1",
+        "exact_compact_preprocess",
+    )
+    assert runner._arm_candidate_enabled(
+        "compact_preprocess_on_1",
+        "exact_compact_preprocess",
     )
 
 
@@ -760,6 +803,80 @@ def test_exact_coarse_single_translate_profile_fails_closed() -> None:
         )
 
 
+def _exact_compact_preprocess_meta(*, enabled: bool) -> dict:
+    meta = _all_optimized_estep_meta(enabled=True)
+    batch_count = meta["halfset_0_profile_summary"][
+        "coarse_gaussian_gemm_hybrid"
+    ]["batch_count"]
+    generic_count = 0 if enabled else batch_count
+    meta["halfset_0_profile_summary"]["exact_coarse_operand_assembly"] = {
+        "skip_generic_default_enabled": False,
+        "skip_generic_requested": True,
+        "skip_generic_effective": True,
+        "exact_coarse_operands_effective": True,
+        "exact_compact_preprocess_default_enabled": False,
+        "exact_compact_preprocess_requested": enabled,
+        "exact_compact_preprocess_effective": enabled,
+        "generic_score_preprocess_count": generic_count,
+        "exact_source_preprocess_count": batch_count,
+        "generic_ctf_evaluation_count": generic_count,
+        "generic_full_translation_count": generic_count,
+        "generic_assembly_count": 0,
+        "exact_assembly_count": batch_count,
+        "translate_score_call_site_count": batch_count,
+        "translate_score_call_count": batch_count,
+        "downstream_operand_source": "exact_source_star",
+        "diagnostic_operand_source": "exact_source_star",
+        "raw_score_capture_changed": False,
+        "generic_fallback_policy": (
+            "raise_before_generic_score_fallback" if enabled else "available"
+        ),
+        "skipped_generic_outputs": [
+            "coarse_gaussian_shifted_corrected",
+            "coarse_gaussian_pixel_weight",
+            "coarse_gaussian_unshifted_corrected",
+        ],
+    }
+    return meta
+
+
+@pytest.mark.parametrize(
+    ("enabled", "expected_generic", "expected_calls"),
+    [(False, 2, 2), (True, 0, 1)],
+)
+def test_exact_compact_preprocess_profile_proves_removed_duplicate_work(
+    enabled: bool,
+    expected_generic: int,
+    expected_calls: int,
+) -> None:
+    contract = runner._validate_exact_compact_preprocess_profiles(
+        _exact_compact_preprocess_meta(enabled=enabled),
+        enabled=enabled,
+        label="arm",
+    )
+
+    assert contract["profile_exact"] is True
+    assert contract["total_batch_count"] == 2
+    assert contract["total_generic_score_preprocess_count"] == expected_generic
+    assert contract["total_exact_source_preprocess_count"] == 2
+    assert contract["expected_process_half_image_calls_per_batch"] == expected_calls
+    assert contract["profile_counter_device_synchronization"] is False
+
+
+def test_exact_compact_preprocess_profile_fails_closed() -> None:
+    meta = _exact_compact_preprocess_meta(enabled=True)
+    meta["halfset_0_profile_summary"]["exact_coarse_operand_assembly"][
+        "generic_full_translation_count"
+    ] = 1
+
+    with pytest.raises(RuntimeError, match="preprocessing mismatch"):
+        runner._validate_exact_compact_preprocess_profiles(
+            meta,
+            enabled=True,
+            label="arm",
+        )
+
+
 @pytest.mark.parametrize(
     "broken_field",
     [
@@ -1102,6 +1219,36 @@ def test_hybrid_image_batch_runtime_contract_compares_four_warm_arms_each() -> N
     assert contract["batch200_vs_batch110"]["pass1_time_s"]["speedup"] > 1.0
 
 
+def test_exact_compact_preprocess_runtime_contract_is_balanced_and_isolated() -> None:
+    arms = {}
+    for index, label in enumerate(runner.EXACT_COMPACT_PREPROCESS_ARM_ORDER):
+        enabled = "_on_" in label
+        requested = runner._candidate_environment(
+            "exact_compact_preprocess",
+            enabled=enabled,
+        )
+        arms[label] = {
+            "wall_s": (0.8 if enabled else 1.0) + index * 0.001,
+            "performance_summary": {
+                "pass1_time_s": (0.4 if enabled else 0.5) + index * 0.001,
+                "pass2_time_s": 0.3 + index * 0.001,
+            },
+            "execution_contract": {"requested_environment": requested},
+        }
+
+    contract = runner._exact_compact_preprocess_runtime_contract(arms)
+
+    assert contract["preprocess_off"]["repeat_count"] == 2
+    assert contract["preprocess_on"]["repeat_count"] == 2
+    assert contract["preprocess_on_vs_preprocess_off"]["wall_s"]["speedup"] > 1.0
+    assert contract["isolated_environment_contract"] == {
+        "only_difference": runner.EXACT_COMPACT_PREPROCESS_ENVIRONMENT,
+        "all_other_environment_exact": True,
+        "profile_free_wall_timing": True,
+        "profile_counter_device_synchronization": False,
+    }
+
+
 def test_arm_performance_summary_exposes_compact_table_geometry() -> None:
     profile = _compact_profile()
     summary = runner._arm_performance_summary(
@@ -1309,9 +1456,19 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         "single_translate_on_2,single_translate_off_2"
         in sbatch
     )
+    assert (
+        "compact_preprocess_off_1,compact_preprocess_on_1,"
+        "compact_preprocess_on_2,compact_preprocess_off_2"
+        in sbatch
+    )
     assert "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE" in source
+    assert "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS" in source
     assert "profile_free_wall_timing" in sbatch
     assert "translate_score_call_count" in sbatch
+    assert "generic_score_preprocess_count" in sbatch
+    assert "exact_source_preprocess_count" in sbatch
+    assert "generic_full_translation_count" in sbatch
+    assert "raise_before_generic_score_fallback" in sbatch
     assert "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR=0" in sbatch
     assert ".compact_effective == true" in sbatch
     assert ".packed_deferred_effective == true" in sbatch

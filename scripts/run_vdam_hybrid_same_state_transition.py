@@ -132,6 +132,12 @@ EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER = (
     "single_translate_on_2",
     "single_translate_off_2",
 )
+EXACT_COMPACT_PREPROCESS_ARM_ORDER = (
+    "compact_preprocess_off_1",
+    "compact_preprocess_on_1",
+    "compact_preprocess_on_2",
+    "compact_preprocess_off_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
@@ -154,6 +160,9 @@ EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT = (
 EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT = (
     "RECOVAR_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE"
 )
+EXACT_COMPACT_PREPROCESS_ENVIRONMENT = (
+    "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS"
+)
 HYBRID_IMAGE_BATCH_CONTROL_REQUEST = 110
 HYBRID_IMAGE_BATCH_CANDIDATE_REQUEST = 500
 HYBRID_IMAGE_BATCH_CONTROL_EFFECTIVE = 110
@@ -175,6 +184,7 @@ CANDIDATE_MODES = (
     "compact_packed_deferred",
     "all_optimized",
     "exact_coarse_single_translate",
+    "exact_compact_preprocess",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -247,6 +257,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return ALL_OPTIMIZED_ARM_ORDER
     if candidate_mode == "exact_coarse_single_translate":
         return EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
+    if candidate_mode == "exact_compact_preprocess":
+        return EXACT_COMPACT_PREPROCESS_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -260,7 +272,10 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         PACKED_DEFERRED_ENVIRONMENT: "0",
         PACKED_FINAL_NOISE_ENVIRONMENT: "0",
     }
-    if candidate_mode == "exact_coarse_single_translate":
+    if candidate_mode in {
+        "exact_coarse_single_translate",
+        "exact_compact_preprocess",
+    }:
         values.update({name: "1" for name in HYBRID_ENVIRONMENT})
         values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
         values[FLAT_ROW_ENVIRONMENT] = "1"
@@ -268,9 +283,15 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         values[PACKED_PROJECTION_ENVIRONMENT] = "1"
         values[PACKED_DEFERRED_ENVIRONMENT] = "1"
         values[PACKED_FINAL_NOISE_ENVIRONMENT] = "1"
-        values[EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] = (
-            "1" if enabled else "0"
-        )
+        values[EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] = "1"
+        if candidate_mode == "exact_coarse_single_translate":
+            values[EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT] = (
+                "1" if enabled else "0"
+            )
+        else:
+            values[EXACT_COMPACT_PREPROCESS_ENVIRONMENT] = (
+                "1" if enabled else "0"
+            )
         return values
     if candidate_mode == "stable_shapes":
         values.update({name: "1" for name in HYBRID_ENVIRONMENT})
@@ -339,6 +360,7 @@ def _candidate_uses_hybrid(candidate_mode: str) -> bool:
         "compact_packed_deferred",
         "all_optimized",
         "exact_coarse_single_translate",
+        "exact_compact_preprocess",
     }
 
 
@@ -348,6 +370,7 @@ def _candidate_uses_compact_posterior(candidate_mode: str) -> bool:
         "compact_packed_deferred",
         "all_optimized",
         "exact_coarse_single_translate",
+        "exact_compact_preprocess",
     }
 
 
@@ -356,6 +379,7 @@ def _candidate_uses_packed_deferred(candidate_mode: str) -> bool:
         "compact_packed_deferred",
         "all_optimized",
         "exact_coarse_single_translate",
+        "exact_compact_preprocess",
     }
 
 
@@ -364,8 +388,11 @@ def _arm_candidate_enabled(label: str, candidate_mode: str) -> bool:
         return label.startswith("stable_on_")
     if candidate_mode == "stable_flat_capacity":
         return label.startswith("stable_flat_on_")
-    if candidate_mode == "exact_coarse_single_translate":
-        return label.startswith("single_translate_on_")
+    if candidate_mode in {
+        "exact_coarse_single_translate",
+        "exact_compact_preprocess",
+    }:
+        return "_on_" in label
     return not label.startswith("direct")
 
 
@@ -703,6 +730,99 @@ def _validate_exact_coarse_single_translate_profiles(
     }
 
 
+def _validate_exact_compact_preprocess_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+) -> dict[str, Any]:
+    """Prove exact compact scoring removed only the overwritten preprocess."""
+
+    profiles: dict[str, Any] = {}
+    total_batch_count = 0
+    total_generic_score_preprocess_count = 0
+    total_exact_source_preprocess_count = 0
+    skipped_outputs = [
+        "coarse_gaussian_shifted_corrected",
+        "coarse_gaussian_pixel_weight",
+        "coarse_gaussian_unshifted_corrected",
+    ]
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict):
+            continue
+        profile = value.get("exact_coarse_operand_assembly")
+        if profile is None:
+            continue
+        if not isinstance(profile, dict):
+            raise RuntimeError(
+                f"{label} profile {key} exact-coarse assembly is not a mapping",
+            )
+        hybrid = value.get("coarse_gaussian_gemm_hybrid")
+        if not isinstance(hybrid, dict) or not isinstance(
+            hybrid.get("batch_count"),
+            int,
+        ):
+            raise RuntimeError(
+                f"{label} profile {key} omitted the matching hybrid batch count",
+            )
+        batch_count = int(hybrid["batch_count"])
+        generic_count = 0 if enabled else batch_count
+        expected = {
+            "skip_generic_default_enabled": False,
+            "skip_generic_requested": True,
+            "skip_generic_effective": True,
+            "exact_coarse_operands_effective": True,
+            "exact_compact_preprocess_default_enabled": False,
+            "exact_compact_preprocess_requested": bool(enabled),
+            "exact_compact_preprocess_effective": bool(enabled),
+            "generic_score_preprocess_count": generic_count,
+            "exact_source_preprocess_count": batch_count,
+            "generic_ctf_evaluation_count": generic_count,
+            "generic_full_translation_count": generic_count,
+            "generic_assembly_count": 0,
+            "exact_assembly_count": batch_count,
+            "translate_score_call_site_count": batch_count,
+            "translate_score_call_count": batch_count,
+            "downstream_operand_source": "exact_source_star",
+            "diagnostic_operand_source": "exact_source_star",
+            "raw_score_capture_changed": False,
+            "generic_fallback_policy": (
+                "raise_before_generic_score_fallback" if enabled else "available"
+            ),
+            "skipped_generic_outputs": skipped_outputs,
+        }
+        observed = {field: _json_ready(profile.get(field)) for field in expected}
+        if observed != expected:
+            raise RuntimeError(
+                f"{label} profile {key} exact compact preprocessing mismatch: "
+                f"observed={observed!r}, expected={expected!r}",
+            )
+        profiles[key] = {"batch_count": batch_count, **observed}
+        total_batch_count += batch_count
+        total_generic_score_preprocess_count += generic_count
+        total_exact_source_preprocess_count += batch_count
+    if not profiles:
+        raise RuntimeError(
+            f"{label} did not publish an exact compact preprocessing profile",
+        )
+    return {
+        "enabled": bool(enabled),
+        "profile_exact": True,
+        "profile_count": len(profiles),
+        "total_batch_count": total_batch_count,
+        "total_generic_score_preprocess_count": (
+            total_generic_score_preprocess_count
+        ),
+        "total_exact_source_preprocess_count": total_exact_source_preprocess_count,
+        "expected_process_half_image_calls_per_batch": 1 if enabled else 2,
+        "wall_timing_policy": (
+            "outer transition wall; profile counters add no device synchronization"
+        ),
+        "profile_counter_device_synchronization": False,
+        "profiles": profiles,
+    }
+
+
 def _validate_hybrid_image_batch_profiles(
     estep_meta: dict[str, Any],
     *,
@@ -922,7 +1042,12 @@ def _validate_arm_execution_contract(
     profiles = _coarse_hybrid_profiles(estep_meta)
     contract["hybrid_profiles"] = _json_ready(profiles)
     expected_compact = bool(
-        candidate_enabled or candidate_mode == "exact_coarse_single_translate"
+        candidate_enabled
+        or candidate_mode
+        in {
+            "exact_coarse_single_translate",
+            "exact_compact_preprocess",
+        }
     )
     expected_token = "1" if expected_compact else "0"
     if requested_environment[COMPACT_POSTERIOR_ENVIRONMENT] != expected_token:
@@ -1514,12 +1639,17 @@ def _run_transition_arm(
         "stable_shapes",
         "all_optimized",
         "exact_coarse_single_translate",
+        "exact_compact_preprocess",
     }:
         opts = dataclasses.replace(
             opts,
             stable_fourier_window_shapes=bool(
                 candidate_enabled
-                or candidate_mode == "exact_coarse_single_translate"
+                or candidate_mode
+                in {
+                    "exact_coarse_single_translate",
+                    "exact_compact_preprocess",
+                }
             ),
         )
     dataset = checkpoint["dataset"]
@@ -1561,15 +1691,22 @@ def _run_transition_arm(
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(
         int(dataset.n_images)
     )
-    resolved_backend_mode = (
-        (
+    if backend_mode is not None:
+        resolved_backend_mode = backend_mode
+    elif candidate_mode == "exact_coarse_single_translate":
+        resolved_backend_mode = (
             "all_optimized_exact_coarse_single_translate_on"
             if candidate_enabled
             else "all_optimized_exact_coarse_single_translate_off"
         )
-        if candidate_mode == "exact_coarse_single_translate"
-        else candidate_mode if candidate_enabled else "direct"
-    ) if backend_mode is None else backend_mode
+    elif candidate_mode == "exact_compact_preprocess":
+        resolved_backend_mode = (
+            "all_optimized_exact_compact_preprocess_on"
+            if candidate_enabled
+            else "all_optimized_exact_compact_preprocess_off"
+        )
+    else:
+        resolved_backend_mode = candidate_mode if candidate_enabled else "direct"
     if backend_mode is None:
         requested_environment = _candidate_environment(
             candidate_mode,
@@ -1586,7 +1723,10 @@ def _run_transition_arm(
         requested_environment[HYBRID_IMAGE_BATCH_ENVIRONMENT] = str(
             hybrid_image_batch_request,
         )
-    if candidate_mode == "exact_coarse_single_translate":
+    if candidate_mode in {
+        "exact_coarse_single_translate",
+        "exact_compact_preprocess",
+    }:
         requested_environment[EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT] = (
             "1" if exact_coarse_profile_enabled else "0"
         )
@@ -1666,6 +1806,7 @@ def _run_transition_arm(
     if candidate_mode in {
         "all_optimized",
         "exact_coarse_single_translate",
+        "exact_compact_preprocess",
     }:
         all_optimized_enabled = bool(
             candidate_enabled
@@ -1709,6 +1850,30 @@ def _run_transition_arm(
                 "profile_checked": False,
                 "profile_free_wall_timing": True,
             }
+    if candidate_mode == "exact_compact_preprocess":
+        if exact_coarse_profile_enabled:
+            execution_contract["exact_compact_preprocess"] = (
+                _validate_exact_compact_preprocess_profiles(
+                    captured["estep_meta"],
+                    enabled=candidate_enabled,
+                    label=label,
+                )
+            )
+        else:
+            if any(
+                isinstance(value, dict)
+                and "exact_coarse_operand_assembly" in value
+                for value in captured["estep_meta"].values()
+            ):
+                raise RuntimeError(
+                    f"{label} profile-off timing arm published call-count metadata",
+                )
+            execution_contract["exact_compact_preprocess"] = {
+                "enabled": bool(candidate_enabled),
+                "profile_enabled": False,
+                "profile_checked": False,
+                "profile_free_wall_timing": True,
+            }
     if hybrid_image_batch_request is not None:
         execution_contract["hybrid_image_batch"] = (
             _validate_hybrid_image_batch_profiles(
@@ -1738,6 +1903,7 @@ def _run_transition_arm(
                         "stable_shapes",
                         "stable_flat_capacity",
                         "exact_coarse_single_translate",
+                        "exact_compact_preprocess",
                     }
                 )
             )
@@ -2017,6 +2183,79 @@ def _exact_coarse_single_translate_runtime_contract(
     result["skip_on_vs_skip_off"] = changes
     result["isolated_environment_contract"] = {
         "only_difference": EXACT_COARSE_SINGLE_TRANSLATE_ENVIRONMENT,
+        "all_other_environment_exact": True,
+        "profile_free_wall_timing": True,
+        "profile_counter_device_synchronization": False,
+    }
+    return result
+
+
+def _exact_compact_preprocess_runtime_contract(
+    arms: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare warmed exact preprocessing ABBA timings at one frozen state."""
+
+    result: dict[str, Any] = {}
+    environments: dict[str, dict[str, str]] = {}
+    for backend, token in (
+        ("preprocess_off", "_off_"),
+        ("preprocess_on", "_on_"),
+    ):
+        labels = tuple(
+            label
+            for label in EXACT_COMPACT_PREPROCESS_ARM_ORDER
+            if token in label
+        )
+        measurements: dict[str, list[float]] = {}
+        for metric in ("wall_s", "pass1_time_s", "pass2_time_s"):
+            values = []
+            for label in labels:
+                source = (
+                    arms[label]
+                    if metric == "wall_s"
+                    else arms[label]["performance_summary"]
+                )
+                if metric not in source:
+                    raise RuntimeError(f"{label} omitted runtime metric {metric}")
+                values.append(float(source[metric]))
+            measurements[metric] = values
+        result[backend] = {
+            "labels": list(labels),
+            "repeat_count": len(labels),
+            "measurements": measurements,
+            "median": {
+                metric: float(np.median(values))
+                for metric, values in measurements.items()
+            },
+        }
+        for label in labels:
+            requested = dict(
+                arms[label]["execution_contract"]["requested_environment"],
+            )
+            requested.pop(EXACT_COMPACT_PREPROCESS_ENVIRONMENT)
+            environments[label] = requested
+
+    distinct_environments = {
+        json.dumps(environment, sort_keys=True, separators=(",", ":"))
+        for environment in environments.values()
+    }
+    if len(distinct_environments) != 1:
+        raise RuntimeError(
+            "exact compact preprocessing arms differ outside the isolated flag",
+        )
+    changes = {}
+    for metric in ("wall_s", "pass1_time_s", "pass2_time_s"):
+        control = result["preprocess_off"]["median"][metric]
+        candidate = result["preprocess_on"]["median"][metric]
+        changes[metric] = {
+            "preprocess_off_median": control,
+            "preprocess_on_median": candidate,
+            "fractional_change": candidate / control - 1.0,
+            "speedup": control / candidate,
+        }
+    result["preprocess_on_vs_preprocess_off"] = changes
+    result["isolated_environment_contract"] = {
+        "only_difference": EXACT_COMPACT_PREPROCESS_ENVIRONMENT,
         "all_other_environment_exact": True,
         "profile_free_wall_timing": True,
         "profile_counter_device_synchronization": False,
@@ -2346,6 +2585,11 @@ def main(argv: list[str] | None = None) -> int:
             f"{EXACT_COARSE_ASSEMBLY_PROFILE_ENVIRONMENT} must be absent from "
             "the outer environment; the same-state harness scopes it per arm",
         )
+    if EXACT_COMPACT_PREPROCESS_ENVIRONMENT in os.environ:
+        raise ValueError(
+            f"{EXACT_COMPACT_PREPROCESS_ENVIRONMENT} must be absent from the "
+            "outer environment; the same-state harness scopes it per arm",
+        )
     fixture_dir = args.fixture_dir.resolve(strict=True)
     acceptance_path = args.acceptance_config.resolve(strict=True)
     output_root = args.output_root.resolve()
@@ -2502,6 +2746,47 @@ def main(argv: list[str] | None = None) -> int:
             (label, None)
             for label in EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
         )
+    elif args.candidate_mode == "exact_compact_preprocess":
+        for backend, enabled in (
+            ("preprocess_off", False),
+            ("preprocess_on", True),
+        ):
+            warm = _run_transition_arm(
+                checkpoint,
+                label=f"prewarm_{backend}",
+                candidate_mode=args.candidate_mode,
+                candidate_enabled=enabled,
+                checkpoint_iteration=args.checkpoint_iteration,
+                exact_coarse_profile_enabled=True,
+            )
+            for key, expected in expected_manifests.items():
+                if warm[key]["manifest_sha256"] != expected:
+                    raise RuntimeError(
+                        f"prewarm_{backend} did not start from the exact shared {key}",
+                    )
+            prewarm[backend] = {
+                "label": warm["label"],
+                "backend_mode": warm["backend_mode"],
+                "wall_s": warm["wall_s"],
+                "exact_compact_preprocess": warm["execution_contract"][
+                    "exact_compact_preprocess"
+                ],
+                "initial_state_manifest_sha256": warm[
+                    "initial_state_manifest"
+                ]["manifest_sha256"],
+                "initial_particle_state_manifest_sha256": warm[
+                    "initial_particle_state_manifest"
+                ]["manifest_sha256"],
+                "initial_sampling_state_manifest_sha256": warm[
+                    "initial_sampling_state_manifest"
+                ]["manifest_sha256"],
+            }
+            del warm
+            gc.collect()
+        arm_specs = tuple(
+            (label, None)
+            for label in EXACT_COMPACT_PREPROCESS_ARM_ORDER
+        )
     else:
         legacy_arm_order = _arm_order(args.candidate_mode)
         arm_specs = tuple(
@@ -2587,6 +2872,23 @@ def main(argv: list[str] | None = None) -> int:
             ]
         )
         if args.candidate_mode == "exact_coarse_single_translate"
+        else None
+    )
+    exact_compact_preprocess_runtime_contract = (
+        _exact_compact_preprocess_runtime_contract(arms)
+        if args.candidate_mode == "exact_compact_preprocess"
+        else None
+    )
+    exact_compact_preprocess_atomic_contract_passed = (
+        bool(
+            compact_science_contract["accumulator_repeat_envelope"][
+                "all_cross_within_observed_repeat_envelope"
+            ]
+            and compact_science_contract["final_state_repeat_envelope"][
+                "all_cross_within_observed_repeat_envelope"
+            ]
+        )
+        if args.candidate_mode == "exact_compact_preprocess"
         else None
     )
     arm_dir = output_root / "arms"
@@ -2682,6 +2984,12 @@ def main(argv: list[str] | None = None) -> int:
         "exact_coarse_single_translate_atomic_contract_passed": (
             exact_coarse_single_translate_atomic_contract_passed
         ),
+        "exact_compact_preprocess_runtime_contract": (
+            exact_compact_preprocess_runtime_contract
+        ),
+        "exact_compact_preprocess_atomic_contract_passed": (
+            exact_compact_preprocess_atomic_contract_passed
+        ),
         "hybrid_image_batch_science_contract": (
             hybrid_image_batch_science_contract
         ),
@@ -2699,6 +3007,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.mirrored_hybrid_image_batch_panels
                 else "all_optimized_exact_coarse_single_translate_off"
                 if args.candidate_mode == "exact_coarse_single_translate"
+                else "all_optimized_exact_compact_preprocess_off"
+                if args.candidate_mode == "exact_compact_preprocess"
                 else (
                     "hybrid_packed_deferred_stable_fourier_off"
                     if args.candidate_mode == "stable_shapes"
@@ -2714,6 +3024,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.mirrored_hybrid_image_batch_panels
                 else "all_optimized_exact_coarse_single_translate_on"
                 if args.candidate_mode == "exact_coarse_single_translate"
+                else "all_optimized_exact_compact_preprocess_on"
+                if args.candidate_mode == "exact_compact_preprocess"
                 else (
                     "hybrid_packed_deferred_stable_fourier_on"
                     if args.candidate_mode == "stable_shapes"
@@ -2736,7 +3048,11 @@ def main(argv: list[str] | None = None) -> int:
             "both_compared_backends_prewarmed": bool(
                 args.mirrored_incremental_panels
                 or args.mirrored_hybrid_image_batch_panels
-                or args.candidate_mode == "exact_coarse_single_translate"
+                or args.candidate_mode
+                in {
+                    "exact_coarse_single_translate",
+                    "exact_compact_preprocess",
+                }
             ),
             "both_incremental_backends_prewarmed": bool(
                 args.mirrored_incremental_panels,
@@ -2752,9 +3068,16 @@ def main(argv: list[str] | None = None) -> int:
                 args.candidate_mode,
             ),
             "all_optimized_profile_fail_closed": args.candidate_mode
-            in {"all_optimized", "exact_coarse_single_translate"},
+            in {
+                "all_optimized",
+                "exact_coarse_single_translate",
+                "exact_compact_preprocess",
+            },
             "exact_coarse_single_translate_profile_fail_closed": (
                 args.candidate_mode == "exact_coarse_single_translate"
+            ),
+            "exact_compact_preprocess_profile_fail_closed": (
+                args.candidate_mode == "exact_compact_preprocess"
             ),
             "hybrid_image_batch_profile_fail_closed": bool(
                 args.mirrored_hybrid_image_batch_panels,
@@ -2790,6 +3113,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.candidate_mode == "exact_coarse_single_translate" and not (
         compact_science_contract["hard_exact_contract_passed"]
         and exact_coarse_single_translate_atomic_contract_passed
+    ):
+        return 1
+    if args.candidate_mode == "exact_compact_preprocess" and not (
+        compact_science_contract["hard_exact_contract_passed"]
+        and exact_compact_preprocess_atomic_contract_passed
     ):
         return 1
     return 0
