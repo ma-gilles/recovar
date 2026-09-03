@@ -122,6 +122,23 @@ the metrics JSON and manifest SHA-256 values are
 and
 `bdb19f45bbf1ce1cea3382855184893fb509ee196315e23fa34e73c9e1f8229e`.
 
+The iteration-16 masked-support replication uses the same sealed publication
+mask and phase-randomization policy as the earlier checkpoints. RECOVAR and
+RELION first remain below corrected-masked FSC 0.143 at shells 280
+(`2.251428 A`) and 277 (`2.275812 A`), respectively. Over their common band,
+shells 1--276, masked normalized AUC differs by `0.0008457` and curve RMSE is
+`0.0053812`. The raw curves extracted from the same postprocess STAR files
+both reproduce the shell-281 crossing. This is supporting-only evidence and
+does not replace or modify the direct unmasked pass.
+
+CPU job `13381344` completed with exact requested/allocated
+`cpu=4,mem=64G,node=1,billing=16`. Its verified record is at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_masked_fsc_20260903T101521Z`;
+the comparison JSON and manifest SHA-256 values are
+`f72404609a235f0cb2a09df9d0bae3dc4e23d87d907944892e7ea9e9ec8abaa7`
+and
+`3e69ade91053e305665cead63abcb6ac28d6af41a6154f056d560c036357cf3c`.
+
 ## Evidence and reproduction
 
 The complete immutable, disposable audit root is

@@ -219,6 +219,20 @@ and
 The complete record is retained at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_direct_fsc_20260903T100833Z`.
 
+The corresponding iteration-16 masked-support check uses the exact sealed
+publication mask and phase-randomization policy. Its corrected-masked curves
+first remain below FSC 0.143 at shell 280 for RECOVAR (`2.251428 A`) and shell
+277 for RELION (`2.275812 A`); over common shells 1--276, masked AUC differs
+by `0.0008457` and RMSE is `0.0053812`. The raw curves reproduce the direct
+shell-281 crossing. Masked FSC remains supporting only. CPU job `13381344`
+used exact `ReqTRES=AllocTRES=cpu=4,mem=64G,node=1,billing=16`; its comparison
+JSON and verified manifest SHA-256 are
+`f72404609a235f0cb2a09df9d0bae3dc4e23d87d907944892e7ea9e9ec8abaa7`
+and
+`3e69ade91053e305665cead63abcb6ac28d6af41a6154f056d560c036357cf3c`.
+The complete record is retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_masked_fsc_20260903T101521Z`.
+
 At corrected full-particle checkpoint `it006` (numbered iteration 7), the
 release, compact, and no-padding trajectories retain identical saved FSC
 crossings (0.5 at shell 150; 0.143 at shell 183). Corrected-versus-release map

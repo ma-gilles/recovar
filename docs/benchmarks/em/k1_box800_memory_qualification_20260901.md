@@ -640,6 +640,26 @@ has result JSON, curves, report, accounting, and verified manifest SHA-256
 and
 `bdb19f45bbf1ce1cea3382855184893fb509ee196315e23fa34e73c9e1f8229e`.
 
+The matched iteration-16 supporting postprocess also completed. With the exact
+sealed mask, phase randomization at FSC 0.8, and seed 42, the corrected-masked
+curves first remain below 0.143 at shell 280 for RECOVAR (`2.251428 A`) and
+shell 277 for RELION (`2.275812 A`). Over their common resolved band, shells
+1--276, normalized masked AUC is `0.8586138` versus `0.8594595` (absolute
+delta `0.0008457`) and curve RMSE is `0.0053812`. The raw postprocess curves
+independently reproduce the shell-281 direct crossing. These masked metrics
+remain supporting only and do not alter the direct unmasked pass.
+
+CPU job `13381344` completed `0:0` in 5:31 with exact
+`ReqTRES=AllocTRES=cpu=4,mem=64G,node=1,billing=16`, no GPU, and
+`OverSubscribe=OK`; batch MaxRSS was 24,119,936 KiB. The sealed record at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_masked_fsc_20260903T101521Z`
+has comparison, report, accounting, and verified manifest SHA-256
+`f72404609a235f0cb2a09df9d0bae3dc4e23d87d907944892e7ea9e9ec8abaa7`,
+`b226762d109c4ad4f07f617f638eef4fba7803bf23613c3840e005b2cc81806c`,
+`635d25992ab6d5ba82b45b437887703375fcea9b0e61b35d159a5a1900b3d95e`,
+and
+`3e69ade91053e305665cead63abcb6ac28d6af41a6154f056d560c036357cf3c`.
+
 ## Live full-particle checkpoint-7 three-way audit
 
 A read-only three-way audit compares zero-based checkpoint `it006` (numbered

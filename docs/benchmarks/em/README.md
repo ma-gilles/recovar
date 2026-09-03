@@ -473,6 +473,15 @@ fitted operation. CPU job `13381233` and its verified manifest are retained at
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_direct_fsc_20260903T100833Z`.
 This remains intermediate evidence pending natural convergence.
 
+The matched iteration-16 RELION-postprocess check is consistent with that
+primary pass. Under the sealed phase-randomized mask, RECOVAR and RELION first
+remain below corrected-masked FSC 0.143 at shells 280 (`2.25143 A`) and 277
+(`2.27581 A`), respectively. Over their common resolved band (shells 1--276),
+the masked FSC-AUC delta is `0.000846` and RMSE is `0.005381`. This is
+supporting-only evidence; the direct unmasked result remains the admission
+metric. CPU job `13381344` and its verified manifest are retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_masked_fsc_20260903T101521Z`.
+
 ## EMPIAR-10345 native-grid K=4 checkpoint
 
 Three 10,000-particle, 256-grid independent-half K=4 seeds completed without a
