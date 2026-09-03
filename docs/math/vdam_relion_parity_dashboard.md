@@ -7,6 +7,16 @@
 
 ## Live engineering snapshot — 2026-09-03
 
+> **LATEST — STATIC GEOMETRY:** Comparable H100 job `13393276` removes **41
+> XLA compilations (-9.43%)** and **0.677 s of recorded compile-miss time
+> (-3.00%)** from the optimized iteration-48 replay by moving immutable
+> half-spectrum geometry to one shared host plan. Cold wall improves 0.51%; a
+> single warm replay improves 11.18%. All **23 / 23** deterministic science
+> fields remain exact and both cold/warm execution contracts pass. The strict
+> atomic diagnostic is only **14 / 21** inside the two-repeat envelope, with
+> misses at existing CUDA-reduction scale (maximum normalized L2 `1.65e-7`),
+> so it is recorded but not promoted. [Focused report.](../perf/vdam_static_half_geometry_h100_13393276.md)
+>
 > **LIVE RESULT:** The default-off compact-posterior + packed/deferred stack now
 > makes the exact-state iteration-48 transition **2.583x faster**
 > (`5.966 -> 2.310 s`, job `13377600`): pass 1 is **7.891x** faster, pass 2 is
@@ -38,6 +48,7 @@
 | Signal | Status | Evidence / next decision |
 |---|---|---|
 | Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
+| Shared static half-spectrum geometry | **23 / 23 EXACT / 41 FEWER COMPILES** | Comparable optimized H100 replay `13393276` changes stderr compile count `435 -> 394`, recorded miss time `22.596 -> 21.918 s`, cold wall `30.069 -> 29.915 s`, and warm wall `5.144 -> 4.569 s`. Strict atomic diagnostics are only 14/21 at nondeterministic scale and are not promoted; [report](../perf/vdam_static_half_geometry_h100_13393276.md). |
 | Full combined GF46 sentinel | **COMPLETE — 1.639x FASTER / NON-SCORING DIVERGENCE** | Job `13369646` completed both `0 -> 200` arms: wall `2810.434 -> 1714.290 s` (-39.00%), expectation `2718.193 -> 1621.030 s` (-40.37%), peak RSS `17673 -> 17643 MiB`. First hard split is one pose at iteration 48. Both final maps remain inside the broad native-repeat quality envelope, but two arms cannot establish basin equivalence. |
 | Same-state iteration 35 | **EXACT DECISIONS / ATOMIC-SCALE CONTINUOUS NOISE** | Job `13358712` deep-copied one exact live iteration-34 state into an ABBA panel. Every particle/pose/translation/class/posterior/significance field and all 200 exact support-ID rows agree across direct and hybrid; aggregate support SHA-256 is identical. Cross-backend reconstruction deltas are the same scale as direct/direct and hybrid/hybrid atomic-repeat noise. |
 | Combined same-state iteration 35 | **QUALITY + MATERIAL RUNTIME PASS** | Job `13368042` enables both optimized seams. All decisions/support/state are exact; maps/noise remain repeat-scale. Warm wall improves `2.603267 -> 1.654054 s` (**36.46%**), expectation **39.85%**, pass 1 **45.33%**, and pass 2 **42.70%**. Full trajectory remains open. |
@@ -63,17 +74,22 @@
 
 ### Immediate queue
 
-1. Finish the literal mature-EM direct-oracle packed-noise gate `13378581` and
+1. Continue compile-boundary attribution from the now-host-planned static
+   geometry: the remaining cold profile is 394 compilations / 22.72 seconds,
+   led by the coarse certificate, local big JIT, and eager controller
+   primitives. Require exact hard state and repeat-controlled atomics for each
+   retained boundary.
+2. Finish the literal mature-EM direct-oracle packed-noise gate `13378581` and
    the shared scatter-boundary fresh-process gate `13378757`; retain only
    oracle-exact seams with measured cold or composed value.
-2. Prove and gate a shared stable RELION-projector storage/radius ABI. Shape
+3. Prove and gate a shared stable RELION-projector storage/radius ABI. Shape
    attribution shows 73.5% zero-GPU-util samples and 317/348 seconds of
    expectation time in iterations that create new executables.
-3. Then run a fresh
+4. Then run a fresh
    repeat-controlled `0 -> 200` sentinel for the qualified complete
    stack, with direct/direct variability, FSC/scale, selector/fallback, memory,
    compile-count, and runtime audits. A two-arm basin split cannot update a score.
-4. Expand across outliers, pose/noise distributions, scale, parameters, and
+5. Expand across outliers, pose/noise distributions, scale, parameters, and
    long trajectories. K>1 and real data remain later independent gates.
 
 ## At a glance
