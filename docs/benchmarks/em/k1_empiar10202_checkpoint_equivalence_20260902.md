@@ -75,6 +75,42 @@ comparison because the original harness treated the legitimate matching
 that report byte-for-byte.  These two harness events are not scientific
 failures and did not alter either running refinement.
 
+## Corrected/no-pad versus persistent-texture checkpoint
+
+A separate full-particle experiment compares the corrected/no-padding source
+at commit `b31f7bb3a88b96885e568fa4a12d5ec265ab4aab` with the integrated
+persistent-texture source at commit
+`37f640c7e1553ce2b6ed95b061aed4c9e16552b8`.  This comparison is distinct from
+the release-versus-compact experiment above.  At numbered iteration 7
+(zero-based checkpoint 6), the controller metadata, logged resolution
+(`4.23` A), FSC crossing shells (`150` at 0.5 and `183` at 0.143), and next
+quantized size (`498`) agree.  The execution state is not exact: pose
+agreement is `97.2408%` and `97.3914%` for the two halves, and every one of the
+42 translation-grid scalars differs by at most `0.00340033` pixels.
+
+The regularized half maps remain close but measurably different.  Their
+centered correlations are `0.999945606` and `0.999950657`, with relative L2
+differences `0.0104176` and `0.00992269`.  The nonzero-shell FSC RMSE is
+`0.000848545`, the maximum absolute shellwise FSC delta is `0.00324598`, and
+the mean candidate-minus-baseline FSC delta is `+0.0000933168`.  Persistent
+texture took `591.2` seconds versus `589.3` seconds (`+0.322%`), with an HBM
+peak of `39,075` MiB versus `39,073` MiB.  The correct conclusion at this
+checkpoint is therefore **science-close with measurable divergence**, not
+execution equivalence.  Final acceptance still depends on the completed
+masked and unmasked half-map comparison.
+
+CPU audit job `13381829` completed `0:0` in 6:25 with exact requested and
+allocated `cpu=4,mem=32G,node=1,billing=8`, no GPU, and no exclusive
+allocation.  Its comparator exit status 2 is the expected result for a valid
+nonexact comparison.  Preceding job `13381813` failed after three seconds on
+an obsolete audit-repository HEAD pin, before launching the comparator; it
+has no scientific result.  The sealed semantic summary is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint7_deep_corrected_vs_ptex_20260903T0610/checkpoint7_deep_corrected_vs_ptex.json`
+(SHA-256
+`ab85f97d7dde5592d4bf1e7b0a97ce5b551b9e18ff821350e0fa001556192e51`).
+The root carries a complete manifest with SHA-256
+`ccc3978c30dbaf11c5bd958fa29a99b734a71d10b3532231fa935f1431e810fc`.
+
 ## Evidence and reproduction
 
 The disposable comparison root is
