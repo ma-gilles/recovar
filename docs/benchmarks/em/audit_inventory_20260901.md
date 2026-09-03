@@ -92,6 +92,56 @@ contract while reducing HBM from 11,991 to 6,279 MiB.  The 5,712-MiB reduction
 matches the exact 5,710.607529-MiB numerator/weight pair to sampling
 resolution; this is a memory-path gate, not a final reconstruction.
 
+The associated full-particle compact-planner job `13363818` subsequently
+reproduced iteration 11 at 3.46 A and reduced the size-564 fine loop to 1,263
+chunks, but still failed naturally after 1,000 chunks in a transient RELION
+texture allocation.  Peak sampled HBM was 79,259 MiB; host cgroup memory
+events remained zero.  This is retained as a negative full-scale boundary,
+not an accepted completion.  It defines the boundary used by the subsequent
+persistent-texture lifetime and arithmetic gates below.
+
+Persistent-texture commit `530eba051` now passes the exact box-800,
+current-size-564 allocation/lifetime gate. Nonexclusive H100 job `13379238`
+runs both a normal 256-rotation compiled bucket and a forced 512-rotation split
+bucket against one shared `(1131,1131,566)` complex64 PPref owner, updates the
+full x-half accumulators, closes the owner, and completes `0:0`. Its 100-ms HBM
+peak is 39,033 MiB, 40,226 MiB below the old failure sample. This admits the
+memory boundary, not final trajectory quality. Parent commit `737018067`
+separately removes a 15.258789-GiB box-800 host snapshot copy while preserving
+device offload and non-owning-view isolation.
+
+Independent nonexclusive H100 job `13379318` supplies the same full-size PPref
+with 2,556,626 deterministic nonzero voxels and seven nonidentity rotations.
+Persistent dynamic-handle and historical transient-texture projections are
+bitwise identical (`max_abs_diff=0.0`, common output SHA-256
+`dd30338fbbe1a02b10003f95cf5e19a4ac407c4195f1d03c6c54835d346593b4`).
+It requested and received exactly one H100, four CPUs, and 80 GiB, completed
+`0:0` in 19 s, and is retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_persistent_texture_arithmetic_20260903`.
+
+At corrected full-particle checkpoint `it006` (numbered iteration 7), the
+release, compact, and no-padding trajectories retain identical saved FSC
+crossings (0.5 at shell 150; 0.143 at shell 183). Corrected-versus-release map
+correlations are 0.9999608/0.9999576 and relative L2 differences are
+0.00884/0.00919, while pose-assignment agreement is 97.80%/97.70%. This is
+scientifically close map/FSC evidence but a strict execution-equivalence
+failure. The compact three-way record is sealed at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint7_threeway_20260903T0435`;
+its JSON and Markdown SHA-256 values are
+`4dc0a318e2f3e332306fb52de28f63cabd472cbda3caaa9f7659d5655b64fc92`
+and `a6427feb0c12db158b2384f4e3cb2846b57243279a82c8fa86359c498b6ded75`.
+
+The K=4 compact-pair threshold campaign is closed under a separately frozen
+two-tier contract. Three matched default-512/threshold-128 seed pairs preserve
+every controller decision and all 120,000 saved class assignments while
+reducing sparse-group wall time by 12.77--17.23% without sampled-HBM growth.
+The formal tier rejects all three pairs, and the scientific-equivalence tier
+rejects one of three because seed 42002 changes one iteration-8 pose by a
+47.37-degree physical rotation. The aggregate rule is an all-pair conjunction,
+with no averaging. The production default therefore remains 512. The compact
+ledger and its dedicated fail-closed validator retain the formal and science
+outcomes separately.
+
 `k1_empiar10202_checkpoint_equivalence_20260902.md` records the first five
 matching checkpoints from the full-particle box-800 I1 control and compact
 candidate.  Checkpoint 0 is execution-exact.  At checkpoints 1 through 4,

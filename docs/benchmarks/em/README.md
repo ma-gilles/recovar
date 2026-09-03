@@ -462,10 +462,14 @@ raw pose exactly. All 32 numbered maps remained at signed non-DC FSC-AUC
 the cause of the 3.68% seed-42001 cross-engine assignment gap; see
 `real_k4_10345_relion_repeatability_20260903.md`.
 
-The first full-trajectory K=4 compact-pair tuning candidate is also sealed.
-Lowering the minimum bucket size from 512 to 1 reduced directly affected
-sparse-group wall time by 13.55% without increasing HBM, but accumulated seven
-assignment changes at iteration 8 and missed its prospective map-equivalence
-limits. It is rejected as a production default; see
+The full-trajectory K=4 compact-pair tuning series is also sealed. Thresholds
+1 and 256 are closed, and a three-seed default-512/threshold-128 campaign has
+now rejected threshold 128 as well. All three pairs preserved every class
+assignment and reduced sparse-group wall time by 12.77--17.23% without HBM
+growth, but seed 42002 changed one particle's iteration-8 orientation by a
+genuine 47.37-degree physical rotation. The predeclared all-pair conjunction
+therefore rejects scientific equivalence (two of three pairs pass); no
+averaging or near-identical endpoint maps can erase that failed pair. The
+production default remains 512; see
 `real_k4_10345_compact_pair_threshold_20260903.md` and
-`diagnostics/real-k4-10345-native10k-compact-pair-threshold1-2f6759608-20260903.json`.
+`diagnostics/real-k4-10345-native10k-compact-pair-threshold128-default512-campaign-2f6759608-20260903.json`.

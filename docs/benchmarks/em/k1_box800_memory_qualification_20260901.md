@@ -256,6 +256,123 @@ passes, has matching requested and allocated resources, and produces a
 quality and high-resolution gate for this planner; no final-quality claim is
 inferred from job `13363559`.
 
+## Full-dataset compact-planner boundary result
+
+Full-particle job `13363818` completed numbered iteration 11 at a logged
+internal resolution of 3.46 A, matching the earlier release trajectory, and
+then entered iteration 12 at `current_size=564`.  The compact plan reduced the
+half-1 fine M-step from the release run's 15,258 chunks to 1,263.  It completed
+1,000 of those chunks (13,000/15,258 images) before failing naturally in
+`relion_projector_half_texture_f32` immediately after two one-image
+`bucket_rot=512` split-route buckets.  Thus the compact planner is a real
+throughput improvement, but it is not by itself sufficient for the box-800
+high-resolution memory boundary.
+
+The sampled HBM peak was 79,259 MiB.  The scientific Slurm step had
+`MaxRSS=496561284K`; the observed cgroup peak was 508,585,185,280 bytes under
+the 500-GiB allocation, and every cgroup memory-event counter remained zero.
+The failure is therefore a CUDA allocation failure, not a host-memory kill.
+The failing split route retains the eager JAX `Projector::data` slab while the
+transient texture launcher creates a second full CUDA texture array.  The next
+bounded fix is to reuse the already implemented host-uploaded persistent
+RELION texture across the exact-local loop, with an explicit error-path
+lifecycle gate; no final completion claim is made until that route crosses
+this exact size-564 boundary.
+
+Job `13363818` used source commit
+`8069ac01508d57bfd74a7686930ebcea66b6e328` (tree
+`bc7220a4dde5c85e4e615cae3113a05b042655fc`) and requested and received
+exactly one H100, four CPUs, and 500 GiB without `--exclusive`.  It failed
+`1:0` after 7:33:45.  The immutable run root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/empiar10202_set6_i1_full_recovar_compact_8069ac015_20260902`
+and carries `SAFE_TO_DELETE`.  Its stderr, HBM trace, command, and `scontrol`
+record have SHA-256
+`e0e7f5db7e375286f3b586399cfab61a8fd4bca9d1752937fad79419497ed093`,
+`05391a39adfabf74207c9b150babd73ece31ac852d54ef12383f20dc66ba6c7a`,
+`d312726b64b59e348a22bef505f5c67beb73b496b622710fbe0dd2f7f618a495`,
+and `bf4ca493ce3ac35406a934c94f371661e4e730ace499b9906378040080e9d1e8`,
+respectively.  The exact terminal block is stderr lines 26415--26472.
+
+## Accepted persistent PPref texture lifetime gate
+
+Commit `530eba051e8cf14d21be1563027d2b189ff40741` removes the device-side
+duplication at the exact failure geometry. Exact local search now opens one
+host-uploaded RELION texture owner around the complete engine call. The normal
+compiled bucket path receives its handle as a dynamic scalar, so a compiled
+executable cannot retain a stale handle; cache construction, packed-noise
+projection, and the wide split route share the same owner. The engine waits for
+every borrowed compiled result before cleanup, and cleanup closes the owner on
+both success and exception paths. The fallback slab and manual-projection paths
+retain their previous behavior.
+
+H100 job `13379238` exercises the full `run_local_em_exact` engine at box 800,
+`current_size=564`, 84 translations, and the actual failure-sized host PPref
+shape `(1131,1131,566)` complex64 (5.394259 GiB). One 256-rotation bucket runs
+through `run_local_bucket_big_jit`; one 512-rotation bucket is deliberately
+forced through the wide split route. Both update the full x-half BPref
+accumulators, whose packed outputs each contain 724,005,126 elements. The gate
+records one normal compiled bucket and one wide split, completes in 28.913 s,
+and closes the owner cleanly.
+
+The 100-ms trace peaks at 39,033 MiB, compared with 79,259 MiB immediately
+before the old full-particle failure. This is a 40,226-MiB separation at the
+same projector/current-size boundary, although the two-image gate is not
+reported as a matched full-trajectory performance A/B. Texture-ready HBM is
+6,159 MiB. The job requested and received exactly one H100, four CPUs, and 150
+GiB (`ReqTRES=AllocTRES`) without `--exclusive`; it completed `0:0` in 47 s on
+`della-h19g1`, with batch `MaxRSS=22475616K`.
+
+The persistent-texture unit suite also checks transient-versus-persistent
+bitwise projection equality, dynamic-handle compile reuse, stale/zero-handle
+failure, normal and split engine routing, and success/error cleanup. The
+15-test local-A100 file passes in 31.19 s, 22 selected routing/refinement tests
+pass in 23.54 s, and `test-em-fast-guard` passes all 16 tests in 77.35 s.
+
+A separate same-geometry arithmetic discriminator, H100 job `13379318`, used
+the full `(1131,1131,566)` complex64 PPref with 2,556,626 deterministic
+nonzero voxels and seven nonidentity rotations. The dynamic-handle persistent
+texture and the existing transient-texture implementation produced bitwise
+identical finite `(7,159612)` complex64 projections: `max_abs_diff=0.0`, with
+common output SHA-256
+`dd30338fbbe1a02b10003f95cf5e19a4ac407c4195f1d03c6c54835d346593b4`.
+The input PPref and rotations have SHA-256
+`a80cd9f556919446de07f1ec736f1785014d7412659293e8ae1389d515ea0cb4`
+and
+`154e8b29e51253685d57ada794eb39c490842fdfb9c3a1130640f110ed313321`.
+The nonexclusive job requested and received exactly one H100, four CPUs, and
+80 GiB, completed `0:0` in 19 s, and peaked at 14,369 MiB sampled HBM.
+
+The run and runtime roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_persistent_texture_size564_20260903`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/k1_persistent_texture_size564_20260903`;
+both carry `SAFE_TO_DELETE`. The complete stdout, 100-ms HBM trace, and audit
+Markdown have SHA-256
+`4375dc5e723a7e423c50db449a01b6ae7f0eb0436a66a6b711d93f7706d427e9`,
+`cc5e9eeac48c4c880c6179bdb54475640249fb38228796b00be837cc2cb89e6e`,
+and `2edf9fc84cc2dd30568f90b45c67cb69c2d1db0d9d390ddb3c2c39af7d46e177`.
+This accepts the exact allocation/lifetime boundary, not final reconstruction
+quality; a full advancing trajectory remains the quality gate.
+
+The arithmetic discriminator is sealed under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_persistent_texture_arithmetic_20260903`
+with `SAFE_TO_DELETE`; its stdout, 100-ms HBM trace, and audit Markdown have
+SHA-256
+`aa7c894ee2e1fef6120c73be98f3a26ada087beeb4943bb3921210074b52156a`,
+`bd1c6f0e415ae09bf998fbc05383c9ee88db3a8977067a3d03cc1cbe6a453289`,
+and `d80856f22cc08de39532c90f80672ad7c6294e0b2dfa1760f3dc4086d293c47e`.
+It accepts projection arithmetic at the failure geometry, not the full
+refinement trajectory.
+
+Parent commit `737018067b3ed671d218129fe53aec58fc14e825` independently transfers
+already-owned K=1 NumPy half-map snapshots into the previous-reference slots
+instead of copying them. At box 800 this removes a deterministic transient of
+`2 * 800^3 * sizeof(complex128)` = 16,384,000,000 bytes (15.258789 GiB).
+Device arrays still offload explicitly, shared cold-start device buffers are
+transferred once, and non-owning NumPy views are copied. Its five lifecycle
+tests, 16-test EM fast guard, scoped Ruff, and `git diff --check` pass. This is
+a host-ownership change only; it does not alter map arithmetic.
+
 ## Accepted unused local-padding removal
 
 Commit `f91c73f2907ccea635782814d0cbde1d4f8ed4c2` (tree
@@ -342,6 +459,36 @@ cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cb
 This remains a score-only memory/performance qualification.  The advancing
 full-particle trajectories and their checkpoint/FSC audits separately decide
 final scientific quality.
+
+## Live full-particle checkpoint-7 three-way audit
+
+A read-only three-way audit compares zero-based checkpoint `it006` (numbered
+iteration 7) from the release, compact, and corrected no-padding trajectories.
+This is deliberately not called execution-exact: corrected-versus-release
+hard pose assignments agree for 97.80%/97.70% of the two halves, rotation-
+matrix correlations are 0.999588/0.999493, and map relative L2 differences are
+0.00884/0.00919. Nevertheless, the resolved scientific diagnostics have not
+moved: all three saved half-map FSC curves cross 0.5 at shell 150 and 0.143 at
+shell 183, and corrected-versus-release map correlations are
+0.9999608/0.9999576. The half-FSC curve RMSE is 0.0007522.
+
+The corrected controller reports `current_size=496`, resolution shell 149
+(`4.23 A`), order 4, and 589.3 s. The comparable compact and release iterations
+took 3,683.1 s and 3,541.7 s. Corrected sampled HBM peaked at 39,073 MiB versus
+70,871/70,305 MiB, a 44.87%/44.42% reduction. Its host cgroup peak was
+356,348,030,976 bytes under the 500-GiB allocation and every memory-event
+counter remained zero.
+
+The compact JSON and Markdown are sealed, independently of the three source
+run roots, under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint7_threeway_20260903T0435`
+with `SAFE_TO_DELETE`. Their SHA-256 values are
+`4dc0a318e2f3e332306fb52de28f63cabd472cbda3caaa9f7659d5655b64fc92`
+and `a6427feb0c12db158b2384f4e3cb2846b57243279a82c8fa86359c498b6ded75`;
+`MANIFEST.sha256` verifies the retained tool and outputs. This checkpoint is
+scientifically close by map/FSC but fails strict state equivalence. Final
+acceptance remains tied to the converged direct RECOVAR-versus-RELION
+scorecard, not to this same-engine checkpoint.
 
 ## Full-particle checkpoint-seeded local confirmation
 

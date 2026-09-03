@@ -189,6 +189,56 @@ env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
   tests/unit/test_refine_relion_mode.py::test_local_search_iteration_k4_forwards_relion_projectors_to_each_class_engine
 ```
 
+### Broad K=4 regression census, 2026-09-03
+
+A filename-routed census now runs every unit module whose name contains
+`k4`, `k_class`, or `kclass`, including the initial-model subtree. The first
+CPU job `13377915` passed 823 tests and failed eight before testing their
+assertions: five source-routing checks invoked the deliberately GPU-only
+JAX/cuFFT helper, and three translation/plumbing checks attempted to load an
+optional RELION binding that the isolated checkout had not built. This failed
+job and its complete logs are retained; it is not reported as a green suite.
+
+Focused H100 job `13378099` rebuilt the binding from the current checkout and
+pinned RELION source, then passed all eight original paths natively in 7.74 s.
+It requested and received exactly one GPU, eight CPUs, and 64 GiB. Commit
+`9571f714f` then isolates the wiring assertions from accelerator availability
+without changing any production code; the actual accelerator execution
+remains covered by the focused H100 gate. CPU rerun `13378207` requested and
+received exactly eight CPUs and 64 GiB and passed all 831 selected tests in
+121.45 s. Ruff and `git diff --check` pass.
+
+The disposable roots are
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr158_k4_focused_regressions_20260903`
+and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr158_k4_cpu_suite_rerun_20260903`;
+both contain `SAFE_TO_DELETE`. H100 stdout and CPU stdout have SHA-256
+`082d7a64cee11af4c0d97b7ef87ea515a790043117b2eb8d870bb78bfa161f39`
+and `cd31c8f8f1096da22123a7ad7a5e77fe4ec8f293b93750c986630ff3c623ed6`.
+
+### Native real-data compact-pair campaign, 2026-09-03
+
+Three eight-iteration EMPIAR-10345 half-1 pairs compare the production
+compact-pair minimum bucket size 512 with candidate 128 at seeds 42001--42003.
+Each arm uses 5,000 particles, K=4, the native 256 grid, the same starting
+maps and dispatch replay, and one H100. All pairs preserve the controller and
+all 40,000 per-pair class assignments, keep all four classes occupied at every
+saved iteration, improve the measured sparse phase by 12.77--17.23%, and keep
+sampled HBM within 0.05% of control.
+
+The prospective science-equivalence contract nevertheless fails by
+conjunction. Seed 42002 has one changed Euler row at iteration 8 (source row
+3280): the largest Euler-component delta is 156.684653 degrees and the two
+physical rotations differ by 47.374945 degrees. Its translations and class
+assignment remain exact and its four final maps remain extremely close
+(minimum signed non-DC FSC-AUC 0.999999792004; maximum relative L2
+8.83407e-5), but endpoint quality does not rewrite a failed pose gate. Science
+passes two of three pairs and formal equivalence passes zero of three, so the
+production default remains 512. Jobs `13378734`--`13378737` are the valid GPU
+pairs; audit jobs `13378859`--`13378861` and aggregate job `13378887` exit 3
+intentionally to encode rejection. Earlier jobs `13378526`--`13378529` are
+excluded harness failures caused by a mismatched dispatch seed.
+
 ## Tier 1: fixed-state GPU discriminators
 
 Use a sealed 32–256 particle panel at two current sizes (one coarse, one late
