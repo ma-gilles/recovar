@@ -2349,16 +2349,33 @@ def _write_iteration_artifacts(
     dataset=None,
     particle_state: NativeParticleState | None = None,
 ) -> None:
+    profile_artifacts = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+    artifact_started = time.perf_counter()
+    stage_started = artifact_started
+    artifact_profile: dict[str, float] = {}
+
+    def _record_artifact_stage(name: str) -> None:
+        nonlocal stage_started
+        if not profile_artifacts:
+            return
+        now = time.perf_counter()
+        artifact_profile[f"{name}_time_s"] = float(now - stage_started)
+        stage_started = now
+
     out_dir = _output_dir_from_prefix(output_prefix)
     out_dir.mkdir(parents=True, exist_ok=True)
     class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
+    _record_artifact_stage("setup")
     for k, class_mrc in enumerate(class_mrcs):
         write_relion_mrc(class_mrc, np.asarray(state.Iref[k]), voxel_size=float(state.pixel_size))
+    _record_artifact_stage("class_mrc")
     model_star = f"{output_prefix}_it{iteration:03d}_model.star"
     _write_model_star(model_star, state, class_mrcs)
+    _record_artifact_stage("model_star")
     meta_path = f"{output_prefix}_it{iteration:03d}_recovar_meta.json"
     with open(meta_path, "w") as f:
         json.dump(_json_ready(meta), f, indent=2, sort_keys=True)
+    _record_artifact_stage("meta_json")
     if main_star is not None and dataset is not None and particle_state is not None:
         _write_data_star(
             f"{output_prefix}_it{iteration:03d}_data.star",
@@ -2366,6 +2383,14 @@ def _write_iteration_artifacts(
             optics_star,
             dataset,
             particle_state,
+        )
+    _record_artifact_stage("data_star")
+    if profile_artifacts:
+        artifact_profile["total_time_s"] = float(time.perf_counter() - artifact_started)
+        print(
+            f"VDAM iteration {iteration} artifact profile: "
+            f"{json.dumps(artifact_profile, sort_keys=True)}",
+            flush=True,
         )
 
 
@@ -2406,6 +2431,19 @@ def _write_final_outputs(output_prefix: str, state: InitialModelState) -> tuple[
 def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialModelResult:
     """Run native recovar InitialModel refinement."""
 
+    profile_driver = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+    driver_started = time.perf_counter()
+    stage_started = driver_started
+    driver_profile: dict[str, float] = {}
+
+    def _record_driver_stage(name: str) -> None:
+        nonlocal stage_started
+        if not profile_driver:
+            return
+        now = time.perf_counter()
+        driver_profile[f"{name}_time_s"] = float(now - stage_started)
+        stage_started = now
+
     if opts.nr_classes < 1:
         raise ValueError("nr_classes must be >= 1")
     if opts.nr_iter < 1:
@@ -2441,9 +2479,11 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             "native InitialModel direct refinement currently supports C1 only; "
             "use the GUI-default do_run_C1 mode until symmetry-restricted sampling is implemented"
         )
+    _record_driver_stage("validation")
 
     main_star, optics_star = read_star(opts.fn_img)
     particle_order = _micrograph_sort_order(main_star)
+    _record_driver_stage("input_star")
     dataset = load_dataset(
         opts.fn_img,
         lazy=bool(opts.lazy),
@@ -2452,7 +2492,9 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     )
     if getattr(dataset, "tilt_series_flag", False):
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
+    _record_driver_stage("dataset_load")
     maybe_cache_raw_image_loaders((dataset,))
+    _record_driver_stage("raw_cache_setup")
 
     _configure_relion_image_mask(dataset, opts)
     optics_state = _native_optics_state(main_star, optics_star, dataset)
@@ -2494,6 +2536,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             raise NotImplementedError(
                 "diagnostic native VDAM continuation currently supports one optics group"
             )
+    _record_driver_stage("state_setup")
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
     expectation_step = _native_expectation_step(
         dataset,
@@ -2504,6 +2547,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         optics_state,
     )
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
+    _record_driver_stage("expectation_setup")
 
     if opts.write_iter_artifacts:
         _output_dir_from_prefix(opts.outputname).mkdir(parents=True, exist_ok=True)
@@ -2553,6 +2597,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                     sort_keys=True,
                 )
                 f.write("\n")
+    _record_driver_stage("initial_artifacts")
 
     if opts.write_iter_artifacts:
 
@@ -2594,6 +2639,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 iteration=int(_iteration),
                 meta=_meta,
             )
+    _record_driver_stage("iteration_setup")
 
     final_state = run_vdam_iterations(
         state,
@@ -2617,10 +2663,15 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         start_iteration=int(state.iter),
         diagnostic_stop_after_iteration=opts.diagnostic_stop_after_iteration,
     )
+    _record_driver_stage("iterations")
     final_mrc, class_mrcs = _write_final_outputs(opts.outputname, final_state)
     final_model_star = f"{opts.outputname}_it{final_state.iter:03d}_model.star"
     if not os.path.exists(final_model_star):
         _write_model_star(final_model_star, final_state, class_mrcs)
+    _record_driver_stage("final_artifacts")
+    if profile_driver:
+        driver_profile["total_time_s"] = float(time.perf_counter() - driver_started)
+        print(f"VDAM driver profile: {json.dumps(driver_profile, sort_keys=True)}", flush=True)
     return NativeInitialModelResult(
         state=final_state,
         output_prefix=opts.outputname,

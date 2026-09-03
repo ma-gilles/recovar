@@ -2050,7 +2050,7 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     assert "_rlnOrientationDistribution" in text
 
 
-def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, tmp_path):
+def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, tmp_path, capsys):
     state = initialise_denovo_state(ori_size=8, pixel_size=1.5, K=1, nr_iter=8, n_directions=12)
     main = pd.DataFrame(
         {
@@ -2071,6 +2071,7 @@ def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, t
         Path(path).write_bytes(b"iteration-zero-map")
 
     monkeypatch.setattr(driver, "write_relion_mrc", fake_write_mrc)
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "1")
     prefix = str(tmp_path / "run")
     driver._write_iteration_artifacts(
         prefix,
@@ -2088,6 +2089,21 @@ def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, t
     assert (tmp_path / "run_it000_data.star").is_file()
     meta = json.loads((tmp_path / "run_it000_recovar_meta.json").read_text())
     assert meta == {"checkpoint_iteration": 0, "phase": "bootstrap"}
+    profile_line = capsys.readouterr().out.strip()
+    profile = json.loads(profile_line.split(": ", 1)[1])
+    assert profile_line.startswith("VDAM iteration 0 artifact profile: ")
+    assert set(profile) == {
+        "class_mrc_time_s",
+        "data_star_time_s",
+        "meta_json_time_s",
+        "model_star_time_s",
+        "setup_time_s",
+        "total_time_s",
+    }
+    assert all(value >= 0.0 for value in profile.values())
+    assert profile["total_time_s"] >= sum(
+        value for name, value in profile.items() if name != "total_time_s"
+    )
 
 
 def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
