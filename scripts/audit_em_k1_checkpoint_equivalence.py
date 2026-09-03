@@ -102,6 +102,7 @@ def _numeric_metrics(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
     exact = True
     finite = True
     count = 0
+    mismatch_count = 0
     difference_squared = 0.0
     left_squared = 0.0
     max_absolute = 0.0
@@ -111,6 +112,7 @@ def _numeric_metrics(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
         left_chunk = np.asarray(left[key]) if key else np.asarray(left).reshape(1)
         right_chunk = np.asarray(right[key]) if key else np.asarray(right).reshape(1)
         exact &= bool(np.array_equal(left_chunk, right_chunk, equal_nan=True))
+        mismatch_count += int(np.count_nonzero(left_chunk != right_chunk))
         finite &= bool(np.isfinite(left_chunk).all() and np.isfinite(right_chunk).all())
         left_wide = left_chunk.astype(
             np.complex128 if np.iscomplexobj(left_chunk) else np.float64,
@@ -146,6 +148,8 @@ def _numeric_metrics(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
         "dtype": str(left.dtype),
         "element_count": count,
         "element_exact": exact,
+        "mismatch_count": mismatch_count,
+        "mismatch_fraction": mismatch_count / count,
         "finite": finite,
         "max_absolute_difference": max_absolute,
         "rmse": math.sqrt(difference_squared / count),
@@ -254,6 +258,29 @@ def _mrc_file_record(left: Path, right: Path) -> dict[str, Any]:
     }
 
 
+def _fsc_curve_indicators(left: Path, right: Path) -> dict[str, Any]:
+    baseline = np.asarray(np.load(left, allow_pickle=False), dtype=np.float64).reshape(-1)
+    candidate = np.asarray(np.load(right, allow_pickle=False), dtype=np.float64).reshape(-1)
+    if baseline.shape != candidate.shape or baseline.size < 2:
+        raise AuditError("FSC arrays must have the same nontrivial one-dimensional shape")
+
+    def first_below(values: np.ndarray, threshold: float) -> int | None:
+        crossings = np.flatnonzero(values[1:] < threshold)
+        return None if crossings.size == 0 else int(crossings[0] + 1)
+
+    difference = candidate[1:] - baseline[1:]
+    return {
+        "shell_count_including_zero": int(baseline.size),
+        "baseline_first_below_0p5_shell": first_below(baseline, 0.5),
+        "candidate_first_below_0p5_shell": first_below(candidate, 0.5),
+        "baseline_first_below_0p143_shell": first_below(baseline, 0.143),
+        "candidate_first_below_0p143_shell": first_below(candidate, 0.143),
+        "nonzero_shell_rmse": float(np.sqrt(np.mean(difference * difference))),
+        "nonzero_shell_mean_delta": float(np.mean(difference)),
+        "maximum_absolute_shell_delta": float(np.max(np.abs(difference))),
+    }
+
+
 def run_audit(
     baseline_dir: Path,
     candidate_dir: Path,
@@ -298,6 +325,8 @@ def run_audit(
         )
         for suffix in MAP_SUFFIXES
     }
+    fsc_paths = _artifact_pair(baseline_dir, candidate_dir, prefix, "fsc.npy")
+    fsc_curve = _fsc_curve_indicators(*fsc_paths)
 
     exact_execution_state = (
         all(record["metrics"]["element_exact"] for record in discrete.values())
@@ -308,6 +337,15 @@ def run_audit(
     all_floating_finite = all(record["finite"] for record in floating_metrics)
     maximum_relative_l2 = max(record["relative_l2_difference"] for record in floating_metrics)
     accepted = exact_execution_state and all_floating_finite and maximum_relative_l2 <= max_relative_l2
+    fine_pose_agreement = {
+        half: 1.0 - discrete[f"ha_half{half}.npy"]["metrics"]["mismatch_fraction"]
+        for half in (1, 2)
+    }
+    coarse_pose_agreement = {
+        half: 1.0 - discrete[f"coarse_ha_half{half}.npy"]["metrics"]["mismatch_fraction"]
+        for half in (1, 2)
+    }
+    map_metrics = [record["metrics"] for record in maps.values()]
     return {
         "schema": SCHEMA,
         "baseline_intermediates": str(baseline_dir),
@@ -319,10 +357,22 @@ def run_audit(
         "metadata": metadata,
         "floating_arrays": floating,
         "maps": maps,
+        "science_indicators": {
+            "fine_pose_agreement_by_half": fine_pose_agreement,
+            "coarse_pose_agreement_by_half": coarse_pose_agreement,
+            "fsc_curve": fsc_curve,
+            "minimum_map_centered_correlation": min(
+                record["centered_correlation"] for record in map_metrics
+            ),
+            "maximum_map_relative_l2_difference": max(
+                record["relative_l2_difference"] for record in map_metrics
+            ),
+        },
         "summary": {
             "exact_execution_state": exact_execution_state,
             "all_floating_finite": all_floating_finite,
             "maximum_relative_l2_difference": maximum_relative_l2,
+            "strict_execution_equivalence_accepted": accepted,
             "accepted": accepted,
         },
     }

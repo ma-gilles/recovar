@@ -74,9 +74,12 @@ def test_checkpoint_audit_accepts_exact_state_and_small_float_drift(tmp_path: Pa
     )
 
     assert report["summary"]["accepted"] is True
+    assert report["summary"]["strict_execution_equivalence_accepted"] is True
     assert report["summary"]["exact_execution_state"] is True
     assert report["maps"]["half1_reg.mrc"]["metrics"]["element_exact"] is False
     assert report["maps"]["half1_reg.mrc"]["metrics"]["centered_correlation"] == pytest.approx(1.0)
+    assert report["science_indicators"]["fine_pose_agreement_by_half"] == {1: 1.0, 2: 1.0}
+    assert report["science_indicators"]["fsc_curve"]["nonzero_shell_rmse"] == 0.0
 
 
 def test_checkpoint_audit_rejects_changed_particle_decision(tmp_path: Path) -> None:
@@ -96,3 +99,5 @@ def test_checkpoint_audit_rejects_changed_particle_decision(tmp_path: Path) -> N
     assert report["summary"]["accepted"] is False
     assert report["summary"]["exact_execution_state"] is False
     assert report["discrete_arrays"]["ha_half1.npy"]["metrics"]["element_exact"] is False
+    assert report["discrete_arrays"]["ha_half1.npy"]["metrics"]["mismatch_count"] == 1
+    assert report["science_indicators"]["fine_pose_agreement_by_half"][1] == 0.75
