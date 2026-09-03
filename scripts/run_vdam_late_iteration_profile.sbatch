@@ -55,6 +55,7 @@ STABLE_FOURIER_WINDOW_SHAPES=${STABLE_FOURIER_WINDOW_SHAPES:-0}
 AUDIT_RAW_IMAGE_CACHE=${AUDIT_RAW_IMAGE_CACHE:-0}
 EXECUTION_CONTRACT=${VDAM_LATE_PROFILE_CONTRACT:-diagnostic}
 IMAGE_SIZE=${VDAM_LATE_PROFILE_IMAGE_SIZE:-128}
+HOST_ATTRIBUTION=${VDAM_LATE_PROFILE_HOST_ATTRIBUTION:-0}
 REUSE_NATIVE_ROOT=${VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT:-}
 EXPECTED_REUSED_NATIVE_NSYS_SHA256=${EXPECTED_REUSED_NATIVE_NSYS_SHA256:-}
 
@@ -86,6 +87,7 @@ test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${AUDIT_RAW_IMAGE_CACHE}" =~ ^[01]$ ]]
 [[ "${EXECUTION_CONTRACT}" =~ ^(diagnostic|default|all_optimized_q32)$ ]]
 [[ "${IMAGE_SIZE}" =~ ^[0-9]+$ ]]
+[[ "${HOST_ATTRIBUTION}" =~ ^[01]$ ]]
 test "${IMAGE_SIZE}" -gt 0
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
@@ -156,6 +158,8 @@ printf 'audit_raw_image_cache=%s\n' \
   >> "${PROVENANCE}/candidate_parameters.txt"
 printf 'execution_contract=%s\nimage_size=%s\n' \
   "${EXECUTION_CONTRACT}" "${IMAGE_SIZE}" \
+  >> "${PROVENANCE}/candidate_parameters.txt"
+printf 'host_attribution=%s\n' "${HOST_ATTRIBUTION}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
@@ -409,6 +413,12 @@ if [[ -z "${REUSE_NATIVE_ROOT}" ]]; then
 fi
 
 RECOVAR_NSYS_BASE=${NSIGHT}/recovar_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
+RECOVAR_NSYS_TRACE=cuda,nvtx,osrt
+RECOVAR_NSYS_EXTRA=(--sample=none --cpuctxsw=none)
+if [[ "${HOST_ATTRIBUTION}" = 1 ]]; then
+  RECOVAR_NSYS_TRACE=cuda,nvtx,osrt,python-gil
+  RECOVAR_NSYS_EXTRA+=(--python-sampling=true --python-sampling-frequency=1000)
+fi
 RECOVAR_COMMAND=(
   env "LD_PRELOAD=${CUSPARSE_LIBRARY}"
   "${PIXI_PY}" -m scripts.run_vdam_late_iteration_profile
@@ -432,7 +442,8 @@ fi
 if [[ "${AUDIT_RAW_IMAGE_CACHE}" = 1 ]]; then
   RECOVAR_COMMAND+=(--audit-raw-image-cache)
 fi
-printf '%q ' "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
+printf '%q ' "${NSYS}" profile --trace="${RECOVAR_NSYS_TRACE}" \
+  "${RECOVAR_NSYS_EXTRA[@]}" \
   --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \
   --capture-range-end=stop -o "${RECOVAR_NSYS_BASE}" "${RECOVAR_COMMAND[@]}" \
   > "${PROVENANCE}/recovar_nsys_command.sh"
@@ -440,7 +451,8 @@ printf '\n' >> "${PROVENANCE}/recovar_nsys_command.sh"
 recovar_profile_started=$(date +%s.%N)
 (
   cd "${REPO_ROOT}"
-  "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
+  "${NSYS}" profile --trace="${RECOVAR_NSYS_TRACE}" \
+    "${RECOVAR_NSYS_EXTRA[@]}" \
     --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \
     --capture-range-end=stop -o "${RECOVAR_NSYS_BASE}" \
     "${RECOVAR_COMMAND[@]}"
@@ -501,7 +513,8 @@ done
   "${native_plain_started}" "${native_plain_finished}" \
   "${native_profile_started}" "${native_profile_finished}" \
   "${recovar_profile_started}" "${recovar_profile_finished}" \
-  "${REUSE_NATIVE_ROOT}" "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}" <<'PY'
+  "${REUSE_NATIVE_ROOT}" "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}" \
+  "${HOST_ATTRIBUTION}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -560,6 +573,8 @@ payload = {
         "recovar_profile_process": float(sys.argv[13]) - float(sys.argv[12]),
     },
     "native_capture": native_capture,
+    "host_attribution": bool(int(sys.argv[16])),
+    "timing_truth_allowed": not bool(int(sys.argv[16])),
     "native_stop_mechanism": "gdb second-expectation sentinel after exact profiled iteration",
     "science_promotion_allowed": False,
 }

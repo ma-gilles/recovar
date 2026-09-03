@@ -531,6 +531,10 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert "_all_optimized_q32_environment" in launcher
     assert '--execution-contract "${EXECUTION_CONTRACT}"' in launcher
     assert "recovar_execution_contract.json" in launcher
+    assert "VDAM_LATE_PROFILE_HOST_ATTRIBUTION" in launcher
+    assert "--python-sampling=true" in launcher
+    assert "cuda,nvtx,osrt,python-gil" in launcher
+    assert '"timing_truth_allowed": not bool(int(sys.argv[16]))' in launcher
     assert "status --porcelain=v1 --untracked-files=no" in launcher
     assert "test ! -e" in launcher
     assert 'test ! -e "${NATIVE_PROFILE}/run_it' in launcher
