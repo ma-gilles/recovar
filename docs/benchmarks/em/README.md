@@ -443,10 +443,14 @@ live RECOVAR trajectory reaching natural completion.
 
 ## EMPIAR-10345 native-grid K=4 checkpoint
 
-The first 10,000-particle, 256-grid independent-half K=4 run completed without
-a compute failure.  All four unmasked half-map FSC-AUC differences are within
-0.01 and all FSC=0.5 shells match, but the prospective gate remains rejected
-on two direct-map cells, one masked delta, and 96.3%/97.3% assignment
-agreement.  The full result and exact reproduction contract are in
-`real_kclass_halfmap_refinement.md` and
-`diagnostics/real-k4-10345-native10k-seed42001-2f6759608-20260903.json`.
+Three 10,000-particle, 256-grid independent-half K=4 seeds completed without a
+compute failure. Seed-matched RECOVAR/RELION map FSC-AUC is
+0.98530--0.99314, while within-engine cross-seed FSC-AUC is only
+0.62790--0.82231; the same strict separation holds for hard assignments in
+both halves. Common-mask merged cross-engine FSC-AUC is
+0.997499--0.998972. This is strong evidence for a shared seed-sensitive local
+optimum, but the prospective per-seed gates remain rejected and are not
+retroactively weakened. The full result and exact reproduction contract are
+in `real_k4_10345_native10k_multiseed_20260903.md`,
+`real_kclass_halfmap_refinement.md`, and
+`diagnostics/real-k4-10345-native10k-multiseed-2f6759608-20260903.json`.

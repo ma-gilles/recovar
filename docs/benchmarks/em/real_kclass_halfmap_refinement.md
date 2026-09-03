@@ -408,8 +408,16 @@ The adjacent curve archive has SHA-256
 `cd497fe6c7731a9d97ff8c86fb4faf55917dd2d5bc68a8fbb71541124a23a620`.
 The compact checked-in record is
 `docs/benchmarks/em/diagnostics/real-k4-10345-native10k-seed42001-2f6759608-20260903.json`.
-Seeds 42002 and 42003 remain required before a native-grid multi-seed claim or
-registry admission.
+
+Seeds 42002 and 42003 subsequently completed the same frozen native-grid
+contract. Across all three seeds, seed-matched RECOVAR/RELION maps are much
+closer than either engine's maps across seeds for every class: full unmasked
+non-DC map FSC-AUC is 0.98530--0.99314 within a seed and
+0.62790--0.82231 across seeds. Common-mask merged FSC-AUC is
+0.997499--0.998972 over all 12 seed/class cells. This supports a shared
+seed-sensitive local optimum, while all three prospective per-seed gates
+remain rejected. See `real_k4_10345_native10k_multiseed_20260903.md` and
+`diagnostics/real-k4-10345-native10k-multiseed-2f6759608-20260903.json`.
 
 ## Reproduction
 

@@ -488,26 +488,29 @@ K=4 processes per engine, one on each immutable random subset. The launcher is
 dry-run by default. The three-seed 128-grid sign-fixed pilot is now complete
 and checked in as a rejected diagnostic: classes remain occupied, but all
 seeds miss the prospective assignment gate and one class/seed misses the
-half-map quality gate substantially. Native execution therefore remains
-blocked by policy rather than by missing infrastructure.
+half-map quality gate substantially. Native EMPIAR-10076 execution therefore
+remains blocked by policy rather than by missing infrastructure.
 
 The 10345 contract freezes a 10,000-particle, 5,000/5,000 split, its native
 256-grid stack, and four common iteration-0 maps, with every input identified
 by SHA-256. It deliberately supports only `native10k-256`: no qualified
 128-grid 10345 stack exists, so the launcher rejects both 128-grid profiles
 before creating an output root. A first native invocation is a bounded
-diagnostic and cannot enter the registry until its audit and multi-seed
-stability requirements pass.
+diagnostic. The three required seeds have now completed, but none can enter the
+registry because the frozen per-seed gates remain red.
 
 That launcher is deliberately narrower than the complete Tier-6 checklist:
 it reports maps, half-map/cross-engine FSC, populations, hard-assignment
 agreement, significant support, and resources for one invocation. The
 validated three-seed hard-assignment aggregate and final-map cross-seed
 analysis are emitted separately. Particle-state audits also retain Pmax,
-pose, translation, and significant-support trajectories. The completed pilot
-therefore establishes the independent-half infrastructure and a shared
-stochastic-instability boundary, but it cannot be described as complete Tier-6
-evidence while the frozen per-seed quality and assignment gates remain red.
+pose, translation, and significant-support trajectories. The completed 10345
+native-grid three-seed diagnostic establishes the independent-half
+infrastructure and a shared stochastic-instability boundary: for every class,
+seed-matched cross-engine map agreement exceeds within-engine cross-seed
+agreement. It still cannot be described as complete Tier-6 evidence while the
+frozen per-seed quality and assignment gates remain red; see
+`real_k4_10345_native10k_multiseed_20260903.md`.
 The final-map analysis has a separate cross-CPU reproduction contract: inputs,
 discrete class mappings, and decisions must match exactly; every reported
 FSC-AUC may move by at most 0.005 under the continuous proper-rigid fit; and the

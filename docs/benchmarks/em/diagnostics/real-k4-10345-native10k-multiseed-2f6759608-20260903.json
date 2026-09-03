@@ -1,0 +1,207 @@
+{
+  "schema": "recovar.em.real_kclass_halfmap_multiseed_stability.v1",
+  "admission_status": "DIAGNOSTIC_ONLY_PER_SEED_GATES_RETAINED",
+  "accepted_result": false,
+  "status": "complete_shared_seed_sensitive_boundary",
+  "dataset": "EMPIAR-10345",
+  "profile": "native10k-256",
+  "source": {
+    "commit": "2f6759608c82356dd5c24e7b149002df8cc84f28",
+    "tree": "b2e9b35f3988ae63aae45e1dac90c0386099d97f",
+    "clean": true
+  },
+  "configuration": {
+    "K": 4,
+    "particles": 10000,
+    "half_counts": [
+      5000,
+      5000
+    ],
+    "grid_size": 256,
+    "max_iter": 8,
+    "symmetry": "C1",
+    "seeds": [
+      42001,
+      42002,
+      42003
+    ],
+    "initial_lowpass_angstrom": 30,
+    "fourier_backend": "relion_cuda",
+    "same_job_serial": true,
+    "absolute_resolution_claim": false,
+    "phase_randomization_corrected": false
+  },
+  "per_seed": [
+    {
+      "seed": 42001,
+      "setup_job_id": 13371068,
+      "qualification_job_id": 13371069,
+      "qualification_exit_code": "3:0",
+      "compute_failure": false,
+      "assignment_agreement_half1_half2": [
+        0.9632,
+        0.973
+      ],
+      "audit_sha256": "84217ddbc0f5cf20967a14d2a1d29e12f1a5006114200e31659b4490c8ae9e5a",
+      "prospective_science_gate_accepted": false,
+      "prospective_science_gate_failures": [
+        "class002:unmasked:cross_merged_band_fsc_auc",
+        "class004:common_masked:half_band_auc_drop",
+        "class004:unmasked:cross_merged_band_fsc_auc",
+        "half1:class_assignment_agreement",
+        "half2:class_assignment_agreement"
+      ]
+    },
+    {
+      "seed": 42002,
+      "setup_job_id": 13374047,
+      "qualification_job_id": 13374048,
+      "qualification_exit_code": "3:0",
+      "compute_failure": false,
+      "assignment_agreement_half1_half2": [
+        0.9614,
+        0.9616
+      ],
+      "audit_sha256": "342667840d3f75e1b0ed160044a7bbd652aee36efe4390f4cb38e7f13e13ecff",
+      "prospective_science_gate_accepted": false,
+      "prospective_science_gate_failures": [
+        "class001:unmasked:half_band_auc_drop",
+        "class001:unmasked:cross_merged_band_fsc_auc",
+        "class002:unmasked:half_band_auc_drop",
+        "class002:unmasked:cross_merged_band_fsc_auc",
+        "class003:unmasked:half_band_auc_drop",
+        "class004:unmasked:cross_merged_band_fsc_auc",
+        "half1:class_assignment_agreement",
+        "half2:class_assignment_agreement"
+      ]
+    },
+    {
+      "seed": 42003,
+      "setup_job_id": 13374045,
+      "qualification_job_id": 13374046,
+      "qualification_exit_code": "3:0",
+      "compute_failure": false,
+      "assignment_agreement_half1_half2": [
+        0.9634,
+        0.9662
+      ],
+      "audit_sha256": "dc4c9a31edd38176197625cdf5882d9becbfaba38fb9679ca8bfe02d1a352b5d",
+      "prospective_science_gate_accepted": false,
+      "prospective_science_gate_failures": [
+        "class002:unmasked:cross_merged_band_fsc_auc",
+        "class004:unmasked:cross_merged_band_fsc_auc",
+        "half1:class_assignment_agreement",
+        "half2:class_assignment_agreement"
+      ]
+    }
+  ],
+  "masked_quality": {
+    "same_seed_cross_engine_merged_fsc_auc": {
+      "cells": 12,
+      "min": 0.9974991809855038,
+      "mean": 0.9983882985898259,
+      "median": 0.9984857765160151,
+      "max": 0.9989718291538118
+    },
+    "recovar_minus_relion_halfmap_fsc_auc": {
+      "cells": 12,
+      "min": -0.013876533859058404,
+      "mean": -0.0009078928010250084,
+      "median": 0.0005188064473040099,
+      "max": 0.005096921996716741
+    }
+  },
+  "assignment_stability": {
+    "same_seed_cross_engine": {
+      "half1": {
+        "min": 0.9614,
+        "mean": 0.9626666666666667,
+        "max": 0.9634
+      },
+      "half2": {
+        "min": 0.9616,
+        "mean": 0.9669333333333333,
+        "max": 0.973
+      }
+    },
+    "within_engine_cross_seed": {
+      "half1": {
+        "min": 0.59,
+        "mean": 0.6298666666666667,
+        "max": 0.6516
+      },
+      "half2": {
+        "min": 0.5868,
+        "mean": 0.6213666666666667,
+        "max": 0.6522
+      }
+    },
+    "same_seed_min_exceeds_cross_seed_max_in_both_halves": true
+  },
+  "map_stability": {
+    "metric": "full_unmasked_non_dc_fsc_auc",
+    "proper_rigid_alignment": true,
+    "one_transform_shared_by_all_four_classes": true,
+    "same_seed_cross_engine": {
+      "cells": 12,
+      "min": 0.9852997322319759,
+      "mean": 0.9890222347682812,
+      "max": 0.9931382920836855
+    },
+    "within_engine_cross_seed": {
+      "cells": 24,
+      "min": 0.6278987415271268,
+      "mean": 0.7204909092321873,
+      "max": 0.8223071505186338
+    },
+    "same_seed_min_exceeds_cross_seed_max_for_every_class": true
+  },
+  "performance_across_six_half_runs": {
+    "relion_wall_seconds": {
+      "min": 141.25073432922363,
+      "mean": 143.13887949784598,
+      "max": 147.48314142227173
+    },
+    "recovar_wall_seconds": {
+      "min": 1532.4141764640808,
+      "mean": 1603.2319784164429,
+      "max": 1708.0267224311829
+    },
+    "relion_peak_hbm_mib": {
+      "min": 79573,
+      "mean": 79578,
+      "max": 79585
+    },
+    "recovar_peak_hbm_mib": {
+      "min": 33789,
+      "mean": 33792.333333333336,
+      "max": 33795
+    }
+  },
+  "aggregate_analysis_job": {
+    "job_id": 13375384,
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:06:46",
+    "node": "della-h17n1",
+    "requested_tres": "billing=16,cpu=4,mem=64G,node=1",
+    "allocated_tres": "billing=16,cpu=4,mem=64G,node=1",
+    "max_rss_kib": 4769208
+  },
+  "conclusion": {
+    "classification": "SHARED_SEED_SENSITIVE_LOCAL_OPTIMUM_BOUNDARY",
+    "interpretation": "For every class, seed-matched RECOVAR and RELION maps are closer than either engine's maps across seeds. The same ordering holds for hard assignments in both independent halves. This is strong evidence against a RECOVAR-specific K=4 reconstruction defect and for a shared seed-sensitive local optimum.",
+    "limitations": [
+      "All three predeclared per-seed science gates remain rejected and are not retroactively weakened.",
+      "The run uses 10,000 particles for eight iterations and makes no absolute-resolution claim.",
+      "An independent exact RELION same-seed repeat is required to quantify same-engine nondeterminism separately from seed sensitivity."
+    ]
+  },
+  "artifacts": {
+    "aggregate_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_multiseed_2f6759608_20260903",
+    "assignment_and_quality_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_multiseed_2f6759608_20260903/analysis/assignment_and_quality_stability.json",
+    "assignment_and_quality_sha256": "cf47aeb5b6f1e4901d58b68d6e0a810abaea9f9bca1a1d97aa86d0154aed9066",
+    "map_stability_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_multiseed_2f6759608_20260903/analysis/map_stability.json",
+    "map_stability_sha256": "4b9288f1ade5726d53bde8dc3a4e41ee78fa1a722a23dc60dffc290350558a9b"
+  }
+}
