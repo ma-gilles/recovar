@@ -1503,6 +1503,37 @@ def test_arm_performance_summary_exposes_compact_table_geometry() -> None:
     assert table["dense_global_score_table_capacity_bytes_f32"] == 855_244_800
 
 
+def test_arm_performance_summary_preserves_canonical_local_timing_names() -> None:
+    timing = {field: 0.0 for field in runner.LOCAL_TIMING_FIELDS}
+    timing.update(
+        {
+            "em_time_s": 1.5,
+            "big_jit_bucket_s": 0.75,
+            "local_pack_s": 0.125,
+            "local_noise_s": 0.0,
+        }
+    )
+
+    summary = runner._arm_performance_summary(
+        wall_s=2.0,
+        estep_meta={"halfset_0_profile_summary": timing},
+    )
+
+    assert summary["local_em_time_s"] == 1.5
+    assert summary["local_big_jit_bucket_s"] == 0.75
+    assert summary["local_pack_s"] == 0.125
+    assert summary["local_noise_s"] == 0.0
+    assert not any(key.startswith("local_local_") for key in summary)
+
+
+def test_local_timing_summary_fails_closed_on_missing_canonical_timer() -> None:
+    timing = {field: 0.0 for field in runner.LOCAL_TIMING_FIELDS}
+    del timing["local_pack_s"]
+
+    with pytest.raises(RuntimeError, match="omitted canonical fields.*local_pack_s"):
+        runner._local_timing_summary({"halfset_0_profile_summary": timing})
+
+
 def test_same_state_incremental_gate_is_mirrored_repeated_and_backend_scoped() -> None:
     assert runner.PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER == (
         "abba_packed_deferred_1",

@@ -1441,19 +1441,33 @@ LOCAL_TIMING_FIELDS = (
 )
 
 
+def _local_performance_metric_name(field: str) -> str:
+    """Return the canonical arm-summary name for one local-engine timer."""
+
+    return field if field.startswith("local_") else f"local_{field}"
+
+
 def _local_timing_summary(estep_meta: dict[str, Any]) -> dict[str, Any]:
     by_profile: dict[str, dict[str, float]] = {}
     totals = {field: 0.0 for field in LOCAL_TIMING_FIELDS}
     for name, profile in sorted(estep_meta.items()):
         if not isinstance(profile, dict) or "em_time_s" not in profile:
             continue
-        timings = {
-            field: float(profile[field])
-            for field in LOCAL_TIMING_FIELDS
-            if field in profile
-        }
-        if not timings:
-            continue
+        missing = [field for field in LOCAL_TIMING_FIELDS if field not in profile]
+        if missing:
+            raise RuntimeError(
+                f"local timing profile {name} omitted canonical fields {missing}",
+            )
+        timings = {field: float(profile[field]) for field in LOCAL_TIMING_FIELDS}
+        invalid = [
+            field
+            for field, value in timings.items()
+            if not np.isfinite(value) or value < 0.0
+        ]
+        if invalid:
+            raise RuntimeError(
+                f"local timing profile {name} has invalid fields {invalid}",
+            )
         by_profile[name] = timings
         for field, value in timings.items():
             totals[field] += value
@@ -1484,8 +1498,9 @@ def _arm_performance_summary(
             summary[field] = _json_ready(sparse[field])
     local_timing = _local_timing_summary(estep_meta)
     summary["local_timing"] = local_timing
-    for field, value in local_timing["totals_s"].items():
-        summary[f"local_{field}"] = value
+    if local_timing["profile_count"]:
+        for field, value in local_timing["totals_s"].items():
+            summary[_local_performance_metric_name(field)] = value
     if persistent_cache is not None:
         summary["persistent_cache"] = persistent_cache
     table_fields = (
