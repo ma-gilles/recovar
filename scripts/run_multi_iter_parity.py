@@ -126,6 +126,31 @@ def replay_override_iteration_pairs(init_relion_iteration: int, max_iter: int) -
     ]
 
 
+def replay_override_is_before_cutoff(recovar_iteration: int, replay_override_max_iter: int | None) -> bool:
+    """Return whether a carried-state override belongs before the native boundary.
+
+    ``recovar_iteration`` is the zero-based slot in ``replay_iteration_overrides``.
+    Slot ``i`` seeds physical iteration ``i + 1``. A cutoff of ``N`` means
+    physical iterations 1 through N may read RELION's control STARs, but
+    physical iteration N + 1 starts from RECOVAR's own completed state.
+    Consequently, only carried-state slots strictly below N are replayed.
+    """
+
+    return replay_override_max_iter is None or int(recovar_iteration) < int(replay_override_max_iter)
+
+
+def parity_runtime_real_dtype(environ=None) -> type[np.float32] | type[np.float64]:
+    """Match the dense engine dtype for replayed floating-point operands."""
+
+    env = os.environ if environ is None else environ
+    enabled = {"1", "true", "yes", "on"}
+    use_double = any(
+        str(env.get(name, "0")).strip().lower() in enabled
+        for name in ("RECOVAR_USE_FLOAT64_SCORING", "RECOVAR_USE_FLOAT64_PROJECTIONS")
+    )
+    return np.float64 if use_double else np.float32
+
+
 def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
     """Map pose arrays indexed by stack row onto the current particle ordering."""
     n_total = len(our_names)
@@ -587,10 +612,11 @@ def main():
         type=int,
         default=None,
         help=(
-            "Diagnostic only: only re-seed recovar's state from RELION's per-iteration "
-            "STAR files through this recovar iteration number (1-indexed); later "
-            "iterations up to --max_iter run on recovar's own carried-forward state "
-            "instead. Gates BOTH replay sources the engine reads every iteration: (1) "
+            "Diagnostic only: use RELION's per-iteration STAR controls for the first "
+            "N physical RECOVAR iterations (1-indexed), then switch completely to "
+            "RECOVAR's own carried-forward state. A value of 0 disables all numbered "
+            "replay after the initial snapshot. Gates BOTH replay sources the engine "
+            "reads every iteration: (1) "
             "the explicit replay_iteration_overrides dict (model.star tau2/sigma2_noise, "
             "direction priors, previous-best poses, image/scale corrections -- via this "
             "script's own per-iteration override loop), and (2) RelionParityOptions."
@@ -914,7 +940,7 @@ def main():
         RelionParityOptions,
         ReplayState,
     )
-    from recovar.em.sampling import read_relion_sampling_metadata
+    from recovar.em.sampling import read_relion_optimiser_metadata, read_relion_sampling_metadata
     from recovar.output.output import save_volume
     from recovar.reconstruction import noise as recon_noise
     from recovar.reconstruction import regularization
@@ -1069,6 +1095,15 @@ def main():
     oversampling = int(m_os.group(1)) if m_os else 0
     m_ms = re.search(r"_rlnMaximumSignificantPoses\s+(-?\d+)", opt_text)
     max_significants = int(m_ms.group(1)) if m_ms else 500
+    optimiser_metadata = read_relion_optimiser_metadata(
+        relion_dir / f"{run_prefix}_it{iteration:03d}_optimiser.star"
+    )
+    optimizer_random_seed = optimiser_metadata.get("random_seed")
+    if optimizer_random_seed is not None:
+        optimizer_random_seed = int(optimizer_random_seed)
+        print(f"  RELION optimiser random seed: {optimizer_random_seed}")
+    else:
+        print("  RELION optimiser random seed: unavailable; autonomous perturbations will be unseeded")
     optimiser_cli_flags = parse_relion_optimiser_cli_flags(opt_text)
     oracle_firstiter_cc = bool(optimiser_cli_flags["do_firstiter_cc"])
     do_firstiter_cc = resolve_firstiter_cc_mode(
@@ -1221,6 +1256,12 @@ def main():
 
     # ---- Dataset + half-set split ----
     ds = load_dataset(args.data_star)
+    if os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        ds.dtype = np.complex128
+        ds.dtype_real = np.dtype(np.float64)
+        image_backend = ds.image_source.backend
+        image_backend.dtype = np.complex128
+        print("  Double scoring: preserving float64/complex128 particle preprocessing")
     if args.relion_native_lane_softmask_reduction:
         if args.image_fourier_backend != "relion_cuda":
             raise ValueError(
@@ -1329,15 +1370,20 @@ def main():
     half2_mask = our_subsets == 2
     half1_our_idx = [_idx(our_names[i]) for i in np.where(half1_mask)[0]]
     half2_our_idx = [_idx(our_names[i]) for i in np.where(half2_mask)[0]]
-    corr_h1 = np.array([combined_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-    corr_h2 = np.array([combined_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
-    scale_corr_h1 = np.array([pp_scale_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-    scale_corr_h2 = np.array([pp_scale_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+    replay_real_dtype = parity_runtime_real_dtype()
+    corr_h1 = np.array([combined_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=replay_real_dtype)
+    corr_h2 = np.array([combined_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=replay_real_dtype)
+    scale_corr_h1 = np.array(
+        [pp_scale_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=replay_real_dtype
+    )
+    scale_corr_h2 = np.array(
+        [pp_scale_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=replay_real_dtype
+    )
     for override in args.normalization_factor_override:
         try:
             stack_text, factor_text = override.split(":", maxsplit=1)
             stack_index = int(stack_text)
-            normalization_factor = np.float32(factor_text)
+            normalization_factor = replay_real_dtype(factor_text)
         except (TypeError, ValueError) as error:
             raise ValueError(
                 "--normalization-factor-override must be ZERO_BASED_STACK:FACTOR"
@@ -1370,8 +1416,8 @@ def main():
         offsets_x = np.array(relion_df["rlnOriginXAngst"], dtype=np.float64) / pixel_size
         offsets_y = np.array(relion_df["rlnOriginYAngst"], dtype=np.float64) / pixel_size
         offsets = np.stack([offsets_x, offsets_y], axis=1)
-        trans_h1 = np.array([offsets[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-        trans_h2 = np.array([offsets[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+        trans_h1 = np.array([offsets[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=replay_real_dtype)
+        trans_h2 = np.array([offsets[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=replay_real_dtype)
         print(
             f"  Pre-centering offsets: h1 mean_abs={np.abs(trans_h1).mean():.3f} px, h2 mean_abs={np.abs(trans_h2).mean():.3f} px"
         )
@@ -1384,8 +1430,8 @@ def main():
     euler_h2 = None
     if all(col in relion_df.columns for col in angle_cols):
         eulers = np.stack([np.array(relion_df[col], dtype=np.float64) for col in angle_cols], axis=1)
-        euler_h1 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-        euler_h2 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+        euler_h1 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=replay_real_dtype)
+        euler_h2 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=replay_real_dtype)
         print(f"  Previous best eulers: h1={euler_h1.shape[0]} particles, h2={euler_h2.shape[0]} particles")
     else:
         print("  Previous best eulers: None (angle columns not found)")
@@ -1413,8 +1459,8 @@ def main():
     pdf_orient_key = "model_pdf_orient_class_1"
     if pdf_orient_key in model_h1 and pdf_orient_key in model_h2:
         direction_prior = [
-            np.array(model_h1[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
-            np.array(model_h2[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
+            np.array(model_h1[pdf_orient_key]["rlnOrientationDistribution"], dtype=replay_real_dtype),
+            np.array(model_h2[pdf_orient_key]["rlnOrientationDistribution"], dtype=replay_real_dtype),
         ]
         print(
             "  direction_prior: "
@@ -1519,18 +1565,18 @@ def main():
         combined_h2_iter = (avg_norm_h2_iter / normcorr_iter) * pp_scale_h2_iter
 
         corr_h1_iter = np.array(
-            [combined_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32
+            [combined_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx], dtype=replay_real_dtype
         )
         corr_h2_iter = np.array(
-            [combined_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32
+            [combined_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx], dtype=replay_real_dtype
         )
         scale_corr_h1_iter = np.array(
             [pp_scale_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
-            dtype=np.float32,
+            dtype=replay_real_dtype,
         )
         scale_corr_h2_iter = np.array(
             [pp_scale_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
-            dtype=np.float32,
+            dtype=replay_real_dtype,
         )
 
         if "rlnOriginXAngst" in relion_iter_df.columns:
@@ -1539,11 +1585,11 @@ def main():
             offsets_iter = np.stack([offsets_x_iter, offsets_y_iter], axis=1)
             trans_h1_iter = np.array(
                 [offsets_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
-                dtype=np.float32,
+                dtype=replay_real_dtype,
             )
             trans_h2_iter = np.array(
                 [offsets_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
-                dtype=np.float32,
+                dtype=replay_real_dtype,
             )
         else:
             trans_h1_iter = None
@@ -1555,36 +1601,36 @@ def main():
         euler_h2_iter = None
         if all(col in relion_iter_df.columns for col in angle_cols):
             eulers_iter = np.stack([np.array(relion_iter_df[col], dtype=np.float64) for col in angle_cols], axis=1)
-            rotations_iter = utils.R_from_relion(eulers_iter).astype(np.float32)
+            rotations_iter = utils.R_from_relion(eulers_iter).astype(replay_real_dtype)
             rot_h1_iter = np.array(
                 [rotations_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
-                dtype=np.float32,
+                dtype=replay_real_dtype,
             )
             rot_h2_iter = np.array(
                 [rotations_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
-                dtype=np.float32,
+                dtype=replay_real_dtype,
             )
             euler_h1_iter = np.array(
                 [eulers_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
-                dtype=np.float32,
+                dtype=replay_real_dtype,
             )
             euler_h2_iter = np.array(
                 [eulers_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
-                dtype=np.float32,
+                dtype=replay_real_dtype,
             )
 
         pdf_iter = None
         if pdf_orient_key in model_h1_iter and pdf_orient_key in model_h2_iter:
             pdf_iter = [
-                np.array(model_h1_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
-                np.array(model_h2_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
+                np.array(model_h1_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=replay_real_dtype),
+                np.array(model_h2_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=replay_real_dtype),
             ]
 
         return {
-            "translation_sigma_angstrom": np.float32(sigma_offset_iter),
+            "translation_sigma_angstrom": replay_real_dtype(sigma_offset_iter),
             "translation_sigma_angstrom_per_half": np.asarray(
                 sigma_offset_iter_per_half,
-                dtype=np.float32,
+                dtype=replay_real_dtype,
             ),
             "image_corrections": [corr_h1_iter, corr_h2_iter],
             "scale_corrections": [scale_corr_h1_iter, scale_corr_h2_iter],
@@ -1602,10 +1648,7 @@ def main():
         iteration,
         args.max_iter,
     ):
-        if (
-            args.replay_override_max_iter is not None
-            and recovar_iter > args.replay_override_max_iter
-        ):
+        if not replay_override_is_before_cutoff(recovar_iter, args.replay_override_max_iter):
             print(
                 f"  Replay state for recovar iter {recovar_iter + 1}: skipped "
                 f"(--replay-override-max-iter {args.replay_override_max_iter}); "
@@ -1738,6 +1781,7 @@ def main():
             parity=RelionParityOptions(
                 tau2_fudge=1.0,
                 perturb_factor=0.5,
+                perturb_seed=optimizer_random_seed,
                 perturb_replay_relion_dir=str(relion_dir),
                 perturb_replay_relion_prefix=run_prefix,
                 perturb_replay_max_iter=args.replay_override_max_iter,
@@ -1746,6 +1790,7 @@ def main():
                 first_iteration_score_mode=args.first_iteration_score_mode,
                 first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
                 image_fourier_backend=args.image_fourier_backend,
+                optimizer_random_seed=optimizer_random_seed,
             ),
             replay=ReplayState(
                 init_image_corrections=[corr_h1, corr_h2],
@@ -1844,7 +1889,7 @@ def main():
         save_dict["ave_Pmax_trajectory"] = np.array(result["ave_Pmax_trajectory"])
     if result.get("pmax_per_image_history"):
         for i, pmax_arr in enumerate(result["pmax_per_image_history"]):
-            save_dict[f"pmax_per_image_iter_{i:03d}"] = np.array(pmax_arr, dtype=np.float32)
+            save_dict[f"pmax_per_image_iter_{i:03d}"] = np.asarray(pmax_arr)
     if result.get("healpix_order_trajectory"):
         save_dict["healpix_order_trajectory"] = np.array(result["healpix_order_trajectory"])
     if result.get("wall_times"):
@@ -1932,7 +1977,7 @@ def main():
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
                 if arr_i is not None:
-                    _save_array_or_half_sequence(f"{prefix_name}_{i:03d}", arr_i, dtype=np.float32)
+                    _save_array_or_half_sequence(f"{prefix_name}_{i:03d}", arr_i, dtype=replay_real_dtype)
 
     for key in (
         "final_all_data_best_rotation_eulers",
@@ -1941,7 +1986,7 @@ def main():
     ):
         value = result.get(key)
         if value is not None:
-            save_dict[key] = _concat_half_sequence(value, np.float32)
+            save_dict[key] = _concat_half_sequence(value, replay_real_dtype)
     for key in (
         "final_all_data_fsc",
         "tau2_radial_final_all_data",

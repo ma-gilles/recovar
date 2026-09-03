@@ -895,15 +895,16 @@ def _k1_data_vs_prior_for_scheduling(
             grid_size=grid_size,
         )
 
-    fsc_prev = np.asarray(raw_fsc, dtype=np.float32).copy()
+    runtime_dtype = _dense_global_scoring_dtype()
+    fsc_prev = np.asarray(raw_fsc, dtype=runtime_dtype).copy()
     if int(current_size) < int(grid_size):
         fsc_prev[min(len(fsc_prev), int(current_size) // 2 + 1) :] = 0.0
-    return np.asarray(fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge), dtype=np.float32)
+    return np.asarray(fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge), dtype=runtime_dtype)
 
 
 def _truncate_data_vs_prior_for_current_size(data_vs_prior, *, current_size, grid_size):
     """Zero DVP shells beyond RELION's inclusive current-size boundary."""
-    truncated = np.asarray(data_vs_prior, dtype=np.float32).copy()
+    truncated = np.asarray(data_vs_prior, dtype=_dense_global_scoring_dtype()).copy()
     if int(current_size) < int(grid_size):
         first_unavailable_shell = min(truncated.shape[-1], int(current_size) // 2 + 1)
         truncated[..., first_unavailable_shell:] = 0.0
@@ -917,7 +918,7 @@ def _truncate_fsc_for_current_size_growth(fsc, *, current_size, grid_size):
     shell therefore remains part of RELION's full-array FSC threshold scan;
     only shells starting at ``current_size // 2 + 1`` are unavailable.
     """
-    truncated = np.asarray(fsc, dtype=np.float32).copy()
+    truncated = np.asarray(fsc, dtype=_dense_global_scoring_dtype()).copy()
     if int(current_size) < int(grid_size):
         first_unavailable_shell = min(len(truncated), int(current_size) // 2 + 1)
         truncated[first_unavailable_shell:] = 0.0
@@ -931,7 +932,7 @@ def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
     for half_idx, stack in enumerate(stacks):
         if stack is None:
             return None
-        arr = np.asarray(stack, dtype=np.float32)
+        arr = np.asarray(stack, dtype=_dense_global_scoring_dtype())
         if arr.size == 0:
             arr = arr.reshape((0, *tuple(trailing_shape)))
         if arr.ndim != expected_ndim or tuple(arr.shape[1:]) != tuple(trailing_shape):
@@ -1121,11 +1122,11 @@ def _remap_relion_follower_runtime_inputs(
             state,
             group_ids=physical_groups,
             follower_owners=owners,
-        ).astype(np.float32)
+        ).astype(_dense_global_scoring_dtype())
         relion_half_inputs.scale_corrections[half_idx] = selected_scales
         relion_half_inputs.image_corrections[half_idx] = np.asarray(
             norm_factor * selected_scales,
-            dtype=np.float32,
+            dtype=_dense_global_scoring_dtype(),
         )
         stats_group_ids_per_half.append(
             relion_worker_group_ids(
@@ -1600,11 +1601,11 @@ def _scatter_dense_k_class_result(
         # See the cross-iteration pose-state comment at the
         # ``new_iter_best_rotations``/``new_iter_best_translations`` call
         # site: RELION's exp_metadata is never narrowed to float, so
-        # rotations/translations follow ``pose_dtype``
-        # (``_dense_global_scoring_dtype()``); Euler angles stay float32.
+        # rotations/translations/Euler metadata follow ``pose_dtype``
+        # (``_dense_global_scoring_dtype()``).
         best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=pose_dtype)
         best_pose_rotations[k] = best_rots
-        best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
+        best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(pose_dtype)
         best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=pose_dtype)
     return (
         ha_k,
@@ -1655,11 +1656,12 @@ def _collapse_single_class_stats_to_coarse(stats, *, rot_parent_map, n_rot_coars
         )
     coarse_post = np.zeros(n_rot_coarse, dtype=np.float64)
     np.add.at(coarse_post, rot_parent, rot_post)
+    runtime_dtype = _dense_global_scoring_dtype()
     return make_relion_stats(
-        log_evidence_per_image=np.asarray(stats.log_evidence_per_image, dtype=np.float32),
-        best_log_score_per_image=np.asarray(stats.best_log_score_per_image, dtype=np.float32),
-        max_posterior_per_image=np.asarray(stats.max_posterior_per_image, dtype=np.float32),
-        rotation_posterior_sums=coarse_post.astype(np.float32),
+        log_evidence_per_image=np.asarray(stats.log_evidence_per_image, dtype=runtime_dtype),
+        best_log_score_per_image=np.asarray(stats.best_log_score_per_image, dtype=runtime_dtype),
+        max_posterior_per_image=np.asarray(stats.max_posterior_per_image, dtype=runtime_dtype),
+        rotation_posterior_sums=coarse_post.astype(runtime_dtype),
     )
 
 
@@ -1905,11 +1907,11 @@ class PerHalfOutputs:
         self.noise_stats[idx] = hs.noise_stats
         self.max_posterior[idx] = np.asarray(
             hs.em_stats.max_posterior_per_image,
-            dtype=np.float32,
+            dtype=_dense_global_scoring_dtype(),
         )
         self.rotation_posterior[idx] = np.asarray(
             hs.em_stats.rotation_posterior_sums,
-            dtype=np.float32,
+            dtype=_dense_global_scoring_dtype(),
         )
         if hs.best_pose_rotations is not None:
             self.best_pose_rotations[idx] = hs.best_pose_rotations
@@ -2890,10 +2892,11 @@ def _score_half_dense(
                 or k1_adaptive_result.best_pose_translations is None
             ):
                 raise RuntimeError("K=1 adaptive path did not return best pose details")
-            best_rots = np.asarray(k1_adaptive_result.best_pose_rotations, dtype=np.float32)
+            pose_dtype = _dense_global_scoring_dtype()
+            best_rots = np.asarray(k1_adaptive_result.best_pose_rotations, dtype=pose_dtype)
             best_pose_rotations[k] = best_rots
-            best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
-            best_pose_translations[k] = np.asarray(k1_adaptive_result.best_pose_translations, dtype=np.float32)
+            best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(pose_dtype)
+            best_pose_translations[k] = np.asarray(k1_adaptive_result.best_pose_translations, dtype=pose_dtype)
         if fine_rotations_for_pose is None and rot_pmap_for_collapse is not None:
             fine_rotations_for_pose = _build_firstiter_cc_pass2_grids(
                 effective_rotations,
@@ -3674,12 +3677,13 @@ def _score_half_local(
         class_posterior_per_half[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
         if class_full_posterior_per_half is not None:
             class_full_posterior_per_half[k] = np.asarray(class_full_posterior_sums_k, dtype=np.float64)
-    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+    pose_dtype = _dense_global_scoring_dtype()
+    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=pose_dtype)
     best_pose_rotation_eulers[k] = utils.R_to_relion(
         np.asarray(best_rots_k),
         degrees=True,
-    ).astype(np.float32)
-    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+    ).astype(pose_dtype)
+    best_pose_translations[k] = np.asarray(best_trans_k, dtype=pose_dtype)
     return HalfScoreResult(
         ha=ha_k,
         Ft_y=Ft_y_k,
@@ -4538,7 +4542,7 @@ def _init_resolution_from_fsc(
 ) -> None:
     """Seed current/previous resolution from a caller-provided initial FSC curve."""
     schedule = options.schedule
-    fsc = np.asarray(schedule.init_fsc, dtype=np.float32).copy()
+    fsc = np.asarray(schedule.init_fsc, dtype=_dense_global_scoring_dtype()).copy()
     previous_current_size = int(schedule.init_current_size)
     if previous_current_size < grid_size:
         fsc[min(len(fsc), previous_current_size // 2) :] = 0.0
@@ -4660,6 +4664,27 @@ def _past_perturb_replay_max_iter(iteration: int, perturb_replay_max_iter: int |
     if perturb_replay_max_iter is None:
         return False
     return (int(iteration) + 1) > int(perturb_replay_max_iter)
+
+
+def _native_sampling_boundary_for_iteration(
+    *,
+    iteration: int,
+    perturb_replay_relion_dir: str | None,
+    perturb_replay_max_iter: int | None,
+    sealed_sampling_state,
+) -> bool:
+    """Return whether this physical iteration owns sampling and convergence.
+
+    A diagnostic replay cutoff is a real ownership boundary, not merely a
+    guard around STAR reads. Once crossed, RECOVAR must resume its native
+    expected-accuracy, angular-sampling, and convergence transitions.
+    """
+
+    replay_active = perturb_replay_relion_dir is not None and not _past_perturb_replay_max_iter(
+        iteration,
+        perturb_replay_max_iter,
+    )
+    return not replay_active and sealed_sampling_state is None
 
 
 def _run_relion_iteration_loop(
@@ -4977,7 +5002,7 @@ def _run_relion_iteration_loop(
                 mean_variance_per_half[0].astype(jnp.float64)
                 + mean_variance_per_half[1].astype(jnp.float64)
             ),
-            dtype=jnp.float32,
+            dtype=_dense_global_scoring_dtype(),
         )
         logger.info("Initialized exact per-half K=1 tau2 priors")
     else:
@@ -5074,7 +5099,7 @@ def _run_relion_iteration_loop(
     ]
     previous_noise_radial = jnp.asarray(
         np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
-        dtype=jnp.float32,
+        dtype=_dense_global_scoring_dtype(),
     )
     _mark_setup_phase("noise_radial_init")
 
@@ -5186,8 +5211,11 @@ def _run_relion_iteration_loop(
         "RELION mode setup timing before iteration loop: %s",
         ", ".join(f"{key}={value:.1f}s" for key, value in setup_phase_seconds.items()),
     )
-    native_sampling_boundary = (
-        perturb_replay_relion_dir is None and sealed_sampling_state is None
+    native_sampling_boundary = _native_sampling_boundary_for_iteration(
+        iteration=iteration,
+        perturb_replay_relion_dir=perturb_replay_relion_dir,
+        perturb_replay_max_iter=perturb_replay_max_iter,
+        sealed_sampling_state=sealed_sampling_state,
     )
     # A numbered RELION sampling STAR is the state *after* the expectation
     # transition that produced it.  The next expectation computes
@@ -5219,6 +5247,23 @@ def _run_relion_iteration_loop(
             sealed_scoring_context=debug.sealed_scoring_context,
         )
     while (schedule.force_max_iter_after_convergence or not state.has_converged) and iteration < schedule.max_iter:
+        if perturb_replay_relion_dir is not None and _past_perturb_replay_max_iter(
+            iteration, perturb_replay_max_iter
+        ):
+            logger.info(
+                "Replay override: disabling RELION per-iteration STAR replay from "
+                "iteration %d onward (--replay-override-max-iter %d)",
+                iteration + 1,
+                perturb_replay_max_iter,
+            )
+            perturb_replay_relion_dir = None
+            replay_saved_healpix_order = None
+        native_sampling_boundary = _native_sampling_boundary_for_iteration(
+            iteration=iteration,
+            perturb_replay_relion_dir=perturb_replay_relion_dir,
+            perturb_replay_max_iter=perturb_replay_max_iter,
+            sealed_sampling_state=sealed_sampling_state,
+        )
         # RELION checks convergence at the top of iteration n from the
         # completed n-1 statistics and the fine-enough decision latched during
         # expectation n-1.  If true, iteration n is the unnumbered joined
@@ -5241,16 +5286,6 @@ def _run_relion_iteration_loop(
         iter_replay_override = None
         if replay.replay_iteration_overrides is not None and iteration < len(replay.replay_iteration_overrides):
             iter_replay_override = replay.replay_iteration_overrides[iteration]
-        if perturb_replay_relion_dir is not None and _past_perturb_replay_max_iter(
-            iteration, perturb_replay_max_iter
-        ):
-            logger.info(
-                "Replay override: disabling RELION per-iteration STAR replay from "
-                "iteration %d onward (--replay-override-max-iter %d)",
-                iteration + 1,
-                perturb_replay_max_iter,
-            )
-            perturb_replay_relion_dir = None
         relion_firstiter_cc_this_iter = bool(
             parity.emulate_relion_firstiter_cc and init_relion_iteration == 0 and iteration == 0
         )
@@ -5345,7 +5380,10 @@ def _run_relion_iteration_loop(
             if k_class_enabled:
                 if previous_data_vs_prior_for_scheduling is None:
                     raise RuntimeError("K-class current-size scheduling requires a previous data_vs_prior curve")
-                data_vs_prior_prev_raw = np.asarray(previous_data_vs_prior_for_scheduling, dtype=np.float32).copy()
+                data_vs_prior_prev_raw = np.asarray(
+                    previous_data_vs_prior_for_scheduling,
+                    dtype=_dense_global_scoring_dtype(),
+                ).copy()
                 data_vs_prior_prev = data_vs_prior_prev_raw.copy()
                 if prev_cs < grid_size:
                     data_vs_prior_prev[..., min(data_vs_prior_prev.shape[-1], prev_cs // 2 + 1) :] = 0.0
@@ -5405,7 +5443,10 @@ def _run_relion_iteration_loop(
                     )
                 cs = computed_cs
             else:
-                fsc_prev_raw = np.asarray(history.fsc_history[-1], dtype=np.float32).copy()
+                fsc_prev_raw = np.asarray(
+                    history.fsc_history[-1],
+                    dtype=_dense_global_scoring_dtype(),
+                ).copy()
                 fsc_prev_for_growth = _truncate_fsc_for_current_size_growth(
                     history.fsc_for_growth_history[-1] if history.fsc_for_growth_history else fsc_prev_raw,
                     current_size=prev_cs,
@@ -7334,7 +7375,8 @@ def _run_relion_iteration_loop(
             mean_signal_variance = jnp.stack(mean_signal_variance_per_class, axis=0)
             mean_signal_variance_shells = jnp.stack(mean_signal_variance_shells_per_class, axis=0)
             data_vs_prior_iter = np.stack(
-                [np.asarray(dvp, dtype=np.float32) for dvp in data_vs_prior_per_class], axis=0
+                [np.asarray(dvp, dtype=_dense_global_scoring_dtype()) for dvp in data_vs_prior_per_class],
+                axis=0,
             )
             history.record_data_vs_prior(data_vs_prior_iter)
             previous_data_vs_prior_for_scheduling = data_vs_prior_iter
@@ -7580,7 +7622,10 @@ def _run_relion_iteration_loop(
                 dtype=np.int32,
             ).reshape(-1)
             radial_shells = np.minimum(radial_shells, len(tau2_taper) - 1)
-            tau2_taper_volume = jnp.asarray(tau2_taper[radial_shells], dtype=jnp.float32)
+            tau2_taper_volume = jnp.asarray(
+                tau2_taper[radial_shells],
+                dtype=_dense_global_scoring_dtype(),
+            )
             for half_idx in range(2):
                 mean_signal_variance_per_half[half_idx] = (
                     mean_signal_variance_per_half[half_idx] * tau2_taper_volume
@@ -7834,11 +7879,17 @@ def _run_relion_iteration_loop(
             )
         else:
             if tau2_update_details is not None and tau2_update_details.get("ssnr_shells") is not None:
-                dvp_iter = np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float32).copy()
+                dvp_iter = np.asarray(
+                    tau2_update_details["ssnr_shells"],
+                    dtype=_dense_global_scoring_dtype(),
+                ).copy()
             else:
                 dvp_iter = np.asarray(
-                    fsc_to_relion_ssnr(np.asarray(fsc, dtype=np.float32), tau2_fudge=tau2_fudge),
-                    dtype=np.float32,
+                    fsc_to_relion_ssnr(
+                        np.asarray(fsc, dtype=_dense_global_scoring_dtype()),
+                        tau2_fudge=tau2_fudge,
+                    ),
+                    dtype=_dense_global_scoring_dtype(),
                 )
             dvp_iter = _truncate_data_vs_prior_for_current_size(
                 dvp_iter,
@@ -7951,19 +8002,17 @@ def _run_relion_iteration_loop(
         # backed by ``std::vector<double>`` in ``MetaDataContainer``) -- never
         # narrowed to float, so this snapshot must follow the same dtype as
         # the rest of the dense/global-path float64-sensitive operands
-        # (``_dense_global_scoring_dtype``). Euler angles are left at float32:
-        # they are RELION's public per-particle metadata angles and, unlike
-        # the rotation matrix/translation used directly in scoring
-        # arithmetic, degree-valued float32 has ample precision relative to
-        # any HEALPix grid spacing used in practice.
+        # (``_dense_global_scoring_dtype``). The Euler columns live in the
+        # same ``MultidimArray<RFLOAT> exp_metadata`` as translations in
+        # RELION, so ACC_DOUBLE_PRECISION also keeps them double internally.
         _pose_state_dtype = _dense_global_scoring_dtype()
         for k in range(2):
             if best_pose_rotations[k] is not None:
                 best_rots = np.asarray(best_pose_rotations[k], dtype=_pose_state_dtype)
                 best_eulers = (
-                    np.asarray(best_pose_rotation_eulers[k], dtype=np.float32)
+                    np.asarray(best_pose_rotation_eulers[k], dtype=_pose_state_dtype)
                     if best_pose_rotation_eulers[k] is not None
-                    else utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
+                    else utils.R_to_relion(best_rots, degrees=True).astype(_pose_state_dtype)
                 )
                 best_trans = np.asarray(best_pose_translations[k], dtype=_pose_state_dtype)
             elif use_local:
@@ -7978,13 +8027,13 @@ def _run_relion_iteration_loop(
                         random_perturbation=local_search_random_perturbation,
                         angular_sampling_deg=local_search_angular_sampling_deg,
                     )
-                    best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
+                    best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
                 else:
                     best_rots = np.asarray(local_search_rotations, dtype=_pose_state_dtype)[rot_idx]
                     if local_search_rotation_eulers is not None:
-                        best_eulers = np.asarray(local_search_rotation_eulers, dtype=np.float32)[rot_idx]
+                        best_eulers = np.asarray(local_search_rotation_eulers, dtype=_pose_state_dtype)[rot_idx]
                     else:
-                        best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
+                        best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
                 best_trans = np.asarray(current_translations)[trans_idx]
             else:
                 # Global search uses the dense grid in pose_rotations[k].
@@ -7993,7 +8042,7 @@ def _run_relion_iteration_loop(
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
                 best_rots = np.asarray(pose_rotations[k], dtype=_pose_state_dtype)[rot_idx]
-                best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
+                best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
                 best_trans = np.asarray(current_translations)[trans_idx]
             new_iter_best_rotations[k] = best_rots
             new_iter_best_rotation_eulers[k] = best_eulers
@@ -8032,8 +8081,11 @@ def _run_relion_iteration_loop(
         )
 
         if not k_class_enabled:
-            history.record_data_vs_prior(np.asarray(dvp_iter, dtype=np.float32))
-            previous_data_vs_prior_for_scheduling = np.asarray(dvp_iter, dtype=np.float32)
+            history.record_data_vs_prior(np.asarray(dvp_iter, dtype=_dense_global_scoring_dtype()))
+            previous_data_vs_prior_for_scheduling = np.asarray(
+                dvp_iter,
+                dtype=_dense_global_scoring_dtype(),
+            )
 
         # RELION-style posterior-weighted noise update. Helper folds the
         # K-class (shared) / K=1 (per-half) / firstiter_cc-skip variants;
@@ -8771,7 +8823,7 @@ def _run_relion_iteration_loop(
                 ]
                 previous_noise_radial = jnp.asarray(
                     np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
-                    dtype=jnp.float32,
+                    dtype=_dense_global_scoring_dtype(),
                 )
                 _final_replay_fields.append("noise_variance")
             _final_replay_dir_prior = final_replay_override.get("direction_prior")

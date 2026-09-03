@@ -1892,10 +1892,10 @@ def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch
     )
     calls = []
 
-    def fake_read_priors(path, n_classes):
+    def fake_read_priors(path, n_classes, *, dtype=np.float32):
         calls.append(str(path))
         assert n_classes == 2
-        return raw_prior
+        return np.asarray(raw_prior, dtype=dtype)
 
     monkeypatch.setattr(relion_replay, "read_relion_direction_priors", fake_read_priors)
 
@@ -1961,10 +1961,19 @@ def test_read_relion_direction_priors_reads_all_classes(tmp_path):
     )
 
     priors = read_relion_direction_priors(model_star, n_classes=2)
+    priors_float64 = read_relion_direction_priors(model_star, n_classes=2, dtype=np.float64)
 
     np.testing.assert_allclose(
         priors,
         np.asarray([[0.2, 0.3], [0.1, 0.4]], dtype=np.float32),
         rtol=1e-6,
         atol=1e-6,
+    )
+    assert priors.dtype == np.float32
+    assert priors_float64.dtype == np.float64
+    np.testing.assert_allclose(
+        priors_float64,
+        np.asarray([[0.2, 0.3], [0.1, 0.4]], dtype=np.float64),
+        rtol=0.0,
+        atol=0.0,
     )

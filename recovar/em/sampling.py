@@ -960,7 +960,7 @@ def read_relion_optimiser_metadata(optimiser_star_path):
     )
 
 
-def read_relion_direction_prior(model_star_path):
+def read_relion_direction_prior(model_star_path, *, dtype=np.float32):
     """Read RELION's saved orientation distribution from ``model.star``."""
     import numpy as np
     import starfile
@@ -971,10 +971,10 @@ def read_relion_direction_prior(model_star_path):
     df = data["model_pdf_orient_class_1"]
     if "rlnOrientationDistribution" not in df.columns:
         raise ValueError(f"Missing rlnOrientationDistribution in {model_star_path}")
-    return np.asarray(df["rlnOrientationDistribution"], dtype=np.float32)
+    return np.asarray(df["rlnOrientationDistribution"], dtype=dtype)
 
 
-def read_relion_direction_priors(model_star_path, n_classes=None):
+def read_relion_direction_priors(model_star_path, n_classes=None, *, dtype=np.float32):
     """Read all RELION per-class orientation distributions from ``model.star``."""
     import re
 
@@ -1005,7 +1005,7 @@ def read_relion_direction_priors(model_star_path, n_classes=None):
         df = data[key]
         if "rlnOrientationDistribution" not in df.columns:
             raise ValueError(f"Missing rlnOrientationDistribution in {key} of {model_star_path}")
-        priors.append(np.asarray(df["rlnOrientationDistribution"], dtype=np.float32))
+        priors.append(np.asarray(df["rlnOrientationDistribution"], dtype=dtype))
     return np.stack(priors, axis=0)
 
 
