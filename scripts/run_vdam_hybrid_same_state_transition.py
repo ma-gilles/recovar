@@ -48,12 +48,27 @@ HYBRID_PACKED_DEFERRED_ARM_ORDER = (
     "hybrid_packed_deferred_2",
     "direct_2",
 )
+STABLE_SHAPES_ARM_ORDER = (
+    "stable_off_1",
+    "stable_on_1",
+    "stable_on_2",
+    "stable_off_2",
+)
+STABLE_FLAT_CAPACITY_ARM_ORDER = (
+    "stable_flat_off_1",
+    "stable_flat_on_1",
+    "stable_flat_on_2",
+    "stable_flat_off_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE",
 )
 FLAT_ROW_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
+STABLE_FLAT_CAPACITY_ENVIRONMENT = (
+    "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
+)
 PACKED_PROJECTION_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
 PACKED_DEFERRED_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
 CANDIDATE_MODES = (
@@ -62,6 +77,8 @@ CANDIDATE_MODES = (
     "packed_projection",
     "packed_deferred",
     "hybrid_packed_deferred",
+    "stable_shapes",
+    "stable_flat_capacity",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -98,6 +115,10 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return PACKED_DEFERRED_ARM_ORDER
     if candidate_mode == "hybrid_packed_deferred":
         return HYBRID_PACKED_DEFERRED_ARM_ORDER
+    if candidate_mode == "stable_shapes":
+        return STABLE_SHAPES_ARM_ORDER
+    if candidate_mode == "stable_flat_capacity":
+        return STABLE_FLAT_CAPACITY_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -105,9 +126,23 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
     values = {
         **{name: "0" for name in HYBRID_ENVIRONMENT},
         FLAT_ROW_ENVIRONMENT: "0",
+        STABLE_FLAT_CAPACITY_ENVIRONMENT: "0",
         PACKED_PROJECTION_ENVIRONMENT: "0",
         PACKED_DEFERRED_ENVIRONMENT: "0",
     }
+    if candidate_mode == "stable_shapes":
+        values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+        values[FLAT_ROW_ENVIRONMENT] = "1"
+        values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+        values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        return values
+    if candidate_mode == "stable_flat_capacity":
+        values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+        values[FLAT_ROW_ENVIRONMENT] = "1"
+        values[STABLE_FLAT_CAPACITY_ENVIRONMENT] = "1" if enabled else "0"
+        values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+        values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        return values
     if enabled:
         if candidate_mode == "hybrid":
             values.update({name: "1" for name in HYBRID_ENVIRONMENT})
@@ -131,7 +166,70 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
 
 
 def _candidate_uses_hybrid(candidate_mode: str) -> bool:
-    return candidate_mode in {"hybrid", "hybrid_packed_deferred"}
+    return candidate_mode in {
+        "hybrid",
+        "hybrid_packed_deferred",
+        "stable_shapes",
+        "stable_flat_capacity",
+    }
+
+
+def _arm_candidate_enabled(label: str, candidate_mode: str) -> bool:
+    if candidate_mode == "stable_shapes":
+        return label.startswith("stable_on_")
+    if candidate_mode == "stable_flat_capacity":
+        return label.startswith("stable_flat_on_")
+    return not label.startswith("direct")
+
+
+def _validate_stable_flat_capacity_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+) -> dict[str, Any]:
+    """Prove the adapter request reached every executed local engine profile."""
+
+    profiles: dict[str, Any] = {}
+    strict_reduction_count = 0
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict) or "chunk_flat_score_rows" not in value:
+            continue
+        if not bool(value.get("flat_local_rows_enabled", False)):
+            raise RuntimeError(f"{label} profile {key} did not execute flat rows")
+        if "stable_flat_row_capacity_enabled" not in value:
+            raise RuntimeError(
+                f"{label} profile {key} omitted stable_flat_row_capacity_enabled"
+            )
+        if bool(value["stable_flat_row_capacity_enabled"]) != bool(enabled):
+            raise RuntimeError(
+                f"{label} profile {key} reported stable_flat_row_capacity_enabled="
+                f"{value['stable_flat_row_capacity_enabled']!r}, expected {enabled!r}"
+            )
+        flat_rows = np.asarray(value["chunk_flat_score_rows"], dtype=np.int64)
+        padded_rows = np.asarray(value["chunk_padded_rotations"], dtype=np.int64)
+        if flat_rows.ndim != 1 or flat_rows.size == 0:
+            raise RuntimeError(f"{label} profile {key} has no flat-row execution")
+        if flat_rows.shape != padded_rows.shape:
+            raise RuntimeError(f"{label} profile {key} row shapes do not align")
+        if np.any(flat_rows > padded_rows):
+            raise RuntimeError(f"{label} profile {key} exceeds the mature B*R ABI")
+        if enabled and not np.array_equal(flat_rows, padded_rows):
+            raise RuntimeError(f"{label} profile {key} did not use the mature B*R ABI")
+        strict_reduction_count += int(np.count_nonzero(flat_rows < padded_rows))
+        profiles[key] = {
+            "chunk_flat_score_rows": flat_rows.tolist(),
+            "chunk_padded_rotations": padded_rows.tolist(),
+        }
+    if not profiles:
+        raise RuntimeError(f"{label} has no local engine profile to validate")
+    if not enabled and strict_reduction_count == 0:
+        raise RuntimeError(f"{label} stable-off arm did not retain packed row reduction")
+    return {
+        "enabled": bool(enabled),
+        "strict_reduction_count": strict_reduction_count,
+        "profiles": profiles,
+    }
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -464,6 +562,11 @@ def _run_transition_arm(
     initial_particle_state_manifest = _dataclass_manifest(particle_state)
     initial_sampling_state_manifest = _dataclass_manifest(sampling_state)
     opts = checkpoint["opts"]
+    if candidate_mode == "stable_shapes":
+        opts = dataclasses.replace(
+            opts,
+            stable_fourier_window_shapes=bool(candidate_enabled),
+        )
     dataset = checkpoint["dataset"]
     expectation_step = checkpoint["expectation_factory"](
         dataset,
@@ -538,12 +641,37 @@ def _run_transition_arm(
         raise RuntimeError(f"{label} stopped at the wrong iteration")
     if "accumulators" not in captured or "estep_meta" not in captured:
         raise RuntimeError(f"{label} did not capture its E-step boundary")
+    stable_flat_capacity_contract = None
+    if candidate_mode == "stable_flat_capacity":
+        for key in (
+            "requested_stable_flat_row_capacity",
+            "effective_stable_flat_row_capacity",
+        ):
+            if key not in captured["estep_meta"]:
+                raise RuntimeError(f"{label} did not report {key}")
+            if bool(captured["estep_meta"][key]) != bool(candidate_enabled):
+                raise RuntimeError(
+                    f"{label} reported {key}="
+                    f"{captured['estep_meta'][key]!r}, expected {candidate_enabled!r}"
+                )
+        stable_flat_capacity_contract = _validate_stable_flat_capacity_profiles(
+            captured["estep_meta"],
+            enabled=candidate_enabled,
+            label=label,
+        )
     return {
         "label": label,
         "candidate_mode": candidate_mode,
         "candidate_enabled": bool(candidate_enabled),
-        "hybrid": bool(candidate_enabled and _candidate_uses_hybrid(candidate_mode)),
+        "hybrid": bool(
+            _candidate_uses_hybrid(candidate_mode)
+            and (
+                candidate_enabled
+                or candidate_mode in {"stable_shapes", "stable_flat_capacity"}
+            )
+        ),
         "wall_s": wall_s,
+        "stable_flat_capacity_contract": stable_flat_capacity_contract,
         "initial_state_manifest": initial_state_manifest,
         "initial_particle_state_manifest": initial_particle_state_manifest,
         "initial_sampling_state_manifest": initial_sampling_state_manifest,
@@ -605,7 +733,7 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint,
             label=label,
             candidate_mode=args.candidate_mode,
-            candidate_enabled=not label.startswith("direct"),
+            candidate_enabled=_arm_candidate_enabled(label, args.candidate_mode),
             checkpoint_iteration=args.checkpoint_iteration,
         )
 
@@ -642,6 +770,9 @@ def main(argv: list[str] | None = None) -> int:
             "candidate_mode": arm["candidate_mode"],
             "candidate_enabled": arm["candidate_enabled"],
             "wall_s": arm["wall_s"],
+            "stable_flat_capacity_contract": arm[
+                "stable_flat_capacity_contract"
+            ],
             "initial_state_manifest": arm["initial_state_manifest"],
             "initial_particle_state_manifest": arm["initial_particle_state_manifest"],
             "initial_sampling_state_manifest": arm["initial_sampling_state_manifest"],
@@ -659,6 +790,9 @@ def main(argv: list[str] | None = None) -> int:
             "candidate_mode": arm["candidate_mode"],
             "candidate_enabled": arm["candidate_enabled"],
             "wall_s": arm["wall_s"],
+            "stable_flat_capacity_contract": payload[
+                "stable_flat_capacity_contract"
+            ],
             "artifact": str(arm_path.resolve()),
             "artifact_sha256": _sha256_bytes(arm_path.read_bytes()),
             "accumulator_manifest": payload["accumulator_manifest"],
@@ -686,9 +820,25 @@ def main(argv: list[str] | None = None) -> int:
             "model_state_exact_for_every_arm": True,
             "particle_state_exact_for_every_arm": True,
             "sampling_state_exact_for_every_arm": True,
-            "baseline_trajectory_backend": "direct",
-            "candidate_backend": args.candidate_mode,
-            "transition_panel": f"direct/{args.candidate_mode}/{args.candidate_mode}/direct",
+            "baseline_trajectory_backend": (
+                "hybrid_packed_deferred_stable_fourier_off"
+                if args.candidate_mode == "stable_shapes"
+                else (
+                    "hybrid_packed_deferred_stable_flat_capacity_off"
+                    if args.candidate_mode == "stable_flat_capacity"
+                    else "direct"
+                )
+            ),
+            "candidate_backend": (
+                "hybrid_packed_deferred_stable_fourier_on"
+                if args.candidate_mode == "stable_shapes"
+                else (
+                    "hybrid_packed_deferred_stable_flat_capacity_on"
+                    if args.candidate_mode == "stable_flat_capacity"
+                    else args.candidate_mode
+                )
+            ),
+            "transition_panel": "/".join(arm_order),
             "support_audit_ids_enabled_for_transition_arms": True,
         },
         "science_promotion_allowed": False,

@@ -123,6 +123,11 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         runner._arm_order("hybrid_packed_deferred")
         == runner.HYBRID_PACKED_DEFERRED_ARM_ORDER
     )
+    assert runner._arm_order("stable_shapes") == runner.STABLE_SHAPES_ARM_ORDER
+    assert (
+        runner._arm_order("stable_flat_capacity")
+        == runner.STABLE_FLAT_CAPACITY_ARM_ORDER
+    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -136,9 +141,18 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         "hybrid_packed_deferred", enabled=True
     )
     hybrid = runner._candidate_environment("hybrid", enabled=True)
+    stable_off = runner._candidate_environment("stable_shapes", enabled=False)
+    stable_on = runner._candidate_environment("stable_shapes", enabled=True)
+    stable_flat_off = runner._candidate_environment(
+        "stable_flat_capacity", enabled=False
+    )
+    stable_flat_on = runner._candidate_environment(
+        "stable_flat_capacity", enabled=True
+    )
 
     assert all(control[name] == "0" for name in runner.HYBRID_ENVIRONMENT)
     assert control[runner.FLAT_ROW_ENVIRONMENT] == "0"
+    assert control[runner.STABLE_FLAT_CAPACITY_ENVIRONMENT] == "0"
     assert control[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
     assert control[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
     assert all(flat_rows[name] == "0" for name in runner.HYBRID_ENVIRONMENT)
@@ -168,9 +182,85 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert hybrid[runner.FLAT_ROW_ENVIRONMENT] == "0"
     assert hybrid[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
     assert hybrid[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
+    assert stable_off == stable_on
+    assert all(stable_off[name] == "1" for name in runner.HYBRID_ENVIRONMENT)
+    assert stable_off[runner.FLAT_ROW_ENVIRONMENT] == "1"
+    assert stable_off[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
+    assert stable_off[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
+    assert stable_off[runner.STABLE_FLAT_CAPACITY_ENVIRONMENT] == "0"
+    assert stable_flat_off[runner.STABLE_FLAT_CAPACITY_ENVIRONMENT] == "0"
+    assert stable_flat_on[runner.STABLE_FLAT_CAPACITY_ENVIRONMENT] == "1"
+    assert all(
+        stable_flat_off[name] == stable_flat_on[name] == "1"
+        for name in runner.HYBRID_ENVIRONMENT
+    )
+    assert stable_flat_off[runner.FLAT_ROW_ENVIRONMENT] == "1"
+    assert stable_flat_on[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
+    assert stable_flat_on[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
     assert runner._candidate_uses_hybrid("hybrid") is True
     assert runner._candidate_uses_hybrid("hybrid_packed_deferred") is True
+    assert runner._candidate_uses_hybrid("stable_shapes") is True
+    assert runner._candidate_uses_hybrid("stable_flat_capacity") is True
     assert runner._candidate_uses_hybrid("packed_deferred") is False
+    assert runner._arm_candidate_enabled("stable_off_1", "stable_shapes") is False
+    assert runner._arm_candidate_enabled("stable_on_1", "stable_shapes") is True
+    assert (
+        runner._arm_candidate_enabled(
+            "stable_flat_off_1", "stable_flat_capacity"
+        )
+        is False
+    )
+    assert (
+        runner._arm_candidate_enabled(
+            "stable_flat_on_1", "stable_flat_capacity"
+        )
+        is True
+    )
+
+
+def test_same_state_stable_flat_capacity_profiles_prove_engine_execution() -> None:
+    packed = {
+        "halfset_0_profile_summary": {
+            "flat_local_rows_enabled": True,
+            "stable_flat_row_capacity_enabled": False,
+            "chunk_flat_score_rows": [4752, 4752],
+            "chunk_padded_rotations": [13824, 13824],
+        }
+    }
+    stable = {
+        "halfset_0_profile_summary": {
+            "flat_local_rows_enabled": True,
+            "stable_flat_row_capacity_enabled": True,
+            "chunk_flat_score_rows": [13824, 13824],
+            "chunk_padded_rotations": [13824, 13824],
+        }
+    }
+
+    packed_contract = runner._validate_stable_flat_capacity_profiles(
+        packed, enabled=False, label="off"
+    )
+    stable_contract = runner._validate_stable_flat_capacity_profiles(
+        stable, enabled=True, label="on"
+    )
+
+    assert packed_contract["strict_reduction_count"] == 2
+    assert stable_contract["strict_reduction_count"] == 0
+
+
+def test_same_state_stable_flat_capacity_profiles_fail_closed() -> None:
+    ignored = {
+        "halfset_0_profile_summary": {
+            "flat_local_rows_enabled": True,
+            "stable_flat_row_capacity_enabled": False,
+            "chunk_flat_score_rows": [4752],
+            "chunk_padded_rotations": [13824],
+        }
+    }
+
+    with np.testing.assert_raises_regex(RuntimeError, "reported"):
+        runner._validate_stable_flat_capacity_profiles(
+            ignored, enabled=True, label="on"
+        )
 
 
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
@@ -196,6 +286,12 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         "direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2"
         in sbatch
     )
+    assert "stable_off_1,stable_on_1,stable_on_2,stable_off_2" in sbatch
+    assert (
+        "stable_flat_off_1,stable_flat_on_1,stable_flat_on_2,stable_flat_off_2"
+        in sbatch
+    )
+    assert '"RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=0"' in sbatch
     assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch
     assert "VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS" in sbatch

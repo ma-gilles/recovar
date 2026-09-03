@@ -79,6 +79,12 @@ case "${CANDIDATE_MODE}" in
   hybrid_packed_deferred)
     expected_arm_order=direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2
     ;;
+  stable_shapes)
+    expected_arm_order=stable_off_1,stable_on_1,stable_on_2,stable_off_2
+    ;;
+  stable_flat_capacity)
+    expected_arm_order=stable_flat_off_1,stable_flat_on_1,stable_flat_on_2,stable_flat_off_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -183,6 +189,7 @@ command=(
   "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO=0"
   "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE=0"
   "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS=0"
+  "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=0"
   "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION=0"
   "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM=0"
   "TMPDIR=${RUNTIME}/tmp"
