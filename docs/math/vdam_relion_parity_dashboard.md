@@ -7,6 +7,20 @@
 
 ## Live engineering snapshot — 2026-09-03
 
+> **LATEST — STABLE-SHAPE SAME-STATE RESULT:** H100 job `13394745`
+> deep-copied one optimized iteration-47 live state into stable
+> off/on/on/off arms. All four crossed comparisons preserve selected IDs,
+> poses/translations/classes, significant counts, support hashes, complete
+> particle state, and sampling state **exactly**. Accumulator changes are at
+> most `2.10e-7` normalized L2 but exceed the strict repeat envelope by up to
+> `2.88x`; final state reaches `4.93x` at at most `5.82e-8`, so the atomic gate
+> and defaults remain on hold. Warm fixed-size wall is 2.73% slower; the
+> 45.15% trajectory win comes from avoiding recompilation. Particle 2798 is
+> not tied from the shared state: the fresh-trajectory competing translation
+> ranks fifth, 3.171 score units below the winner. The next performance target
+> is the still-logical-shape coarse-significance window.
+> [Focused report.](../perf/vdam_allten_stable_same_state_it48_h100_13394745.md)
+>
 > **LATEST — SHARED BATCHED POSTERIOR COMPOSITION:** H100 job `13393862`
 > composes the shared EM/VDAM batched exact-posterior CUDA primitives with
 > static host-planned geometry.  Relative to static geometry alone, it removes
@@ -66,6 +80,7 @@
 | Signal | Status | Evidence / next decision |
 |---|---|---|
 | Release score | **NOT READY — correctness 2 / 20; runtime 0 / 20** | Frozen v3 is unchanged. Component gates and diagnostics cannot inflate it. |
+| Stable-shape exact-state transition | **HARD STATE EXACT / ATOMIC HOLD** | Job `13394745` passes all four crossed hard-state comparisons from one live iteration-47 state. Continuous accumulator/final-state changes are tiny but outside the strict repeat envelope; warm fixed-size wall is +2.73%, confirming the trajectory value is compile avoidance. Particle 2798 has a clear shared-state margin; [report](../perf/vdam_allten_stable_same_state_it48_h100_13394745.md). |
 | Static geometry + shared batched posterior | **23/23 EXACT / 2,410 FEWER KERNELS** | Job `13393862` improves warm replay `5.144 -> 4.386 s` (-14.75%) and Nsight span `1.689 -> 1.454 s` (-13.91%) versus `13391819`. The shared posterior primitives remove exactly 2,040 launches on top of static geometry; [report](../perf/vdam_static_geometry_batched_posterior_h100_13393862.md). |
 | Complete optimized `0 -> 50` stack | **45.15% FASTER / STRICT SCIENCE HOLD** | Job `13392701` changes median fresh wall `500.604 -> 274.569 s`, expectation `471.249 -> 239.133 s`, and memory +0.04%. Candidate 1 stays hard-state exact; candidate 2 changes one pose at iterations 48 and 50. Runtime passes, defaults and frozen scores do not; [report](../perf/vdam_runtime_stack_trajectory_h100_13392701.md). |
 | Shared static half-spectrum geometry | **23 / 23 EXACT / 41 FEWER COMPILES** | Comparable optimized H100 replay `13393276` changes stderr compile count `435 -> 394`, recorded miss time `22.596 -> 21.918 s`, cold wall `30.069 -> 29.915 s`, and warm wall `5.144 -> 4.569 s`. Strict atomic diagnostics are only 14/21 at nondeterministic scale and are not promoted; [report](../perf/vdam_static_half_geometry_h100_13393276.md). |
@@ -94,15 +109,15 @@
 
 ### Immediate queue
 
-1. Finish H100 job `13394494`: it reconstructs the `13392701` optimized/q32/
-   batched state through iteration 47, deep-copies that exact live state, then
-   runs stable-off/on/on/off while changing only stable Fourier and flat-row
-   capacity. Inspect particle 2798's iteration-48 pose/translation margin.
-2. Continue compile-boundary attribution from the now-host-planned static
-   geometry: the remaining cold profile is 394 compilations / 22.72 seconds,
-   led by the coarse certificate, local big JIT, and eager controller
-   primitives. Require exact hard state and repeat-controlled atomics for each
-   retained boundary.
+1. Extend stable host-planned Fourier geometry to the shared coarse
+   significance square window. Job `13394745` closes the isolated local
+   hard-state question; trajectory profiles now show repeated 5--8 second
+   coarse-pass spikes at logical-size changes. Preserve RELION's logical
+   active-pixel mask and gate the physical-size quantum with same-state ABBA.
+2. Continue compile/controller attribution: registered NVTX strings in
+   `13393862` place roughly 234 ms between completed image collation and the
+   first CUDA call inside the warm local range. The full capture performs only
+   118 ms of GPU work, so prioritize shape/executable reuse over kernel math.
 3. Finish the literal mature-EM direct-oracle packed-noise gate `13378581` and
    the shared scatter-boundary fresh-process gate `13378757`; retain only
    oracle-exact seams with measured cold or composed value.
@@ -123,8 +138,8 @@
 | Frozen v3 K=1 correctness | **2 / 20** | Release gate; unchanged. |
 | Frozen v3 runtime | **0 / 20** | Independent release gate; unchanged. |
 | Legacy v2 expansion | **6 / 15** | Regression track only; no v3 score impact. |
-| Current correctness work | **IT47->48 SAME-STATE BLOCKER ACTIVE** | Job `13394494` starts from the optimized/q32/batched live state and changes only the two stable ABIs in an off/on/on/off panel. This directly targets particle 2798's iteration-48 split in `13392701`. |
-| Current performance work | **45.15% FRESH 0->50 / 14.75% FOCUSED COMPOSITION** | The complete optimized stack changes fresh trajectory wall `500.604 -> 274.569 s` (`13392701`). Static geometry plus shared batched posterior separately changes the comparable warm replay `5.144 -> 4.386 s` and removes 2,410 launches (`13393862`). Strict trajectory science remains on hold. |
+| Current correctness work | **SHARED-STATE HARD EXACT / ATOMIC HOLD** | Job `13394745` changes only stable Fourier/row capacity from one iteration-47 state. All crossed decisions/support/state are exact; tiny continuous changes exceed the strict repeat envelope, so trajectory science remains on hold. |
+| Current performance work | **COARSE SHAPE STABILITY NEXT** | The complete optimized stack changes fresh trajectory wall `500.604 -> 274.569 s` (`13392701`). Warm fixed-size stable shapes are +2.73% (`13394745`), proving the large gain is compile avoidance. Late coarse pass-1 size transitions still cost 5--8 s and are the next shared boundary. |
 | K>1 | **UNQUALIFIED** | Separate gate after K=1 closure. |
 | Real data | **NOT SCORED** | Separate confirmation gate; no release claim. |
 
