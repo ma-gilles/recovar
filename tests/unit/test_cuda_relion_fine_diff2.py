@@ -491,11 +491,11 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
 
     significance_source = Path(significance.__file__).read_text()
     production_start = significance_source.index(
-        "if coarse_fused_projector_enabled:",
+        "if coarse_gaussian_score_backend in {",
         significance_source.index("def _score_block("),
     )
     production_end = significance_source.index(
-        "if coarse_gaussian_native_texture_enabled:",
+        "if coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.NATIVE_TEXTURE:",
         production_start,
     )
     production = significance_source[production_start:production_end]
