@@ -119,6 +119,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert runner._arm_order("flat_rows") == runner.FLAT_ROW_ARM_ORDER
     assert runner._arm_order("packed_projection") == runner.PACKED_PROJECTION_ARM_ORDER
     assert runner._arm_order("packed_deferred") == runner.PACKED_DEFERRED_ARM_ORDER
+    assert (
+        runner._arm_order("hybrid_packed_deferred")
+        == runner.HYBRID_PACKED_DEFERRED_ARM_ORDER
+    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -127,6 +131,9 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     packed_deferred = runner._candidate_environment(
         "packed_deferred", enabled=True
+    )
+    hybrid_packed_deferred = runner._candidate_environment(
+        "hybrid_packed_deferred", enabled=True
     )
     hybrid = runner._candidate_environment("hybrid", enabled=True)
 
@@ -150,6 +157,13 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert packed_deferred[runner.FLAT_ROW_ENVIRONMENT] == "1"
     assert packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
     assert packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
+    assert all(
+        hybrid_packed_deferred[name] == "1"
+        for name in runner.HYBRID_ENVIRONMENT
+    )
+    assert hybrid_packed_deferred[runner.FLAT_ROW_ENVIRONMENT] == "1"
+    assert hybrid_packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
+    assert hybrid_packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
     assert all(hybrid[name] == "1" for name in runner.HYBRID_ENVIRONMENT)
     assert hybrid[runner.FLAT_ROW_ENVIRONMENT] == "0"
     assert hybrid[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
@@ -175,6 +189,10 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         "direct_1,packed_projection_1,packed_projection_2,direct_2" in sbatch
     )
     assert "direct_1,packed_deferred_1,packed_deferred_2,direct_2" in sbatch
+    assert (
+        "direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2"
+        in sbatch
+    )
     assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch
     assert "VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS" in sbatch

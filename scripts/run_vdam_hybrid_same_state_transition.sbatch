@@ -76,6 +76,9 @@ case "${CANDIDATE_MODE}" in
   packed_deferred)
     expected_arm_order=direct_1,packed_deferred_1,packed_deferred_2,direct_2
     ;;
+  hybrid_packed_deferred)
+    expected_arm_order=direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2

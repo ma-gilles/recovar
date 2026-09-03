@@ -42,6 +42,12 @@ PACKED_DEFERRED_ARM_ORDER = (
     "packed_deferred_2",
     "direct_2",
 )
+HYBRID_PACKED_DEFERRED_ARM_ORDER = (
+    "direct_1",
+    "hybrid_packed_deferred_1",
+    "hybrid_packed_deferred_2",
+    "direct_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
@@ -50,7 +56,13 @@ HYBRID_ENVIRONMENT = (
 FLAT_ROW_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
 PACKED_PROJECTION_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
 PACKED_DEFERRED_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
-CANDIDATE_MODES = ("hybrid", "flat_rows", "packed_projection", "packed_deferred")
+CANDIDATE_MODES = (
+    "hybrid",
+    "flat_rows",
+    "packed_projection",
+    "packed_deferred",
+    "hybrid_packed_deferred",
+)
 META_ARRAY_KEYS = (
     "selected_particle_ids",
     "best_pose_rotation_ids",
@@ -84,6 +96,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return PACKED_PROJECTION_ARM_ORDER
     if candidate_mode == "packed_deferred":
         return PACKED_DEFERRED_ARM_ORDER
+    if candidate_mode == "hybrid_packed_deferred":
+        return HYBRID_PACKED_DEFERRED_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -103,6 +117,11 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
             values[FLAT_ROW_ENVIRONMENT] = "1"
             values[PACKED_PROJECTION_ENVIRONMENT] = "1"
         elif candidate_mode == "packed_deferred":
+            values[FLAT_ROW_ENVIRONMENT] = "1"
+            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        elif candidate_mode == "hybrid_packed_deferred":
+            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
             values[FLAT_ROW_ENVIRONMENT] = "1"
             values[PACKED_PROJECTION_ENVIRONMENT] = "1"
             values[PACKED_DEFERRED_ENVIRONMENT] = "1"
