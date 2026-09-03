@@ -1439,6 +1439,29 @@ class CoarseGaussianGemmHybridBatchResult(NamedTuple):
     fallback_reason: str | None
     selection: CoarseGemmHybridBlockSelection
     compact_scores: CoarseGemmHybridCompactScores | None = None
+    score_representation: str = "compact_selected_exact"
+
+
+def _select_coarse_gaussian_gemm_score_representation(
+    *,
+    n_rotations: int,
+    block_capacity: int,
+    compact_posterior: bool,
+) -> str:
+    """Choose the smaller physical exact-score layout before certification."""
+
+    n_rotations = operator.index(n_rotations)
+    block_capacity = operator.index(block_capacity)
+    if n_rotations <= 0 or block_capacity <= 0:
+        raise ValueError("hybrid score-layout dimensions must be positive")
+    if (
+        compact_posterior
+        and block_capacity * SOURCE_ROTATION_BLOCK_SIZE >= n_rotations
+    ):
+        return "dense_full_direct_static_capacity"
+    if compact_posterior:
+        return "compact_selected_exact"
+    return "dense_selected_exact"
 
 
 def _compute_coarse_gaussian_gemm_hybrid_batch(
@@ -1521,16 +1544,6 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             "capacity, and image counts",
         )
 
-    image_batch = _prepare_relion_coarse_gaussian_gemm_f64_image_batch(
-        shifted,
-        weight,
-        initial,
-        actual_count,
-    )
-    state = initialize_coarse_gemm_hybrid_interval_state(
-        batch_size,
-        n_rotations,
-    )
     rotation_prior = None
     if rotation_log_prior is not None:
         rotation_prior = jnp.asarray(rotation_log_prior, dtype=jnp.float32)
@@ -1538,30 +1551,56 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             raise ValueError(
                 "hybrid rotation_log_prior must have one value per source rotation",
             )
-    for rotation_start in range(0, n_rotations, chunk_rows):
-        rotation_stop = min(rotation_start + chunk_rows, n_rotations)
-        state = _relion_coarse_gaussian_gemm_update_certificate_state(
-            state,
-            cache[0, rotation_start:rotation_stop],
-            image_batch,
-            topology=topology,
-            rotation_offset=rotation_start,
-            class_log_prior=class_log_prior,
-            rotation_log_prior=(
-                None
-                if rotation_prior is None
-                else rotation_prior[rotation_start:rotation_stop]
-            ),
-            translation_log_prior=translation_log_prior,
-        )
-    selection = select_coarse_gemm_hybrid_rotation_blocks(
-        state,
-        actual_image_count=actual_count,
+    score_representation = _select_coarse_gaussian_gemm_score_representation(
         n_rotations=n_rotations,
-        n_translations=n_translations,
-        certificate_valid=True,
         block_capacity=capacity,
+        compact_posterior=compact_posterior,
     )
+    if score_representation == "dense_full_direct_static_capacity":
+        empty_counts = np.zeros(batch_size, dtype=np.int32)
+        selection = CoarseGemmHybridBlockSelection(
+            eligible=False,
+            fallback_reason="compact_physical_capacity_not_smaller_than_dense",
+            block_ids=np.full((batch_size, capacity), -1, dtype=np.int32),
+            block_count=empty_counts,
+            posterior_block_count=empty_counts.copy(),
+            raw_max_block_count=empty_counts.copy(),
+        )
+    else:
+        image_batch = _prepare_relion_coarse_gaussian_gemm_f64_image_batch(
+            shifted,
+            weight,
+            initial,
+            actual_count,
+        )
+        state = initialize_coarse_gemm_hybrid_interval_state(
+            batch_size,
+            n_rotations,
+        )
+        for rotation_start in range(0, n_rotations, chunk_rows):
+            rotation_stop = min(rotation_start + chunk_rows, n_rotations)
+            state = _relion_coarse_gaussian_gemm_update_certificate_state(
+                state,
+                cache[0, rotation_start:rotation_stop],
+                image_batch,
+                topology=topology,
+                rotation_offset=rotation_start,
+                class_log_prior=class_log_prior,
+                rotation_log_prior=(
+                    None
+                    if rotation_prior is None
+                    else rotation_prior[rotation_start:rotation_stop]
+                ),
+                translation_log_prior=translation_log_prior,
+            )
+        selection = select_coarse_gemm_hybrid_rotation_blocks(
+            state,
+            actual_image_count=actual_count,
+            n_rotations=n_rotations,
+            n_translations=n_translations,
+            certificate_valid=True,
+            block_capacity=capacity,
+        )
     fallback_reason = selection.fallback_reason
     if selection.eligible:
         selected_diff2 = _relion_coarse_diff2_rotation_blocks_from_topology_f32(
@@ -1608,8 +1647,12 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
                 fallback_reason=None,
                 selection=selection,
                 compact_scores=compact_scores,
+                score_representation=score_representation,
             )
         fallback_reason = "invalid_selected_exact_output"
+        score_representation = "dense_full_direct_dynamic_fallback"
+    elif score_representation != "dense_full_direct_static_capacity":
+        score_representation = "dense_full_direct_dynamic_fallback"
 
     full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
         cache[0],
@@ -1626,6 +1669,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         used_selected_rescore=False,
         fallback_reason=fallback_reason or "unspecified_fail_closed_fallback",
         selection=selection,
+        score_representation=score_representation,
     )
 
 
@@ -5897,14 +5941,17 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_stream_original_indices = []
     coarse_gaussian_gemm_hybrid_batch_count = 0
     coarse_gaussian_gemm_hybrid_selected_batch_count = 0
+    coarse_gaussian_gemm_hybrid_static_dense_batch_count = 0
     coarse_gaussian_gemm_hybrid_fallback_batch_count = 0
     coarse_gaussian_gemm_hybrid_selected_image_count = 0
+    coarse_gaussian_gemm_hybrid_static_dense_image_count = 0
     coarse_gaussian_gemm_hybrid_fallback_image_count = 0
     coarse_gaussian_gemm_hybrid_selected_block_count = 0
     coarse_gaussian_gemm_hybrid_max_blocks_per_image = 0
     coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates = 0
     coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates = 0
     coarse_gaussian_gemm_hybrid_fallback_reasons = {}
+    coarse_gaussian_gemm_hybrid_score_representation_batch_counts = {}
     coarse_gaussian_gemm_hybrid_actual_image_batch_sizes = []
     coarse_gaussian_gemm_hybrid_physical_image_batch_sizes = []
     generic_coarse_operand_assembly_count = 0
@@ -6461,16 +6508,19 @@ def _compute_k_class_significance_batched(
                     ),
                 )
             )
-            if exact_compact_preprocess_enabled and (
-                not coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore
-                or coarse_gaussian_gemm_hybrid_batch_result.compact_scores is None
-            ):
-                raise RuntimeError(
-                    "exact+compact preprocessing cannot execute the generic "
-                    "score fallback: "
-                    f"{coarse_gaussian_gemm_hybrid_batch_result.fallback_reason}",
-                )
             coarse_gaussian_gemm_hybrid_batch_count += 1
+            score_representation = str(
+                coarse_gaussian_gemm_hybrid_batch_result.score_representation,
+            )
+            coarse_gaussian_gemm_hybrid_score_representation_batch_counts[
+                score_representation
+            ] = (
+                coarse_gaussian_gemm_hybrid_score_representation_batch_counts.get(
+                    score_representation,
+                    0,
+                )
+                + 1
+            )
             if coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
                 coarse_gaussian_gemm_hybrid_selected_batch_count += 1
                 coarse_gaussian_gemm_hybrid_selected_image_count += actual_batch_size
@@ -6493,6 +6543,11 @@ def _compute_k_class_significance_batched(
                 )
                 coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates += (
                     batch_size * n_rot * n_trans
+                )
+            elif score_representation == "dense_full_direct_static_capacity":
+                coarse_gaussian_gemm_hybrid_static_dense_batch_count += 1
+                coarse_gaussian_gemm_hybrid_static_dense_image_count += (
+                    actual_batch_size
                 )
             else:
                 coarse_gaussian_gemm_hybrid_fallback_batch_count += 1
@@ -7721,7 +7776,7 @@ def _compute_k_class_significance_batched(
             ),
             "raw_score_capture_changed": False,
             "generic_fallback_policy": (
-                "raise_before_generic_score_fallback"
+                "exact_full_direct_scores_available"
                 if exact_compact_preprocess_enabled
                 else "available"
             ),
@@ -7808,6 +7863,23 @@ def _compute_k_class_significance_batched(
             "published_score_source": "exact_relion_source16_or_full_rectangular",
             "expanded_gemm_scores_published": False,
             "whole_batch_fail_closed_fallback": True,
+            "score_representation_policy": (
+                "compact_only_when_fixed_physical_capacity_is_smaller_than_dense"
+            ),
+            "static_preferred_score_representation": (
+                _select_coarse_gaussian_gemm_score_representation(
+                    n_rotations=n_rot,
+                    block_capacity=coarse_gaussian_gemm_hybrid_capacity,
+                    compact_posterior=(
+                        coarse_gaussian_gemm_compact_posterior_requested
+                    ),
+                )
+            ),
+            "score_representation_batch_counts": dict(
+                sorted(
+                    coarse_gaussian_gemm_hybrid_score_representation_batch_counts.items(),
+                ),
+            ),
             "batch_count": int(coarse_gaussian_gemm_hybrid_batch_count),
             "actual_image_batch_sizes": list(
                 coarse_gaussian_gemm_hybrid_actual_image_batch_sizes,
@@ -7830,11 +7902,17 @@ def _compute_k_class_significance_batched(
             "selected_rescore_batch_count": int(
                 coarse_gaussian_gemm_hybrid_selected_batch_count,
             ),
+            "static_dense_batch_count": int(
+                coarse_gaussian_gemm_hybrid_static_dense_batch_count,
+            ),
             "fallback_batch_count": int(
                 coarse_gaussian_gemm_hybrid_fallback_batch_count,
             ),
             "selected_rescore_image_count": int(
                 coarse_gaussian_gemm_hybrid_selected_image_count,
+            ),
+            "static_dense_image_count": int(
+                coarse_gaussian_gemm_hybrid_static_dense_image_count,
             ),
             "fallback_image_count": int(
                 coarse_gaussian_gemm_hybrid_fallback_image_count,
@@ -7867,6 +7945,11 @@ def _compute_k_class_significance_batched(
                 float(compact_table_capacity / dense_table_capacity)
                 if dense_table_capacity
                 else None
+            ),
+            "static_compact_to_dense_capacity_fraction": float(
+                coarse_gaussian_gemm_hybrid_capacity
+                * SOURCE_ROTATION_BLOCK_SIZE
+                / n_rot
             ),
             "max_selected_blocks_per_image": int(
                 coarse_gaussian_gemm_hybrid_max_blocks_per_image,

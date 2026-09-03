@@ -435,8 +435,6 @@ def _validate_late_hybrid_image_batch(
         "requested_hybrid_image_batch_size": 200,
         "effective_image_batch_size": 200,
         "batch_count": 1,
-        "selected_rescore_batch_count": 1,
-        "selected_rescore_image_count": 200,
         "fallback_batch_count": 0,
         "fallback_image_count": 0,
         "actual_image_batch_sizes": [200],
@@ -452,6 +450,30 @@ def _validate_late_hybrid_image_batch(
                     f"expected {expected!r}"
                 )
             current[field] = value
+        selected_batches = profile.get("selected_rescore_batch_count")
+        static_dense_batches = profile.get("static_dense_batch_count")
+        selected_images = profile.get("selected_rescore_image_count")
+        static_dense_images = profile.get("static_dense_image_count")
+        if selected_batches + static_dense_batches != 1:
+            raise RuntimeError(
+                f"{label} profile {name} did not represent the profiled batch"
+            )
+        if selected_images + static_dense_images != 200:
+            raise RuntimeError(
+                f"{label} profile {name} did not represent all profiled images"
+            )
+        current.update(
+            selected_rescore_batch_count=selected_batches,
+            static_dense_batch_count=static_dense_batches,
+            selected_rescore_image_count=selected_images,
+            static_dense_image_count=static_dense_images,
+            static_preferred_score_representation=profile.get(
+                "static_preferred_score_representation"
+            ),
+            score_representation_batch_counts=profile.get(
+                "score_representation_batch_counts"
+            ),
+        )
         chunk_rows = profile.get("certificate_chunk_rows")
         chunk_count = profile.get("certificate_chunk_count_per_batch")
         if not isinstance(chunk_rows, int) or chunk_rows <= 0:

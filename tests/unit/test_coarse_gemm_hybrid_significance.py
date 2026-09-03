@@ -429,6 +429,11 @@ def test_hybrid_compact_posterior_retains_ordered_ids_without_dense_scatter(
     cache, shifted, weight, initial, topology = _hybrid_operands()
     monkeypatch.setattr(
         significance,
+        "_select_coarse_gaussian_gemm_score_representation",
+        lambda **_kwargs: "compact_selected_exact",
+    )
+    monkeypatch.setattr(
+        significance,
         "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
         _selected_diff2_from_ids,
     )
@@ -480,6 +485,69 @@ def test_hybrid_compact_posterior_retains_ordered_ids_without_dense_scatter(
     assert compact.posterior_scores_flat.shape == (
         shifted.shape[0],
         2 * 16 * shifted.shape[1],
+    )
+
+
+def test_compact_hybrid_chooses_dense_before_certificate_when_not_smaller(
+    monkeypatch,
+):
+    cache, shifted, weight, initial, topology = _hybrid_operands()
+    certificate_calls = 0
+    full_calls = 0
+
+    def reject_certificate(*_args, **_kwargs):
+        nonlocal certificate_calls
+        certificate_calls += 1
+        raise AssertionError("static dense selection must skip certification")
+
+    def full_direct(reference, shifted_image, score_weight, initial_diff2, mapping):
+        nonlocal full_calls
+        full_calls += 1
+        assert reference.shape == cache.shape[1:]
+        assert shifted_image.shape == shifted.shape
+        assert score_weight.shape == weight.shape
+        np.testing.assert_array_equal(np.asarray(initial_diff2), initial)
+        np.testing.assert_array_equal(np.asarray(mapping), topology.full_to_compact)
+        return jnp.ones(
+            (shifted.shape[0], cache.shape[1], shifted.shape[1]),
+            dtype=jnp.float32,
+        )
+
+    monkeypatch.setattr(
+        significance,
+        "_relion_coarse_gaussian_gemm_update_certificate_state",
+        reject_certificate,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_coarse_diff2_rectangular_f32",
+        full_direct,
+    )
+    result = significance._compute_coarse_gaussian_gemm_hybrid_batch(
+        jnp.asarray(cache),
+        jnp.asarray(shifted),
+        jnp.asarray(weight),
+        jnp.asarray(initial),
+        topology=topology,
+        actual_image_count=2,
+        class_log_prior=np.float32(0.0),
+        certificate_chunk_rows=16,
+        block_capacity=2,
+        compact_posterior=True,
+    )
+
+    assert certificate_calls == 0
+    assert full_calls == 1
+    assert not result.used_selected_rescore
+    assert result.score_representation == "dense_full_direct_static_capacity"
+    assert (
+        result.fallback_reason
+        == "compact_physical_capacity_not_smaller_than_dense"
+    )
+    assert result.compact_scores is None
+    np.testing.assert_array_equal(
+        np.asarray(result.scores),
+        -np.ones(result.scores.shape, dtype=np.float32),
     )
 
 
@@ -552,6 +620,13 @@ def test_hybrid_invalid_selected_output_falls_back_for_whole_batch(
 ):
     cache, shifted, weight, initial, topology = _hybrid_operands()
     full_calls = 0
+    monkeypatch.setattr(
+        significance,
+        "_select_coarse_gaussian_gemm_score_representation",
+        lambda **_kwargs: (
+            "compact_selected_exact" if compact_posterior else "dense_selected_exact"
+        ),
+    )
 
     def invalid_selected(*args, **kwargs):
         selected = np.array(

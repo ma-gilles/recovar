@@ -1402,15 +1402,16 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
 
 
 @pytest.mark.parametrize(
-    ("compact_posterior", "hybrid_image_batch_size"),
-    [(False, None), (True, None), (True, 3)],
+    ("compact_posterior", "hybrid_image_batch_size", "force_fallback"),
+    [(False, None, False), (True, None, False), (True, 3, False), (True, 3, True)],
 )
 def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     monkeypatch,
     compact_posterior,
     hybrid_image_batch_size,
+    force_fallback,
 ):
-    """Dense and compact hybrid loops must not republish or reprior scores."""
+    """Selected and exact-full-direct hybrid scores are reused in both passes."""
 
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers import (
@@ -1592,8 +1593,8 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         counts = np.zeros(batch_size, dtype=np.int32)
         counts[:actual_image_count] = 1
         selection = CoarseGemmHybridBlockSelection(
-            eligible=True,
-            fallback_reason=None,
+            eligible=not force_fallback,
+            fallback_reason=("block_capacity_overflow" if force_fallback else None),
             block_ids=block_ids,
             block_count=counts,
             posterior_block_count=counts.copy(),
@@ -1601,7 +1602,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         )
         compact = None
         published_scores = jnp.asarray(scores)
-        if compact_posterior:
+        if compact_posterior and not force_fallback:
             compact_width = block_capacity * 16 * 2
             compact_values = np.full(
                 (batch_size, compact_width),
@@ -1633,11 +1634,20 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         result = significance.CoarseGaussianGemmHybridBatchResult(
             scores=published_scores,
             raw_score_max=jnp.zeros(batch_size, dtype=jnp.float32),
-            scores_include_priors=True,
-            used_selected_rescore=True,
-            fallback_reason=None,
+            scores_include_priors=not force_fallback,
+            used_selected_rescore=not force_fallback,
+            fallback_reason=("block_capacity_overflow" if force_fallback else None),
             selection=selection,
             compact_scores=compact,
+            score_representation=(
+                "dense_full_direct_dynamic_fallback"
+                if force_fallback
+                else (
+                    "compact_selected_exact"
+                    if compact_posterior
+                    else "dense_selected_exact"
+                )
+            ),
         )
         return result
 
@@ -1660,7 +1670,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     ):
         del adaptive_fraction, max_significants, tie_score_ulps
         assert filter_positive_before_sort is (
-            False if compact_expected else None
+            False if compact_expected and not force_fallback else None
         )
         scores = jnp.asarray(score_values, dtype=jnp.float32)
         posterior_inputs.append(np.asarray(scores))
@@ -1772,8 +1782,9 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         ):
             np.testing.assert_array_equal(candidate_value, control_value)
         assert candidate_call[3] == control_call[3]
-    for helper_scores, posterior_scores in zip(helper_outputs, posterior_inputs):
-        np.testing.assert_array_equal(posterior_scores, helper_scores)
+    if not force_fallback:
+        for helper_scores, posterior_scores in zip(helper_outputs, posterior_inputs):
+            np.testing.assert_array_equal(posterior_scores, helper_scores)
     for candidate_scores, control_scores in zip(
         helper_outputs,
         control_helper_outputs,
@@ -1885,11 +1896,22 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     assert hybrid_stats["physical_image_batch_sizes"] == (
         [3] if hybrid_image_batch_size else [2, 2]
     )
-    assert hybrid_stats["selected_rescore_batch_count"] == expected_batch_count
-    assert hybrid_stats["fallback_batch_count"] == 0
-    assert hybrid_stats["selected_rescore_image_count"] == 3
-    assert hybrid_stats["selected_source16_block_count"] == 3
-    assert hybrid_stats["selected_exact_candidate_fraction"] == 1.0
+    assert hybrid_stats["selected_rescore_batch_count"] == (
+        0 if force_fallback else expected_batch_count
+    )
+    assert hybrid_stats["fallback_batch_count"] == (
+        expected_batch_count if force_fallback else 0
+    )
+    assert hybrid_stats["selected_rescore_image_count"] == (
+        0 if force_fallback else 3
+    )
+    assert hybrid_stats["fallback_image_count"] == (3 if force_fallback else 0)
+    assert hybrid_stats["selected_source16_block_count"] == (
+        0 if force_fallback else 3
+    )
+    assert hybrid_stats["selected_exact_candidate_fraction"] == (
+        None if force_fallback else 1.0
+    )
     assert hybrid_stats["input_image_batch_size"] == 2
     assert hybrid_stats["requested_hybrid_image_batch_size"] == hybrid_image_batch_size
     assert hybrid_stats["effective_image_batch_size"] == (
@@ -1898,20 +1920,25 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     assert hybrid_stats[
         "streamed_certificate_candidate_count_at_effective_batch"
     ] == (hybrid_image_batch_size or 2) * 16 * 2
+    expected_table_multiplier = 0 if force_fallback else expected_physical_rows
     assert hybrid_stats["selected_score_table_capacity_candidates"] == (
-        expected_physical_rows * 64 * 16 * 2
+        expected_table_multiplier * 64 * 16 * 2
     )
     assert hybrid_stats["dense_global_score_table_capacity_candidates"] == (
-        expected_physical_rows * 16 * 2
+        expected_table_multiplier * 16 * 2
     )
     assert hybrid_stats["selected_score_table_capacity_bytes_f32"] == (
-        expected_physical_rows * 64 * 16 * 2 * 4
+        expected_table_multiplier * 64 * 16 * 2 * 4
     )
     assert hybrid_stats["dense_global_score_table_capacity_bytes_f32"] == (
-        expected_physical_rows * 16 * 2 * 4
+        expected_table_multiplier * 16 * 2 * 4
     )
-    assert hybrid_stats["selected_to_dense_score_table_capacity_fraction"] == 64.0
-    assert hybrid_stats["fallback_reasons"] == {}
+    assert hybrid_stats["selected_to_dense_score_table_capacity_fraction"] == (
+        None if force_fallback else 64.0
+    )
+    assert hybrid_stats["fallback_reasons"] == (
+        {"block_capacity_overflow": expected_batch_count} if force_fallback else {}
+    )
     support_audit = result[5]["coarse_significance_support_audit"]
     assert support_audit["n_classes"] == 1
     assert support_audit["n_images"] == 3
@@ -2031,7 +2058,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
             "generic_score_preprocess_count": 0,
             "generic_ctf_evaluation_count": 0,
             "generic_full_translation_count": 0,
-            "generic_fallback_policy": "raise_before_generic_score_fallback",
+            "generic_fallback_policy": "exact_full_direct_scores_available",
         }
     )
     assert specialized_assembly == expected_specialized_assembly

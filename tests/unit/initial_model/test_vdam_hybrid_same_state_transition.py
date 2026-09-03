@@ -520,12 +520,19 @@ def _compact_profile(**updates):
         "published_score_source": "exact_relion_source16_or_full_rectangular",
         "expanded_gemm_scores_published": False,
         "whole_batch_fail_closed_fallback": True,
+        "score_representation_policy": (
+            "compact_only_when_fixed_physical_capacity_is_smaller_than_dense"
+        ),
+        "static_preferred_score_representation": "compact_selected_exact",
+        "score_representation_batch_counts": {"compact_selected_exact": 2},
         "batch_count": 2,
         "certificate_chunk_count_per_batch": 8,
         "certificate_chunk_rows": 4608,
         "selected_rescore_batch_count": 2,
+        "static_dense_batch_count": 0,
         "fallback_batch_count": 0,
         "selected_rescore_image_count": 300,
+        "static_dense_image_count": 0,
         "fallback_image_count": 0,
         "selected_source16_block_count": 500,
         "selected_exact_candidate_count": 232_000,
@@ -534,6 +541,7 @@ def _compact_profile(**updates):
         "selected_score_table_capacity_bytes_f32": 23_756_800,
         "dense_global_score_table_capacity_bytes_f32": 855_244_800,
         "selected_to_dense_score_table_capacity_fraction": 1.0 / 36.0,
+        "static_compact_to_dense_capacity_fraction": 1.0 / 4.5,
         "topology_full_to_compact_sha256": "a" * 64,
     }
     profile.update(updates)
@@ -642,6 +650,43 @@ def test_compact_posterior_execution_contract_requires_effective_profile() -> No
     assert contract["compact_effective"] is True
     assert contract["profile_exact"] is True
     assert list(contract["hybrid_profiles"]) == ["halfset_0_profile_summary"]
+
+
+def test_compact_posterior_execution_contract_accepts_static_dense_schedule() -> None:
+    requested = runner._candidate_environment("compact_posterior", enabled=True)
+    profile = _compact_profile(
+        static_preferred_score_representation="dense_full_direct_static_capacity",
+        score_representation_batch_counts={
+            "dense_full_direct_static_capacity": 2,
+        },
+        selected_rescore_batch_count=0,
+        static_dense_batch_count=2,
+        selected_rescore_image_count=0,
+        static_dense_image_count=300,
+        selected_source16_block_count=0,
+        selected_exact_candidate_count=0,
+        selected_score_table_capacity_candidates=0,
+        dense_global_score_table_capacity_candidates=0,
+        selected_score_table_capacity_bytes_f32=0,
+        dense_global_score_table_capacity_bytes_f32=0,
+        selected_to_dense_score_table_capacity_fraction=None,
+        static_compact_to_dense_capacity_fraction=16.0 / 9.0,
+    )
+    contract = runner._validate_arm_execution_contract(
+        candidate_mode="compact_posterior",
+        candidate_enabled=True,
+        requested_environment=requested,
+        effective_environment=dict(requested),
+        estep_meta={
+            "halfset_0_profile_summary": {
+                "coarse_gaussian_gemm_hybrid": profile,
+            },
+        },
+    )
+
+    assert contract["profile_exact"] is True
+    observed = contract["hybrid_profiles"]["halfset_0_profile_summary"]
+    assert observed["static_dense_batch_count"] == 2
 
 
 @pytest.mark.parametrize(
@@ -976,7 +1021,7 @@ def _exact_compact_preprocess_meta(*, enabled: bool) -> dict:
         "diagnostic_operand_source": "exact_source_star",
         "raw_score_capture_changed": False,
         "generic_fallback_policy": (
-            "raise_before_generic_score_fallback" if enabled else "available"
+            "exact_full_direct_scores_available" if enabled else "available"
         ),
         "skipped_generic_outputs": [
             "coarse_gaussian_shifted_corrected",

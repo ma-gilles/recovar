@@ -834,7 +834,7 @@ def _validate_exact_compact_preprocess_profiles(
             "diagnostic_operand_source": "exact_source_star",
             "raw_score_capture_changed": False,
             "generic_fallback_policy": (
-                "raise_before_generic_score_fallback" if enabled else "available"
+                "exact_full_direct_scores_available" if enabled else "available"
             ),
             "skipped_generic_outputs": skipped_outputs,
         }
@@ -1288,6 +1288,9 @@ def _validate_arm_execution_contract(
         "published_score_source": "exact_relion_source16_or_full_rectangular",
         "expanded_gemm_scores_published": False,
         "whole_batch_fail_closed_fallback": True,
+        "score_representation_policy": (
+            "compact_only_when_fixed_physical_capacity_is_smaller_than_dense"
+        ),
         "fallback_batch_count": 0,
         "fallback_image_count": 0,
     }
@@ -1303,14 +1306,6 @@ def _validate_arm_execution_contract(
             "batch_count",
             "certificate_chunk_count_per_batch",
             "certificate_chunk_rows",
-            "selected_rescore_batch_count",
-            "selected_rescore_image_count",
-            "selected_source16_block_count",
-            "selected_exact_candidate_count",
-            "selected_score_table_capacity_candidates",
-            "dense_global_score_table_capacity_candidates",
-            "selected_score_table_capacity_bytes_f32",
-            "dense_global_score_table_capacity_bytes_f32",
         )
         for field in positive_fields:
             if not isinstance(profile.get(field), int) or profile[field] <= 0:
@@ -1327,19 +1322,83 @@ def _validate_arm_execution_contract(
                 f"{profile_name} compact profile has an invalid "
                 "topology_full_to_compact_sha256",
             )
-        if profile["selected_rescore_batch_count"] != profile["batch_count"]:
+        batch_count = profile["batch_count"]
+        selected_batch_count = profile.get("selected_rescore_batch_count")
+        static_dense_batch_count = profile.get("static_dense_batch_count")
+        if not isinstance(selected_batch_count, int) or selected_batch_count < 0:
             raise RuntimeError(
-                f"{profile_name} compact profile did not select every batch",
+                f"{profile_name} compact profile has invalid "
+                "selected_rescore_batch_count",
             )
-        table_fraction = profile.get(
-            "selected_to_dense_score_table_capacity_fraction",
+        if not isinstance(static_dense_batch_count, int) or static_dense_batch_count < 0:
+            raise RuntimeError(
+                f"{profile_name} compact profile has invalid static_dense_batch_count",
+            )
+        if selected_batch_count + static_dense_batch_count != batch_count:
+            raise RuntimeError(
+                f"{profile_name} compact profile did not represent every batch",
+            )
+        static_fraction = profile.get(
+            "static_compact_to_dense_capacity_fraction",
         )
-        if not isinstance(table_fraction, (float, int)) or not 0.0 < float(
-            table_fraction,
-        ) < 1.0:
+        if not isinstance(static_fraction, (float, int)) or float(static_fraction) <= 0.0:
             raise RuntimeError(
-                f"{profile_name} compact table fraction must be strictly between 0 and 1",
+                f"{profile_name} compact static table fraction must be positive",
             )
+        prefer_dense = float(static_fraction) >= 1.0
+        expected_preference = (
+            "dense_full_direct_static_capacity"
+            if prefer_dense
+            else "compact_selected_exact"
+        )
+        if profile.get("static_preferred_score_representation") != expected_preference:
+            raise RuntimeError(
+                f"{profile_name} compact profile has inconsistent static preference",
+            )
+        expected_representation_counts = {
+            expected_preference: batch_count,
+        }
+        if profile.get("score_representation_batch_counts") != expected_representation_counts:
+            raise RuntimeError(
+                f"{profile_name} compact profile has inconsistent representation counts",
+            )
+        if prefer_dense:
+            if selected_batch_count != 0 or static_dense_batch_count != batch_count:
+                raise RuntimeError(
+                    f"{profile_name} compact profile did not choose static dense scoring",
+                )
+            if profile.get("selected_to_dense_score_table_capacity_fraction") is not None:
+                raise RuntimeError(
+                    f"{profile_name} static dense profile published a selected table fraction",
+                )
+        else:
+            if selected_batch_count != batch_count or static_dense_batch_count != 0:
+                raise RuntimeError(
+                    f"{profile_name} compact profile did not select every batch",
+                )
+            selected_positive_fields = (
+                "selected_rescore_image_count",
+                "selected_source16_block_count",
+                "selected_exact_candidate_count",
+                "selected_score_table_capacity_candidates",
+                "dense_global_score_table_capacity_candidates",
+                "selected_score_table_capacity_bytes_f32",
+                "dense_global_score_table_capacity_bytes_f32",
+            )
+            for field in selected_positive_fields:
+                if not isinstance(profile.get(field), int) or profile[field] <= 0:
+                    raise RuntimeError(
+                        f"{profile_name} compact profile field {field!r} must be positive",
+                    )
+            table_fraction = profile.get(
+                "selected_to_dense_score_table_capacity_fraction",
+            )
+            if not isinstance(table_fraction, (float, int)) or not 0.0 < float(
+                table_fraction,
+            ) < 1.0:
+                raise RuntimeError(
+                    f"{profile_name} compact table fraction must be strictly between 0 and 1",
+                )
         if _candidate_uses_packed_deferred(candidate_mode):
             parent_profile = estep_meta[profile_name]
             packed_required = {
