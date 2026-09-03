@@ -870,6 +870,41 @@ def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
     assert handler.count(".Ret<ffi::AnyBuffer>()") == 2
 
 
+def test_relion_x_half_cuda_uses_native_floorf_buckets_in_double_mode():
+    """RELION's double CUDA BPref still rounds interpolation buckets via floorf."""
+
+    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
+    text = cuda_source.read_text()
+
+    assert (
+        "static __device__ __forceinline__ int relion_floor_int(double x) "
+        "{ return (int)floorf((float)x); }"
+    ) in text
+    compact_gate = text[
+        text.index("static __device__ __forceinline__ bool relion_compact_trilinear_oob(") :
+        text.index("/* scatter_nearest:")
+    ]
+    assert compact_gate.count("relion_floor_int(") == 3
+
+    fused_scatter = text[
+        text.index("static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(") :
+        text.index("/* ================================================================== */", text.index("static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half("))
+    ]
+    for axis in range(3):
+        assert f"const int r{axis} = relion_floor_int(rk{axis});" in fused_scatter
+
+    indexed_kernel = text[
+        text.index("backproject_indexed_kernel(") :
+        text.index("/* Diagnostic companion", text.index("backproject_indexed_kernel("))
+    ]
+    batched_kernel = text[
+        text.index("batch_backproject_indexed_kernel(") :
+        text.index("/* One invocation corresponds", text.index("batch_backproject_indexed_kernel("))
+    ]
+    assert "stride0, stride1,\n                                           relion_half_backproject" in indexed_kernel
+    assert "stride0, stride1,\n                                               relion_half_backproject" in batched_kernel
+
+
 def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():
     data_accumulator = np.asarray([1.0 + 2.0j], dtype=np.complex64)
     weight_accumulator = np.asarray([3.0], dtype=np.float32)
