@@ -62,6 +62,11 @@ static __device__ __forceinline__ double2 make_v2(double a, double b) { return m
 
 static __device__ __forceinline__ int floor_int(float  x) { return (int)floorf(x); }
 static __device__ __forceinline__ int floor_int(double x) { return (int)floor(x); }
+/* RELION's CUDA BP kernels call floorf() even when XFLOAT is double.  The
+ * conversion to float happens only for the integer bucket; the fractional
+ * remainder is still formed from the original XFLOAT coordinate. */
+static __device__ __forceinline__ int relion_floor_int(float  x) { return (int)floorf(x); }
+static __device__ __forceinline__ int relion_floor_int(double x) { return (int)floorf((float)x); }
 static __device__ __forceinline__ int round_int(float  x) { return (int)rintf(x); }
 static __device__ __forceinline__ int round_int(double x) { return (int)rint(x); }
 
@@ -145,9 +150,9 @@ static __device__ __forceinline__ bool relion_compact_trilinear_oob(
      * eight neighbors would leave that compact box. RECOVAR's normal scatter
      * clips neighbors independently in the full padded box; RELION parity must
      * reproduce the all-or-nothing compact-boundary skip. */
-    const int x0 = floor_int(relion_x);
-    const int y0 = floor_int(relion_y) + maxR + 1;
-    const int z0 = floor_int(relion_z) + maxR + 1;
+    const int x0 = relion_floor_int(relion_x);
+    const int y0 = relion_floor_int(relion_y) + maxR + 1;
+    const int z0 = relion_floor_int(relion_z) + maxR + 1;
     const int xdim = maxR + 2;
     const int ydim = 2 * maxR + 3;
     return x0 < 0 || x0 + 1 >= xdim ||
@@ -265,7 +270,8 @@ static __device__ __forceinline__ void scatter_trilinear(
     T* __restrict__ vol,
     T rk0, T rk1, T rk2, T val_re, T val_im,
     T c0, T c1, T c2,
-    int N0, int N1, int N2_eff, int stride0, int stride1)
+    int N0, int N1, int N2_eff, int stride0, int stride1,
+    bool relion_floorf_quirk = false)
 {
     const T g0 = rk0 + c0;
     const T g1 = rk1 + c1;
@@ -279,9 +285,18 @@ static __device__ __forceinline__ void scatter_trilinear(
             g1 < (T)-1 || g1 >= (T)N1 ||
             g2_full < (T)-1 || g2_full >= (T)N2_full) return;
 
-        const int b0 = floor_int(g0);
-        const int b1 = floor_int(g1);
-        const int b2 = floor_int(g2_full);
+        /* RELION applies floorf to the unshifted XFLOAT coordinates and only
+         * then adds the integer compact-volume origin.  Preserve that order:
+         * casting (rk + origin) to float is not equivalent near cancellation. */
+        const int b0 = relion_floorf_quirk
+            ? relion_floor_int(rk0) + (int)c0
+            : floor_int(g0);
+        const int b1 = relion_floorf_quirk
+            ? relion_floor_int(rk1) + (int)c1
+            : floor_int(g1);
+        const int b2 = relion_floorf_quirk
+            ? relion_floor_int(rk2) + (int)c2
+            : floor_int(g2_full);
         const T f0 = g0 - (T)b0, f1 = g1 - (T)b1, f2 = g2_full - (T)b2;
         const T w0[2] = {(T)1 - f0, f0};
         const T w1[2] = {(T)1 - f1, f1};
@@ -422,9 +437,12 @@ static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(
      * before applying the integer model origin.  Adding the origin first is
      * mathematically equivalent but loses float32 mantissa bits and changes
      * the trilinear coefficients by several ulp. */
-    const int r0 = floor_int(rk0);
-    const int r1 = floor_int(rk1);
-    const int r2 = floor_int(rk2);
+    /* RELION's BP.cuh calls floorf for these integer buckets even when
+     * XFLOAT is double.  Keep the original T-valued coordinate for the
+     * fractional remainder, exactly as the native kernel does. */
+    const int r0 = relion_floor_int(rk0);
+    const int r1 = relion_floor_int(rk1);
+    const int r2 = relion_floor_int(rk2);
     const int b0 = r0 + ic0;
     const int b1 = r1 + ic1;
     const int b2 = r2 + ic2;
@@ -885,7 +903,8 @@ backproject_indexed_kernel(
                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
         else
             scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
+                                           relion_half_backproject);
     }
 
     if (HALF_IMG && !relion_half_backproject) {
@@ -1267,7 +1286,8 @@ batch_backproject_indexed_kernel(
                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
             else
                 scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
-                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                                               c0, c1, c2, N0, N1, N2_eff, stride0, stride1,
+                                               relion_half_backproject);
         }
 
         if (HALF_IMG && !relion_half_backproject) {
