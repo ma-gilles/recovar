@@ -279,7 +279,7 @@ find "${RUNTIME}/jax_cache" -maxdepth 1 -type f -name '*-cache' -printf '%f\n' \
   | LC_ALL=C sort | uniq -c | sort -nr \
   > "${PROVENANCE}/jax_cache_name_counts.txt"
 grep -E \
-  'coarse|prepare_relion|assemble_coarse|update_logsumexp|posterior|translate_score|run_local_bucket_big_jit|fine_diff2_fused_translate_runtime_(flat_rows|pairs)|relion_vdam_mstep_fused_projector|gather|where|take_along_axis' \
+  'coarse|prepare_relion|assemble_coarse|update_logsumexp|posterior|translate_score|run_local_bucket_big_jit|fine_diff2_fused_translate_runtime_(flat_rows|pairs|jobs)|relion_vdam_mstep_fused_projector|gather|where|take_along_axis' \
   "${PROVENANCE}/jax_cache_name_counts.txt" \
   > "${PROVENANCE}/pass1_jax_cache_name_counts.txt" || true
 

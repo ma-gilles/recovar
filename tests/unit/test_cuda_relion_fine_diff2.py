@@ -2410,6 +2410,7 @@ def test_relion_fused_translate_jobs_match_rectangular_tree_bitwise(
     valid = (
         (job_plan[:, 0] >= 0)
         & (job_plan[:, 1] >= 0)
+        & (job_plan[:, 2] >= 0)
         & (job_plan[:, 3] >= 0)
     )
 

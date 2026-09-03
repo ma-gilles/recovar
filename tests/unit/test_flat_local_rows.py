@@ -255,14 +255,14 @@ def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_ro
 
     monkeypatch.setenv("RECOVAR_EXACT_FINE_JOB_BUCKET_QUANTUM", "8192")
     capacities = local_em_engine._plan_local_fine_job_capacities([bucket])
-    assert capacities == {(3, dense_rotation_count): 4096}
+    assert capacities == {(3, dense_rotation_count): 144}
     stable = local_em_engine._build_local_fused_pair_fine_arguments(
         bucket,
         encoded,
         np.asarray([True, True, False]),
         fine_job_bucket_size=capacities[(3, dense_rotation_count)],
     )
-    assert stable["job_plan"].shape == (4096, 4)
+    assert stable["job_plan"].shape == (144, 4)
     np.testing.assert_array_equal(stable["job_plan"][:7], expected_jobs)
     assert np.all(stable["job_plan"][7:] == -1)
 

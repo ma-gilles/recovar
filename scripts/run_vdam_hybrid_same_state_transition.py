@@ -177,6 +177,7 @@ PERSISTENT_CACHE_TARGET_FAMILIES = (
     "jit_run_local_bucket_big_jit",
     "jit_relion_fine_diff2_fused_translate_runtime_flat_rows_f32",
     "jit_relion_fine_diff2_fused_translate_runtime_pairs_f32",
+    "jit_relion_fine_diff2_fused_translate_runtime_jobs_f32",
     "jit_relion_vdam_mstep_fused_projector_x_half",
 )
 HYBRID_IMAGE_BATCH_CONTROL_REQUEST = 110

@@ -3145,6 +3145,7 @@ def _plan_local_fine_job_capacities(
         )
 
     required_by_abi: dict[tuple[int, int], int] = {}
+    dense_capacity_by_abi: dict[tuple[int, int], int] = {}
     for bucket in bucket_specs:
         physical_image_count = int(np.asarray(bucket.image_indices).shape[0])
         dense_batch_size = max(
@@ -3159,14 +3160,21 @@ def _plan_local_fine_job_capacities(
         required = int(np.count_nonzero(candidate_mask))
         key = (dense_batch_size, dense_rotation_count)
         required_by_abi[key] = max(required_by_abi.get(key, 0), required)
+        dense_capacity_by_abi[key] = max(
+            dense_capacity_by_abi.get(key, 0),
+            dense_batch_size * dense_rotation_count * candidate_mask.shape[2],
+        )
 
     return {
-        key: max(
-            _FINE_JOB_MIN_CAPACITY,
-            _exact_bucket_rotation_size(
-                required,
-                5000,
-                large_bucket_quantum=large_quantum,
+        key: min(
+            dense_capacity_by_abi[key],
+            max(
+                _FINE_JOB_MIN_CAPACITY,
+                _exact_bucket_rotation_size(
+                    required,
+                    5000,
+                    large_bucket_quantum=large_quantum,
+                ),
             ),
         )
         for key, required in required_by_abi.items()
