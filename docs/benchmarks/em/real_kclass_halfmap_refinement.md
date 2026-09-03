@@ -1,7 +1,7 @@
 # Real-data K=4 independent-half refinement
 
 This is a runnable, bounded component of the Tier-6 harness for genuine
-EMPIAR-10076 K=4 half-map evidence. It is execution infrastructure, not a
+EMPIAR-10076 and EMPIAR-10345 K=4 half-map evidence. It is execution infrastructure, not a
 completed benchmark result or the complete Tier-6 matrix. No entry may be
 added to `entries/` until the Slurm run completes, the audit passes, and the
 resulting artifacts are sealed.
@@ -31,7 +31,9 @@ The harness uses this construction instead:
 All four engine processes run serially on one physical H100. The setup/build
 job is separate and is not included in either engine's runtime.
 
-## Frozen EMPIAR-10076 inputs
+## Frozen dataset inputs
+
+### EMPIAR-10076
 
 The source fixture is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data`.
@@ -41,7 +43,7 @@ They are supplied to both half processes and low-pass filtered to 30 A before
 the first expectation. Their use is explicit in the report because they were
 estimated from both particle halves.
 
-Three profiles are frozen:
+Three profiles are frozen for EMPIAR-10076:
 
 | Profile | Particles | Grid | Host-memory request | Purpose |
 | --- | ---: | ---: | ---: | --- |
@@ -56,6 +58,26 @@ that profile has its own sealed peak-RSS measurement. GPU memory is monitored
 separately at one-second cadence and is not inferred from these host-memory
 requests.
 
+### EMPIAR-10345
+
+The native-grid 10,000-particle fixture is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data`.
+It selects 10,000 rows in immutable source order from the 64,174-particle
+stack and freezes 5,000 particles in each external half. The fixture labels
+were generated once with seed `20260823`; they are a reproducible scientific
+split, not a deposited `rlnRandomSubset` field. The native stack is
+`/projects/CRYOEM/singerlab/mg6942/10345/recovar_data/particles.256.mrcs`
+(22,089,827,328 bytes; SHA-256
+`7909a695db68b65bfe6d0391054a1b19ae37fc4cd8da5cc4eb9595d76e4116e4`).
+
+The four common 256-grid starting maps are the numbered iteration-0 maps in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/relion`.
+As for 10076, both engines receive the same maps, and each independent process
+low-pass filters them to 30 A. The manifest records that these shared starting
+maps were estimated using both halves. EMPIAR-10345 is currently admitted only
+for `native10k-256`; there is no qualified 128-grid stack. Selecting either
+128-grid profile with `--dataset 10345` fails before creating a run root.
+
 The particle stacks, source STAR, source indices, selection, initial maps, and
 instrumented RELION executable have frozen SHA-256 values in the launcher.
 Every generated `rlnImageName` contains the sealed particle stack's absolute
@@ -67,8 +89,8 @@ binds that executable to that source, and the report states this limitation.
 The exact tracked patch is copied into each run's `provenance/` directory and
 included in the in-job SHA-256 verification manifest; its content hash, rather
 than a presentation-dependent line count, is the identity.
-Every small input is rehashed while preparing the run. The particle stack is
-size-checked during preparation and fully rehashed inside the Slurm job before
+Every input, including each multi-gigabyte particle stack, is fully rehashed
+while preparing the run and is rehashed again inside the Slurm job before
 either engine starts.
 
 ## First-iteration native score boundary
@@ -336,6 +358,7 @@ The launcher is dry-run by default. Use a fresh root for every retry:
 ```bash
 cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_k4_halfmap_repro_harness_20260901
 pixi run python -m scripts.launch_em_real_kclass_halfmaps_slurm \
+  --dataset 10076 \
   --profile shared200-128 \
   --seed 42001 \
   --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_shared200_seed42001_<commit>_20260901
@@ -346,11 +369,27 @@ Submission is an explicit separate action:
 
 ```bash
 pixi run python -m scripts.launch_em_real_kclass_halfmaps_slurm \
+  --dataset 10076 \
   --profile shared200-128 \
   --seed 42001 \
   --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10076_shared200_seed42001_<commit>_submitted_20260901 \
   --submit
 ```
+
+The corresponding dry-run for the independently frozen native 10345 input is:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902
+pixi run python -m scripts.launch_em_real_kclass_halfmaps_slurm \
+  --dataset 10345 \
+  --profile native10k-256 \
+  --seed 42001 \
+  --output-root /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10345_native10k_seed42001_<commit>_20260903
+```
+
+This native 10345 invocation is initially a bounded diagnostic. It is not
+eligible for registry admission until the run and audit finish and the required
+multi-seed stability evidence is available.
 
 Immediately after each `sbatch`, the launcher records `scontrol show job -o`
 and requires exactly one requested GPU, a nonexclusive allocation, and exact

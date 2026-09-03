@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and optionally submit genuine EMPIAR-10076 K=4 half-map runs.
+"""Prepare and optionally submit genuine real-data K=4 half-map runs.
 
 RELION forbids ``--split_random_halves`` together with multiple classes.  This
 launcher therefore creates two disjoint frozen particle STARs and runs one
@@ -73,6 +73,27 @@ CANONICAL_HASHES = {
     str(INITIAL_MAP_ROOT / "run_it000_class003.mrc"): "dd405a82bac91e9361e62129a47daf2e49e07ea5a92ab73a19ede7735d377201",
     str(INITIAL_MAP_ROOT / "run_it000_class004.mrc"): "c80b1339f82f1bd155d4b4a28e61502ee535abdad4351d6479af05bd8c9f64d5",
 }
+SOURCE_FIXTURE_10345 = Path(
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "vdam_real10345_10k_fixture_v1_20260823/data"
+)
+INITIAL_MAP_ROOT_10345 = Path(
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/"
+    "real_k4_10345_offset_prior_fullpair_92438c285_20260901/pair/relion"
+)
+STACKS_10345 = {
+    256: Path("/projects/CRYOEM/singerlab/mg6942/10345/recovar_data/particles.256.mrcs"),
+}
+CANONICAL_HASHES_10345 = {
+    str(SOURCE_FIXTURE_10345 / "particles.star"): "e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5",
+    str(SOURCE_FIXTURE_10345 / "source_indices.npy"): "9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3",
+    str(SOURCE_FIXTURE_10345 / "fixture_manifest.json"): "175972d7911dc512ceca2668c0f9b9372d76a3828ee4e9217c9870f55cec4683",
+    str(STACKS_10345[256]): "7909a695db68b65bfe6d0391054a1b19ae37fc4cd8da5cc4eb9595d76e4116e4",
+    str(INITIAL_MAP_ROOT_10345 / "run_it000_class001.mrc"): "976d13ba09a2385266a3913558ad3db0b98002ae286d919177f35803a84f0d9b",
+    str(INITIAL_MAP_ROOT_10345 / "run_it000_class002.mrc"): "2d07cec3661b1f7a07ba91ea38a3b0628bbcddcf08f6559a1417a7fb8643732d",
+    str(INITIAL_MAP_ROOT_10345 / "run_it000_class003.mrc"): "cd9e289c638b6f23301151d5372ba50178ba29a25ee1162443dda09b0e5e07d3",
+    str(INITIAL_MAP_ROOT_10345 / "run_it000_class004.mrc"): "1c4cbed1c79a0c6f5f1be78c0117bfc0fb825821110fe0f0caab7b7ad0b4f484",
+}
 DEFAULT_RELION_REFINE_MPI = Path(
     "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/"
     "relion_k4_100k_dispatchv2_20260717/build/bin/relion_refine_mpi"
@@ -100,6 +121,18 @@ class Profile:
     image_batch_size: int
 
 
+@dataclass(frozen=True)
+class DatasetSpec:
+    key: str
+    label: str
+    source_fixture: Path
+    shared200_selection: Path | None
+    initial_map_root: Path
+    stacks: Mapping[int, Path]
+    canonical_hashes: Mapping[str, str]
+    supported_profiles: frozenset[str]
+
+
 PROFILES = {
     # Sealed 128-grid runs used 6.3 GiB RSS for shared-200 and at most
     # 17.7 GiB for the larger 10k initial-model pair.  These requests retain
@@ -110,6 +143,35 @@ PROFILES = {
     # until its first sealed peak-RSS measurement is available.
     "native10k-256": Profile("native10k-256", 256, "full10k", 10_000, "24:00:00", "256G", 250),
 }
+
+
+def _dataset_spec(key: str) -> DatasetSpec:
+    if key == "10076":
+        # Resolve the legacy module constants here rather than capturing them
+        # at import time. Existing callers and tests may still override those
+        # constants while the default dataset remains backward compatible.
+        return DatasetSpec(
+            key="10076",
+            label="EMPIAR-10076",
+            source_fixture=SOURCE_FIXTURE,
+            shared200_selection=SHARED200_SELECTION,
+            initial_map_root=INITIAL_MAP_ROOT,
+            stacks=STACKS,
+            canonical_hashes=CANONICAL_HASHES,
+            supported_profiles=frozenset(PROFILES),
+        )
+    if key == "10345":
+        return DatasetSpec(
+            key="10345",
+            label="EMPIAR-10345",
+            source_fixture=SOURCE_FIXTURE_10345,
+            shared200_selection=None,
+            initial_map_root=INITIAL_MAP_ROOT_10345,
+            stacks=STACKS_10345,
+            canonical_hashes=CANONICAL_HASHES_10345,
+            supported_profiles=frozenset({"native10k-256"}),
+        )
+    raise LaunchError(f"unsupported dataset: {key}")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -174,9 +236,13 @@ def _relion_source_provenance(source_dir: Path) -> dict[str, Any]:
     }
 
 
-def _verify_canonical(path: Path) -> str:
+def _verify_canonical(
+    path: Path,
+    canonical_hashes: Mapping[str, str] | None = None,
+) -> str:
     resolved = path.resolve()
-    expected = CANONICAL_HASHES.get(str(resolved)) or CANONICAL_HASHES.get(str(path))
+    hashes = CANONICAL_HASHES if canonical_hashes is None else canonical_hashes
+    expected = hashes.get(str(resolved)) or hashes.get(str(path))
     _require(expected is not None, f"no frozen checksum is declared for {resolved}")
     _require(resolved.is_file(), f"missing canonical artifact: {resolved}")
     # Preparation is the provenance boundary.  Deferring a large-stack hash
@@ -204,8 +270,9 @@ def _input_record(path: Path, *, role: str, expected_hash: str | None = None) ->
     }
 
 
-def _particle_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
-    payload = starfile.read(SOURCE_FIXTURE / "particles.star")
+def _particle_tables(source_fixture: Path | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    fixture = SOURCE_FIXTURE if source_fixture is None else source_fixture
+    payload = starfile.read(fixture / "particles.star")
     _require(isinstance(payload, dict) and set(payload) >= {"optics", "particles"}, "fixture STAR topology changed")
     return payload["optics"].copy(), payload["particles"].copy()
 
@@ -218,13 +285,18 @@ def _image_stack_index(value: str) -> int:
     return one_based - 1
 
 
-def _selected_particles(profile: Profile, particles: pd.DataFrame) -> pd.DataFrame:
+def _selected_particles(
+    profile: Profile,
+    particles: pd.DataFrame,
+    shared200_selection: Path | None = None,
+) -> pd.DataFrame:
     names = particles["rlnImageName"].astype(str)
     _require(names.is_unique, "source rlnImageName identities are not unique")
     if profile.selection == "full10k":
         selected = particles.copy()
     else:
-        payload = json.loads(SHARED200_SELECTION.read_text())
+        selection_path = SHARED200_SELECTION if shared200_selection is None else shared200_selection
+        payload = json.loads(selection_path.read_text())
         _require(payload.get("same_visited_particle_ids") is True, "shared200 source was not admitted")
         requested = {str(value) for value in payload["visited_particle_ids"]}
         _require(len(requested) == profile.expected_count, "shared200 identity count changed")
@@ -234,15 +306,24 @@ def _selected_particles(profile: Profile, particles: pd.DataFrame) -> pd.DataFra
     return selected.reset_index(drop=True)
 
 
-def _prepare_references(root: Path, profile: Profile) -> tuple[list[Path], list[Path], Path]:
+def _prepare_references(
+    root: Path,
+    profile: Profile,
+    dataset: DatasetSpec | None = None,
+) -> tuple[list[Path], list[Path], Path]:
+    initial_map_root = INITIAL_MAP_ROOT if dataset is None else dataset.initial_map_root
+    canonical_hashes = CANONICAL_HASHES if dataset is None else dataset.canonical_hashes
     reference_dir = root / "data" / "references"
     reference_dir.mkdir(parents=True)
     recovar_paths: list[Path] = []
     relion_paths: list[Path] = []
     class_rows: list[dict[str, Any]] = []
     for class_id in range(1, 5):
-        source = INITIAL_MAP_ROOT / f"run_it000_class{class_id:03d}.mrc"
-        _verify_canonical(source)
+        source = initial_map_root / f"run_it000_class{class_id:03d}.mrc"
+        if dataset is None:
+            _verify_canonical(source)
+        else:
+            _verify_canonical(source, canonical_hashes)
         volume, voxel = helpers.load_relion_volume(str(source), return_voxel_size=True)
         volume = np.asarray(volume, dtype=np.float32)
         source_grid = int(volume.shape[0])
@@ -279,10 +360,19 @@ def _prepare_references(root: Path, profile: Profile) -> tuple[list[Path], list[
 def _write_particle_inputs(
     root: Path,
     profile: Profile,
+    dataset: DatasetSpec | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[int]]:
-    optics, particles = _particle_tables()
-    selected = _selected_particles(profile, particles)
-    source_indices_raw = np.load(SOURCE_FIXTURE / "source_indices.npy", allow_pickle=False)
+    if dataset is None:
+        source_fixture = SOURCE_FIXTURE
+        stacks = STACKS
+        optics, particles = _particle_tables()
+        selected = _selected_particles(profile, particles)
+    else:
+        source_fixture = dataset.source_fixture
+        stacks = dataset.stacks
+        optics, particles = _particle_tables(source_fixture)
+        selected = _selected_particles(profile, particles, dataset.shared200_selection)
+    source_indices_raw = np.load(source_fixture / "source_indices.npy", allow_pickle=False)
     _require(
         source_indices_raw.ndim == 1
         and np.issubdtype(source_indices_raw.dtype, np.integer)
@@ -308,7 +398,8 @@ def _write_particle_inputs(
     _require(source_grid == 256, "source fixture image grid changed")
     optics.loc[:, "rlnImageSize"] = profile.grid_size
     optics.loc[:, "rlnImagePixelSize"] = source_apix * source_grid / profile.grid_size
-    stack_path = STACKS[profile.grid_size].resolve()
+    _require(profile.grid_size in stacks, f"dataset has no qualified grid-{profile.grid_size} stack")
+    stack_path = stacks[profile.grid_size].resolve()
     _require(stack_path.is_file(), f"runtime particle stack is unavailable: {stack_path}")
     selected.loc[:, "rlnImageName"] = [
         f"{str(value).split('@', 1)[0]}@{stack_path}" for value in selected["rlnImageName"]
@@ -589,6 +680,7 @@ def render_run_script(
     mpi_ranks: int,
     pool: int,
     analysis_policy: Mapping[str, Any],
+    dataset_key: str = "10076",
 ) -> str:
     _require(
         analysis_policy == expected_analysis_policy(profile.grid_size),
@@ -607,7 +699,7 @@ def render_run_script(
         cuda_lib=cuda_lib,
         cuda_module=cuda_module,
         relion_src_dir=relion_source,
-        job_name=f"real_k4_halfmap_{profile.name}_seed{seed}",
+        job_name=f"real_k4_halfmap_{dataset_key}_{profile.name}_seed{seed}",
         expected_commit=str(source["commit"]),
     )
     command_arrays = []
@@ -620,7 +712,7 @@ def render_run_script(
             ]
         )
     return f"""#!/usr/bin/env bash
-#SBATCH --job-name=k4half_{profile.name[:12]}_{seed}
+#SBATCH --job-name=k4h_{dataset_key}_{profile.name[:10]}_{seed}
 #SBATCH --output={q(root / 'logs' / 'qualification-%j.out')}
 #SBATCH --error={q(root / 'logs' / 'qualification-%j.err')}
 #SBATCH --partition=cryoem
@@ -833,6 +925,7 @@ done
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--dataset", choices=("10076", "10345"), default="10076")
     parser.add_argument("--profile", choices=sorted(PROFILES), default="shared200-128")
     parser.add_argument("--seed", type=int, choices=(42001, 42002, 42003), default=42001)
     parser.add_argument("--max-iter", type=int, default=8)
@@ -854,6 +947,12 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     _require(args.max_iter >= 1, "max_iter must be positive")
     _require(args.mpi_ranks >= 2 and args.pool >= 1, "invalid RELION MPI/pool topology")
     profile = PROFILES[args.profile]
+    dataset = _dataset_spec(args.dataset)
+    _require(
+        profile.name in dataset.supported_profiles,
+        f"{dataset.label} does not have qualified inputs for profile {profile.name}; "
+        f"supported profiles: {', '.join(sorted(dataset.supported_profiles))}",
+    )
     source = _source_provenance()
     _require(base_pixi_python().is_file(), f"base pixi Python is unavailable: {base_pixi_python()}")
     relion_source = _relion_source_provenance(args.relion_source_dir.resolve())
@@ -885,14 +984,33 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "size_bytes": relion_diff_artifact.stat().st_size,
     }
 
-    for path in (SOURCE_FIXTURE / "particles.star", SOURCE_FIXTURE / "source_indices.npy", SOURCE_FIXTURE / "fixture_manifest.json"):
-        _verify_canonical(path)
+    source_fixture = dataset.source_fixture
+    initial_map_root = dataset.initial_map_root
+    canonical_hashes = dataset.canonical_hashes
+    stacks = dataset.stacks
+    for path in (
+        source_fixture / "particles.star",
+        source_fixture / "source_indices.npy",
+        source_fixture / "fixture_manifest.json",
+    ):
+        _verify_canonical(path, canonical_hashes)
     if profile.selection == "shared200":
-        _verify_canonical(SHARED200_SELECTION)
-    stack_hash = _verify_canonical(STACKS[profile.grid_size])
+        _require(dataset.shared200_selection is not None, "dataset has no qualified shared200 selection")
+        _verify_canonical(dataset.shared200_selection, canonical_hashes)
+    _require(profile.grid_size in stacks, f"dataset has no qualified grid-{profile.grid_size} stack")
+    stack_path = stacks[profile.grid_size]
+    stack_hash = _verify_canonical(stack_path, canonical_hashes)
     analysis_policy = expected_analysis_policy(profile.grid_size)
-    recovar_reference_paths, relion_reference_paths, reference_star = _prepare_references(root, profile)
-    halves, selected_names, selected_source_indices = _write_particle_inputs(root, profile)
+    recovar_reference_paths, relion_reference_paths, reference_star = _prepare_references(
+        root,
+        profile,
+        dataset,
+    )
+    halves, selected_names, selected_source_indices = _write_particle_inputs(
+        root,
+        profile,
+        dataset,
+    )
 
     run_python = root / "venv" / "bin" / "python"
     for row in halves:
@@ -954,22 +1072,35 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             mpi_ranks=args.mpi_ranks,
             pool=args.pool,
             analysis_policy=analysis_policy,
+            dataset_key=dataset.key,
         )
     )
     run_script.chmod(0o755)
 
     input_artifacts = [
-        _input_record(SOURCE_FIXTURE / "particles.star", role="frozen_source_particles_star", expected_hash=CANONICAL_HASHES[str(SOURCE_FIXTURE / 'particles.star')]),
-        _input_record(SOURCE_FIXTURE / "source_indices.npy", role="frozen_source_indices", expected_hash=CANONICAL_HASHES[str(SOURCE_FIXTURE / 'source_indices.npy')]),
-        _input_record(SOURCE_FIXTURE / "fixture_manifest.json", role="frozen_fixture_manifest", expected_hash=CANONICAL_HASHES[str(SOURCE_FIXTURE / 'fixture_manifest.json')]),
-        _input_record(STACKS[profile.grid_size], role=f"particle_stack_grid{profile.grid_size}", expected_hash=stack_hash),
+        _input_record(source_fixture / "particles.star", role="frozen_source_particles_star", expected_hash=canonical_hashes[str(source_fixture / 'particles.star')]),
+        _input_record(source_fixture / "source_indices.npy", role="frozen_source_indices", expected_hash=canonical_hashes[str(source_fixture / 'source_indices.npy')]),
+        _input_record(source_fixture / "fixture_manifest.json", role="frozen_fixture_manifest", expected_hash=canonical_hashes[str(source_fixture / 'fixture_manifest.json')]),
+        _input_record(stack_path, role=f"particle_stack_grid{profile.grid_size}", expected_hash=stack_hash),
         _input_record(executable, role="instrumented_relion_refine_mpi", expected_hash=DEFAULT_RELION_SHA256),
         _input_record(
             relion_diff_artifact,
             role="instrumented_relion_source_tracked_diff",
             expected_hash=DEFAULT_RELION_TRACKED_DIFF_SHA256,
         ),
-        *[_input_record(path, role=f"shared_initial_class{index:03d}_source", expected_hash=CANONICAL_HASHES[str(INITIAL_MAP_ROOT / f'run_it000_class{index:03d}.mrc')]) for index, path in enumerate([INITIAL_MAP_ROOT / f"run_it000_class{i:03d}.mrc" for i in range(1, 5)], start=1)],
+        *[
+            _input_record(
+                path,
+                role=f"shared_initial_class{index:03d}_source",
+                expected_hash=canonical_hashes[
+                    str(initial_map_root / f"run_it000_class{index:03d}.mrc")
+                ],
+            )
+            for index, path in enumerate(
+                [initial_map_root / f"run_it000_class{i:03d}.mrc" for i in range(1, 5)],
+                start=1,
+            )
+        ],
         *[
             _input_record(path, role=f"prepared_recovar_initial_class{index:03d}")
             for index, path in enumerate(recovar_reference_paths, start=1)
@@ -982,8 +1113,13 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         _input_record(root / "data" / "selected_particles.star", role="frozen_selected_particles_star"),
     ]
     if profile.selection == "shared200":
+        assert dataset.shared200_selection is not None
         input_artifacts.append(
-            _input_record(SHARED200_SELECTION, role="shared200_selection", expected_hash=CANONICAL_HASHES[str(SHARED200_SELECTION)])
+            _input_record(
+                dataset.shared200_selection,
+                role="shared200_selection",
+                expected_hash=canonical_hashes[str(dataset.shared200_selection)],
+            )
         )
     for row in halves:
         input_artifacts.extend(
@@ -998,7 +1134,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
 
     manifest = {
         "schema": MANIFEST_SCHEMA,
-        "dataset": "EMPIAR-10076",
+        "dataset": dataset.label,
         "profile": profile.name,
         "source": source,
         "relion_source": relion_source,
@@ -1036,20 +1172,22 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "particle_selection": {
             "mode": profile.selection,
             "source_particles_star": str((root / "data" / "selected_particles.star").resolve()),
-            "origin_particles_star": str((SOURCE_FIXTURE / "particles.star").resolve()),
-            "origin_particles_star_sha256": CANONICAL_HASHES[
-                str(SOURCE_FIXTURE / "particles.star")
+            "origin_particles_star": str((source_fixture / "particles.star").resolve()),
+            "origin_particles_star_sha256": canonical_hashes[
+                str(source_fixture / "particles.star")
             ],
-            "source_indices_npy": str((SOURCE_FIXTURE / "source_indices.npy").resolve()),
-            "source_indices_sha256": CANONICAL_HASHES[
-                str(SOURCE_FIXTURE / "source_indices.npy")
+            "source_indices_npy": str((source_fixture / "source_indices.npy").resolve()),
+            "source_indices_sha256": canonical_hashes[
+                str(source_fixture / "source_indices.npy")
             ],
             "selection_source_json": (
-                str(SHARED200_SELECTION.resolve()) if profile.selection == "shared200" else None
+                str(dataset.shared200_selection.resolve())
+                if dataset.shared200_selection is not None and profile.selection == "shared200"
+                else None
             ),
             "selection_source_sha256": (
-                CANONICAL_HASHES[str(SHARED200_SELECTION)]
-                if profile.selection == "shared200"
+                canonical_hashes[str(dataset.shared200_selection)]
+                if dataset.shared200_selection is not None and profile.selection == "shared200"
                 else None
             ),
             "selected_particles_star": str((root / "data" / "selected_particles.star").resolve()),
@@ -1057,7 +1195,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "ordered_image_names_sha256": sha256_strings(selected_names),
             "selected_source_indices": selected_source_indices,
             "ordered_source_indices_sha256": sha256_ints(selected_source_indices),
-            "particle_stack_path": str(STACKS[profile.grid_size].resolve()),
+            "particle_stack_path": str(stack_path.resolve()),
             "particle_stack_sha256": stack_hash,
         },
         "halves": halves,
@@ -1085,7 +1223,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             "setup_base_pixi_python": str(base_pixi_python()),
             "runtime_root_policy": str(
                 DEFAULT_RUNTIME_ROOT
-                / f"real_k4_halfmap_{profile.name}_seed{args.seed}_<job_id>"
+                / f"real_k4_halfmap_{dataset.key}_{profile.name}_seed{args.seed}_<job_id>"
             ),
             "relion_tmpdir_policy": "<runtime_root>/relion_half<half>",
         },
@@ -1108,6 +1246,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "setup_script": str(setup_script),
         "run_script": str(run_script),
         "profile": profile.name,
+        "dataset": dataset.label,
         "particle_count": len(selected_names),
         "half_counts": [row["particle_count"] for row in halves],
         "submitted": False,

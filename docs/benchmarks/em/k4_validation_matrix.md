@@ -469,7 +469,7 @@ matched one-GPU performance. Because InitialModel does not emit independently
 refined half maps, this precursor does not satisfy the native full-run
 admission rule above.
 
-The independent-half EMPIAR-10076 refinement gate is now runnable through
+The independent-half EMPIAR-10076 and native-grid EMPIAR-10345 refinement gates are now runnable through
 `scripts/launch_em_real_kclass_halfmaps_slurm.py`; see
 `real_kclass_halfmap_refinement.md`. RELION does not permit K>1 and
 `--split_random_halves` in one process, so the harness runs two independent
@@ -479,6 +479,14 @@ and checked in as a rejected diagnostic: classes remain occupied, but all
 seeds miss the prospective assignment gate and one class/seed misses the
 half-map quality gate substantially. Native execution therefore remains
 blocked by policy rather than by missing infrastructure.
+
+The 10345 contract freezes a 10,000-particle, 5,000/5,000 split, its native
+256-grid stack, and four common iteration-0 maps, with every input identified
+by SHA-256. It deliberately supports only `native10k-256`: no qualified
+128-grid 10345 stack exists, so the launcher rejects both 128-grid profiles
+before creating an output root. A first native invocation is a bounded
+diagnostic and cannot enter the registry until its audit and multi-seed
+stability requirements pass.
 
 That launcher is deliberately narrower than the complete Tier-6 checklist:
 it reports maps, half-map/cross-engine FSC, populations, hard-assignment
@@ -516,9 +524,10 @@ implementation:
 - fail-closed permutation/duplicate-map/controller-corruption fixtures beyond
   the existing evaluator unit tests;
 - the independent exactly generated 100k/256 release fixture; and
-- an independent-half K=4 launcher for EMPIAR-10345 (and optional
-  EMPIAR-10073); EMPIAR-10076 has a completed but rejected three-seed pilot,
-  and the InitialModel-only diagnostic cannot replace either real-data gate.
+- a qualified 128-grid EMPIAR-10345 pilot input (the native independent-half
+  launcher is implemented) and an optional independent-half EMPIAR-10073
+  contract; EMPIAR-10076 has a completed but rejected three-seed pilot, and
+  the InitialModel-only diagnostic cannot replace either real-data gate.
 
 These are deliberately documented as pending execution infrastructure, not as
 completed coverage.

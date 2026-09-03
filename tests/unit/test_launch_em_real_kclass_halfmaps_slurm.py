@@ -292,12 +292,83 @@ def test_particle_input_generation_carries_immutable_source_indices(tmp_path: Pa
     )
 
 
+def test_particle_input_generation_routes_dataset_specific_fixture_and_stack(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    np.save(fixture / "source_indices.npy", np.arange(4, dtype=np.int64))
+    stack = tmp_path / "dataset-specific-particles.256.mrcs"
+    stack.write_bytes(b"stack")
+    optics = pd.DataFrame({"rlnImagePixelSize": [1.25], "rlnImageSize": [256]})
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": [f"{index}@original.mrcs" for index in range(1, 5)],
+            "rlnRandomSubset": [1, 2, 1, 2],
+        }
+    )
+    starfile.write({"optics": optics, "particles": particles}, fixture / "particles.star")
+    dataset = launcher.DatasetSpec(
+        key="test",
+        label="TEST",
+        source_fixture=fixture,
+        shared200_selection=None,
+        initial_map_root=tmp_path / "maps",
+        stacks={256: stack},
+        canonical_hashes={},
+        supported_profiles=frozenset({"tiny"}),
+    )
+    profile = launcher.Profile("tiny", 256, "full10k", 4, "00:10:00", "1G", 1)
+
+    halves, names, source_indices = launcher._write_particle_inputs(
+        tmp_path / "run",
+        profile,
+        dataset,
+    )
+
+    assert names == [f"{index}@{stack.resolve()}" for index in range(1, 5)]
+    assert source_indices == [0, 1, 2, 3]
+    assert [row["particle_count"] for row in halves] == [2, 2]
+
+
 def test_cli_is_dry_run_unless_submit_is_explicit(tmp_path: Path) -> None:
     args = launcher._parse_args(["--output-root", str(tmp_path / "run")])
 
     assert args.submit is False
+    assert args.dataset == "10076"
     assert args.profile == "shared200-128"
     assert args.seed == 42001
+
+
+def test_10345_dataset_contract_is_native_grid_only() -> None:
+    dataset = launcher._dataset_spec("10345")
+
+    assert dataset.label == "EMPIAR-10345"
+    assert dataset.supported_profiles == frozenset({"native10k-256"})
+    assert set(dataset.stacks) == {256}
+    assert dataset.shared200_selection is None
+    assert dataset.canonical_hashes[str(dataset.stacks[256])].startswith("7909a695")
+
+
+def test_10345_rejects_unqualified_128_profile_before_creating_run_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "run"
+    monkeypatch.setattr(launcher, "DEFAULT_RUN_ROOT", tmp_path)
+    args = launcher._parse_args(
+        [
+            "--output-root",
+            str(root),
+            "--dataset",
+            "10345",
+            "--profile",
+            "pilot10k-128",
+        ]
+    )
+
+    with pytest.raises(launcher.LaunchError, match="does not have qualified inputs"):
+        launcher.prepare(args)
+
+    assert not root.exists()
 
 
 def test_profiles_request_measured_host_memory_headroom() -> None:

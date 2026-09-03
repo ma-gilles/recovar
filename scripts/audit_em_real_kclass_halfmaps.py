@@ -1167,7 +1167,7 @@ def audit(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, np.ndarra
     manifest = json.loads(manifest_path.read_text())
     _require(manifest.get("schema") == MANIFEST_SCHEMA, "submission manifest schema mismatch")
     _require(int(manifest["config"]["K"]) == N_CLASSES, "audit requires exactly K=4")
-    _require(manifest["config"]["symmetry"] == "C1", "frozen EMPIAR-10076 contract requires C1")
+    _require(manifest["config"]["symmetry"] == "C1", "frozen real-data K=4 contract requires C1")
     _require(manifest.get("thresholds") == EXPECTED_THRESHOLDS, "prospective K=4 science thresholds changed")
     analysis_policy = validate_analysis_policy(manifest, args)
     _require(bool(manifest["source"]["clean"]), "source worktree was not clean at launch")
