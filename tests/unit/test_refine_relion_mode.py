@@ -6564,9 +6564,26 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
 def test_local_k4_batch_and_rotation_blocks_match_float64_oracle(rng):
     """K=4 production scoring is invariant to chunking and agrees with its f64 oracle."""
 
+    from recovar.core.relion_project import centered_full_to_relion_half
+
     dataset = MockDataset(3, rng)
-    mean = _hermitian_volume(VOLUME_SHAPE, seed=160)
-    means = jnp.stack([mean, mean, mean, mean], axis=0)
+    means = jnp.stack(
+        [
+            _hermitian_volume(VOLUME_SHAPE, seed=seed) * np.float32(1.0e-4)
+            for seed in (160, 163, 167, 173)
+        ],
+        axis=0,
+    )
+    relion_projector_half = np.stack(
+        [
+            np.asarray(
+                centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE)),
+                dtype=np.complex64,
+            )
+            for mean in means
+        ],
+    )
+    assert len({np.asarray(projector).tobytes() for projector in relion_projector_half}) == 4
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=161)
@@ -6599,8 +6616,12 @@ def test_local_k4_batch_and_rotation_blocks_match_float64_oracle(rng):
         current_size=6,
         reconstruct_significant_only=False,
         return_best_pose_details=True,
+        return_profile=True,
         score_with_masked_images=True,
         half_spectrum_scoring=True,
+        projection_relion_texture_interp=False,
+        relion_projector_half=relion_projector_half,
+        relion_projector_r_max=4,
         image_corrections=np.asarray([1.3, 0.8, 1.1], dtype=np.float32),
         scale_corrections=np.asarray([0.7, 1.2, 0.9], dtype=np.float32),
         image_pre_shifts=np.asarray([[1.0, -1.0], [-1.0, 1.0], [0.0, 0.0]], dtype=np.float32),
@@ -6636,6 +6657,12 @@ def test_local_k4_batch_and_rotation_blocks_match_float64_oracle(rng):
         batched.per_class_hard_assignments,
         microbatched.per_class_hard_assignments,
     )
+    for result in (batched, microbatched):
+        assert [
+            str(np.asarray(profile["projection_mode"]).item())
+            for profile in result.profile_summary["per_class_profile_summary"]
+        ] == ["relion_projector"] * 4
+        assert np.all(np.asarray(result.class_posterior_sums) > 0.0)
     np.testing.assert_allclose(
         batched.class_responsibilities,
         microbatched.class_responsibilities,
