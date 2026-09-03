@@ -10416,6 +10416,55 @@ class TestRelionModeSmokeTest:
         assert len(result["wall_times"]) == 1
         assert len(result["current_sizes"]) == 1
 
+    def test_relion_k4_does_not_finalize_after_max_iter_even_when_diagnostic_force_enabled(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        monkeypatch,
+    ):
+        """K-class max-iteration exhaustion never enables final all-data."""
+        final_all_data_pass_count = 0
+        original_final_half_indices = iteration_loop_module._final_bpref_contribution_half_indices
+
+        def record_final_half_indices(environ=None):
+            nonlocal final_all_data_pass_count
+            final_all_data_pass_count += 1
+            return original_final_half_indices(environ)
+
+        monkeypatch.setenv("RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER", "1")
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_final_bpref_contribution_half_indices",
+            record_final_half_indices,
+        )
+
+        n_classes = 4
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1, init_current_size=4, init_healpix_order=2, max_healpix_order=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                k_class=KClassOptions(
+                    n_classes=n_classes,
+                    init_class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
+                ),
+            ),
+        )
+
+        assert result["convergence_state"].has_converged is False
+        assert result["final_all_data_ran"] is False
+        assert np.asarray(result["class_means"]).shape == (n_classes, VOLUME_SIZE)
+        assert final_all_data_pass_count == 0
+
     def test_relion_mode_joins_lowres_halves_on_first_iteration(
         self,
         half_datasets,
@@ -11114,20 +11163,33 @@ class TestRelionModeSmokeTest:
         translations,
         monkeypatch,
     ):
-        """K-class refinement can run the final all-data iteration."""
+        """K=4 refinement runs exactly one final all-data iteration."""
         original_update = iteration_loop_module.update_refinement_state
+        original_final_half_indices = iteration_loop_module._final_bpref_contribution_half_indices
+        final_all_data_pass_count = 0
 
         def force_convergence_after_first_iter(*args, **kwargs):
             updated = original_update(*args, **kwargs)
             updated.has_converged = True
             return updated
 
+        def record_final_half_indices(environ=None):
+            nonlocal final_all_data_pass_count
+            final_all_data_pass_count += 1
+            return original_final_half_indices(environ)
+
         monkeypatch.setattr(
             iteration_loop_module,
             "update_refinement_state",
             force_convergence_after_first_iter,
         )
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_final_bpref_contribution_half_indices",
+            record_final_half_indices,
+        )
 
+        n_classes = 4
         result = refine_single_volume(
             half_datasets,
             init_volume,
@@ -11141,18 +11203,22 @@ class TestRelionModeSmokeTest:
                 batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
                 parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
                 k_class=KClassOptions(
-                    n_classes=2,
-                    init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+                    n_classes=n_classes,
+                    init_class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
                 ),
             ),
         )
 
         assert result["convergence_state"].has_converged is True
+        assert result["final_all_data_ran"] is True
         assert len(result["wall_times"]) == 2
-        assert np.asarray(result["class_means"]).shape == (2, VOLUME_SIZE)
+        assert np.asarray(result["class_means"]).shape == (n_classes, VOLUME_SIZE)
         np.testing.assert_allclose(np.sum(result["class_weights"]), 1.0, rtol=1e-6, atol=1e-6)
         for half_classes in result["class_assignments"]:
             assert np.asarray(half_classes).shape == (N_IMAGES // 2,)
+        for half_classes in result["final_all_data_class_assignments"]:
+            assert np.asarray(half_classes).shape == (N_IMAGES // 2,)
+        assert final_all_data_pass_count == 1
 
     def test_relion_final_iteration_k_class_adaptive_uses_sparse_pass2_route(
         self,
