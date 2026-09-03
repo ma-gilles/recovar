@@ -10,6 +10,7 @@ import pytest
 from recovar.data_io.image_loader import ImageLoader
 from scripts.run_vdam_late_iteration_profile import (
     _all_optimized_q32_environment,
+    _capture_cold_compile_calls,
     _capture_raw_image_cache_loads,
     _process_resource_delta,
     _profile_metadata,
@@ -89,6 +90,47 @@ def test_late_profile_cache_audit_records_load_all_and_restores_method():
         "leaf_cached_before": [],
         "leaf_cached_after": [],
     }
+
+
+def test_cold_compile_callsite_trace_records_cache_result_and_restores(tmp_path, monkeypatch):
+    from jax._src import compiler
+
+    sentinel = object()
+
+    def fake_cache_read(*args, **kwargs):
+        return sentinel, 1.0
+
+    def fake_compile(
+        backend,
+        computation,
+        devices,
+        compile_options,
+        host_callbacks,
+        executable_devices,
+        pgle_profiler=None,
+    ):
+        compiler._cache_read("module", "key")
+        return sentinel
+
+    monkeypatch.setattr(compiler, "_cache_read", fake_cache_read)
+    monkeypatch.setattr(compiler, "compile_or_get_cached", fake_compile)
+    computation = SimpleNamespace(name="jit(test_module)")
+    output = tmp_path / "calls.jsonl"
+
+    with _capture_cold_compile_calls(output) as records:
+        result = compiler.compile_or_get_cached(None, computation, None, None, (), None)
+
+    assert result is sentinel
+    assert compiler.compile_or_get_cached is fake_compile
+    assert compiler._cache_read is fake_cache_read
+    assert records is not None and len(records) == 1
+    record = json.loads(output.read_text())
+    assert record["module"] == "jit(test_module)"
+    assert record["cache_status"] == "hit"
+    assert record["cache_lookup"] is True
+    assert record["cache_hit"] is True
+    assert record["elapsed_s"] >= 0.0
+    assert record["callsite"]["file"].endswith("test_vdam_late_iteration_profile.py")
 
 
 def test_late_profile_cache_audit_can_be_disabled():
@@ -577,13 +619,15 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert '--execution-contract "${EXECUTION_CONTRACT}"' in launcher
     assert "recovar_execution_contract.json" in launcher
     assert "VDAM_LATE_PROFILE_HOST_ATTRIBUTION" in launcher
+    assert "VDAM_LATE_PROFILE_COLD_COMPILE_ATTRIBUTION" in launcher
     assert "--python-sampling=true" in launcher
     assert "cuda,nvtx,osrt,python-gil" in launcher
     assert "JAX_SKIP_CUDA_CONSTRAINTS_CHECK=1" in launcher
     assert "unset JAX_SKIP_CUDA_CONSTRAINTS_CHECK" in launcher
     assert 'RECOVAR_COMMAND_PREFIX=(env "LD_PRELOAD=${CUSPARSE_LIBRARY}")' in launcher
     assert "RECOVAR_COMMAND_PREFIX=()" in launcher
-    assert '"timing_truth_allowed": not bool(int(sys.argv[16]))' in launcher
+    assert "cold_compile_calls.jsonl" in launcher
+    assert 'bool(int(sys.argv[16])) or bool(int(sys.argv[17]))' in launcher
     assert "status --porcelain=v1 --untracked-files=no" in launcher
     assert "test ! -e" in launcher
     assert 'test ! -e "${NATIVE_PROFILE}/run_it' in launcher

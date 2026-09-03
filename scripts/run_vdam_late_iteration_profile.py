@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import functools
 import hashlib
+import inspect
 import json
 import os
 import resource
+import threading
 import time
+import traceback
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -86,6 +90,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--audit-raw-image-cache",
         action="store_true",
         help="Record every ImageLoader.load_all call without changing cache policy.",
+    )
+    parser.add_argument(
+        "--cold-compile-callsite-log",
+        type=Path,
+        help=(
+            "Diagnostic-only JSONL trace of cold compile_or_get_cached calls; "
+            "this adds traceback overhead and invalidates timing truth."
+        ),
     )
     parser.add_argument(
         "--execution-contract",
@@ -934,6 +946,101 @@ def _capture_raw_image_cache_loads(
         ImageLoader.load_all = original
 
 
+def _nearest_repo_frame(stack: list[traceback.FrameSummary]) -> dict[str, object] | None:
+    repo_root = Path(__file__).resolve().parents[1]
+    this_file = Path(__file__).resolve()
+    for frame in reversed(stack):
+        path = Path(frame.filename).resolve()
+        if path == this_file:
+            continue
+        try:
+            relative = path.relative_to(repo_root)
+        except ValueError:
+            continue
+        return {
+            "file": str(relative),
+            "line": int(frame.lineno),
+            "function": frame.name,
+            "source": frame.line,
+        }
+    return None
+
+
+@contextmanager
+def _capture_cold_compile_calls(path: Path | None) -> Iterator[list[dict[str, object]] | None]:
+    if path is None:
+        yield None
+        return
+    path = path.resolve()
+    if path.exists():
+        raise FileExistsError(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    from jax._src import compiler
+
+    original_compile = compiler.compile_or_get_cached
+    original_cache_read = compiler._cache_read
+    signature = inspect.signature(original_compile)
+    thread_state = threading.local()
+    write_lock = threading.Lock()
+    records: list[dict[str, object]] = []
+
+    @functools.wraps(original_cache_read)
+    def traced_cache_read(*args, **kwargs):
+        result = original_cache_read(*args, **kwargs)
+        current = getattr(thread_state, "compile_record", None)
+        if current is not None:
+            current["cache_lookup"] = True
+            current["cache_hit"] = result[0] is not None
+        return result
+
+    @functools.wraps(original_compile)
+    def traced_compile(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        computation = bound.arguments["computation"]
+        try:
+            sym_name = computation.operation.attributes["sym_name"]
+            module_name = compiler.ir.StringAttr(sym_name).value
+        except Exception:
+            module_name = str(getattr(computation, "name", "<unknown>"))
+        record: dict[str, object] = {
+            "module": module_name,
+            "cache_lookup": False,
+            "cache_hit": None,
+            "thread_id": threading.get_ident(),
+            "thread_name": threading.current_thread().name,
+            "callsite": _nearest_repo_frame(traceback.extract_stack()[:-1]),
+        }
+        started = time.perf_counter()
+        thread_state.compile_record = record
+        try:
+            result = original_compile(*args, **kwargs)
+        except BaseException as error:
+            record["exception"] = f"{type(error).__name__}: {error}"
+            raise
+        finally:
+            record["elapsed_s"] = float(time.perf_counter() - started)
+            if record["cache_lookup"]:
+                record["cache_status"] = "hit" if record["cache_hit"] else "miss"
+            else:
+                record["cache_status"] = "not_checked"
+            thread_state.compile_record = None
+            with write_lock:
+                record["sequence"] = len(records)
+                records.append(record)
+                with path.open("a") as stream:
+                    stream.write(json.dumps(record, sort_keys=True) + "\n")
+        return result
+
+    compiler._cache_read = traced_cache_read
+    compiler.compile_or_get_cached = traced_compile
+    try:
+        yield records
+    finally:
+        compiler.compile_or_get_cached = original_compile
+        compiler._cache_read = original_cache_read
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     checkpoint = args.checkpoint_optimiser.resolve(strict=True)
@@ -971,8 +1078,6 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
     os.environ.setdefault("JAX_LOG_COMPILES", "1")
 
-    from scripts.run_ab_initio import main as run_ab_initio
-
     profiler_start: Callable[[], None] | None = None
     profiler_stop: Callable[[], None] | None = None
     if args.cuda_profiler_range:
@@ -980,6 +1085,7 @@ def main(argv: list[str] | None = None) -> int:
 
     reports: dict[str, dict[str, object]] = {}
     target_iteration = int(args.checkpoint_iteration) + 1
+    run_ab_initio: Callable[[list[str]], int] | None = None
     with _capture_raw_image_cache_loads(bool(args.audit_raw_image_cache)) as cache_events:
         for label in ("cold", "warm"):
             prefix = output_root / label / "run"
@@ -991,13 +1097,19 @@ def main(argv: list[str] | None = None) -> int:
             started = time.perf_counter()
             if capture:
                 profiler_start()
-            try:
-                status = int(run_ab_initio(command))
-                _effects_barrier()
-            finally:
-                if capture:
-                    assert profiler_stop is not None
-                    profiler_stop()
+            compile_log = args.cold_compile_callsite_log if label == "cold" else None
+            with _capture_cold_compile_calls(compile_log) as compile_records:
+                if run_ab_initio is None:
+                    from scripts.run_ab_initio import main as imported_run_ab_initio
+
+                    run_ab_initio = imported_run_ab_initio
+                try:
+                    status = int(run_ab_initio(command))
+                    _effects_barrier()
+                finally:
+                    if capture:
+                        assert profiler_stop is not None
+                        profiler_stop()
             wall_s = float(time.perf_counter() - started)
             resources_after = _process_resource_snapshot()
             if status != 0:
@@ -1023,6 +1135,8 @@ def main(argv: list[str] | None = None) -> int:
                     "max_gb": float(os.environ.get("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "16")),
                     "load_all_events": [dict(event) for event in cache_events[event_start:]],
                 }
+            if compile_records is not None:
+                reports[label]["cold_compile_callsite_count"] = len(compile_records)
 
     report = {
         "schema": "recovar.vdam_late_iteration_profile.v1",
@@ -1037,6 +1151,11 @@ def main(argv: list[str] | None = None) -> int:
         "data_dir": str(data_dir),
         "cuda_profiler_range": bool(args.cuda_profiler_range),
         "raw_image_cache_audit_enabled": bool(args.audit_raw_image_cache),
+        "cold_compile_callsite_log": (
+            str(args.cold_compile_callsite_log.resolve())
+            if args.cold_compile_callsite_log is not None
+            else None
+        ),
         "execution_contract_mode": args.execution_contract,
         "execution_contract_environment": contract_environment,
         "image_shape": [int(args.image_size), int(args.image_size)],

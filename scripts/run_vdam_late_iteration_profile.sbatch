@@ -56,6 +56,7 @@ AUDIT_RAW_IMAGE_CACHE=${AUDIT_RAW_IMAGE_CACHE:-0}
 EXECUTION_CONTRACT=${VDAM_LATE_PROFILE_CONTRACT:-diagnostic}
 IMAGE_SIZE=${VDAM_LATE_PROFILE_IMAGE_SIZE:-128}
 HOST_ATTRIBUTION=${VDAM_LATE_PROFILE_HOST_ATTRIBUTION:-0}
+COLD_COMPILE_ATTRIBUTION=${VDAM_LATE_PROFILE_COLD_COMPILE_ATTRIBUTION:-0}
 REUSE_NATIVE_ROOT=${VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT:-}
 EXPECTED_REUSED_NATIVE_NSYS_SHA256=${EXPECTED_REUSED_NATIVE_NSYS_SHA256:-}
 
@@ -88,6 +89,7 @@ test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${EXECUTION_CONTRACT}" =~ ^(diagnostic|default|all_optimized_q32)$ ]]
 [[ "${IMAGE_SIZE}" =~ ^[0-9]+$ ]]
 [[ "${HOST_ATTRIBUTION}" =~ ^[01]$ ]]
+[[ "${COLD_COMPILE_ATTRIBUTION}" =~ ^[01]$ ]]
 test "${IMAGE_SIZE}" -gt 0
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
@@ -160,6 +162,8 @@ printf 'execution_contract=%s\nimage_size=%s\n' \
   "${EXECUTION_CONTRACT}" "${IMAGE_SIZE}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
 printf 'host_attribution=%s\n' "${HOST_ATTRIBUTION}" \
+  >> "${PROVENANCE}/candidate_parameters.txt"
+printf 'cold_compile_attribution=%s\n' "${COLD_COMPILE_ATTRIBUTION}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
@@ -440,6 +444,11 @@ fi
 if [[ "${AUDIT_RAW_IMAGE_CACHE}" = 1 ]]; then
   RECOVAR_COMMAND+=(--audit-raw-image-cache)
 fi
+if [[ "${COLD_COMPILE_ATTRIBUTION}" = 1 ]]; then
+  RECOVAR_COMMAND+=(
+    --cold-compile-callsite-log "${PROVENANCE}/cold_compile_calls.jsonl"
+  )
+fi
 printf '%q ' "${NSYS}" profile --trace="${RECOVAR_NSYS_TRACE}" \
   "${RECOVAR_NSYS_EXTRA[@]}" \
   --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \
@@ -483,6 +492,9 @@ if payload["mode"] != "diagnostic":
 Path(sys.argv[2]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 test -s "${PROVENANCE}/recovar_execution_contract.json"
+if [[ "${COLD_COMPILE_ATTRIBUTION}" = 1 ]]; then
+  test -s "${PROVENANCE}/cold_compile_calls.jsonl"
+fi
 
 for implementation in native recovar; do
   if [[ "${implementation}" == native ]]; then
@@ -512,7 +524,7 @@ done
   "${native_profile_started}" "${native_profile_finished}" \
   "${recovar_profile_started}" "${recovar_profile_finished}" \
   "${REUSE_NATIVE_ROOT}" "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}" \
-  "${HOST_ATTRIBUTION}" <<'PY'
+  "${HOST_ATTRIBUTION}" "${COLD_COMPILE_ATTRIBUTION}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -572,7 +584,10 @@ payload = {
     },
     "native_capture": native_capture,
     "host_attribution": bool(int(sys.argv[16])),
-    "timing_truth_allowed": not bool(int(sys.argv[16])),
+    "cold_compile_attribution": bool(int(sys.argv[17])),
+    "timing_truth_allowed": not (
+        bool(int(sys.argv[16])) or bool(int(sys.argv[17]))
+    ),
     "native_stop_mechanism": "gdb second-expectation sentinel after exact profiled iteration",
     "science_promotion_allowed": False,
 }
