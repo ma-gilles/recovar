@@ -302,6 +302,17 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--stable-fourier-window-shapes",
+        "--stable_fourier_window_shapes",
+        dest="stable_fourier_window_shapes",
+        action=argparse.BooleanOptionalAction,
+        default=INITIAL_MODEL_GUI_DEFAULTS.stable_fourier_window_shapes,
+        help=(
+            "Reuse low-cardinality physical Fourier capacities while retaining "
+            "the exact logical CUDA bounds"
+        ),
+    )
+    p.add_argument(
         "--image_fourier_backend",
         choices=("auto", "host_numpy", "jax_gpu", "relion_cuda"),
         default="auto",
@@ -464,6 +475,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         exact_local_physical_order_chunk_size=(
             args.exact_local_physical_order_chunk_size
         ),
+        stable_fourier_window_shapes=bool(args.stable_fourier_window_shapes),
         bootstrap_min_particles=args.bootstrap_min_particles,
         sigma2_min_particles=args.sigma2_min_particles,
         lazy=not args.eager_images,

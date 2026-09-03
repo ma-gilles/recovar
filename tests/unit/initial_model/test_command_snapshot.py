@@ -177,6 +177,39 @@ class TestInputValidation:
         assert "--ctf_intact_first_peak" not in cmd
 
 
+class TestRecovarRuntimeOptions:
+    def test_stable_fourier_window_shapes_defaults_off(self, run_ab_initio):
+        args = run_ab_initio._parse_args(["--i", "particles.star"])
+        assert args.stable_fourier_window_shapes is False
+
+    def test_stable_fourier_window_shapes_reaches_native_driver(
+        self, run_ab_initio, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        import recovar.em.initial_model.driver as driver
+
+        captured = {}
+
+        def fake_run_native_initial_model(options):
+            captured["options"] = options
+            return SimpleNamespace(final_mrc="initial_model.mrc", final_model_star="model.star")
+
+        monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native_initial_model)
+        assert (
+            run_ab_initio.main(
+                [
+                    "--i",
+                    "particles.star",
+                    "--stable-fourier-window-shapes",
+                    "--no_iter_artifacts",
+                ]
+            )
+            == 0
+        )
+        assert captured["options"].stable_fourier_window_shapes is True
+
+
 # ---------------------------------------------------------------------------
 # align_symmetry command
 # ---------------------------------------------------------------------------
