@@ -1072,11 +1072,8 @@ def test_deferred_packed_vdam_keeps_dense_oracle_and_packed_final_noise_lane():
     assert "scalar_noise_reconstruction_probs = reconstruction_probs" in engine
     assert "pixel_support_mass = support_mass[:unpadded_batch_size]" in engine
     assert "compute_local_noise_scalar_terms(" in engine
-    assert "compute_local_noise_scalar_terms(" not in big_jit
-    assert (
-        "support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), "
-        "axis=1).astype(jnp.float32)"
-    ) in big_jit
+    assert "compute_local_noise_scalar_terms(" in big_jit
+    assert "support_mass = jnp.sum(reconstruction_probs.reshape" not in big_jit
     assert "noise_sumw = noise_sumw + jnp.sum(support_mass)" in big_jit
     assert "_relion_wavg_direct_triplet_shells(" in engine
     assert "materialize_shifted_recon = not return_deferred_source_vdam_operands" in big_jit

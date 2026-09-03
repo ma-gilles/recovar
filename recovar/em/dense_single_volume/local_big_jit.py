@@ -57,6 +57,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 )
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_mstep_sums,
+    compute_local_noise_scalar_terms,
     compute_local_weighted_sums,
 )
 
