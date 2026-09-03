@@ -1,5 +1,6 @@
 """Focused tests for exact-local RELION norm-correction image power."""
 
+import jax
 import numpy as np
 import pytest
 
@@ -20,6 +21,53 @@ from recovar.em.dense_single_volume.local_big_jit import (
     _norm_correction_image_power_mass,
     _norm_correction_image_power_per_image,
 )
+from recovar.em.dense_single_volume.local_em_engine import _noise_wsum_initial_dtype
+
+
+@pytest.mark.parametrize(
+    ("relion_exact_fine_diff2", "use_window", "expected"),
+    (
+        (True, True, np.float64),
+        (True, False, np.float32),
+        (False, True, np.float32),
+        (False, False, np.float32),
+    ),
+)
+def test_noise_wsum_initial_dtype_matches_direct_wavg_output(
+    relion_exact_fine_diff2,
+    use_window,
+    expected,
+):
+    actual = _noise_wsum_initial_dtype(
+        relion_exact_fine_diff2=relion_exact_fine_diff2,
+        use_window=use_window,
+    )
+
+    assert np.dtype(actual) == np.dtype(expected)
+
+
+def test_noise_wsum_float64_zero_is_bitwise_equivalent_to_first_bucket_promotion():
+    direct_wavg_shells = jnp.asarray(
+        [0.0, np.nextafter(1.0, 2.0), -3.25, 2**40 + 0.25],
+        dtype=jnp.float64,
+    )
+    add_bucket = jax.jit(lambda carry, block: carry + block)
+
+    legacy = add_bucket(jnp.zeros(4, dtype=jnp.float32), direct_wavg_shells)
+    canonical = add_bucket(
+        jnp.zeros(
+            4,
+            dtype=_noise_wsum_initial_dtype(
+                relion_exact_fine_diff2=True,
+                use_window=True,
+            ),
+        ),
+        direct_wavg_shells,
+    )
+
+    assert np.asarray(legacy).dtype == np.float64
+    assert np.asarray(canonical).dtype == np.float64
+    np.testing.assert_array_equal(np.asarray(canonical), np.asarray(legacy))
 
 
 def test_norm_correction_mass_drops_invalid_shells_and_keeps_valid_outer_shell():

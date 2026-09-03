@@ -203,6 +203,12 @@ STABLE_FOURIER_WINDOW_QUANTUM_ENV = (
 DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM = 8
 
 
+def _noise_wsum_initial_dtype(*, relion_exact_fine_diff2: bool, use_window: bool):
+    """Match the initial carry to the direct-Wavg post-bucket dtype."""
+
+    return jnp.float64 if relion_exact_fine_diff2 and use_window else jnp.float32
+
+
 def _relion_exact_fine_full_to_compact_lookup(
     image_shape,
     current_size,
@@ -5009,7 +5015,17 @@ def run_local_em_exact(
             shell_indices_noise,
             n_shells=n_shells,
         )
-        noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
+        # Direct Wavg replaces the cutoff shell with its ordered float64
+        # reduction, so the first bucket otherwise promotes this carry and
+        # creates a one-off float32 big-JIT ABI.  Starting from float64 zero is
+        # numerically identical and matches every subsequent bucket.
+        noise_wsum = jnp.zeros(
+            n_shells,
+            dtype=_noise_wsum_initial_dtype(
+                relion_exact_fine_diff2=relion_exact_fine_diff2,
+                use_window=use_window,
+            ),
+        )
         noise_img_power = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_norm_correction = jnp.zeros(
             n_images,
