@@ -179,6 +179,42 @@ def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
     np.testing.assert_array_equal(np.asarray(actual), np.asarray([expected]))
 
 
+def test_powerclass_spectrum_norm_keeps_double_kernel_inputs():
+    height = 8
+    current_size = 4
+    half_width = height // 2 + 1
+    centered = np.arange(height * half_width, dtype=np.float64).reshape(height, half_width)
+    centered = (centered + 1j * (centered / 3.0 + 2.0**-35)).astype(np.complex128)
+    processed = centered.reshape(1, -1) * np.float64(height * height)
+
+    actual = np.asarray(
+        _relion_cuda_powerclass_spectrum_highres_norm_units(
+            jnp.asarray(processed),
+            image_shape=(height, height),
+            current_size=current_size,
+        )
+    )
+
+    relion_image = np.roll(centered, -(height // 2), axis=0)
+    expected = np.float64(0.0)
+    for y in range(height):
+        signed_y = y if y < half_width else y - height
+        for x in range(half_width):
+            shell = int(np.rint(np.sqrt(np.float64(x * x + signed_y * signed_y))))
+            if (
+                shell >= current_size // 2 + 1
+                and shell < half_width
+                and not (x == 0 and signed_y < 0)
+            ):
+                value = relion_image[y, x]
+                expected += np.float64(value.real * value.real + value.imag * value.imag)
+    expected *= np.float64((height * height) ** 2)
+
+    assert actual.dtype == np.float64
+    np.testing.assert_allclose(actual, np.asarray([expected]), rtol=3e-16, atol=1e-8)
+    assert not np.array_equal(actual, actual.astype(np.float32).astype(np.float64))
+
+
 def test_translated_wavg_low_shell_power_preserves_per_pixel_boundary():
     shifted = np.asarray(
         [

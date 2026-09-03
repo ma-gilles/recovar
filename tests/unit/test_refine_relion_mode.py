@@ -212,6 +212,20 @@ def test_relion_optimizer_average_pmax_uses_k1_mstep_mass():
     assert average == pytest.approx(0.3 / 1.8)
 
 
+def test_relion_optimizer_average_pmax_preserves_double_particle_values():
+    pmax = [
+        np.asarray([0.123456789012345], dtype=np.float64),
+        np.asarray([0.987654321098765], dtype=np.float64),
+    ]
+
+    combined, average, denominator = iteration_loop_module._relion_optimizer_average_pmax(pmax)
+
+    assert combined.dtype == np.float64
+    np.testing.assert_array_equal(combined, np.concatenate(pmax))
+    assert average == pmax[0][0]
+    assert denominator == 1.0
+
+
 def test_diagnostic_float64_pass2_iteration_selector(monkeypatch):
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
     assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is False
@@ -619,6 +633,33 @@ def test_run_relion_iteration_loop_clears_perturb_replay_dir_past_cutoff_source(
     source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
     assert "perturb_replay_relion_dir = None" in source
     assert "_past_perturb_replay_max_iter(" in source
+    assert "replay_saved_healpix_order = None" in source
+    assert source.count("_native_sampling_boundary_for_iteration(") >= 2
+
+
+@pytest.mark.parametrize(
+    ("iteration", "replay_dir", "cutoff", "sealed", "expected_native"),
+    [
+        (0, "/replay", None, None, False),
+        (0, "/replay", 0, None, True),
+        (0, "/replay", 1, None, False),
+        (1, "/replay", 1, None, True),
+        (1, None, 1, None, True),
+        (1, None, 1, object(), False),
+    ],
+)
+def test_native_sampling_boundary_transitions_at_replay_cutoff(
+    iteration, replay_dir, cutoff, sealed, expected_native
+):
+    assert (
+        iteration_loop_module._native_sampling_boundary_for_iteration(
+            iteration=iteration,
+            perturb_replay_relion_dir=replay_dir,
+            perturb_replay_max_iter=cutoff,
+            sealed_sampling_state=sealed,
+        )
+        is expected_native
+    )
 
 
 def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_rounding(monkeypatch, tmp_path):
@@ -649,6 +690,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
         }
 
     monkeypatch.setattr(relion_replay_module, "read_relion_sampling_metadata", fake_sampling_metadata)
+    monkeypatch.setattr(iteration_loop_module, "_dense_global_scoring_dtype", lambda: np.float64)
 
     state = State()
     state_grid = get_translation_grid(state.translation_range, state.translation_step)
@@ -686,6 +728,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
     )
 
     replay_grid = np.asarray(result.prior_translations)
+    assert replay_grid.dtype == np.float64
     assert replay_grid.shape[0] == 29
     assert get_translation_grid(state.translation_range, state.translation_step).shape[0] == 29
     assert state.translation_range == pytest.approx(3.0)

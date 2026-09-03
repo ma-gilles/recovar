@@ -6050,6 +6050,13 @@ def test_exact_raw_diff2_cache_budget_admission_and_fallback(monkeypatch):
 
     estimated = _exact_raw_diff2_cache_estimated_bytes(2, 131_072, 116)
     assert estimated == 116 * mib
+    estimated_f64 = _exact_raw_diff2_cache_estimated_bytes(
+        2,
+        131_072,
+        116,
+        dtype=np.float64,
+    )
+    assert estimated_f64 == 232 * mib
     assert _exact_raw_diff2_cache_fits_budget(estimated, estimated)
     assert not _exact_raw_diff2_cache_fits_budget(estimated + 4, estimated)
     assert not _exact_raw_diff2_cache_fits_budget(0, estimated)

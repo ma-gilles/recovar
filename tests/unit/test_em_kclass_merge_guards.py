@@ -181,11 +181,14 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         Ft_ctf="ft_ctf",
         stats="stats",
         aggregate_noise_stats="aggregate_noise",
-        best_pose_rotations=None,
-        best_pose_translations=None,
+        best_pose_rotations=np.repeat(np.eye(3, dtype=np.float64)[None], 3, axis=0),
+        best_pose_translations=np.asarray([[0.1, -0.2], [0.3, -0.4], [0.5, -0.6]], dtype=np.float64),
     )
     class_posterior_per_half = [None]
     class_full_posterior_per_half = [None]
+    best_pose_rotations = [None]
+    best_pose_rotation_eulers = [None]
+    best_pose_translations = [None]
 
     iteration_loop._scatter_dense_k_class_result(
         result,
@@ -199,14 +202,18 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         class_posterior_per_half=class_posterior_per_half,
         class_full_posterior_per_half=class_full_posterior_per_half,
         class_rotation_posterior_per_half=[None],
-        best_pose_rotations=[None],
-        best_pose_rotation_eulers=[None],
-        best_pose_translations=[None],
-        require_best_pose_details=False,
+        best_pose_rotations=best_pose_rotations,
+        best_pose_rotation_eulers=best_pose_rotation_eulers,
+        best_pose_translations=best_pose_translations,
+        require_best_pose_details=True,
+        pose_dtype=np.float64,
     )
 
     np.testing.assert_allclose(class_posterior_per_half[0], [1.2, 1.8])
     np.testing.assert_allclose(class_full_posterior_per_half[0], [1.7, 1.3])
+    assert best_pose_rotations[0].dtype == np.float64
+    assert best_pose_rotation_eulers[0].dtype == np.float64
+    assert best_pose_translations[0].dtype == np.float64
 
 
 def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():
@@ -1378,6 +1385,33 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
         payload["raw_operand_pair_translation_idx"],
         pair_translation_idx[0],
     )
+
+
+def test_kclass_pass2_raw_operand_capture_preserves_double_precision():
+    raw_diff2 = np.asarray([[1.0, 2.0]], dtype=np.float64)
+    shifted_corrected = np.asarray([[[1.0 + 2.0j]]], dtype=np.complex128)
+    corr_img_score = np.asarray([[3.0]], dtype=np.float64)
+    proj_half = np.asarray([[[4.0 + 5.0j]]], dtype=np.complex128)
+    half_weights = np.asarray([6.0], dtype=np.float64)
+
+    captured = sparse_pass2_mod._capture_k_class_pass2_raw_operands(
+        raw_diff2=raw_diff2,
+        target_rows=np.asarray([0], dtype=np.int64),
+        actual_counts=np.asarray([1], dtype=np.int64),
+        shifted_corrected=shifted_corrected,
+        corr_img_score=corr_img_score,
+        proj_half=proj_half,
+        half_weights=half_weights,
+        relion_full_to_compact=None,
+        highres_xi2_half=np.asarray([7.0], dtype=np.float64),
+    )[0]
+
+    assert captured["raw_diff2"].dtype == np.float64
+    assert captured["shifted_corrected"].dtype == np.complex128
+    assert captured["corr_img_score"].dtype == np.float64
+    assert captured["proj_half"].dtype == np.complex128
+    assert captured["half_weights"].dtype == np.float64
+    assert captured["highres_xi2_half"].dtype == np.float64
 
 
 def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path):
