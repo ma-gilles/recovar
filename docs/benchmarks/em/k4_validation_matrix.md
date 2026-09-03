@@ -70,7 +70,7 @@ assignments, duplicated maps, missing classes, and a negative GT association.
 
 ### Current-source executable K=4 controls, 2026-09-02
 
-Four focused controls now cover previously implicit K=4 execution boundaries:
+Five focused controls now cover previously implicit K=4 execution boundaries:
 
 | Boundary | Executable evidence | Established scope |
 | --- | --- | --- |
@@ -78,6 +78,7 @@ Four focused controls now cover previously implicit K=4 execution boundaries:
 | Simultaneous dense image/rotation partitioning | Commit `1d9011a18`: `test_dense_k4_image_and_rotation_partition_equivalence` | A deterministic four-image, four-class dense global E/M step compares image batch 4 / rotation block 5 with image batch 3 / rotation block 2. Discrete class/pose outputs are exact; complex128 accumulator, evidence, and map reductions agree within the frozen `1024 * eps(float64)` bound. The odd five-rotation grid exercises a padded tail block. |
 | Numbered global-to-local continuity | Commit `ca626914d`: `test_k4_numbered_global_to_exact_local_preserves_per_half_pose_state` | Numbered iteration 1 routes both halves through the real dense K-class orchestrator; a forced controller transition routes both halves through the real exact-local K-class orchestrator at iteration 2. Exact assertions bind each half's dense pose outputs to iteration-1 history, local rotation/translation priors and integer pre-shifts, and local pose outputs to iteration-2 history, while preserving four class means. No final all-data pass is involved. |
 | Exact-local class projectors and CUDA x-half BPref | H100 job `13366865` plus commit `43a924358`: `test_local_search_iteration_k4_forwards_relion_projectors_to_each_class_engine` | Four distinct supplied RELION projectors execute direct exact-local K=4 scoring and x-half accumulation. Every class accumulator matches an independently normalized K=1 replay. The numbered wrapper now forwards the class projector array and common `r_max`; the regression observes the correct projector in all four score probes and all four M-steps. |
+| Supplied-projector local partitioning and fp64 oracle | Commit `b4cc56162`: `test_local_k4_batch_and_rotation_blocks_match_float64_oracle` | Four distinct class means and four corresponding RELION half-projectors execute the real K=4 local engine with irregular per-image supports, nonuniform class/rotation/translation priors, corrections, pre-shifts, and two translations. Image/rotation partitioning `(3, 8)` versus `(1, 1)` preserves all discrete outputs exactly, keeps all classes alive, and satisfies the frozen f32 and fp64 numerical bounds. |
 
 The first three rows are CPU unit controls, not trajectory-quality, FSC, HBM,
 or performance evidence. The continuity control deliberately sets
@@ -85,8 +86,9 @@ or performance evidence. The continuity control deliberately sets
 and full-volume exact-local K-class handoff, not the GPU/CUDA x-half BPref
 implementation.  The fourth row is a direct H100 engine invariant plus a CPU
 wrapper-seam regression; it is still not a trajectory-quality or FSC result.
-The dense partition control covers one simultaneous partition pair, not the
-complete Tier-1 batch/block matrix.
+The fifth row combines nonidentical supplied projectors with real local
+partitioning and the fp64 oracle on CPU.  The two partition controls each cover
+one simultaneous partition pair, not the complete Tier-1 batch/block matrix.
 
 The following focused commands were run from
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902`
@@ -144,6 +146,20 @@ The six focused K-class/local CPU tests passed in 47.73 seconds with
 `CUDA_VISIBLE_DEVICES`.  The repository `pixi run test-em-fast-guard` also
 passed all 16 tests in 53.30 seconds.  Scoped Ruff and `git diff --check`
 passed.
+
+At commit `b4cc56162`, the supplied-projector partition test passed alone in
+31.62 seconds and together with the identical-means split and numbered-wrapper
+projector-forwarding siblings in 32.54 seconds.  Repeat that focused CPU gate
+with:
+
+```bash
+cd /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902
+env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
+  PYTHONNOUSERSITE=1 JAX_PLATFORMS=cpu RECOVAR_DISABLE_CUDA=1 \
+  CUDA_VISIBLE_DEVICES='' \
+  .pixi/envs/default/bin/python -m pytest -q \
+  tests/unit/test_refine_relion_mode.py::test_local_k4_batch_and_rotation_blocks_match_float64_oracle
+```
 
 The disposable H100 evidence root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/k4_exact_local_xhalf_h100_f91c73f29_20260903T011014Z`
