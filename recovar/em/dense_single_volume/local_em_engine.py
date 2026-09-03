@@ -7514,7 +7514,6 @@ def run_local_em_exact(
                     support_mass,
                     _translation_posterior,
                     noise_sumw_offset,
-                    retained_mass,
                 ) = compute_local_noise_scalar_terms(
                     scalar_noise_reconstruction_probs,
                     translation_sqdist_arg[:scalar_noise_batch_size],
@@ -7552,7 +7551,7 @@ def run_local_em_exact(
                     ),
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
-                noise_sumw = noise_sumw + retained_mass
+                noise_sumw = noise_sumw + jnp.sum(support_mass)
 
                 block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
                 block_a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)

@@ -143,8 +143,7 @@ def compute_local_noise_scalar_terms(
         translation_posterior
         * jnp.asarray(translation_sqdist, dtype=jnp.float32)
     )
-    retained_mass = jnp.sum(support_mass)
-    return support_mass, translation_posterior, noise_sumw_offset, retained_mass
+    return support_mass, translation_posterior, noise_sumw_offset
 
 
 @jax.jit

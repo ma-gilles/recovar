@@ -29,6 +29,8 @@ def test_same_state_array_comparison_reports_exact_and_particle_mismatches() -> 
         "best_pose_rotation_ids": np.asarray([4, 7, 11], dtype=np.int32),
         "pose_assignments": np.asarray([40, 70, 110], dtype=np.int32),
         "significant_counts": np.asarray([2, 3, 4], dtype=np.int32),
+        "noise_sumw": np.asarray(2.75, dtype=np.float32),
+        "wsum_sigma2_offset": np.asarray(8.5, dtype=np.float32),
     }
     right = {
         **left,
@@ -42,6 +44,8 @@ def test_same_state_array_comparison_reports_exact_and_particle_mismatches() -> 
     assert report["best_pose_rotation_ids"]["mismatching_selected_particle_ids"] == [143, 181]
     assert report["pose_assignments"]["mismatching_selected_particle_ids"] == [143, 181]
     assert report["significant_counts"]["exact_equal"] is True
+    assert report["noise_sumw"]["exact_equal"] is True
+    assert report["wsum_sigma2_offset"]["exact_equal"] is True
 
 
 def test_same_state_support_audit_comparison_finds_nested_profile_audits() -> None:
@@ -802,14 +806,16 @@ def test_same_state_incremental_gate_is_mirrored_repeated_and_backend_scoped() -
     )
     specs = runner._incremental_arm_specs()
     assert tuple(label for label, _backend in specs) == (
+        "direct_oracle",
         *runner.PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER,
         *runner.PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER,
     )
+    assert [backend for _label, backend in specs].count("direct") == 1
     assert [backend for _label, backend in specs].count("packed_deferred") == 4
     assert [backend for _label, backend in specs].count("packed_final_noise") == 4
 
     pairs = runner._incremental_pair_labels()
-    assert len(pairs) == 14
+    assert len(pairs) == 16
     assert len(set(pairs)) == len(pairs)
     assert (
         "abba_packed_deferred_1",
@@ -823,6 +829,8 @@ def test_same_state_incremental_gate_is_mirrored_repeated_and_backend_scoped() -
         "abba_packed_final_noise_1",
         "baab_packed_final_noise_1",
     ) in pairs
+    assert ("direct_oracle", "abba_packed_deferred_1") in pairs
+    assert ("direct_oracle", "abba_packed_final_noise_1") in pairs
 
 
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
@@ -849,7 +857,7 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         in sbatch
     )
     assert (
-        "abba_packed_deferred_1,abba_packed_final_noise_1,"
+        "direct_oracle,abba_packed_deferred_1,abba_packed_final_noise_1,"
         "abba_packed_final_noise_2,abba_packed_deferred_2,"
         "baab_packed_final_noise_1,baab_packed_deferred_1,"
         "baab_packed_deferred_2,baab_packed_final_noise_2"
@@ -887,3 +895,5 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "--mirrored-incremental-panels" in source
     assert "for backend_mode in (\"packed_deferred\", \"packed_final_noise\")" in source
     assert "del warm\n            gc.collect()" in source
+    assert "direct_oracle__vs__abba_packed_deferred_1" in sbatch
+    assert "direct_oracle__vs__abba_packed_final_noise_1" in sbatch

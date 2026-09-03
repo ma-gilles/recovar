@@ -66,6 +66,10 @@ PACKED_FINAL_NOISE_INCREMENTAL_ARM_ORDER = (
     *PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER,
     *PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER,
 )
+PACKED_FINAL_NOISE_INCREMENTAL_GATE_ARM_ORDER = (
+    "direct_oracle",
+    *PACKED_FINAL_NOISE_INCREMENTAL_ARM_ORDER,
+)
 HYBRID_PACKED_DEFERRED_ARM_ORDER = (
     "direct_1",
     "hybrid_packed_deferred_1",
@@ -138,6 +142,12 @@ META_ARRAY_KEYS = (
     "significant_counts",
     "cutoff_counts",
     "relion_f32_sum_weight",
+    "class_posterior_sums",
+    "class_direction_posterior_sums",
+    "class_reconstruction_support_sums",
+    "noise_sumw",
+    "sigma2_offset_sumw",
+    "wsum_sigma2_offset",
 )
 
 
@@ -709,6 +719,8 @@ def _arm_performance_summary(
 
 
 def _incremental_backend_for_label(label: str) -> str:
+    if label == "direct_oracle":
+        return "direct"
     if "packed_final_noise" in label:
         return "packed_final_noise"
     if "packed_deferred" in label:
@@ -719,7 +731,7 @@ def _incremental_backend_for_label(label: str) -> str:
 def _incremental_arm_specs() -> tuple[tuple[str, str], ...]:
     return tuple(
         (label, _incremental_backend_for_label(label))
-        for label in PACKED_FINAL_NOISE_INCREMENTAL_ARM_ORDER
+        for label in PACKED_FINAL_NOISE_INCREMENTAL_GATE_ARM_ORDER
     )
 
 
@@ -755,6 +767,14 @@ def _incremental_pair_labels() -> tuple[tuple[str, str], ...]:
             (
                 PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER[1],
                 PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER[0],
+            ),
+            (
+                "direct_oracle",
+                PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER[0],
+            ),
+            (
+                "direct_oracle",
+                PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER[1],
             ),
         ]
     )
@@ -1706,6 +1726,10 @@ def main(argv: list[str] | None = None) -> int:
             "both_incremental_backends_prewarmed": bool(
                 args.mirrored_incremental_panels
             ),
+            "direct_oracle_from_shared_checkpoint": bool(
+                args.mirrored_incremental_panels
+            ),
+            "oracle_backend": "direct",
             "support_audit_ids_enabled_for_transition_arms": True,
             "requested_environment_exact_for_every_arm": True,
             "compact_profile_fail_closed": _candidate_uses_compact_posterior(

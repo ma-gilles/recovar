@@ -119,7 +119,6 @@ def test_local_noise_scalar_terms_match_dense_relion_order_exactly():
     support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
     translation_posterior = jnp.sum(probs, axis=1).astype(jnp.float32)
     noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist)
-    retained_mass = jnp.sum(support_mass)
 
     actual = compute_local_noise_scalar_terms(
         probs,
@@ -129,7 +128,7 @@ def test_local_noise_scalar_terms_match_dense_relion_order_exactly():
 
     for actual_value, expected_value in zip(
         actual,
-        (support_mass, translation_posterior, noise_sumw_offset, retained_mass),
+        (support_mass, translation_posterior, noise_sumw_offset),
         strict=True,
     ):
         np.testing.assert_array_equal(
@@ -158,12 +157,10 @@ def test_local_noise_scalar_terms_inline_the_mature_big_jit_primitives():
             translation_posterior
             * jnp.asarray(translation_sqdist_arg, dtype=jnp.float32)
         )
-        retained_mass = jnp.sum(support_mass)
         return (
             support_mass,
             translation_posterior,
             noise_sumw_offset,
-            retained_mass,
         )
 
     helper_jaxpr = jax.make_jaxpr(compute_local_noise_scalar_terms)(

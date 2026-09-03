@@ -106,7 +106,7 @@ case "${CANDIDATE_MODE}" in
 esac
 if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
   test "${CANDIDATE_MODE}" = packed_final_noise
-  expected_arm_order=abba_packed_deferred_1,abba_packed_final_noise_1,abba_packed_final_noise_2,abba_packed_deferred_2,baab_packed_final_noise_1,baab_packed_deferred_1,baab_packed_deferred_2,baab_packed_final_noise_2
+  expected_arm_order=direct_oracle,abba_packed_deferred_1,abba_packed_final_noise_1,abba_packed_final_noise_2,abba_packed_deferred_2,baab_packed_final_noise_1,baab_packed_deferred_1,baab_packed_deferred_2,baab_packed_final_noise_2
 fi
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
@@ -329,6 +329,32 @@ if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
     packed_deferred
   test "$(jq -r '.same_state_contract.both_incremental_backends_prewarmed' "${SCIENCE}/report.json")" = \
     true
+  test "$(jq -r '.same_state_contract.direct_oracle_from_shared_checkpoint' "${SCIENCE}/report.json")" = \
+    true
+  test "$(jq -r '.arms.direct_oracle.backend_mode' "${SCIENCE}/report.json")" = \
+    direct
+  for oracle_pair in \
+    direct_oracle__vs__abba_packed_deferred_1 \
+    direct_oracle__vs__abba_packed_final_noise_1; do
+    jq -e --arg pair "${oracle_pair}" '
+      .comparisons[$pair]
+      | .support_audits.exact_equal
+        and ([.estep_meta[].exact_equal] | all)
+        and ([.particle_state[].exact_equal] | all)
+        and ([.sampling_state[].exact_equal] | all)
+        and ([
+          .final_state.Mavg.exact_equal,
+          .final_state.ave_Pmax.exact_equal,
+          .final_state.pdf_class.exact_equal,
+          .final_state.pdf_direction.exact_equal,
+          .final_state.sigma2_offset.exact_equal,
+          .final_state.tau2_class.exact_equal,
+          .final_state.fsc_halves_class.exact_equal,
+          .final_state.current_resolution.exact_equal,
+          .final_state.current_size.exact_equal
+        ] | all)
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
 fi
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${cuda_sha256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"

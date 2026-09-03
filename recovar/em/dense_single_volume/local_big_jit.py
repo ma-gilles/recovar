@@ -57,7 +57,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 )
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_mstep_sums,
-    compute_local_noise_scalar_terms,
     compute_local_weighted_sums,
 )
 
@@ -2191,7 +2190,6 @@ def run_local_bucket_big_jit(
             support_mass,
             _translation_posterior,
             noise_sumw_offset,
-            retained_mass,
         ) = compute_local_noise_scalar_terms(
             reconstruction_probs,
             translation_sqdist_ang,
@@ -2216,7 +2214,7 @@ def run_local_bucket_big_jit(
             use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
-        noise_sumw = noise_sumw + retained_mass
+        noise_sumw = noise_sumw + jnp.sum(support_mass)
 
         shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
         shifted_noise_split = jnp.where(support_mass[:, None, None] != 0.0, shifted_noise_split, 0.0)
