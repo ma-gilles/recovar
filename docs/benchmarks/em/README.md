@@ -412,3 +412,18 @@ The runs exercise the post-`c75cbfffc` fixed non-C1 local-search path through
 iteration 5 and retain generated-input hashes, per-class signed GT FSC-AUC,
 hard populations, matched-H100 wall/HBM, Slurm accounting, and independent
 trajectory-audit jobs.
+
+The family-wide implementation contract was rechecked separately on
+2026-09-03.  At source head `47f8fe79d`, the CPU parser/operator/sampling and
+RELION BPref-oracle suite passed 358/358 tests, covering every `C1`--`C99` and
+`D1`--`D99` order, `T`, `O`, and `I`/`I1`--`I4`.  At evidence head
+`eae7264de`, H100 job `13372916` passed the 22/22 streamed CUDA-versus-RELION
+oracle tests in float32 and float64 with exact requested/allocated resources
+`cpu=4,mem=64G,node=1,gres/gpu=1,billing=5`.  The reproducible launcher and
+full audit trail are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/symmetry_cuda_contract_eae7264de_20260903`
+(launcher SHA-256
+`1ca0c30df49e0981dfbacc19b60beb0c85b3ef752a4f955f4003de2422a9aba6`).
+The preceding job `13372884` failed before collection because its launcher
+omitted the pixi NVIDIA library directories; it is retained as a harness
+failure and is not counted as a test result.
