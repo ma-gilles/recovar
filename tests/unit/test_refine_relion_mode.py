@@ -8591,6 +8591,7 @@ def test_exact_local_big_jit_max_bucket_rotations_env(monkeypatch):
 
 def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monkeypatch, rng):
     from recovar.core.relion_project import centered_full_to_relion_half
+    from recovar.reconstruction import relion_functions
 
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=565)
@@ -8638,6 +8639,16 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
         max_significants=-1,
         relion_projector_half=relion_projector_half,
         relion_projector_r_max=4,
+        projection_padding_factor=2,
+    )
+
+    def fail_if_native_projection_padding_is_built(*args, **kwargs):
+        raise AssertionError("supplied RELION Projector must bypass native projection padding")
+
+    monkeypatch.setattr(
+        relion_functions,
+        "pad_volume_for_projection",
+        fail_if_native_projection_padding_is_built,
     )
 
     monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)

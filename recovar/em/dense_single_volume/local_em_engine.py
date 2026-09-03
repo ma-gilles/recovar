@@ -2311,7 +2311,8 @@ def run_local_em_exact(
     if return_half_volume_accumulators and mstep_relion_x_half:
         raise ValueError("return_half_volume_accumulators only supports native half-volume accumulators")
 
-    if projection_padding_factor > 1:
+    use_relion_projector = relion_projector_half is not None
+    if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
@@ -2857,7 +2858,6 @@ def run_local_em_exact(
         and n_images > 0
         and local_support_rows >= int(np.ceil(max(n_images, 1) / EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION))
     )
-    use_relion_projector = relion_projector_half is not None
     compact_relion_projector_big_jit = bool(use_relion_projector and window_spec.use_window)
     relion_projector_big_jit_supported = bool(use_relion_projector and (not use_window or compact_relion_projector_big_jit))
     disable_big_jit_buckets = os.environ.get("RECOVAR_DISABLE_LOCAL_BIG_JIT", "").lower() in {
