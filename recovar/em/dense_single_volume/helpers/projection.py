@@ -227,6 +227,7 @@ def _texture_centered_crop_to_full(
     image_shape,
     projector_output_size: int,
     mask_current_image_disk: bool = True,
+    current_image_mask_size=None,
 ):
     """Scatter a centered even-size CUDA projection into the full image box."""
 
@@ -236,7 +237,11 @@ def _texture_centered_crop_to_full(
     crop_rows = jnp.arange(crop_size, dtype=jnp.int32)
     crop_ky = jnp.where(crop_rows == 0, crop_size // 2, crop_rows - crop_size // 2)
     crop_cols = jnp.arange(crop_size // 2 + 1, dtype=jnp.int32)
-    output_radius = crop_size // 2
+    output_radius = (
+        jnp.asarray(crop_size, dtype=jnp.int32)
+        if current_image_mask_size is None
+        else jnp.asarray(current_image_mask_size, dtype=jnp.int32)
+    ) // jnp.int32(2)
     output_disk = crop_ky[:, None] ** 2 + crop_cols[None, :] ** 2 <= output_radius**2
     # RELION clips projections to min(PPref.mdlMaxR, image_half_width-1).
     # The texture kernel already enforces the PPref/model sphere; apply the
@@ -263,6 +268,7 @@ def _texture_centered_crop_at_indices(
     image_shape,
     projector_output_size: int,
     mask_current_image_disk: bool = True,
+    current_image_mask_size=None,
 ):
     """Gather centered full-image pixels directly from a CUDA projection crop."""
 
@@ -292,7 +298,12 @@ def _texture_centered_crop_at_indices(
     selected = projection_crop.reshape((projection_crop.shape[0], -1))[:, crop_indices]
     if not mask_current_image_disk:
         return selected
-    output_disk = ky * ky + cols * cols <= (crop_size // 2) ** 2
+    output_radius = (
+        jnp.asarray(crop_size, dtype=jnp.int32)
+        if current_image_mask_size is None
+        else jnp.asarray(current_image_mask_size, dtype=jnp.int32)
+    ) // jnp.int32(2)
+    output_disk = ky * ky + cols * cols <= output_radius**2
     return jnp.where(output_disk[None, :], selected, jnp.zeros((), dtype=selected.dtype))
 
 
@@ -304,6 +315,7 @@ def _project_relion_projector_texture(
     r_max: int,
     projector_output_size: int,
     mask_current_image_disk: bool = True,
+    current_image_mask_size=None,
     pixel_indices=None,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
@@ -326,12 +338,14 @@ def _project_relion_projector_texture(
             image_shape=image_shape,
             projector_output_size=int(projector_output_size),
             mask_current_image_disk=bool(mask_current_image_disk),
+            current_image_mask_size=current_image_mask_size,
         )
     return _texture_centered_crop_to_full(
         projection_crop,
         image_shape=image_shape,
         projector_output_size=int(projector_output_size),
         mask_current_image_disk=bool(mask_current_image_disk),
+        current_image_mask_size=current_image_mask_size,
     )
 
 
@@ -349,6 +363,7 @@ def compute_relion_projector_projections_block(
     pixel_indices=None,
     relion_texture_interp: bool | None = None,
     mask_current_image_disk: bool = True,
+    current_image_mask_size=None,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -386,6 +401,8 @@ def compute_relion_projector_projections_block(
             texture_kwargs["pixel_indices"] = pixel_indices
         if not mask_current_image_disk:
             texture_kwargs["mask_current_image_disk"] = False
+        if current_image_mask_size is not None:
+            texture_kwargs["current_image_mask_size"] = current_image_mask_size
         proj_centered = _project_relion_projector_texture(
             volume_relion_half,
             rotations_block,
@@ -400,6 +417,11 @@ def compute_relion_projector_projections_block(
                 axes=1,
             ).reshape((proj_centered.shape[0], -1))
 
+    elif current_image_mask_size is not None:
+        raise RuntimeError(
+            "a runtime current-image projection mask requires the RELION "
+            "texture projector",
+        )
     elif pixel_indices is not None:
         if not centered_rows:
             raise ValueError("pixel_indices are only supported with centered_rows=True")

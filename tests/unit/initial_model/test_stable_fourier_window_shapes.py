@@ -11,11 +11,15 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_indices_np,
+    make_frequency_coords_half_np,
     make_stable_fourier_window_shape_plan,
     stable_fourier_window_current_size,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     crop_relion_x_half_accumulator,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    _texture_centered_crop_at_indices,
 )
 from recovar.em.dense_single_volume.helpers.significance import (
     _plan_coarse_gaussian_square_layout,
@@ -185,6 +189,17 @@ def test_stable_coarse_square_preserves_logical_issue_prefix(monkeypatch):
         np.arange(logical_count, layout.physical_square_count, dtype=np.int32),
     )
     assert not np.any(layout.score_active_mask_np[logical_count:])
+    coords = np.rint(make_frequency_coords_half_np(_IMAGE_SHAPE)).astype(np.int64)
+    expected_projector_mask = (
+        np.sum(coords[layout.score_indices_np] ** 2, axis=1)
+        <= (logical_size // 2) ** 2
+    )
+    expected_projector_mask[logical_count:] = False
+    np.testing.assert_array_equal(
+        layout.logical_projector_mask_np,
+        expected_projector_mask,
+    )
+    assert not np.any(layout.logical_projector_mask_np[logical_count:])
 
     topology = plan_coarse_gemm_certificate_topology(
         layout.full_to_compact_np,
@@ -192,6 +207,58 @@ def test_stable_coarse_square_preserves_logical_issue_prefix(monkeypatch):
         translation_count=29,
     )
     assert topology.full_position_count == layout.physical_square_count
+
+
+def test_stable_coarse_projector_keeps_logical_disk_boundary(monkeypatch):
+    """Physical size 96 must retain the logical size-86 projector disk."""
+
+    monkeypatch.setenv(
+        "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM",
+        "32",
+    )
+    logical_size = 86
+    layout = _plan_coarse_gaussian_square_layout(
+        _IMAGE_SHAPE,
+        logical_size,
+        _active_coarse_score_indices(logical_size),
+        stable_fourier_window_shapes=True,
+    )
+    coords = np.rint(make_frequency_coords_half_np(_IMAGE_SHAPE)).astype(np.int64)
+    compact_r2 = np.sum(coords[layout.score_indices_np] ** 2, axis=1)
+    just_outside = np.flatnonzero(
+        (np.arange(layout.physical_square_count) < layout.logical_square_count)
+        & (compact_r2 == (logical_size // 2) ** 2 + 1)
+    )
+    assert just_outside.tolist() == [
+        57,
+        333,
+        783,
+        1317,
+        1847,
+        1935,
+        2461,
+        2983,
+        3413,
+        3665,
+        3741,
+    ]
+    assert np.all(layout.score_active_mask_np[just_outside])
+    assert not np.any(layout.logical_projector_mask_np[just_outside])
+
+    projection_crop = np.ones(
+        (2, layout.physical_square_count),
+        dtype=np.complex64,
+    )
+    masked = _texture_centered_crop_at_indices(
+        projection_crop,
+        layout.score_indices_np,
+        image_shape=_IMAGE_SHAPE,
+        projector_output_size=layout.physical_current_size,
+        current_image_mask_size=np.int32(logical_size),
+    )
+    masked = np.asarray(masked)
+    assert np.all(masked[:, just_outside] == 0)
+    assert np.all(masked[:, layout.logical_projector_mask_np] == 1)
 
 
 def test_stable_coarse_square_has_one_shape_across_q32_class(monkeypatch):
@@ -244,6 +311,11 @@ def test_disabled_coarse_square_layout_is_legacy_exact(monkeypatch):
     assert layout.logical_square_count == layout.physical_square_count == legacy_count
     np.testing.assert_array_equal(layout.score_indices_np, legacy_indices)
     np.testing.assert_array_equal(layout.score_active_mask_np, np.isin(legacy_indices, active))
+    coords = np.rint(make_frequency_coords_half_np(_IMAGE_SHAPE)).astype(np.int64)
+    np.testing.assert_array_equal(
+        layout.logical_projector_mask_np,
+        np.sum(coords[legacy_indices] ** 2, axis=1) <= (current_size // 2) ** 2,
+    )
     np.testing.assert_array_equal(layout.full_to_compact_np, legacy_lookup)
 
 

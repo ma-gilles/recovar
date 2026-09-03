@@ -1573,6 +1573,8 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         block_capacity,
         compact_posterior: bool,
         force_static_dense_after_overflow: bool,
+        logical_full_pixel_count,
+        capture_selected_diff2: bool,
     ):
         batch_size = int(shifted_corrected.shape[0])
         static_overflow_requests.append(force_static_dense_after_overflow)
@@ -1593,6 +1595,8 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         assert certificate_chunk_rows == 16
         assert block_capacity == 64
         assert compact_posterior is compact_expected
+        assert logical_full_pixel_count is None
+        assert capture_selected_diff2 is False
 
         scores = np.full((batch_size, 16, 2), -100.0, dtype=np.float32)
         scores[:actual_image_count, 5, 1] = np.float32(3.0)

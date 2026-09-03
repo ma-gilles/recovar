@@ -242,6 +242,7 @@ class CoarseGaussianSquareLayout(NamedTuple):
     physical_square_count: int
     score_indices_np: np.ndarray
     score_active_mask_np: np.ndarray
+    logical_projector_mask_np: np.ndarray
     full_to_compact_np: np.ndarray
 
 
@@ -263,6 +264,7 @@ def _plan_coarse_gaussian_square_layout(
 
     from recovar.em.dense_single_volume.helpers.fourier_window import (
         make_fourier_window_indices_np,
+        make_frequency_coords_half_np,
         stable_fourier_window_current_size,
         stable_fourier_window_quantum,
     )
@@ -338,6 +340,14 @@ def _plan_coarse_gaussian_square_layout(
     score_active_mask_np = np.isin(score_indices_np, active_score_indices)
     if physical_count > logical_count:
         score_active_mask_np[logical_count:] = False
+    compact_coords = np.rint(
+        make_frequency_coords_half_np(image_shape)[score_indices_np],
+    ).astype(np.int64)
+    logical_projector_mask_np = np.sum(compact_coords**2, axis=1) <= (
+        logical_current_size // 2
+    ) ** 2
+    if physical_count > logical_count:
+        logical_projector_mask_np[logical_count:] = False
 
     return CoarseGaussianSquareLayout(
         logical_current_size=logical_current_size,
@@ -346,6 +356,10 @@ def _plan_coarse_gaussian_square_layout(
         physical_square_count=physical_count,
         score_indices_np=score_indices_np,
         score_active_mask_np=np.asarray(score_active_mask_np, dtype=np.bool_),
+        logical_projector_mask_np=np.asarray(
+            logical_projector_mask_np,
+            dtype=np.bool_,
+        ),
         full_to_compact_np=full_to_compact_np,
     )
 
@@ -5875,7 +5889,7 @@ def _compute_k_class_significance_batched(
                 "compact RELION score-row projection requires the texture "
                 "projector and an explicit score-row table",
             )
-        return _compute_relion_projector_projections_block(
+        projected, projected_abs2 = _compute_relion_projector_projections_block(
             relion_projector_half[class_index],
             rots_b,
             image_shape,
@@ -5894,7 +5908,13 @@ def _compute_k_class_significance_batched(
             # current-image crop corners rather than silently rebuilding a
             # different projection table.
             mask_current_image_disk=True,
+            current_image_mask_size=(
+                jnp.asarray(score_size, dtype=jnp.int32)
+                if stable_fourier_window_shapes
+                else None
+            ),
         )
+        return projected, projected_abs2
 
     def _project_block(class_index, mean_for_proj, rots_b):
         if use_relion_projector:
