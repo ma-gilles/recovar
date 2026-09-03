@@ -177,6 +177,52 @@ every existing per-seed half-map/assignment/permutation-margin threshold, and
 the existing validated multi-seed assignment and map-stability summaries. A
 failed seed is retained; no favorable seed may be selected post hoc.
 
+### EMPIAR-10073 fixed-eight outcome: early-trajectory rejection
+
+The seed-42001 calibration completed all four engine/half processes in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/real_k4_halfmap_10073_native10k_tiera_seed42001_827aedd66_submitted_20260903`.
+Setup job `13381089` completed `0:0`; qualification job `13381090` ended `3:0`
+only because the frozen prospective science gate rejected.  Every engine
+process itself exited zero, every class remained occupied, both particle
+audits completed without a threshold failure, and no OOM signature or runtime
+error was present.
+
+This is explicitly a bounded early-trajectory result, not a final K=4 quality
+verdict.  RECOVAR stopped at current sizes 58/58 with 93.24% and 97.16% of
+assignments still changing in the two external halves.  It did not report
+convergence and did not run final all-data.  The eight-iteration endpoints are:
+
+| Class | Unmasked merged cross-engine FSC-AUC | Common-mask merged cross-engine FSC-AUC | Unmasked / masked half-map FSC-AUC delta, RECOVAR - RELION |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.981925 | 0.980378 | -0.000459 / +0.010877 |
+| 2 | 0.962807 | 0.973140 | -0.020928 / -0.029382 |
+| 3 | 0.994158 | 0.994521 | +0.000967 / +0.001525 |
+| 4 | 0.980283 | 0.987818 | -0.005705 / +0.009196 |
+
+Every same-half unmasked cross-engine FSC-AUC is at least 0.94756, and all
+class-permutation margin gates pass.  Hard-label agreement is 0.9372 in half 1
+and 0.9700 in half 2.  The frozen gate rejects classes 1, 2, and 4 at the 0.99
+merged-map threshold, class 2 at both half-map-loss thresholds, and both
+assignment thresholds.  These failures remain visible; the otherwise close
+maps do not relabel the run as an acceptance.
+
+Serial same-H100 wall times are 144.26/145.27 seconds for RELION and
+1571.56/1656.84 seconds for RECOVAR.  Sampled peak HBM is 79,591/79,593 MiB
+for RELION and 33,493/33,497 MiB for RECOVAR.  The four measured engine runs
+consume 0.9772 aggregate H100-hours; including setup, the campaign consumes
+1.1039 H100-hours and 62.2 minutes elapsed.  A follow-up must therefore retain
+within-half device matching while running the two independent external halves
+on isolated one-H100 jobs, then join them in a CPU audit after both converge.
+
+The submission manifest SHA-256 is
+`1dc1a26c9b830c24d58645c01135f3203f145af3031f1a986a2a2435ac98ab30`.
+The authoritative audit JSON SHA-256 is
+`2f9faee7dc3a28484d94b1b120c4d914e5a46bb7e0f170b3e981f1c5bcd609d2`;
+its FSC archive SHA-256 is
+`8dbc064324d1321513257af49fe58adc94c28966332b01bef64413af2cc37d81`,
+and the common-mask SHA-256 is
+`a6a9ecebc467bc5b290ca6494fecb396353b7c1a016d32e27cc1d929688586ce`.
+
 ## First-iteration native score boundary
 
 The first material real-data K=4 disagreement was a particle-state handoff,
