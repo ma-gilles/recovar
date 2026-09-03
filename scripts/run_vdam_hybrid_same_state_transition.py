@@ -72,6 +72,12 @@ COMPACT_PACKED_DEFERRED_ARM_ORDER = (
     "compact_packed_deferred_2",
     "direct_2",
 )
+ALL_OPTIMIZED_ARM_ORDER = (
+    "direct_1",
+    "all_optimized_1",
+    "all_optimized_2",
+    "direct_2",
+)
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO",
@@ -94,6 +100,7 @@ CANDIDATE_MODES = (
     "stable_flat_capacity",
     "compact_posterior",
     "compact_packed_deferred",
+    "all_optimized",
 )
 META_ARRAY_KEYS = (
     "selected_particle_ids",
@@ -138,6 +145,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return COMPACT_POSTERIOR_ARM_ORDER
     if candidate_mode == "compact_packed_deferred":
         return COMPACT_PACKED_DEFERRED_ARM_ORDER
+    if candidate_mode == "all_optimized":
+        return ALL_OPTIMIZED_ARM_ORDER
     raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
 
 
@@ -189,6 +198,13 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
             values[FLAT_ROW_ENVIRONMENT] = "1"
             values[PACKED_PROJECTION_ENVIRONMENT] = "1"
             values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        elif candidate_mode == "all_optimized":
+            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
+            values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
+            values[FLAT_ROW_ENVIRONMENT] = "1"
+            values[STABLE_FLAT_CAPACITY_ENVIRONMENT] = "1"
+            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
         else:
             raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
     return values
@@ -202,6 +218,7 @@ def _candidate_uses_hybrid(candidate_mode: str) -> bool:
         "stable_flat_capacity",
         "compact_posterior",
         "compact_packed_deferred",
+        "all_optimized",
     }
 
 
@@ -209,6 +226,14 @@ def _candidate_uses_compact_posterior(candidate_mode: str) -> bool:
     return candidate_mode in {
         "compact_posterior",
         "compact_packed_deferred",
+        "all_optimized",
+    }
+
+
+def _candidate_uses_packed_deferred(candidate_mode: str) -> bool:
+    return candidate_mode in {
+        "compact_packed_deferred",
+        "all_optimized",
     }
 
 
@@ -270,6 +295,180 @@ def _validate_stable_flat_capacity_profiles(
     }
 
 
+def _validate_stable_fourier_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+    image_shape: tuple[int, int],
+) -> dict[str, Any]:
+    """Prove logical Fourier support was carried by the requested capacity."""
+
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
+        make_stable_fourier_window_shape_plan,
+    )
+
+    image_shape = tuple(int(value) for value in image_shape)
+    if len(image_shape) != 2 or image_shape[0] != image_shape[1]:
+        raise RuntimeError(f"{label} has invalid image shape {image_shape}")
+    for key in (
+        "requested_stable_fourier_window_shapes",
+        "effective_stable_fourier_window_shapes",
+    ):
+        if key not in estep_meta:
+            raise RuntimeError(f"{label} did not report {key}")
+        if bool(estep_meta[key]) != bool(enabled):
+            raise RuntimeError(
+                f"{label} reported {key}={estep_meta[key]!r}, expected {enabled!r}"
+            )
+
+    n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+    profiles: dict[str, Any] = {}
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict) or "chunk_padded_rotations" not in value:
+            continue
+        required = (
+            "stable_fourier_window_shapes",
+            "logical_current_size",
+            "physical_current_size",
+            "logical_reconstruction_pixels",
+            "physical_reconstruction_pixels",
+            "n_windowed",
+            "n_projection_windowed",
+            "big_jit_projection_pixels",
+        )
+        missing = [field for field in required if field not in value]
+        if missing:
+            raise RuntimeError(
+                f"{label} profile {key} omitted stable Fourier fields {missing}"
+            )
+        logical_size = int(value["logical_current_size"])
+        plan = make_stable_fourier_window_shape_plan(
+            image_shape,
+            logical_size,
+            n_half,
+            enabled=bool(enabled),
+            recon_exact_radius=False,
+        )
+        expected = {
+            "stable_fourier_window_shapes": bool(
+                enabled and plan.logical_spec.use_window
+            ),
+            "logical_current_size": int(plan.logical_current_size),
+            "physical_current_size": int(plan.physical_current_size),
+            "logical_reconstruction_pixels": int(
+                plan.logical_reconstruction_pixels
+            ),
+            "physical_reconstruction_pixels": int(
+                plan.physical_reconstruction_pixels
+            ),
+            "n_windowed": int(plan.physical_score_pixels),
+            "n_projection_windowed": int(plan.physical_projection_pixels),
+            "big_jit_projection_pixels": int(plan.physical_projection_pixels),
+        }
+        observed = {field: _json_ready(value[field]) for field in expected}
+        for field, expected_value in expected.items():
+            if observed[field] != expected_value:
+                raise RuntimeError(
+                    f"{label} profile {key} reported {field}="
+                    f"{observed[field]!r}, expected {expected_value!r}"
+                )
+        profiles[key] = observed
+    if not profiles:
+        raise RuntimeError(f"{label} has no local engine profile to validate")
+    return {
+        "enabled": bool(enabled),
+        "image_shape": list(image_shape),
+        "profiles": profiles,
+    }
+
+
+ALL_OPTIMIZED_SEAMS = (
+    "certified_coarse_hybrid",
+    "coarse_gemm_macro",
+    "coarse_projection_cache",
+    "compact_posterior",
+    "flat_local_rows",
+    "packed_local_projection",
+    "packed_vdam_deferral",
+    "stable_fourier_window_shapes",
+    "stable_flat_row_capacity",
+)
+
+
+def _validate_all_optimized_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    enabled: bool,
+    label: str,
+    image_shape: tuple[int, int],
+) -> dict[str, Any]:
+    """Fail closed unless every seam in the composed arm is effective."""
+
+    stable_fourier = _validate_stable_fourier_profiles(
+        estep_meta,
+        enabled=enabled,
+        label=label,
+        image_shape=image_shape,
+    )
+    for key in (
+        "requested_stable_flat_row_capacity",
+        "effective_stable_flat_row_capacity",
+    ):
+        if key not in estep_meta:
+            raise RuntimeError(f"{label} did not report {key}")
+        if bool(estep_meta[key]) != bool(enabled):
+            raise RuntimeError(
+                f"{label} reported {key}={estep_meta[key]!r}, expected {enabled!r}"
+            )
+
+    expected_flags = {
+        "flat_local_rows_enabled": bool(enabled),
+        "stable_flat_row_capacity_enabled": bool(enabled),
+        "packed_local_projection_enabled": bool(enabled),
+        "defer_packed_vdam_enabled": bool(enabled),
+        "packed_vdam_reuses_flat_score_projection": bool(enabled),
+    }
+    local_profiles: dict[str, Any] = {}
+    for key, value in sorted(estep_meta.items()):
+        if not isinstance(value, dict) or "chunk_padded_rotations" not in value:
+            continue
+        missing = [field for field in expected_flags if field not in value]
+        if missing:
+            raise RuntimeError(
+                f"{label} profile {key} omitted composed seam fields {missing}"
+            )
+        observed = {
+            field: bool(value[field]) for field in expected_flags
+        }
+        for field, expected in expected_flags.items():
+            if observed[field] is not expected:
+                raise RuntimeError(
+                    f"{label} profile {key} reported {field}="
+                    f"{observed[field]!r}, expected {expected!r}"
+                )
+        local_profiles[key] = observed
+    if not local_profiles:
+        raise RuntimeError(f"{label} has no local engine profile to validate")
+
+    stable_flat = None
+    if enabled:
+        stable_flat = _validate_stable_flat_capacity_profiles(
+            estep_meta,
+            enabled=True,
+            label=label,
+        )
+    return {
+        "enabled": bool(enabled),
+        "enabled_seams": list(ALL_OPTIMIZED_SEAMS if enabled else ()),
+        "disabled_seams": list(() if enabled else ALL_OPTIMIZED_SEAMS),
+        "profile_exact": True,
+        "stable_fourier": stable_fourier,
+        "stable_flat_capacity": stable_flat,
+        "local_profiles": local_profiles,
+    }
+
+
 def _coarse_hybrid_profiles(meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Collect every per-halfset certified-hybrid execution profile."""
 
@@ -322,6 +521,7 @@ def _validate_arm_execution_contract(
         contract.update(
             compact_requested=False,
             compact_effective=False,
+            packed_deferred_effective=False,
             profile_exact=True,
         )
         return contract
@@ -353,6 +553,8 @@ def _validate_arm_execution_contract(
                 )
         positive_fields = (
             "batch_count",
+            "certificate_chunk_count_per_batch",
+            "certificate_chunk_rows",
             "selected_rescore_batch_count",
             "selected_rescore_image_count",
             "selected_source16_block_count",
@@ -367,6 +569,16 @@ def _validate_arm_execution_contract(
                 raise RuntimeError(
                     f"{profile_name} compact profile field {field!r} must be positive",
                 )
+        topology_sha256 = profile.get("topology_full_to_compact_sha256")
+        if not (
+            isinstance(topology_sha256, str)
+            and len(topology_sha256) == 64
+            and all(character in "0123456789abcdef" for character in topology_sha256)
+        ):
+            raise RuntimeError(
+                f"{profile_name} compact profile has an invalid "
+                "topology_full_to_compact_sha256",
+            )
         if profile["selected_rescore_batch_count"] != profile["batch_count"]:
             raise RuntimeError(
                 f"{profile_name} compact profile did not select every batch",
@@ -380,7 +592,7 @@ def _validate_arm_execution_contract(
             raise RuntimeError(
                 f"{profile_name} compact table fraction must be strictly between 0 and 1",
             )
-        if candidate_mode == "compact_packed_deferred":
+        if _candidate_uses_packed_deferred(candidate_mode):
             parent_profile = estep_meta[profile_name]
             packed_required = {
                 "flat_local_rows_enabled": True,
@@ -400,9 +612,7 @@ def _validate_arm_execution_contract(
     contract.update(
         compact_requested=True,
         compact_effective=True,
-        packed_deferred_effective=(
-            candidate_mode == "compact_packed_deferred"
-        ),
+        packed_deferred_effective=_candidate_uses_packed_deferred(candidate_mode),
         profile_exact=True,
     )
     if packed_profiles:
@@ -786,7 +996,7 @@ def _run_transition_arm(
     initial_particle_state_manifest = _dataclass_manifest(particle_state)
     initial_sampling_state_manifest = _dataclass_manifest(sampling_state)
     opts = checkpoint["opts"]
-    if candidate_mode == "stable_shapes":
+    if candidate_mode in {"stable_shapes", "all_optimized"}:
         opts = dataclasses.replace(
             opts,
             stable_fourier_window_shapes=bool(candidate_enabled),
@@ -873,6 +1083,14 @@ def _run_transition_arm(
         raise RuntimeError(f"{label} stopped at the wrong iteration")
     if "accumulators" not in captured or "estep_meta" not in captured:
         raise RuntimeError(f"{label} did not capture its E-step boundary")
+    stable_fourier_window_contract = None
+    if candidate_mode == "stable_shapes":
+        stable_fourier_window_contract = _validate_stable_fourier_profiles(
+            captured["estep_meta"],
+            enabled=candidate_enabled,
+            label=label,
+            image_shape=tuple(int(value) for value in dataset.image_shape),
+        )
     stable_flat_capacity_contract = None
     if candidate_mode == "stable_flat_capacity":
         for key in (
@@ -898,6 +1116,20 @@ def _run_transition_arm(
         effective_environment=effective_environment,
         estep_meta=captured["estep_meta"],
     )
+    if candidate_mode == "all_optimized":
+        all_optimized_contract = _validate_all_optimized_profiles(
+            captured["estep_meta"],
+            enabled=candidate_enabled,
+            label=label,
+            image_shape=tuple(int(value) for value in dataset.image_shape),
+        )
+        execution_contract["all_optimized"] = all_optimized_contract
+        execution_contract["all_optimized_profile_exact"] = True
+        stable_fourier_window_contract = all_optimized_contract["stable_fourier"]
+        if candidate_enabled:
+            stable_flat_capacity_contract = all_optimized_contract[
+                "stable_flat_capacity"
+            ]
     performance_summary = _arm_performance_summary(
         wall_s=wall_s,
         estep_meta=captured["estep_meta"],
@@ -916,6 +1148,7 @@ def _run_transition_arm(
         "execution_contract": execution_contract,
         "performance_summary": performance_summary,
         "wall_s": wall_s,
+        "stable_fourier_window_contract": stable_fourier_window_contract,
         "stable_flat_capacity_contract": stable_flat_capacity_contract,
         "initial_state_manifest": initial_state_manifest,
         "initial_particle_state_manifest": initial_particle_state_manifest,
@@ -1205,6 +1438,9 @@ def main(argv: list[str] | None = None) -> int:
             "execution_contract": arm["execution_contract"],
             "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
+            "stable_fourier_window_contract": arm[
+                "stable_fourier_window_contract"
+            ],
             "stable_flat_capacity_contract": arm[
                 "stable_flat_capacity_contract"
             ],
@@ -1227,6 +1463,9 @@ def main(argv: list[str] | None = None) -> int:
             "execution_contract": arm["execution_contract"],
             "performance_summary": arm["performance_summary"],
             "wall_s": arm["wall_s"],
+            "stable_fourier_window_contract": payload[
+                "stable_fourier_window_contract"
+            ],
             "stable_flat_capacity_contract": payload[
                 "stable_flat_capacity_contract"
             ],
@@ -1282,6 +1521,8 @@ def main(argv: list[str] | None = None) -> int:
             "compact_profile_fail_closed": _candidate_uses_compact_posterior(
                 args.candidate_mode,
             ),
+            "all_optimized_profile_fail_closed": args.candidate_mode
+            == "all_optimized",
         },
         "science_promotion_allowed": False,
     }

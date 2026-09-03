@@ -137,6 +137,7 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         runner._arm_order("compact_packed_deferred")
         == runner.COMPACT_PACKED_DEFERRED_ARM_ORDER
     )
+    assert runner._arm_order("all_optimized") == runner.ALL_OPTIMIZED_ARM_ORDER
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -164,6 +165,14 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     compact_packed_deferred = runner._candidate_environment(
         "compact_packed_deferred",
+        enabled=True,
+    )
+    all_optimized_control = runner._candidate_environment(
+        "all_optimized",
+        enabled=False,
+    )
+    all_optimized = runner._candidate_environment(
+        "all_optimized",
         enabled=True,
     )
 
@@ -236,8 +245,11 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert compact_packed_deferred[runner.FLAT_ROW_ENVIRONMENT] == "1"
     assert compact_packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
     assert compact_packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
+    assert all(value == "0" for value in all_optimized_control.values())
+    assert all(value == "1" for value in all_optimized.values())
     assert runner._candidate_uses_hybrid("compact_posterior") is True
     assert runner._candidate_uses_hybrid("compact_packed_deferred") is True
+    assert runner._candidate_uses_hybrid("all_optimized") is True
     assert runner._candidate_uses_hybrid("packed_deferred") is False
     assert runner._candidate_uses_compact_posterior("compact_posterior") is True
     assert (
@@ -245,6 +257,9 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         is True
     )
     assert runner._candidate_uses_compact_posterior("hybrid") is False
+    assert runner._candidate_uses_compact_posterior("all_optimized") is True
+    assert runner._candidate_uses_packed_deferred("all_optimized") is True
+    assert runner._candidate_uses_packed_deferred("compact_posterior") is False
     assert runner._arm_candidate_enabled("stable_off_1", "stable_shapes") is False
     assert runner._arm_candidate_enabled("stable_on_1", "stable_shapes") is True
     assert (
@@ -318,6 +333,8 @@ def _compact_profile(**updates):
         "expanded_gemm_scores_published": False,
         "whole_batch_fail_closed_fallback": True,
         "batch_count": 2,
+        "certificate_chunk_count_per_batch": 8,
+        "certificate_chunk_rows": 4608,
         "selected_rescore_batch_count": 2,
         "fallback_batch_count": 0,
         "selected_rescore_image_count": 300,
@@ -329,6 +346,7 @@ def _compact_profile(**updates):
         "selected_score_table_capacity_bytes_f32": 23_756_800,
         "dense_global_score_table_capacity_bytes_f32": 855_244_800,
         "selected_to_dense_score_table_capacity_fraction": 1.0 / 36.0,
+        "topology_full_to_compact_sha256": "a" * 64,
     }
     profile.update(updates)
     return profile
@@ -409,6 +427,163 @@ def test_compact_packed_execution_contract_requires_both_optimized_profiles(
         )
 
 
+def _all_optimized_estep_meta(*, enabled: bool) -> dict:
+    physical_size = 88 if enabled else 84
+    physical_score_pixels = 3104 if enabled else 2834
+    physical_projection_pixels = 3105 if enabled else 2835
+    profile = {
+        "flat_local_rows_enabled": enabled,
+        "stable_flat_row_capacity_enabled": enabled,
+        "packed_local_projection_enabled": enabled,
+        "defer_packed_vdam_enabled": enabled,
+        "packed_vdam_reuses_flat_score_projection": enabled,
+        "stable_fourier_window_shapes": enabled,
+        "logical_current_size": 84,
+        "physical_current_size": physical_size,
+        "logical_reconstruction_pixels": 2835,
+        "physical_reconstruction_pixels": physical_projection_pixels,
+        "n_windowed": physical_score_pixels,
+        "n_projection_windowed": physical_projection_pixels,
+        "big_jit_projection_pixels": physical_projection_pixels,
+        "chunk_flat_score_rows": [13824],
+        "chunk_padded_rotations": [13824],
+    }
+    if enabled:
+        profile["coarse_gaussian_gemm_hybrid"] = _compact_profile()
+    return {
+        "requested_stable_fourier_window_shapes": enabled,
+        "effective_stable_fourier_window_shapes": enabled,
+        "requested_stable_flat_row_capacity": enabled,
+        "effective_stable_flat_row_capacity": enabled,
+        "halfset_0_profile_summary": profile,
+    }
+
+
+def test_all_optimized_execution_contract_proves_every_candidate_seam() -> None:
+    requested = runner._candidate_environment("all_optimized", enabled=True)
+    meta = _all_optimized_estep_meta(enabled=True)
+
+    compact = runner._validate_arm_execution_contract(
+        candidate_mode="all_optimized",
+        candidate_enabled=True,
+        requested_environment=requested,
+        effective_environment=dict(requested),
+        estep_meta=meta,
+    )
+    composed = runner._validate_all_optimized_profiles(
+        meta,
+        enabled=True,
+        label="all_optimized_1",
+        image_shape=(128, 128),
+    )
+
+    assert compact["compact_effective"] is True
+    assert compact["packed_deferred_effective"] is True
+    assert composed["profile_exact"] is True
+    assert composed["enabled_seams"] == list(runner.ALL_OPTIMIZED_SEAMS)
+    assert composed["disabled_seams"] == []
+    assert composed["stable_fourier"]["enabled"] is True
+    assert composed["stable_flat_capacity"]["strict_reduction_count"] == 0
+
+
+def test_all_optimized_execution_contract_proves_direct_control_is_off() -> None:
+    requested = runner._candidate_environment("all_optimized", enabled=False)
+    meta = _all_optimized_estep_meta(enabled=False)
+
+    compact = runner._validate_arm_execution_contract(
+        candidate_mode="all_optimized",
+        candidate_enabled=False,
+        requested_environment=requested,
+        effective_environment=dict(requested),
+        estep_meta=meta,
+    )
+    composed = runner._validate_all_optimized_profiles(
+        meta,
+        enabled=False,
+        label="direct_1",
+        image_shape=(128, 128),
+    )
+
+    assert compact["compact_effective"] is False
+    assert compact["packed_deferred_effective"] is False
+    assert composed["enabled_seams"] == []
+    assert composed["disabled_seams"] == list(runner.ALL_OPTIMIZED_SEAMS)
+    assert composed["stable_fourier"]["enabled"] is False
+    assert composed["stable_flat_capacity"] is None
+
+
+@pytest.mark.parametrize(
+    "broken_field",
+    [
+        "flat_local_rows_enabled",
+        "stable_flat_row_capacity_enabled",
+        "packed_local_projection_enabled",
+        "defer_packed_vdam_enabled",
+        "packed_vdam_reuses_flat_score_projection",
+        "stable_fourier_window_shapes",
+    ],
+)
+def test_all_optimized_execution_contract_fails_closed_on_local_seam(
+    broken_field: str,
+) -> None:
+    meta = _all_optimized_estep_meta(enabled=True)
+    meta["halfset_0_profile_summary"][broken_field] = False
+
+    with pytest.raises(RuntimeError, match=broken_field):
+        runner._validate_all_optimized_profiles(
+            meta,
+            enabled=True,
+            label="all_optimized_1",
+            image_shape=(128, 128),
+        )
+
+
+@pytest.mark.parametrize(
+    "broken_field",
+    [
+        "requested_stable_fourier_window_shapes",
+        "effective_stable_fourier_window_shapes",
+        "requested_stable_flat_row_capacity",
+        "effective_stable_flat_row_capacity",
+    ],
+)
+def test_all_optimized_execution_contract_fails_closed_on_adapter_seam(
+    broken_field: str,
+) -> None:
+    meta = _all_optimized_estep_meta(enabled=True)
+    meta[broken_field] = False
+
+    with pytest.raises(RuntimeError, match=broken_field):
+        runner._validate_all_optimized_profiles(
+            meta,
+            enabled=True,
+            label="all_optimized_1",
+            image_shape=(128, 128),
+        )
+
+
+def test_all_optimized_execution_contract_fails_closed_on_shape_or_row_abi() -> None:
+    wrong_shape = _all_optimized_estep_meta(enabled=True)
+    wrong_shape["halfset_0_profile_summary"]["physical_current_size"] = 84
+    with pytest.raises(RuntimeError, match="physical_current_size"):
+        runner._validate_all_optimized_profiles(
+            wrong_shape,
+            enabled=True,
+            label="all_optimized_1",
+            image_shape=(128, 128),
+        )
+
+    wrong_rows = _all_optimized_estep_meta(enabled=True)
+    wrong_rows["halfset_0_profile_summary"]["chunk_flat_score_rows"] = [4752]
+    with pytest.raises(RuntimeError, match="mature B.R ABI"):
+        runner._validate_all_optimized_profiles(
+            wrong_rows,
+            enabled=True,
+            label="all_optimized_1",
+            image_shape=(128, 128),
+        )
+
+
 @pytest.mark.parametrize(
     ("profile", "match"),
     [
@@ -421,6 +596,14 @@ def test_compact_packed_execution_contract_requires_both_optimized_profiles(
         (
             _compact_profile(selected_to_dense_score_table_capacity_fraction=1.0),
             "table fraction",
+        ),
+        (
+            _compact_profile(certificate_chunk_count_per_batch=0),
+            "certificate_chunk_count_per_batch",
+        ),
+        (
+            _compact_profile(topology_full_to_compact_sha256="not-a-digest"),
+            "topology_full_to_compact_sha256",
         ),
     ],
 )
@@ -621,9 +804,12 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         "direct_1,compact_packed_deferred_1,compact_packed_deferred_2,direct_2"
         in sbatch
     )
+    assert "direct_1,all_optimized_1,all_optimized_2,direct_2" in sbatch
     assert "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR=0" in sbatch
     assert ".compact_effective == true" in sbatch
     assert ".packed_deferred_effective == true" in sbatch
+    assert ".execution_contract.all_optimized_profile_exact == true" in sbatch
+    assert "helpers/fourier_window.py" in sbatch
     assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch
     assert "VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS" in sbatch

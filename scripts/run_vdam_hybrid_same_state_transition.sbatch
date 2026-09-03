@@ -91,6 +91,9 @@ case "${CANDIDATE_MODE}" in
   compact_packed_deferred)
     expected_arm_order=direct_1,compact_packed_deferred_1,compact_packed_deferred_2,direct_2
     ;;
+  all_optimized)
+    expected_arm_order=direct_1,all_optimized_1,all_optimized_2,direct_2
+    ;;
   *)
     echo "unsupported CANDIDATE_MODE: ${CANDIDATE_MODE}" >&2
     exit 2
@@ -157,6 +160,7 @@ sha256sum \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/oversampling.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/flat_local_rows.py" \
+  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/fourier_window.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/significance.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_big_jit.py" \
   "${REPO_ROOT}/recovar/em/dense_single_volume/local_em_engine.py" \
@@ -240,7 +244,8 @@ test "$(jq -r '.candidate_mode' "${SCIENCE}/report.json")" = \
 test "$(jq -r '.arm_order | join(",")' "${SCIENCE}/report.json")" = \
   "${expected_arm_order}"
 if [[ "${CANDIDATE_MODE}" == compact_posterior || \
-      "${CANDIDATE_MODE}" == compact_packed_deferred ]]; then
+      "${CANDIDATE_MODE}" == compact_packed_deferred || \
+      "${CANDIDATE_MODE}" == all_optimized ]]; then
   jq -e '.compact_science_contract.hard_exact_contract_passed == true' \
     "${SCIENCE}/report.json" > /dev/null
   for arm in direct_1 direct_2; do
@@ -264,13 +269,40 @@ if [[ "${CANDIDATE_MODE}" == compact_posterior || \
          and (.hybrid_profiles | length) > 0' \
       "${SCIENCE}/report.json" > /dev/null
   done
-  if [[ "${CANDIDATE_MODE}" == compact_packed_deferred ]]; then
-    for arm in compact_packed_deferred_1 compact_packed_deferred_2; do
+  if [[ "${CANDIDATE_MODE}" == compact_packed_deferred || \
+        "${CANDIDATE_MODE}" == all_optimized ]]; then
+    for arm in "${CANDIDATE_MODE}_1" "${CANDIDATE_MODE}_2"; do
       jq -e --arg arm "${arm}" \
         '.arms[$arm].execution_contract.packed_deferred_effective == true' \
         "${SCIENCE}/report.json" > /dev/null
     done
   fi
+fi
+if [[ "${CANDIDATE_MODE}" == all_optimized ]]; then
+  for arm in direct_1 direct_2; do
+    jq -e --arg arm "${arm}" \
+      '.arms[$arm]
+       | .execution_contract.all_optimized_profile_exact == true
+         and .execution_contract.all_optimized.enabled == false
+         and (.execution_contract.all_optimized.enabled_seams | length) == 0
+         and (.execution_contract.all_optimized.disabled_seams | length) == 9
+         and .stable_fourier_window_contract.enabled == false
+         and .stable_flat_capacity_contract == null' \
+      "${SCIENCE}/report.json" > /dev/null
+  done
+  for arm in all_optimized_1 all_optimized_2; do
+    jq -e --arg arm "${arm}" \
+      '.arms[$arm]
+       | .execution_contract.all_optimized_profile_exact == true
+         and .execution_contract.all_optimized.enabled == true
+         and (.execution_contract.all_optimized.enabled_seams | length) == 9
+         and (.execution_contract.all_optimized.disabled_seams | length) == 0
+         and (.execution_contract.all_optimized.local_profiles | length) > 0
+         and .stable_fourier_window_contract.enabled == true
+         and .stable_flat_capacity_contract.enabled == true
+         and .stable_flat_capacity_contract.strict_reduction_count == 0' \
+      "${SCIENCE}/report.json" > /dev/null
+  done
 fi
 test "$(sha256sum "${CUDA_BINARY}" | awk '{print $1}')" = "${cuda_sha256}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
