@@ -551,6 +551,56 @@ def test_compact_hybrid_chooses_dense_before_certificate_when_not_smaller(
     )
 
 
+def test_compact_hybrid_latched_overflow_skips_certificate(monkeypatch):
+    cache, shifted, weight, initial, topology = _hybrid_operands()
+    certificate_calls = 0
+    full_calls = 0
+
+    def reject_certificate(*_args, **_kwargs):
+        nonlocal certificate_calls
+        certificate_calls += 1
+        raise AssertionError("latched overflow must skip certification")
+
+    def full_direct(reference, shifted_image, *_args):
+        nonlocal full_calls
+        full_calls += 1
+        return jnp.ones(
+            (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
+            dtype=jnp.float32,
+        )
+
+    monkeypatch.setattr(
+        significance,
+        "_relion_coarse_gaussian_gemm_update_certificate_state",
+        reject_certificate,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_coarse_diff2_rectangular_f32",
+        full_direct,
+    )
+
+    result = significance._compute_coarse_gaussian_gemm_hybrid_batch(
+        jnp.asarray(cache),
+        jnp.asarray(shifted),
+        jnp.asarray(weight),
+        jnp.asarray(initial),
+        topology=topology,
+        actual_image_count=2,
+        class_log_prior=np.float32(0.0),
+        certificate_chunk_rows=16,
+        block_capacity=1,
+        compact_posterior=True,
+        force_static_dense_after_overflow=True,
+    )
+
+    assert certificate_calls == 0
+    assert full_calls == 1
+    assert result.score_representation == "dense_full_direct_static_capacity"
+    assert result.fallback_reason == "prior_batch_block_capacity_overflow"
+    assert not result.used_selected_rescore
+
+
 def test_hybrid_capacity_overflow_uses_one_full_direct_batch(monkeypatch):
     cache, shifted, weight, initial, topology = _hybrid_operands()
     selected_calls = 0

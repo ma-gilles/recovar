@@ -1403,7 +1403,13 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
 
 @pytest.mark.parametrize(
     ("compact_posterior", "hybrid_image_batch_size", "force_fallback"),
-    [(False, None, False), (True, None, False), (True, 3, False), (True, 3, True)],
+    [
+        (False, None, False),
+        (True, None, False),
+        (True, 3, False),
+        (True, 3, True),
+        (True, None, True),
+    ],
 )
 def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     monkeypatch,
@@ -1549,6 +1555,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
 
     helper_outputs = []
     operand_inputs = []
+    static_overflow_requests = []
     compact_expected = compact_posterior
 
     def fake_hybrid(
@@ -1565,8 +1572,10 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         certificate_chunk_rows,
         block_capacity,
         compact_posterior: bool,
+        force_static_dense_after_overflow: bool,
     ):
         batch_size = int(shifted_corrected.shape[0])
+        static_overflow_requests.append(force_static_dense_after_overflow)
         operand_inputs.append(
             (
                 np.asarray(shifted_corrected).copy(),
@@ -1592,9 +1601,17 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         block_ids[:actual_image_count, 0] = 0
         counts = np.zeros(batch_size, dtype=np.int32)
         counts[:actual_image_count] = 1
+        use_selected = not force_fallback and not force_static_dense_after_overflow
+        fallback_reason = (
+            "prior_batch_block_capacity_overflow"
+            if force_static_dense_after_overflow
+            else "block_capacity_overflow"
+            if force_fallback
+            else None
+        )
         selection = CoarseGemmHybridBlockSelection(
-            eligible=not force_fallback,
-            fallback_reason=("block_capacity_overflow" if force_fallback else None),
+            eligible=use_selected,
+            fallback_reason=fallback_reason,
             block_ids=block_ids,
             block_count=counts,
             posterior_block_count=counts.copy(),
@@ -1602,7 +1619,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         )
         compact = None
         published_scores = jnp.asarray(scores)
-        if compact_posterior and not force_fallback:
+        if compact_posterior and use_selected:
             compact_width = block_capacity * 16 * 2
             compact_values = np.full(
                 (batch_size, compact_width),
@@ -1634,18 +1651,22 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         result = significance.CoarseGaussianGemmHybridBatchResult(
             scores=published_scores,
             raw_score_max=jnp.zeros(batch_size, dtype=jnp.float32),
-            scores_include_priors=not force_fallback,
-            used_selected_rescore=not force_fallback,
-            fallback_reason=("block_capacity_overflow" if force_fallback else None),
+            scores_include_priors=use_selected,
+            used_selected_rescore=use_selected,
+            fallback_reason=fallback_reason,
             selection=selection,
             compact_scores=compact,
             score_representation=(
-                "dense_full_direct_dynamic_fallback"
-                if force_fallback
+                "dense_full_direct_static_capacity"
+                if force_static_dense_after_overflow
                 else (
-                    "compact_selected_exact"
-                    if compact_posterior
-                    else "dense_selected_exact"
+                    "dense_full_direct_dynamic_fallback"
+                    if force_fallback
+                    else (
+                        "compact_selected_exact"
+                        if compact_posterior
+                        else "dense_selected_exact"
+                    )
                 )
             ),
         )
@@ -1744,6 +1765,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     projection_calls.clear()
     helper_outputs.clear()
     operand_inputs.clear()
+    static_overflow_requests.clear()
     posterior_inputs.clear()
     translation_calls.clear()
     process_calls.clear()
@@ -1767,6 +1789,11 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     assert len(control_translation_calls) == 2 * expected_batch_count
     assert len(process_calls) == 2 * expected_batch_count
     assert len(control_process_calls) == 2 * expected_batch_count
+    assert static_overflow_requests == (
+        [False, True]
+        if force_fallback and expected_batch_count == 2
+        else [False] * expected_batch_count
+    )
     assert [call[1] for call in process_calls] == [False, True] * expected_batch_count
     assert [call[1] for call in control_process_calls] == [
         False,
@@ -1899,13 +1926,22 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     assert hybrid_stats["selected_rescore_batch_count"] == (
         0 if force_fallback else expected_batch_count
     )
-    assert hybrid_stats["fallback_batch_count"] == (
-        expected_batch_count if force_fallback else 0
+    expected_fallback_batches = 1 if force_fallback else 0
+    expected_static_batches = (
+        expected_batch_count - 1 if force_fallback else 0
     )
+    first_batch_images = 3 if hybrid_image_batch_size else 2
+    assert hybrid_stats["fallback_batch_count"] == expected_fallback_batches
+    assert hybrid_stats["static_dense_batch_count"] == expected_static_batches
     assert hybrid_stats["selected_rescore_image_count"] == (
         0 if force_fallback else 3
     )
-    assert hybrid_stats["fallback_image_count"] == (3 if force_fallback else 0)
+    assert hybrid_stats["fallback_image_count"] == (
+        first_batch_images if force_fallback else 0
+    )
+    assert hybrid_stats["static_dense_image_count"] == (
+        3 - first_batch_images if force_fallback else 0
+    )
     assert hybrid_stats["selected_source16_block_count"] == (
         0 if force_fallback else 3
     )
@@ -1937,7 +1973,20 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         None if force_fallback else 64.0
     )
     assert hybrid_stats["fallback_reasons"] == (
-        {"block_capacity_overflow": expected_batch_count} if force_fallback else {}
+        {"block_capacity_overflow": 1} if force_fallback else {}
+    )
+    assert hybrid_stats["overflow_latch_scope"] == (
+        "current_significance_call_exact_geometry_and_capacity"
+    )
+    assert hybrid_stats["overflow_latch_active_at_return"] is force_fallback
+    assert hybrid_stats["overflow_latch_activation_count"] == (
+        1 if force_fallback else 0
+    )
+    assert hybrid_stats["overflow_latch_static_dense_batch_count"] == (
+        expected_static_batches
+    )
+    assert hybrid_stats["overflow_latch_static_dense_image_count"] == (
+        3 - first_batch_images if force_fallback else 0
     )
     support_audit = result[5]["coarse_significance_support_audit"]
     assert support_audit["n_classes"] == 1

@@ -1478,6 +1478,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     certificate_chunk_rows: int = _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_CHUNK_ROWS,
     block_capacity: int = DEFAULT_ROTATION_BLOCK_CAPACITY,
     compact_posterior: bool = False,
+    force_static_dense_after_overflow: bool = False,
 ) -> CoarseGaussianGemmHybridBatchResult:
     """Certify, exactly rescore, and restore one K=1 coarse score table.
 
@@ -1543,6 +1544,8 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             "certified coarse GEMM hybrid requires positive aligned chunk, "
             "capacity, and image counts",
         )
+    if not isinstance(force_static_dense_after_overflow, (bool, np.bool_)):
+        raise ValueError("force_static_dense_after_overflow must be boolean")
 
     rotation_prior = None
     if rotation_log_prior is not None:
@@ -1551,16 +1554,24 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             raise ValueError(
                 "hybrid rotation_log_prior must have one value per source rotation",
             )
-    score_representation = _select_coarse_gaussian_gemm_score_representation(
-        n_rotations=n_rotations,
-        block_capacity=capacity,
-        compact_posterior=compact_posterior,
+    score_representation = (
+        "dense_full_direct_static_capacity"
+        if force_static_dense_after_overflow
+        else _select_coarse_gaussian_gemm_score_representation(
+            n_rotations=n_rotations,
+            block_capacity=capacity,
+            compact_posterior=compact_posterior,
+        )
     )
     if score_representation == "dense_full_direct_static_capacity":
         empty_counts = np.zeros(batch_size, dtype=np.int32)
         selection = CoarseGemmHybridBlockSelection(
             eligible=False,
-            fallback_reason="compact_physical_capacity_not_smaller_than_dense",
+            fallback_reason=(
+                "prior_batch_block_capacity_overflow"
+                if force_static_dense_after_overflow
+                else "compact_physical_capacity_not_smaller_than_dense"
+            ),
             block_ids=np.full((batch_size, capacity), -1, dtype=np.int32),
             block_count=empty_counts,
             posterior_block_count=empty_counts.copy(),
@@ -5954,6 +5965,16 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_hybrid_score_representation_batch_counts = {}
     coarse_gaussian_gemm_hybrid_actual_image_batch_sizes = []
     coarse_gaussian_gemm_hybrid_physical_image_batch_sizes = []
+    # Every batch in this significance call shares the exact projection
+    # cache, topology, rotation/translation geometry, and selected-block
+    # capacity.  Once one certified selection overflows, later batches can
+    # safely skip that certificate and use the mature exact rectangular
+    # scorer.  Keep this latch local so no posterior-width assumption crosses
+    # an iteration, dataset, or independently constructed score call.
+    coarse_gaussian_gemm_hybrid_overflow_latched = False
+    coarse_gaussian_gemm_hybrid_overflow_latch_activation_count = 0
+    coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_batch_count = 0
+    coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_image_count = 0
     generic_coarse_operand_assembly_count = 0
     exact_coarse_operand_assembly_count = 0
     generic_score_preprocess_count = 0
@@ -6484,6 +6505,9 @@ def _compute_k_class_significance_batched(
                     "certified coarse GEMM hybrid is missing its projection "
                     "cache, cache plan, or sealed topology",
                 )
+            force_static_dense_after_overflow = bool(
+                coarse_gaussian_gemm_hybrid_overflow_latched
+            )
             coarse_gaussian_gemm_hybrid_batch_result = (
                 _compute_coarse_gaussian_gemm_hybrid_batch(
                     coarse_gaussian_gemm_projection_cache,
@@ -6506,9 +6530,17 @@ def _compute_k_class_significance_batched(
                     compact_posterior=(
                         coarse_gaussian_gemm_compact_posterior_requested
                     ),
+                    force_static_dense_after_overflow=(
+                        force_static_dense_after_overflow
+                    ),
                 )
             )
             coarse_gaussian_gemm_hybrid_batch_count += 1
+            if force_static_dense_after_overflow:
+                coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_batch_count += 1
+                coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_image_count += (
+                    actual_batch_size
+                )
             score_representation = str(
                 coarse_gaussian_gemm_hybrid_batch_result.score_representation,
             )
@@ -6562,6 +6594,12 @@ def _compute_k_class_significance_batched(
                     )
                     + 1
                 )
+                if (
+                    fallback_reason == "block_capacity_overflow"
+                    and not coarse_gaussian_gemm_hybrid_overflow_latched
+                ):
+                    coarse_gaussian_gemm_hybrid_overflow_latched = True
+                    coarse_gaussian_gemm_hybrid_overflow_latch_activation_count += 1
 
         compact_hybrid_scores = (
             None
@@ -7916,6 +7954,21 @@ def _compute_k_class_significance_batched(
             ),
             "fallback_image_count": int(
                 coarse_gaussian_gemm_hybrid_fallback_image_count,
+            ),
+            "overflow_latch_scope": (
+                "current_significance_call_exact_geometry_and_capacity"
+            ),
+            "overflow_latch_active_at_return": bool(
+                coarse_gaussian_gemm_hybrid_overflow_latched,
+            ),
+            "overflow_latch_activation_count": int(
+                coarse_gaussian_gemm_hybrid_overflow_latch_activation_count,
+            ),
+            "overflow_latch_static_dense_batch_count": int(
+                coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_batch_count,
+            ),
+            "overflow_latch_static_dense_image_count": int(
+                coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_image_count,
             ),
             "selected_source16_block_count": int(
                 coarse_gaussian_gemm_hybrid_selected_block_count,

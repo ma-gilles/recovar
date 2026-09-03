@@ -534,6 +534,13 @@ def _compact_profile(**updates):
         "selected_rescore_image_count": 300,
         "static_dense_image_count": 0,
         "fallback_image_count": 0,
+        "overflow_latch_scope": (
+            "current_significance_call_exact_geometry_and_capacity"
+        ),
+        "overflow_latch_active_at_return": False,
+        "overflow_latch_activation_count": 0,
+        "overflow_latch_static_dense_batch_count": 0,
+        "overflow_latch_static_dense_image_count": 0,
         "selected_source16_block_count": 500,
         "selected_exact_candidate_count": 232_000,
         "selected_score_table_capacity_candidates": 5_939_200,
@@ -1589,6 +1596,8 @@ def test_arm_performance_summary_exposes_compact_table_geometry() -> None:
     table = summary["coarse_hybrid_tables"]["halfset_0_profile_summary"]
     assert table["selected_score_table_capacity_candidates"] == 5_939_200
     assert table["dense_global_score_table_capacity_bytes_f32"] == 855_244_800
+    assert table["overflow_latch_activation_count"] == 0
+    assert table["overflow_latch_static_dense_batch_count"] == 0
 
 
 def test_arm_performance_summary_preserves_canonical_local_timing_names() -> None:
