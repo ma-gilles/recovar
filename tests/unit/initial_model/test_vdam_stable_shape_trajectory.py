@@ -30,11 +30,14 @@ def test_analyzer_cli_can_isolate_flat_row_abi_from_fourier_shapes():
             "/tmp/report.md",
             "--no-stable-fourier-window-shapes",
             "--stable-flat-row-capacity",
+            "--stable-fourier-window-quantum",
+            "16",
         ]
     )
 
     assert args.stable_fourier_window_shapes is False
     assert args.stable_flat_row_capacity is True
+    assert args.stable_fourier_window_quantum == 16
 
 
 def test_normalized_l2_is_symmetric_and_scale_normalized():

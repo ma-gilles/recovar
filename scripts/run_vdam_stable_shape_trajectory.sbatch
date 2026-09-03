@@ -30,6 +30,7 @@ RELION_BIND_SOURCE=$(realpath "${VDAM_STABLE_TRAJECTORY_RELION_BIND}")
 FIXTURE=${VDAM_STABLE_TRAJECTORY_FIXTURE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826/vdam-gf46/repeat-01/vdam-gf46/data}
 LAST_ITERATION=${VDAM_STABLE_TRAJECTORY_LAST_ITERATION:-50}
 STABLE_FOURIER_WINDOW_SHAPES=${VDAM_STABLE_TRAJECTORY_STABLE_FOURIER_WINDOW_SHAPES:-1}
+STABLE_FOURIER_WINDOW_QUANTUM=${VDAM_STABLE_TRAJECTORY_STABLE_FOURIER_WINDOW_QUANTUM:-8}
 STABLE_FLAT_ROW_CAPACITY=${VDAM_STABLE_TRAJECTORY_STABLE_FLAT_ROW_CAPACITY:-0}
 ACCEPTANCE=${REPO_ROOT}/scripts/vdam_coarse_combined_true200_acceptance.json
 ANALYZER=${REPO_ROOT}/scripts/analyze_vdam_stable_shape_trajectory.py
@@ -85,6 +86,13 @@ case "${STABLE_FLAT_ROW_CAPACITY}" in
     exit 2
     ;;
 esac
+if ! [[ "${STABLE_FOURIER_WINDOW_QUANTUM}" =~ ^[0-9]+$ ]] \
+  || (( STABLE_FOURIER_WINDOW_QUANTUM < 2 )) \
+  || (( STABLE_FOURIER_WINDOW_QUANTUM % 2 != 0 )); then
+  printf 'VDAM_STABLE_TRAJECTORY_STABLE_FOURIER_WINDOW_QUANTUM must be an even integer >= 2, got %s\n' \
+    "${STABLE_FOURIER_WINDOW_QUANTUM}" >&2
+  exit 2
+fi
 if [[ "${STABLE_FOURIER_WINDOW_SHAPES}" == 0 && "${STABLE_FLAT_ROW_CAPACITY}" == 0 ]]; then
   printf 'candidate must enable at least one stable ABI\n' >&2
   exit 2
@@ -110,6 +118,8 @@ printf '%s\n' "${SLURMD_NODENAME:-$(hostname -s)}" > "${ROOT}/provenance/node.tx
 printf '%s\n' "${selected_gpu_uuid}" > "${ROOT}/provenance/selected_gpu_uuid.txt"
 printf '%s\n' "${STABLE_FOURIER_WINDOW_SHAPES}" > \
   "${ROOT}/provenance/stable_fourier_window_shapes.txt"
+printf '%s\n' "${STABLE_FOURIER_WINDOW_QUANTUM}" > \
+  "${ROOT}/provenance/stable_fourier_window_quantum.txt"
 printf '%s\n' "${STABLE_FLAT_ROW_CAPACITY}" > \
   "${ROOT}/provenance/stable_flat_row_capacity.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${ROOT}/provenance/nvidia_smi_q.txt"
@@ -182,8 +192,10 @@ for arm in "${ARM_ORDER[@]}"; do
   )
   stable=0
   stable_flat=0
+  stable_quantum=8
   if [[ "${arm}" == stable_on_* ]]; then
     stable=${STABLE_FOURIER_WINDOW_SHAPES}
+    stable_quantum=${STABLE_FOURIER_WINDOW_QUANTUM}
     if [[ "${stable}" == 1 ]]; then
       command+=(--stable-fourier-window-shapes)
     fi
@@ -192,21 +204,24 @@ for arm in "${ARM_ORDER[@]}"; do
     fi
   fi
   "${PIXI_PY}" - "${run_root}/command.json" "${stable}" "${stable_flat}" \
+    "${stable_quantum}" \
     "${command[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-target, stable, stable_flat, *argv = sys.argv[1:]
+target, stable, stable_flat, stable_quantum, *argv = sys.argv[1:]
 Path(target).write_text(json.dumps({
     "argv": argv,
     "stable_fourier_window_shapes": bool(int(stable)),
     "stable_flat_row_capacity": bool(int(stable_flat)),
+    "stable_fourier_window_quantum": int(stable_quantum),
 }, indent=2, sort_keys=True) + "\n")
 PY
   science_environment=(
     "${COMMON_ENVIRONMENT[@]}"
     "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=${stable_flat}"
+    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM=${stable_quantum}"
     "TMPDIR=${tmp}"
     "JAX_COMPILATION_CACHE_DIR=${cache}"
   )
@@ -270,6 +285,7 @@ analyzer_args=(
   --root "${ROOT}"
   --acceptance "${ACCEPTANCE}"
   --last-iteration "${LAST_ITERATION}"
+  --stable-fourier-window-quantum "${STABLE_FOURIER_WINDOW_QUANTUM}"
   --output "${ROOT}/analysis/report.json"
   --markdown-output "${ROOT}/analysis/report.md"
 )

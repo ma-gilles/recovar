@@ -197,6 +197,11 @@ from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
+STABLE_FOURIER_WINDOW_QUANTUM_ENV = (
+    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"
+)
+DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM = 8
+
 
 def _relion_exact_fine_full_to_compact_lookup(
     image_shape,
@@ -2020,6 +2025,27 @@ def _optional_nonnegative_int_env(name: str) -> int | None:
     if value < 0:
         raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
     return value
+
+
+def _stable_fourier_window_quantum() -> int:
+    """Return the diagnostic physical-size quantum for stable VDAM windows."""
+
+    raw = os.environ.get(STABLE_FOURIER_WINDOW_QUANTUM_ENV, "").strip()
+    if not raw:
+        return DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM
+    try:
+        quantum = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        ) from exc
+    if quantum < 2 or quantum % 2:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        )
+    return quantum
 
 
 def _env_flag(name: str) -> bool:
@@ -4597,12 +4623,18 @@ def run_local_em_exact(
             "stable Fourier-window VDAM currently requires identical score and "
             "reconstruction current sizes"
         )
+    stable_fourier_window_quantum = (
+        _stable_fourier_window_quantum()
+        if stable_fourier_window_shapes
+        else DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM
+    )
     stable_window_plan = make_stable_fourier_window_shape_plan(
         image_shape,
         logical_current_size,
         n_half,
         reconstruction_current_size=mstep_current_size,
         enabled=stable_fourier_window_shapes,
+        quantum=stable_fourier_window_quantum,
         square=square_window,
         recon_exact_radius=bool(recon_exact_radius),
     )
@@ -9662,6 +9694,7 @@ def run_local_em_exact(
         ),
         "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
         "stable_fourier_window_shapes": np.asarray(stable_window_active),
+        "stable_fourier_window_quantum": np.int32(stable_fourier_window_quantum),
         "logical_current_size": np.int32(logical_current_size),
         "physical_current_size": np.int32(physical_current_size),
         "logical_reconstruction_pixels": np.int32(

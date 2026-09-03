@@ -57,13 +57,20 @@ _GF46_CURRENT_SIZES_THROUGH_80 = (
 )
 
 
-def _plan(current_size, *, enabled=True, reconstruction_current_size=None):
+def _plan(
+    current_size,
+    *,
+    enabled=True,
+    reconstruction_current_size=None,
+    quantum=8,
+):
     return make_stable_fourier_window_shape_plan(
         _IMAGE_SHAPE,
         current_size,
         _N_HALF,
         enabled=enabled,
         reconstruction_current_size=reconstruction_current_size,
+        quantum=quantum,
     )
 
 
@@ -100,6 +107,25 @@ def test_stable_window_size_uses_eight_pixel_classes_and_isolates_full_box():
 def test_stable_window_size_rejects_invalid_shapes(current_size, image_size, quantum):
     with pytest.raises(ValueError):
         stable_fourier_window_current_size(current_size, image_size, quantum=quantum)
+
+
+def test_stable_window_runtime_quantum_is_diagnostic_and_fail_closed(monkeypatch):
+    from recovar.em.dense_single_volume.local_em_engine import (
+        DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM,
+        STABLE_FOURIER_WINDOW_QUANTUM_ENV,
+        _stable_fourier_window_quantum,
+    )
+
+    monkeypatch.delenv(STABLE_FOURIER_WINDOW_QUANTUM_ENV, raising=False)
+    assert _stable_fourier_window_quantum() == DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM == 8
+
+    monkeypatch.setenv(STABLE_FOURIER_WINDOW_QUANTUM_ENV, "16")
+    assert _stable_fourier_window_quantum() == 16
+
+    for invalid in ("0", "3", "nope"):
+        monkeypatch.setenv(STABLE_FOURIER_WINDOW_QUANTUM_ENV, invalid)
+        with pytest.raises(ValueError, match=STABLE_FOURIER_WINDOW_QUANTUM_ENV):
+            _stable_fourier_window_quantum()
 
 
 def test_shape_policy_is_default_off():
@@ -210,6 +236,29 @@ def test_gf46_shape_trajectory_collapses_from_29_signatures_to_14():
         126,
         128,
     ]
+
+
+@pytest.mark.parametrize(
+    ("quantum", "expected_physical_sizes"),
+    (
+        (16, [32, 48, 64, 80, 96, 112, 126, 128]),
+        (32, [32, 64, 96, 126, 128]),
+    ),
+)
+def test_larger_diagnostic_quantums_reduce_trajectory_shape_cardinality(
+    quantum,
+    expected_physical_sizes,
+):
+    plans = [
+        _plan(current_size, quantum=quantum)
+        for current_size in _GF46_CURRENT_SIZES_THROUGH_80
+    ]
+
+    assert sorted({plan.physical_current_size for plan in plans}) == expected_physical_sizes
+    assert all(
+        plan.physical_projection_pixels >= plan.logical_projection_pixels
+        for plan in plans
+    )
 
 
 def test_padding_appends_storage_without_changing_score_pixel_order():
