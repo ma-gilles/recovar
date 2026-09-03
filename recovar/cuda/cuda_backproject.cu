@@ -9876,18 +9876,55 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
     int current_size,
     const int32_t* runtime_current_size)
 {
-    const int64_t hypothesis = static_cast<int64_t>(blockIdx.x);
-    const int64_t total_hypotheses = batch_size * pair_count;
-    if (hypothesis >= total_hypotheses) return;
+    // RELION's makeJobsForDiff2Fine groups a short source-ordered translation
+    // run into one block.  The compact pair ABI already stores candidates in
+    // that source order, so consume four adjacent pairs per block without
+    // materializing another job layout.  A chunk may cross a rotation run;
+    // each lane keeps its own reference id, which preserves arbitrary compact
+    // masks while still sharing the image/weight fetch and launch overhead.
+    const int64_t pair_chunks =
+        (pair_count + kRelionFineDiff2Ref3dJobChunk - 1) /
+        kRelionFineDiff2Ref3dJobChunk;
+    const int64_t flat_block = static_cast<int64_t>(blockIdx.x);
+    const int64_t batch = flat_block / pair_chunks;
+    const int64_t pair_chunk = flat_block % pair_chunks;
+    if (batch >= batch_size) return;
+    const int64_t pair_start =
+        pair_chunk * kRelionFineDiff2Ref3dJobChunk;
+    const int pairs_in_chunk = static_cast<int>(min(
+        static_cast<int64_t>(kRelionFineDiff2Ref3dJobChunk),
+        pair_count - pair_start));
 
-    const int64_t batch = hypothesis / pair_count;
-    const int64_t pair = hypothesis % pair_count;
-    const int32_t reference_row = pair_reference_rows[hypothesis];
-    const int32_t translation = pair_translation_ids[hypothesis];
-    if (reference_row < 0 || reference_row >= reference_row_count ||
-        translation < 0 || translation >= translation_count) {
-        if (threadIdx.x == 0)
+    int32_t reference_rows[kRelionFineDiff2TranslationCapacity];
+    int32_t translations[kRelionFineDiff2TranslationCapacity];
+    bool valid_pairs[kRelionFineDiff2TranslationCapacity];
+    bool any_valid_pair = false;
+    #pragma unroll
+    for (int pair_offset = 0;
+         pair_offset < kRelionFineDiff2TranslationCapacity;
+         ++pair_offset) {
+        const bool in_chunk = pair_offset < pairs_in_chunk;
+        const int64_t hypothesis =
+            batch * pair_count + pair_start + pair_offset;
+        const int32_t reference_row =
+            in_chunk ? pair_reference_rows[hypothesis] : -1;
+        const int32_t translation =
+            in_chunk ? pair_translation_ids[hypothesis] : -1;
+        const bool valid =
+            in_chunk && reference_row >= 0 &&
+            reference_row < reference_row_count && translation >= 0 &&
+            translation < translation_count;
+        reference_rows[pair_offset] = reference_row;
+        translations[pair_offset] = translation;
+        valid_pairs[pair_offset] = valid;
+        any_valid_pair = any_valid_pair || valid;
+    }
+    if (!any_valid_pair) {
+        if (threadIdx.x < pairs_in_chunk) {
+            const int64_t hypothesis =
+                batch * pair_count + pair_start + threadIdx.x;
             output[hypothesis] = __int_as_float(0x7f800000);
+        }
         return;
     }
 
@@ -9899,12 +9936,26 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
         (logical_current_size / 2 + 1);
     if (logical_current_size <= 0 || (logical_current_size & 1) != 0 ||
         logical_full_pixel_count > full_pixel_capacity) {
-        if (threadIdx.x == 0) output[hypothesis] = nanf("");
+        if (threadIdx.x < pairs_in_chunk) {
+            const int pair_offset = threadIdx.x;
+            const int64_t hypothesis =
+                batch * pair_count + pair_start + pair_offset;
+            output[hypothesis] = valid_pairs[pair_offset]
+                ? nanf("")
+                : __int_as_float(0x7f800000);
+        }
         return;
     }
 
-    __shared__ float lane_sums[kRelionFineDiff2BlockSize];
-    float lane_sum = 0.0f;
+    __shared__ float lane_sums[
+        kRelionFineDiff2BlockSize * kRelionFineDiff2TranslationCapacity];
+    float pair_sums[kRelionFineDiff2TranslationCapacity];
+    #pragma unroll
+    for (int pair_offset = 0;
+         pair_offset < kRelionFineDiff2TranslationCapacity;
+         ++pair_offset) {
+        pair_sums[pair_offset] = 0.0f;
+    }
     const int current_half_width = logical_current_size / 2 + 1;
     const int pass_count = static_cast<int>(
         (logical_full_pixel_count + kRelionFineDiff2BlockSize - 1) /
@@ -9919,31 +9970,75 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
                 const int x = static_cast<int>(full_pixel % current_half_width);
                 int y = static_cast<int>(full_pixel / current_half_width);
                 if (y > logical_current_size / 2) y -= logical_current_size;
-                const int64_t reference_index =
-                    static_cast<int64_t>(reference_row) * compact_pixel_count +
-                    compact_pixel;
                 const int64_t image_index =
                     batch * compact_pixel_count + compact_pixel;
-                const float2 shifted = relion_score_translate_f32(
-                    image[image_index], x, y,
-                    translation_angles[2 * translation],
-                    translation_angles[2 * translation + 1]);
-                lane_sum = relion_fine_diff2_update_f32(
-                    reference[reference_index], shifted,
-                    weight[image_index], lane_sum);
+                const float2 image_value = image[image_index];
+                const float pixel_weight = weight[image_index];
+                #pragma unroll
+                for (int pair_offset = 0;
+                     pair_offset < kRelionFineDiff2TranslationCapacity;
+                     ++pair_offset) {
+                    if (pair_offset >= pairs_in_chunk ||
+                        !valid_pairs[pair_offset])
+                        continue;
+                    const int64_t reference_index =
+                        static_cast<int64_t>(reference_rows[pair_offset]) *
+                            compact_pixel_count +
+                        compact_pixel;
+                    const int32_t translation = translations[pair_offset];
+                    const float2 shifted = relion_score_translate_f32(
+                        image_value,
+                        x,
+                        y,
+                        translation_angles[2 * translation],
+                        translation_angles[2 * translation + 1]);
+                    pair_sums[pair_offset] = relion_fine_diff2_update_f32(
+                        reference[reference_index],
+                        shifted,
+                        pixel_weight,
+                        pair_sums[pair_offset]);
+                }
             }
         }
     }
-    lane_sums[threadIdx.x] = lane_sum;
+    #pragma unroll
+    for (int pair_offset = 0;
+         pair_offset < kRelionFineDiff2TranslationCapacity;
+         ++pair_offset) {
+        if (pair_offset < pairs_in_chunk && valid_pairs[pair_offset]) {
+            lane_sums[
+                pair_offset * kRelionFineDiff2BlockSize + threadIdx.x] =
+                pair_sums[pair_offset];
+        }
+    }
     __syncthreads();
     for (int width = kRelionFineDiff2BlockSize / 2; width > 0; width /= 2) {
-        if (threadIdx.x < width)
-            lane_sums[threadIdx.x] = __fadd_rn(
-                lane_sums[threadIdx.x], lane_sums[threadIdx.x + width]);
+        if (threadIdx.x < width) {
+            #pragma unroll
+            for (int pair_offset = 0;
+                 pair_offset < kRelionFineDiff2TranslationCapacity;
+                 ++pair_offset) {
+                if (pair_offset >= pairs_in_chunk ||
+                    !valid_pairs[pair_offset])
+                    continue;
+                const int lane_index =
+                    pair_offset * kRelionFineDiff2BlockSize + threadIdx.x;
+                lane_sums[lane_index] = __fadd_rn(
+                    lane_sums[lane_index], lane_sums[lane_index + width]);
+            }
+        }
         __syncthreads();
     }
-    if (threadIdx.x == 0)
-        output[hypothesis] = __fadd_rn(lane_sums[0], initial_diff2[batch]);
+    if (threadIdx.x < pairs_in_chunk) {
+        const int pair_offset = threadIdx.x;
+        const int64_t hypothesis =
+            batch * pair_count + pair_start + pair_offset;
+        output[hypothesis] = valid_pairs[pair_offset]
+            ? __fadd_rn(
+                  lane_sums[pair_offset * kRelionFineDiff2BlockSize],
+                  initial_diff2[batch])
+            : __int_as_float(0x7f800000);
+    }
 }
 
 cudaError_t launch_relion_fine_diff2_rectangular_f32(
@@ -10301,10 +10396,13 @@ cudaError_t launch_relion_fine_diff2_fused_translate_pairs_f32(
     int current_size,
     const int32_t* runtime_current_size)
 {
-    const int64_t total_hypotheses = batch_size * pair_count;
-    if (total_hypotheses == 0) return cudaSuccess;
+    const int64_t pair_chunks =
+        (pair_count + kRelionFineDiff2Ref3dJobChunk - 1) /
+        kRelionFineDiff2Ref3dJobChunk;
+    const int64_t total_blocks = batch_size * pair_chunks;
+    if (total_blocks == 0) return cudaSuccess;
     relion_fine_diff2_fused_translate_pairs_f32_kernel<<<
-        static_cast<unsigned int>(total_hypotheses),
+        static_cast<unsigned int>(total_blocks),
         kRelionFineDiff2BlockSize,
         0,
         stream>>>(

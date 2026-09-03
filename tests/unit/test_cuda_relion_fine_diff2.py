@@ -221,6 +221,26 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
     assert "RelionFineDiff2FusedTranslateRuntimeFlatRowsF32" in source
     assert "RelionFineDiff2FusedTranslateRuntimeRectangularF32" in source
 
+    pair_start = source.index(
+        "relion_fine_diff2_fused_translate_pairs_f32_kernel"
+    )
+    pair_kernel = source[pair_start : source.index("cudaError_t", pair_start)]
+    assert "pair_count + kRelionFineDiff2Ref3dJobChunk - 1" in pair_kernel
+    assert "pair_chunk * kRelionFineDiff2Ref3dJobChunk" in pair_kernel
+    assert (
+        "kRelionFineDiff2BlockSize * kRelionFineDiff2TranslationCapacity"
+        in pair_kernel
+    )
+    assert "image_value = image[image_index]" in pair_kernel
+    assert "pixel_weight = weight[image_index]" in pair_kernel
+
+    launch_start = source.index(
+        "cudaError_t launch_relion_fine_diff2_fused_translate_pairs_f32"
+    )
+    launch = source[launch_start : source.index("__global__", launch_start)]
+    assert "const int64_t total_blocks = batch_size * pair_chunks;" in launch
+    assert "static_cast<unsigned int>(total_blocks)" in launch
+
 
 def test_relion_powerclass_cuda_source_pins_native_atomic_topology():
     source = (
