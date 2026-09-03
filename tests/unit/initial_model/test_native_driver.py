@@ -1992,6 +1992,9 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
             "_rlnOriginYAngst": ["0.0", "0.0"],
             "_rlnOriginX": ["0.0", "0.0"],
             "_rlnOriginY": ["0.0", "0.0"],
+            # InitialModel pseudo-halfsets are defined by Experiment part_id,
+            # so stale input split labels must not leak into the output.
+            "_rlnRandomSubset": ["1", "1"],
         }
     )
     optics = pd.DataFrame({"_rlnOpticsGroup": ["1"], "_rlnImageSize": ["8"]})
@@ -2019,6 +2022,7 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
     np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [0.5, 2.0])
     np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [1.25, -1.0])
     np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [1, 2])
+    np.testing.assert_array_equal(data["_rlnRandomSubset"].astype(int).to_numpy(), [1, 2])
     np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.25, 0.875])
 
 
@@ -2059,6 +2063,7 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path):
     expected_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
     assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"]
     np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [0, 1, 1])
+    np.testing.assert_array_equal(data["_rlnRandomSubset"].astype(int).to_numpy(), [1, 2, 1])
     np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.0, 0.625, 0.75])
     np.testing.assert_allclose(data["_rlnAngleRot"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 0])
     np.testing.assert_allclose(data["_rlnAngleTilt"].astype(float).to_numpy()[[1, 2]], expected_eulers[[9, 5], 1])

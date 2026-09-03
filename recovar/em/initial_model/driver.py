@@ -2147,6 +2147,29 @@ def _format_float_column(values: np.ndarray, precision: int = 6) -> list[str]:
     return [f"{float(value):.{precision}f}" for value in np.asarray(values).reshape(-1)]
 
 
+def _initial_model_random_subsets(main_star) -> np.ndarray:
+    """Return RELION's one-based pseudo-halfset for every input-table row.
+
+    InitialModel routes ``Experiment`` part ids by ``part_id % 2`` even when
+    ordinary split-half refinement is disabled.  ``_experiment_read_order``
+    maps those internal part ids to RECOVAR's input-table rows; invert that
+    map here so the written data STAR records the same persistent identity.
+    """
+
+    order = np.asarray(_experiment_read_order(main_star), dtype=np.int64)
+    n_images = len(main_star)
+    if (
+        order.shape != (n_images,)
+        or np.unique(order).size != n_images
+        or np.any(order < 0)
+        or np.any(order >= n_images)
+    ):
+        raise ValueError("RELION experiment read order must be a particle-row permutation")
+    part_ids = np.empty(n_images, dtype=np.int64)
+    part_ids[order] = np.arange(n_images, dtype=np.int64)
+    return (part_ids % 2 + 1).astype(np.int32, copy=False)
+
+
 def _write_data_star(path: str, main_star, optics_star, dataset, particle_state: NativeParticleState) -> None:
     n_images = int(getattr(dataset, "n_images", len(main_star)))
     if len(main_star) != n_images:
@@ -2173,6 +2196,7 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     class_numbers = np.zeros(n_images, dtype=np.int32)
     class_numbers[visited] = np.asarray(particle_state.class_assignments, dtype=np.int32)[visited] + 1
     _set_star_column(table, "_rlnClassNumber", class_numbers)
+    _set_star_column(table, "_rlnRandomSubset", _initial_model_random_subsets(main_star))
     _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
 
     has_rotations = particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None
