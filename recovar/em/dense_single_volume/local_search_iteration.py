@@ -23,7 +23,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import oversampling as _oversampling
 from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
 )
@@ -37,36 +36,6 @@ logger = logging.getLogger(__name__)
 # Mirror iteration_loop's constant locally so the helper has a stable home.
 EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
 EXACT_LOCAL_XHALF_BATCH_GUARD_ENV = "RECOVAR_LOCAL_XHALF_BATCH_GUARD"
-
-
-def _call_exact_local_engine_with_projector_texture(callback, *args, **engine_kwargs):
-    """Keep one eligible host PPref texture alive for an exact-local call."""
-
-    relion_projector_half = engine_kwargs.get("relion_projector_half")
-    relion_texture_interp = engine_kwargs.get("projection_relion_texture_interp")
-    relion_projector_texture = (
-        _oversampling._open_persistent_relion_projector_texture(
-            relion_projector_half,
-            relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
-            projection_padding_factor=engine_kwargs.get(
-                "projection_padding_factor",
-                1,
-            ),
-            relion_texture_interp=relion_texture_interp,
-            log_label="Exact local",
-        )
-        if relion_texture_interp is not False
-        else None
-    )
-    if relion_projector_texture is not None:
-        engine_kwargs["relion_projector_half"] = None
-        engine_kwargs["relion_projector_texture"] = relion_projector_texture
-    return _oversampling._call_with_persistent_texture_cleanup(
-        relion_projector_texture,
-        callback,
-        *args,
-        **engine_kwargs,
-    )
 
 
 def _precompute_exact_local_fine_grid_enabled(
@@ -533,8 +502,7 @@ def _run_local_search_iteration(
         )
     else:
         class_details = None
-        engine_outputs = _call_exact_local_engine_with_projector_texture(
-            _il.run_local_em_exact,
+        engine_outputs = _il.run_local_em_exact(
             experiment_dataset,
             mean,
             mean_variance,

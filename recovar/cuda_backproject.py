@@ -2267,21 +2267,6 @@ class RelionPersistentHalfTextureF32:
             raise RuntimeError("persistent RELION half texture is closed")
         return self._owner_handle
 
-    @property
-    def handle_array(self) -> jax.Array:
-        """Return the dynamic device token used by compiled projection calls.
-
-        The owning :class:`RelionPersistentHalfTextureF32` must remain alive
-        until every computation consuming this token is ready.  Keeping the
-        token dynamic prevents a compiled executable from embedding a stale
-        owner handle.
-        """
-
-        with self._lock:
-            if self.closed or self._handle_array is None:
-                raise RuntimeError("persistent RELION half texture is closed")
-            return self._handle_array
-
     def _require_live_geometry(
         self,
         *,
@@ -2409,54 +2394,6 @@ def relion_projector_persistent_half_texture_f32(
         output = jax.block_until_ready(output)
         texture._last_output = None
         return output
-
-
-def relion_projector_persistent_half_texture_f32_from_handle(
-    owner_handle: jax.Array,
-    rotation_matrices: jax.Array,
-    *,
-    current_size: int,
-    padding_factor: int,
-    projector_max_r: int,
-) -> jax.Array:
-    """Project from a borrowed persistent-texture token inside a larger JIT.
-
-    This variant deliberately does not synchronize the result and does not
-    own the referenced texture.  Its caller must retain the corresponding
-    :class:`RelionPersistentHalfTextureF32` and wait for the enclosing result
-    before closing that owner.
-    """
-
-    owner_handle = jnp.asarray(owner_handle)
-    rotation_matrices = jnp.asarray(rotation_matrices)
-    if owner_handle.dtype != jnp.uint64 or owner_handle.shape != ():
-        raise TypeError(
-            "persistent RELION texture handle must be a scalar uint64, got "
-            f"shape={owner_handle.shape} dtype={owner_handle.dtype}"
-        )
-    if rotation_matrices.dtype != jnp.float32:
-        raise TypeError(
-            "RELION half-texture rotations must be float32, got "
-            f"{rotation_matrices.dtype}"
-        )
-    if (
-        int(current_size) <= 0
-        or rotation_matrices.ndim != 3
-        or rotation_matrices.shape[0] <= 0
-        or rotation_matrices.shape[1:] != (3, 3)
-    ):
-        raise ValueError(
-            "persistent RELION half-texture projection operands have "
-            f"inconsistent shapes: rotations={rotation_matrices.shape}, "
-            f"current_size={current_size}"
-        )
-    return _relion_projector_persistent_half_texture_f32(
-        owner_handle,
-        rotation_matrices,
-        current_size=int(current_size),
-        padding_factor=int(padding_factor),
-        projector_max_r=int(projector_max_r),
-    )
 
 
 @functools.partial(

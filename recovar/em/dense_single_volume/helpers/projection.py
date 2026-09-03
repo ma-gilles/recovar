@@ -16,7 +16,6 @@ from recovar.cuda_backproject import (
     project_indexed,
     relion_projector_half_texture_f32,
     relion_projector_persistent_half_texture_f32,
-    relion_projector_persistent_half_texture_f32_from_handle,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 
@@ -453,31 +452,20 @@ def _project_relion_projector_texture(
     projector_output_size: int,
     pixel_indices=None,
     persistent_texture=None,
-    persistent_texture_handle=None,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
 
-    if persistent_texture is not None and persistent_texture_handle is not None:
-        raise ValueError("pass a persistent RELION texture owner or handle, not both")
-    if persistent_texture is not None:
-        projection_crop = relion_projector_persistent_half_texture_f32(
-            persistent_texture,
-            jnp.asarray(rotations_block, dtype=jnp.float32),
-            current_size=int(projector_output_size),
-            padding_factor=int(padding_factor),
-            projector_max_r=int(r_max),
-        )
-    elif persistent_texture_handle is not None:
-        projection_crop = relion_projector_persistent_half_texture_f32_from_handle(
-            persistent_texture_handle,
+    if persistent_texture is None:
+        projection_crop = relion_projector_half_texture_f32(
+            jnp.asarray(volume_relion_half, dtype=jnp.complex64),
             jnp.asarray(rotations_block, dtype=jnp.float32),
             current_size=int(projector_output_size),
             padding_factor=int(padding_factor),
             projector_max_r=int(r_max),
         )
     else:
-        projection_crop = relion_projector_half_texture_f32(
-            jnp.asarray(volume_relion_half, dtype=jnp.complex64),
+        projection_crop = relion_projector_persistent_half_texture_f32(
+            persistent_texture,
             jnp.asarray(rotations_block, dtype=jnp.float32),
             current_size=int(projector_output_size),
             padding_factor=int(padding_factor),
@@ -511,7 +499,6 @@ def compute_relion_projector_projections_block(
     pixel_indices=None,
     relion_texture_interp: bool | None = None,
     persistent_texture=None,
-    persistent_texture_handle=None,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -525,9 +512,7 @@ def compute_relion_projector_projections_block(
     resolved_output_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
     if resolved_output_size <= 0 or resolved_output_size > image_size:
         resolved_output_size = image_size
-    if persistent_texture is not None and persistent_texture_handle is not None:
-        raise ValueError("pass a persistent RELION texture owner or handle, not both")
-    use_texture = persistent_texture is not None or persistent_texture_handle is not None
+    use_texture = persistent_texture is not None
     if not use_texture:
         use_texture = _relion_projector_texture_enabled(
             volume_relion_half,
@@ -554,8 +539,6 @@ def compute_relion_projector_projections_block(
             texture_kwargs["pixel_indices"] = pixel_indices
         if persistent_texture is not None:
             texture_kwargs["persistent_texture"] = persistent_texture
-        if persistent_texture_handle is not None:
-            texture_kwargs["persistent_texture_handle"] = persistent_texture_handle
         proj_centered = _project_relion_projector_texture(
             volume_relion_half,
             rotations_block,

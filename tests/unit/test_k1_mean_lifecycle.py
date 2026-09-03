@@ -11,10 +11,9 @@ from recovar.em.dense_single_volume import iteration_loop
 pytestmark = pytest.mark.unit
 
 
-def test_snapshot_and_release_previous_k1_means_transfers_owned_host_arrays(monkeypatch):
-    first = np.arange(24, dtype=np.float64).view(np.complex128).reshape(3, 4).copy()
+def test_snapshot_and_release_previous_k1_means_owns_host_copies(monkeypatch):
+    first = np.arange(24, dtype=np.float64).view(np.complex128).reshape(3, 4)
     second = (first + np.complex128(2.0 + 3.0j)).copy()
-    expected = [first.copy(), second.copy()]
     means = [first, second]
     collect_states = []
 
@@ -27,54 +26,14 @@ def test_snapshot_and_release_previous_k1_means_transfers_owned_host_arrays(monk
 
     assert means == [None, None]
     assert collect_states == [(None, None)]
-    for snapshot, original, expected_value in zip(
-        snapshots,
-        (first, second),
-        expected,
-        strict=True,
-    ):
+    for snapshot, original in zip(snapshots, (first, second), strict=True):
         assert type(snapshot) is np.ndarray
         assert snapshot.flags.owndata
-        assert snapshot is original
-        assert np.shares_memory(snapshot, original)
-        np.testing.assert_array_equal(snapshot, expected_value)
+        assert not np.shares_memory(snapshot, original)
+        np.testing.assert_array_equal(snapshot, original)
 
-
-def test_snapshot_and_release_previous_k1_means_copies_nonowning_host_views():
-    owner = np.arange(24, dtype=np.float64).view(np.complex128)
-    view = owner.reshape(3, 4)
-    second = (view + np.complex128(2.0 + 3.0j)).copy()
-    means = [view, second]
-
-    snapshots = iteration_loop._snapshot_and_release_previous_k1_means(means)
-
-    assert means == [None, None]
-    assert snapshots[0] is not view
-    assert not np.shares_memory(snapshots[0], view)
-    np.testing.assert_array_equal(snapshots[0], view)
-    assert snapshots[1] is second
-
-    owner[...] = np.complex128(-9.0 + 4.0j)
-    assert not np.array_equal(snapshots[0], view)
-
-
-def test_snapshot_and_release_previous_k1_means_offloads_shared_device_once(monkeypatch):
-    device_mean = object()
-    host_mean = np.arange(12, dtype=np.complex64)
-    means = [device_mean, device_mean]
-    offloaded = []
-
-    def _offload(value):
-        offloaded.append(value)
-        return host_mean
-
-    monkeypatch.setattr(iteration_loop, "_host_offload_array", _offload)
-    snapshots = iteration_loop._snapshot_and_release_previous_k1_means(means)
-
-    assert means == [None, None]
-    assert offloaded == [device_mean]
-    assert snapshots[0] is host_mean
-    assert snapshots[1] is host_mean
+    first[...] = np.complex128(-9.0 + 4.0j)
+    assert not np.array_equal(snapshots[0], first)
 
 
 def test_k1_mean_release_precedes_tau_and_reconstruction():

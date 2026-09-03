@@ -837,7 +837,6 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     bucket_specs: list[LocalBucketSpec],
     relion_projector_half,
     *,
-    relion_projector_texture=None,
     image_shape,
     n_projection_pixels: int,
     relion_projector_r_max: int,
@@ -913,7 +912,6 @@ def _build_exact_local_relion_projection_cache_for_buckets(
             relion_texture_interp=projection_relion_texture_interp,
             projector_output_size=int(projector_output_size) if int(projector_output_size) > 0 else None,
             pixel_indices=projection_pixel_indices,
-            persistent_texture=relion_projector_texture,
         )
         _block_until_ready(proj_chunk)
         host_cache[start:stop] = np.asarray(proj_chunk, dtype=np.complex64)
@@ -1069,7 +1067,6 @@ def _project_local_bucket(
     half_weights,
     precision_policy: DensePrecisionPolicy,
     relion_projector_half=None,
-    relion_projector_texture=None,
     relion_projector_r_max: int | None = None,
     projection_padding_factor: int = 1,
     materialize_recon_projection: bool = True,
@@ -1082,23 +1079,20 @@ def _project_local_bucket(
     # duplicate factor changes materially. It regressed a measured local run
     # from ~76.7s to ~126.9s when duplicate factor was only ~1.004-1.005.
     flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
-    if relion_projector_half is not None and relion_projector_texture is not None:
-        raise ValueError("pass a RELION projector slab or persistent texture, not both")
-    if relion_projector_half is not None or relion_projector_texture is not None:
+    if relion_projector_half is not None:
         if relion_projector_r_max is None:
-            raise ValueError("relion_projector_r_max is required when a RELION projector is provided")
-        if relion_projector_half is not None:
-            relion_projector_half = _select_projector_half_for_class(
-                relion_projector_half,
-                0,
-                1,
+            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        relion_projector_half = _select_projector_half_for_class(
+            relion_projector_half,
+            0,
+            1,
+        )
+        relion_projector_half = jnp.asarray(relion_projector_half)
+        if relion_projector_half.ndim != 3:
+            raise ValueError(
+                "local RELION projector path expected Projector::data shape (z, y, x_half), "
+                f"got {relion_projector_half.shape}",
             )
-            relion_projector_half = jnp.asarray(relion_projector_half)
-            if relion_projector_half.ndim != 3:
-                raise ValueError(
-                    "local RELION projector path expected Projector::data shape (z, y, x_half), "
-                    f"got {relion_projector_half.shape}",
-                )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
@@ -1110,8 +1104,6 @@ def _project_local_bucket(
             )
         if projection_indices is not None:
             projector_kwargs["pixel_indices"] = projection_indices
-        if relion_projector_texture is not None:
-            projector_kwargs["persistent_texture"] = relion_projector_texture
         proj_relion_flat, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             flat_rotations,
@@ -1247,29 +1239,25 @@ def _project_packed_noise_rows(
     precision_policy: DensePrecisionPolicy,
     reconstruction_pack_mask_jnp,
     relion_projector_half=None,
-    relion_projector_texture=None,
     relion_projector_r_max: int | None = None,
     projection_padding_factor: int = 1,
 ) -> jnp.ndarray:
     """Project only packed reconstruction rows for local noise accumulation."""
 
-    if relion_projector_half is not None and relion_projector_texture is not None:
-        raise ValueError("pass a RELION projector slab or persistent texture, not both")
-    if relion_projector_half is not None or relion_projector_texture is not None:
+    if relion_projector_half is not None:
         if relion_projector_r_max is None:
-            raise ValueError("relion_projector_r_max is required when a RELION projector is provided")
-        if relion_projector_half is not None:
-            relion_projector_half = _select_projector_half_for_class(
-                relion_projector_half,
-                0,
-                1,
+            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        relion_projector_half = _select_projector_half_for_class(
+            relion_projector_half,
+            0,
+            1,
+        )
+        relion_projector_half = jnp.asarray(relion_projector_half)
+        if relion_projector_half.ndim != 3:
+            raise ValueError(
+                "local RELION projector path expected Projector::data shape (z, y, x_half), "
+                f"got {relion_projector_half.shape}",
             )
-            relion_projector_half = jnp.asarray(relion_projector_half)
-            if relion_projector_half.ndim != 3:
-                raise ValueError(
-                    "local RELION projector path expected Projector::data shape (z, y, x_half), "
-                    f"got {relion_projector_half.shape}",
-                )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
@@ -1281,8 +1269,6 @@ def _project_packed_noise_rows(
             )
         if projection_indices is not None:
             projector_kwargs["pixel_indices"] = projection_indices
-        if relion_projector_texture is not None:
-            projector_kwargs["persistent_texture"] = relion_projector_texture
         proj_relion_flat, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             packed_flat_rotations,
@@ -2142,7 +2128,6 @@ def run_local_em_exact(
     projection_relion_texture_interp: bool = False,
     projection_force_jax: bool = False,
     relion_projector_half=None,
-    relion_projector_texture=None,
     relion_projector_r_max: int | None = None,
     do_gridding_correction: bool = False,
     square_window: bool = False,
@@ -2343,11 +2328,7 @@ def run_local_em_exact(
     if return_half_volume_accumulators and mstep_relion_x_half:
         raise ValueError("return_half_volume_accumulators only supports native half-volume accumulators")
 
-    if relion_projector_half is not None and relion_projector_texture is not None:
-        raise ValueError("pass a RELION projector slab or persistent texture, not both")
-    use_relion_projector = (
-        relion_projector_half is not None or relion_projector_texture is not None
-    )
+    use_relion_projector = relion_projector_half is not None
     if projection_padding_factor > 1 and not use_relion_projector:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
@@ -2418,13 +2399,7 @@ def run_local_em_exact(
     projection_kwargs = window_spec.projection_kwargs()
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
     projection_kwargs["force_jax"] = bool(projection_force_jax)
-    projection_mode = _local_projection_mode(
-        window_spec,
-        projection_kwargs,
-        relion_projector_half
-        if relion_projector_half is not None
-        else relion_projector_texture,
-    )
+    projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
 
     half_weights = make_scoring_half_image_weights(
         image_shape,
@@ -2470,7 +2445,7 @@ def run_local_em_exact(
         or return_noise_split
     )
     can_defer_local_noise_projection = (
-        not use_relion_projector
+        relion_projector_half is None
         and not bool(projection_kwargs.get("relion_texture_interp", False))
         and not bool(projection_kwargs.get("force_jax", False))
         and _indexed_projection_available()
@@ -2597,7 +2572,7 @@ def run_local_em_exact(
     # buckets at 256 OOMed at both 2x and 1.25x in c180 probes. Keep the default
     # conservative and allow explicit experiments through the x-half env knob.
     allow_microbatch_auto_boost = True
-    xhalf_bpref_mstep = bool(use_relion_projector and mstep_relion_x_half and not score_only)
+    xhalf_bpref_mstep = bool(relion_projector_half is not None and mstep_relion_x_half and not score_only)
     xhalf_auto_microbatch_boost = _exact_local_xhalf_auto_microbatch_boost() if xhalf_bpref_mstep else None
     xhalf_full_bpref_mstep = bool(
         xhalf_bpref_mstep and int(recon_volume_shape[0]) >= (2 * int(image_shape[0]) + 1)
@@ -2927,7 +2902,6 @@ def run_local_em_exact(
     mean_for_proj_big_jit = mean_for_proj
     projection_half_volume_big_jit = False
     relion_projector_half_big_jit = jnp.zeros((1, 1, 1), dtype=jnp.complex64)
-    relion_projector_texture_handle_big_jit = jnp.asarray(0, dtype=jnp.uint64)
     relion_projector_r_max_big_jit = 0
     big_jit_projection_pixel_indices_arg = jnp.zeros((1,), dtype=jnp.int32)
     big_jit_projection_score_take_arg = jnp.zeros((1,), dtype=jnp.int32)
@@ -2946,33 +2920,18 @@ def run_local_em_exact(
     relion_projection_cache_id_map_rows = 0
     if use_relion_projector:
         if relion_projector_r_max is None:
-            raise ValueError("relion_projector_r_max is required when a RELION projector is provided")
-        if relion_projector_texture is None:
-            relion_projector_half = _select_projector_half_for_class(
-                relion_projector_half,
-                0,
-                1,
-            )
-            relion_projector_half = jnp.asarray(relion_projector_half)
-            relion_projector_half_big_jit = relion_projector_half
-            if relion_projector_half_big_jit.ndim != 3:
-                raise ValueError(
-                    "local RELION projector big-JIT path expected Projector::data shape (z, y, x_half), "
-                    f"got {relion_projector_half_big_jit.shape}",
-                )
-        else:
-            if (
-                int(relion_projector_texture.padding_factor)
-                != int(projection_padding_factor)
-                or int(relion_projector_texture.projector_max_r)
-                != int(relion_projector_r_max)
-            ):
-                raise ValueError(
-                    "persistent RELION projector texture geometry does not match "
-                    "the exact-local projection request"
-                )
-            relion_projector_texture_handle_big_jit = (
-                relion_projector_texture.handle_array
+            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+        relion_projector_half = _select_projector_half_for_class(
+            relion_projector_half,
+            0,
+            1,
+        )
+        relion_projector_half = jnp.asarray(relion_projector_half)
+        relion_projector_half_big_jit = relion_projector_half
+        if relion_projector_half_big_jit.ndim != 3:
+            raise ValueError(
+                "local RELION projector big-JIT path expected Projector::data shape (z, y, x_half), "
+                f"got {relion_projector_half_big_jit.shape}",
             )
         relion_projector_r_max_big_jit = int(relion_projector_r_max)
         if compact_relion_projector_big_jit:
@@ -3074,7 +3033,6 @@ def run_local_em_exact(
             relion_projection_cache = _build_exact_local_relion_projection_cache_for_buckets(
                 bucket_specs[group_start:group_stop],
                 relion_projector_half_big_jit,
-                relion_projector_texture=relion_projector_texture,
                 image_shape=image_shape,
                 n_projection_pixels=int(window_spec.n_projection),
                 relion_projector_r_max=int(relion_projector_r_max_big_jit),
@@ -3457,11 +3415,6 @@ def run_local_em_exact(
                 normalization_log_evidence_arg,
                 reconstruction_probability_threshold_arg,
                 config,
-                relion_projector_texture_handle=(
-                    relion_projector_texture_handle_big_jit
-                    if relion_projector_texture is not None
-                    else None
-                ),
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,
@@ -3504,20 +3457,12 @@ def run_local_em_exact(
                 has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
                 score_only=score_only,
                 use_relion_projector=bool(use_relion_projector),
-                use_persistent_relion_texture=bool(
-                    relion_projector_texture is not None
-                ),
                 relion_projector_r_max=relion_projector_r_max_big_jit,
                 projection_padding_factor=int(projection_padding_factor),
                 return_debug_arrays=return_big_jit_debug_arrays,
                 return_debug_scores=return_big_jit_debug_scores,
                 return_debug_operands=return_big_jit_debug_operands,
             )
-            if relion_projector_texture is not None:
-                # The compiled path borrows only the dynamic owner token.  Do
-                # not let the outer cleanup destroy its CUDA array until every
-                # output that could depend on that token has completed.
-                _block_until_ready(*big_jit_result)
             debug_scores = None
             debug_probs = None
             debug_shifted_score_split = None
@@ -4021,7 +3966,7 @@ def run_local_em_exact(
                 shifted_noise_split_unpadded = shifted_noise_split[:unpadded_batch_size]
                 packed_rotation_count = int(packed_rotations_np.shape[1])
                 n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
-                noise_projection_pixels = int(n_half) if use_relion_projector else int(n_recon_pixels)
+                noise_projection_pixels = int(n_half) if relion_projector_half is not None else int(n_recon_pixels)
                 chunk_rows = min(
                     packed_rotation_count,
                     _packed_noise_projection_chunk_rows(noise_projection_pixels, batch_size=unpadded_batch_size),
@@ -4062,7 +4007,6 @@ def run_local_em_exact(
                         precision_policy=precision_policy,
                         reconstruction_pack_mask_jnp=reconstruction_pack_mask_jnp[:, chunk_start:chunk_stop],
                         relion_projector_half=relion_projector_half,
-                        relion_projector_texture=relion_projector_texture,
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                     )
@@ -4280,7 +4224,6 @@ def run_local_em_exact(
             half_weights=half_weights,
             precision_policy=precision_policy,
             relion_projector_half=relion_projector_half,
-            relion_projector_texture=relion_projector_texture,
             relion_projector_r_max=relion_projector_r_max,
             projection_padding_factor=projection_padding_factor,
             materialize_recon_projection=need_local_recon_projection_for_bucket,
@@ -5217,7 +5160,7 @@ def run_local_em_exact(
             if proj_for_noise is None:
                 packed_rotation_count = int(packed_rotations_np.shape[1])
                 n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
-                noise_projection_pixels = int(n_half) if use_relion_projector else int(n_recon_pixels)
+                noise_projection_pixels = int(n_half) if relion_projector_half is not None else int(n_recon_pixels)
                 chunk_rows = min(
                     packed_rotation_count,
                     _packed_noise_projection_chunk_rows(noise_projection_pixels, batch_size=batch_size),
@@ -5249,7 +5192,6 @@ def run_local_em_exact(
                         precision_policy=precision_policy,
                         reconstruction_pack_mask_jnp=reconstruction_pack_mask_jnp[:, chunk_start:chunk_stop],
                         relion_projector_half=relion_projector_half,
-                        relion_projector_texture=relion_projector_texture,
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                     )
