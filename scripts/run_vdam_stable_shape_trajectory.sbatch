@@ -29,6 +29,7 @@ CUDA_SOURCE=$(realpath "${VDAM_STABLE_TRAJECTORY_CUDA}")
 RELION_BIND_SOURCE=$(realpath "${VDAM_STABLE_TRAJECTORY_RELION_BIND}")
 FIXTURE=${VDAM_STABLE_TRAJECTORY_FIXTURE:-/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_full_expansion_v3_984637b7d_87274be_20260826/vdam-gf46/repeat-01/vdam-gf46/data}
 LAST_ITERATION=${VDAM_STABLE_TRAJECTORY_LAST_ITERATION:-50}
+STABLE_FOURIER_WINDOW_SHAPES=${VDAM_STABLE_TRAJECTORY_STABLE_FOURIER_WINDOW_SHAPES:-1}
 STABLE_FLAT_ROW_CAPACITY=${VDAM_STABLE_TRAJECTORY_STABLE_FLAT_ROW_CAPACITY:-0}
 ACCEPTANCE=${REPO_ROOT}/scripts/vdam_coarse_combined_true200_acceptance.json
 ANALYZER=${REPO_ROOT}/scripts/analyze_vdam_stable_shape_trajectory.py
@@ -68,6 +69,14 @@ test -s "${ANALYZER}"
 test -s "${GPU_SELECTION_HELPER}"
 test "${LAST_ITERATION}" -ge 2
 test "${LAST_ITERATION}" -le 200
+case "${STABLE_FOURIER_WINDOW_SHAPES}" in
+  0|1) ;;
+  *)
+    printf 'VDAM_STABLE_TRAJECTORY_STABLE_FOURIER_WINDOW_SHAPES must be 0 or 1, got %s\n' \
+      "${STABLE_FOURIER_WINDOW_SHAPES}" >&2
+    exit 2
+    ;;
+esac
 case "${STABLE_FLAT_ROW_CAPACITY}" in
   0|1) ;;
   *)
@@ -76,6 +85,10 @@ case "${STABLE_FLAT_ROW_CAPACITY}" in
     exit 2
     ;;
 esac
+if [[ "${STABLE_FOURIER_WINDOW_SHAPES}" == 0 && "${STABLE_FLAT_ROW_CAPACITY}" == 0 ]]; then
+  printf 'candidate must enable at least one stable ABI\n' >&2
+  exit 2
+fi
 
 mkdir -p "${ROOT}/provenance" "${ROOT}/runtime/cuda" "${RELION_BIND_DIR}" \
   "${ROOT}/runs" "${ROOT}/analysis"
@@ -95,6 +108,8 @@ sha256sum "${CUDA_BINARY}" "${RELION_BIND_BINARY}" "${ACCEPTANCE}" "${ANALYZER}"
 printf '%s\n' "${SLURM_JOB_ID}" > "${ROOT}/provenance/slurm_job_id.txt"
 printf '%s\n' "${SLURMD_NODENAME:-$(hostname -s)}" > "${ROOT}/provenance/node.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${ROOT}/provenance/selected_gpu_uuid.txt"
+printf '%s\n' "${STABLE_FOURIER_WINDOW_SHAPES}" > \
+  "${ROOT}/provenance/stable_fourier_window_shapes.txt"
 printf '%s\n' "${STABLE_FLAT_ROW_CAPACITY}" > \
   "${ROOT}/provenance/stable_flat_row_capacity.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${ROOT}/provenance/nvidia_smi_q.txt"
@@ -168,8 +183,10 @@ for arm in "${ARM_ORDER[@]}"; do
   stable=0
   stable_flat=0
   if [[ "${arm}" == stable_on_* ]]; then
-    command+=(--stable-fourier-window-shapes)
-    stable=1
+    stable=${STABLE_FOURIER_WINDOW_SHAPES}
+    if [[ "${stable}" == 1 ]]; then
+      command+=(--stable-fourier-window-shapes)
+    fi
     if [[ "${STABLE_FLAT_ROW_CAPACITY}" == 1 ]]; then
       stable_flat=1
     fi
@@ -256,6 +273,9 @@ analyzer_args=(
   --output "${ROOT}/analysis/report.json"
   --markdown-output "${ROOT}/analysis/report.md"
 )
+if [[ "${STABLE_FOURIER_WINDOW_SHAPES}" == 0 ]]; then
+  analyzer_args+=(--no-stable-fourier-window-shapes)
+fi
 if [[ "${STABLE_FLAT_ROW_CAPACITY}" == 1 ]]; then
   analyzer_args+=(--stable-flat-row-capacity)
 fi

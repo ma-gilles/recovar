@@ -28,7 +28,7 @@ from scripts.analyze_vdam_coarse_combined_true200 import (
 )
 from scripts.summarize_em_completion_bench import _load_relion_volume, _read_gpu_monitor
 
-SCHEMA = "recovar.vdam_stable_shape_trajectory.v2"
+SCHEMA = "recovar.vdam_stable_shape_trajectory.v3"
 ARM_ORDER = ("stable_off_1", "stable_on_1", "stable_on_2", "stable_off_2")
 CONTROL_ARMS = ("stable_off_1", "stable_off_2")
 CANDIDATE_ARMS = ("stable_on_1", "stable_on_2")
@@ -147,18 +147,23 @@ def _native_options(
     root: Path,
     arm: str,
     *,
-    enabled: bool,
+    candidate_enabled: bool,
+    stable_fourier_window_shapes: bool,
     stable_flat_row_capacity: bool,
 ) -> dict[str, Any]:
     path = root / "runs" / arm / "output" / "run_native_options.json"
     options = _load_json(path, f"{arm} native options")
+    expected_stable_shapes = bool(
+        candidate_enabled and stable_fourier_window_shapes
+    )
     _require(
-        bool(options.get("stable_fourier_window_shapes")) is enabled,
+        bool(options.get("stable_fourier_window_shapes"))
+        is expected_stable_shapes,
         f"{arm} stable-shape option differs",
     )
     command_path = root / "runs" / arm / "command.json"
     command = _load_json(command_path, f"{arm} command")
-    expected_flat_capacity = bool(enabled and stable_flat_row_capacity)
+    expected_flat_capacity = bool(candidate_enabled and stable_flat_row_capacity)
     _require(
         bool(command.get("stable_flat_row_capacity", False)) is expected_flat_capacity,
         f"{arm} stable-flat command contract differs",
@@ -168,7 +173,7 @@ def _native_options(
         "sha256": _sha256(path),
         "command_path": str(command_path.resolve()),
         "command_sha256": _sha256(command_path),
-        "stable_shapes": enabled,
+        "stable_shapes": expected_stable_shapes,
         "stable_flat_row_capacity": expected_flat_capacity,
     }
 
@@ -285,6 +290,7 @@ def analyze(
     acceptance_path: Path,
     *,
     last_iteration: int,
+    stable_fourier_window_shapes: bool,
     stable_flat_row_capacity: bool,
     numerical_tolerance: float,
     minimum_speedup_percent: float,
@@ -303,12 +309,17 @@ def analyze(
         math.isfinite(numerical_tolerance) and numerical_tolerance > 0.0,
         "numerical tolerance must be finite and positive",
     )
+    _require(
+        stable_fourier_window_shapes or stable_flat_row_capacity,
+        "trajectory candidate must enable at least one stable ABI",
+    )
 
     native_options = {
         arm: _native_options(
             root,
             arm,
-            enabled=arm in CANDIDATE_ARMS,
+            candidate_enabled=arm in CANDIDATE_ARMS,
+            stable_fourier_window_shapes=stable_fourier_window_shapes,
             stable_flat_row_capacity=stable_flat_row_capacity,
         )
         for arm in ARM_ORDER
@@ -359,16 +370,23 @@ def analyze(
                 maps[ARM_ORDER[0]].shape[:2],
                 logical_size,
                 maps[ARM_ORDER[0]].shape[0] * (maps[ARM_ORDER[0]].shape[0] // 2 + 1),
-                enabled=True,
+                enabled=stable_fourier_window_shapes,
             )
             physical_sizes.append(int(plan.physical_current_size))
             for arm in ARM_ORDER:
-                enabled = arm in CANDIDATE_ARMS
+                candidate_enabled = arm in CANDIDATE_ARMS
+                stable_shapes_enabled = bool(
+                    candidate_enabled and stable_fourier_window_shapes
+                )
                 observed = bool(metas[arm].get("effective_stable_fourier_window_shapes"))
-                if observed is not enabled:
+                if observed is not stable_shapes_enabled:
                     exact_failures.append({"iteration": iteration, "feature": "stable_shape_execution", "arm": arm})
                 profile = metas[arm].get("halfset_0_profile_summary", {})
-                expected_windowed = plan.physical_score_pixels if enabled else plan.logical_score_pixels
+                expected_windowed = (
+                    plan.physical_score_pixels
+                    if stable_shapes_enabled
+                    else plan.logical_score_pixels
+                )
                 if int(profile.get("n_windowed", -1)) != int(expected_windowed):
                     exact_failures.append(
                         {
@@ -382,7 +400,7 @@ def analyze(
                 if stable_flat_row_capacity:
                     observation = validate_stable_flat_capacity_execution(
                         metas[arm],
-                        expected=enabled,
+                        expected=candidate_enabled,
                         arm=arm,
                         iteration=iteration,
                     )
@@ -511,24 +529,36 @@ def analyze(
         "schema": SCHEMA,
         "classification": (
             "focused_stable_fourier_and_flat_row_abi_multi_size_abba_gate"
-            if stable_flat_row_capacity
-            else "focused_stable_shape_multi_size_abba_gate"
+            if stable_fourier_window_shapes and stable_flat_row_capacity
+            else (
+                "focused_stable_fourier_abi_multi_size_abba_gate"
+                if stable_fourier_window_shapes
+                else "focused_stable_flat_row_abi_multi_size_abba_gate"
+            )
         ),
         "trajectory_mode": (
             "stable_fourier_and_flat_row_abi"
-            if stable_flat_row_capacity
-            else "stable_fourier_abi_only"
+            if stable_fourier_window_shapes and stable_flat_row_capacity
+            else (
+                "stable_fourier_abi_only"
+                if stable_fourier_window_shapes
+                else "stable_flat_row_abi_only"
+            )
         ),
         "arm_order": list(ARM_ORDER),
         "fresh_process_and_jax_cache_per_arm_required": True,
-        "only_configuration_delta": (
-            [
-                "--stable-fourier-window-shapes",
-                "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=1",
-            ]
-            if stable_flat_row_capacity
-            else ["--stable-fourier-window-shapes"]
-        ),
+        "only_configuration_delta": [
+            *(
+                ["--stable-fourier-window-shapes"]
+                if stable_fourier_window_shapes
+                else []
+            ),
+            *(
+                ["RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=1"]
+                if stable_flat_row_capacity
+                else []
+            ),
+        ],
         "acceptance_config": str(acceptance_path.resolve()),
         "acceptance_config_sha256": _sha256(acceptance_path),
         "last_iteration": int(last_iteration),
@@ -554,7 +584,11 @@ def _markdown(report: dict[str, Any]) -> str:
     title = (
         "Stable Fourier + flat-row ABI trajectory gate"
         if report["trajectory_mode"] == "stable_fourier_and_flat_row_abi"
-        else "Stable Fourier-shape trajectory gate"
+        else (
+            "Stable Fourier-shape trajectory gate"
+            if report["trajectory_mode"] == "stable_fourier_abi_only"
+            else "Stable flat-row ABI trajectory gate"
+        )
     )
     return "\n".join(
         (
@@ -582,6 +616,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--acceptance", required=True, type=Path)
     parser.add_argument("--last-iteration", type=int, default=50)
     parser.add_argument(
+        "--stable-fourier-window-shapes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="require candidate arms to use stable Fourier-window shapes",
+    )
+    parser.add_argument(
         "--stable-flat-row-capacity",
         action="store_true",
         help="require candidate arms to use the fixed B * R packed-row ABI",
@@ -601,6 +641,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.root.resolve(),
             args.acceptance.resolve(),
             last_iteration=args.last_iteration,
+            stable_fourier_window_shapes=args.stable_fourier_window_shapes,
             stable_flat_row_capacity=args.stable_flat_row_capacity,
             numerical_tolerance=args.numerical_tolerance,
             minimum_speedup_percent=args.minimum_speedup_percent,

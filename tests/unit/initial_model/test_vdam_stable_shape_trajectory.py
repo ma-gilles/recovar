@@ -8,11 +8,32 @@ import pytest
 from scripts.analyze_vdam_stable_shape_trajectory import (
     ARM_ORDER,
     GateSetupError,
+    _parse_args,
     normalized_l2,
     summarize_pair_distances,
     summarize_runtime_panel,
     validate_stable_flat_capacity_execution,
 )
+
+
+def test_analyzer_cli_can_isolate_flat_row_abi_from_fourier_shapes():
+    args = _parse_args(
+        [
+            "--root",
+            "/tmp/root",
+            "--acceptance",
+            "/tmp/acceptance.json",
+            "--output",
+            "/tmp/report.json",
+            "--markdown-output",
+            "/tmp/report.md",
+            "--no-stable-fourier-window-shapes",
+            "--stable-flat-row-capacity",
+        ]
+    )
+
+    assert args.stable_fourier_window_shapes is False
+    assert args.stable_flat_row_capacity is True
 
 
 def test_normalized_l2_is_symmetric_and_scale_normalized():
