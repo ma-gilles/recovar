@@ -1989,6 +1989,19 @@ def _initial_state_from_particles(
     opts: NativeInitialModelOptions,
     rotations: np.ndarray,
 ) -> tuple[InitialModelState, np.ndarray]:
+    profile_initial_state = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+    initial_state_started = time.perf_counter()
+    stage_started = initial_state_started
+    initial_state_profile: dict[str, float] = {}
+
+    def _record_initial_state_stage(name: str) -> None:
+        nonlocal stage_started
+        if not profile_initial_state:
+            return
+        now = time.perf_counter()
+        initial_state_profile[f"{name}_time_s"] = float(now - stage_started)
+        stage_started = now
+
     ori_size = int(dataset.grid_size)
     pixel_size = float(dataset.voxel_size)
     order = _experiment_read_order(main_star)
@@ -1996,6 +2009,7 @@ def _initial_state_from_particles(
     nr_optics_groups = int(np.unique(optics_group_by_particle).size)
     if nr_optics_groups != 1:
         raise NotImplementedError("native InitialModel currently supports one optics group")
+    _record_initial_state_stage("setup")
 
     Mavg, sigma2_per_group = compute_avg_unaligned_and_sigma2(
         _image_sigma2_iter(
@@ -2012,12 +2026,15 @@ def _initial_state_from_particles(
         nr_optics_groups=nr_optics_groups,
         minimum_nr_particles=int(opts.sigma2_min_particles),
     )
+    _record_initial_state_stage("average_unaligned")
 
     bootstrap_count = min(len(order), int(opts.bootstrap_min_particles))
     bootstrap_order = order[:bootstrap_count]
     images = _load_raw_images(dataset, bootstrap_order, batch_size=max(1, int(opts.image_batch_size)))
+    _record_initial_state_stage("raw_images")
     sorted_star = main_star.iloc[bootstrap_order]
     voltage, Cs, Q0, pixel_size = _single_optics_scalars(sorted_star, optics_star, dataset)
+    _record_initial_state_stage("optics_metadata")
 
     iref = compute_bootstrap_iref_via_cpp(
         images=images,
@@ -2040,6 +2057,7 @@ def _initial_state_from_particles(
         current_size=-1,
         minimum_nr_particles=int(opts.bootstrap_min_particles),
     )
+    _record_initial_state_stage("bootstrap")
 
     state = initialise_denovo_state(
         ori_size=ori_size,
@@ -2057,6 +2075,7 @@ def _initial_state_from_particles(
     )
     state.sigma2_offset = float(init_sigma_offset_angstrom) ** 2
     state.Mavg = Mavg
+    _record_initial_state_stage("state_init")
     # RECOVAR_INITIAL_IREF_OVERRIDE lets a parity caller swap in RELION's
     # iter000 ref directly when isolating E/M-step behavior from bootstrap.
     override_path = os.environ.get("RECOVAR_INITIAL_IREF_OVERRIDE")
@@ -2088,11 +2107,19 @@ def _initial_state_from_particles(
             do_init_blobs=True,
             is_helical_segment=False,
         )
+    _record_initial_state_stage("initial_reference")
     state = initialise_data_vs_prior_from_references(
         state,
         nr_particles=len(main_star),
         fix_tau=False,
     )
+    _record_initial_state_stage("data_vs_prior")
+    if profile_initial_state:
+        initial_state_profile["total_time_s"] = float(time.perf_counter() - initial_state_started)
+        print(
+            f"VDAM initial state profile: {json.dumps(initial_state_profile, sort_keys=True)}",
+            flush=True,
+        )
     return state, optics_group_by_particle
 
 

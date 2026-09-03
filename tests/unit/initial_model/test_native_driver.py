@@ -1167,8 +1167,9 @@ def test_random_perturbation_sequence_matches_relion_initialmodel_fixture():
     assert driver._random_perturbation_for_iteration(seed_zero, 2) == 0.34533798694610596
 
 
-def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
+def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch, capsys):
     monkeypatch.delenv("RECOVAR_INITIAL_IREF_OVERRIDE", raising=False)
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "1")
     raw_iref = np.full((1, 8, 8, 8), 2.0, dtype=np.float64)
     post_iref = np.full((1, 8, 8, 8), 3.0, dtype=np.float64)
     calls = []
@@ -1244,6 +1245,24 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch):
             "is_helical_segment": False,
         }
     ]
+    profile_line = capsys.readouterr().out.strip()
+    profile = json.loads(profile_line.split(": ", 1)[1])
+    assert profile_line.startswith("VDAM initial state profile: ")
+    assert set(profile) == {
+        "average_unaligned_time_s",
+        "bootstrap_time_s",
+        "data_vs_prior_time_s",
+        "initial_reference_time_s",
+        "optics_metadata_time_s",
+        "raw_images_time_s",
+        "setup_time_s",
+        "state_init_time_s",
+        "total_time_s",
+    }
+    assert all(value >= 0.0 for value in profile.values())
+    assert profile["total_time_s"] >= sum(
+        value for name, value in profile.items() if name != "total_time_s"
+    )
 
 
 def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
