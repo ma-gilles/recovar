@@ -54,12 +54,18 @@ from .dense_adapter import (
     run_dense_initial_model_estep,
 )
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
-from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
+from .iteration_loop import (
+    relion_solvent_flatten_state,
+    relion_solvent_mask,
+    restore_subset_order_for_continuation,
+    run_vdam_iterations,
+)
 from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
     DEFAULT_SIGMA2_FUDGE,
     GuiInitialModelDefaults,
     default_subset_sizes_for_3d_initial_model,
+    phase_lengths_from_effective_fractions,
 )
 from .state import InitialModelState
 from .subset import RndUnifFn
@@ -289,6 +295,11 @@ class NativeContinuationCheckpoint:
     iteration: int
     state: InitialModelState
     sampling_state: NativeSamplingState
+    grad_ini_subset_size: int
+    grad_fin_subset_size: int
+    grad_ini_frac: float
+    grad_fin_frac: float
+    grad_suspended_local_searches_iter: int
 
 
 def _relion_star_list_value(text: str, label: str, cast=str):
@@ -405,6 +416,51 @@ def _load_native_vdam_continuation(
         raise ValueError("checkpoint grad_em_iters differs from requested schedule")
     if _relion_star_list_value(optimiser_text, "rlnParticleDiameter", float) != float(opts.particle_diameter):
         raise ValueError("checkpoint particle diameter differs from requested value")
+    unsupported_subset_modes = {
+        "rlnDoFastSubsetOptimisation": _relion_star_list_value(
+            optimiser_text,
+            "rlnDoFastSubsetOptimisation",
+            int,
+        ),
+        "rlnGradSubsetOrder": _relion_star_list_value(
+            optimiser_text,
+            "rlnGradSubsetOrder",
+            int,
+        ),
+    }
+    enabled_subset_modes = [
+        name for name, value in unsupported_subset_modes.items() if int(value) != 0
+    ]
+    if enabled_subset_modes:
+        raise NotImplementedError(
+            "diagnostic native VDAM continuation does not support "
+            + ", ".join(enabled_subset_modes)
+        )
+    grad_suspended_local_searches_iter = _relion_star_list_value(
+        optimiser_text,
+        "rlnGradSuspendLocalSamplingIter",
+        int,
+    )
+    grad_ini_subset_size = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdInitialSubsetSize",
+        int,
+    )
+    grad_fin_subset_size = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdFinalSubsetSize",
+        int,
+    )
+    grad_ini_frac = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdInitialIterationsFraction",
+        float,
+    )
+    grad_fin_frac = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdFinalIterationsFraction",
+        float,
+    )
 
     model = starfile.read(model_path, always_dict=True)
     general = model.get("model_general")
@@ -630,6 +686,11 @@ def _load_native_vdam_continuation(
         iteration=iteration,
         state=state,
         sampling_state=sampling_state,
+        grad_ini_subset_size=grad_ini_subset_size,
+        grad_fin_subset_size=grad_fin_subset_size,
+        grad_ini_frac=grad_ini_frac,
+        grad_fin_frac=grad_fin_frac,
+        grad_suspended_local_searches_iter=grad_suspended_local_searches_iter,
     )
 
 
@@ -648,6 +709,20 @@ def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
         return float(cache[call_idx])
 
     return _rnd
+
+
+def _validate_continuation_order_replay(checkpoint: NativeContinuationCheckpoint) -> None:
+    """Fail closed when native subset-order history is not reconstructible."""
+
+    if (
+        int(checkpoint.sampling_state.orientational_prior_mode)
+        != RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+        or int(checkpoint.grad_suspended_local_searches_iter) != -1
+    ):
+        raise NotImplementedError(
+            "diagnostic native VDAM continuation can reconstruct particle "
+            "order only before the first local-search transition"
+        )
 
 
 def _output_dir_from_prefix(outputname: str) -> Path:
@@ -2645,6 +2720,12 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         nr_classes=int(opts.nr_classes),
     )
     if continuation is None:
+        grad_ini_subset_size, grad_fin_subset_size = (
+            default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
+        )
+        grad_ini_frac = float(opts.grad_ini_frac)
+        grad_fin_frac = float(opts.grad_fin_frac)
+        continuation_phase_lengths = None
         sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
         sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
         state, optics_group_by_particle = _initial_state_from_particles(
@@ -2656,13 +2737,37 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         )
         sampling_state.last_current_resolution = float(state.current_resolution)
     else:
-        state = continuation.state
-        sampling_state = continuation.sampling_state
+        _validate_continuation_order_replay(continuation)
+        grad_ini_subset_size = int(continuation.grad_ini_subset_size)
+        grad_fin_subset_size = int(continuation.grad_fin_subset_size)
+        grad_ini_frac = float(continuation.grad_ini_frac)
+        grad_fin_frac = float(continuation.grad_fin_frac)
+        continuation_phase_lengths = phase_lengths_from_effective_fractions(
+            int(continuation.state.nr_iter),
+            grad_ini_frac,
+            grad_fin_frac,
+        )
         optics_group_by_particle = _optics_group_indices(main_star)
         if int(np.unique(optics_group_by_particle).size) != 1:
             raise NotImplementedError(
                 "diagnostic native VDAM continuation currently supports one optics group"
             )
+        state = restore_subset_order_for_continuation(
+            continuation.state,
+            through_iteration=int(continuation.iteration),
+            nr_particles=int(dataset.n_images),
+            optics_group_by_particle=optics_group_by_particle,
+            grad_ini_subset_size=grad_ini_subset_size,
+            grad_fin_subset_size=grad_fin_subset_size,
+            random_seed=int(opts.random_seed),
+            rnd_unif_factory=_relion_rnd_unif_factory,
+            particle_order=particle_order,
+            grad_ini_frac=grad_ini_frac,
+            grad_fin_frac=grad_fin_frac,
+            grad_em_iters=int(opts.grad_em_iters),
+            phase_lengths=continuation_phase_lengths,
+        )
+        sampling_state = continuation.sampling_state
     _record_driver_stage("state_setup")
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
     expectation_step = _native_expectation_step(
@@ -2673,7 +2778,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_state,
         optics_state,
     )
-    grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
     _record_driver_stage("expectation_setup")
 
     if opts.write_iter_artifacts:
@@ -2783,8 +2887,9 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         iter_artifact_sink=artifact_sink,
         post_mstep_update=post_mstep_update,
         particle_order=particle_order,
-        grad_ini_frac=float(opts.grad_ini_frac),
-        grad_fin_frac=float(opts.grad_fin_frac),
+        grad_ini_frac=grad_ini_frac,
+        grad_fin_frac=grad_fin_frac,
+        phase_lengths=continuation_phase_lengths,
         grad_stepsize=float(opts.stepsize),
         mu=float(opts.mu),
         projector_padding_factor=int(opts.padding_factor),

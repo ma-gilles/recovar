@@ -17,6 +17,7 @@ from recovar.em.initial_model.iteration_loop import (
     refresh_tau2_from_projector_power,
     relion_solvent_flatten_state,
     relion_solvent_mask,
+    restore_subset_order_for_continuation,
     run_vdam_iterations,
     select_subset_for_iter,
     update_current_resolution_from_data_vs_prior,
@@ -1001,6 +1002,117 @@ class TestRunVdamIterations:
         np.testing.assert_array_equal(second.sorted_particle_part_ids, expected_parts)
         np.testing.assert_array_equal(second.subset_particle_ids, expected_rows[:4])
         np.testing.assert_array_equal(second.subset_halfset_ids, (expected_parts[:4] % 2).astype(np.int8))
+
+    def test_continuation_replays_complete_relion_sorted_idx_history(self, bind):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=10,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.iter = 5
+        state.subset_size = 4
+        particle_order = np.array([5, 0, 3, 4, 1, 2], dtype=np.int64)
+        optics = np.array([0, 1, 0, 1, 0, 1], dtype=np.int64)
+
+        restored = restore_subset_order_for_continuation(
+            state,
+            through_iteration=5,
+            nr_particles=6,
+            optics_group_by_particle=optics,
+            grad_ini_subset_size=2,
+            grad_fin_subset_size=5,
+            random_seed=7,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            particle_order=particle_order,
+            grad_ini_frac=0.2,
+            grad_fin_frac=0.2,
+            grad_em_iters=0,
+        )
+
+        expected_rows = particle_order.copy()
+        expected_parts = np.arange(6, dtype=np.int64)
+        subset_sizes = (2, 2, 3, 3, 4)
+        for iteration, subset_size in enumerate(subset_sizes, start=1):
+            permutation = np.asarray(
+                bind.vdam_randomise_particles_order(6, 7 + iteration),
+                dtype=np.int64,
+            )
+            expected_rows = expected_rows[permutation]
+            expected_parts = expected_parts[permutation]
+            prefix_order = np.argsort(
+                optics[expected_rows[:subset_size]],
+                kind="stable",
+            )
+            expected_rows[:subset_size] = expected_rows[:subset_size][prefix_order]
+            expected_parts[:subset_size] = expected_parts[:subset_size][prefix_order]
+
+        np.testing.assert_array_equal(restored.sorted_particle_ids, expected_rows)
+        np.testing.assert_array_equal(restored.sorted_particle_part_ids, expected_parts)
+        np.testing.assert_array_equal(restored.subset_particle_ids, expected_rows[:4])
+        np.testing.assert_array_equal(
+            restored.subset_halfset_ids,
+            (expected_parts[:4] % 2).astype(np.int8),
+        )
+
+        restored.subset_size = 4
+        resumed_next = select_subset_for_iter(
+            restored,
+            iter=6,
+            nr_particles=6,
+            optics_group_by_particle=optics,
+            rnd_unif_factory=numpy_rnd_unif_factory,
+            random_seed=7,
+            do_grad=True,
+            particle_order=particle_order,
+        )
+        next_permutation = np.asarray(
+            bind.vdam_randomise_particles_order(6, 13),
+            dtype=np.int64,
+        )
+        expected_rows = expected_rows[next_permutation]
+        expected_parts = expected_parts[next_permutation]
+        next_prefix_order = np.argsort(optics[expected_rows[:4]], kind="stable")
+        expected_rows[:4] = expected_rows[:4][next_prefix_order]
+        expected_parts[:4] = expected_parts[:4][next_prefix_order]
+        np.testing.assert_array_equal(resumed_next.sorted_particle_ids, expected_rows)
+        np.testing.assert_array_equal(
+            resumed_next.sorted_particle_part_ids,
+            expected_parts,
+        )
+        np.testing.assert_array_equal(
+            resumed_next.subset_particle_ids,
+            expected_rows[:4],
+        )
+        assert state.sorted_particle_ids is None
+        assert state.sorted_particle_part_ids is None
+
+    def test_continuation_order_replay_fails_closed_after_convergence(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=10,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.iter = 3
+        state.subset_size = 4
+        state.has_converged = True
+
+        with pytest.raises(ValueError, match="unrecorded convergence boundary"):
+            restore_subset_order_for_continuation(
+                state,
+                through_iteration=3,
+                nr_particles=6,
+                optics_group_by_particle=np.zeros(6, dtype=np.int64),
+                grad_ini_subset_size=4,
+                grad_fin_subset_size=5,
+                random_seed=7,
+                rnd_unif_factory=numpy_rnd_unif_factory,
+            )
 
     def test_5_iter_smoke(self, bind):
         ori = 16

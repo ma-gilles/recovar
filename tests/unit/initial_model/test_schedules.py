@@ -28,7 +28,11 @@ from recovar.em.initial_model import (
     default_subset_sizes_for_3d_initial_model,
     default_tau2_fudge_for_3d_initial_model,
 )
-from recovar.em.initial_model.schedules import _relion_round, _step_sigmoid_value
+from recovar.em.initial_model.schedules import (
+    _relion_round,
+    _step_sigmoid_value,
+    phase_lengths_from_effective_fractions,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -59,6 +63,22 @@ class TestPhaseLengths:
         assert p.grad_fin_iter == int(1100 * (0.5 / 1.1))
         # nr_iter - ini - fin
         assert p.grad_inbetween_iter == 1100 - p.grad_ini_iter - p.grad_fin_iter
+
+    def test_checkpoint_effective_fractions_are_not_normalized_twice(self):
+        effective = 0.8 / (0.8 + 0.8 + 0.1)
+
+        uninterrupted = compute_phase_lengths(200, 0.8, 0.8)
+        resumed = phase_lengths_from_effective_fractions(
+            200,
+            effective,
+            effective,
+        )
+
+        assert resumed == uninterrupted
+        assert resumed.grad_ini_iter == 94
+        assert resumed.grad_inbetween_iter == 12
+        assert resumed.grad_fin_iter == 94
+        assert compute_phase_lengths(200, effective, effective) != uninterrupted
 
     def test_c_integer_truncation_not_banker_rounding(self):
         # nr_iter=10, frac=0.15 -> int(10*0.15) = int(1.5) = 1 (trunc), NOT 2

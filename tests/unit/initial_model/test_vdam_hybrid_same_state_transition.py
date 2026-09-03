@@ -630,6 +630,52 @@ def test_same_state_target_row_resolution_is_unique() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("selected", "status", "oracle_allowed"),
+    (
+        ((True, True), "selected_in_every_arm", True),
+        ((False, False), "target_not_selected", False),
+        ((True, False), "inconsistent_arm_selection", False),
+    ),
+)
+def test_target_transition_coverage_is_explicit(
+    selected,
+    status,
+    oracle_allowed,
+) -> None:
+    summaries = {
+        "arm_a": {
+            "selected_in_transition": selected[0],
+            "selected_position": 31 if selected[0] else None,
+        },
+        "arm_b": {
+            "selected_in_transition": selected[1],
+            "selected_position": 31 if selected[1] else None,
+        },
+    }
+
+    coverage = runner._target_transition_coverage(summaries)
+
+    assert coverage["status"] == status
+    assert coverage["native_oracle_comparison_allowed"] is oracle_allowed
+    assert coverage["selected_in_every_arm"] is all(selected)
+    assert coverage["selected_in_no_arms"] is not any(selected)
+    assert coverage["selected_position_exact_across_arms"] is oracle_allowed
+
+
+def test_target_transition_coverage_rejects_different_arm_positions() -> None:
+    coverage = runner._target_transition_coverage(
+        {
+            "arm_a": {"selected_in_transition": True, "selected_position": 7},
+            "arm_b": {"selected_in_transition": True, "selected_position": 8},
+        }
+    )
+
+    assert coverage["status"] == "inconsistent_arm_position"
+    assert coverage["selected_position_exact_across_arms"] is False
+    assert coverage["native_oracle_comparison_allowed"] is False
+
+
 def _fused_coarse_selector_audit(enabled: bool) -> dict:
     return {
         "score_mode": "gaussian",

@@ -83,6 +83,33 @@ class VdamPhaseLengths:
     grad_fin_iter: int
 
 
+def phase_lengths_from_effective_fractions(
+    nr_iter: int,
+    grad_ini_frac: float,
+    grad_fin_frac: float,
+) -> VdamPhaseLengths:
+    """Build phase lengths from fractions RELION already normalized.
+
+    Optimiser checkpoints serialize the effective fractions after RELION's
+    command-line normalization.  Applying that normalization a second time
+    changes nondefault schedules whose original fractions summed above 0.9.
+    """
+
+    if nr_iter <= 0:
+        raise ValueError("nr_iter must be positive")
+    if grad_ini_frac <= 0.0 or grad_ini_frac >= 1.0:
+        raise ValueError("Invalid value for grad_ini_frac (must be in (0, 1))")
+    if grad_fin_frac <= 0.0 or grad_fin_frac >= 1.0:
+        raise ValueError("Invalid value for grad_fin_frac (must be in (0, 1))")
+    if grad_ini_frac + grad_fin_frac > 1.0:
+        raise ValueError("effective gradient phase fractions must sum to at most 1")
+
+    grad_ini_iter = int(nr_iter * grad_ini_frac)
+    grad_fin_iter = int(nr_iter * grad_fin_frac)
+    grad_inbetween_iter = nr_iter - grad_ini_iter - grad_fin_iter
+    return VdamPhaseLengths(grad_ini_iter, grad_inbetween_iter, grad_fin_iter)
+
+
 def compute_phase_lengths(
     nr_iter: int,
     grad_ini_frac: float = DEFAULT_GRAD_INI_FRAC,
@@ -103,10 +130,11 @@ def compute_phase_lengths(
         grad_ini_frac /= s
         grad_fin_frac /= s
 
-    grad_ini_iter = int(nr_iter * grad_ini_frac)
-    grad_fin_iter = int(nr_iter * grad_fin_frac)
-    grad_inbetween_iter = max(0, nr_iter - grad_ini_iter - grad_fin_iter)
-    return VdamPhaseLengths(grad_ini_iter, grad_inbetween_iter, grad_fin_iter)
+    return phase_lengths_from_effective_fractions(
+        nr_iter,
+        grad_ini_frac,
+        grad_fin_frac,
+    )
 
 
 def default_subset_sizes_for_3d_initial_model(dataset_size: int) -> tuple[int, int]:

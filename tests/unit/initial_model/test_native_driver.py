@@ -220,6 +220,13 @@ _rlnParticleDiameter 200
 _rlnIncrementImageSize 10
 _rlnHasHighFscAtResolLimit 0
 _rlnGradCurrentStepsize 0.5
+_rlnDoFastSubsetOptimisation 0
+_rlnGradSubsetOrder 0
+_rlnGradSuspendLocalSamplingIter -1
+_rlnSgdInitialIterationsFraction 0.3
+_rlnSgdFinalIterationsFraction 0.2
+_rlnSgdInitialSubsetSize 200
+_rlnSgdFinalSubsetSize 1000
 _rlnSgdSubsetSize 1000
 _rlnHasConverged 0
 _rlnGradHasConverged 0
@@ -266,6 +273,11 @@ def test_native_vdam_diagnostic_continuation_loads_complete_gradient_state(tmp_p
     assert checkpoint.state.current_resolution_shell == 1
     assert checkpoint.state.subset_size == 1000
     assert checkpoint.state.Igrad1.dtype == np.complex128
+    assert checkpoint.grad_ini_subset_size == 200
+    assert checkpoint.grad_fin_subset_size == 1000
+    assert checkpoint.grad_ini_frac == pytest.approx(0.3)
+    assert checkpoint.grad_fin_frac == pytest.approx(0.2)
+    assert checkpoint.grad_suspended_local_searches_iter == -1
     np.testing.assert_array_equal(
         checkpoint.state.Iref[0],
         relion_volume_to_recovar(expected["reference"]),
@@ -298,6 +310,32 @@ def test_native_vdam_diagnostic_continuation_fails_without_second_pseudo_half(tm
             opts=opts,
             dataset=SimpleNamespace(grid_size=4, voxel_size=2.0),
         )
+
+
+@pytest.mark.parametrize(
+    ("prior_mode", "suspend_iteration"),
+    ((1, -1), (0, 0), (0, 2)),
+)
+def test_continuation_order_replay_rejects_local_search_history(
+    prior_mode,
+    suspend_iteration,
+):
+    checkpoint = SimpleNamespace(
+        sampling_state=SimpleNamespace(orientational_prior_mode=prior_mode),
+        grad_suspended_local_searches_iter=suspend_iteration,
+    )
+
+    with pytest.raises(NotImplementedError, match="before the first local-search"):
+        driver._validate_continuation_order_replay(checkpoint)
+
+
+def test_continuation_order_replay_accepts_pre_local_checkpoint():
+    checkpoint = SimpleNamespace(
+        sampling_state=SimpleNamespace(orientational_prior_mode=0),
+        grad_suspended_local_searches_iter=-1,
+    )
+
+    driver._validate_continuation_order_replay(checkpoint)
 
 
 def test_iteration_reference_replay_expands_iteration_and_class(monkeypatch, tmp_path):

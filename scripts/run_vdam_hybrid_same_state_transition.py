@@ -2346,6 +2346,50 @@ def _target_particle_summary(
     return summary
 
 
+def _target_transition_coverage(
+    target_arm_summaries: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Classify whether a requested native-oracle target actually executed."""
+
+    if not target_arm_summaries:
+        raise ValueError("target transition coverage requires at least one arm")
+    selected = {
+        str(label): bool(summary["selected_in_transition"])
+        for label, summary in target_arm_summaries.items()
+    }
+    selected_labels = [label for label, value in selected.items() if value]
+    unselected_labels = [label for label, value in selected.items() if not value]
+    selected_positions = {
+        label: int(target_arm_summaries[label]["selected_position"])
+        for label in selected_labels
+    }
+    if not unselected_labels:
+        status = (
+            "selected_in_every_arm"
+            if len(set(selected_positions.values())) == 1
+            else "inconsistent_arm_position"
+        )
+    elif not selected_labels:
+        status = "target_not_selected"
+    else:
+        status = "inconsistent_arm_selection"
+    positions_exact = (
+        not unselected_labels
+        and bool(selected_positions)
+        and len(set(selected_positions.values())) == 1
+    )
+    return {
+        "status": status,
+        "selected_in_every_arm": not unselected_labels,
+        "selected_in_no_arms": not selected_labels,
+        "selected_arm_labels": selected_labels,
+        "unselected_arm_labels": unselected_labels,
+        "selected_positions": selected_positions,
+        "selected_position_exact_across_arms": positions_exact,
+        "native_oracle_comparison_allowed": positions_exact,
+    }
+
+
 def _array_sha256(value: Any) -> str:
     array = np.ascontiguousarray(np.asarray(value))
     digest = hashlib.sha256()
@@ -2757,6 +2801,22 @@ def _capture_direct_checkpoint(
                     data_dir=native_data_dir,
                 ),
                 "data_dir": str(native_data_dir.resolve(strict=True)),
+                "restored_subset_order": {
+                    "replay_through_iteration": checkpoint_iteration,
+                    "subset_size": int(captured["result"].state.subset_size),
+                    "subset_particle_ids_sha256": _array_sha256(
+                        captured["result"].state.subset_particle_ids,
+                    ),
+                    "subset_halfset_ids_sha256": _array_sha256(
+                        captured["result"].state.subset_halfset_ids,
+                    ),
+                    "sorted_particle_ids_sha256": _array_sha256(
+                        captured["result"].state.sorted_particle_ids,
+                    ),
+                    "sorted_particle_part_ids_sha256": _array_sha256(
+                        captured["result"].state.sorted_particle_part_ids,
+                    ),
+                },
             }
         )
     captured["expectation_factory"] = original_expectation_factory
@@ -2778,7 +2838,10 @@ def _run_transition_arm(
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from recovar.data_io.starfile import read_star
-    from recovar.em.initial_model.schedules import default_subset_sizes_for_3d_initial_model
+    from recovar.em.initial_model.schedules import (
+        default_subset_sizes_for_3d_initial_model,
+        phase_lengths_from_effective_fractions,
+    )
 
     if hybrid_image_batch_request is not None and not (
         candidate_mode == "all_optimized" and candidate_enabled and backend_mode is None
@@ -2859,6 +2922,16 @@ def _run_transition_arm(
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(
         int(dataset.n_images)
     )
+    continuation_phase_lengths = None
+    if checkpoint["checkpoint_source"] == "native_relion":
+        continuation = checkpoint["continuation"]
+        grad_ini_subset_size = int(continuation.grad_ini_subset_size)
+        grad_fin_subset_size = int(continuation.grad_fin_subset_size)
+        continuation_phase_lengths = phase_lengths_from_effective_fractions(
+            int(state.nr_iter),
+            float(continuation.grad_ini_frac),
+            float(continuation.grad_fin_frac),
+        )
     if backend_mode is not None:
         resolved_backend_mode = backend_mode
     elif candidate_mode == "exact_coarse_single_translate":
@@ -2962,6 +3035,7 @@ def _run_transition_arm(
             particle_order=particle_order,
             grad_ini_frac=float(opts.grad_ini_frac),
             grad_fin_frac=float(opts.grad_fin_frac),
+            phase_lengths=continuation_phase_lengths,
             grad_stepsize=float(opts.stepsize),
             mu=float(opts.mu),
             projector_padding_factor=int(opts.padding_factor),
@@ -4490,6 +4564,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             for label, arm in arms.items()
         }
+    target_transition_coverage = (
+        None
+        if target_arm_summaries is None
+        else _target_transition_coverage(target_arm_summaries)
+    )
     arm_dir = output_root / "arms"
     arm_dir.mkdir()
     arm_summaries: dict[str, Any] = {}
@@ -4570,6 +4649,7 @@ def main(argv: list[str] | None = None) -> int:
             else {
                 **target_checkpoint,
                 "arms": target_arm_summaries,
+                "transition_coverage": target_transition_coverage,
             }
         ),
         "fused_posterior_dump_original_index": (

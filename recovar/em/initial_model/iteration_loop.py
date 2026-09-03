@@ -67,6 +67,26 @@ IterArtifactSink = Callable[[InitialModelState, int, dict], None]
 PostMstepUpdateFn = Callable[[InitialModelState, int, dict], InitialModelState]
 
 
+def _resolve_phase_lengths(
+    nr_iter: int,
+    grad_ini_frac: float,
+    grad_fin_frac: float,
+    phase_lengths: VdamPhaseLengths | None,
+) -> VdamPhaseLengths:
+    if phase_lengths is None:
+        return compute_phase_lengths(nr_iter, grad_ini_frac, grad_fin_frac)
+    if not isinstance(phase_lengths, VdamPhaseLengths):
+        raise TypeError("phase_lengths must be a VdamPhaseLengths instance")
+    values = (
+        int(phase_lengths.grad_ini_iter),
+        int(phase_lengths.grad_inbetween_iter),
+        int(phase_lengths.grad_fin_iter),
+    )
+    if any(value < 0 for value in values) or sum(values) != int(nr_iter):
+        raise ValueError("phase_lengths must be non-negative and sum to nr_iter")
+    return phase_lengths
+
+
 def refresh_tau2_from_projector_power(
     state: InitialModelState,
     *,
@@ -598,6 +618,106 @@ def select_subset_for_iter(
     return new_state
 
 
+def restore_subset_order_for_continuation(
+    state: InitialModelState,
+    *,
+    through_iteration: int,
+    nr_particles: int,
+    optics_group_by_particle: Sequence[int],
+    grad_ini_subset_size: int,
+    grad_fin_subset_size: int,
+    random_seed: int,
+    rnd_unif_factory: Callable[[int], RndUnifFn],
+    particle_order: Sequence[int] | None = None,
+    grad_ini_frac: float = 0.3,
+    grad_fin_frac: float = 0.2,
+    grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
+    phase_lengths: VdamPhaseLengths | None = None,
+) -> InitialModelState:
+    """Rebuild RELION's transient ``sorted_idx`` at a restart boundary.
+
+    InitialModel mutates ``Experiment::sorted_idx`` after every deterministic
+    shuffle and stable optics-group sort, but RELION does not serialize that
+    vector in an optimiser checkpoint.  A bounded diagnostic continuation
+    must therefore replay the inexpensive ordering chronology from iteration
+    one; starting the next shuffle from the input order selects a different
+    particle subset even when every scientific checkpoint array is exact.
+
+    The replay is valid while convergence has not occurred because subset
+    scheduling is then a pure function of the command and iteration.  The
+    onset iteration of convergence is not serialized, so fail closed instead
+    of guessing when either convergence flag is already set.
+    """
+
+    through_iteration = int(through_iteration)
+    nr_particles = int(nr_particles)
+    if through_iteration < 0 or through_iteration > int(state.nr_iter):
+        raise ValueError("continuation iteration must be between 0 and nr_iter")
+    if int(state.iter) != through_iteration:
+        raise ValueError(
+            "continuation state iteration does not match the requested order replay"
+        )
+    if nr_particles <= 0:
+        raise ValueError("continuation particle count must be positive")
+    if state.sorted_particle_ids is not None or state.sorted_particle_part_ids is not None:
+        raise ValueError("continuation state already contains a serialized particle order")
+    if through_iteration and (state.has_converged or state.grad_has_converged):
+        raise ValueError(
+            "cannot reconstruct particle order after an unrecorded convergence boundary"
+        )
+
+    phase_lengths = _resolve_phase_lengths(
+        int(state.nr_iter),
+        float(grad_ini_frac),
+        float(grad_fin_frac),
+        phase_lengths,
+    )
+    order_state = replace(
+        state,
+        subset_particle_ids=None,
+        subset_halfset_ids=None,
+        sorted_particle_ids=None,
+        sorted_particle_part_ids=None,
+    )
+    for iteration in range(1, through_iteration + 1):
+        subset_size = compute_subset_size(
+            iter=iteration,
+            phase_lengths=phase_lengths,
+            grad_ini_subset_size=int(grad_ini_subset_size),
+            grad_fin_subset_size=int(grad_fin_subset_size),
+            nr_particles=nr_particles,
+            nr_iter=int(state.nr_iter),
+            grad_em_iters=int(grad_em_iters),
+            has_converged=False,
+            grad_has_converged=False,
+            nr_classes=int(state.K),
+        )
+        order_state = replace(order_state, subset_size=int(subset_size))
+        do_grad = (int(state.nr_iter) - iteration) >= int(grad_em_iters)
+        order_state = select_subset_for_iter(
+            order_state,
+            iter=iteration,
+            nr_particles=nr_particles,
+            optics_group_by_particle=optics_group_by_particle,
+            rnd_unif_factory=rnd_unif_factory,
+            random_seed=int(random_seed),
+            do_grad=do_grad,
+            particle_order=particle_order,
+        )
+
+    if through_iteration and int(order_state.subset_size) != int(state.subset_size):
+        raise ValueError(
+            "replayed continuation subset size differs from the native checkpoint"
+        )
+    restored = replace(state)
+    restored.subset_particle_ids = order_state.subset_particle_ids
+    restored.subset_halfset_ids = order_state.subset_halfset_ids
+    restored.sorted_particle_ids = order_state.sorted_particle_ids
+    restored.sorted_particle_part_ids = order_state.sorted_particle_part_ids
+    restored.pseudo_halfsets = order_state.pseudo_halfsets
+    return restored
+
+
 def relion_solvent_mask(
     *,
     ori_size: int,
@@ -677,6 +797,7 @@ def run_vdam_iterations(
     particle_order: Sequence[int] | None = None,
     grad_ini_frac: float = 0.3,
     grad_fin_frac: float = 0.2,
+    phase_lengths: VdamPhaseLengths | None = None,
     grad_stepsize: float | None = None,
     mu: float = DEFAULT_GRAD_MU,
     refresh_tau2_from_projector: bool = True,
@@ -686,7 +807,12 @@ def run_vdam_iterations(
     diagnostic_stop_after_iteration: int | None = None,
 ) -> InitialModelState:
     """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
-    phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
+    phase_lengths = _resolve_phase_lengths(
+        int(state.nr_iter),
+        float(grad_ini_frac),
+        float(grad_fin_frac),
+        phase_lengths,
+    )
     start_iteration = int(start_iteration)
     if start_iteration < 0 or start_iteration >= int(state.nr_iter):
         raise ValueError("start_iteration must be between 0 and state.nr_iter - 1")
