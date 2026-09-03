@@ -655,10 +655,10 @@ CPU job `13381344` completed `0:0` in 5:31 with exact
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/root/empiar10202_set6_it16_corrected_masked_fsc_20260903T101521Z`
 has comparison, report, accounting, and verified manifest SHA-256
 `f72404609a235f0cb2a09df9d0bae3dc4e23d87d907944892e7ea9e9ec8abaa7`,
-`b226762d109c4ad4f07f617f638eef4fba7803bf23613c3840e005b2cc81806c`,
+`db4e5fea9d3119857af015397a509df304dc468b5ff500964b1fb297a580955b`,
 `635d25992ab6d5ba82b45b437887703375fcea9b0e61b35d159a5a1900b3d95e`,
 and
-`3e69ade91053e305665cead63abcb6ac28d6af41a6154f056d560c036357cf3c`.
+`97fe931cd7fa13d0da05861059b5053723c14dce10a11e812680227757f260f0`.
 
 ## Live full-particle checkpoint-7 three-way audit
 

@@ -137,7 +137,7 @@ CPU job `13381344` completed with exact requested/allocated
 the comparison JSON and manifest SHA-256 values are
 `f72404609a235f0cb2a09df9d0bae3dc4e23d87d907944892e7ea9e9ec8abaa7`
 and
-`3e69ade91053e305665cead63abcb6ac28d6af41a6154f056d560c036357cf3c`.
+`97fe931cd7fa13d0da05861059b5053723c14dce10a11e812680227757f260f0`.
 
 ## Evidence and reproduction
 
