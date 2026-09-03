@@ -5,8 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+_XLA_COMPILE_RE = re.compile(
+    r"Finished XLA compilation of (?P<name>.+?) in "
+    r"(?P<seconds>[0-9]+(?:\.[0-9]+)?) sec(?:ond)?s?\s*$"
+)
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -66,6 +73,39 @@ def _phase_seconds(profile: object, *, label: str) -> dict[str, float]:
     return dict(sorted(phases.items(), key=lambda item: (-item[1], item[0])))
 
 
+def _compile_log_summary(path: Path, *, top: int) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for line in path.read_text(errors="replace").splitlines():
+        match = _XLA_COMPILE_RE.search(line)
+        if match is not None:
+            grouped[match.group("name")].append(float(match.group("seconds")))
+    if not grouped:
+        raise RuntimeError(f"no completed XLA compilations found in {path}")
+
+    rows = []
+    for name, durations in grouped.items():
+        total_s = sum(durations)
+        rows.append(
+            {
+                "name": name,
+                "count": len(durations),
+                "total_s": total_s,
+                "mean_s": total_s / len(durations),
+                "max_s": max(durations),
+            }
+        )
+    rows.sort(key=lambda row: (-row["total_s"], row["name"]))
+    return {
+        "log": str(path),
+        "compile_count": sum(row["count"] for row in rows),
+        "total_s": sum(row["total_s"] for row in rows),
+        "unique_module_count": len(rows),
+        "top_modules": rows[:top],
+    }
+
+
 def analyze(root: Path, *, top: int = 20) -> dict[str, Any]:
     root = root.resolve(strict=True)
     if not (root / "COMPLETED").is_file():
@@ -102,8 +142,26 @@ def analyze(root: Path, *, top: int = 20) -> dict[str, Any]:
         raise RuntimeError("profile capture spans must be positive")
 
     warm = profile.get("warm")
-    if not isinstance(warm, dict):
-        raise RuntimeError("RECOVAR profile omitted the warm arm")
+    cold = profile.get("cold")
+    if not isinstance(cold, dict) or not isinstance(warm, dict):
+        raise RuntimeError("RECOVAR profile omitted the cold or warm arm")
+    cold_wall_s = float(cold.get("wall_s", -1.0))
+    warm_wall_s = float(warm.get("wall_s", -1.0))
+    if min(cold_wall_s, warm_wall_s) <= 0.0:
+        raise RuntimeError("RECOVAR cold and warm wall times must be positive")
+    cold_warm_delta_s = cold_wall_s - warm_wall_s
+    if cold_warm_delta_s <= 0.0:
+        raise RuntimeError("RECOVAR cold wall time must exceed warm wall time")
+    compilation = _compile_log_summary(root / "recovar_profiled.stderr", top=top)
+    compilation["cold_wall_s"] = cold_wall_s
+    compilation["warm_wall_s"] = warm_wall_s
+    compilation["cold_warm_delta_s"] = cold_warm_delta_s
+    compilation["fraction_of_cold_warm_delta"] = (
+        float(compilation["total_s"]) / cold_warm_delta_s
+    )
+    compilation["cold_warm_delta_minus_compile_s"] = (
+        cold_warm_delta_s - float(compilation["total_s"])
+    )
     iteration_phases = _phase_seconds(
         warm.get("iteration_profile"),
         label="iteration",
@@ -171,6 +229,7 @@ def analyze(root: Path, *, top: int = 20) -> dict[str, Any]:
             "native_top": _ranked_seconds(native.get("cuda_apis"), top=top),
             "recovar_top": _ranked_seconds(recovar.get("cuda_apis"), top=top),
         },
+        "cold_compilation": compilation,
     }
 
 
@@ -183,7 +242,16 @@ def main(argv: list[str] | None = None) -> int:
     report = analyze(args.root, top=args.top)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print(json.dumps({"capture": report["capture"], "gpu": report["gpu"]}, indent=2))
+    print(
+        json.dumps(
+            {
+                "capture": report["capture"],
+                "gpu": report["gpu"],
+                "cold_compilation": report["cold_compilation"],
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

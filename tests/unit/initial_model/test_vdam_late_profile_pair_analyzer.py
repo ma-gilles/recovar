@@ -28,7 +28,9 @@ def _profile_root(tmp_path: Path) -> Path:
         root / "recovar_profiled" / "profile_summary.json",
         {
             "profiled_iteration": 48,
+            "cold": {"wall_s": 25.0},
             "warm": {
+                "wall_s": 5.0,
                 "iteration_profile": {
                     "pre_artifact_time_s": 1.2,
                     "expectation_time_s": 0.8,
@@ -46,6 +48,11 @@ def _profile_root(tmp_path: Path) -> Path:
                 },
             },
         },
+    )
+    (root / "recovar_profiled.stderr").write_text(
+        "Finished XLA compilation of jit(add) in 2.0 sec\n"
+        "Finished XLA compilation of jit(add) in 1.0 seconds\n"
+        "Finished XLA compilation of jit(large) in 4.0 sec\n"
     )
     common_kernel = {
         "name": "kernel",
@@ -116,6 +123,26 @@ def test_late_profile_pair_analyzer_reports_phase_kernel_and_api_gap(tmp_path):
     assert report["recovar_phases"]["capture_minus_profiled_iteration_s"] == pytest.approx(0.8)
     assert report["kernels"]["recovar_top"][0]["total_s"] == pytest.approx(0.1)
     assert report["cuda_apis"]["native_top"][0]["total_s"] == pytest.approx(0.02)
+    assert report["cold_compilation"] == {
+        "log": str(root / "recovar_profiled.stderr"),
+        "compile_count": 3,
+        "total_s": 7.0,
+        "unique_module_count": 2,
+        "top_modules": [
+            {
+                "name": "jit(large)",
+                "count": 1,
+                "total_s": 4.0,
+                "mean_s": 4.0,
+                "max_s": 4.0,
+            }
+        ],
+        "cold_wall_s": 25.0,
+        "warm_wall_s": 5.0,
+        "cold_warm_delta_s": 20.0,
+        "fraction_of_cold_warm_delta": 0.35,
+        "cold_warm_delta_minus_compile_s": 13.0,
+    }
 
 
 def test_late_profile_pair_analyzer_rejects_host_attribution_as_timing(tmp_path):
