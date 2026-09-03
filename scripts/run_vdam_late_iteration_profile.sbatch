@@ -52,6 +52,8 @@ RELION_BIND_DIR=${RUNTIME}/relion_bind
 EXACT_LOCAL_BUCKET_RADIX=${EXACT_LOCAL_BUCKET_RADIX:-4}
 EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE=${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE:-0}
 STABLE_FOURIER_WINDOW_SHAPES=${STABLE_FOURIER_WINDOW_SHAPES:-0}
+REUSE_NATIVE_ROOT=${VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT:-}
+EXPECTED_REUSED_NATIVE_NSYS_SHA256=${EXPECTED_REUSED_NATIVE_NSYS_SHA256:-}
 
 on_error() {
   local status=$?
@@ -84,6 +86,12 @@ test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_SHA256}"
 test "$(sha256sum "${RELION_BIND_BINARY_OVERRIDE}" | awk '{print $1}')" = \
   "${EXPECTED_RELION_BIND_SHA256}"
+if [[ -n "${REUSE_NATIVE_ROOT}" ]]; then
+  test -n "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}"
+  [[ "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+  test -d "${REUSE_NATIVE_ROOT}"
+  test "${REUSE_NATIVE_ROOT}" != "${ROOT}"
+fi
 
 source "${REPO_ROOT}/scripts/vdam_gpu_selection.sh"
 vdam_select_target_gpu "${TARGET_GPU_UUID}" 0
@@ -107,6 +115,25 @@ nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 "${NSYS}" --version > "${PROVENANCE}/nsys_version.txt"
 "${CUDA_TOOLKIT}/bin/nvcc" --version > "${PROVENANCE}/nvcc_version.txt"
+
+# Resolve the guarded K=1 Gaussian defaults before a CUDA build or either
+# profiler capture.  In particular, the GEMM macro needs explicit opt-outs for
+# the fused/canonical backends that are default-on for this continuation path.
+(
+  cd "${REPO_ROOT}"
+  "${PIXI_PY}" - "${PROVENANCE}/profile_environment_preflight.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from scripts.run_vdam_late_iteration_profile import _validate_profile_environment
+
+report = _validate_profile_environment()
+Path(sys.argv[1]).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+print(json.dumps(report, sort_keys=True))
+PY
+) > "${PROVENANCE}/profile_environment_preflight.stdout" \
+  2> "${PROVENANCE}/profile_environment_preflight.stderr"
 
 checkpoint_prefix=${CHECKPOINT%_optimiser.star}
 CHECKPOINT_FILES=(
@@ -132,6 +159,76 @@ for path in "${CHECKPOINT_FILES[@]}"; do
   test -s "${path}"
 done
 sha256sum "${CHECKPOINT_FILES[@]}" > "${PROVENANCE}/static_inputs.sha256"
+
+NATIVE_NSYS_BASE=${NSIGHT}/native_it$(printf '%03d' "${PROFILED_ITERATION}")
+if [[ -n "${REUSE_NATIVE_ROOT}" ]]; then
+  source_native_report=${REUSE_NATIVE_ROOT}/nsight/native_it$(printf '%03d' "${PROFILED_ITERATION}").nsys-rep
+  source_native_manifest=${REUSE_NATIVE_ROOT}/provenance/static_inputs.sha256
+  source_native_profile=${REUSE_NATIVE_ROOT}/native_profiled
+  source_native_plain=${REUSE_NATIVE_ROOT}/native_unprofiled
+  test -s "${source_native_report}"
+  test -s "${source_native_manifest}"
+  [[ "$(cat "${REUSE_NATIVE_ROOT}/provenance/repo_head.txt")" =~ ^[0-9a-f]{40}$ ]]
+  test ! -s "${REUSE_NATIVE_ROOT}/provenance/repo_status.txt"
+  test "$(sha256sum "${source_native_report}" | awk '{print $1}')" = \
+    "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}"
+  test -s "${source_native_plain}/run_it$(printf '%03d' "${PROFILED_ITERATION}")_data.star"
+  test -s "${source_native_profile}/run_it$(printf '%03d' "${PROFILED_ITERATION}")_data.star"
+  test ! -e "${source_native_plain}/run_it$(printf '%03d' "$((PROFILED_ITERATION + 1))")_data.star"
+  test ! -e "${source_native_profile}/run_it$(printf '%03d' "$((PROFILED_ITERATION + 1))")_data.star"
+  test "$(rg -c 'VDAM_GDB_FIRST_EXPECTATION' "${source_native_plain}/runner.stdout")" -eq 1
+  test "$(rg -c 'VDAM_GDB_SECOND_EXPECTATION' "${source_native_plain}/runner.stdout")" -eq 1
+  test "$(rg -c 'VDAM_GDB_CUDA_PROFILER_START status=0' "${source_native_profile}/runner.stdout")" -eq 1
+  test "$(rg -c 'VDAM_GDB_CUDA_PROFILER_STOP status=0' "${source_native_profile}/runner.stdout")" -eq 1
+  NATIVE_REUSE_INPUTS=(
+    "${CHECKPOINT}"
+    "${checkpoint_prefix}_model.star"
+    "${checkpoint_prefix}_data.star"
+    "${checkpoint_prefix}_sampling.star"
+    "${checkpoint_prefix}_class001.mrc"
+    "${checkpoint_prefix}_1moment001.mrc"
+    "${checkpoint_prefix}_1moment002.mrc"
+    "${checkpoint_prefix}_2moment001.mrc"
+    "${DATA_STAR}"
+    "${PARTICLE_STACK}"
+    "${RELION_BINARY}"
+    "${CUSPARSE_LIBRARY}"
+    "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb"
+  )
+  "${PIXI_PY}" - "${PROVENANCE}/reused_native_inputs.json" \
+    "${source_native_manifest}" "${NATIVE_REUSE_INPUTS[@]}" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1])
+manifest_path = Path(sys.argv[2])
+expected = {}
+for line in manifest_path.read_text().splitlines():
+    digest, path = line.split(maxsplit=1)
+    expected[path] = digest
+records = []
+for raw_path in sys.argv[3:]:
+    path = Path(raw_path)
+    if raw_path not in expected:
+        raise RuntimeError(f"reused native manifest omitted {raw_path}")
+    checksum = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            checksum.update(block)
+    digest = checksum.hexdigest()
+    if digest != expected[raw_path]:
+        raise RuntimeError(f"reused native input changed: {raw_path}")
+    records.append({"path": raw_path, "sha256": digest})
+output.write_text(json.dumps({"inputs": records}, indent=2, sort_keys=True) + "\n")
+PY
+  cp --reflink=auto "${source_native_report}" "${NATIVE_NSYS_BASE}.nsys-rep"
+  test "$(sha256sum "${NATIVE_NSYS_BASE}.nsys-rep" | awk '{print $1}')" = \
+    "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}"
+  printf '%s\n' "${REUSE_NATIVE_ROOT}" > "${PROVENANCE}/reused_native_root.txt"
+  sha256sum "${source_native_report}" > "${PROVENANCE}/reused_native_nsys.sha256"
+fi
 
 build_started=$(date +%s.%N)
 make -C "${REPO_ROOT}/recovar/cuda" \
@@ -194,66 +291,71 @@ PY
 ) > "${PROVENANCE}/runtime_gate.stdout" 2> "${PROVENANCE}/runtime_gate.stderr"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
-NATIVE_ARGS=(
-  "${RELION_BINARY}"
-  --continue "${CHECKPOINT}"
-  --o "${NATIVE_PLAIN}/run"
-  --iter "${NR_ITER_SCHEDULE}"
-  --pool 3
-  --gpu 0
-  --j 8
-)
-printf '%q ' gdb -q -batch -ex 'set $vdam_profile_cuda = 0' \
-  -x "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb" --args "${NATIVE_ARGS[@]}" \
-  > "${PROVENANCE}/native_unprofiled_command.sh"
-printf '\n' >> "${PROVENANCE}/native_unprofiled_command.sh"
-native_plain_started=$(date +%s.%N)
-(
-  cd "${DATA_DIR}"
-  gdb -q -batch -ex 'set $vdam_profile_cuda = 0' \
-    -x "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb" \
-    --args "${NATIVE_ARGS[@]}"
-) > "${NATIVE_PLAIN}/runner.stdout" 2> "${NATIVE_PLAIN}/runner.stderr"
-native_plain_finished=$(date +%s.%N)
-test -s "${NATIVE_PLAIN}/run_it$(printf '%03d' "${PROFILED_ITERATION}")_data.star"
-test ! -e "${NATIVE_PLAIN}/run_it$(printf '%03d' "$((PROFILED_ITERATION + 1))")_data.star"
-test "$(rg -c 'VDAM_GDB_FIRST_EXPECTATION' "${NATIVE_PLAIN}/runner.stdout")" -eq 1
-test "$(rg -c 'VDAM_GDB_SECOND_EXPECTATION' "${NATIVE_PLAIN}/runner.stdout")" -eq 1
+native_plain_started=
+native_plain_finished=
+native_profile_started=
+native_profile_finished=
+if [[ -z "${REUSE_NATIVE_ROOT}" ]]; then
+  NATIVE_ARGS=(
+    "${RELION_BINARY}"
+    --continue "${CHECKPOINT}"
+    --o "${NATIVE_PLAIN}/run"
+    --iter "${NR_ITER_SCHEDULE}"
+    --pool 3
+    --gpu 0
+    --j 8
+  )
+  printf '%q ' gdb -q -batch -ex 'set $vdam_profile_cuda = 0' \
+    -x "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb" --args "${NATIVE_ARGS[@]}" \
+    > "${PROVENANCE}/native_unprofiled_command.sh"
+  printf '\n' >> "${PROVENANCE}/native_unprofiled_command.sh"
+  native_plain_started=$(date +%s.%N)
+  (
+    cd "${DATA_DIR}"
+    gdb -q -batch -ex 'set $vdam_profile_cuda = 0' \
+      -x "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb" \
+      --args "${NATIVE_ARGS[@]}"
+  ) > "${NATIVE_PLAIN}/runner.stdout" 2> "${NATIVE_PLAIN}/runner.stderr"
+  native_plain_finished=$(date +%s.%N)
+  test -s "${NATIVE_PLAIN}/run_it$(printf '%03d' "${PROFILED_ITERATION}")_data.star"
+  test ! -e "${NATIVE_PLAIN}/run_it$(printf '%03d' "$((PROFILED_ITERATION + 1))")_data.star"
+  test "$(rg -c 'VDAM_GDB_FIRST_EXPECTATION' "${NATIVE_PLAIN}/runner.stdout")" -eq 1
+  test "$(rg -c 'VDAM_GDB_SECOND_EXPECTATION' "${NATIVE_PLAIN}/runner.stdout")" -eq 1
 
-NATIVE_PROFILE_ARGS=(
-  "${RELION_BINARY}"
-  --continue "${CHECKPOINT}"
-  --o "${NATIVE_PROFILE}/run"
-  --iter "${NR_ITER_SCHEDULE}"
-  --pool 3
-  --gpu 0
-  --j 8
-)
-NATIVE_NSYS_BASE=${NSIGHT}/native_it$(printf '%03d' "${PROFILED_ITERATION}")
-printf '%q ' "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
-  --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \
-  --capture-range-end=stop -o "${NATIVE_NSYS_BASE}" \
-  gdb -q -batch -ex 'set $vdam_profile_cuda = 1' \
-  -x "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb" \
-  --args "${NATIVE_PROFILE_ARGS[@]}" > "${PROVENANCE}/native_nsys_command.sh"
-printf '\n' >> "${PROVENANCE}/native_nsys_command.sh"
-native_profile_started=$(date +%s.%N)
-(
-  cd "${DATA_DIR}"
-  "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
+  NATIVE_PROFILE_ARGS=(
+    "${RELION_BINARY}"
+    --continue "${CHECKPOINT}"
+    --o "${NATIVE_PROFILE}/run"
+    --iter "${NR_ITER_SCHEDULE}"
+    --pool 3
+    --gpu 0
+    --j 8
+  )
+  printf '%q ' "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
     --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \
     --capture-range-end=stop -o "${NATIVE_NSYS_BASE}" \
     gdb -q -batch -ex 'set $vdam_profile_cuda = 1' \
     -x "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb" \
-    --args "${NATIVE_PROFILE_ARGS[@]}"
-) > "${NATIVE_PROFILE}/runner.stdout" 2> "${NATIVE_PROFILE}/runner.stderr"
-native_profile_finished=$(date +%s.%N)
-test -s "${NATIVE_NSYS_BASE}.nsys-rep"
-test -s "${NATIVE_PROFILE}/run_it$(printf '%03d' "${PROFILED_ITERATION}")_data.star"
-test ! -e "${NATIVE_PROFILE}/run_it$(printf '%03d' "$((PROFILED_ITERATION + 1))")_data.star"
-test "$(rg -c 'VDAM_GDB_CUDA_PROFILER_START status=0' "${NATIVE_PROFILE}/runner.stdout")" -eq 1
-test "$(rg -c 'VDAM_GDB_CUDA_PROFILER_STOP status=0' "${NATIVE_PROFILE}/runner.stdout")" -eq 1
-vdam_verify_selected_gpu "${selected_gpu_uuid}"
+    --args "${NATIVE_PROFILE_ARGS[@]}" > "${PROVENANCE}/native_nsys_command.sh"
+  printf '\n' >> "${PROVENANCE}/native_nsys_command.sh"
+  native_profile_started=$(date +%s.%N)
+  (
+    cd "${DATA_DIR}"
+    "${NSYS}" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
+      --kill=none --force-overwrite=true --capture-range=cudaProfilerApi \
+      --capture-range-end=stop -o "${NATIVE_NSYS_BASE}" \
+      gdb -q -batch -ex 'set $vdam_profile_cuda = 1' \
+      -x "${REPO_ROOT}/scripts/vdam_relion_one_iteration.gdb" \
+      --args "${NATIVE_PROFILE_ARGS[@]}"
+  ) > "${NATIVE_PROFILE}/runner.stdout" 2> "${NATIVE_PROFILE}/runner.stderr"
+  native_profile_finished=$(date +%s.%N)
+  test -s "${NATIVE_NSYS_BASE}.nsys-rep"
+  test -s "${NATIVE_PROFILE}/run_it$(printf '%03d' "${PROFILED_ITERATION}")_data.star"
+  test ! -e "${NATIVE_PROFILE}/run_it$(printf '%03d' "$((PROFILED_ITERATION + 1))")_data.star"
+  test "$(rg -c 'VDAM_GDB_CUDA_PROFILER_START status=0' "${NATIVE_PROFILE}/runner.stdout")" -eq 1
+  test "$(rg -c 'VDAM_GDB_CUDA_PROFILER_STOP status=0' "${NATIVE_PROFILE}/runner.stdout")" -eq 1
+  vdam_verify_selected_gpu "${selected_gpu_uuid}"
+fi
 
 RECOVAR_NSYS_BASE=${NSIGHT}/recovar_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
 RECOVAR_COMMAND=(
@@ -320,10 +422,49 @@ done
   "${CHECKPOINT_ITERATION}" "${PROFILED_ITERATION}" "${NR_ITER_SCHEDULE}" \
   "${native_plain_started}" "${native_plain_finished}" \
   "${native_profile_started}" "${native_profile_finished}" \
-  "${recovar_profile_started}" "${recovar_profile_finished}" <<'PY'
+  "${recovar_profile_started}" "${recovar_profile_finished}" \
+  "${REUSE_NATIVE_ROOT}" "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}" <<'PY'
 import json
 import sys
 from pathlib import Path
+
+reuse_root = Path(sys.argv[14]) if sys.argv[14] else None
+if reuse_root is None:
+    execution_order = [
+        "native_unprofiled",
+        "native_profiled",
+        "recovar_cold",
+        "recovar_warm",
+    ]
+    native_unprofiled_wall = float(sys.argv[9]) - float(sys.argv[8])
+    native_profiled_wall = float(sys.argv[11]) - float(sys.argv[10])
+    native_capture = {"mode": "captured_in_job"}
+else:
+    source_job_path = reuse_root / "provenance" / "slurm_job_id.txt"
+    if source_job_path.is_file():
+        source_job_id = source_job_path.read_text().strip()
+    else:
+        source_job_id = "unknown"
+        submission_environment = (
+            reuse_root / "provenance" / "submission_environment.txt"
+        )
+        if submission_environment.is_file():
+            for line in submission_environment.read_text().splitlines():
+                if line.startswith("SLURM_JOB_ID="):
+                    source_job_id = line.split("=", 1)[1]
+                    break
+    execution_order = ["native_reused", "recovar_cold", "recovar_warm"]
+    native_unprofiled_wall = None
+    native_profiled_wall = None
+    native_capture = {
+        "mode": "reused",
+        "source_root": str(reuse_root.resolve()),
+        "source_job_id": source_job_id,
+        "source_gpu_uuid": (
+            reuse_root / "provenance" / "selected_gpu_uuid.txt"
+        ).read_text().strip(),
+        "nsys_sha256": sys.argv[15],
+    }
 
 payload = {
     "schema": "recovar.vdam_late_iteration_same_h100_gate.v1",
@@ -334,12 +475,13 @@ payload = {
     "checkpoint_iteration": int(sys.argv[5]),
     "profiled_iteration": int(sys.argv[6]),
     "nr_iter_schedule": int(sys.argv[7]),
-    "execution_order": ["native_unprofiled", "native_profiled", "recovar_cold", "recovar_warm"],
+    "execution_order": execution_order,
     "walls_s": {
-        "native_unprofiled_process": float(sys.argv[9]) - float(sys.argv[8]),
-        "native_profiled_process": float(sys.argv[11]) - float(sys.argv[10]),
+        "native_unprofiled_process": native_unprofiled_wall,
+        "native_profiled_process": native_profiled_wall,
         "recovar_profile_process": float(sys.argv[13]) - float(sys.argv[12]),
     },
+    "native_capture": native_capture,
     "native_stop_mechanism": "gdb second-expectation sentinel after exact profiled iteration",
     "science_promotion_allowed": False,
 }

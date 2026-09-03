@@ -17,9 +17,22 @@ import json
 import os
 import resource
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
+
+_PROFILE_BOOLEAN_TRUE = frozenset({"1", "true", "yes", "on"})
+_PROFILE_BOOLEAN_FALSE = frozenset({"0", "false", "no", "off"})
+_PROFILE_GEMM_MACRO_ENV = "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO"
+_PROFILE_FFI_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_FFI"
+_PROFILE_SINCOSF_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF"
+_PROFILE_FUSED_PROJECTOR_ENV = "RECOVAR_K1_COARSE_FUSED_PROJECTOR"
+_PROFILE_CANONICAL_REDUCTION_ENV = "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION"
+_PROFILE_NATIVE_ATOMIC_ENV = "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION"
+_PROFILE_SINGLE_LANE_ENV = "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL"
+_PROFILE_MULTISTREAM_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
+_PROFILE_NATIVE_TEXTURE_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -58,6 +71,123 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _profile_environment_bool(
+    environment: Mapping[str, str],
+    name: str,
+    *,
+    default: bool,
+) -> bool:
+    token = environment.get(name, "1" if default else "0").strip().lower()
+    if token in _PROFILE_BOOLEAN_FALSE:
+        return False
+    if token in _PROFILE_BOOLEAN_TRUE:
+        return True
+    raise ValueError(f"Unsupported {name}={token!r}")
+
+
+def _validate_profile_environment(
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Resolve late-profile coarse selectors before any expensive capture.
+
+    The continuation is the guarded K=1 Gaussian path, so absent fused and
+    canonical selectors are effectively enabled.  An explicitly requested
+    GEMM macro must therefore carry the same explicit opt-outs as the accepted
+    optimized q32 configuration instead of relying on ambient defaults.
+    """
+
+    environ = os.environ if environment is None else environment
+    ffi = _profile_environment_bool(environ, _PROFILE_FFI_ENV, default=True)
+    sincosf = _profile_environment_bool(
+        environ,
+        _PROFILE_SINCOSF_ENV,
+        default=ffi,
+    )
+    fused_projector = _profile_environment_bool(
+        environ,
+        _PROFILE_FUSED_PROJECTOR_ENV,
+        default=ffi and sincosf,
+    )
+    canonical_reduction = _profile_environment_bool(
+        environ,
+        _PROFILE_CANONICAL_REDUCTION_ENV,
+        default=fused_projector,
+    )
+    native_atomic = _profile_environment_bool(
+        environ,
+        _PROFILE_NATIVE_ATOMIC_ENV,
+        default=False,
+    )
+    single_lane = _profile_environment_bool(
+        environ,
+        _PROFILE_SINGLE_LANE_ENV,
+        default=False,
+    )
+    native_texture = _profile_environment_bool(
+        environ,
+        _PROFILE_NATIVE_TEXTURE_ENV,
+        default=False,
+    )
+    multistream_token = environ.get(_PROFILE_MULTISTREAM_ENV, "0").strip()
+    try:
+        multistream_workers = int(multistream_token)
+    except ValueError as error:
+        raise ValueError(
+            f"{_PROFILE_MULTISTREAM_ENV} must be 0 or 8, got {multistream_token!r}",
+        ) from error
+    if multistream_workers not in {0, 8}:
+        raise ValueError(
+            f"{_PROFILE_MULTISTREAM_ENV} must be 0 or 8, got {multistream_token!r}",
+        )
+    gemm_macro = _profile_environment_bool(
+        environ,
+        _PROFILE_GEMM_MACRO_ENV,
+        default=False,
+    )
+    competing = {
+        _PROFILE_FUSED_PROJECTOR_ENV: fused_projector,
+        _PROFILE_CANONICAL_REDUCTION_ENV: canonical_reduction,
+        _PROFILE_NATIVE_ATOMIC_ENV: native_atomic,
+        _PROFILE_SINGLE_LANE_ENV: single_lane,
+        _PROFILE_MULTISTREAM_ENV: multistream_workers > 0,
+        _PROFILE_NATIVE_TEXTURE_ENV: native_texture,
+    }
+    conflicts = [name for name, enabled in competing.items() if enabled]
+    if gemm_macro and conflicts:
+        rendered = ", ".join(
+            f"{name}={environ.get(name, '<effective default>')}" for name in conflicts
+        )
+        raise ValueError(
+            f"{_PROFILE_GEMM_MACRO_ENV}=1 conflicts with {rendered}; "
+            "set every competing selector explicitly to 0 before profiling",
+        )
+    return {
+        "schema": "recovar.vdam_late_profile_environment_preflight.v1",
+        "gemm_macro_requested": gemm_macro,
+        "resolved_backend": "gemm_macro" if gemm_macro else "non_gemm",
+        "effective_selectors": {
+            _PROFILE_FFI_ENV: ffi,
+            _PROFILE_SINCOSF_ENV: sincosf,
+            _PROFILE_FUSED_PROJECTOR_ENV: fused_projector,
+            _PROFILE_CANONICAL_REDUCTION_ENV: canonical_reduction,
+            _PROFILE_NATIVE_ATOMIC_ENV: native_atomic,
+            _PROFILE_SINGLE_LANE_ENV: single_lane,
+            _PROFILE_MULTISTREAM_ENV: multistream_workers,
+            _PROFILE_NATIVE_TEXTURE_ENV: native_texture,
+        },
+        "explicit_values": {
+            name: environ[name]
+            for name in (
+                _PROFILE_GEMM_MACRO_ENV,
+                _PROFILE_FFI_ENV,
+                _PROFILE_SINCOSF_ENV,
+                *competing,
+            )
+            if name in environ
+        },
+    }
 
 
 def _load_cuda_profiler() -> tuple[Callable[[], None], Callable[[], None]]:

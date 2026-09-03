@@ -13,6 +13,7 @@ from scripts.run_vdam_late_iteration_profile import (
     _process_resource_delta,
     _profile_metadata,
     _recovar_argv,
+    _validate_profile_environment,
 )
 from scripts.summarize_vdam_nsys_sqlite import summarize
 
@@ -249,6 +250,7 @@ def test_late_profile_only_passes_nondefault_candidate_options(tmp_path):
         checkpoint_optimiser=tmp_path / "run_it180_optimiser.star",
         exact_local_bucket_radix=4,
         exact_local_physical_order_chunk_size=0,
+        stable_fourier_window_shapes=False,
     )
 
     control = _recovar_argv(args=args, output_prefix=tmp_path / "control" / "run")
@@ -266,6 +268,70 @@ def test_late_profile_only_passes_nondefault_candidate_options(tmp_path):
     ]
 
 
+def test_late_profile_environment_rejects_implicit_fused_gemm_conflict():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "RECOVAR_K1_COARSE_FUSED_PROJECTOR=<effective default>.*"
+            "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION=<effective default>"
+        ),
+    ):
+        _validate_profile_environment(
+            {"RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "enabled_value"),
+    [
+        ("RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION", "1"),
+        ("RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL", "1"),
+        ("RECOVAR_K1_COARSE_MULTISTREAM_WORKERS", "8"),
+        ("RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE", "1"),
+    ],
+)
+def test_late_profile_environment_rejects_every_explicit_gemm_selector(
+    name,
+    enabled_value,
+):
+    environment = {
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
+        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
+        "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
+        name: enabled_value,
+    }
+    with pytest.raises(ValueError, match=name):
+        _validate_profile_environment(environment)
+
+
+def test_late_profile_environment_accepts_explicit_q32_gemm_selectors():
+    environment = {
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
+        "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
+        "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
+        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
+        "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
+        "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
+        "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS": "0",
+        "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE": "0",
+    }
+
+    report = _validate_profile_environment(environment)
+
+    assert report["resolved_backend"] == "gemm_macro"
+    assert report["gemm_macro_requested"] is True
+    assert all(
+        value in {False, 0}
+        for name, value in report["effective_selectors"].items()
+        if name
+        not in {
+            "RECOVAR_K1_COARSE_GAUSSIAN_FFI",
+            "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF",
+        }
+    )
+
+
 def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     launcher = (ROOT / "scripts" / "run_vdam_late_iteration_profile.sbatch").read_text()
     gdb_commands = (ROOT / "scripts" / "vdam_relion_one_iteration.gdb").read_text()
@@ -275,6 +341,12 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert "--capture-range-end=stop" in launcher
     assert "EXPECTED_RELION_SHA256" in launcher
     assert "EXPECTED_RELION_BIND_SHA256" in launcher
+    assert "profile_environment_preflight.json" in launcher
+    assert launcher.index("profile_environment_preflight.json") < launcher.index(
+        "native_plain_started=",
+    )
+    assert "VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT" in launcher
+    assert "EXPECTED_REUSED_NATIVE_NSYS_SHA256" in launcher
     assert "status --porcelain=v1 --untracked-files=no" in launcher
     assert "test ! -e" in launcher
     assert 'test ! -e "${NATIVE_PROFILE}/run_it' in launcher
