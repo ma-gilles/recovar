@@ -299,6 +299,7 @@ test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = \
   "${EXPECTED_RELION_BIND_SHA256}"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
+unset JAX_SKIP_CUDA_CONSTRAINTS_CHECK
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export CUDA_VISIBLE_DEVICES=${selected_gpu_uuid}
@@ -402,16 +403,22 @@ fi
 
 RECOVAR_NSYS_BASE=${NSIGHT}/recovar_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
 RECOVAR_NSYS_TRACE=cuda,nvtx,osrt
-RECOVAR_NSYS_EXTRA=(
-  "--env-var=LD_PRELOAD=${CUSPARSE_LIBRARY}"
-  --sample=none
-  --cpuctxsw=none
-)
+RECOVAR_NSYS_EXTRA=(--sample=none --cpuctxsw=none)
+RECOVAR_COMMAND_PREFIX=(env "LD_PRELOAD=${CUSPARSE_LIBRARY}")
 if [[ "${HOST_ATTRIBUTION}" = 1 ]]; then
   RECOVAR_NSYS_TRACE=cuda,nvtx,osrt,python-gil
-  RECOVAR_NSYS_EXTRA+=(--python-sampling=true --python-sampling-frequency=1000)
+  # Nsight's Python/GIL/OSRT injection must launch Python directly.  Its
+  # injection interposes the cuSPARSE version probe, so bypass only that
+  # diagnostic check after the normal runtime gate above has passed.
+  RECOVAR_NSYS_EXTRA+=(
+    "--env-var=LD_PRELOAD=${CUSPARSE_LIBRARY},JAX_SKIP_CUDA_CONSTRAINTS_CHECK=1"
+    --python-sampling=true
+    --python-sampling-frequency=1000
+  )
+  RECOVAR_COMMAND_PREFIX=()
 fi
 RECOVAR_COMMAND=(
+  "${RECOVAR_COMMAND_PREFIX[@]}"
   "${PIXI_PY}" -m scripts.run_vdam_late_iteration_profile
   --checkpoint-optimiser "${CHECKPOINT}"
   --input-star "${DATA_STAR}"
