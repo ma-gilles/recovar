@@ -1124,9 +1124,6 @@ def run_local_bucket_big_jit(
         raise ValueError(
             "deferred source VDAM operands require the guarded RELION VDAM M-step route"
         )
-    materialize_deferred_noise_projection = bool(
-        return_deferred_source_vdam_operands and return_deferred_noise_inputs
-    )
     _validate_relion_exact_fine_diff2_preconditions(
         relion_exact_fine_diff2=relion_exact_fine_diff2,
         relion_exact_bpref_operands=relion_exact_bpref_operands,
@@ -1488,7 +1485,7 @@ def run_local_bucket_big_jit(
             if use_compact_relion_projector_projection:
                 if (
                     return_deferred_mstep_inputs
-                    and not materialize_deferred_noise_projection
+                    and (not accumulate_noise or return_deferred_source_vdam_operands)
                     and not return_debug_operands
                 ):
                     proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
@@ -1511,7 +1508,7 @@ def run_local_bucket_big_jit(
             else:
                 if (
                     return_deferred_mstep_inputs
-                    and not materialize_deferred_noise_projection
+                    and (not accumulate_noise or return_deferred_source_vdam_operands)
                     and not return_debug_operands
                 ):
                     proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
@@ -1539,7 +1536,7 @@ def run_local_bucket_big_jit(
         if not score_only:
             if (
                 return_deferred_mstep_inputs
-                and not materialize_deferred_noise_projection
+                and (not accumulate_noise or return_deferred_source_vdam_operands)
                 and not return_debug_operands
             ):
                 proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
@@ -1902,7 +1899,6 @@ def run_local_bucket_big_jit(
             ctf2_over_nv_recon,
             shifted_noise_for_return,
             processed_score_half_for_return,
-            proj_for_noise,
             deferred_source_vdam_images,
             deferred_source_vdam_ctf,
             deferred_source_vdam_minvsigma2,

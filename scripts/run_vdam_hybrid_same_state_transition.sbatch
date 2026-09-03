@@ -26,6 +26,7 @@ LAUNCH_MANIFEST=$(realpath -e -- "${VDAM_SAME_STATE_LAUNCH_MANIFEST}")
 CHECKPOINT_ITERATION=${CHECKPOINT_ITERATION:-34}
 CANDIDATE_MODE=${CANDIDATE_MODE:-hybrid}
 TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
+NOISE_SPLIT_DIAGNOSTICS=${VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS:-0}
 PIXI_PY=$(jq -er '.files.interpreter.path' "${LAUNCH_MANIFEST}")
 RELION_BIND_SOURCE=$(jq -er '.files.relion_bind.path' "${LAUNCH_MANIFEST}")
 CUSPARSE_LIBRARY=$(jq -er '.files.cusparse_library.resolved_path' "${LAUNCH_MANIFEST}")
@@ -61,6 +62,7 @@ on_error() {
 trap on_error ERR
 
 [[ "${CHECKPOINT_ITERATION}" =~ ^[1-9][0-9]*$ ]]
+[[ "${NOISE_SPLIT_DIAGNOSTICS}" =~ ^[01]$ ]]
 case "${CANDIDATE_MODE}" in
   hybrid)
     expected_arm_order=direct_1,hybrid_1,hybrid_2,direct_2
@@ -129,6 +131,8 @@ printf '%s\n' "${SLURMD_NODENAME:-$(hostname -s)}" > "${PROVENANCE}/node.txt"
 printf '%s\n' "${selected_gpu_uuid}" > "${PROVENANCE}/selected_gpu_uuid.txt"
 printf '%s\n' "${VDAM_VISIBLE_GPU_UUIDS_CSV}" > "${PROVENANCE}/visible_gpu_uuids.csv"
 printf '%s\n' "${CANDIDATE_MODE}" > "${PROVENANCE}/candidate_mode.txt"
+printf '%s\n' "${NOISE_SPLIT_DIAGNOSTICS}" \
+  > "${PROVENANCE}/noise_split_diagnostics.txt"
 printf '%s\n' "${CUDA_ARCH_FLAGS}" > "${PROVENANCE}/cuda_arch_flags.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
@@ -152,9 +156,18 @@ mapfile -d '' -t fixed_environment < <(
   jq -j '.runtime_contract.fixed_science_environment | to_entries[] | .key, "=", .value, "\u0000"' \
     "${ACCEPTANCE}"
 )
+diagnostic_environment=()
+if [[ "${NOISE_SPLIT_DIAGNOSTICS}" = 1 ]]; then
+  # This enables aggregate A2/XA returns without requesting per-particle
+  # dumps, so the production local big-JIT path remains active.
+  diagnostic_environment+=(
+    "RECOVAR_NOISE_DEBUG_DUMP_DIR=${RUNTIME}/noise_split_enabled"
+  )
+fi
 command=(
   env -i
   "${fixed_environment[@]}"
+  "${diagnostic_environment[@]}"
   "CUDA_VISIBLE_DEVICES=${selected_gpu_uuid}"
   "JAX_COMPILATION_CACHE_DIR=${RUNTIME}/jax_cache"
   "LD_PRELOAD=${CUSPARSE_LIBRARY}"

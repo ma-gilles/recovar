@@ -1055,15 +1055,14 @@ def test_deferred_packed_vdam_preserves_exact_denominator_and_projects_final_sup
     assert "packed_source_vdam_ctf_probs = jnp.take_along_axis(" in engine
     assert "source_vdam_outer_scatter = bool(" in engine
     assert "_project_packed_noise_rows(" in engine
-    assert "dense_proj_for_noise = jnp.asarray(" in engine
-    assert "deferred_proj_for_noise" in engine
-    assert '"packed_vdam_reuses_score_projection"' in engine
+    assert "dense_proj_for_noise = scatter_flat_local_rows(" in engine
+    assert "compute_local_weighted_sums(\n                        reconstruction_probs," in engine
+    assert "dense_ctf_probs_for_noise = deferred_source_vdam_ctf_probs" in engine
+    assert '"packed_vdam_restores_dense_noise_reduction"' in engine
     assert "_relion_wavg_direct_triplet_shells(" in engine
     assert "materialize_shifted_recon = not return_deferred_source_vdam_operands" in big_jit
-    assert "materialize_deferred_noise_projection = bool(" in big_jit
-    assert "processed_score_half_for_return,\n            proj_for_noise," in big_jit
     assert "relion_vdam_mstep_denominator_f32(" in big_jit
-    assert big_jit.count("and not materialize_deferred_noise_projection") == 3
+    assert big_jit.count("and (not accumulate_noise or return_deferred_source_vdam_operands)") == 3
 
 
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):

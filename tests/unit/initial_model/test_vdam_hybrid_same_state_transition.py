@@ -177,3 +177,5 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "direct_1,packed_deferred_1,packed_deferred_2,direct_2" in sbatch
     assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch
+    assert "VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS" in sbatch
+    assert "RECOVAR_NOISE_DEBUG_DUMP_DIR=${RUNTIME}/noise_split_enabled" in sbatch

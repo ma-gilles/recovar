@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPo
 from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     build_pool_flat_local_row_plan,
     encode_flat_local_row_plan,
+    scatter_flat_local_rows,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     centered_half_indices_to_fftw_half_indices,
@@ -6083,7 +6084,6 @@ def run_local_em_exact(
                     ctf2_over_nv_recon,
                     shifted_noise_split,
                     processed_score_half,
-                    deferred_proj_for_noise,
                     deferred_source_vdam_images,
                     deferred_source_vdam_ctf,
                     deferred_source_vdam_minvsigma2,
@@ -6228,7 +6228,6 @@ def run_local_em_exact(
                             ctf2_over_nv_recon,
                             shifted_noise_split,
                             processed_score_half,
-                            deferred_proj_for_noise,
                             deferred_source_vdam_images,
                             deferred_source_vdam_ctf,
                             deferred_source_vdam_minvsigma2,
@@ -7329,20 +7328,95 @@ def run_local_em_exact(
                     group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
                 )
                 if preserve_dense_noise_reduction:
-                    dense_proj_for_noise = jnp.asarray(
-                        deferred_proj_for_noise,
-                        dtype=jnp.complex64,
+                    packed_rotation_count = int(packed_rotations_np.shape[1])
+                    n_recon_pixels = (
+                        window_spec.n_recon
+                        if window_spec.use_window
+                        else int(n_half)
                     )
-                    expected_noise_projection_shape = (
-                        int(batch_size),
-                        int(bucket.bucket_rotation_count),
-                        window_spec.n_recon if window_spec.use_window else int(n_half),
+                    noise_projection_pixels = (
+                        int(n_half)
+                        if relion_projector_half is not None
+                        else int(n_recon_pixels)
                     )
-                    if dense_proj_for_noise.shape != expected_noise_projection_shape:
-                        raise RuntimeError(
-                            "deferred VDAM score projection did not retain the mature dense noise layout: "
-                            f"{dense_proj_for_noise.shape} vs {expected_noise_projection_shape}",
+                    chunk_rows = min(
+                        packed_rotation_count,
+                        _packed_noise_projection_chunk_rows(
+                            noise_projection_pixels,
+                            batch_size=unpadded_batch_size,
+                        ),
+                    )
+                    if (
+                        chunk_rows < packed_rotation_count
+                        and not logged_deferred_noise_projection_chunking
+                    ):
+                        logger.info(
+                            "Exact local VDAM dense-order noise projection chunking: "
+                            "packed_rows=%d chunk_rows=%d n_recon_pixels=%d "
+                            "projection_pixels=%d batch_size=%d",
+                            packed_rotation_count,
+                            chunk_rows,
+                            n_recon_pixels,
+                            noise_projection_pixels,
+                            unpadded_batch_size,
                         )
+                        logged_deferred_noise_projection_chunking = True
+                    packed_projection_chunks = []
+                    for chunk_start in range(0, packed_rotation_count, chunk_rows):
+                        chunk_stop = min(
+                            packed_rotation_count,
+                            chunk_start + chunk_rows,
+                        )
+                        packed_projection_chunks.append(
+                            _project_packed_noise_rows(
+                                mean_for_proj=mean_for_proj,
+                                packed_flat_rotations=flatten_bucket_rotations(
+                                    jnp.asarray(
+                                        packed_rotations_np[
+                                            :, chunk_start:chunk_stop
+                                        ]
+                                    )
+                                ),
+                                packed_rotation_count=chunk_stop - chunk_start,
+                                batch_size=unpadded_batch_size,
+                                image_shape=image_shape,
+                                proj_volume_shape=proj_volume_shape,
+                                disc_type=disc_type,
+                                projection_kwargs=projection_kwargs,
+                                window_spec=window_spec,
+                                n_half=n_half,
+                                precision_policy=precision_policy,
+                                reconstruction_pack_mask_jnp=(
+                                    reconstruction_pack_mask_jnp[
+                                        :, chunk_start:chunk_stop
+                                    ]
+                                ),
+                                relion_projector_half=relion_projector_half,
+                                relion_projector_r_max=relion_projector_r_max,
+                                projection_padding_factor=(
+                                    projection_padding_factor
+                                ),
+                            )
+                        )
+                    packed_proj_for_noise = jnp.concatenate(
+                        packed_projection_chunks,
+                        axis=1,
+                    )
+                    packed_image_ids = jnp.broadcast_to(
+                        jnp.arange(unpadded_batch_size, dtype=jnp.int32)[
+                            :, None
+                        ],
+                        reconstruction_take_indices_jnp.shape,
+                    )
+                    dense_proj_for_noise = scatter_flat_local_rows(
+                        flatten_bucket_rows(packed_proj_for_noise),
+                        packed_image_ids.reshape(-1),
+                        reconstruction_take_indices_jnp.reshape(-1),
+                        reconstruction_pack_mask_jnp.reshape(-1),
+                        batch_size=int(batch_size),
+                        dense_rotation_count=int(bucket.bucket_rotation_count),
+                        fill_value=0.0,
+                    )
                     dense_shifted_noise_split = jnp.where(
                         support_mass[:, None, None] != 0.0,
                         shifted_noise_split,
@@ -9121,7 +9195,7 @@ def run_local_em_exact(
             packed_local_projection_enabled
         ),
         "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
-        "packed_vdam_reuses_score_projection": np.asarray(
+        "packed_vdam_restores_dense_noise_reduction": np.asarray(
             defer_packed_vdam_enabled and accumulate_noise
         ),
         "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
