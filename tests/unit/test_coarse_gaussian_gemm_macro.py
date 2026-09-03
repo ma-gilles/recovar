@@ -1581,6 +1581,12 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "correctness_oracle_not_runtime" if compact_posterior else None
     )
     assert hybrid_stats["batch_count"] == expected_batch_count
+    assert hybrid_stats["actual_image_batch_sizes"] == (
+        [3] if hybrid_image_batch_size else [2, 1]
+    )
+    assert hybrid_stats["physical_image_batch_sizes"] == (
+        [3] if hybrid_image_batch_size else [2, 2]
+    )
     assert hybrid_stats["selected_rescore_batch_count"] == expected_batch_count
     assert hybrid_stats["fallback_batch_count"] == 0
     assert hybrid_stats["selected_rescore_image_count"] == 3

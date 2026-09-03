@@ -70,6 +70,26 @@ PACKED_FINAL_NOISE_INCREMENTAL_GATE_ARM_ORDER = (
     "direct_oracle",
     *PACKED_FINAL_NOISE_INCREMENTAL_ARM_ORDER,
 )
+HYBRID_IMAGE_BATCH_ABBA_ARM_ORDER = (
+    "abba_batch110_1",
+    "abba_batch200_1",
+    "abba_batch200_2",
+    "abba_batch110_2",
+)
+HYBRID_IMAGE_BATCH_BAAB_ARM_ORDER = (
+    "baab_batch200_1",
+    "baab_batch110_1",
+    "baab_batch110_2",
+    "baab_batch200_2",
+)
+HYBRID_IMAGE_BATCH_ARM_ORDER = (
+    *HYBRID_IMAGE_BATCH_ABBA_ARM_ORDER,
+    *HYBRID_IMAGE_BATCH_BAAB_ARM_ORDER,
+)
+HYBRID_IMAGE_BATCH_GATE_ARM_ORDER = (
+    "direct_oracle",
+    *HYBRID_IMAGE_BATCH_ARM_ORDER,
+)
 HYBRID_PACKED_DEFERRED_ARM_ORDER = (
     "direct_1",
     "hybrid_packed_deferred_1",
@@ -119,6 +139,17 @@ STABLE_FLAT_CAPACITY_ENVIRONMENT = (
 PACKED_PROJECTION_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
 PACKED_DEFERRED_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
 PACKED_FINAL_NOISE_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE"
+HYBRID_IMAGE_BATCH_ENVIRONMENT = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE"
+)
+HYBRID_IMAGE_BATCH_CONTROL_REQUEST = 110
+HYBRID_IMAGE_BATCH_CANDIDATE_REQUEST = 500
+HYBRID_IMAGE_BATCH_CONTROL_EFFECTIVE = 110
+HYBRID_IMAGE_BATCH_CANDIDATE_EFFECTIVE = 200
+HYBRID_IMAGE_BATCH_CONTROL_BATCH_COUNT = 2
+HYBRID_IMAGE_BATCH_CANDIDATE_BATCH_COUNT = 1
+HYBRID_IMAGE_BATCH_CERTIFICATE_CHUNK_ROWS = 4_608
+HYBRID_IMAGE_BATCH_TRANSLATION_COUNT = 49
 CANDIDATE_MODES = (
     "hybrid",
     "flat_rows",
@@ -165,6 +196,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "prewarm packed-deferred and packed-final, then measure mirrored "
             "ABBA/BAAB panels between only those two backends"
+        ),
+    )
+    parser.add_argument(
+        "--mirrored-hybrid-image-batch-panels",
+        action="store_true",
+        help=(
+            "prewarm all ten optimized seams at image batches 110 and 200, "
+            "then measure mirrored ABBA/BAAB panels from one exact state"
         ),
     )
     return parser.parse_args(argv)
@@ -542,6 +581,93 @@ def _coarse_hybrid_profiles(meta: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _validate_hybrid_image_batch_profiles(
+    estep_meta: dict[str, Any],
+    *,
+    requested_batch_size: int,
+    label: str,
+) -> dict[str, Any]:
+    """Prove that only the compact-hybrid image row batch changed."""
+
+    expected_by_request = {
+        HYBRID_IMAGE_BATCH_CONTROL_REQUEST: (
+            HYBRID_IMAGE_BATCH_CONTROL_EFFECTIVE,
+            HYBRID_IMAGE_BATCH_CONTROL_BATCH_COUNT,
+        ),
+        HYBRID_IMAGE_BATCH_CANDIDATE_REQUEST: (
+            HYBRID_IMAGE_BATCH_CANDIDATE_EFFECTIVE,
+            HYBRID_IMAGE_BATCH_CANDIDATE_BATCH_COUNT,
+        ),
+    }
+    try:
+        effective_batch_size, expected_batch_count = expected_by_request[
+            int(requested_batch_size)
+        ]
+    except KeyError as error:
+        raise RuntimeError(
+            f"unsupported hybrid image-batch request {requested_batch_size!r}",
+        ) from error
+    expected = {
+        "input_image_batch_size": HYBRID_IMAGE_BATCH_CONTROL_EFFECTIVE,
+        "requested_hybrid_image_batch_size": int(requested_batch_size),
+        "effective_image_batch_size": effective_batch_size,
+        "streamed_certificate_candidate_count_at_effective_batch": (
+            effective_batch_size
+            * HYBRID_IMAGE_BATCH_CERTIFICATE_CHUNK_ROWS
+            * HYBRID_IMAGE_BATCH_TRANSLATION_COUNT
+        ),
+        "batch_count": expected_batch_count,
+        "selected_rescore_batch_count": expected_batch_count,
+        "fallback_batch_count": 0,
+        "fallback_image_count": 0,
+        "certificate_chunk_count_per_batch": 8,
+        "certificate_chunk_rows": HYBRID_IMAGE_BATCH_CERTIFICATE_CHUNK_ROWS,
+        "selected_rescore_image_count": HYBRID_IMAGE_BATCH_CANDIDATE_EFFECTIVE,
+        "actual_image_batch_sizes": (
+            [110, 90]
+            if effective_batch_size == HYBRID_IMAGE_BATCH_CONTROL_EFFECTIVE
+            else [HYBRID_IMAGE_BATCH_CANDIDATE_EFFECTIVE]
+        ),
+        "physical_image_batch_sizes": (
+            [110, 110]
+            if effective_batch_size == HYBRID_IMAGE_BATCH_CONTROL_EFFECTIVE
+            else [HYBRID_IMAGE_BATCH_CANDIDATE_EFFECTIVE]
+        ),
+    }
+    profiles = _coarse_hybrid_profiles(estep_meta)
+    if not profiles:
+        raise RuntimeError(f"{label} did not publish a hybrid image-batch profile")
+    observed_profiles: dict[str, Any] = {}
+    for profile_name, profile in profiles.items():
+        observed: dict[str, Any] = {}
+        for field, expected_value in expected.items():
+            if field not in profile:
+                raise RuntimeError(
+                    f"{label} profile {profile_name} omitted {field}",
+                )
+            observed[field] = _json_ready(profile[field])
+            if observed[field] != expected_value:
+                raise RuntimeError(
+                    f"{label} profile {profile_name} reported {field}="
+                    f"{observed[field]!r}, expected {expected_value!r}",
+                )
+        observed_profiles[profile_name] = observed
+    return {
+        "requested_batch_size": int(requested_batch_size),
+        "effective_batch_size": int(effective_batch_size),
+        "profile_exact": True,
+        "profiles": observed_profiles,
+        "pass1_image_shape_variants": {
+            "actual": sorted(set(expected["actual_image_batch_sizes"])),
+            "physical": sorted(set(expected["physical_image_batch_sizes"])),
+            "actual_variant_count": len(set(expected["actual_image_batch_sizes"])),
+            "physical_variant_count": len(
+                set(expected["physical_image_batch_sizes"]),
+            ),
+        },
+    }
+
+
 def _validate_packed_final_noise_profiles(
     estep_meta: dict[str, Any],
     *,
@@ -893,6 +1019,33 @@ def _incremental_pair_labels() -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+def _hybrid_image_batch_request_for_label(label: str) -> int | None:
+    if label == "direct_oracle":
+        return None
+    if "batch110" in label:
+        return HYBRID_IMAGE_BATCH_CONTROL_REQUEST
+    if "batch200" in label:
+        return HYBRID_IMAGE_BATCH_CANDIDATE_REQUEST
+    raise ValueError(f"unsupported hybrid image-batch arm label: {label}")
+
+
+def _hybrid_image_batch_arm_specs() -> tuple[tuple[str, int | None], ...]:
+    return tuple(
+        (label, _hybrid_image_batch_request_for_label(label))
+        for label in HYBRID_IMAGE_BATCH_GATE_ARM_ORDER
+    )
+
+
+def _hybrid_image_batch_pair_labels() -> tuple[tuple[str, str], ...]:
+    """Compare every pair in the oracle plus mirrored eight-arm panel."""
+
+    return tuple(
+        (left, right)
+        for left_index, left in enumerate(HYBRID_IMAGE_BATCH_GATE_ARM_ORDER)
+        for right in HYBRID_IMAGE_BATCH_GATE_ARM_ORDER[left_index + 1 :]
+    )
+
+
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -1212,10 +1365,18 @@ def _run_transition_arm(
     candidate_enabled: bool,
     checkpoint_iteration: int,
     backend_mode: str | None = None,
+    hybrid_image_batch_request: int | None = None,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from recovar.data_io.starfile import read_star
     from recovar.em.initial_model.schedules import default_subset_sizes_for_3d_initial_model
+
+    if hybrid_image_batch_request is not None and not (
+        candidate_mode == "all_optimized" and candidate_enabled and backend_mode is None
+    ):
+        raise ValueError(
+            "hybrid image-batch arms require the complete all-optimized backend",
+        )
 
     state = copy.deepcopy(checkpoint["result"].state)
     particle_state = copy.deepcopy(checkpoint["particle_state"])
@@ -1282,6 +1443,10 @@ def _run_transition_arm(
         requested_environment = _candidate_environment(
             resolved_backend_mode,
             enabled=True,
+        )
+    if hybrid_image_batch_request is not None:
+        requested_environment[HYBRID_IMAGE_BATCH_ENVIRONMENT] = str(
+            hybrid_image_batch_request,
         )
     effective_environment: dict[str, str | None] = {}
     started = time.perf_counter()
@@ -1370,6 +1535,14 @@ def _run_transition_arm(
             stable_flat_capacity_contract = all_optimized_contract[
                 "stable_flat_capacity"
             ]
+    if hybrid_image_batch_request is not None:
+        execution_contract["hybrid_image_batch"] = (
+            _validate_hybrid_image_batch_profiles(
+                captured["estep_meta"],
+                requested_batch_size=hybrid_image_batch_request,
+                label=label,
+            )
+        )
     performance_summary = _arm_performance_summary(
         wall_s=wall_s,
         estep_meta=captured["estep_meta"],
@@ -1602,8 +1775,318 @@ def _compact_science_contract(
     }
 
 
+HYBRID_IMAGE_BATCH_REQUIRED_META = (
+    "selected_particle_ids",
+    "best_pose_rotation_ids",
+    "pose_assignments",
+    "class_assignments",
+    "best_pose_translations",
+    "max_posterior_per_image",
+    "significant_counts",
+)
+HYBRID_IMAGE_BATCH_PUBLIC_STATE = (
+    "Mavg",
+    "ave_Pmax",
+    "pdf_class",
+    "pdf_direction",
+    "sigma2_offset",
+    "tau2_class",
+    "fsc_halves_class",
+    "current_resolution",
+    "current_size",
+)
+
+
+def _pair_name(
+    comparisons: dict[str, dict[str, Any]],
+    left: str,
+    right: str,
+) -> str:
+    forward = f"{left}__vs__{right}"
+    reverse = f"{right}__vs__{left}"
+    if forward in comparisons:
+        return forward
+    if reverse in comparisons:
+        return reverse
+    raise KeyError(f"missing same-state comparison for {left!r} and {right!r}")
+
+
+def _unordered_pairs(labels: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (left, right)
+        for left_index, left in enumerate(labels)
+        for right in labels[left_index + 1 :]
+    )
+
+
+def _accumulator_scalar_fields_exact(section: dict[str, Any]) -> bool:
+    entries = section.get("entries")
+    if section.get("comparable") is not True or not isinstance(entries, list) or not entries:
+        return False
+    scalar_count = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return False
+        for comparison in entry.values():
+            if not isinstance(comparison, dict) or "left_shape" in comparison:
+                continue
+            scalar_count += 1
+            if comparison.get("exact_equal") is not True:
+                return False
+    return scalar_count > 0
+
+
+def _dataclass_scalar_fields_exact(section: dict[str, Any]) -> bool:
+    scalar_fields = [
+        comparison
+        for comparison in section.values()
+        if isinstance(comparison, dict) and "left_shape" not in comparison
+    ]
+    return bool(scalar_fields) and all(
+        comparison.get("exact_equal") is True for comparison in scalar_fields
+    )
+
+
+def _multi_repeat_envelope_report(
+    comparisons: dict[str, dict[str, Any]],
+    *,
+    control_labels: tuple[str, ...],
+    candidate_labels: tuple[str, ...],
+    section: str,
+    nested_entries: bool,
+) -> dict[str, Any]:
+    control_pairs = _unordered_pairs(control_labels)
+    candidate_pairs = _unordered_pairs(candidate_labels)
+    cross_pairs = tuple(
+        (control, candidate)
+        for control in control_labels
+        for candidate in candidate_labels
+    )
+
+    def values_by_pair(pairs):
+        return {
+            _pair_name(comparisons, left, right): _numeric_comparison_values(
+                comparisons[_pair_name(comparisons, left, right)][section],
+                nested_entries=nested_entries,
+            )
+            for left, right in pairs
+        }
+
+    control_values = values_by_pair(control_pairs)
+    candidate_values = values_by_pair(candidate_pairs)
+    cross_values = values_by_pair(cross_pairs)
+    paths = sorted(
+        set().union(
+            *(
+                set(values)
+                for values in (
+                    *control_values.values(),
+                    *candidate_values.values(),
+                    *cross_values.values(),
+                )
+            ),
+        ),
+    )
+    rows: dict[str, Any] = {}
+    for path in paths:
+        control_max = max(
+            (values.get(path, 0.0) for values in control_values.values()),
+            default=0.0,
+        )
+        candidate_max = max(
+            (values.get(path, 0.0) for values in candidate_values.values()),
+            default=0.0,
+        )
+        envelope = max(control_max, candidate_max)
+        cross_by_pair = {
+            pair: values.get(path, 0.0) for pair, values in cross_values.items()
+        }
+        cross_max = max(cross_by_pair.values(), default=0.0)
+        within = (
+            cross_max <= float(np.nextafter(envelope, np.inf))
+            if envelope > 0.0
+            else cross_max == 0.0
+        )
+        rows[path] = {
+            "control_repeat_max_normalized_l2": control_max,
+            "candidate_repeat_max_normalized_l2": candidate_max,
+            "repeat_envelope_normalized_l2": envelope,
+            "maximum_cross_normalized_l2": cross_max,
+            "cross_normalized_l2_by_pair": cross_by_pair,
+            "within_observed_repeat_envelope": within,
+        }
+    outside = [
+        path for path, row in rows.items() if not row["within_observed_repeat_envelope"]
+    ]
+    return {
+        "policy": (
+            "every 110/200 cross delta must be no larger than the maximum "
+            "within-backend delta over all six pairs among four warm repeats"
+        ),
+        "control_repeat_pair_count": len(control_pairs),
+        "candidate_repeat_pair_count": len(candidate_pairs),
+        "cross_pair_count": len(cross_pairs),
+        "all_cross_within_observed_repeat_envelope": not outside,
+        "outside_paths": outside,
+        "rows": rows,
+    }
+
+
+def _hybrid_image_batch_science_contract(
+    comparisons: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Gate exact science and repeat-bounded atomics for B=110 versus B=200."""
+
+    control_labels = tuple(
+        label for label in HYBRID_IMAGE_BATCH_ARM_ORDER if "batch110" in label
+    )
+    candidate_labels = tuple(
+        label for label in HYBRID_IMAGE_BATCH_ARM_ORDER if "batch200" in label
+    )
+    exact_pairs = _unordered_pairs(HYBRID_IMAGE_BATCH_GATE_ARM_ORDER)
+    exact_checks: dict[str, Any] = {}
+    for left, right in exact_pairs:
+        pair = _pair_name(comparisons, left, right)
+        comparison = comparisons[pair]
+        meta = comparison["estep_meta"]
+        missing_meta = [
+            key for key in HYBRID_IMAGE_BATCH_REQUIRED_META if key not in meta
+        ]
+        unequal_meta = [
+            key
+            for key in HYBRID_IMAGE_BATCH_REQUIRED_META
+            if key in meta and meta[key].get("exact_equal") is not True
+        ]
+        final_state = comparison["final_state"]
+        missing_public_state = [
+            key for key in HYBRID_IMAGE_BATCH_PUBLIC_STATE if key not in final_state
+        ]
+        unequal_public_state = [
+            key
+            for key in HYBRID_IMAGE_BATCH_PUBLIC_STATE
+            if key in final_state
+            and final_state[key].get("exact_equal") is not True
+        ]
+        exact_checks[pair] = {
+            "required_meta_present": not missing_meta,
+            "missing_meta": missing_meta,
+            "required_meta_exact": not unequal_meta,
+            "unequal_meta": unequal_meta,
+            "support_audits_exact": comparison["support_audits"].get(
+                "exact_equal",
+            )
+            is True,
+            "accumulator_scalars_exact": _accumulator_scalar_fields_exact(
+                comparison["accumulators"],
+            ),
+            "particle_state_exact": _comparison_fields_exact(
+                comparison["particle_state"],
+            ),
+            "sampling_state_exact": _comparison_fields_exact(
+                comparison["sampling_state"],
+            ),
+            "final_state_scalars_exact": _dataclass_scalar_fields_exact(final_state),
+            "public_state_present": not missing_public_state,
+            "missing_public_state": missing_public_state,
+            "public_state_exact": not unequal_public_state,
+            "unequal_public_state": unequal_public_state,
+        }
+        exact_checks[pair]["pass"] = all(
+            value is True
+            for key, value in exact_checks[pair].items()
+            if key
+            not in {
+                "missing_meta",
+                "unequal_meta",
+                "missing_public_state",
+                "unequal_public_state",
+            }
+        )
+
+    accumulator_envelope = _multi_repeat_envelope_report(
+        comparisons,
+        control_labels=control_labels,
+        candidate_labels=candidate_labels,
+        section="accumulators",
+        nested_entries=True,
+    )
+    final_state_envelope = _multi_repeat_envelope_report(
+        comparisons,
+        control_labels=control_labels,
+        candidate_labels=candidate_labels,
+        section="final_state",
+        nested_entries=False,
+    )
+    return {
+        "hard_exact_contract_passed": all(
+            row["pass"] for row in exact_checks.values()
+        ),
+        "hard_exact_policy": (
+            "all 36 oracle/repeat/cross pairs require exact support, hard and "
+            "posterior decisions, accumulator/state scalars, particle/sampling "
+            "state, and public state"
+        ),
+        "exact_pair_checks": exact_checks,
+        "accumulator_repeat_envelope": accumulator_envelope,
+        "final_state_repeat_envelope": final_state_envelope,
+        "atomic_repeat_envelope_passed": bool(
+            accumulator_envelope["all_cross_within_observed_repeat_envelope"]
+            and final_state_envelope["all_cross_within_observed_repeat_envelope"]
+        ),
+    }
+
+
+def _hybrid_image_batch_runtime_contract(
+    arms: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare all four warmed observations from each mirrored backend."""
+
+    result: dict[str, Any] = {}
+    for backend, token in (("batch110", "batch110"), ("batch200", "batch200")):
+        labels = tuple(label for label in HYBRID_IMAGE_BATCH_ARM_ORDER if token in label)
+        measurements: dict[str, list[float]] = {}
+        for metric in ("wall_s", "pass1_time_s", "pass2_time_s"):
+            values = []
+            for label in labels:
+                source = (
+                    arms[label]
+                    if metric == "wall_s"
+                    else arms[label]["performance_summary"]
+                )
+                if metric not in source:
+                    raise RuntimeError(f"{label} omitted runtime metric {metric}")
+                values.append(float(source[metric]))
+            measurements[metric] = values
+        result[backend] = {
+            "labels": list(labels),
+            "repeat_count": len(labels),
+            "measurements": measurements,
+            "median": {
+                metric: float(np.median(values))
+                for metric, values in measurements.items()
+            },
+        }
+    changes = {}
+    for metric in ("wall_s", "pass1_time_s", "pass2_time_s"):
+        control = result["batch110"]["median"][metric]
+        candidate = result["batch200"]["median"][metric]
+        changes[metric] = {
+            "batch110_median": control,
+            "batch200_median": candidate,
+            "fractional_change": candidate / control - 1.0,
+            "speedup": control / candidate,
+        }
+    result["batch200_vs_batch110"] = changes
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if HYBRID_IMAGE_BATCH_ENVIRONMENT in os.environ:
+        raise ValueError(
+            f"{HYBRID_IMAGE_BATCH_ENVIRONMENT} must be absent from the outer "
+            "environment; the mirrored harness scopes it per arm",
+        )
     fixture_dir = args.fixture_dir.resolve(strict=True)
     acceptance_path = args.acceptance_config.resolve(strict=True)
     output_root = args.output_root.resolve()
@@ -1611,9 +2094,18 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("checkpoint-iteration must be positive")
     if args.image_batch_size < 1:
         raise ValueError("image-batch-size must be positive")
+    if args.mirrored_incremental_panels and args.mirrored_hybrid_image_batch_panels:
+        raise ValueError("mirrored panel modes are mutually exclusive")
     if args.mirrored_incremental_panels and args.candidate_mode != "packed_final_noise":
         raise ValueError(
             "mirrored incremental panels require --candidate-mode packed_final_noise"
+        )
+    if (
+        args.mirrored_hybrid_image_batch_panels
+        and args.candidate_mode != "all_optimized"
+    ):
+        raise ValueError(
+            "mirrored hybrid image-batch panels require --candidate-mode all_optimized",
         )
     if output_root.exists():
         raise FileExistsError(f"output root already exists: {output_root}")
@@ -1676,20 +2168,64 @@ def main(argv: list[str] | None = None) -> int:
             del warm
             gc.collect()
         arm_specs = _incremental_arm_specs()
+    elif args.mirrored_hybrid_image_batch_panels:
+        for batch_label, batch_request in (
+            ("batch110", HYBRID_IMAGE_BATCH_CONTROL_REQUEST),
+            ("batch200", HYBRID_IMAGE_BATCH_CANDIDATE_REQUEST),
+        ):
+            warm = _run_transition_arm(
+                checkpoint,
+                label=f"prewarm_{batch_label}",
+                candidate_mode=args.candidate_mode,
+                candidate_enabled=True,
+                checkpoint_iteration=args.checkpoint_iteration,
+                hybrid_image_batch_request=batch_request,
+            )
+            for key, expected in expected_manifests.items():
+                if warm[key]["manifest_sha256"] != expected:
+                    raise RuntimeError(
+                        f"prewarm_{batch_label} did not start from the exact shared {key}",
+                    )
+            batch_contract = warm["execution_contract"]["hybrid_image_batch"]
+            prewarm[batch_label] = {
+                "label": warm["label"],
+                "backend_mode": warm["backend_mode"],
+                "wall_s": warm["wall_s"],
+                "hybrid_image_batch": batch_contract,
+                "initial_state_manifest_sha256": warm["initial_state_manifest"][
+                    "manifest_sha256"
+                ],
+                "initial_particle_state_manifest_sha256": warm[
+                    "initial_particle_state_manifest"
+                ]["manifest_sha256"],
+                "initial_sampling_state_manifest_sha256": warm[
+                    "initial_sampling_state_manifest"
+                ]["manifest_sha256"],
+            }
+            del warm
+            gc.collect()
+        arm_specs = _hybrid_image_batch_arm_specs()
     else:
         legacy_arm_order = _arm_order(args.candidate_mode)
         arm_specs = tuple(
             (label, None)
             for label in legacy_arm_order
         )
-    arm_order = tuple(label for label, _backend_mode in arm_specs)
+    arm_order = tuple(label for label, _arm_parameter in arm_specs)
     arms: dict[str, dict[str, Any]] = {}
-    for label, backend_mode in arm_specs:
-        candidate_enabled = (
-            _arm_candidate_enabled(label, args.candidate_mode)
-            if backend_mode is None
-            else backend_mode == args.candidate_mode
-        )
+    for label, arm_parameter in arm_specs:
+        if args.mirrored_hybrid_image_batch_panels:
+            backend_mode = None
+            hybrid_image_batch_request = arm_parameter
+            candidate_enabled = hybrid_image_batch_request is not None
+        else:
+            backend_mode = arm_parameter
+            hybrid_image_batch_request = None
+            candidate_enabled = (
+                _arm_candidate_enabled(label, args.candidate_mode)
+                if backend_mode is None
+                else backend_mode == args.candidate_mode
+            )
         arms[label] = _run_transition_arm(
             checkpoint,
             label=label,
@@ -1697,6 +2233,7 @@ def main(argv: list[str] | None = None) -> int:
             candidate_enabled=candidate_enabled,
             checkpoint_iteration=args.checkpoint_iteration,
             backend_mode=backend_mode,
+            hybrid_image_batch_request=hybrid_image_batch_request,
         )
 
     for label, arm in arms.items():
@@ -1706,6 +2243,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mirrored_incremental_panels:
         pair_labels = _incremental_pair_labels()
+    elif args.mirrored_hybrid_image_batch_panels:
+        pair_labels = _hybrid_image_batch_pair_labels()
     else:
         candidate_1, candidate_2 = arm_order[1:3]
         pair_labels = (
@@ -1720,11 +2259,22 @@ def main(argv: list[str] | None = None) -> int:
         f"{left}__vs__{right}": _pair_report(arms[left], arms[right])
         for left, right in pair_labels
     }
-    compact_science_contract = (
-        _compact_science_contract(comparisons, arm_order)
-        if _candidate_uses_compact_posterior(args.candidate_mode)
+    hybrid_image_batch_science_contract = (
+        _hybrid_image_batch_science_contract(comparisons)
+        if args.mirrored_hybrid_image_batch_panels
         else None
     )
+    hybrid_image_batch_runtime_contract = (
+        _hybrid_image_batch_runtime_contract(arms)
+        if args.mirrored_hybrid_image_batch_panels
+        else None
+    )
+    compact_science_contract = None
+    if (
+        not args.mirrored_hybrid_image_batch_panels
+        and _candidate_uses_compact_posterior(args.candidate_mode)
+    ):
+        compact_science_contract = _compact_science_contract(comparisons, arm_order)
     arm_dir = output_root / "arms"
     arm_dir.mkdir()
     arm_summaries: dict[str, Any] = {}
@@ -1785,6 +2335,9 @@ def main(argv: list[str] | None = None) -> int:
         "profiled_iteration": int(args.checkpoint_iteration) + 1,
         "candidate_mode": args.candidate_mode,
         "mirrored_incremental_panels": bool(args.mirrored_incremental_panels),
+        "mirrored_hybrid_image_batch_panels": bool(
+            args.mirrored_hybrid_image_batch_panels,
+        ),
         "frozen_nr_iter_schedule": frozen_nr_iter,
         "arm_order": list(arm_order),
         "panel_orders": (
@@ -1793,6 +2346,11 @@ def main(argv: list[str] | None = None) -> int:
                 "baab": list(PACKED_FINAL_NOISE_INCREMENTAL_BAAB_ARM_ORDER),
             }
             if args.mirrored_incremental_panels
+            else {
+                "abba": list(HYBRID_IMAGE_BATCH_ABBA_ARM_ORDER),
+                "baab": list(HYBRID_IMAGE_BATCH_BAAB_ARM_ORDER),
+            }
+            if args.mirrored_hybrid_image_batch_panels
             else {"abba": list(arm_order)}
         ),
         "prewarm": prewarm,
@@ -1804,6 +2362,12 @@ def main(argv: list[str] | None = None) -> int:
         "arms": arm_summaries,
         "comparisons": comparisons,
         "compact_science_contract": compact_science_contract,
+        "hybrid_image_batch_science_contract": (
+            hybrid_image_batch_science_contract
+        ),
+        "hybrid_image_batch_runtime_contract": (
+            hybrid_image_batch_runtime_contract
+        ),
         "same_state_contract": {
             "model_state_exact_for_every_arm": True,
             "particle_state_exact_for_every_arm": True,
@@ -1811,6 +2375,8 @@ def main(argv: list[str] | None = None) -> int:
             "baseline_trajectory_backend": (
                 "packed_deferred"
                 if args.mirrored_incremental_panels
+                else "all_optimized_hybrid_image_batch_110"
+                if args.mirrored_hybrid_image_batch_panels
                 else (
                     "hybrid_packed_deferred_stable_fourier_off"
                     if args.candidate_mode == "stable_shapes"
@@ -1822,25 +2388,37 @@ def main(argv: list[str] | None = None) -> int:
                 )
             ),
             "candidate_backend": (
-                "hybrid_packed_deferred_stable_fourier_on"
-                if args.candidate_mode == "stable_shapes"
+                "all_optimized_hybrid_image_batch_200"
+                if args.mirrored_hybrid_image_batch_panels
                 else (
-                    "hybrid_packed_deferred_stable_flat_capacity_on"
-                    if args.candidate_mode == "stable_flat_capacity"
-                    else args.candidate_mode
+                    "hybrid_packed_deferred_stable_fourier_on"
+                    if args.candidate_mode == "stable_shapes"
+                    else (
+                        "hybrid_packed_deferred_stable_flat_capacity_on"
+                        if args.candidate_mode == "stable_flat_capacity"
+                        else args.candidate_mode
+                    )
                 )
             ),
             "transition_panel": (
                 "packed_deferred/packed_final_noise/packed_final_noise/packed_deferred"
                 "+packed_final_noise/packed_deferred/packed_deferred/packed_final_noise"
                 if args.mirrored_incremental_panels
+                else "batch110/batch200/batch200/batch110"
+                "+batch200/batch110/batch110/batch200"
+                if args.mirrored_hybrid_image_batch_panels
                 else "/".join(arm_order)
             ),
-            "both_incremental_backends_prewarmed": bool(
+            "both_compared_backends_prewarmed": bool(
                 args.mirrored_incremental_panels
+                or args.mirrored_hybrid_image_batch_panels
+            ),
+            "both_incremental_backends_prewarmed": bool(
+                args.mirrored_incremental_panels,
             ),
             "direct_oracle_from_shared_checkpoint": bool(
                 args.mirrored_incremental_panels
+                or args.mirrored_hybrid_image_batch_panels
             ),
             "oracle_backend": "direct",
             "support_audit_ids_enabled_for_transition_arms": True,
@@ -1850,6 +2428,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             "all_optimized_profile_fail_closed": args.candidate_mode
             == "all_optimized",
+            "hybrid_image_batch_profile_fail_closed": bool(
+                args.mirrored_hybrid_image_batch_panels,
+            ),
         },
         "science_promotion_allowed": False,
     }
@@ -1871,6 +2452,11 @@ def main(argv: list[str] | None = None) -> int:
     if (
         compact_science_contract is not None
         and not compact_science_contract["hard_exact_contract_passed"]
+    ):
+        return 1
+    if hybrid_image_batch_science_contract is not None and not (
+        hybrid_image_batch_science_contract["hard_exact_contract_passed"]
+        and hybrid_image_batch_science_contract["atomic_repeat_envelope_passed"]
     ):
         return 1
     return 0

@@ -5603,6 +5603,8 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates = 0
     coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates = 0
     coarse_gaussian_gemm_hybrid_fallback_reasons = {}
+    coarse_gaussian_gemm_hybrid_actual_image_batch_sizes = []
+    coarse_gaussian_gemm_hybrid_physical_image_batch_sizes = []
 
     start_idx = 0
     image_indices = np.arange(n_images)
@@ -5646,6 +5648,13 @@ def _compute_k_class_significance_batched(
                 target_size=int(image_batch_size),
             )
         batch_size = int(np.asarray(batch_data).shape[0])
+        if coarse_gaussian_gemm_hybrid_requested:
+            coarse_gaussian_gemm_hybrid_actual_image_batch_sizes.append(
+                int(actual_batch_size),
+            )
+            coarse_gaussian_gemm_hybrid_physical_image_batch_sizes.append(
+                int(batch_size),
+            )
         local_indices_np = np.asarray(indices, dtype=np.int64)
         batch_original_indices_np = None
         if coarse_gaussian_gemm_stream_diagnostic_dir is not None:
@@ -7429,6 +7438,12 @@ def _compute_k_class_significance_batched(
             "expanded_gemm_scores_published": False,
             "whole_batch_fail_closed_fallback": True,
             "batch_count": int(coarse_gaussian_gemm_hybrid_batch_count),
+            "actual_image_batch_sizes": list(
+                coarse_gaussian_gemm_hybrid_actual_image_batch_sizes,
+            ),
+            "physical_image_batch_sizes": list(
+                coarse_gaussian_gemm_hybrid_physical_image_batch_sizes,
+            ),
             "input_image_batch_size": int(input_image_batch_size),
             "requested_hybrid_image_batch_size": (
                 None

@@ -270,6 +270,8 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert compact_packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
     assert all(value == "0" for value in all_optimized_control.values())
     assert all(value == "1" for value in all_optimized.values())
+    assert runner.HYBRID_IMAGE_BATCH_ENVIRONMENT not in all_optimized_control
+    assert runner.HYBRID_IMAGE_BATCH_ENVIRONMENT not in all_optimized
     assert runner._candidate_uses_hybrid("compact_posterior") is True
     assert runner._candidate_uses_hybrid("compact_packed_deferred") is True
     assert runner._candidate_uses_hybrid("all_optimized") is True
@@ -297,6 +299,24 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
         )
         is True
     )
+
+
+def test_hybrid_image_batch_gate_uses_one_oracle_and_mirrored_four_repeats() -> None:
+    specs = runner._hybrid_image_batch_arm_specs()
+    assert tuple(label for label, _request in specs) == (
+        runner.HYBRID_IMAGE_BATCH_GATE_ARM_ORDER
+    )
+    assert specs[0] == ("direct_oracle", None)
+    assert [request for _label, request in specs].count(110) == 4
+    assert [request for _label, request in specs].count(500) == 4
+
+    pairs = runner._hybrid_image_batch_pair_labels()
+    assert len(pairs) == 36
+    assert len(set(pairs)) == len(pairs)
+    assert ("direct_oracle", "abba_batch110_1") in pairs
+    assert ("abba_batch110_1", "abba_batch200_1") in pairs
+    assert ("abba_batch110_1", "baab_batch110_1") in pairs
+    assert ("abba_batch200_1", "baab_batch200_1") in pairs
 
 
 def test_same_state_stable_flat_capacity_profiles_prove_engine_execution() -> None:
@@ -373,6 +393,89 @@ def _compact_profile(**updates):
     }
     profile.update(updates)
     return profile
+
+
+def _hybrid_image_batch_meta(requested_batch_size: int) -> dict:
+    if requested_batch_size == 110:
+        effective_batch_size = 110
+        batch_count = 2
+    elif requested_batch_size == 500:
+        effective_batch_size = 200
+        batch_count = 1
+    else:
+        raise ValueError(requested_batch_size)
+    profile = _compact_profile(
+        input_image_batch_size=110,
+        requested_hybrid_image_batch_size=requested_batch_size,
+        effective_image_batch_size=effective_batch_size,
+        streamed_certificate_candidate_count_at_effective_batch=(
+            effective_batch_size * 4_608 * 49
+        ),
+        batch_count=batch_count,
+        selected_rescore_batch_count=batch_count,
+        selected_rescore_image_count=200,
+        actual_image_batch_sizes=(
+            [110, 90] if requested_batch_size == 110 else [200]
+        ),
+        physical_image_batch_sizes=(
+            [110, 110] if requested_batch_size == 110 else [200]
+        ),
+    )
+    return {
+        "halfset_0_profile_summary": {
+            "coarse_gaussian_gemm_hybrid": profile,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("requested_batch_size", "effective_batch_size", "batch_count"),
+    [(110, 110, 2), (500, 200, 1)],
+)
+def test_hybrid_image_batch_profile_contract_is_exact(
+    requested_batch_size: int,
+    effective_batch_size: int,
+    batch_count: int,
+) -> None:
+    contract = runner._validate_hybrid_image_batch_profiles(
+        _hybrid_image_batch_meta(requested_batch_size),
+        requested_batch_size=requested_batch_size,
+        label="arm",
+    )
+
+    assert contract["requested_batch_size"] == requested_batch_size
+    assert contract["effective_batch_size"] == effective_batch_size
+    assert contract["profile_exact"] is True
+    profile = contract["profiles"]["halfset_0_profile_summary"]
+    assert profile["batch_count"] == batch_count
+    assert profile["fallback_batch_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("requested_batch_size", "broken_field", "broken_value"),
+    [
+        (110, "batch_count", 1),
+        (500, "effective_image_batch_size", 110),
+        (500, "streamed_certificate_candidate_count_at_effective_batch", 1),
+        (500, "fallback_batch_count", 1),
+    ],
+)
+def test_hybrid_image_batch_profile_contract_fails_closed(
+    requested_batch_size: int,
+    broken_field: str,
+    broken_value: int,
+) -> None:
+    meta = _hybrid_image_batch_meta(requested_batch_size)
+    meta["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"][
+        broken_field
+    ] = broken_value
+
+    with pytest.raises(RuntimeError, match=broken_field):
+        runner._validate_hybrid_image_batch_profiles(
+            meta,
+            requested_batch_size=requested_batch_size,
+            label="arm",
+        )
 
 
 def test_compact_posterior_execution_contract_requires_effective_profile() -> None:
@@ -778,6 +881,111 @@ def test_compact_science_contract_localizes_exact_and_repeat_envelope_failure() 
     assert accumulator["outside_paths"] == ["0.A2"]
 
 
+def _hybrid_image_batch_science_pair(normalized_l2: float) -> dict:
+    exact = {"exact_equal": True}
+    array_delta = {
+        "exact_equal": normalized_l2 == 0.0,
+        "left_shape": [2],
+        "normalized_l2_delta": normalized_l2,
+    }
+    return {
+        "estep_meta": {
+            key: dict(exact) for key in runner.HYBRID_IMAGE_BATCH_REQUIRED_META
+        },
+        "support_audits": {"exact_equal": True},
+        "accumulators": {
+            "comparable": True,
+            "entries": [
+                {
+                    "class_idx": dict(exact),
+                    "halfset_idx": dict(exact),
+                    "data": dict(array_delta),
+                },
+            ],
+        },
+        "particle_state": {"rot": dict(exact)},
+        "sampling_state": {"order": dict(exact)},
+        "final_state": {
+            **{
+                field: dict(exact)
+                for field in runner.HYBRID_IMAGE_BATCH_PUBLIC_STATE
+            },
+            "iter": dict(exact),
+            "Igrad1": dict(array_delta),
+        },
+    }
+
+
+def _hybrid_image_batch_science_comparisons() -> dict:
+    comparisons = {}
+    for left, right in runner._hybrid_image_batch_pair_labels():
+        if left == "direct_oracle":
+            normalized_l2 = 8.0e-7
+        elif "batch110" in left and "batch110" in right:
+            normalized_l2 = 3.0e-7
+        elif "batch200" in left and "batch200" in right:
+            normalized_l2 = 2.0e-7
+        else:
+            normalized_l2 = 1.0e-7
+        comparisons[f"{left}__vs__{right}"] = _hybrid_image_batch_science_pair(
+            normalized_l2,
+        )
+    return comparisons
+
+
+def test_hybrid_image_batch_science_contract_uses_all_four_warm_repeats() -> None:
+    contract = runner._hybrid_image_batch_science_contract(
+        _hybrid_image_batch_science_comparisons(),
+    )
+
+    assert contract["hard_exact_contract_passed"] is True
+    assert len(contract["exact_pair_checks"]) == 36
+    accumulator = contract["accumulator_repeat_envelope"]
+    assert accumulator["control_repeat_pair_count"] == 6
+    assert accumulator["candidate_repeat_pair_count"] == 6
+    assert accumulator["cross_pair_count"] == 16
+    assert accumulator["rows"]["0.data"]["repeat_envelope_normalized_l2"] == 3.0e-7
+    assert contract["atomic_repeat_envelope_passed"] is True
+
+
+def test_hybrid_image_batch_science_contract_fails_closed() -> None:
+    comparisons = _hybrid_image_batch_science_comparisons()
+    failed_pair = "abba_batch110_1__vs__abba_batch200_1"
+    comparisons[failed_pair]["accumulators"]["entries"][0]["data"][
+        "normalized_l2_delta"
+    ] = 4.0e-7
+    comparisons[failed_pair]["final_state"]["Mavg"]["exact_equal"] = False
+
+    contract = runner._hybrid_image_batch_science_contract(comparisons)
+
+    assert contract["hard_exact_contract_passed"] is False
+    assert contract["exact_pair_checks"][failed_pair]["unequal_public_state"] == [
+        "Mavg"
+    ]
+    assert contract["atomic_repeat_envelope_passed"] is False
+    assert contract["accumulator_repeat_envelope"]["outside_paths"] == ["0.data"]
+
+
+def test_hybrid_image_batch_runtime_contract_compares_four_warm_arms_each() -> None:
+    arms = {}
+    for index, label in enumerate(runner.HYBRID_IMAGE_BATCH_ARM_ORDER):
+        candidate = "batch200" in label
+        arms[label] = {
+            "wall_s": (0.8 if candidate else 1.0) + index * 0.001,
+            "performance_summary": {
+                "pass1_time_s": (0.4 if candidate else 0.5) + index * 0.001,
+                "pass2_time_s": 0.3 + index * 0.001,
+            },
+        }
+
+    contract = runner._hybrid_image_batch_runtime_contract(arms)
+
+    assert contract["batch110"]["repeat_count"] == 4
+    assert contract["batch200"]["repeat_count"] == 4
+    assert len(contract["batch110"]["measurements"]["pass1_time_s"]) == 4
+    assert contract["batch200_vs_batch110"]["pass1_time_s"]["speedup"] > 1.0
+
+
 def test_arm_performance_summary_exposes_compact_table_geometry() -> None:
     profile = _compact_profile()
     summary = runner._arm_performance_summary(
@@ -1000,3 +1208,14 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert '.packed_final_noise.backend_mode == "packed_deferred"' in sbatch
     assert '.packed_final_noise.backend_mode == "packed_final_noise"' in sbatch
     assert "sum_packed_final_noise_rows] | all(. > 0)" in sbatch
+    assert "VDAM_SAME_STATE_MIRRORED_HYBRID_IMAGE_BATCH_PANELS" in sbatch
+    assert "--mirrored-hybrid-image-batch-panels" in source
+    assert (
+        "direct_oracle,abba_batch110_1,abba_batch200_1,abba_batch200_2,"
+        "abba_batch110_2,baab_batch200_1,baab_batch110_1,"
+        "baab_batch110_2,baab_batch200_2"
+        in sbatch
+    )
+    assert "streamed_certificate_candidate_count_at_effective_batch == 24837120" in sbatch
+    assert "streamed_certificate_candidate_count_at_effective_batch == 45158400" in sbatch
+    assert "pass1_jax_cache_name_counts.txt" in sbatch

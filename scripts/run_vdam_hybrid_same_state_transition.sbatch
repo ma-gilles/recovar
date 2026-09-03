@@ -28,6 +28,7 @@ CANDIDATE_MODE=${CANDIDATE_MODE:-hybrid}
 TARGET_GPU_UUID=${TARGET_GPU_UUID:-}
 NOISE_SPLIT_DIAGNOSTICS=${VDAM_SAME_STATE_NOISE_SPLIT_DIAGNOSTICS:-0}
 MIRRORED_INCREMENTAL_PANELS=${VDAM_SAME_STATE_MIRRORED_INCREMENTAL_PANELS:-0}
+MIRRORED_HYBRID_IMAGE_BATCH_PANELS=${VDAM_SAME_STATE_MIRRORED_HYBRID_IMAGE_BATCH_PANELS:-0}
 PIXI_PY=$(jq -er '.files.interpreter.path' "${LAUNCH_MANIFEST}")
 RELION_BIND_SOURCE=$(jq -er '.files.relion_bind.path' "${LAUNCH_MANIFEST}")
 CUSPARSE_LIBRARY=$(jq -er '.files.cusparse_library.resolved_path' "${LAUNCH_MANIFEST}")
@@ -65,6 +66,8 @@ trap on_error ERR
 [[ "${CHECKPOINT_ITERATION}" =~ ^[1-9][0-9]*$ ]]
 [[ "${NOISE_SPLIT_DIAGNOSTICS}" =~ ^[01]$ ]]
 [[ "${MIRRORED_INCREMENTAL_PANELS}" =~ ^[01]$ ]]
+[[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" =~ ^[01]$ ]]
+test "$((MIRRORED_INCREMENTAL_PANELS + MIRRORED_HYBRID_IMAGE_BATCH_PANELS))" -le 1
 case "${CANDIDATE_MODE}" in
   hybrid)
     expected_arm_order=direct_1,hybrid_1,hybrid_2,direct_2
@@ -107,6 +110,10 @@ esac
 if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
   test "${CANDIDATE_MODE}" = packed_final_noise
   expected_arm_order=direct_oracle,abba_packed_deferred_1,abba_packed_final_noise_1,abba_packed_final_noise_2,abba_packed_deferred_2,baab_packed_final_noise_1,baab_packed_deferred_1,baab_packed_deferred_2,baab_packed_final_noise_2
+fi
+if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
+  test "${CANDIDATE_MODE}" = all_optimized
+  expected_arm_order=direct_oracle,abba_batch110_1,abba_batch200_1,abba_batch200_2,abba_batch110_2,baab_batch200_1,baab_batch110_1,baab_batch110_2,baab_batch200_2
 fi
 test ! -e "${ROOT}"
 test -x "${PIXI_PY}"
@@ -162,6 +169,8 @@ printf '%s\n' "${NOISE_SPLIT_DIAGNOSTICS}" \
   > "${PROVENANCE}/noise_split_diagnostics.txt"
 printf '%s\n' "${MIRRORED_INCREMENTAL_PANELS}" \
   > "${PROVENANCE}/mirrored_incremental_panels.txt"
+printf '%s\n' "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" \
+  > "${PROVENANCE}/mirrored_hybrid_image_batch_panels.txt"
 printf '%s\n' "${CUDA_ARCH_FLAGS}" > "${PROVENANCE}/cuda_arch_flags.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${PROVENANCE}/nvidia_smi.txt"
 scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
@@ -231,6 +240,9 @@ command=(
 if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
   command+=(--mirrored-incremental-panels)
 fi
+if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
+  command+=(--mirrored-hybrid-image-batch-panels)
+fi
 printf '%q ' "${command[@]}" > "${PROVENANCE}/command.sh"
 printf '\n' >> "${PROVENANCE}/command.sh"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
@@ -250,6 +262,15 @@ kill "${monitor_pid}" 2>/dev/null || true
 wait "${monitor_pid}" 2>/dev/null || true
 monitor_pid=
 
+find "${RUNTIME}/jax_cache" -maxdepth 1 -type f -name '*-cache' -printf '%f\n' \
+  | sed -E 's/-[0-9a-f]{64}-cache$//' \
+  | LC_ALL=C sort | uniq -c | sort -nr \
+  > "${PROVENANCE}/jax_cache_name_counts.txt"
+grep -E \
+  'coarse|prepare_relion|assemble_coarse|update_logsumexp|posterior|translate_score|gather|where|take_along_axis' \
+  "${PROVENANCE}/jax_cache_name_counts.txt" \
+  > "${PROVENANCE}/pass1_jax_cache_name_counts.txt" || true
+
 test -s "${SCIENCE}/report.json"
 test "$(jq -r '.schema' "${SCIENCE}/report.json")" = \
   'recovar.vdam_hybrid_same_state_transition.v3'
@@ -259,11 +280,14 @@ test "$(jq -r '.candidate_mode' "${SCIENCE}/report.json")" = \
   "${CANDIDATE_MODE}"
 test "$(jq -r '.mirrored_incremental_panels' "${SCIENCE}/report.json")" = \
   "$([[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]] && printf true || printf false)"
+test "$(jq -r '.mirrored_hybrid_image_batch_panels' "${SCIENCE}/report.json")" = \
+  "$([[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]] && printf true || printf false)"
 test "$(jq -r '.arm_order | join(",")' "${SCIENCE}/report.json")" = \
   "${expected_arm_order}"
 if [[ "${CANDIDATE_MODE}" == compact_posterior || \
       "${CANDIDATE_MODE}" == compact_packed_deferred || \
-      "${CANDIDATE_MODE}" == all_optimized ]]; then
+      "${CANDIDATE_MODE}" == all_optimized ]] && \
+   [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 0 ]]; then
   jq -e '.compact_science_contract.hard_exact_contract_passed == true' \
     "${SCIENCE}/report.json" > /dev/null
   for arm in direct_1 direct_2; do
@@ -296,7 +320,8 @@ if [[ "${CANDIDATE_MODE}" == compact_posterior || \
     done
   fi
 fi
-if [[ "${CANDIDATE_MODE}" == all_optimized ]]; then
+if [[ "${CANDIDATE_MODE}" == all_optimized && \
+      "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 0 ]]; then
   for arm in direct_1 direct_2; do
     jq -e --arg arm "${arm}" \
       '.arms[$arm]
@@ -323,6 +348,120 @@ if [[ "${CANDIDATE_MODE}" == all_optimized ]]; then
          and .stable_flat_capacity_contract.enabled == true
          and .stable_flat_capacity_contract.strict_reduction_count == 0' \
       "${SCIENCE}/report.json" > /dev/null
+  done
+fi
+if [[ "${MIRRORED_HYBRID_IMAGE_BATCH_PANELS}" = 1 ]]; then
+  test "$(jq -r '.prewarm | keys | join(",")' "${SCIENCE}/report.json")" = \
+    batch110,batch200
+  test "$(jq -r '.same_state_contract.baseline_trajectory_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_hybrid_image_batch_110
+  test "$(jq -r '.same_state_contract.candidate_backend' "${SCIENCE}/report.json")" = \
+    all_optimized_hybrid_image_batch_200
+  test "$(jq -r '.same_state_contract.both_compared_backends_prewarmed' "${SCIENCE}/report.json")" = \
+    true
+  test "$(jq -r '.same_state_contract.direct_oracle_from_shared_checkpoint' "${SCIENCE}/report.json")" = \
+    true
+  jq -e '
+    .hybrid_image_batch_science_contract
+    | .hard_exact_contract_passed == true
+      and .atomic_repeat_envelope_passed == true
+      and (.exact_pair_checks | length) == 36
+      and .accumulator_repeat_envelope.control_repeat_pair_count == 6
+      and .accumulator_repeat_envelope.candidate_repeat_pair_count == 6
+      and .accumulator_repeat_envelope.cross_pair_count == 16
+      and .accumulator_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+      and .final_state_repeat_envelope.control_repeat_pair_count == 6
+      and .final_state_repeat_envelope.candidate_repeat_pair_count == 6
+      and .final_state_repeat_envelope.cross_pair_count == 16
+      and .final_state_repeat_envelope.all_cross_within_observed_repeat_envelope == true
+  ' "${SCIENCE}/report.json" >/dev/null
+  jq -e '
+    .hybrid_image_batch_runtime_contract
+    | .batch110.repeat_count == 4
+      and .batch200.repeat_count == 4
+      and ([.batch110.measurements[], .batch200.measurements[]]
+           | all(length == 4 and all(. > 0)))
+  ' "${SCIENCE}/report.json" >/dev/null
+  jq -e --arg env_name RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE '
+    .arms.direct_oracle
+    | .candidate_enabled == false
+      and .backend_mode == "direct"
+      and .execution_contract.environment_exact == true
+      and (.execution_contract.requested_environment | has($env_name) | not)
+      and (.execution_contract.effective_environment | has($env_name) | not)
+      and .execution_contract.compact_requested == false
+      and .execution_contract.compact_effective == false
+      and .execution_contract.all_optimized_profile_exact == true
+      and .execution_contract.all_optimized.enabled == false
+      and (.execution_contract.all_optimized.disabled_seams | length) == 10
+  ' "${SCIENCE}/report.json" >/dev/null
+  for arm in \
+    abba_batch110_1 abba_batch110_2 \
+    baab_batch110_1 baab_batch110_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == true
+        and .backend_mode == "all_optimized"
+        and .execution_contract.environment_exact == true
+        and .execution_contract.effective_environment.RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE == "110"
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.all_optimized_profile_exact == true
+        and .execution_contract.all_optimized.enabled == true
+        and (.execution_contract.all_optimized.enabled_seams | length) == 10
+        and (.execution_contract.all_optimized.disabled_seams | length) == 0
+        and .execution_contract.hybrid_image_batch.requested_batch_size == 110
+        and .execution_contract.hybrid_image_batch.effective_batch_size == 110
+        and .execution_contract.hybrid_image_batch.profile_exact == true
+        and ([.execution_contract.hybrid_image_batch.profiles[]
+              | .input_image_batch_size == 110
+                and .requested_hybrid_image_batch_size == 110
+                and .effective_image_batch_size == 110
+                and .streamed_certificate_candidate_count_at_effective_batch == 24837120
+                and .batch_count == 2
+                and .selected_rescore_batch_count == 2
+                and .fallback_batch_count == 0
+                and .fallback_image_count == 0
+                and .certificate_chunk_count_per_batch == 8
+                and .certificate_chunk_rows == 4608
+                and .selected_rescore_image_count == 200
+                and .actual_image_batch_sizes == [110, 90]
+                and .physical_image_batch_sizes == [110, 110]] | all)
+    ' "${SCIENCE}/report.json" >/dev/null
+  done
+  for arm in \
+    abba_batch200_1 abba_batch200_2 \
+    baab_batch200_1 baab_batch200_2; do
+    jq -e --arg arm "${arm}" '
+      .arms[$arm]
+      | .candidate_enabled == true
+        and .backend_mode == "all_optimized"
+        and .execution_contract.environment_exact == true
+        and .execution_contract.effective_environment.RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE == "500"
+        and .execution_contract.compact_requested == true
+        and .execution_contract.compact_effective == true
+        and .execution_contract.all_optimized_profile_exact == true
+        and .execution_contract.all_optimized.enabled == true
+        and (.execution_contract.all_optimized.enabled_seams | length) == 10
+        and (.execution_contract.all_optimized.disabled_seams | length) == 0
+        and .execution_contract.hybrid_image_batch.requested_batch_size == 500
+        and .execution_contract.hybrid_image_batch.effective_batch_size == 200
+        and .execution_contract.hybrid_image_batch.profile_exact == true
+        and ([.execution_contract.hybrid_image_batch.profiles[]
+              | .input_image_batch_size == 110
+                and .requested_hybrid_image_batch_size == 500
+                and .effective_image_batch_size == 200
+                and .streamed_certificate_candidate_count_at_effective_batch == 45158400
+                and .batch_count == 1
+                and .selected_rescore_batch_count == 1
+                and .fallback_batch_count == 0
+                and .fallback_image_count == 0
+                and .certificate_chunk_count_per_batch == 8
+                and .certificate_chunk_rows == 4608
+                and .selected_rescore_image_count == 200
+                and .actual_image_batch_sizes == [200]
+                and .physical_image_batch_sizes == [200]] | all)
+    ' "${SCIENCE}/report.json" >/dev/null
   done
 fi
 if [[ "${MIRRORED_INCREMENTAL_PANELS}" = 1 ]]; then
