@@ -32,8 +32,7 @@ ARM_SPECS = (
 PREWARM_SPECS = (("prewarm_dynamic", 64), ("prewarm_oracle", 288))
 
 
-def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input-star", type=Path, required=True)
     parser.add_argument("--checkpoint-optimiser", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -48,10 +47,22 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--exact-local-physical-order-chunk-size", type=int, default=0
     )
     parser.add_argument("--stable-fourier-window-shapes", action="store_true")
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    _add_common_arguments(parser)
     return parser.parse_args(argv)
 
 
-def _run_arm(args: argparse.Namespace, label: str, capacity: int) -> dict:
+def _run_arm(
+    args: argparse.Namespace,
+    label: str,
+    capacity: int,
+    *,
+    expected_representation: str | None = None,
+    expected_fallback: int | None = None,
+) -> dict:
     from scripts.run_ab_initio import main as run_ab_initio
 
     output_prefix = args.output_root / "arms" / label / "run"
@@ -71,15 +82,13 @@ def _run_arm(args: argparse.Namespace, label: str, capacity: int) -> dict:
     )
     meta = json.loads(meta_path.read_text())
     hybrid = meta["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"]
-    expected_representation = (
-        "dense_full_direct_dynamic_fallback"
-        if capacity == 64
-        else "dense_full_direct_static_capacity"
-    )
-    expected_fallback = 1 if capacity == 64 else 0
-    if hybrid.get("score_representation_batch_counts") != {
-        expected_representation: 1
-    } or hybrid.get("fallback_batch_count") != expected_fallback:
+    if (expected_representation is None) != (expected_fallback is None):
+        raise ValueError("representation and fallback expectations must be paired")
+    if expected_representation is not None and (
+        hybrid.get("score_representation_batch_counts")
+        != {expected_representation: 1}
+        or hybrid.get("fallback_batch_count") != expected_fallback
+    ):
         raise RuntimeError(
             f"{label} representation mismatch: "
             f"{hybrid.get('score_representation_batch_counts')!r}, "
@@ -102,8 +111,7 @@ def _run_arm(args: argparse.Namespace, label: str, capacity: int) -> dict:
     }
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(argv)
+def _prepare_run(args: argparse.Namespace) -> dict[str, str]:
     args.input_star = args.input_star.resolve(strict=True)
     args.checkpoint_optimiser = args.checkpoint_optimiser.resolve(strict=True)
     args.data_dir = args.data_dir.resolve(strict=True)
@@ -125,9 +133,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"expected {value!r}"
             )
     os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
+    return expected_environment
 
-    prewarm = [_run_arm(args, label, capacity) for label, capacity in PREWARM_SPECS]
-    arms = [_run_arm(args, label, capacity) for label, capacity in ARM_SPECS]
+
+def _expected_arm(args: argparse.Namespace, label: str, capacity: int) -> dict:
+    dynamic = label.startswith("dynamic_") or label == "prewarm_dynamic"
+    return _run_arm(
+        args,
+        label,
+        capacity,
+        expected_representation=(
+            "dense_full_direct_dynamic_fallback"
+            if dynamic
+            else "dense_full_direct_static_capacity"
+        ),
+        expected_fallback=1 if dynamic else 0,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
+    expected_environment = _prepare_run(args)
+
+    prewarm = [
+        _expected_arm(args, label, capacity) for label, capacity in PREWARM_SPECS
+    ]
+    arms = [_expected_arm(args, label, capacity) for label, capacity in ARM_SPECS]
     report = {
         "schema": SCHEMA,
         "classification": "diagnostic_schedule_representation_qualification",

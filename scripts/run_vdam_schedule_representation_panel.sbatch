@@ -42,6 +42,8 @@ PROVENANCE=${ROOT}/provenance
 RUNTIME=${ROOT}/runtime
 PANEL=${ROOT}/panel
 CUDA_BINARY=${RUNTIME}/cuda/libcuda_backproject.so
+PANEL_MODE=${VDAM_REPRESENTATION_PANEL_MODE:-representation}
+CAPACITY_SWEEP=${VDAM_REPRESENTATION_CAPACITY_SWEEP:-96,128,192,256}
 
 on_error() {
   local status=$?
@@ -63,6 +65,7 @@ test -s "${PARTICLE_STACK}"
 test -s "${CUDA_LIB_SOURCE}"
 test -d "${RECOVAR_RELION_BIND_BUILD_DIR}"
 test -s "${CUSPARSE_LIBRARY}"
+[[ "${PANEL_MODE}" =~ ^(representation|capacity_sweep)$ ]]
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 
@@ -100,6 +103,7 @@ env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 sha256sum "${CHECKPOINT}" "${DATA_STAR}" "${PARTICLE_STACK}" \
   "${CUDA_LIB_SOURCE}" "${CUDA_BINARY}" "${CUSPARSE_LIBRARY}" \
   "${REPO_ROOT}/scripts/run_vdam_schedule_representation_panel.py" \
+  "${REPO_ROOT}/scripts/run_vdam_schedule_capacity_sweep.py" \
   "${REPO_ROOT}/scripts/analyze_vdam_schedule_representation_gate.py" \
   "${REPO_ROOT}/scripts/run_vdam_schedule_representation_panel.sbatch" \
   > "${PROVENANCE}/static_inputs.sha256"
@@ -138,9 +142,8 @@ PY
 ) > "${PROVENANCE}/runtime_gate.stdout" 2> "${PROVENANCE}/runtime_gate.stderr"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
-PANEL_COMMAND=(
-  env "LD_PRELOAD=${CUSPARSE_LIBRARY}"
-  "${PIXI_PY}" -m scripts.run_vdam_schedule_representation_panel
+COMMAND_PREFIX=(env "LD_PRELOAD=${CUSPARSE_LIBRARY}" "${PIXI_PY}")
+COMMON_ARGS=(
   --checkpoint-optimiser "${CHECKPOINT}"
   --input-star "${DATA_STAR}"
   --data-dir "${DATA_DIR}"
@@ -154,22 +157,45 @@ PANEL_COMMAND=(
   --exact-local-physical-order-chunk-size 0
   --stable-fourier-window-shapes
 )
+if [[ "${PANEL_MODE}" = representation ]]; then
+  PANEL_COMMAND=(
+    "${COMMAND_PREFIX[@]}"
+    -m scripts.run_vdam_schedule_representation_panel
+    "${COMMON_ARGS[@]}"
+  )
+  EXPECTED_REPORT=${PANEL}/panel.json
+else
+  PANEL_COMMAND=(
+    "${COMMAND_PREFIX[@]}"
+    -m scripts.run_vdam_schedule_capacity_sweep
+    "${COMMON_ARGS[@]}"
+  )
+  IFS=, read -r -a capacities <<< "${CAPACITY_SWEEP}"
+  test "${#capacities[@]}" -gt 0
+  for capacity in "${capacities[@]}"; do
+    [[ "${capacity}" =~ ^[1-9][0-9]*$ ]]
+    PANEL_COMMAND+=(--capacity "${capacity}")
+  done
+  EXPECTED_REPORT=${PANEL}/capacity_sweep.json
+fi
 printf '%q ' "${PANEL_COMMAND[@]}" > "${PROVENANCE}/panel_command.sh"
 printf '\n' >> "${PROVENANCE}/panel_command.sh"
 (
   cd "${REPO_ROOT}"
   "${PANEL_COMMAND[@]}"
 ) > "${PROVENANCE}/panel.stdout" 2> "${PROVENANCE}/panel.stderr"
-test -s "${PANEL}/panel.json"
+test -s "${EXPECTED_REPORT}"
 vdam_verify_selected_gpu "${selected_gpu_uuid}"
 
-(
-  cd "${REPO_ROOT}"
-  "${PIXI_PY}" -m scripts.analyze_vdam_schedule_representation_gate \
-    --panel-root "${PANEL}" \
-    --output "${PROVENANCE}/schedule_representation_gate.json"
-) > "${PROVENANCE}/gate.stdout" 2> "${PROVENANCE}/gate.stderr"
-test -s "${PROVENANCE}/schedule_representation_gate.json"
+if [[ "${PANEL_MODE}" = representation ]]; then
+  (
+    cd "${REPO_ROOT}"
+    "${PIXI_PY}" -m scripts.analyze_vdam_schedule_representation_gate \
+      --panel-root "${PANEL}" \
+      --output "${PROVENANCE}/schedule_representation_gate.json"
+  ) > "${PROVENANCE}/gate.stdout" 2> "${PROVENANCE}/gate.stderr"
+  test -s "${PROVENANCE}/schedule_representation_gate.json"
+fi
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 touch "${ROOT}/COMPLETED"
