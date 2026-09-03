@@ -9,14 +9,23 @@ from scripts import audit_em_k1_checkpoint_equivalence as audit
 pytestmark = pytest.mark.unit
 
 
-def _write_checkpoint(root: Path, *, floating_offset: float = 0.0) -> None:
+def _write_checkpoint(
+    root: Path,
+    *,
+    floating_offset: float = 0.0,
+    empty_rotations: bool = False,
+) -> None:
     root.mkdir()
     prefix = "it000"
     for suffix in audit.DISCRETE_NPY_SUFFIXES:
         if suffix == "fsc.npy":
             value = np.linspace(1.0, 0.0, 5, dtype=np.float32)
         elif suffix == "rotations.npy":
-            value = np.eye(3, dtype=np.float32)[None]
+            value = (
+                np.empty((0, 3, 3), dtype=np.float32)
+                if empty_rotations
+                else np.eye(3, dtype=np.float32)[None]
+            )
         elif suffix == "translations.npy":
             value = np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32)
         else:
@@ -101,3 +110,66 @@ def test_checkpoint_audit_rejects_changed_particle_decision(tmp_path: Path) -> N
     assert report["discrete_arrays"]["ha_half1.npy"]["metrics"]["element_exact"] is False
     assert report["discrete_arrays"]["ha_half1.npy"]["metrics"]["mismatch_count"] == 1
     assert report["science_indicators"]["fine_pose_agreement_by_half"][1] == 0.75
+
+
+def test_numeric_metrics_accepts_matching_empty_structural_sentinel() -> None:
+    metrics = audit._numeric_metrics(
+        np.empty((0, 3, 3), dtype=np.float32),
+        np.empty((0, 3, 3), dtype=np.float32),
+    )
+
+    assert metrics == {
+        "shape": [0, 3, 3],
+        "dtype": "float32",
+        "element_count": 0,
+        "element_exact": True,
+        "empty_structural_match": True,
+        "mismatch_count": 0,
+        "mismatch_fraction": 0.0,
+        "finite": True,
+        "max_absolute_difference": 0.0,
+        "rmse": 0.0,
+        "relative_l2_difference": 0.0,
+        "centered_correlation": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (
+            np.empty((0, 3, 3), dtype=np.float32),
+            np.empty((1, 3, 3), dtype=np.float32),
+        ),
+        (
+            np.empty((0, 3, 3), dtype=np.float32),
+            np.empty((0, 3, 3), dtype=np.float64),
+        ),
+    ],
+)
+def test_numeric_metrics_rejects_asymmetric_empty_structure(
+    left: np.ndarray,
+    right: np.ndarray,
+) -> None:
+    with pytest.raises(audit.AuditError, match="shape/dtype mismatch"):
+        audit._numeric_metrics(left, right)
+
+
+def test_checkpoint_audit_reports_science_with_empty_local_rotation_grid(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline"
+    candidate = tmp_path / "candidate"
+    _write_checkpoint(baseline, empty_rotations=True)
+    _write_checkpoint(candidate, empty_rotations=True)
+
+    report = audit.run_audit(
+        baseline,
+        candidate,
+        0,
+        max_relative_l2=0.0,
+    )
+
+    rotations = report["discrete_arrays"]["rotations.npy"]["metrics"]
+    assert rotations["empty_structural_match"] is True
+    assert report["science_indicators"]["fsc_curve"]["nonzero_shell_rmse"] == 0.0
+    assert report["science_indicators"]["minimum_map_centered_correlation"] == 1.0
+    assert report["summary"]["accepted"] is True

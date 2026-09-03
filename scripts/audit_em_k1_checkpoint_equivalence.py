@@ -141,7 +141,25 @@ def _numeric_metrics(left: np.ndarray, right: np.ndarray) -> dict[str, Any]:
             )
 
     if count == 0:
-        raise AuditError("checkpoint artifact is empty")
+        # Local-search checkpoints deliberately save an empty global rotation
+        # grid. The leading shape/dtype guard means this accepts only a shared
+        # structural sentinel; one-sided emptiness and dtype drift still fail.
+        metrics: dict[str, Any] = {
+            "shape": list(left.shape),
+            "dtype": str(left.dtype),
+            "element_count": 0,
+            "element_exact": True,
+            "empty_structural_match": True,
+            "mismatch_count": 0,
+            "mismatch_fraction": 0.0,
+            "finite": True,
+            "max_absolute_difference": 0.0,
+            "rmse": 0.0,
+            "relative_l2_difference": 0.0,
+        }
+        if real_sums is not None:
+            metrics["centered_correlation"] = None
+        return metrics
     relative_l2 = math.sqrt(difference_squared / left_squared) if left_squared else (0.0 if not difference_squared else math.inf)
     metrics: dict[str, Any] = {
         "shape": list(left.shape),
