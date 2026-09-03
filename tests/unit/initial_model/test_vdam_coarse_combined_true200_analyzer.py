@@ -1820,6 +1820,16 @@ def test_acceptance_seals_twelve_arm_power_and_truthful_resource_estimate() -> N
         == "e0c1d1746570e64bad3618b09a50be31b79ebe60"
     )
     assert (
+        contract["qualified_candidate"]["cuda_sha256"]
+        == "34bd56f46aa456e3eef22e60ab51d6d63cf8a426be2481e03e212522ecb5d9e8"
+    )
+    assert contract["qualified_candidate"]["cuda_build_source_head"] == (
+        "209aae4593f0a040090e150482f9d44dfa57e79f"
+    )
+    assert contract["qualified_candidate"]["cuda_build_job_id"] == "13368042"
+    assert contract["qualified_candidate"]["cuda_arch"] == "sm_90"
+    assert contract["qualified_candidate"]["cuda_toolkit"] == "12.6"
+    assert (
         contract["qualified_candidate"]["relion_bind_sha256"]
         == "9bbb1fb0ce6fa7ac816598ec521453515d163221642b916e5715bb2850798980"
     )
