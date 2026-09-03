@@ -72,6 +72,7 @@ _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 _FLAT_LOCAL_ROWS_ENV = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
 _PACKED_LOCAL_PROJECTION_ENV = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
+_DEFER_PACKED_VDAM_ENV = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
 _COMPACT_SPARSE_PASS2_ENV = "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
@@ -124,6 +125,13 @@ def _packed_local_projection_enabled() -> bool:
     """Project packed fine rows directly for controlled InitialModel A/B runs."""
 
     setting = os.environ.get(_PACKED_LOCAL_PROJECTION_ENV, "0").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _defer_packed_vdam_enabled() -> bool:
+    """Defer VDAM noise/M-step work onto final packed support for A/B runs."""
+
+    setting = os.environ.get(_DEFER_PACKED_VDAM_ENV, "0").strip().lower()
     return setting not in {"0", "false", "no", "off"}
 
 
@@ -1416,6 +1424,12 @@ def _run_sparse_pass2_initial_model_estep(
                         use_exact_fine_diff2
                         and _flat_local_rows_enabled()
                         and _packed_local_projection_enabled()
+                    ),
+                    _defer_packed_vdam_enabled=bool(
+                        use_exact_fine_diff2
+                        and _flat_local_rows_enabled()
+                        and _packed_local_projection_enabled()
+                        and _defer_packed_vdam_enabled()
                     ),
                     relion_wavg_sequential_cuda=(
                         bool(config.relion_wavg_sequential_cuda)

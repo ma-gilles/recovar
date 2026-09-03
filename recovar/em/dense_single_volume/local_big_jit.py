@@ -897,6 +897,7 @@ def _project_local_half_spectrum(
         "return_mstep_tensors",
         "return_source_vdam_operands",
         "return_deferred_mstep_inputs",
+        "return_deferred_source_vdam_operands",
         "return_deferred_noise_inputs",
         "n_shells",
         "norm_current_size",
@@ -1020,6 +1021,7 @@ def run_local_bucket_big_jit(
     return_mstep_tensors: bool,
     return_source_vdam_operands: bool = False,
     return_deferred_mstep_inputs: bool,
+    return_deferred_source_vdam_operands: bool = False,
     return_deferred_noise_inputs: bool,
     n_shells: int,
     norm_current_size: int | None,
@@ -1088,20 +1090,40 @@ def run_local_bucket_big_jit(
     if return_deferred_mstep_inputs and (
         return_mstep_tensors
         or accumulate_noise
-        or mstep_subtract_ctf_projection
+        or (
+            mstep_subtract_ctf_projection
+            and not return_deferred_source_vdam_operands
+        )
         or (not disable_adjoint_y)
         or (not disable_adjoint_ctf)
     ):
         raise ValueError(
             "deferred local big-JIT M-step returns posterior/preprocessed inputs only; "
-            "disable in-kernel adjoints, residual subtraction, full M-step tensors, and in-kernel noise"
+            "disable in-kernel adjoints, unsupported residual subtraction, full M-step tensors, "
+            "and in-kernel noise"
         )
     if return_source_vdam_operands and not return_mstep_tensors:
         raise ValueError("source VDAM operands require return_mstep_tensors=True")
+    if return_deferred_source_vdam_operands and not return_deferred_mstep_inputs:
+        raise ValueError(
+            "deferred source VDAM operands require deferred M-step inputs"
+        )
 
     use_relion_cuda_preprocess = bool(
         relion_exact_bpref_operands and relion_cuda_preprocess_radius > 0.0
     )
+    source_ordered_vdam_mstep = bool(
+        relion_sequential_mstep_reduction
+        and mstep_subtract_ctf_projection
+        and relion_exact_bpref_operands
+        and use_relion_cuda_preprocess
+        and not apply_fourier_pre_shift
+        and relion_score_translation_angles is not None
+    )
+    if return_deferred_source_vdam_operands and not source_ordered_vdam_mstep:
+        raise ValueError(
+            "deferred source VDAM operands require the guarded RELION VDAM M-step route"
+        )
     _validate_relion_exact_fine_diff2_preconditions(
         relion_exact_fine_diff2=relion_exact_fine_diff2,
         relion_exact_bpref_operands=relion_exact_bpref_operands,
@@ -1194,7 +1216,10 @@ def run_local_bucket_big_jit(
 
     batch_size = processed_score_half.shape[0]
     n_trans = translation_phases_half.shape[0]
-    materialize_shifted_noise = not (return_deferred_mstep_inputs and not return_deferred_noise_inputs)
+    materialize_shifted_recon = not return_deferred_source_vdam_operands
+    materialize_shifted_noise = not (
+        return_deferred_mstep_inputs and not return_deferred_noise_inputs
+    )
 
     def _translate_score_weighted_half(weighted_half, pixel_indices):
         if relion_score_translation_angles is not None:
@@ -1246,7 +1271,16 @@ def run_local_bucket_big_jit(
         ctf2_over_nv_score = ctf2_over_nv_score_half[:, window_indices]
         score_half_weights = half_weights[window_indices]
         if not score_only:
-            shifted_recon = _translate_weighted_half_window(processed_recon_half, recon_window_indices)
+            if materialize_shifted_recon:
+                shifted_recon = _translate_weighted_half_window(
+                    processed_recon_half,
+                    recon_window_indices,
+                )
+            else:
+                shifted_recon = jnp.zeros(
+                    (batch_size * n_trans, 1),
+                    dtype=shifted_score.dtype,
+                )
             if materialize_shifted_noise:
                 shifted_noise = _translate_weighted_half_window(processed_score_half, recon_window_indices)
             else:
@@ -1263,15 +1297,24 @@ def run_local_bucket_big_jit(
             jnp.arange(processed_score_half.shape[1], dtype=jnp.int32),
         )
         if not score_only:
-            recon_weighted_half = (
-                processed_recon_half * weighted_ctf_half
-                if relion_exact_bpref_operands
-                else processed_recon_half * ctf_half / noise_variance_half
-            )
-            shifted_recon_half = (recon_weighted_half[:, None, :] * translation_phases_half[None, :, :]).reshape(
-                batch_size * n_trans,
-                processed_recon_half.shape[1],
-            )
+            if materialize_shifted_recon:
+                recon_weighted_half = (
+                    processed_recon_half * weighted_ctf_half
+                    if relion_exact_bpref_operands
+                    else processed_recon_half * ctf_half / noise_variance_half
+                )
+                shifted_recon_half = (
+                    recon_weighted_half[:, None, :]
+                    * translation_phases_half[None, :, :]
+                ).reshape(
+                    batch_size * n_trans,
+                    processed_recon_half.shape[1],
+                )
+            else:
+                shifted_recon_half = jnp.zeros(
+                    (batch_size * n_trans, 1),
+                    dtype=shifted_half.dtype,
+                )
     score_power_over_noise = (
         jnp.abs(processed_score_half) ** 2 * inverse_noise_half[None, :]
         if relion_exact_bpref_operands
@@ -1292,12 +1335,13 @@ def run_local_bucket_big_jit(
     if use_window:
         shifted_score = shifted_score * corr_expanded[:, None]
         if not score_only:
-            shifted_recon = shifted_recon * corr_expanded[:, None]
+            if materialize_shifted_recon:
+                shifted_recon = shifted_recon * corr_expanded[:, None]
             if materialize_shifted_noise:
                 shifted_noise = shifted_noise * corr_expanded[:, None]
     else:
         shifted_half = shifted_half * corr_expanded[:, None]
-        if not score_only:
+        if not score_only and materialize_shifted_recon:
             shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
     if not use_relion_cuda_preprocess:
         batch_norm = batch_norm * (image_only_corr**2)[:, None]
@@ -1314,14 +1358,19 @@ def run_local_bucket_big_jit(
             score_phase_expanded = jnp.repeat(pre_shift_phases[:, window_indices], n_trans, axis=0)
             shifted_score = shifted_score * score_phase_expanded
             if not score_only:
-                recon_phase_expanded = jnp.repeat(pre_shift_phases[:, recon_window_indices], n_trans, axis=0)
-                shifted_recon = shifted_recon * recon_phase_expanded
+                recon_phase_expanded = jnp.repeat(
+                    pre_shift_phases[:, recon_window_indices],
+                    n_trans,
+                    axis=0,
+                )
+                if materialize_shifted_recon:
+                    shifted_recon = shifted_recon * recon_phase_expanded
                 if materialize_shifted_noise:
                     shifted_noise = shifted_noise * recon_phase_expanded
         else:
             phase_expanded = tiled_half_image_phase_factors(image_shape, fourier_pre_shifts, n_trans)
             shifted_half = shifted_half * phase_expanded
-            if not score_only:
+            if not score_only and materialize_shifted_recon:
                 shifted_recon_half = shifted_recon_half * phase_expanded
 
     if half_spectrum_scoring:
@@ -1434,7 +1483,11 @@ def run_local_bucket_big_jit(
             )
         if not score_only:
             if use_compact_relion_projector_projection:
-                if return_deferred_mstep_inputs and not accumulate_noise and not return_debug_operands:
+                if (
+                    return_deferred_mstep_inputs
+                    and (not accumulate_noise or return_deferred_source_vdam_operands)
+                    and not return_debug_operands
+                ):
                     proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
                 elif packed_local_projection:
                     proj_for_noise = scatter_flat_local_rows(
@@ -1453,7 +1506,11 @@ def run_local_bucket_big_jit(
                         projection_recon_take_indices.shape[0],
                     )
             else:
-                if return_deferred_mstep_inputs and not accumulate_noise and not return_debug_operands:
+                if (
+                    return_deferred_mstep_inputs
+                    and (not accumulate_noise or return_deferred_source_vdam_operands)
+                    and not return_debug_operands
+                ):
                     proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
                 elif packed_local_projection:
                     proj_for_noise = scatter_flat_local_rows(
@@ -1477,7 +1534,11 @@ def run_local_bucket_big_jit(
         else:
             proj_half = proj_half_flat.reshape(batch_size, local_rotations.shape[1], -1)
         if not score_only:
-            if return_deferred_mstep_inputs and not accumulate_noise and not return_debug_operands:
+            if (
+                return_deferred_mstep_inputs
+                and (not accumulate_noise or return_deferred_source_vdam_operands)
+                and not return_debug_operands
+            ):
                 proj_for_noise = jnp.zeros((1, 1, 1), dtype=proj_half.dtype)
             elif packed_local_projection:
                 proj_for_noise = scatter_flat_local_rows(
@@ -1725,6 +1786,19 @@ def run_local_bucket_big_jit(
         log_score_offset = (-0.5 * jnp.squeeze(batch_norm, axis=1)).astype(normalization_dtype)
         effective_normalization_log_z = normalization_log_evidence.astype(normalization_dtype) - log_score_offset
         effective_has_normalization_log_z = True
+    if source_ordered_vdam_mstep:
+        bpref_pixel_indices = (
+            recon_window_indices
+            if use_window
+            else jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32)
+        )
+        bpref_ctf = (
+            ctf_half[:, bpref_pixel_indices] * batch_scale[:, None]
+        ).astype(jnp.float32)
+        bpref_minvsigma2 = jnp.broadcast_to(
+            inverse_noise_half[bpref_pixel_indices][None, :],
+            bpref_ctf.shape,
+        )
     if return_deferred_mstep_inputs:
         (
             log_Z,
@@ -1770,6 +1844,33 @@ def run_local_bucket_big_jit(
         else:
             shifted_noise_for_return = jnp.zeros((1, 1, 1), dtype=shifted_recon_split.dtype)
             processed_score_half_for_return = jnp.zeros((1, 1), dtype=processed_score_half.dtype)
+        if return_deferred_source_vdam_operands:
+            from recovar import cuda_backproject
+
+            deferred_source_vdam_images = jnp.asarray(
+                processed_recon_half[:, bpref_pixel_indices],
+                dtype=jnp.complex64,
+            )
+            deferred_source_vdam_ctf = bpref_ctf
+            deferred_source_vdam_minvsigma2 = jnp.asarray(
+                bpref_minvsigma2,
+                dtype=jnp.float32,
+            )
+            deferred_source_vdam_ctf_probs = (
+                cuda_backproject.relion_vdam_mstep_denominator_f32(
+                    deferred_source_vdam_ctf,
+                    deferred_source_vdam_minvsigma2,
+                    jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+                )
+            )
+        else:
+            deferred_source_vdam_images = jnp.zeros((1, 1), dtype=jnp.complex64)
+            deferred_source_vdam_ctf = jnp.zeros((1, 1), dtype=jnp.float32)
+            deferred_source_vdam_minvsigma2 = jnp.zeros((1, 1), dtype=jnp.float32)
+            deferred_source_vdam_ctf_probs = jnp.zeros(
+                (1, 1, 1),
+                dtype=jnp.float32,
+            )
         result = (
             Ft_y,
             Ft_ctf,
@@ -1798,6 +1899,10 @@ def run_local_bucket_big_jit(
             ctf2_over_nv_recon,
             shifted_noise_for_return,
             processed_score_half_for_return,
+            deferred_source_vdam_images,
+            deferred_source_vdam_ctf,
+            deferred_source_vdam_minvsigma2,
+            deferred_source_vdam_ctf_probs,
         )
         return _append_debug_outputs(
             result,
@@ -1852,14 +1957,6 @@ def run_local_bucket_big_jit(
         sequential_translation_reduction=relion_sequential_mstep_reduction,
         scores_override=direct_scores,
     )
-    source_ordered_vdam_mstep = bool(
-        relion_sequential_mstep_reduction
-        and mstep_subtract_ctf_projection
-        and relion_exact_bpref_operands
-        and use_relion_cuda_preprocess
-        and not apply_fourier_pre_shift
-        and relion_score_translation_angles is not None
-    )
     source_ordered_vdam_scattered = bool(
         source_ordered_vdam_mstep
         and not return_mstep_tensors
@@ -1870,19 +1967,6 @@ def run_local_bucket_big_jit(
         raise ValueError("source VDAM operands require the guarded RELION VDAM M-step route")
     if source_ordered_vdam_mstep:
         from recovar import cuda_backproject
-
-        bpref_pixel_indices = (
-            recon_window_indices
-            if use_window
-            else jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32)
-        )
-        bpref_ctf = (
-            ctf_half[:, bpref_pixel_indices] * batch_scale[:, None]
-        ).astype(jnp.float32)
-        bpref_minvsigma2 = jnp.broadcast_to(
-            inverse_noise_half[bpref_pixel_indices][None, :],
-            bpref_ctf.shape,
-        )
         if source_ordered_vdam_scattered:
             Ft_y, Ft_ctf, ctf_probs = cuda_backproject.relion_vdam_mstep_fused_x_half(
                 Ft_y,

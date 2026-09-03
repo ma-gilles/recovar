@@ -116,6 +116,7 @@ from recovar.em.dense_single_volume.local_big_jit import (
     _partition_uniform_fixed_capacity_calls,
     _prepare_fixed_capacity_local_call,
     _reconstruct_fixed_capacity_score_only_result,
+    _relion_wavg_direct_triplet_shells,
     run_fixed_capacity_segmented_local_scan,
     run_local_bucket_big_jit,
 )
@@ -1696,7 +1697,11 @@ def _accumulate_relion_vdam_physical_particle_grid(
         posterior_over_weight_norm,
         dtype=jnp.float32,
     )
-    reference = jnp.asarray(reference, dtype=jnp.complex64)
+    reference = (
+        None
+        if reference is None
+        else jnp.asarray(reference, dtype=jnp.complex64)
+    )
     rotations = jnp.asarray(rotations, dtype=jnp.float32)
     row_mask = jnp.asarray(row_mask, dtype=bool)
     if ctf.shape != images.shape or minvsigma2.shape != images.shape:
@@ -1704,8 +1709,23 @@ def _accumulate_relion_vdam_physical_particle_grid(
     if posterior_over_weight_norm.ndim != 3:
         raise ValueError("RELION VDAM posterior operands must be particle/rotation/translation")
     particle_count, rotation_count, _ = posterior_over_weight_norm.shape
-    if reference.shape != (particle_count, rotation_count, images.shape[1]):
-        raise ValueError("RELION VDAM reference operands must match particle/rotation/pixel axes")
+    if projector_full is None:
+        if reference is None:
+            raise ValueError(
+                "RELION VDAM preprojected accumulation requires reference operands"
+            )
+        if reference.shape != (particle_count, rotation_count, images.shape[1]):
+            raise ValueError(
+                "RELION VDAM reference operands must match particle/rotation/pixel axes"
+            )
+    elif reference is not None and reference.shape != (
+        particle_count,
+        rotation_count,
+        images.shape[1],
+    ):
+        raise ValueError(
+            "RELION VDAM optional reference operands must match particle/rotation/pixel axes"
+        )
     if rotations.shape != (particle_count, rotation_count, 3, 3):
         raise ValueError("RELION VDAM rotations must match particle/rotation axes")
     if row_mask.shape != (particle_count, rotation_count):
@@ -1732,7 +1752,8 @@ def _accumulate_relion_vdam_physical_particle_grid(
         posterior_over_weight_norm = jnp.take(
             posterior_over_weight_norm, particle_replay_order, axis=0
         )
-        reference = jnp.take(reference, particle_replay_order, axis=0)
+        if reference is not None:
+            reference = jnp.take(reference, particle_replay_order, axis=0)
         rotations = jnp.take(rotations, particle_replay_order, axis=0)
         row_mask = jnp.take(row_mask, particle_replay_order, axis=0)
         if scoring_rotations is not None:
@@ -1798,10 +1819,11 @@ def _accumulate_relion_vdam_physical_particle_grid(
             posterior_over_weight_norm,
             replay_order,
         )
-        reference = _materialize_relion_vdam_rotation_rows(
-            reference,
-            replay_order,
-        )
+        if reference is not None:
+            reference = _materialize_relion_vdam_rotation_rows(
+                reference,
+                replay_order,
+            )
         rotations = _materialize_relion_vdam_rotation_rows(
             rotations,
             replay_order,
@@ -4224,6 +4246,7 @@ def run_local_em_exact(
     _fixed_capacity_whole_boundary_enabled: bool = False,
     _flat_local_rows_enabled: bool = False,
     _packed_local_projection_enabled: bool = False,
+    _defer_packed_vdam_enabled: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -4235,6 +4258,7 @@ def run_local_em_exact(
     )
     flat_local_rows_enabled = bool(_flat_local_rows_enabled)
     packed_local_projection_enabled = bool(_packed_local_projection_enabled)
+    defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -4263,12 +4287,29 @@ def run_local_em_exact(
         raise ValueError(
             "packed local projection requires flat local rows"
         )
+    if defer_packed_vdam_enabled and not packed_local_projection_enabled:
+        raise ValueError(
+            "deferred packed VDAM requires packed local projection"
+        )
     if relion_wavg_sequential_cuda is not None:
         relion_wavg_sequential_cuda = bool(relion_wavg_sequential_cuda)
     preserve_bpref_particle_order = bool(preserve_bpref_particle_order)
     source_faithful_bpref = bool(
         preserve_bpref_particle_order and relion_exact_bpref_operands
     )
+    if defer_packed_vdam_enabled and not (
+        source_faithful_bpref
+        and mstep_subtract_ctf_projection
+        and mstep_relion_x_half
+        and reconstruct_significant_only
+        and relion_projector_half is not None
+        and not disable_adjoint_y
+        and not disable_adjoint_ctf
+    ):
+        raise ValueError(
+            "deferred packed VDAM requires source-faithful significant-only "
+            "RELION residual backprojection"
+        )
     reconstruction_group_ids_np = None
     resolved_reconstruction_group_count = 1
     if reconstruction_group_ids is not None:
@@ -5132,6 +5173,7 @@ def run_local_em_exact(
     relion_projection_cache_n_projection_pixels = 0
     relion_projection_cache_id_map_rows = 0
     source_vdam_projector_full = None
+    big_jit_projection_pixel_count = int(window_spec.n_projection)
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
@@ -5153,10 +5195,11 @@ def run_local_em_exact(
             big_jit_relion_projector_output_size = (
                 int(2 * window_spec.max_r) if window_spec.max_r is not None else 0
             )
-            if score_only:
+            if score_only or defer_packed_vdam_enabled:
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.score_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.arange(window_spec.n_score, dtype=jnp.int32)
                 big_jit_projection_recon_take_arg = jnp.zeros((1,), dtype=jnp.int32)
+                big_jit_projection_pixel_count = int(window_spec.n_score)
             else:
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.projection_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.asarray(window_spec.score_projection_take, dtype=jnp.int32)
@@ -5175,7 +5218,7 @@ def run_local_em_exact(
         and not score_only
     ):
         requested_cache_rows, relion_projection_cache_cap_gb = _exact_local_relion_projection_cache_capacity_rows(
-            int(window_spec.n_projection)
+            big_jit_projection_pixel_count
         )
         if requested_cache_rows > 0:
             bucket_specs = _sort_buckets_for_relion_projection_cache(bucket_specs)
@@ -5192,14 +5235,16 @@ def run_local_em_exact(
                 max_cache_groups,
                 int(requested_cache_rows),
                 float(relion_projection_cache_cap_gb),
-                int(window_spec.n_projection),
+                big_jit_projection_pixel_count,
             )
             relion_projection_cache_groups = []
         if relion_projection_cache_groups:
             relion_projection_cache_capacity_rows = int(
                 max(row_count for _, _, row_count in relion_projection_cache_groups)
             )
-            relion_projection_cache_n_projection_pixels = int(window_spec.n_projection)
+            relion_projection_cache_n_projection_pixels = (
+                big_jit_projection_pixel_count
+            )
             valid_layout_ids = np.asarray(local_layout.rotation_ids_flat, dtype=np.int64)
             valid_layout_ids = valid_layout_ids[valid_layout_ids >= 0]
             relion_projection_cache_id_map_rows = (
@@ -5262,12 +5307,12 @@ def run_local_em_exact(
                 bucket_specs[group_start:group_stop],
                 relion_projector_half_big_jit,
                 image_shape=image_shape,
-                n_projection_pixels=int(window_spec.n_projection),
+                n_projection_pixels=big_jit_projection_pixel_count,
                 relion_projector_r_max=int(relion_projector_r_max_big_jit),
                 projection_padding_factor=int(projection_padding_factor),
                 projection_relion_texture_interp=projection_relion_texture_interp,
                 projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
-                projection_pixel_indices=jnp.asarray(window_spec.projection_indices, dtype=jnp.int32),
+                projection_pixel_indices=big_jit_projection_pixel_indices_arg,
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(relion_projection_cache_capacity_rows),
                 max_global_rotation_id=max(relion_projection_cache_id_map_rows - 1, 0),
@@ -5412,10 +5457,16 @@ def run_local_em_exact(
             use_big_jit_buckets_for_bucket
             and significant_backprojection_candidate
             and not score_only
-            and not mstep_subtract_ctf_projection
+            and (
+                not mstep_subtract_ctf_projection
+                or defer_packed_vdam_enabled
+            )
             and (not disable_adjoint_y or not disable_adjoint_ctf or accumulate_noise)
         )
-        force_deferred_big_jit_backprojection = _env_flag(EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV)
+        force_deferred_big_jit_backprojection = bool(
+            defer_packed_vdam_enabled
+            or _env_flag(EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV)
+        )
         deferred_big_jit_backprojection = (
             can_defer_big_jit_backprojection
             and (
@@ -5719,6 +5770,12 @@ def run_local_em_exact(
                 disable_adjoint_y=disable_adjoint_y,
                 disable_adjoint_ctf=disable_adjoint_ctf,
             )
+            if defer_packed_vdam_enabled:
+                if not deferred_big_jit_backprojection:
+                    raise ValueError(
+                        "deferred packed VDAM did not reach the deferred big-JIT path"
+                    )
+                return_big_jit_mstep_tensors = False
             return_source_vdam_operands = bool(
                 return_big_jit_mstep_tensors
                 and source_faithful_bpref
@@ -5727,6 +5784,10 @@ def run_local_em_exact(
             )
             return_big_jit_deferred_mstep_inputs = (
                 deferred_big_jit_backprojection and not return_big_jit_mstep_tensors
+            )
+            return_deferred_source_vdam_operands = bool(
+                return_big_jit_deferred_mstep_inputs
+                and defer_packed_vdam_enabled
             )
             big_jit_disable_adjoint_y = (
                 disable_adjoint_y or return_big_jit_mstep_tensors or return_big_jit_deferred_mstep_inputs
@@ -5871,6 +5932,9 @@ def run_local_em_exact(
                 return_mstep_tensors=return_big_jit_mstep_tensors,
                 return_source_vdam_operands=return_source_vdam_operands,
                 return_deferred_mstep_inputs=return_big_jit_deferred_mstep_inputs,
+                return_deferred_source_vdam_operands=(
+                    return_deferred_source_vdam_operands
+                ),
                 return_deferred_noise_inputs=bool(return_big_jit_deferred_mstep_inputs and accumulate_noise),
                 n_shells=n_shells_arg,
                 norm_current_size=current_size,
@@ -6019,6 +6083,10 @@ def run_local_em_exact(
                     ctf2_over_nv_recon,
                     shifted_noise_split,
                     processed_score_half,
+                    deferred_source_vdam_images,
+                    deferred_source_vdam_ctf,
+                    deferred_source_vdam_minvsigma2,
+                    deferred_source_vdam_ctf_probs,
                 ) = big_jit_result
                 summed = None
                 ctf_probs = None
@@ -6159,6 +6227,10 @@ def run_local_em_exact(
                             ctf2_over_nv_recon,
                             shifted_noise_split,
                             processed_score_half,
+                            deferred_source_vdam_images,
+                            deferred_source_vdam_ctf,
+                            deferred_source_vdam_minvsigma2,
+                            deferred_source_vdam_ctf_probs,
                         )
                     ),
                 )
@@ -6444,6 +6516,7 @@ def run_local_em_exact(
             packed_source_vdam_minvsigma2 = None
             packed_source_vdam_posterior = None
             packed_source_vdam_reference = None
+            packed_source_vdam_ctf_probs = None
             if return_big_jit_deferred_mstep_inputs:
                 probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
                 (
@@ -6490,6 +6563,27 @@ def run_local_em_exact(
                     packed_reconstruction_probs_sum_t,
                     0.0,
                 )
+                if return_deferred_source_vdam_operands:
+                    packed_source_vdam_images = deferred_source_vdam_images[
+                        :unpadded_batch_size
+                    ]
+                    packed_source_vdam_ctf = deferred_source_vdam_ctf[
+                        :unpadded_batch_size
+                    ]
+                    packed_source_vdam_minvsigma2 = (
+                        deferred_source_vdam_minvsigma2[:unpadded_batch_size]
+                    )
+                    packed_source_vdam_posterior = packed_reconstruction_probs
+                    packed_source_vdam_ctf_probs = jnp.take_along_axis(
+                        deferred_source_vdam_ctf_probs[:unpadded_batch_size],
+                        reconstruction_take_indices_jnp[:, :, None],
+                        axis=1,
+                    )
+                    packed_source_vdam_ctf_probs = jnp.where(
+                        reconstruction_pack_mask_jnp[:, :, None],
+                        packed_source_vdam_ctf_probs,
+                        0.0,
+                    )
                 packed_summed = None
                 packed_ctf_probs = None
                 packed_flat_rotations = None
@@ -6630,6 +6724,7 @@ def run_local_em_exact(
             if (
                 return_big_jit_deferred_mstep_inputs
                 and source_faithful_bpref
+                and not return_deferred_source_vdam_operands
                 and (not disable_adjoint_y or not disable_adjoint_ctf)
             ):
                 # The fused scorer intentionally did not materialize the
@@ -6691,7 +6786,11 @@ def run_local_em_exact(
                     if return_profile:
                         _block_until_ready(Ft_y, Ft_ctf)
                     timing.adjoint_y_s += time.time() - adjoint_t0
-            elif return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):
+            elif (
+                return_big_jit_deferred_mstep_inputs
+                and not return_deferred_source_vdam_operands
+                and (not disable_adjoint_y or not disable_adjoint_ctf)
+            ):
                 if packed_reconstruction_probs is None:
                     raise RuntimeError("deferred big-JIT local M-step requires packed posterior rows")
                 if packed_reconstruction_probs_sum_t is None:
@@ -6809,7 +6908,11 @@ def run_local_em_exact(
                         sparse_adjoint_chunk_count += int(n_adjoint_chunks)
                         timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
-            if return_source_vdam_operands:
+            source_vdam_outer_scatter = bool(
+                return_source_vdam_operands
+                or return_deferred_source_vdam_operands
+            )
+            if source_vdam_outer_scatter:
                 if any(
                     value is None
                     for value in (
@@ -6817,7 +6920,6 @@ def run_local_em_exact(
                         packed_source_vdam_ctf,
                         packed_source_vdam_minvsigma2,
                         packed_source_vdam_posterior,
-                        packed_source_vdam_reference,
                     )
                 ):
                     raise RuntimeError("source VDAM physical operands were not packed")
@@ -7177,12 +7279,18 @@ def run_local_em_exact(
                     image_shape=image_shape,
                     current_size=current_size,
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                    use_relion_cuda_powerclass_spectrum=bool(
+                        relion_exact_fine_diff2
+                        and return_deferred_source_vdam_operands
+                    ),
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
-                noise_img_power = noise_img_power + batch_img_power_shells
                 noise_sumw = noise_sumw + jnp.sum(support_mass)
 
                 shifted_noise_split_unpadded = shifted_noise_split[:unpadded_batch_size]
+                ctf2_over_nv_recon_unpadded = ctf2_over_nv_recon[
+                    :unpadded_batch_size
+                ]
                 packed_rotation_count = int(packed_rotations_np.shape[1])
                 n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
                 noise_projection_pixels = int(n_half) if relion_projector_half is not None else int(n_recon_pixels)
@@ -7205,6 +7313,16 @@ def run_local_em_exact(
                 block_a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
                 block_xa_shells = jnp.zeros(n_shells, dtype=jnp.float32)
                 block_norm_residual = jnp.zeros(unpadded_batch_size, dtype=jnp.float32)
+                direct_wavg_triplet_shells = jnp.zeros(
+                    (3, n_shells),
+                    dtype=jnp.float64,
+                )
+                use_relion_wavg_cutoff = bool(
+                    return_deferred_source_vdam_operands
+                    and relion_exact_fine_diff2
+                    and use_window
+                    and current_size is not None
+                )
                 bucket_group_ids = (
                     group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
                 )
@@ -7232,10 +7350,19 @@ def run_local_em_exact(
                     chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
                     chunk_probs_sum_t = packed_reconstruction_probs_sum_t[:, chunk_start:chunk_stop]
                     chunk_summed_masked_noise = compute_local_weighted_sums(chunk_probs, shifted_noise_split_unpadded)
-                    chunk_ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
-                        chunk_probs_sum_t,
-                        ctf2_over_nv_recon_unpadded,
-                    )
+                    if return_deferred_source_vdam_operands:
+                        if packed_source_vdam_ctf_probs is None:
+                            raise RuntimeError(
+                                "deferred source VDAM noise requires exact packed denominators"
+                            )
+                        chunk_ctf_probs = packed_source_vdam_ctf_probs[
+                            :, chunk_start:chunk_stop
+                        ]
+                    else:
+                        chunk_ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
+                            chunk_probs_sum_t,
+                            ctf2_over_nv_recon_unpadded,
+                        )
                     flat_proj_for_noise = flatten_bucket_rows(chunk_proj_for_noise)
                     flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
                     chunk_noise_shells, chunk_a2_shells, chunk_xa_shells = _compute_noise_block(
@@ -7251,6 +7378,32 @@ def run_local_em_exact(
                     block_noise_shells = block_noise_shells + chunk_noise_shells
                     block_a2_shells = block_a2_shells + chunk_a2_shells
                     block_xa_shells = block_xa_shells + chunk_xa_shells
+                    if use_relion_wavg_cutoff:
+                        chunk_wavg_triplet_shells, _ = (
+                            _relion_wavg_direct_triplet_shells(
+                                processed_score_half[:unpadded_batch_size],
+                                relion_score_translation_angles,
+                                big_jit_relion_wavg_rectangle_indices_arg,
+                                big_jit_relion_wavg_exact_positions_arg,
+                                big_jit_relion_wavg_rectangle_shell_indices_arg,
+                                big_jit_recon_window_indices_arg,
+                                chunk_proj_for_noise,
+                                ctf_rfloat_half_arg[:unpadded_batch_size],
+                                batch_scale_unpadded,
+                                chunk_probs,
+                                jnp.ones_like(support_mass, dtype=bool),
+                                image_shape=image_shape,
+                                shell_count=n_shells,
+                                cutoff_shell=int(current_size) // 2,
+                                relion_wavg_sequential_cuda=(
+                                    relion_wavg_sequential_cuda
+                                ),
+                            )
+                        )
+                        direct_wavg_triplet_shells = (
+                            direct_wavg_triplet_shells
+                            + chunk_wavg_triplet_shells
+                        )
                     chunk_proj_abs2_for_norm = flat_proj_abs2_for_noise.reshape(chunk_proj_for_noise.shape)
                     block_norm_residual = block_norm_residual + _compute_norm_residual_per_image(
                         chunk_proj_for_noise,
@@ -7271,9 +7424,36 @@ def run_local_em_exact(
                         )
                         noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image)
                         noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image)
+                if use_relion_wavg_cutoff:
+                    cutoff_mask = (
+                        jnp.arange(n_shells, dtype=jnp.int32)
+                        == int(current_size) // 2
+                    )
+                    block_noise_shells = jnp.where(
+                        cutoff_mask,
+                        direct_wavg_triplet_shells[2],
+                        block_noise_shells,
+                    )
+                    batch_img_power_shells = jnp.where(
+                        cutoff_mask,
+                        0.0,
+                        batch_img_power_shells,
+                    )
+                    if return_noise_split:
+                        block_a2_shells = jnp.where(
+                            cutoff_mask,
+                            direct_wavg_triplet_shells[1],
+                            block_a2_shells,
+                        )
+                        block_xa_shells = jnp.where(
+                            cutoff_mask,
+                            direct_wavg_triplet_shells[0],
+                            block_xa_shells,
+                        )
                 if return_profile:
                     _block_until_ready(block_noise_shells, block_norm_residual)
                 noise_wsum = noise_wsum + block_noise_shells
+                noise_img_power = noise_img_power + batch_img_power_shells
                 if return_noise_split:
                     noise_a2 = noise_a2 + block_a2_shells
                     noise_xa = noise_xa + block_xa_shells
@@ -8774,6 +8954,7 @@ def run_local_em_exact(
         "n_chunks": np.int32(n_chunks),
         "projection_mode": np.asarray(projection_mode),
         "n_projection_windowed": np.int32(window_spec.n_projection),
+        "big_jit_projection_pixels": np.int32(big_jit_projection_pixel_count),
         "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
         "chunk_padded_image_counts": np.asarray(
             chunk_padded_image_counts,
@@ -8789,6 +8970,7 @@ def run_local_em_exact(
         "packed_local_projection_enabled": np.asarray(
             packed_local_projection_enabled
         ),
+        "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
         "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
         "chunk_planned_padded_rotations": np.asarray(
             chunk_planned_padded_rotations,

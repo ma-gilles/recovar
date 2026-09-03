@@ -488,7 +488,7 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
         minvsigma2=np.ones((3, 2), dtype=np.float32),
         posterior_over_weight_norm=particle_ids[:, None, None],
         translation_angles=np.zeros((1, 2), dtype=np.float32),
-        reference=np.zeros((3, 1, 2), dtype=np.complex64),
+        reference=None,
         rotations=rotations,
         row_mask=np.ones((3, 1), dtype=bool),
         Ft_y=np.zeros((2, 1), dtype=np.complex64),
@@ -520,6 +520,26 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
     np.testing.assert_array_equal(captured["rotation_counts"], [22, 33, 11])
     np.testing.assert_array_equal(captured["start_offsets"], [200, 300, 100])
     assert captured["parallel"] is False
+
+
+def test_missing_preprojected_reference_requires_inline_projector():
+    with pytest.raises(ValueError, match="requires reference operands"):
+        local_em_engine._accumulate_relion_vdam_physical_particle_grid(
+            images=np.zeros((1, 1), dtype=np.complex64),
+            ctf=np.ones((1, 1), dtype=np.float32),
+            minvsigma2=np.ones((1, 1), dtype=np.float32),
+            posterior_over_weight_norm=np.ones((1, 1, 1), dtype=np.float32),
+            translation_angles=np.zeros((1, 2), dtype=np.float32),
+            reference=None,
+            rotations=np.eye(3, dtype=np.float32)[None, None],
+            row_mask=np.ones((1, 1), dtype=bool),
+            Ft_y=np.zeros(1, dtype=np.complex64),
+            Ft_ctf=np.zeros(1, dtype=np.float32),
+            pixel_indices=np.zeros(1, dtype=np.int32),
+            image_shape=(1, 1),
+            volume_shape=(1, 1, 1),
+            max_r=0,
+        )
 
 
 def test_particle_issue_order_rejects_nonbijective_particle_axis():

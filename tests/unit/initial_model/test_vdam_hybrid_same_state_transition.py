@@ -118,28 +118,42 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert runner._arm_order("hybrid") == runner.ARM_ORDER
     assert runner._arm_order("flat_rows") == runner.FLAT_ROW_ARM_ORDER
     assert runner._arm_order("packed_projection") == runner.PACKED_PROJECTION_ARM_ORDER
+    assert runner._arm_order("packed_deferred") == runner.PACKED_DEFERRED_ARM_ORDER
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
     packed_projection = runner._candidate_environment(
         "packed_projection", enabled=True
     )
+    packed_deferred = runner._candidate_environment(
+        "packed_deferred", enabled=True
+    )
     hybrid = runner._candidate_environment("hybrid", enabled=True)
 
     assert all(control[name] == "0" for name in runner.HYBRID_ENVIRONMENT)
     assert control[runner.FLAT_ROW_ENVIRONMENT] == "0"
     assert control[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
+    assert control[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
     assert all(flat_rows[name] == "0" for name in runner.HYBRID_ENVIRONMENT)
     assert flat_rows[runner.FLAT_ROW_ENVIRONMENT] == "1"
     assert flat_rows[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
+    assert flat_rows[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
     assert all(
         packed_projection[name] == "0" for name in runner.HYBRID_ENVIRONMENT
     )
     assert packed_projection[runner.FLAT_ROW_ENVIRONMENT] == "1"
     assert packed_projection[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
+    assert packed_projection[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
+    assert all(
+        packed_deferred[name] == "0" for name in runner.HYBRID_ENVIRONMENT
+    )
+    assert packed_deferred[runner.FLAT_ROW_ENVIRONMENT] == "1"
+    assert packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
+    assert packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
     assert all(hybrid[name] == "1" for name in runner.HYBRID_ENVIRONMENT)
     assert hybrid[runner.FLAT_ROW_ENVIRONMENT] == "0"
     assert hybrid[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
+    assert hybrid[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
 
 
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
@@ -160,5 +174,6 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert (
         "direct_1,packed_projection_1,packed_projection_2,direct_2" in sbatch
     )
+    assert "direct_1,packed_deferred_1,packed_deferred_2,direct_2" in sbatch
     assert "make -B -C \"${REPO_ROOT}/recovar/cuda\"" in sbatch
     assert "status --porcelain=v1 --untracked-files=all" in sbatch

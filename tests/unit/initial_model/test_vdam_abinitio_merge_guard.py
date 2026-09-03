@@ -1010,10 +1010,9 @@ def test_deferred_big_jit_backprojects_vdam_residual_images():
     """The memory-deferred path must not silently backproject raw images."""
 
     source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
-    start = source.index(
-        "elif return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):"
-    )
-    stop = source.index("if return_big_jit_deferred_mstep_inputs and accumulate_noise:", start)
+    comment = source.index("# The memory-deferred big-JIT path returns posterior rows")
+    start = source.rindex("if mstep_subtract_ctf_projection:", 0, comment)
+    stop = source.index("source_vdam_outer_scatter = bool(", start)
     deferred_mstep = source[start:stop]
 
     assert "if mstep_subtract_ctf_projection:" in deferred_mstep
@@ -1034,14 +1033,32 @@ def test_source_faithful_bpref_respects_memory_gate_without_changing_particle_or
     deferred_start = source.index(
         "return_big_jit_deferred_mstep_inputs\n                and source_faithful_bpref"
     )
-    deferred_stop = source.index(
-        "elif return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):",
-        deferred_start,
-    )
+    deferred_stop = source.index("source_vdam_outer_scatter = bool(", deferred_start)
     deferred = source[deferred_start:deferred_stop]
     assert "for particle_start in range(" in deferred
     assert "sequential_translation_reduction=True" in deferred
     assert "_accumulate_relion_physical_particle_grid(" in deferred
+
+
+def test_deferred_packed_vdam_preserves_exact_denominator_and_projects_final_support():
+    engine = (
+        REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py"
+    ).read_text()
+    big_jit = (
+        REPO_ROOT / "recovar/em/dense_single_volume/local_big_jit.py"
+    ).read_text()
+
+    assert "_defer_packed_vdam_enabled: bool = False" in engine
+    assert "if score_only or defer_packed_vdam_enabled:" in engine
+    assert '"big_jit_projection_pixels"' in engine
+    assert "return_deferred_source_vdam_operands" in engine
+    assert "packed_source_vdam_ctf_probs = jnp.take_along_axis(" in engine
+    assert "source_vdam_outer_scatter = bool(" in engine
+    assert "_project_packed_noise_rows(" in engine
+    assert "_relion_wavg_direct_triplet_shells(" in engine
+    assert "materialize_shifted_recon = not return_deferred_source_vdam_operands" in big_jit
+    assert "relion_vdam_mstep_denominator_f32(" in big_jit
+    assert "not accumulate_noise or return_deferred_source_vdam_operands" in big_jit
 
 
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
