@@ -11587,6 +11587,86 @@ ffi::Error RelionCubSortScanF32Impl(
     return ffi::Error::Success();
 }
 
+ffi::Error RelionCubSortScanBatchedF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer values,
+    ffi::Result<ffi::AnyBuffer> sorted,
+    ffi::Result<ffi::AnyBuffer> cumulative)
+{
+    if (values.element_type() != ffi::DataType::F32 ||
+        sorted->element_type() != ffi::DataType::F32 ||
+        cumulative->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionCubSortScanBatchedF32: input and outputs must be F32");
+
+    const auto input_dims = values.dimensions();
+    const auto sorted_dims = sorted->dimensions();
+    const auto cumulative_dims = cumulative->dimensions();
+    if (input_dims.size() != 2 || input_dims[0] < 1 || input_dims[1] < 1 ||
+        sorted_dims.size() != 2 || sorted_dims[0] != input_dims[0] ||
+        sorted_dims[1] != input_dims[1] ||
+        cumulative_dims.size() != 2 || cumulative_dims[0] != input_dims[0] ||
+        cumulative_dims[1] != input_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionCubSortScanBatchedF32: input and outputs must have the same nonempty 2-D shape");
+    if (input_dims[1] > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionCubSortScanBatchedF32: row is too large for CUB's item count");
+
+    const int64_t row_count = input_dims[0];
+    const int count = static_cast<int>(input_dims[1]);
+    const float* input_ptr = static_cast<const float*>(values.untyped_data());
+    float* sorted_ptr = static_cast<float*>(sorted->untyped_data());
+    float* cumulative_ptr = static_cast<float*>(cumulative->untyped_data());
+
+    size_t sort_bytes = 0;
+    size_t scan_bytes = 0;
+    cudaError_t error = cub::DeviceRadixSort::SortKeys(
+        nullptr, sort_bytes, input_ptr, sorted_ptr, count,
+        0, sizeof(float) * 8, stream);
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanBatchedF32 sort query: ") +
+            cudaGetErrorString(error));
+    error = relion_ampere_inclusive_sum_f32(
+        nullptr, scan_bytes, sorted_ptr, cumulative_ptr, count, stream);
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanBatchedF32 scan query: ") +
+            cudaGetErrorString(error));
+
+    void* temporary = nullptr;
+    const size_t temporary_bytes = std::max<size_t>(
+        1, std::max(sort_bytes, scan_bytes));
+    error = cudaMallocAsync(&temporary, temporary_bytes, stream);
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanBatchedF32 cudaMallocAsync: ") +
+            cudaGetErrorString(error));
+
+    for (int64_t row = 0; row < row_count && error == cudaSuccess; ++row)
+    {
+        const int64_t offset = row * static_cast<int64_t>(count);
+        error = cub::DeviceRadixSort::SortKeys(
+            temporary, sort_bytes, input_ptr + offset, sorted_ptr + offset,
+            count, 0, sizeof(float) * 8, stream);
+        if (error == cudaSuccess)
+            error = relion_ampere_inclusive_sum_f32(
+                temporary, scan_bytes, sorted_ptr + offset,
+                cumulative_ptr + offset, count, stream);
+    }
+    const cudaError_t free_error = cudaFreeAsync(temporary, stream);
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanBatchedF32 execute: ") +
+            cudaGetErrorString(error));
+    if (free_error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionCubSortScanBatchedF32 cudaFreeAsync: ") +
+            cudaGetErrorString(free_error));
+    return ffi::Error::Success();
+}
+
 struct RelionPositiveF32
 {
     __device__ __forceinline__ bool operator()(const float& value) const
@@ -11774,6 +11854,70 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+__global__ void relion_exponentiate_batched_f32_kernel(
+    const float* values,
+    const float* add,
+    float* output,
+    int64_t row_size,
+    int64_t count)
+{
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    const float exponent = values[index] + add[index / row_size];
+    output[index] = exponent < -88.0f ? 0.0f : expf(exponent);
+}
+
+ffi::Error RelionExponentiateBatchedF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer values,
+    ffi::AnyBuffer add,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (values.element_type() != ffi::DataType::F32 ||
+        add.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionExponentiateBatchedF32: inputs and output must be F32");
+
+    const auto value_dims = values.dimensions();
+    const auto add_dims = add.dimensions();
+    const auto output_dims = output->dimensions();
+    if (value_dims.size() != 2 || value_dims[0] < 1 || value_dims[1] < 1 ||
+        add_dims.size() != 1 || add_dims[0] != value_dims[0] ||
+        output_dims.size() != 2 || output_dims[0] != value_dims[0] ||
+        output_dims[1] != value_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionExponentiateBatchedF32: expected values/output (B,N) and add (B,)");
+
+    const int64_t count = value_dims[0] * value_dims[1];
+    constexpr int threads = 256;
+    const int64_t block_count = (count + threads - 1) / threads;
+    if (block_count > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionExponentiateBatchedF32: launch grid exceeds CUDA limit");
+    relion_exponentiate_batched_f32_kernel<<<
+        static_cast<int>(block_count), threads, 0, stream>>>(
+            static_cast<const float*>(values.untyped_data()),
+            static_cast<const float*>(add.untyped_data()),
+            static_cast<float*>(output->untyped_data()),
+            value_dims[1], count);
+    const cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionExponentiateBatchedF32: ") +
+            cudaGetErrorString(error));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionExponentiateBatchedF32, RelionExponentiateBatchedF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 __global__ void relion_divide_f32_kernel(
     const float* values,
     const float* divisor,
@@ -11830,8 +11974,80 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+__global__ void relion_divide_batched_f32_kernel(
+    const float* values,
+    const float* divisor,
+    float* output,
+    int64_t row_size,
+    int64_t count)
+{
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < count)
+        output[index] = values[index] / divisor[index / row_size];
+}
+
+ffi::Error RelionDivideBatchedF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer values,
+    ffi::AnyBuffer divisor,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (values.element_type() != ffi::DataType::F32 ||
+        divisor.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument(
+            "RelionDivideBatchedF32: inputs and output must be F32");
+
+    const auto value_dims = values.dimensions();
+    const auto divisor_dims = divisor.dimensions();
+    const auto output_dims = output->dimensions();
+    if (value_dims.size() != 2 || value_dims[0] < 1 || value_dims[1] < 1 ||
+        divisor_dims.size() != 1 || divisor_dims[0] != value_dims[0] ||
+        output_dims.size() != 2 || output_dims[0] != value_dims[0] ||
+        output_dims[1] != value_dims[1])
+        return ffi::Error::InvalidArgument(
+            "RelionDivideBatchedF32: expected values/output (B,N) and divisor (B,)");
+
+    const int64_t count = value_dims[0] * value_dims[1];
+    constexpr int threads = 256;
+    const int64_t block_count = (count + threads - 1) / threads;
+    if (block_count > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionDivideBatchedF32: launch grid exceeds CUDA limit");
+    relion_divide_batched_f32_kernel<<<
+        static_cast<int>(block_count), threads, 0, stream>>>(
+            static_cast<const float*>(values.untyped_data()),
+            static_cast<const float*>(divisor.untyped_data()),
+            static_cast<float*>(output->untyped_data()),
+            value_dims[1], count);
+    const cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess)
+        return ffi::Error::Internal(
+            std::string("RelionDivideBatchedF32: ") +
+            cudaGetErrorString(error));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionDivideBatchedF32, RelionDivideBatchedF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionCubSortScanF32, RelionCubSortScanF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCubSortScanBatchedF32, RelionCubSortScanBatchedF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::AnyBuffer>()

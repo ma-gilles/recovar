@@ -65,6 +65,9 @@ _CUDA_LIB_ENV = "RECOVAR_CUDA_LIB"
 _CUDA_CACHE_DIR_ENV = "RECOVAR_CUDA_CACHE_DIR"
 _BUILD_LOCKFILE = ".build.lock"
 _RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV = "RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY"
+_RELION_BATCHED_POSTERIOR_PRIMITIVES_ENV = (
+    "RECOVAR_RELION_BATCHED_POSTERIOR_PRIMITIVES"
+)
 _BPREF_DEVICE_SIGNATURE_DUMP_DIR_ENV = "RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR"
 _VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV = (
     "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY"
@@ -114,6 +117,17 @@ def relion_x_half_bp_block_topology_requested() -> bool:
     """Return the raw diagnostic request without changing live-path scope."""
 
     return _env_flag(_RELION_X_HALF_BP_BLOCK_TOPOLOGY_ENV)
+
+
+def relion_batched_posterior_primitives_requested() -> bool:
+    """Return whether exact row-wise posterior CUDA calls are batched.
+
+    The value is consumed while JAX traces the posterior caller. Change it only
+    between fresh processes so an already cached executable cannot silently
+    change its execution contract.
+    """
+
+    return _env_flag(_RELION_BATCHED_POSTERIOR_PRIMITIVES_ENV)
 
 
 @contextmanager
@@ -623,8 +637,11 @@ _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_RUNTIME_F32 = (
     "cuda_relion_powerclass_spectrum_highres_runtime_f32"
 )
 _TARGET_RELION_EXPONENTIATE_F32 = "cuda_relion_exponentiate_f32"
+_TARGET_RELION_EXPONENTIATE_BATCHED_F32 = "cuda_relion_exponentiate_batched_f32"
 _TARGET_RELION_DIVIDE_F32 = "cuda_relion_divide_f32"
+_TARGET_RELION_DIVIDE_BATCHED_F32 = "cuda_relion_divide_batched_f32"
 _TARGET_RELION_CUB_SORT_SCAN_F32 = "cuda_relion_cub_sort_scan_f32"
+_TARGET_RELION_CUB_SORT_SCAN_BATCHED_F32 = "cuda_relion_cub_sort_scan_batched_f32"
 _TARGET_RELION_CUB_POSITIVE_SORT_SCAN_F32 = (
     "cuda_relion_cub_positive_sort_scan_f32"
 )
@@ -785,8 +802,11 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionPowerClassSpectrumHighresRuntimeF32",
     ),
     (_TARGET_RELION_EXPONENTIATE_F32, "RelionExponentiateF32"),
+    (_TARGET_RELION_EXPONENTIATE_BATCHED_F32, "RelionExponentiateBatchedF32"),
     (_TARGET_RELION_DIVIDE_F32, "RelionDivideF32"),
+    (_TARGET_RELION_DIVIDE_BATCHED_F32, "RelionDivideBatchedF32"),
     (_TARGET_RELION_CUB_SORT_SCAN_F32, "RelionCubSortScanF32"),
+    (_TARGET_RELION_CUB_SORT_SCAN_BATCHED_F32, "RelionCubSortScanBatchedF32"),
     (
         _TARGET_RELION_CUB_POSITIVE_SORT_SCAN_F32,
         "RelionCubPositiveSortScanF32",
@@ -1475,6 +1495,36 @@ def relion_exponentiate_f32(values: jax.Array, add: jax.Array) -> jax.Array:
 
 
 @jax.jit
+def relion_exponentiate_batched_f32(
+    values: jax.Array,
+    add: jax.Array,
+) -> jax.Array:
+    """Apply RELION's float32 posterior exponentiation to a row batch."""
+
+    if values.dtype != jnp.float32 or values.ndim != 2:
+        raise TypeError(f"values must be a float32 matrix, got {values.dtype} {values.shape}")
+    if values.shape[0] < 1 or values.shape[1] < 1:
+        raise ValueError(f"values must be nonempty, got {values.shape}")
+    if add.dtype != jnp.float32 or add.shape != (values.shape[0],):
+        raise TypeError(
+            "add must be one float32 scalar per row, got "
+            f"{add.dtype} {add.shape} for values {values.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION batched float32 exponentiation requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION batched float32 exponentiation was requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_EXPONENTIATE_BATCHED_F32,
+        jax.ShapeDtypeStruct(values.shape, jnp.float32),
+    )(values, add)
+
+
+@jax.jit
 def relion_divide_f32(values: jax.Array, divisor: jax.Array) -> jax.Array:
     """Apply RELION's CUDA ``float / float`` posterior normalization."""
 
@@ -1497,6 +1547,36 @@ def relion_divide_f32(values: jax.Array, divisor: jax.Array) -> jax.Array:
         _TARGET_RELION_DIVIDE_F32,
         output_type,
         vmap_method="sequential",
+    )(values, divisor)
+
+
+@jax.jit
+def relion_divide_batched_f32(
+    values: jax.Array,
+    divisor: jax.Array,
+) -> jax.Array:
+    """Apply RELION float32 division to all posterior rows in one FFI call."""
+
+    if values.dtype != jnp.float32 or values.ndim != 2:
+        raise TypeError(f"values must be a float32 matrix, got {values.dtype} {values.shape}")
+    if values.shape[0] < 1 or values.shape[1] < 1:
+        raise ValueError(f"values must be nonempty, got {values.shape}")
+    if divisor.dtype != jnp.float32 or divisor.shape != (values.shape[0],):
+        raise TypeError(
+            "divisor must be one float32 scalar per row, got "
+            f"{divisor.dtype} {divisor.shape} for values {values.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION batched float32 division requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION batched float32 division was requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_DIVIDE_BATCHED_F32,
+        jax.ShapeDtypeStruct(values.shape, jnp.float32),
     )(values, divisor)
 
 
@@ -1526,6 +1606,36 @@ def relion_cub_sort_scan_f32(values: jax.Array) -> tuple[jax.Array, jax.Array]:
         _TARGET_RELION_CUB_SORT_SCAN_F32,
         (output_type, output_type),
         vmap_method="sequential",
+    )(values)
+
+
+@jax.jit
+def relion_cub_sort_scan_batched_f32(
+    values: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Run the exact RELION CUB sort/scan row order in one FFI call.
+
+    Rows remain serialized on the caller's XLA stream. The implementation
+    reuses one stream-ordered scratch allocation, so this changes dispatch and
+    allocation topology without changing any row's CUB arithmetic.
+    """
+
+    if values.dtype != jnp.float32 or values.ndim != 2:
+        raise TypeError(f"values must be a float32 matrix, got {values.dtype} {values.shape}")
+    if values.shape[0] < 1 or values.shape[1] < 1:
+        raise ValueError(f"values must be nonempty, got {values.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION batched CUB sort/scan requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "RELION batched CUB sort/scan was requested but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    output_type = jax.ShapeDtypeStruct(values.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_CUB_SORT_SCAN_BATCHED_F32,
+        (output_type, output_type),
     )(values)
 
 
