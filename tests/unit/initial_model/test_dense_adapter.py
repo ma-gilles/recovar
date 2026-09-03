@@ -1029,6 +1029,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["local_packed_local_projection"] = kwargs[
             "_packed_local_projection_enabled"
         ]
+        calls["local_fused_pair_fine_score"] = kwargs[
+            "fused_pair_fine_score"
+        ]
         calls["local_defer_packed_vdam"] = kwargs[
             "_defer_packed_vdam_enabled"
         ]
@@ -1194,6 +1197,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_flat_local_rows"] is False
     assert calls["local_stable_flat_row_capacity"] is False
     assert calls["local_packed_local_projection"] is False
+    assert calls["local_fused_pair_fine_score"] is False
     assert calls["local_defer_packed_vdam"] is False
     assert calls["local_packed_final_noise"] is False
     assert calls["local_relion_exact_score_translation"] is True
@@ -1205,10 +1209,12 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert result.meta["requested_relion_wavg_sequential_cuda"] is True
     assert result.meta["requested_exact_local_bucket_radix"] == 4
     assert result.meta["requested_stable_flat_row_capacity"] is False
+    assert result.meta["requested_fused_pair_fine_score"] is False
     assert result.meta["requested_exact_local_physical_order_chunk_size"] == 0
     assert result.meta["effective_relion_wavg_sequential_cuda"] is True
     assert result.meta["effective_exact_local_bucket_radix"] == 4
     assert result.meta["effective_stable_flat_row_capacity"] is False
+    assert result.meta["effective_fused_pair_fine_score"] is False
     assert result.meta["effective_exact_local_physical_order_chunk_size"] is None
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
     np.testing.assert_array_equal(result.meta["best_pose_rotation_ids"], [0, 1])
@@ -1263,6 +1269,22 @@ def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):
     for value in ("0", "false", "NO", "Off"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", value)
         assert _packed_local_projection_enabled() is False
+
+
+def test_shared_fused_pair_fine_score_is_explicit_opt_in(monkeypatch):
+    from recovar.em.initial_model.dense_adapter import (
+        _fused_pair_fine_score_enabled,
+    )
+
+    variable = "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"
+    monkeypatch.delenv(variable, raising=False)
+    assert _fused_pair_fine_score_enabled() is False
+    for value in ("1", "true", "YES", "On"):
+        monkeypatch.setenv(variable, value)
+        assert _fused_pair_fine_score_enabled() is True
+    for value in ("0", "false", "NO", "Off"):
+        monkeypatch.setenv(variable, value)
+        assert _fused_pair_fine_score_enabled() is False
 
 
 def test_initial_model_deferred_packed_vdam_is_explicit_opt_in(monkeypatch):

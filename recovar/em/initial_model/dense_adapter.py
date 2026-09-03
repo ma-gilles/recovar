@@ -72,6 +72,7 @@ _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"
 _FLAT_LOCAL_ROWS_ENV = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
 _STABLE_FLAT_ROW_CAPACITY_ENV = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
 _PACKED_LOCAL_PROJECTION_ENV = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
+_FUSED_PAIR_FINE_SCORE_ENV = "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"
 _DEFER_PACKED_VDAM_ENV = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
 _PACKED_FINAL_NOISE_ENV = "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
@@ -133,6 +134,13 @@ def _packed_local_projection_enabled() -> bool:
     """Project packed fine rows directly for controlled InitialModel A/B runs."""
 
     setting = os.environ.get(_PACKED_LOCAL_PROJECTION_ENV, "0").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _fused_pair_fine_score_enabled() -> bool:
+    """Enable the shared selected-pair exact-local scorer for controlled A/B runs."""
+
+    setting = os.environ.get(_FUSED_PAIR_FINE_SCORE_ENV, "0").strip().lower()
     return setting not in {"0", "false", "no", "off"}
 
 
@@ -955,6 +963,8 @@ def _run_sparse_pass2_initial_model_estep(
     exact_local_runtime_policy_active = False
     requested_stable_flat_row_capacity = _stable_flat_row_capacity_enabled()
     effective_stable_flat_row_capacity = False
+    requested_fused_pair_fine_score = _fused_pair_fine_score_enabled()
+    effective_fused_pair_fine_score = False
     coarse_gemm_aggregate_manifest_path = None
     coarse_gemm_stream_aggregate_manifest_path = None
     n_significant_by_image: list[np.ndarray] = []
@@ -1293,6 +1303,10 @@ def _run_sparse_pass2_initial_model_estep(
         use_flat_local_rows = bool(
             use_exact_fine_diff2 and _flat_local_rows_enabled()
         )
+        if requested_fused_pair_fine_score and not use_flat_local_rows:
+            raise ValueError(
+                "shared fused-pair fine scoring requires exact fine diff2 and flat local rows"
+            )
         use_stable_flat_row_capacity = bool(
             use_flat_local_rows and requested_stable_flat_row_capacity
         )
@@ -1301,6 +1315,12 @@ def _run_sparse_pass2_initial_model_estep(
         )
         use_packed_local_projection = bool(
             use_flat_local_rows and _packed_local_projection_enabled()
+        )
+        use_fused_pair_fine_score = bool(
+            use_flat_local_rows and requested_fused_pair_fine_score
+        )
+        effective_fused_pair_fine_score = bool(
+            effective_fused_pair_fine_score or use_fused_pair_fine_score
         )
         sparse_diagnostics.set_bpref_contribution_dump_context(
             iteration=int(group_kwargs.get("debug_iteration", -1)),
@@ -1468,6 +1488,7 @@ def _run_sparse_pass2_initial_model_estep(
                         use_stable_flat_row_capacity
                     ),
                     _packed_local_projection_enabled=use_packed_local_projection,
+                    fused_pair_fine_score=use_fused_pair_fine_score,
                     _defer_packed_vdam_enabled=bool(
                         use_packed_local_projection
                         and _defer_packed_vdam_enabled()
@@ -1565,6 +1586,9 @@ def _run_sparse_pass2_initial_model_estep(
     meta["requested_stable_flat_row_capacity"] = bool(
         requested_stable_flat_row_capacity
     )
+    meta["requested_fused_pair_fine_score"] = bool(
+        requested_fused_pair_fine_score
+    )
     meta["requested_exact_local_physical_order_chunk_size"] = int(
         config.exact_local_physical_order_chunk_size
     )
@@ -1582,6 +1606,9 @@ def _run_sparse_pass2_initial_model_estep(
     )
     meta["effective_stable_flat_row_capacity"] = bool(
         effective_stable_flat_row_capacity
+    )
+    meta["effective_fused_pair_fine_score"] = bool(
+        effective_fused_pair_fine_score
     )
     meta["effective_exact_local_physical_order_chunk_size"] = (
         int(config.exact_local_physical_order_chunk_size)

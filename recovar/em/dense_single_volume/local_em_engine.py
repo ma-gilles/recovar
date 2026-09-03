@@ -3091,6 +3091,68 @@ def _build_flat_local_row_argument(
     return encode_flat_local_row_plan(plan)
 
 
+def _build_local_fused_pair_fine_arguments(
+    bucket: LocalBucketSpec,
+    flat_local_row_argument,
+    valid_image_mask,
+) -> dict[str, np.ndarray | int]:
+    """Map the mature compact-pair ABI onto packed local projection rows.
+
+    Candidate order and pair padding come from the shared compact-pass-2 host
+    encoder.  This local bridge adds only the projection-storage row mapping
+    needed by the fused CUDA ABI; it does not define another pair layout.
+    """
+
+    rotation_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)
+    valid_image_mask = np.asarray(valid_image_mask, dtype=bool)
+    if rotation_mask.ndim != 2 or valid_image_mask.shape != (rotation_mask.shape[0],):
+        raise ValueError(
+            "fused-pair fine scoring requires aligned bucket and valid-image axes"
+        )
+    n_translations = int(np.asarray(bucket.translation_log_prior).shape[1])
+    candidate_mask = np.broadcast_to(
+        rotation_mask[:, :, None],
+        (*rotation_mask.shape, n_translations),
+    ).copy()
+    if bucket.local_sample_mask is not None:
+        sample_mask = np.asarray(bucket.local_sample_mask, dtype=bool)
+        if sample_mask.shape != candidate_mask.shape:
+            raise ValueError(
+                "fused-pair fine sample mask does not match the dense source layout"
+            )
+        candidate_mask &= sample_mask
+    candidate_mask &= valid_image_mask[:, None, None]
+
+    pair_arrays = _sparse_pass2_diagnostics.build_compact_pair_index_arrays(
+        candidate_mask,
+    )
+    pair_mask = np.asarray(pair_arrays["pair_mask"], dtype=bool)
+    local_rotation_rows = np.asarray(
+        pair_arrays["local_rotation_row"],
+        dtype=np.int32,
+    )
+    dense_to_flat = build_dense_to_flat_local_row_lookup(
+        flat_local_row_argument,
+        batch_size=rotation_mask.shape[0],
+        dense_rotation_count=rotation_mask.shape[1],
+    )
+    reference_rows = map_dense_local_rows_to_flat_rows(
+        dense_to_flat,
+        local_rotation_rows,
+        pair_mask,
+    )
+    reference_rows = np.where(pair_mask, reference_rows, -1).astype(
+        np.int32,
+        copy=False,
+    )
+    return {
+        **pair_arrays,
+        "reference_row": reference_rows,
+        "valid_pair_count": int(np.sum(pair_arrays["pair_counts"], dtype=np.int64)),
+        "dense_candidate_capacity": int(candidate_mask.size),
+    }
+
+
 _FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA = "image_pre_shifts"
 
 
@@ -4273,6 +4335,7 @@ def run_local_em_exact(
     _flat_local_rows_enabled: bool = False,
     _stable_flat_row_capacity_enabled: bool = False,
     _packed_local_projection_enabled: bool = False,
+    fused_pair_fine_score: bool = False,
     _defer_packed_vdam_enabled: bool = False,
     _packed_final_noise_enabled: bool = False,
 ):
@@ -4289,6 +4352,7 @@ def run_local_em_exact(
         _stable_flat_row_capacity_enabled
     )
     packed_local_projection_enabled = bool(_packed_local_projection_enabled)
+    fused_pair_fine_score_enabled = bool(fused_pair_fine_score)
     defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
     stable_fourier_window_shapes = bool(stable_fourier_window_shapes)
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
@@ -4321,6 +4385,12 @@ def run_local_em_exact(
     if packed_local_projection_enabled and not flat_local_rows_enabled:
         raise ValueError(
             "packed local projection requires flat local rows"
+        )
+    if fused_pair_fine_score_enabled and not (
+        relion_exact_fine_diff2 and flat_local_rows_enabled
+    ):
+        raise ValueError(
+            "fused-pair fine scoring requires exact RELION fine diff2 and flat local rows"
         )
     if defer_packed_vdam_enabled and not packed_local_projection_enabled:
         raise ValueError(
@@ -4871,6 +4941,9 @@ def run_local_em_exact(
     chunk_local_rotations = []
     chunk_padded_rotations = []
     chunk_flat_score_rows = []
+    chunk_fused_pair_capacities = []
+    chunk_fused_pair_counts = []
+    chunk_fused_pair_dense_capacities = []
     chunk_planned_padded_rotations = []
     chunk_unique_rotations = []
     chunk_nonzero_posterior_rows = []
@@ -4881,6 +4954,9 @@ def run_local_em_exact(
     total_significant_samples = 0
     total_reconstruction_rows = 0
     total_flat_score_rows = 0
+    total_fused_pair_candidates = 0
+    total_fused_pair_capacity = 0
+    total_fused_pair_dense_capacity = 0
     total_packed_final_noise_rows = 0
     reconstruction_sample_indices_by_image = (
         [np.zeros(0, dtype=np.int64) for _ in range(n_images)] if return_reconstruction_sample_indices else None
@@ -5966,6 +6042,56 @@ def run_local_em_exact(
                 if flat_local_rows_enabled
                 else np.zeros((1, 3), dtype=np.int32)
             )
+            if fused_pair_fine_score_enabled:
+                fused_pair_arguments = _build_local_fused_pair_fine_arguments(
+                    bucket,
+                    flat_local_row_argument,
+                    valid_image_mask,
+                )
+                fused_pair_reference_rows_arg = jnp.asarray(
+                    fused_pair_arguments["reference_row"],
+                    dtype=jnp.int32,
+                )
+                fused_pair_local_rotation_rows_arg = jnp.asarray(
+                    fused_pair_arguments["local_rotation_row"],
+                    dtype=jnp.int32,
+                )
+                fused_pair_translation_ids_arg = jnp.asarray(
+                    fused_pair_arguments["translation_idx"],
+                    dtype=jnp.int32,
+                )
+                fused_pair_mask_arg = jnp.asarray(
+                    fused_pair_arguments["pair_mask"],
+                    dtype=bool,
+                )
+                pair_capacity = int(fused_pair_arguments["pair_bucket_size"])
+                valid_pair_count = int(fused_pair_arguments["valid_pair_count"])
+                dense_pair_capacity = int(
+                    fused_pair_arguments["dense_candidate_capacity"]
+                )
+                chunk_fused_pair_capacities.append(pair_capacity)
+                chunk_fused_pair_counts.append(valid_pair_count)
+                chunk_fused_pair_dense_capacities.append(dense_pair_capacity)
+                total_fused_pair_capacity += int(batch_size * pair_capacity)
+                total_fused_pair_candidates += valid_pair_count
+                total_fused_pair_dense_capacity += dense_pair_capacity
+            else:
+                fused_pair_reference_rows_arg = jnp.full(
+                    (1, 1),
+                    -1,
+                    dtype=jnp.int32,
+                )
+                fused_pair_local_rotation_rows_arg = jnp.full(
+                    (1, 1),
+                    -1,
+                    dtype=jnp.int32,
+                )
+                fused_pair_translation_ids_arg = jnp.full(
+                    (1, 1),
+                    -1,
+                    dtype=jnp.int32,
+                )
+                fused_pair_mask_arg = jnp.zeros((1, 1), dtype=bool)
             big_jit_arguments = (
                 jnp.asarray(batch_data),
                 jnp.asarray(ctf_params),
@@ -6016,6 +6142,10 @@ def run_local_em_exact(
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(_local_mstep_rotations(bucket)),
                 jnp.asarray(flat_local_row_argument, dtype=jnp.int32),
+                fused_pair_reference_rows_arg,
+                fused_pair_local_rotation_rows_arg,
+                fused_pair_translation_ids_arg,
+                fused_pair_mask_arg,
                 local_rotation_log_prior_arg,
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),
@@ -6059,6 +6189,7 @@ def run_local_em_exact(
                 relion_exact_fine_diff2=relion_exact_fine_diff2,
                 use_flat_local_rows=flat_local_rows_enabled,
                 use_packed_local_projection=packed_local_projection_enabled,
+                use_fused_pair_fine_score=fused_pair_fine_score_enabled,
                 relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
                 stable_fourier_window_shapes=stable_window_active,
                 relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
@@ -9449,6 +9580,19 @@ def run_local_em_exact(
         "packed_local_projection_enabled": np.asarray(
             packed_local_projection_enabled
         ),
+        "fused_pair_fine_score_enabled": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
+        "fused_pair_fine_score_default_enabled": np.asarray(False),
+        "fused_pair_fine_uses_shared_compact_order": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
+        "fused_pair_fine_avoids_pair_pixel_gathers": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
+        "fused_pair_fine_restores_dense_posterior_order": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
         "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
         "stable_fourier_window_shapes": np.asarray(stable_window_active),
         "logical_current_size": np.int32(logical_current_size),
@@ -9468,6 +9612,18 @@ def run_local_em_exact(
             packed_final_noise_enabled and accumulate_noise
         ),
         "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
+        "chunk_fused_pair_capacities": np.asarray(
+            chunk_fused_pair_capacities,
+            dtype=np.int32,
+        ),
+        "chunk_fused_pair_counts": np.asarray(
+            chunk_fused_pair_counts,
+            dtype=np.int64,
+        ),
+        "chunk_fused_pair_dense_capacities": np.asarray(
+            chunk_fused_pair_dense_capacities,
+            dtype=np.int64,
+        ),
         "chunk_planned_padded_rotations": np.asarray(
             chunk_planned_padded_rotations,
             dtype=np.int32,
@@ -9479,6 +9635,21 @@ def run_local_em_exact(
         "sum_union_rows": np.int64(total_local_rotations),
         "sum_padded_rows": np.int64(total_padded_rotations),
         "sum_flat_score_rows": np.int64(total_flat_score_rows),
+        "sum_fused_pair_candidates": np.int64(total_fused_pair_candidates),
+        "sum_fused_pair_capacity": np.int64(total_fused_pair_capacity),
+        "sum_fused_pair_dense_capacity": np.int64(
+            total_fused_pair_dense_capacity
+        ),
+        "fused_pair_valid_fraction_of_dense": np.float64(
+            0.0
+            if total_fused_pair_dense_capacity == 0
+            else total_fused_pair_candidates / total_fused_pair_dense_capacity
+        ),
+        "fused_pair_padded_fraction_of_dense": np.float64(
+            0.0
+            if total_fused_pair_dense_capacity == 0
+            else total_fused_pair_capacity / total_fused_pair_dense_capacity
+        ),
         "sum_planned_padded_rows": np.int64(total_planned_padded_rotations),
         "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
         "sum_reconstruction_rows": np.int64(total_reconstruction_rows),

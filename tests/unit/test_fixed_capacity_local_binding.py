@@ -886,6 +886,7 @@ def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_c
     assert signature.parameters["_flat_local_rows_enabled"].default is False
     assert signature.parameters["_stable_flat_row_capacity_enabled"].default is False
     assert signature.parameters["_packed_local_projection_enabled"].default is False
+    assert signature.parameters["fused_pair_fine_score"].default is False
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert source.count("_invoke_local_bucket_big_jit(") == 1
     assert "big_jit_result = run_local_bucket_big_jit(" not in source
@@ -909,6 +910,25 @@ def test_stable_flat_row_capacity_requires_flat_rows():
             rotation_block_size=1,
             current_size=2,
             _stable_flat_row_capacity_enabled=True,
+        )
+
+
+def test_fused_pair_fine_score_requires_exact_flat_rows():
+    with pytest.raises(
+        ValueError,
+        match="fused-pair fine scoring requires exact RELION fine diff2 and flat local rows",
+    ):
+        local_em_engine.run_local_em_exact(
+            None,
+            None,
+            None,
+            None,
+            None,
+            "nearest",
+            image_batch_size=1,
+            rotation_block_size=1,
+            current_size=2,
+            fused_pair_fine_score=True,
         )
 
 

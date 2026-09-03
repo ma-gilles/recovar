@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     build_dense_to_flat_local_row_lookup,
     build_pool_flat_local_row_plan,
@@ -22,6 +23,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
 )
+from recovar.em.dense_single_volume.local_layout import LocalBucketSpec
 
 
 @pytest.mark.unit
@@ -148,6 +150,89 @@ def test_dense_to_flat_lookup_gathers_final_rows_in_requested_source_order():
     )
     expected = np.where(final_mask[..., None], expected, 0.0)
     np.testing.assert_array_equal(gathered, expected)
+
+
+@pytest.mark.unit
+def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_rows():
+    rotation_counts = np.asarray([3, 2], dtype=np.int32)
+    dense_rotation_count = 16
+    plan = build_pool_flat_local_row_plan(
+        rotation_counts,
+        dense_rotation_count,
+        pool_size=2,
+        packed_row_count=34,
+        dense_batch_size=3,
+    )
+    encoded = encode_flat_local_row_plan(plan)
+    rotation_mask = np.zeros((3, dense_rotation_count), dtype=bool)
+    rotation_mask[0, :3] = True
+    rotation_mask[1, :2] = True
+    sample_mask = np.zeros((3, dense_rotation_count, 3), dtype=bool)
+    sample_mask[0, 0, [0, 2]] = True
+    sample_mask[0, 2, [1, 2]] = True
+    sample_mask[1, 1, [0, 1, 2]] = True
+    bucket = LocalBucketSpec(
+        image_indices=np.asarray([5, 7, 5], dtype=np.int32),
+        bucket_image_count=3,
+        bucket_rotation_count=dense_rotation_count,
+        actual_rotation_counts=np.asarray([3, 2, 0], dtype=np.int32),
+        local_rotation_ids=np.zeros((3, dense_rotation_count), dtype=np.int32),
+        local_rotations=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (3, dense_rotation_count, 3, 3),
+        ).copy(),
+        local_rotation_log_prior=np.zeros(
+            (3, dense_rotation_count),
+            dtype=np.float32,
+        ),
+        local_rotation_mask=rotation_mask,
+        translation_log_prior=np.zeros((3, 3), dtype=np.float32),
+        local_sample_mask=sample_mask,
+    )
+
+    actual = local_em_engine._build_local_fused_pair_fine_arguments(
+        bucket,
+        encoded,
+        np.asarray([True, True, False]),
+    )
+    shared = sparse_pass2_bucketed.build_compact_pair_index_arrays(
+        sample_mask & rotation_mask[:, :, None],
+    )
+
+    assert actual["pair_bucket_size"] == shared["pair_bucket_size"] == 16
+    for field in (
+        "pair_counts",
+        "local_rotation_row",
+        "translation_idx",
+        "pair_mask",
+    ):
+        np.testing.assert_array_equal(actual[field], shared[field])
+    assert actual["valid_pair_count"] == 7
+    assert actual["dense_candidate_capacity"] == 144
+
+    dense_to_flat = build_dense_to_flat_local_row_lookup(
+        encoded,
+        batch_size=3,
+        dense_rotation_count=dense_rotation_count,
+    )
+    for image_row in range(3):
+        count = int(actual["pair_counts"][image_row])
+        expected_rotation, expected_translation = np.nonzero(
+            sample_mask[image_row] & rotation_mask[image_row, :, None]
+        )
+        np.testing.assert_array_equal(
+            actual["local_rotation_row"][image_row, :count],
+            expected_rotation,
+        )
+        np.testing.assert_array_equal(
+            actual["translation_idx"][image_row, :count],
+            expected_translation,
+        )
+        np.testing.assert_array_equal(
+            actual["reference_row"][image_row, :count],
+            dense_to_flat[image_row, expected_rotation],
+        )
+        assert np.all(actual["reference_row"][image_row, count:] == -1)
 
 
 @pytest.mark.unit

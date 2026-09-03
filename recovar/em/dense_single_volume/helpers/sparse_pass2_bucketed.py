@@ -970,7 +970,16 @@ def _compact_pair_execution_mask_excluding_full_support(per_image_inputs_by_clas
     return filtered, excluded
 
 
-def _candidate_mask_nonzero(candidate_mask):
+def compact_candidate_indices_in_source_order(candidate_mask):
+    """Return compact ``(rotation, translation)`` ids in dense source order.
+
+    Compact pass 2 and the exact-local scorer must agree on one ordering:
+    rotations are the major axis and translations are the minor axis, exactly
+    as if the dense ``(R, T)`` mask had been flattened in C order.  Keep this
+    encoder shared so selected-pair CUDA paths cannot silently invent a
+    different posterior order.
+    """
+
     if isinstance(candidate_mask, SparseCandidateMask):
         if candidate_mask.mode == "empty":
             return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
@@ -982,6 +991,12 @@ def _candidate_mask_nonzero(candidate_mask):
             dense = _dense_candidate_mask_from_spec(candidate_mask)
             return np.nonzero(dense)
     return np.nonzero(_candidate_mask_to_dense(candidate_mask))
+
+
+def _candidate_mask_nonzero(candidate_mask):
+    """Backward-compatible internal name for the shared source-order encoder."""
+
+    return compact_candidate_indices_in_source_order(candidate_mask)
 
 
 def _maybe_dump_native_half_mstep(
@@ -2114,6 +2129,74 @@ def _relion_cuda_score_translation_angles_if_available(
     )
 
 
+def build_compact_pair_index_arrays(
+    candidate_masks,
+    *,
+    pair_bucket_size: int | None = None,
+    pair_block_size_for_quantization: int = 5000,
+):
+    """Pack candidate masks with the mature compact-pass-2 pair ABI.
+
+    Valid pairs occupy a source-ordered prefix of each image row. Padding uses
+    ``-1`` indices plus a false ``pair_mask``.  When no explicit capacity is
+    supplied, use the same compile-friendly bucket quantization as compact
+    pass 2 instead of creating exact-count shape families.
+    """
+
+    candidate_masks = tuple(candidate_masks)
+    compact_indices = tuple(
+        compact_candidate_indices_in_source_order(candidate_mask)
+        for candidate_mask in candidate_masks
+    )
+    pair_counts = np.asarray(
+        [rotation_rows.shape[0] for rotation_rows, _ in compact_indices],
+        dtype=np.int32,
+    )
+    required_capacity = int(pair_counts.max(initial=0))
+    if pair_bucket_size is None:
+        pair_bucket_size = _exact_bucket_rotation_size(
+            required_capacity,
+            pair_block_size_for_quantization,
+        )
+    pair_bucket_size = int(pair_bucket_size)
+    if pair_bucket_size <= 0:
+        raise ValueError("compact pair bucket size must be positive")
+    if required_capacity > pair_bucket_size:
+        raise ValueError(
+            "compact pair bucket is smaller than the source-ordered candidate "
+            f"prefix: required={required_capacity}, capacity={pair_bucket_size}"
+        )
+
+    batch_size = len(candidate_masks)
+    local_rotation_row = np.full(
+        (batch_size, pair_bucket_size),
+        -1,
+        dtype=np.int32,
+    )
+    translation_idx = np.full_like(local_rotation_row, -1)
+    pair_mask = np.zeros((batch_size, pair_bucket_size), dtype=bool)
+    for image_row, (rotation_rows, translation_ids) in enumerate(compact_indices):
+        count = int(rotation_rows.shape[0])
+        if count == 0:
+            continue
+        local_rotation_row[image_row, :count] = rotation_rows.astype(
+            np.int32,
+            copy=False,
+        )
+        translation_idx[image_row, :count] = translation_ids.astype(
+            np.int32,
+            copy=False,
+        )
+        pair_mask[image_row, :count] = True
+    return {
+        "pair_bucket_size": pair_bucket_size,
+        "pair_counts": pair_counts,
+        "local_rotation_row": local_rotation_row,
+        "translation_idx": translation_idx,
+        "pair_mask": pair_mask,
+    }
+
+
 def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=None):
     """Flatten per-image sparse pass-2 masks into valid candidate pairs.
 
@@ -2375,47 +2458,38 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
 
     pair_bucket_size = int(bucket["pair_bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+    index_arrays = build_compact_pair_index_arrays(
+        (
+            per_image_inputs["candidate_mask"][int(image_idx)]
+            for image_idx in image_indices
+        ),
+        pair_bucket_size=pair_bucket_size,
+    )
     batch = int(image_indices.shape[0])
-
-    padded_local_rotation_row = np.full((batch, pair_bucket_size), -1, dtype=np.int32)
-    padded_translation_idx = np.full((batch, pair_bucket_size), -1, dtype=np.int32)
     padded_rotation_index = np.zeros((batch, pair_bucket_size), dtype=np.int64)
     padded_log_prior = np.full((batch, pair_bucket_size), -1e30, dtype=np.float32)
-    padded_pair_mask = np.zeros((batch, pair_bucket_size), dtype=bool)
-    pair_counts = np.zeros(batch, dtype=np.int32)
 
     for row, image_idx in enumerate(image_indices.tolist()):
-        local_rot_rows, translation_idx = _candidate_mask_nonzero(per_image_inputs["candidate_mask"][image_idx])
-        count = int(local_rot_rows.shape[0])
-        if count > pair_bucket_size:
-            raise RuntimeError(
-                "Compact K-class sparse pass-2 bucket is too small for image "
-                f"{int(image_idx)}: pair_count={count}, bucket_size={pair_bucket_size}",
-            )
-        pair_counts[row] = count
+        count = int(index_arrays["pair_counts"][row])
         if count == 0:
             continue
 
-        local_rot_rows = local_rot_rows.astype(np.int32, copy=False)
-        translation_idx = translation_idx.astype(np.int32, copy=False)
+        local_rot_rows = index_arrays["local_rotation_row"][row, :count]
         rotation_indices = np.asarray(per_image_inputs["oversampled_rot_indices"][image_idx], dtype=np.int64)
         rotation_log_prior = np.asarray(per_image_inputs["log_prior"][image_idx], dtype=np.float32)
 
-        padded_local_rotation_row[row, :count] = local_rot_rows
-        padded_translation_idx[row, :count] = translation_idx
         padded_rotation_index[row, :count] = rotation_indices[local_rot_rows]
         padded_log_prior[row, :count] = rotation_log_prior[local_rot_rows]
-        padded_pair_mask[row, :count] = True
 
     return {
         "image_indices": image_indices,
         "pair_bucket_size": pair_bucket_size,
-        "pair_counts": pair_counts,
-        "local_rotation_row": padded_local_rotation_row,
-        "translation_idx": padded_translation_idx,
+        "pair_counts": index_arrays["pair_counts"],
+        "local_rotation_row": index_arrays["local_rotation_row"],
+        "translation_idx": index_arrays["translation_idx"],
         "rotation_index": padded_rotation_index,
         "log_prior": padded_log_prior,
-        "pair_mask": padded_pair_mask,
+        "pair_mask": index_arrays["pair_mask"],
     }
 
 

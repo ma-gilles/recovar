@@ -927,6 +927,7 @@ def _project_local_half_spectrum(
         "relion_exact_fine_diff2",
         "use_flat_local_rows",
         "use_packed_local_projection",
+        "use_fused_pair_fine_score",
         "relion_wavg_sequential_cuda",
         "stable_fourier_window_shapes",
         "relion_cuda_preprocess_radius",
@@ -1012,6 +1013,10 @@ def run_local_bucket_big_jit(
     local_rotations,
     local_mstep_rotations,
     flat_local_row_plan,
+    fused_pair_reference_rows,
+    fused_pair_local_rotation_rows,
+    fused_pair_translation_ids,
+    fused_pair_mask,
     rotation_log_prior,
     translation_log_prior,
     rotation_mask,
@@ -1054,6 +1059,7 @@ def run_local_bucket_big_jit(
     relion_exact_fine_diff2: bool = False,
     use_flat_local_rows: bool = False,
     use_packed_local_projection: bool = False,
+    use_fused_pair_fine_score: bool = False,
     relion_wavg_sequential_cuda: bool | None = None,
     stable_fourier_window_shapes: bool = False,
     relion_cuda_preprocess_radius: float = 0.0,
@@ -1147,6 +1153,31 @@ def run_local_bucket_big_jit(
         raise ValueError(
             "packed local projection does not yet support dense projection operand dumps"
         )
+    fused_pair_reference_rows = jnp.asarray(fused_pair_reference_rows)
+    fused_pair_local_rotation_rows = jnp.asarray(fused_pair_local_rotation_rows)
+    fused_pair_translation_ids = jnp.asarray(fused_pair_translation_ids)
+    fused_pair_mask = jnp.asarray(fused_pair_mask)
+    if use_fused_pair_fine_score:
+        if not (relion_exact_fine_diff2 and use_flat_local_rows):
+            raise ValueError(
+                "fused-pair fine scoring requires exact RELION fine diff2 and flat local rows"
+            )
+        expected_pair_shape = fused_pair_reference_rows.shape
+        if (
+            fused_pair_reference_rows.dtype != jnp.int32
+            or fused_pair_local_rotation_rows.dtype != jnp.int32
+            or fused_pair_translation_ids.dtype != jnp.int32
+            or fused_pair_mask.dtype != jnp.bool_
+            or fused_pair_reference_rows.ndim != 2
+            or expected_pair_shape[0] != local_rotations.shape[0]
+            or expected_pair_shape[1] <= 0
+            or fused_pair_local_rotation_rows.shape != expected_pair_shape
+            or fused_pair_translation_ids.shape != expected_pair_shape
+            or fused_pair_mask.shape != expected_pair_shape
+        ):
+            raise ValueError(
+                "fused-pair fine operands must be aligned (B, P) int32/int32/int32/bool arrays"
+            )
     if return_deferred_mstep_inputs and (
         return_mstep_tensors
         or accumulate_noise
@@ -1652,43 +1683,96 @@ def run_local_bucket_big_jit(
                 if packed_local_projection
                 else proj_half[flat_row_image_ids, flat_row_rotation_rows]
             )
-            direct_flat_args = (
-                jnp.asarray(flat_score_projection, dtype=jnp.complex64),
-                jnp.where(
-                    flat_row_valid_mask,
-                    flat_row_image_ids,
-                    jnp.int32(-1),
-                ),
-                corrected_score,
-                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-                direct_weight,
-                jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
-            )
-            if stable_fourier_window_shapes:
-                direct_diff2_flat = (
-                    cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
-                        *direct_flat_args,
-                        runtime_logical_current_size,
-                        direct_highres,
+            if use_fused_pair_fine_score:
+                pair_args = (
+                    jnp.asarray(flat_score_projection, dtype=jnp.complex64),
+                    corrected_score,
+                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                    direct_weight,
+                    fused_pair_reference_rows,
+                    fused_pair_translation_ids,
+                    jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
+                )
+                if stable_fourier_window_shapes:
+                    direct_diff2_pairs = (
+                        cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32(
+                            *pair_args,
+                            runtime_logical_current_size,
+                            direct_highres,
+                        )
                     )
+                else:
+                    direct_diff2_pairs = (
+                        cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
+                            *pair_args,
+                            direct_highres,
+                            current_size=norm_current_size,
+                        )
+                    )
+                pair_batch_rows = jnp.broadcast_to(
+                    jnp.arange(batch_size, dtype=jnp.int32)[:, None],
+                    fused_pair_mask.shape,
+                )
+                scatter_rotation_rows = jnp.where(
+                    fused_pair_mask,
+                    fused_pair_local_rotation_rows,
+                    jnp.int32(local_rotations.shape[1]),
+                )
+                scatter_translation_ids = jnp.where(
+                    fused_pair_mask,
+                    fused_pair_translation_ids,
+                    jnp.int32(n_trans),
+                )
+                direct_diff2 = jnp.full(
+                    (batch_size, int(local_rotations.shape[1]), n_trans),
+                    jnp.inf,
+                    dtype=jnp.float32,
+                ).at[
+                    pair_batch_rows,
+                    scatter_rotation_rows,
+                    scatter_translation_ids,
+                ].set(
+                    direct_diff2_pairs,
+                    mode="drop",
                 )
             else:
-                direct_diff2_flat = (
-                    cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
-                        *direct_flat_args,
-                        direct_highres,
-                        current_size=norm_current_size,
-                    )
+                direct_flat_args = (
+                    jnp.asarray(flat_score_projection, dtype=jnp.complex64),
+                    jnp.where(
+                        flat_row_valid_mask,
+                        flat_row_image_ids,
+                        jnp.int32(-1),
+                    ),
+                    corrected_score,
+                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                    direct_weight,
+                    jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
                 )
-            direct_diff2 = scatter_flat_local_rows(
-                direct_diff2_flat,
-                flat_row_image_ids,
-                flat_row_rotation_rows,
-                flat_row_valid_mask,
-                batch_size=batch_size,
-                dense_rotation_count=int(local_rotations.shape[1]),
-                fill_value=jnp.inf,
-            )
+                if stable_fourier_window_shapes:
+                    direct_diff2_flat = (
+                        cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
+                            *direct_flat_args,
+                            runtime_logical_current_size,
+                            direct_highres,
+                        )
+                    )
+                else:
+                    direct_diff2_flat = (
+                        cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
+                            *direct_flat_args,
+                            direct_highres,
+                            current_size=norm_current_size,
+                        )
+                    )
+                direct_diff2 = scatter_flat_local_rows(
+                    direct_diff2_flat,
+                    flat_row_image_ids,
+                    flat_row_rotation_rows,
+                    flat_row_valid_mask,
+                    batch_size=batch_size,
+                    dense_rotation_count=int(local_rotations.shape[1]),
+                    fill_value=jnp.inf,
+                )
         else:
             direct_rectangular_args = (
                 jnp.asarray(proj_half, dtype=jnp.complex64),
