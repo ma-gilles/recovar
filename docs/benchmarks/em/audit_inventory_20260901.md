@@ -135,6 +135,18 @@ with SHA-256
 and
 `a259db52a9634d71cf6b879af7ff6691cc8fff02c06432b77309f23a1706ea1b`.
 
+The same comparison is no longer exact at checkpoint 2: fine assignments
+differ for 4/15,258 and 18/15,257 particles, while the controller path and
+FSC crossings remain equal. Half-map relative-L2 drift is
+`1.17e-5/3.99e-5`, correlations remain above `0.9999999991`, and FSC RMSE is
+`2.16e-5`. The checked wording is therefore sparse/science-small drift, not
+strict equivalence. Its semantic JSON and manifest are retained at
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint2_corrected_vs_ptex_20260903T0509`
+with SHA-256
+`a0194ef444fc9f8e6809c959a3a1b7cfd746f009107d87ff730370e1eaa2b747`
+and
+`397247a65cd97789db0d31506f40a4fa373a0d48cf32c00f49eb7651d8955f22`.
+
 Corrected full-particle job `13376414` subsequently completes the historical
 box-800/current-size-564 failure boundary in both halves. Numbered iteration
 12 saves both maps and particle-state archives after `1266/1266` and

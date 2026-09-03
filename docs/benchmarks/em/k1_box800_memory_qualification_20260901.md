@@ -406,6 +406,22 @@ and
 The retained raw tool report is explicitly non-authoritative for strict
 floating equivalence because it used a loose threshold-dependent label.
 
+By numbered checkpoint 2, the integrated and corrected runs are no longer
+execution-exact. Their controller metadata, reported `9.27 A` resolution,
+next size-336 decision, and FSC threshold crossings remain equal, but coarse
+assignments differ for 1/15,258 and 6/15,257 particles and fine assignments
+differ for 4/15,258 and 18/15,257 particles. The FSC-curve RMSE is
+`2.15933e-5`; half-map relative-L2 differences are `1.17061e-5` and
+`3.99373e-5`, with correlations `0.99999999993` and `0.99999999920`. This is
+sparse, science-small trajectory drift, not strict equivalence and not a
+retrospectively thresholded acceptance. The semantic record is sealed under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/live_run_monitor/empiar10202_set6_checkpoint2_corrected_vs_ptex_20260903T0509`;
+its JSON, Markdown, and manifest SHA-256 values are
+`a0194ef444fc9f8e6809c959a3a1b7cfd746f009107d87ff730370e1eaa2b747`,
+`76f2f9e9db74fcaea0811e16ebe037519dde9efad132175aa4aa73ed6996859d`,
+and
+`397247a65cd97789db0d31506f40a4fa373a0d48cf32c00f49eb7651d8955f22`.
+
 ## Accepted unused local-padding removal
 
 Commit `f91c73f2907ccea635782814d0cbde1d4f8ed4c2` (tree
