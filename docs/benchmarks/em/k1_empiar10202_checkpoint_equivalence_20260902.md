@@ -60,7 +60,8 @@ The seven authoritative audit jobs requested and received exactly
 `0:0` in 2:07, 3:15, 3:51, 3:39, 4:48, 5:26, and 3:09.  CPU placement is
 intentional: the auditor memory-maps and streams completed arrays and performs
 no refinement or GPU calculation.  Job `13370903` used 22,111,680 KiB batch
-MaxRSS on `della-i13n10`; job `13372565` used 8,063,012 KiB and exact
+MaxRSS on `della-i13n10`; job `13372565` used 8,063,012 KiB
+`/usr/bin/time` maximum RSS (Slurm batch MaxRSS 35,789,204 KiB) with exact
 requested/allocated resources on `della-h16n18`.
 
 The unchanged pre-fix checkpoint-5 audit job `13370307` exited before the
