@@ -94,6 +94,7 @@ class TestCommandBuilders:
         assert cmd[cmd.index("--padding-factor") + 1] == "2"
         assert cmd[cmd.index("--pass2-engine") + 1] == "auto"
         assert "--relion-wavg-sequential-cuda" in cmd
+        assert "--no-stable-fourier-window-shapes" in cmd
         assert cmd[cmd.index("--exact-local-bucket-radix") + 1] == "4"
         assert cmd[cmd.index("--exact-local-physical-order-chunk-size") + 1] == "0"
         assert cmd[cmd.index("--grad-ini-frac") + 1] == "0.4"
@@ -103,6 +104,18 @@ class TestCommandBuilders:
         assert cmd[cmd.index("--mu") + 1] == "0.7"
         assert "--jax-compilation-cache" in cmd
         assert cmd[cmd.index("--jax-compilation-cache-dir") + 1] == "/shared/jax-cache"
+
+    def test_initial_model_command_exposes_stable_fourier_window_policy(self):
+        cmd = build_initial_model_command(
+            {
+                "input_star": "/data/particles.star",
+                "outdir": "/out/InitialModel/job_0001",
+                "stable_fourier_window_shapes": True,
+            }
+        )
+
+        assert "--stable-fourier-window-shapes" in cmd
+        assert "--no-stable-fourier-window-shapes" not in cmd
 
     def test_initial_model_command_rejects_unqualified_bucket_radix(self):
         with pytest.raises(ValueError, match="must be 2 or 4"):
@@ -273,6 +286,7 @@ class TestJobsAPI:
         assert defaults_response.json()["relion_wavg_sequential_cuda"] is True
         assert defaults_response.json()["exact_local_bucket_radix"] == 4
         assert defaults_response.json()["exact_local_physical_order_chunk_size"] == 0
+        assert defaults_response.json()["stable_fourier_window_shapes"] is False
 
         project_dir = str(tmp_path / "initial_model_project")
         response = await client.post("/api/projects", json={"path": project_dir, "name": "InitialModel"})

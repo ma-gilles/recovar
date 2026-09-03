@@ -38,6 +38,8 @@ export const tooltips: Record<string, string> = {
     "Static-shape palette for exact-local K=1 buckets. Radix 4 reduces JAX compilation churn; radix 2 is the legacy diagnostic setting.",
   "initial_model.exact_local_physical_order_chunk_size":
     "Bound consecutive physical-order K=1 buckets while keeping RELION's pool-of-three boundaries. Zero keeps the qualified run-global shape; nonzero values are performance candidates until trajectory-qualified.",
+  "initial_model.stable_fourier_window_shapes":
+    "Experimental exact K=1 VDAM optimization that reuses low-cardinality Fourier buffer capacities while preserving each iteration's logical CUDA bounds. Unsupported pass-2 topologies fail before execution.",
   "initial_model.bootstrap_min": "Minimum particle count used to form the initial bootstrap reference.",
   "initial_model.sigma2_min": "Minimum particle count used for initial noise-spectrum estimation.",
   "initial_model.translation_sigma": "Optional translation-prior standard deviation in Angstroms.",

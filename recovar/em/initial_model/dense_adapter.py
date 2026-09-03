@@ -239,6 +239,7 @@ class DenseInitialModelEstepConfig:
     relion_wavg_sequential_cuda: bool = True
     exact_local_bucket_radix: int = 4
     exact_local_physical_order_chunk_size: int = 0
+    stable_fourier_window_shapes: bool = False
     padding_factor: int = 1
     class_log_priors: Any | None = None
     relion_bpref_frame: bool = True
@@ -949,6 +950,19 @@ def _run_sparse_pass2_initial_model_estep(
     use_exact_relion_projector = relion_projector_half_by_class is not None
     if use_exact_relion_projector and relion_projector_r_max is None:
         raise ValueError("relion_projector_r_max is required with relion_projector_half_by_class")
+    if config.stable_fourier_window_shapes and (
+        state.K != 1
+        or use_compact_sparse_pass2
+        or not config.relion_bpref_frame
+        or not use_exact_relion_projector
+        or not config.relion_wavg_sequential_cuda
+        or not _exact_relion_fine_diff2_enabled()
+    ):
+        raise ValueError(
+            "stable Fourier-window shapes are supported only by K=1 local "
+            "pass-2 with the exact RELION projector/fine scorer, CUDA Wavg, "
+            "and RELION BPref output"
+        )
 
     joint_halfset_stream = bool(
         state.pseudo_halfsets
@@ -1456,6 +1470,11 @@ def _run_sparse_pass2_initial_model_estep(
                         int(config.exact_local_bucket_radix)
                         if use_exact_local_relion_operands
                         else None
+                    ),
+                    stable_fourier_window_shapes=bool(
+                        config.stable_fourier_window_shapes
+                        and use_exact_local_relion_operands
+                        and use_exact_fine_diff2
                     ),
                     consecutive_mixed_bucket_size=(
                         int(config.exact_local_physical_order_chunk_size)

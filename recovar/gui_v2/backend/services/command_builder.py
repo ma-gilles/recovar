@@ -170,6 +170,7 @@ def build_initial_model_command(params: dict[str, Any]) -> list[str]:
         ("--write-iter-artifacts", "write_iter_artifacts"),
         ("--require-custom-cuda", "require_custom_cuda"),
         ("--relion-wavg-sequential-cuda", "relion_wavg_sequential_cuda"),
+        ("--stable-fourier-window-shapes", "stable_fourier_window_shapes"),
     ):
         _add_boolean_option(cmd, flag, bool(value(name)))
 

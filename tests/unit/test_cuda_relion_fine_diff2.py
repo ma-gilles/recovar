@@ -212,6 +212,7 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
     assert "initial_diff2[batch]" in source
     assert "runtime_current_size[0]" in source
     assert "logical_full_pixel_count" in source
+    assert "RelionFineDiff2FusedTranslateRuntimeFlatRowsF32" in source
     assert "RelionFineDiff2FusedTranslateRuntimeRectangularF32" in source
 
 
@@ -2124,6 +2125,116 @@ def test_relion_flat_rows_skip_invalid_rows_with_positive_infinity(
 
 
 @pytest.mark.gpu
+def test_relion_runtime_flat_rows_match_shared_rectangular_tree_and_reuse_compile(
+    monkeypatch,
+    custom_cuda_lib,
+    gpu_device,
+):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(1932)
+    physical_size = 32
+    physical_pixels = physical_size * (physical_size // 2 + 1)
+    row_image_ids = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    row_rotation_ids = np.asarray([0, 2, 1, 2], dtype=np.int32)
+    translation_angles = rng.normal(0, 0.2, (4, 2)).astype(np.float32)
+    initial_diff2 = np.asarray([0.022644043, 0.03125], dtype=np.float32)
+
+    with jax.default_device(gpu_device):
+        runtime_function = (
+            cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32
+        )
+        runtime_function.clear_cache()
+        for logical_size in (30, 32):
+            logical_pixels = logical_size * (logical_size // 2 + 1)
+            dense_reference = (
+                rng.normal(0, 0.02, (2, 3, logical_pixels))
+                + 1j * rng.normal(0, 0.02, (2, 3, logical_pixels))
+            ).astype(np.complex64)
+            flat_reference = dense_reference[row_image_ids, row_rotation_ids]
+            image = (
+                rng.normal(0, 0.02, (2, logical_pixels))
+                + 1j * rng.normal(0, 0.02, (2, logical_pixels))
+            ).astype(np.complex64)
+            weight = rng.uniform(0, 150_000, (2, logical_pixels)).astype(np.float32)
+            lookup = np.arange(logical_pixels, dtype=np.int32)
+            pad = physical_pixels - logical_pixels
+            physical_reference = np.pad(
+                flat_reference,
+                ((0, 0), (0, pad)),
+                constant_values=np.complex64(7 + 3j),
+            )
+            physical_image = np.pad(
+                image,
+                ((0, 0), (0, pad)),
+                constant_values=np.complex64(5 + 2j),
+            )
+            physical_weight = np.pad(
+                weight,
+                ((0, 0), (0, pad)),
+                constant_values=np.float32(1.25e5),
+            )
+            physical_lookup = np.pad(lookup, (0, pad), constant_values=0)
+
+            dense_expected = (
+                cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+                    jnp.asarray(dense_reference),
+                    jnp.asarray(image),
+                    jnp.asarray(translation_angles),
+                    jnp.asarray(weight),
+                    jnp.asarray(lookup),
+                    jnp.asarray(initial_diff2),
+                    current_size=logical_size,
+                )
+            )
+            static_flat = (
+                cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
+                    jnp.asarray(flat_reference),
+                    jnp.asarray(row_image_ids),
+                    jnp.asarray(image),
+                    jnp.asarray(translation_angles),
+                    jnp.asarray(weight),
+                    jnp.asarray(lookup),
+                    jnp.asarray(initial_diff2),
+                    current_size=logical_size,
+                )
+            )
+            runtime_flat = runtime_function(
+                jnp.asarray(physical_reference),
+                jnp.asarray(row_image_ids),
+                jnp.asarray(physical_image),
+                jnp.asarray(translation_angles),
+                jnp.asarray(physical_weight),
+                jnp.asarray(physical_lookup),
+                jnp.asarray(logical_size, dtype=jnp.int32),
+                jnp.asarray(initial_diff2),
+            )
+            dense_expected, static_flat, runtime_flat = jax.block_until_ready(
+                (dense_expected, static_flat, runtime_flat)
+            )
+            expected_rows = np.asarray(dense_expected)[
+                row_image_ids,
+                row_rotation_ids,
+            ]
+            np.testing.assert_array_equal(
+                np.asarray(static_flat).view(np.uint32),
+                expected_rows.view(np.uint32),
+            )
+            np.testing.assert_array_equal(
+                np.asarray(runtime_flat).view(np.uint32),
+                expected_rows.view(np.uint32),
+            )
+            cache_size = runtime_function._cache_size()
+            if logical_size == 30:
+                first_cache_size = cache_size
+            else:
+                assert cache_size == first_cache_size
+
+
+@pytest.mark.gpu
 def test_relion_fine_diff2_pairs_matches_production_tree_bitwise(
     monkeypatch,
     custom_cuda_lib,
@@ -2286,6 +2397,22 @@ def test_relion_runtime_cutoff_fine_diff2_fails_closed_without_gpu(monkeypatch):
     with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
         cuda_backproject.relion_fine_diff2_fused_translate_runtime_rectangular_f32.__wrapped__(
             jnp.zeros((1, 1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 1), dtype=jnp.float32),
+            jnp.asarray([0], dtype=jnp.int32),
+            jnp.asarray(2, dtype=jnp.int32),
+        )
+
+
+def test_relion_runtime_flat_rows_fails_closed_without_gpu(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject.jax, "default_backend", lambda: "cpu")
+    with pytest.raises(RuntimeError, match="requires a JAX GPU backend"):
+        cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32.__wrapped__(
+            jnp.zeros((1, 1), dtype=jnp.complex64),
+            jnp.zeros((1,), dtype=jnp.int32),
             jnp.zeros((1, 1), dtype=jnp.complex64),
             jnp.zeros((1, 2), dtype=jnp.float32),
             jnp.ones((1, 1), dtype=jnp.float32),

@@ -588,12 +588,18 @@ _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RECTANGULAR_F32 = (
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_FLAT_ROWS_F32 = (
     "cuda_relion_fine_diff2_fused_translate_flat_rows_f32"
 )
+_TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_FLAT_ROWS_F32 = (
+    "cuda_relion_fine_diff2_fused_translate_runtime_flat_rows_f32"
+)
 _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_RECTANGULAR_F32 = (
     "cuda_relion_fine_diff2_fused_translate_runtime_rectangular_f32"
 )
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
 _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32 = (
     "cuda_relion_powerclass_spectrum_highres_f32"
+)
+_TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_RUNTIME_F32 = (
+    "cuda_relion_powerclass_spectrum_highres_runtime_f32"
 )
 _TARGET_RELION_EXPONENTIATE_F32 = "cuda_relion_exponentiate_f32"
 _TARGET_RELION_DIVIDE_F32 = "cuda_relion_divide_f32"
@@ -603,8 +609,14 @@ _TARGET_RELION_WAVG_ROTATION_ATOMIC_ADD_F32 = "cuda_relion_wavg_rotation_atomic_
 _TARGET_RELION_WAVG_ROTATION_ATOMIC_TRIPLET_ADD_F32 = (
     "cuda_relion_wavg_rotation_atomic_triplet_add_f32"
 )
+_TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_TRIPLET_ADD_F32 = (
+    "cuda_relion_wavg_rotation_atomic_runtime_triplet_add_f32"
+)
 _TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32 = (
     "cuda_relion_wavg_sequential_triplet_f32"
+)
+_TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_TRIPLET_F32 = (
+    "cuda_relion_wavg_sequential_runtime_triplet_f32"
 )
 _TARGET_DUAL_WEIGHTED_SUMS_F32 = "cuda_dual_weighted_sums_f32"
 
@@ -704,6 +716,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionFineDiff2FusedTranslateFlatRowsF32",
     ),
     (
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_FLAT_ROWS_F32,
+        "RelionFineDiff2FusedTranslateRuntimeFlatRowsF32",
+    ),
+    (
         _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_RECTANGULAR_F32,
         "RelionFineDiff2FusedTranslateRuntimeRectangularF32",
     ),
@@ -711,6 +727,10 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (
         _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32,
         "RelionPowerClassSpectrumHighresF32",
+    ),
+    (
+        _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_RUNTIME_F32,
+        "RelionPowerClassSpectrumHighresRuntimeF32",
     ),
     (_TARGET_RELION_EXPONENTIATE_F32, "RelionExponentiateF32"),
     (_TARGET_RELION_DIVIDE_F32, "RelionDivideF32"),
@@ -728,8 +748,16 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionWavgRotationAtomicTripletAddF32",
     ),
     (
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_TRIPLET_ADD_F32,
+        "RelionWavgRotationAtomicRuntimeTripletAddF32",
+    ),
+    (
         _TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32,
         "RelionWavgSequentialTripletF32",
+    ),
+    (
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_TRIPLET_F32,
+        "RelionWavgSequentialRuntimeTripletF32",
     ),
     (_TARGET_DUAL_WEIGHTED_SUMS_F32, "DualWeightedSumsF32"),
 )
@@ -2041,7 +2069,7 @@ def _run_vdam_external_host_replay_callback(
 
 @functools.partial(
     jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28),
+    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28, 30),
 )
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
@@ -2073,6 +2101,8 @@ def relion_vdam_mstep_fused_projector_x_half(
     parallel_worker_replay: bool | None = None,
     candidate_trace_active: bool = False,
     persistent_serial_rotation_replay: bool = False,
+    stable_dense_positions: jax.Array | None = None,
+    logical_current_size: int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Project, form residuals, and scatter VDAM rows in one native launch."""
 
@@ -2120,6 +2150,29 @@ def relion_vdam_mstep_fused_projector_x_half(
         raise ValueError("translation_angles must have shape (translation,2)")
     if pixel_indices.shape != (images.shape[1],):
         raise ValueError("pixel_indices must match the compact pixel dimension")
+    stable_capacity = logical_current_size is not None or stable_dense_positions is not None
+    if stable_capacity and (logical_current_size is None or stable_dense_positions is None):
+        raise ValueError(
+            "stable VDAM BPref storage requires both logical_current_size and "
+            "stable_dense_positions"
+        )
+    if stable_capacity:
+        logical_current_size = int(logical_current_size)
+        physical_current_size = 2 * int(round(float(max_r)))
+        if (
+            logical_current_size <= 0
+            or logical_current_size % 2
+            or logical_current_size > physical_current_size
+        ):
+            raise ValueError(
+                "logical_current_size must be positive, even, and no larger "
+                f"than physical current size {physical_current_size}"
+            )
+        stable_dense_positions = jnp.asarray(stable_dense_positions, dtype=jnp.int32)
+        if stable_dense_positions.shape != pixel_indices.shape:
+            raise ValueError(
+                "stable_dense_positions must match the compact pixel dimension"
+            )
     if reconstruction_group_ids is None:
         if data_volume.ndim != 1 or weight_volume.ndim != 1:
             raise ValueError("ungrouped VDAM accumulators must be rank 1")
@@ -2196,15 +2249,35 @@ def relion_vdam_mstep_fused_projector_x_half(
         )
     _ensure_ffi()
 
-    dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
-        images, pixel_indices, image_shape, max_r
-    )
-    dense_ctf, ctf_indices, ctf_h, ctf_w = _prepare_relion_x_half_block_topology_operands(
-        ctf, pixel_indices, image_shape, max_r
-    )
-    dense_minvsigma2, noise_indices, noise_h, noise_w = _prepare_relion_x_half_block_topology_operands(
-        minvsigma2, pixel_indices, image_shape, max_r
-    )
+    if stable_capacity:
+        physical_current_size = 2 * int(round(float(max_r)))
+        pixel_capacity = physical_current_size * (physical_current_size // 2 + 1)
+
+        def _pack_stable_dense(values):
+            dense = jnp.zeros((*values.shape[:-1], pixel_capacity), dtype=values.dtype)
+            return dense.at[..., stable_dense_positions].set(values)
+
+        dense_images = _pack_stable_dense(images)
+        dense_ctf = _pack_stable_dense(ctf)
+        dense_minvsigma2 = _pack_stable_dense(minvsigma2)
+        dense_indices = stable_dense_positions
+        ctf_indices = stable_dense_positions
+        noise_indices = stable_dense_positions
+        current_h = int(logical_current_size)
+        current_w = current_h // 2 + 1
+        ctf_h = noise_h = current_h
+        ctf_w = noise_w = current_w
+    else:
+        dense_images, dense_indices, current_h, current_w = _prepare_relion_x_half_block_topology_operands(
+            images, pixel_indices, image_shape, max_r
+        )
+        dense_ctf, ctf_indices, ctf_h, ctf_w = _prepare_relion_x_half_block_topology_operands(
+            ctf, pixel_indices, image_shape, max_r
+        )
+        dense_minvsigma2, noise_indices, noise_h, noise_w = _prepare_relion_x_half_block_topology_operands(
+            minvsigma2, pixel_indices, image_shape, max_r
+        )
+        pixel_capacity = current_h * current_w
     if (ctf_h, ctf_w) != (current_h, current_w) or (noise_h, noise_w) != (current_h, current_w):
         raise ValueError("VDAM fused-projector operand topology metadata mismatch")
     if not (ctf_indices.shape == noise_indices.shape == dense_indices.shape):
@@ -2221,8 +2294,12 @@ def relion_vdam_mstep_fused_projector_x_half(
         n_particles, n_rotations, 6
     )
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
+    if stable_capacity:
+        kw["max_r2_x4"] = _encode_max_r(
+            float(logical_current_size // 2) * float(kw["upsampling"])
+        )
     denominator_type = jax.ShapeDtypeStruct(
-        (n_particles, n_rotations, current_h * current_w), jnp.float32
+        (n_particles, n_rotations, pixel_capacity), jnp.float32
     )
     data_real_volume = jnp.asarray(data_volume.real, dtype=jnp.float32)
     data_imag_volume = jnp.asarray(data_volume.imag, dtype=jnp.float32)
@@ -2236,6 +2313,10 @@ def relion_vdam_mstep_fused_projector_x_half(
         os.environ.get(_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, "").strip()
     )
     if external_host_replay:
+        if stable_capacity:
+            raise ValueError(
+                "stable VDAM BPref storage is unsupported by external host replay"
+            )
         if (
             captured_rotation_replay
             or serial_rotation_replay
@@ -2314,6 +2395,7 @@ def relion_vdam_mstep_fused_projector_x_half(
             weight_volume,
             image_h=np.int64(current_h),
             image_w=np.int64(current_w),
+            pixel_capacity=np.int64(pixel_capacity),
             N0=kw["N0"],
             N1=kw["N1"],
             N2=kw["N2"],
@@ -2336,13 +2418,20 @@ def relion_vdam_mstep_fused_projector_x_half(
             candidate_trace_active=np.int64(candidate_trace_active),
         )
     fused_data = jax.lax.complex(fused_real, fused_imag)
-    full_h, full_w = map(int, image_shape)
-    full_half_w = full_w // 2 + 1
-    full_rows = pixel_indices // full_half_w
-    columns = pixel_indices % full_half_w
-    signed_rows = jnp.where(full_rows <= full_h // 2, full_rows, full_rows - full_h)
-    current_indices = jnp.mod(signed_rows, current_h) * current_w + columns
-    compact_denominator = jnp.take(dense_denominator, current_indices, axis=-1)
+    if stable_capacity:
+        compact_denominator = jnp.take(
+            dense_denominator,
+            stable_dense_positions,
+            axis=-1,
+        )
+    else:
+        full_h, full_w = map(int, image_shape)
+        full_half_w = full_w // 2 + 1
+        full_rows = pixel_indices // full_half_w
+        columns = pixel_indices % full_half_w
+        signed_rows = jnp.where(full_rows <= full_h // 2, full_rows, full_rows - full_h)
+        current_indices = jnp.mod(signed_rows, current_h) * current_w + columns
+        compact_denominator = jnp.take(dense_denominator, current_indices, axis=-1)
     return fused_data, fused_weight, compact_denominator
 
 
@@ -3303,6 +3392,54 @@ def relion_powerclass_spectrum_highres_f32(
     )
 
 
+@functools.partial(jax.jit, static_argnames=("xdim", "ydim"))
+def relion_powerclass_spectrum_highres_runtime_f32(
+    relion_image: jax.Array,
+    resolution_limit: jax.Array,
+    *,
+    xdim: int,
+    ydim: int,
+) -> jax.Array:
+    """Run powerClass with a device-side high-shell cutoff scalar."""
+
+    relion_image = jnp.asarray(relion_image)
+    resolution_limit = jnp.asarray(resolution_limit, dtype=jnp.int32)
+    if relion_image.dtype != jnp.complex64:
+        raise TypeError(f"relion_image must be complex64, got {relion_image.dtype}")
+    if (
+        relion_image.ndim != 2
+        or relion_image.shape[0] <= 0
+        or xdim <= 0
+        or ydim <= 0
+        or relion_image.shape[1] != int(xdim) * int(ydim)
+    ):
+        raise ValueError(
+            "runtime RELION powerClass operands have inconsistent dimensions: "
+            f"image={relion_image.shape}, xdim={xdim}, ydim={ydim}"
+        )
+    if resolution_limit.shape != ():
+        raise ValueError("resolution_limit must be an int32 scalar")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("runtime RELION powerClass requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("runtime RELION powerClass requires custom CUDA")
+    _ensure_ffi()
+    out_type = jax.ShapeDtypeStruct(
+        (relion_image.shape[0], int(xdim) + 1),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_RUNTIME_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        relion_image,
+        resolution_limit,
+        xdim=int(xdim),
+        ydim=int(ydim),
+    )
+
+
 def _prepare_relion_fine_diff2_fused_translate_rectangular_operands(
     reference,
     image,
@@ -3444,8 +3581,7 @@ def relion_fine_diff2_fused_translate_rectangular_f32(
     )
 
 
-@functools.partial(jax.jit, static_argnames=("current_size",))
-def relion_fine_diff2_fused_translate_flat_rows_f32(
+def _prepare_relion_fine_diff2_fused_translate_flat_rows_operands(
     reference: jax.Array,
     row_image_ids: jax.Array,
     image: jax.Array,
@@ -3453,18 +3589,7 @@ def relion_fine_diff2_fused_translate_flat_rows_f32(
     weight: jax.Array,
     full_to_compact: jax.Array,
     initial_diff2: jax.Array | None = None,
-    *,
-    current_size: int,
-) -> jax.Array:
-    """Evaluate source-ordered flat rotation rows with RELION fine arithmetic.
-
-    ``reference`` is ``(Q,N)`` and ``row_image_ids`` maps every packed row to
-    one of the ``B`` image/weight rows. The CUDA implementation shares the
-    rectangular scorer's translation, pixel traversal, binary32 update, and
-    256-lane reduction body; only the row-to-image address calculation differs.
-    The output shape is ``(Q,T)``.
-    """
-
+) -> tuple[jax.Array, ...]:
     reference = jnp.asarray(reference)
     row_image_ids = jnp.asarray(row_image_ids)
     image = jnp.asarray(image)
@@ -3520,6 +3645,55 @@ def relion_fine_diff2_fused_translate_flat_rows_f32(
             "flat-row RELION fine diff2 initial_diff2 must be float32 with shape "
             f"({image.shape[0]},), got {initial_diff2.shape} {initial_diff2.dtype}"
         )
+    return (
+        reference,
+        row_image_ids,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    )
+
+
+@functools.partial(jax.jit, static_argnames=("current_size",))
+def relion_fine_diff2_fused_translate_flat_rows_f32(
+    reference: jax.Array,
+    row_image_ids: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    initial_diff2: jax.Array | None = None,
+    *,
+    current_size: int,
+) -> jax.Array:
+    """Evaluate source-ordered flat rotation rows with RELION fine arithmetic.
+
+    ``reference`` is ``(Q,N)`` and ``row_image_ids`` maps every packed row to
+    one of the ``B`` image/weight rows. The CUDA implementation shares the
+    rectangular scorer's translation, pixel traversal, binary32 update, and
+    256-lane reduction body; only the row-to-image address calculation differs.
+    The output shape is ``(Q,T)``.
+    """
+
+    (
+        reference,
+        row_image_ids,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    ) = _prepare_relion_fine_diff2_fused_translate_flat_rows_operands(
+        reference,
+        row_image_ids,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    )
     current_size = int(current_size)
     expected_full_pixels = current_size * (current_size // 2 + 1)
     if current_size <= 0 or full_to_compact.shape != (expected_full_pixels,):
@@ -3555,6 +3729,79 @@ def relion_fine_diff2_fused_translate_flat_rows_f32(
         initial_diff2,
         full_to_compact,
         current_size=current_size,
+    )
+
+
+@jax.jit
+def relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
+    reference: jax.Array,
+    row_image_ids: jax.Array,
+    image: jax.Array,
+    translation_angles: jax.Array,
+    weight: jax.Array,
+    full_to_compact: jax.Array,
+    logical_current_size: jax.Array,
+    initial_diff2: jax.Array | None = None,
+) -> jax.Array:
+    """Evaluate packed rotation rows inside a fixed physical pixel capacity.
+
+    The scalar logical size controls the exact RELION rectangle traversal;
+    physical-only score rows remain inert. This is the packed-row counterpart
+    of :func:`relion_fine_diff2_fused_translate_runtime_rectangular_f32` and
+    reaches the same templated CUDA scoring kernel.
+    """
+
+    (
+        reference,
+        row_image_ids,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    ) = _prepare_relion_fine_diff2_fused_translate_flat_rows_operands(
+        reference,
+        row_image_ids,
+        image,
+        translation_angles,
+        weight,
+        full_to_compact,
+        initial_diff2,
+    )
+    logical_current_size = jnp.asarray(logical_current_size, dtype=jnp.int32)
+    if logical_current_size.shape != ():
+        raise ValueError(
+            "runtime flat-row RELION fine diff2 logical_current_size must be a scalar, "
+            f"got {logical_current_size.shape}"
+        )
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(
+            "runtime flat-row fused RELION fine diff2 requires a JAX GPU backend"
+        )
+    if not custom_cuda_requested():
+        raise RuntimeError(
+            "runtime flat-row fused RELION fine diff2 was explicitly requested "
+            "but custom CUDA is disabled"
+        )
+    _ensure_ffi()
+
+    out_type = jax.ShapeDtypeStruct(
+        (reference.shape[0], translation_angles.shape[0]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_FLAT_ROWS_F32,
+        out_type,
+        vmap_method="sequential",
+    )(
+        reference,
+        row_image_ids,
+        image,
+        translation_angles,
+        weight,
+        initial_diff2,
+        full_to_compact,
+        logical_current_size,
     )
 
 
@@ -4599,6 +4846,41 @@ def relion_wavg_rotation_atomic_triplet_add_f32(
 
 
 @jax.jit
+def relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+    terms: jax.Array,
+    accumulator: jax.Array,
+    logical_pixel_count: jax.Array,
+) -> jax.Array:
+    """Run Wavg atomics over a logical prefix of fixed-capacity storage."""
+
+    _ensure_ffi()
+    terms = jnp.asarray(terms)
+    accumulator = jnp.asarray(accumulator)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if terms.dtype != jnp.float32 or terms.ndim != 4 or terms.shape[-1] != 3:
+        raise ValueError(
+            "runtime RELION Wavg triplets require float32 [batch,rotation,pixel,3] terms"
+        )
+    if accumulator.dtype != jnp.float32 or accumulator.shape != (
+        terms.shape[0],
+        terms.shape[2],
+        3,
+    ):
+        raise ValueError(
+            "runtime RELION Wavg triplets require a matching [batch,pixel,3] accumulator"
+        )
+    if logical_pixel_count.shape != ():
+        raise ValueError("logical_pixel_count must be an int32 scalar")
+    output_type = jax.ShapeDtypeStruct(accumulator.shape, jnp.float32)
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_ROTATION_ATOMIC_RUNTIME_TRIPLET_ADD_F32,
+        output_type,
+        input_output_aliases={1: 0},
+        vmap_method="sequential",
+    )(terms, accumulator, logical_pixel_count)
+
+
+@jax.jit
 def relion_wavg_sequential_triplet_f32(
     projections: jax.Array,
     raw_ctf: jax.Array,
@@ -4669,6 +4951,70 @@ def relion_wavg_sequential_triplet_f32(
         output_type,
         vmap_method="sequential",
     )(projections, raw_ctf, scale, shifted_images, posterior)
+
+
+@jax.jit
+def relion_wavg_sequential_runtime_triplet_f32(
+    projections: jax.Array,
+    raw_ctf: jax.Array,
+    scale: jax.Array,
+    shifted_images: jax.Array,
+    posterior: jax.Array,
+    logical_pixel_count: jax.Array,
+) -> jax.Array:
+    """Accumulate Wavg translations over a logical compact-prefix only."""
+
+    _ensure_ffi()
+    projections = jnp.asarray(projections)
+    raw_ctf = jnp.asarray(raw_ctf)
+    scale = jnp.asarray(scale)
+    shifted_images = jnp.asarray(shifted_images)
+    posterior = jnp.asarray(posterior)
+    logical_pixel_count = jnp.asarray(logical_pixel_count, dtype=jnp.int32)
+    if projections.dtype != jnp.complex64 or projections.ndim != 3:
+        raise ValueError(
+            "runtime RELION Wavg expects complex64 projections[B,R,P]"
+        )
+    batch_size, rotation_count, pixel_capacity = projections.shape
+    if raw_ctf.dtype != jnp.float32 or raw_ctf.shape != (batch_size, pixel_capacity):
+        raise ValueError("runtime RELION Wavg expects float32 raw_ctf[B,P]")
+    if scale.dtype != jnp.float32 or scale.shape != (batch_size,):
+        raise ValueError("runtime RELION Wavg expects float32 scale[B]")
+    if (
+        shifted_images.dtype != jnp.complex64
+        or shifted_images.ndim != 3
+        or shifted_images.shape[0] != batch_size
+        or shifted_images.shape[2] != pixel_capacity
+    ):
+        raise ValueError("runtime RELION Wavg expects complex64 shifted_images[B,T,P]")
+    if posterior.dtype != jnp.float32 or posterior.shape != (
+        batch_size,
+        rotation_count,
+        shifted_images.shape[1],
+    ):
+        raise ValueError("runtime RELION Wavg expects float32 posterior[B,R,T]")
+    if logical_pixel_count.shape != ():
+        raise ValueError("logical_pixel_count must be an int32 scalar")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("runtime RELION Wavg requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("runtime RELION Wavg requires custom CUDA")
+    output_type = jax.ShapeDtypeStruct(
+        (batch_size, rotation_count, pixel_capacity, 3),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_TRIPLET_F32,
+        output_type,
+        vmap_method="sequential",
+    )(
+        projections,
+        raw_ctf,
+        scale,
+        shifted_images,
+        posterior,
+        logical_pixel_count,
+    )
 
 
 @jax.jit

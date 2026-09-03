@@ -18,7 +18,7 @@ underlying CUDA image grid.
 See ``docs/math/plan_relion_parity.md``, Phase 3.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import jax.numpy as jnp
@@ -187,6 +187,35 @@ class StableFourierWindowShapePlan:
         support = self.packed_indices_np(name)
         positions = {int(pixel): offset for offset, pixel in enumerate(projection)}
         return np.asarray([positions[int(pixel)] for pixel in support], dtype=np.int32)
+
+    def packed_physical_spec(self, *, dtype=jnp.int32) -> FourierWindowSpec:
+        """Return the physical-capacity spec in logical-first storage order.
+
+        The returned shapes are those of ``physical_spec``. Only their order
+        changes: exact logical score/reconstruction/projection pixels are the
+        prefix consumed by runtime-bound CUDA kernels, followed by the
+        physical-only capacity tail. This keeps the mature shared EM
+        projection implementation as the single producer of Fourier rows.
+        """
+
+        score_indices_np = self.packed_indices_np("score")
+        recon_indices_np = self.packed_indices_np("recon")
+        projection_indices_np = self.packed_indices_np("projection")
+        score_projection_take_np = self.packed_projection_take_np("score")
+        recon_projection_take_np = self.packed_projection_take_np("recon")
+        return replace(
+            self.physical_spec,
+            score_indices_np=score_indices_np,
+            recon_indices_np=recon_indices_np,
+            projection_indices_np=projection_indices_np,
+            score_projection_take_np=score_projection_take_np,
+            recon_projection_take_np=recon_projection_take_np,
+            score_indices=jnp.asarray(score_indices_np, dtype=dtype),
+            recon_indices=jnp.asarray(recon_indices_np, dtype=dtype),
+            projection_indices=jnp.asarray(projection_indices_np, dtype=dtype),
+            score_projection_take=jnp.asarray(score_projection_take_np, dtype=dtype),
+            recon_projection_take=jnp.asarray(recon_projection_take_np, dtype=dtype),
+        )
 
 
 def make_frequency_radius_map_half(image_shape):

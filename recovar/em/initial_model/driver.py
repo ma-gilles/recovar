@@ -149,6 +149,9 @@ class NativeInitialModelOptions:
     exact_local_physical_order_chunk_size: int = (
         INITIAL_MODEL_GUI_DEFAULTS.exact_local_physical_order_chunk_size
     )
+    stable_fourier_window_shapes: bool = (
+        INITIAL_MODEL_GUI_DEFAULTS.stable_fourier_window_shapes
+    )
     bootstrap_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.bootstrap_min_particles
     sigma2_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles
     padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
@@ -1650,6 +1653,7 @@ def _dense_estep_config(
         exact_local_physical_order_chunk_size=int(
             opts.exact_local_physical_order_chunk_size
         ),
+        stable_fourier_window_shapes=bool(opts.stable_fourier_window_shapes),
         padding_factor=int(opts.padding_factor),
         relion_bpref_frame=True,
         relion_projector_frame=True,

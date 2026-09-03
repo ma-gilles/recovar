@@ -9,12 +9,10 @@ import jax
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-
 from recovar.em.dense_single_volume.local_backprojection import (
     enforce_relion_half_volume_x0_hermitian,
     enforce_relion_half_volume_x0_hermitian_host,
 )
-
 
 _RELION_X_HALF_TO_NATIVE_HALF_MIN_VOXELS = 200_000_000
 _RELION_X_HALF_FULL_HOST_MIN_VOXELS = 100_000_000
@@ -243,6 +241,51 @@ def relion_x_half_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
         relion_x_half_volume_to_full(Ft_y, recon_volume_shape),
         relion_x_half_volume_to_full(Ft_ctf, recon_volume_shape),
     )
+
+
+def crop_relion_x_half_accumulator(
+    values,
+    physical_volume_shape,
+    logical_volume_shape,
+):
+    """Crop a centered physical BPref capacity to its logical odd cube.
+
+    RELION's x-half layout is ``(z, y, x>=0)``.  The signed z/y axes are
+    centered and therefore crop symmetrically; the packed x axis starts at
+    zero and keeps its logical prefix.  No arithmetic is performed here.
+    """
+
+    physical_volume_shape = tuple(int(value) for value in physical_volume_shape)
+    logical_volume_shape = tuple(int(value) for value in logical_volume_shape)
+    if (
+        len(physical_volume_shape) != 3
+        or len(logical_volume_shape) != 3
+        or len(set(physical_volume_shape)) != 1
+        or len(set(logical_volume_shape)) != 1
+        or logical_volume_shape[0] > physical_volume_shape[0]
+        or physical_volume_shape[0] % 2 == 0
+        or logical_volume_shape[0] % 2 == 0
+    ):
+        raise ValueError(
+            "stable RELION BPref cropping requires nested odd cubic shapes, "
+            f"got physical={physical_volume_shape}, logical={logical_volume_shape}"
+        )
+    physical_size = physical_volume_shape[0]
+    logical_size = logical_volume_shape[0]
+    physical_half_width = physical_size // 2 + 1
+    logical_half_width = logical_size // 2 + 1
+    expected_size = physical_size * physical_size * physical_half_width
+    if int(values.size) != expected_size:
+        raise ValueError(
+            f"RELION x-half accumulator has {values.size} entries, expected {expected_size}"
+        )
+    start = (physical_size - logical_size) // 2
+    grid = values.reshape((physical_size, physical_size, physical_half_width))
+    return grid[
+        start : start + logical_size,
+        start : start + logical_size,
+        :logical_half_width,
+    ].reshape(-1)
 
 
 def _relion_x_half_volume_to_native_half_host(volume_flat, recon_volume_shape):

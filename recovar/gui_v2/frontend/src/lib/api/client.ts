@@ -226,6 +226,7 @@ export interface InitialModelDefaults {
   relion_wavg_sequential_cuda: boolean;
   exact_local_bucket_radix: 2 | 4;
   exact_local_physical_order_chunk_size: number;
+  stable_fourier_window_shapes: boolean;
   bootstrap_min_particles: number;
   sigma2_min_particles: number;
   padding_factor: number;

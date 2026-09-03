@@ -51,6 +51,7 @@ def test_public_defaults_match_native_option_defaults():
         "relion_wavg_sequential_cuda",
         "exact_local_bucket_radix",
         "exact_local_physical_order_chunk_size",
+        "stable_fourier_window_shapes",
         "bootstrap_min_particles",
         "sigma2_min_particles",
         "padding_factor",
@@ -79,6 +80,7 @@ def test_parser_resolves_gui_defaults_and_auto_gpu_backend():
     assert options["relion_wavg_sequential_cuda"] is True
     assert options["exact_local_bucket_radix"] == 4
     assert options["exact_local_physical_order_chunk_size"] == 0
+    assert options["stable_fourier_window_shapes"] is False
 
 
 @pytest.mark.unit
@@ -130,6 +132,7 @@ def test_parser_accepts_important_overrides():
             "2",
             "--exact-local-physical-order-chunk-size",
             "220",
+            "--stable-fourier-window-shapes",
             "--image-fourier-backend",
             "host_numpy",
             "--gpu",
@@ -164,6 +167,7 @@ def test_parser_accepts_important_overrides():
     assert options["relion_wavg_sequential_cuda"] is False
     assert options["exact_local_bucket_radix"] == 2
     assert options["exact_local_physical_order_chunk_size"] == 220
+    assert options["stable_fourier_window_shapes"] is True
     assert options["image_fourier_backend"] == "host_numpy"
     assert options["deterministic_cuda"] is True
     assert args.require_custom_cuda is False

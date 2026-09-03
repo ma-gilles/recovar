@@ -4945,6 +4945,86 @@ def _make_relion_wavg_rectangle(
     )
 
 
+def _make_stable_relion_wavg_rectangle(image_shape, shape_plan):
+    """Pack a logical Wavg rectangle before its physical-capacity tail.
+
+    RELION's Wavg kernel walks the dense FFTW rectangle, whereas RECOVAR's
+    shared projection path stores a compact disk.  Stable shapes are exact
+    only when both streams retain their original logical order.  The first
+    ``logical_rectangle_pixels`` entries below are therefore byte-for-byte the
+    ordinary logical rectangle.  Physical-only pixels follow it and receive a
+    sentinel shell; runtime CUDA bounds must never issue that tail.
+    """
+
+    logical_recon = shape_plan.packed_indices_np("recon")[
+        : shape_plan.logical_reconstruction_pixels
+    ]
+    physical_recon = shape_plan.packed_indices_np("recon")
+    logical = _make_relion_wavg_rectangle(
+        image_shape,
+        shape_plan.logical_current_size,
+        logical_recon,
+    )
+    physical = _make_relion_wavg_rectangle(
+        image_shape,
+        shape_plan.physical_current_size,
+        physical_recon,
+    )
+
+    logical_set = set(map(int, logical.centered_indices.tolist()))
+    physical_tail = np.asarray(
+        [
+            int(index)
+            for index in physical.centered_indices.tolist()
+            if int(index) not in logical_set
+        ],
+        dtype=np.int32,
+    )
+    packed_rectangle = np.concatenate(
+        (logical.centered_indices, physical_tail),
+    ).astype(np.int32, copy=False)
+    if packed_rectangle.size != shape_plan.physical_rectangle_pixels:
+        raise ValueError(
+            "stable RELION Wavg rectangle does not fill its physical capacity: "
+            f"got {packed_rectangle.size}, expected {shape_plan.physical_rectangle_pixels}"
+        )
+    logical_count = shape_plan.logical_rectangle_pixels
+    recon_tail_count = (
+        shape_plan.physical_reconstruction_pixels
+        - shape_plan.logical_reconstruction_pixels
+    )
+    rectangle_tail_count = packed_rectangle.size - logical_count
+    if recon_tail_count > rectangle_tail_count:
+        raise ValueError(
+            "stable RELION Wavg rectangle tail cannot hold its reconstruction "
+            f"tail: recon={recon_tail_count}, rectangle={rectangle_tail_count}"
+        )
+    # Some pixels newly admitted by the larger physical radius still lie in
+    # the *logical* square rectangle (for example, immediately outside its
+    # exact-radius disk).  Mapping those pixels by coordinate would make the
+    # logical native Wavg/BPref loops consume physical-only values.  Logical
+    # reconstruction rows retain their exact FFTW positions; all capacity-only
+    # rows instead receive arbitrary unique storage in the inert rectangle
+    # tail, whose coordinates are intentionally never issued.
+    recon_positions = np.concatenate(
+        (
+            logical.exact_positions,
+            np.arange(
+                logical_count,
+                logical_count + recon_tail_count,
+                dtype=np.int32,
+            ),
+        )
+    ).astype(np.int32, copy=False)
+    rectangle_shells = np.full(packed_rectangle.size, -1, dtype=np.int32)
+    rectangle_shells[:logical_count] = logical.shell_indices
+    return RelionWavgRectangle(
+        centered_indices=packed_rectangle,
+        exact_positions=recon_positions,
+        shell_indices=rectangle_shells,
+    )
+
+
 def _select_optional_wavg_exact_pixels(values, rectangle):
     """Select exact-radius Wavg pixels when the atomic diagnostic is active."""
 
@@ -5188,6 +5268,7 @@ def _relion_wavg_sequential_triplet_terms(
     posterior,
     *,
     relion_wavg_sequential_cuda: bool | None = None,
+    logical_pixel_count=None,
 ):
     """Dispatch the shared Wavg translation-order reduction.
 
@@ -5207,12 +5288,25 @@ def _relion_wavg_sequential_triplet_terms(
     if use_cuda:
         from recovar import cuda_backproject
 
+        if logical_pixel_count is not None:
+            return cuda_backproject.relion_wavg_sequential_runtime_triplet_f32(
+                jnp.asarray(proj, dtype=jnp.complex64),
+                jnp.asarray(raw_ctf, dtype=jnp.float32),
+                jnp.asarray(scale, dtype=jnp.float32).reshape(-1),
+                jnp.asarray(raw_shifted_images, dtype=jnp.complex64),
+                jnp.asarray(posterior, dtype=jnp.float32),
+                jnp.asarray(logical_pixel_count, dtype=jnp.int32),
+            )
         return cuda_backproject.relion_wavg_sequential_triplet_f32(
             jnp.asarray(proj, dtype=jnp.complex64),
             jnp.asarray(raw_ctf, dtype=jnp.float32),
             jnp.asarray(scale, dtype=jnp.float32).reshape(-1),
             jnp.asarray(raw_shifted_images, dtype=jnp.complex64),
             jnp.asarray(posterior, dtype=jnp.float32),
+        )
+    if logical_pixel_count is not None:
+        raise ValueError(
+            "stable Fourier-window Wavg requires the runtime-bound CUDA reducer"
         )
     return _relion_wavg_sequential_triplet_terms_jax(
         proj,
@@ -6878,6 +6972,7 @@ def _relion_cuda_powerclass_highres_xi2_half(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Reproduce the class-power high-resolution image tail used by fine diff2.
 
@@ -6906,9 +7001,12 @@ def _relion_cuda_powerclass_highres_xi2_half(
             "RELION powerClass input must be flattened centred rfft images, got "
             f"{processed_score_half.shape} for image_shape={image_shape}"
         )
-    if current_size is None:
-        current_size = image_width
-    resolution_limit = int(current_size) // 2 + 1
+    if runtime_current_size is None:
+        if current_size is None:
+            current_size = image_width
+        resolution_limit = int(current_size) // 2 + 1
+    else:
+        resolution_limit = jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1
 
     # RELION's packed rows are 0,+1,...,+Nyquist,-Nyquist+1,...,-1. RECOVAR's
     # rows are fftshift-centred, so move the first non-negative row to index 0.
@@ -6925,17 +7023,19 @@ def _relion_cuda_powerclass_highres_xi2_half(
     radius_squared = columns * columns + signed_rows * signed_rows
     # CUDA __float2int_rn(sqrtf(...)): nearest-even float32 conversion.
     shell = np.rint(np.sqrt(radius_squared.astype(np.float32))).astype(np.int32)
-    valid = (
+    valid_base = (
         (shell > 0)
         & (shell < half_width)
         & ~((columns == 0) & (signed_rows < 0))
-        & (shell >= resolution_limit)
     ).reshape(-1)
+    valid = jnp.asarray(valid_base) & (
+        jnp.asarray(shell.reshape(-1), dtype=jnp.int32) >= resolution_limit
+    )
 
     power = relion_image.real * relion_image.real
     power = jax.lax.optimization_barrier(power)
     power = power + relion_image.imag * relion_image.imag
-    power = jnp.where(jnp.asarray(valid)[None, :], power, jnp.asarray(0.0, dtype=jnp.float32))
+    power = jnp.where(valid[None, :], power, jnp.asarray(0.0, dtype=jnp.float32))
 
     block_size = _RELION_CUDA_POWERCLASS_BLOCK_SIZE
     n_blocks = (power.shape[-1] + block_size - 1) // block_size
@@ -6965,6 +7065,7 @@ def _relion_cuda_powerclass_highres_xi2_half_atomic(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Run the native CUDA powerClass atomics used by exact fine scoring."""
 
@@ -6989,12 +7090,22 @@ def _relion_cuda_powerclass_highres_xi2_half_atomic(
     relion_image = (
         relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
     ).astype(jnp.complex64)
-    spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
-        relion_image,
-        xdim=half_width,
-        ydim=image_height,
-        resolution_limit=int(current_size) // 2 + 1,
-    )
+    if runtime_current_size is None:
+        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+            relion_image,
+            xdim=half_width,
+            ydim=image_height,
+            resolution_limit=int(current_size) // 2 + 1,
+        )
+    else:
+        spectrum_and_highres = (
+            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
+                relion_image,
+                jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
+                xdim=half_width,
+                ydim=image_height,
+            )
+        )
     return spectrum_and_highres[:, -1] * jnp.asarray(0.5, dtype=jnp.float32)
 
 
@@ -7015,6 +7126,7 @@ def _relion_cuda_powerclass_highres_norm_units(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Return source-faithful powerClass high-shell power in RECOVAR N^4 units."""
 
@@ -7023,6 +7135,7 @@ def _relion_cuda_powerclass_highres_norm_units(
             processed_score_half,
             image_shape=image_shape,
             current_size=current_size,
+            runtime_current_size=runtime_current_size,
         ),
         image_shape,
     )
@@ -7102,6 +7215,7 @@ def _relion_cuda_powerclass_spectrum_norm_units(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Return RELION's atomically binned per-image power spectrum in N^4 units."""
 
@@ -7126,12 +7240,22 @@ def _relion_cuda_powerclass_spectrum_norm_units(
     relion_image = (
         relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
     ).astype(jnp.complex64)
-    spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
-        relion_image,
-        xdim=half_width,
-        ydim=image_height,
-        resolution_limit=int(current_size) // 2 + 1,
-    )
+    if runtime_current_size is None:
+        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+            relion_image,
+            xdim=half_width,
+            ydim=image_height,
+            resolution_limit=int(current_size) // 2 + 1,
+        )
+    else:
+        spectrum_and_highres = (
+            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
+                relion_image,
+                jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
+                xdim=half_width,
+                ydim=image_height,
+            )
+        )
     return spectrum_and_highres[:, :half_width] * jnp.asarray(
         (image_height * image_width) ** 2,
         dtype=jnp.float32,

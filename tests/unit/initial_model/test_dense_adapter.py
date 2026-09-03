@@ -1981,6 +1981,9 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
                 "preserve_order": kwargs["preserve_bpref_particle_order"],
                 "unify_buckets": kwargs["unify_local_bucket_sizes"],
                 "chunk_size": kwargs["consecutive_mixed_bucket_size"],
+                "stable_fourier_window_shapes": kwargs[
+                    "stable_fourier_window_shapes"
+                ],
             }
         )
         result = _fake_result(n_classes=1, n=8, n_images=int(dataset.n_images), n_groups=2)
@@ -2055,6 +2058,7 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
         relion_bpref_frame=True,
         pass2_engine="local",
         exact_local_physical_order_chunk_size=220,
+        stable_fourier_window_shapes=True,
         engine_kwargs={
             "sparse_pass2": True,
             "healpix_order": 0,
@@ -2080,11 +2084,14 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
     assert calls["local"][0]["preserve_order"] is True
     assert calls["local"][0]["unify_buckets"] is False
     assert calls["local"][0]["chunk_size"] == 220
+    assert calls["local"][0]["stable_fourier_window_shapes"] is True
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], particle_ids)
     assert result.meta["halfset_ids"] == (0, 1)
     assert result.meta["joint_halfset_particle_stream"] is True
     assert result.meta["requested_exact_local_physical_order_chunk_size"] == 220
     assert result.meta["effective_exact_local_physical_order_chunk_size"] == 220
+    assert result.meta["requested_stable_fourier_window_shapes"] is True
+    assert result.meta["effective_stable_fourier_window_shapes"] is True
     assert [accum.halfset_idx for accum in result.accumulators] == [0, 1]
     assert not np.array_equal(result.accumulators[0].data, result.accumulators[1].data)
     assert result.meta["halfset_0_profile_summary"]["coarse_selector_audit"] == _control_coarse_selector_audit(1)

@@ -2437,6 +2437,58 @@ cudaError_t launch_relion_wavg_rotation_atomic_triplet_add_f32(
     return cudaGetLastError();
 }
 
+__global__ void __launch_bounds__(256)
+relion_wavg_rotation_atomic_runtime_triplet_f32_kernel(
+    const float* __restrict__ terms,
+    float* __restrict__ output,
+    int n_rotations,
+    int pixel_capacity,
+    const int32_t* __restrict__ runtime_logical_pixel_count)
+{
+    const int rotation = blockIdx.x;
+    const int batch = blockIdx.y;
+    const int logical_pixel_count = runtime_logical_pixel_count == nullptr
+        ? pixel_capacity
+        : runtime_logical_pixel_count[0];
+    if (logical_pixel_count < 0 || logical_pixel_count > pixel_capacity) {
+        if (rotation == 0 && batch == 0 && threadIdx.x == 0)
+            output[0] = nanf("");
+        return;
+    }
+    for (int pixel = threadIdx.x;
+         pixel < logical_pixel_count;
+         pixel += blockDim.x) {
+        const int64_t input_index =
+            ((static_cast<int64_t>(batch) * n_rotations + rotation) *
+                 pixel_capacity + pixel) * 3;
+        const int64_t output_index =
+            (static_cast<int64_t>(batch) * pixel_capacity + pixel) * 3;
+        atomicAdd(&output[output_index], terms[input_index]);
+        atomicAdd(&output[output_index + 1], terms[input_index + 1]);
+        atomicAdd(&output[output_index + 2], terms[input_index + 2]);
+    }
+}
+
+cudaError_t launch_relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+    cudaStream_t stream,
+    const float* terms,
+    float* output,
+    int64_t batch_size,
+    int64_t n_rotations,
+    int64_t pixel_capacity,
+    const int32_t* runtime_logical_pixel_count)
+{
+    dim3 grid(static_cast<unsigned>(n_rotations), static_cast<unsigned>(batch_size));
+    dim3 block(256);
+    relion_wavg_rotation_atomic_runtime_triplet_f32_kernel<<<grid, block, 0, stream>>>(
+        terms,
+        output,
+        static_cast<int>(n_rotations),
+        static_cast<int>(pixel_capacity),
+        runtime_logical_pixel_count);
+    return cudaGetLastError();
+}
+
 /* Keep RELION's per-rotation, per-pixel Wavg translation reduction inside one
  * CUDA thread.  The corresponding JAX reference deliberately uses a
  * translation-order fori_loop; lowering that loop emits multiple loop-body
@@ -2533,6 +2585,122 @@ cudaError_t launch_relion_wavg_sequential_triplet_f32(
         rotation_count,
         translation_count,
         pixel_count);
+    return cudaGetLastError();
+}
+
+__global__ void __launch_bounds__(256)
+relion_wavg_sequential_runtime_triplet_f32_kernel(
+    const float2* __restrict__ projections,
+    const float* __restrict__ raw_ctf,
+    const float* __restrict__ scale,
+    const float2* __restrict__ shifted_images,
+    const float* __restrict__ posterior,
+    float* __restrict__ output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_capacity,
+    const int32_t* __restrict__ runtime_logical_pixel_count)
+{
+    const int64_t rotation = blockIdx.x;
+    const int64_t batch = blockIdx.y;
+    if (batch >= batch_size || rotation >= rotation_count) return;
+    const int64_t logical_pixel_count = runtime_logical_pixel_count == nullptr
+        ? pixel_capacity
+        : static_cast<int64_t>(runtime_logical_pixel_count[0]);
+    if (logical_pixel_count < 0 || logical_pixel_count > pixel_capacity) {
+        if (rotation == 0 && batch == 0 && threadIdx.x == 0)
+            output[0] = nanf("");
+        return;
+    }
+    const float batch_scale = scale[batch];
+    const int64_t posterior_base =
+        (batch * rotation_count + rotation) * translation_count;
+    const int64_t shifted_base = batch * translation_count * pixel_capacity;
+    const int64_t projection_base =
+        (batch * rotation_count + rotation) * pixel_capacity;
+    for (int64_t pixel = threadIdx.x;
+         pixel < logical_pixel_count;
+         pixel += blockDim.x)
+    {
+        const float ctf_with_scale = __fmul_rn(
+            raw_ctf[batch * pixel_capacity + pixel], batch_scale);
+        const float2 projection = projections[projection_base + pixel];
+        const float ref_real = __fmul_rn(projection.x, ctf_with_scale);
+        const float ref_imag = __fmul_rn(projection.y, ctf_with_scale);
+        const float ref_abs2 = __fadd_rn(
+            __fmul_rn(ref_real, ref_real),
+            __fmul_rn(ref_imag, ref_imag));
+
+        float xa_raw = 0.0f;
+        float aa_raw = 0.0f;
+        float diff2 = 0.0f;
+        for (int64_t translation = 0;
+             translation < translation_count;
+             ++translation)
+        {
+            const float weight = posterior[posterior_base + translation];
+            const float2 translated = shifted_images[
+                shifted_base + translation * pixel_capacity + pixel];
+            const float diff_real = __fsub_rn(ref_real, translated.x);
+            const float diff_imag = __fsub_rn(ref_imag, translated.y);
+            const float diff_abs2 = __fadd_rn(
+                __fmul_rn(diff_real, diff_real),
+                __fmul_rn(diff_imag, diff_imag));
+            const float cross = __fadd_rn(
+                __fmul_rn(ref_real, translated.x),
+                __fmul_rn(ref_imag, translated.y));
+            xa_raw = __fadd_rn(xa_raw, __fmul_rn(weight, cross));
+            aa_raw = __fadd_rn(aa_raw, __fmul_rn(weight, ref_abs2));
+            diff2 = __fadd_rn(diff2, __fmul_rn(weight, diff_abs2));
+        }
+
+        const float safe_scale = fmaxf(batch_scale, 1.0e-30f);
+        const int64_t output_base = (projection_base + pixel) * 3;
+        output[output_base] = __fmul_rn(xa_raw, __frcp_rn(safe_scale));
+        output[output_base + 1] = __fmul_rn(
+            aa_raw, __frcp_rn(__fmul_rn(safe_scale, safe_scale)));
+        output[output_base + 2] = diff2;
+    }
+}
+
+cudaError_t launch_relion_wavg_sequential_runtime_triplet_f32(
+    cudaStream_t stream,
+    const float2* projections,
+    const float* raw_ctf,
+    const float* scale,
+    const float2* shifted_images,
+    const float* posterior,
+    float* output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pixel_capacity,
+    const int32_t* runtime_logical_pixel_count)
+{
+    const int64_t output_count = batch_size * rotation_count * pixel_capacity;
+    if (output_count == 0) return cudaSuccess;
+    cudaError_t err = cudaMemsetAsync(
+        output,
+        0,
+        static_cast<size_t>(output_count) * 3 * sizeof(float),
+        stream);
+    if (err != cudaSuccess) return err;
+    dim3 grid(
+        static_cast<unsigned>(rotation_count),
+        static_cast<unsigned>(batch_size));
+    relion_wavg_sequential_runtime_triplet_f32_kernel<<<grid, 256, 0, stream>>>(
+        projections,
+        raw_ctf,
+        scale,
+        shifted_images,
+        posterior,
+        output,
+        batch_size,
+        rotation_count,
+        translation_count,
+        pixel_capacity,
+        runtime_logical_pixel_count);
     return cudaGetLastError();
 }
 
@@ -5176,17 +5344,20 @@ __global__ void relion_vdam_denominator_after_sgd_f32_kernel(
     int64_t particle_count,
     int64_t rotation_count,
     int64_t translation_count,
-    int64_t pixel_count)
+    int64_t logical_pixel_count,
+    int64_t pixel_capacity)
 {
     const int64_t output = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const int64_t output_count = particle_count * rotation_count * pixel_count;
-    if (output >= output_count) return;
-    const int64_t pixel = output % pixel_count;
-    const int64_t particle_rotation = output / pixel_count;
+    const int64_t logical_output_count =
+        particle_count * rotation_count * logical_pixel_count;
+    if (output >= logical_output_count) return;
+    const int64_t pixel = output % logical_pixel_count;
+    const int64_t particle_rotation = output / logical_pixel_count;
     const int64_t particle = particle_rotation / rotation_count;
     const int64_t rotation = particle_rotation % rotation_count;
-    const float pixel_ctf = ctf[particle * pixel_count + pixel];
-    const float pixel_minvsigma2 = minvsigma2[particle * pixel_count + pixel];
+    const float pixel_ctf = ctf[particle * pixel_capacity + pixel];
+    const float pixel_minvsigma2 = minvsigma2[
+        particle * pixel_capacity + pixel];
     float Fweight = 0.0f;
     const int64_t posterior_base =
         (particle * rotation_count + rotation) * translation_count;
@@ -5199,7 +5370,7 @@ __global__ void relion_vdam_denominator_after_sgd_f32_kernel(
             Fweight += weight * pixel_ctf;
         }
     }
-    denominator[output] = Fweight;
+    denominator[particle_rotation * pixel_capacity + pixel] = Fweight;
 }
 
 cudaError_t launch_relion_vdam_mstep_denominator_f32(
@@ -5211,15 +5382,24 @@ cudaError_t launch_relion_vdam_mstep_denominator_f32(
     int64_t particle_count,
     int64_t rotation_count,
     int64_t translation_count,
-    int64_t pixel_count)
+    int64_t logical_pixel_count,
+    int64_t pixel_capacity)
 {
-    const int64_t denominator_count =
-        particle_count * rotation_count * pixel_count;
-    if (denominator_count == 0) return cudaSuccess;
+    const int64_t denominator_capacity =
+        particle_count * rotation_count * pixel_capacity;
+    const int64_t logical_denominator_count =
+        particle_count * rotation_count * logical_pixel_count;
+    if (denominator_capacity == 0) return cudaSuccess;
+    cudaError_t err = cudaMemsetAsync(
+        denominator,
+        0,
+        static_cast<size_t>(denominator_capacity) * sizeof(float),
+        stream);
+    if (err != cudaSuccess || logical_denominator_count == 0) return err;
     constexpr int block_size = 256;
     relion_vdam_denominator_after_sgd_f32_kernel<<<
         static_cast<unsigned int>(
-            (denominator_count + block_size - 1) / block_size),
+            (logical_denominator_count + block_size - 1) / block_size),
         block_size,
         0,
         stream>>>(
@@ -5230,7 +5410,8 @@ cudaError_t launch_relion_vdam_mstep_denominator_f32(
         particle_count,
         rotation_count,
         translation_count,
-        pixel_count);
+        logical_pixel_count,
+        pixel_capacity);
     return cudaGetLastError();
 }
 
@@ -5395,6 +5576,7 @@ cudaError_t launch_relion_vdam_mstep_fused_x_half(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t pixel_count,
+    int64_t pixel_capacity,
     int64_t image_h,
     int64_t image_w,
     int64_t N0,
@@ -5812,10 +5994,15 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     {
         const float max_r2 = static_cast<float>(max_r2_x4) / 4.0f;
         const int projector_max_r2_padded = padded_max_r * padded_max_r;
-        const int64_t image_stride = pixel_count;
+        if (pixel_capacity < pixel_count)
+        {
+            err = cudaErrorInvalidValue;
+            goto cleanup;
+        }
+        const int64_t image_stride = pixel_capacity;
         const int64_t posterior_stride = rotation_count * translation_count;
         const int64_t euler_stride = rotation_count * 9;
-        const int64_t image_value_count = n_particles * pixel_count;
+        const int64_t image_value_count = n_particles * pixel_capacity;
         const int64_t accumulator_stride = N0 * N1 * (N2 / 2 + 1);
         const int64_t accumulator_count =
             static_cast<int64_t>(reconstruction_group_count) * accumulator_stride;
@@ -7150,7 +7337,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             n_particles,
             rotation_count,
             translation_count,
-            pixel_count);
+            pixel_count,
+            pixel_capacity);
         if (err != cudaSuccess) goto cleanup;
         err = cudaStreamSynchronize(stream);
     }
@@ -7444,6 +7632,7 @@ extern "C" int recovar_relion_vdam_exact_native_host_replay(
         arguments->n_particles,
         arguments->rotation_count,
         arguments->translation_count,
+        arguments->pixel_count,
         arguments->pixel_count,
         arguments->image_h,
         arguments->image_w,
@@ -9698,6 +9887,96 @@ cudaError_t launch_relion_powerclass_spectrum_highres_f32(
     return cudaSuccess;
 }
 
+__global__ __launch_bounds__(kRelionPowerClassBlockSize)
+void relion_powerclass_spectrum_highres_runtime_f32_kernel(
+    const float2* image,
+    float* spectrum,
+    int image_size,
+    int spectrum_size,
+    int xdim,
+    int ydim,
+    const int32_t* __restrict__ runtime_resolution_limit,
+    float* highres_xi2)
+{
+    const int tid = threadIdx.x;
+    const int voxel = tid + static_cast<int>(blockIdx.x) * kRelionPowerClassBlockSize;
+    __shared__ float highres_lanes[kRelionPowerClassBlockSize];
+    highres_lanes[tid] = 0.0f;
+    const int active_resolution_limit = runtime_resolution_limit[0];
+    if (active_resolution_limit < 0 || active_resolution_limit > spectrum_size) {
+        if (tid == 0) atomicExch(highres_xi2, nanf(""));
+        return;
+    }
+
+    if (voxel < image_size) {
+        const int x = voxel % xdim;
+        int y = (voxel - x) / xdim;
+        y = y < xdim ? y : y - ydim;
+        const int radius_squared = x * x + y * y;
+        const bool coordinates_in_range = !(x == 0 && y < 0);
+        const int shell = __float2int_rn(sqrtf(static_cast<float>(radius_squared)));
+        if (shell > 0 && shell < spectrum_size && coordinates_in_range) {
+            const float value =
+                image[voxel].x * image[voxel].x +
+                image[voxel].y * image[voxel].y;
+            atomicAdd(&spectrum[shell], value);
+            if (shell >= active_resolution_limit)
+                highres_lanes[tid] = value;
+        }
+    }
+
+    __syncthreads();
+    for (int width = kRelionPowerClassBlockSize / 2; width > 0; width /= 2) {
+        if (tid < width)
+            highres_lanes[tid] += highres_lanes[tid + width];
+        __syncthreads();
+    }
+    if (tid == 0)
+        atomicAdd(highres_xi2, highres_lanes[0]);
+}
+
+cudaError_t launch_relion_powerclass_spectrum_highres_runtime_f32(
+    cudaStream_t stream,
+    const float2* image,
+    float* spectrum_and_highres,
+    int64_t batch_size,
+    int image_size,
+    int spectrum_size,
+    int xdim,
+    int ydim,
+    const int32_t* runtime_resolution_limit)
+{
+    const int output_stride = spectrum_size + 1;
+    cudaError_t err = cudaMemsetAsync(
+        spectrum_and_highres,
+        0,
+        static_cast<size_t>(batch_size) * output_stride * sizeof(float),
+        stream);
+    if (err != cudaSuccess) return err;
+    const int block_count =
+        (image_size + kRelionPowerClassBlockSize - 1) /
+        kRelionPowerClassBlockSize;
+    for (int64_t batch = 0; batch < batch_size; ++batch) {
+        float* output_row = spectrum_and_highres + batch * output_stride;
+        relion_powerclass_spectrum_highres_runtime_f32_kernel<<<
+            block_count,
+            kRelionPowerClassBlockSize,
+            0,
+            stream>>>(
+                image + batch * image_size,
+                output_row,
+                image_size,
+                spectrum_size,
+                xdim,
+                ydim,
+                runtime_resolution_limit,
+                output_row + spectrum_size);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return err;
+    }
+    return cudaSuccess;
+}
+
 cudaError_t launch_relion_fine_diff2_pairs_f32(
     cudaStream_t stream,
     const float2* reference,
@@ -9791,7 +10070,8 @@ cudaError_t launch_relion_fine_diff2_fused_translate_flat_rows_f32(
     int64_t translation_count,
     int64_t compact_pixel_count,
     int64_t full_pixel_count,
-    int current_size)
+    int current_size,
+    const int32_t* runtime_current_size)
 {
     const int64_t translation_chunks =
         (translation_count + kRelionFineDiff2Ref3dJobChunk - 1) /
@@ -9818,7 +10098,7 @@ cudaError_t launch_relion_fine_diff2_fused_translate_flat_rows_f32(
             compact_pixel_count,
             full_pixel_count,
             current_size,
-            nullptr);
+            runtime_current_size);
     return cudaGetLastError();
 }
 
@@ -10926,6 +11206,7 @@ ffi::Error RelionVdamMstepDenominatorF32Impl(
         ctf_dims[0],
         posterior_dims[1],
         posterior_dims[2],
+        ctf_dims[1],
         ctf_dims[1]);
     if (err != cudaSuccess)
         return ffi::Error::Internal(
@@ -10947,6 +11228,7 @@ ffi::Error RelionVdamMstepFusedXHalfImpl(
     cudaStream_t stream,
     int64_t image_h,
     int64_t image_w,
+    int64_t pixel_capacity,
     int64_t N0,
     int64_t N1,
     int64_t N2,
@@ -11144,6 +11426,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: invalid dtypes");
     if (image_h <= 0 || image_w != image_h / 2 + 1 ||
+        pixel_capacity < image_h * image_w ||
         N0 <= 0 || N0 != N1 || N1 != N2 || (N2 & 1) == 0 ||
         upsampling <= 0 || max_r2_x4 < 0 || physical_image_size <= 0 ||
         projector_max_r <= 0 || projection_padding_factor <= 0 ||
@@ -11187,9 +11470,9 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     const int64_t pixel_count = image_h * image_w;
     if (projector_dims.size() != 3 || projector_dims[0] <= 0 ||
         projector_dims[1] != projector_dims[0] || projector_dims[2] != projector_dims[0] ||
-        image_dims.size() != 2 || image_dims[0] <= 0 || image_dims[1] != pixel_count ||
-        ctf_dims.size() != 2 || ctf_dims[0] != image_dims[0] || ctf_dims[1] != pixel_count ||
-        noise_dims.size() != 2 || noise_dims[0] != image_dims[0] || noise_dims[1] != pixel_count ||
+        image_dims.size() != 2 || image_dims[0] <= 0 || image_dims[1] != pixel_capacity ||
+        ctf_dims.size() != 2 || ctf_dims[0] != image_dims[0] || ctf_dims[1] != pixel_capacity ||
+        noise_dims.size() != 2 || noise_dims[0] != image_dims[0] || noise_dims[1] != pixel_capacity ||
         posterior_dims.size() != 3 || posterior_dims[0] != image_dims[0] ||
         posterior_dims[1] <= 0 || posterior_dims[2] <= 0 ||
         translation_dims.size() != 2 || translation_dims[0] != posterior_dims[2] || translation_dims[1] != 2 ||
@@ -11211,7 +11494,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         particle_start_offset_dims.size() != 1 ||
         particle_start_offset_dims[0] != image_dims[0] ||
         denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
-        denominator_dims[1] != posterior_dims[1] || denominator_dims[2] != pixel_count)
+        denominator_dims[1] != posterior_dims[1] ||
+        denominator_dims[2] != pixel_capacity)
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: inconsistent topology");
 
@@ -11260,7 +11544,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         static_cast<float*>(weight_volume_out->untyped_data()),
         static_cast<float*>(denominator_sum->untyped_data()),
         projector_dims[0], image_dims[0], posterior_dims[1], posterior_dims[2],
-        pixel_count, image_h, image_w, N0, N1, N2, upsampling, max_r2_x4,
+        pixel_count, pixel_capacity, image_h, image_w, N0, N1, N2,
+        upsampling, max_r2_x4,
         static_cast<int>(physical_image_size),
         static_cast<int>(projector_max_r),
         static_cast<int>(projection_padding_factor),
@@ -11294,6 +11579,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Attr<int64_t>("image_h")
         .Attr<int64_t>("image_w")
+        .Attr<int64_t>("pixel_capacity")
         .Attr<int64_t>("N0")
         .Attr<int64_t>("N1")
         .Attr<int64_t>("N2")
@@ -12588,6 +12874,59 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+ffi::Error RelionPowerClassSpectrumHighresRuntimeF32Impl(
+    cudaStream_t stream,
+    int64_t xdim,
+    int64_t ydim,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer resolution_limit,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (image.element_type() != ffi::DataType::C64 ||
+        output->element_type() != ffi::DataType::F32 ||
+        resolution_limit.element_type() != ffi::DataType::S32 ||
+        resolution_limit.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresRuntimeF32: invalid buffers");
+    const auto image_dims = image.dimensions();
+    const auto output_dims = output->dimensions();
+    if (image_dims.size() != 2 || output_dims.size() != 2 ||
+        image_dims[0] <= 0 || image_dims[1] <= 0 || xdim <= 0 || ydim <= 0 ||
+        image_dims[1] != xdim * ydim || output_dims[0] != image_dims[0] ||
+        output_dims[1] != xdim + 1 ||
+        image_dims[0] > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        image_dims[1] > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        xdim > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        ydim > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument(
+            "RelionPowerClassSpectrumHighresRuntimeF32: inconsistent dimensions");
+    cudaError_t err = launch_relion_powerclass_spectrum_highres_runtime_f32(
+        stream,
+        reinterpret_cast<const float2*>(image.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        image_dims[0],
+        static_cast<int>(image_dims[1]),
+        static_cast<int>(xdim),
+        static_cast<int>(xdim),
+        static_cast<int>(ydim),
+        static_cast<const int32_t*>(resolution_limit.untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionPowerClassSpectrumHighresRuntimeF32,
+    RelionPowerClassSpectrumHighresRuntimeF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("xdim")
+        .Attr<int64_t>("ydim")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 ffi::Error RelionFineDiff2FusedTranslateRectangularF32Common(
     cudaStream_t stream,
     int64_t current_size,
@@ -12717,9 +13056,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
-ffi::Error RelionFineDiff2FusedTranslateFlatRowsF32Impl(
+ffi::Error RelionFineDiff2FusedTranslateFlatRowsF32Common(
     cudaStream_t stream,
     int64_t current_size,
+    const ffi::AnyBuffer* runtime_current_size,
     ffi::AnyBuffer reference,
     ffi::AnyBuffer row_image_ids,
     ffi::AnyBuffer image,
@@ -12743,7 +13083,14 @@ ffi::Error RelionFineDiff2FusedTranslateFlatRowsF32Impl(
         output->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2FusedTranslateFlatRowsF32: angles/weight/initial/output must be F32");
-    if (current_size <= 0 || current_size > std::numeric_limits<int>::max())
+    if (runtime_current_size != nullptr &&
+        (runtime_current_size->element_type() != ffi::DataType::S32 ||
+         runtime_current_size->dimensions().size() != 0))
+        return ffi::Error::InvalidArgument(
+            "RelionFineDiff2FusedTranslateRuntimeFlatRowsF32: "
+            "logical_current_size must be an S32 scalar");
+    if (runtime_current_size == nullptr &&
+        (current_size <= 0 || current_size > std::numeric_limits<int>::max()))
         return ffi::Error::InvalidArgument(
             "RelionFineDiff2FusedTranslateFlatRowsF32: invalid current_size");
 
@@ -12755,12 +13102,14 @@ ffi::Error RelionFineDiff2FusedTranslateFlatRowsF32Impl(
     const auto initial_dims = initial_diff2.dimensions();
     const auto lookup_dims = full_to_compact.dimensions();
     const auto output_dims = output->dimensions();
-    const int64_t expected_full_pixels =
-        current_size * (current_size / 2 + 1);
+    const bool lookup_shape_valid = lookup_dims.size() == 1 && lookup_dims[0] > 0;
+    const int64_t expected_full_pixels = runtime_current_size == nullptr
+        ? current_size * (current_size / 2 + 1)
+        : (lookup_shape_valid ? lookup_dims[0] : 0);
     if (reference_dims.size() != 2 || row_image_dims.size() != 1 ||
         image_dims.size() != 2 || translation_dims.size() != 2 ||
         translation_dims[1] != 2 || weight_dims.size() != 2 ||
-        initial_dims.size() != 1 || lookup_dims.size() != 1 ||
+        initial_dims.size() != 1 || !lookup_shape_valid ||
         output_dims.size() != 2 || reference_dims[0] <= 0 ||
         reference_dims[1] <= 0 || row_image_dims[0] != reference_dims[0] ||
         image_dims[0] <= 0 || image_dims[1] != reference_dims[1] ||
@@ -12795,11 +13144,31 @@ ffi::Error RelionFineDiff2FusedTranslateFlatRowsF32Impl(
         translation_dims[0],
         reference_dims[1],
         lookup_dims[0],
-        static_cast<int>(current_size));
+        static_cast<int>(current_size),
+        runtime_current_size == nullptr
+            ? nullptr
+            : static_cast<const int32_t*>(runtime_current_size->untyped_data()));
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
+}
+
+ffi::Error RelionFineDiff2FusedTranslateFlatRowsF32Impl(
+    cudaStream_t stream,
+    int64_t current_size,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer row_image_ids,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslateFlatRowsF32Common(
+        stream, current_size, nullptr, reference, row_image_ids, image,
+        translation_angles, weight, initial_diff2, full_to_compact, output);
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -12808,6 +13177,39 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Attr<int64_t>("current_size")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+ffi::Error RelionFineDiff2FusedTranslateRuntimeFlatRowsF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer row_image_ids,
+    ffi::AnyBuffer image,
+    ffi::AnyBuffer translation_angles,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer logical_current_size,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionFineDiff2FusedTranslateFlatRowsF32Common(
+        stream, 0, &logical_current_size, reference, row_image_ids, image,
+        translation_angles, weight, initial_diff2, full_to_compact, output);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionFineDiff2FusedTranslateRuntimeFlatRowsF32,
+    RelionFineDiff2FusedTranslateRuntimeFlatRowsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -14096,6 +14498,57 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>());
 
+ffi::Error RelionWavgRotationAtomicRuntimeTripletAddF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer terms,
+    ffi::AnyBuffer accumulator_in,
+    ffi::AnyBuffer logical_pixel_count,
+    ffi::Result<ffi::AnyBuffer> accumulator_out)
+{
+    if (terms.element_type() != ffi::DataType::F32 ||
+        accumulator_in.element_type() != ffi::DataType::F32 ||
+        accumulator_out->element_type() != ffi::DataType::F32 ||
+        logical_pixel_count.element_type() != ffi::DataType::S32 ||
+        logical_pixel_count.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicRuntimeTripletAddF32: invalid buffers");
+    const auto dims = terms.dimensions();
+    const auto accumulator_dims = accumulator_in.dimensions();
+    const auto output_dims = accumulator_out->dimensions();
+    if (dims.size() != 4 || accumulator_dims.size() != 3 ||
+        output_dims.size() != 3 || dims[3] != 3 ||
+        accumulator_dims[2] != 3 || output_dims[0] != accumulator_dims[0] ||
+        output_dims[1] != accumulator_dims[1] ||
+        output_dims[2] != accumulator_dims[2] ||
+        accumulator_dims[0] != dims[0] || accumulator_dims[1] != dims[2] ||
+        dims[0] <= 0 || dims[0] > 65535 || dims[1] <= 0 ||
+        dims[1] > std::numeric_limits<int>::max() || dims[2] <= 0 ||
+        dims[2] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument(
+            "RelionWavgRotationAtomicRuntimeTripletAddF32: inconsistent topology");
+    cudaError_t err = launch_relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+        stream,
+        static_cast<const float*>(terms.untyped_data()),
+        static_cast<float*>(accumulator_out->untyped_data()),
+        dims[0],
+        dims[1],
+        dims[2],
+        static_cast<const int32_t*>(logical_pixel_count.untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgRotationAtomicRuntimeTripletAddF32,
+    RelionWavgRotationAtomicRuntimeTripletAddF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
 ffi::Error RelionWavgSequentialTripletF32Impl(
     cudaStream_t stream,
     ffi::AnyBuffer projections,
@@ -14174,6 +14627,85 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionWavgSequentialTripletF32Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+ffi::Error RelionWavgSequentialRuntimeTripletF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer projections,
+    ffi::AnyBuffer raw_ctf,
+    ffi::AnyBuffer scale,
+    ffi::AnyBuffer shifted_images,
+    ffi::AnyBuffer posterior,
+    ffi::AnyBuffer logical_pixel_count,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    if (projections.element_type() != ffi::DataType::C64 ||
+        raw_ctf.element_type() != ffi::DataType::F32 ||
+        scale.element_type() != ffi::DataType::F32 ||
+        shifted_images.element_type() != ffi::DataType::C64 ||
+        posterior.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32 ||
+        logical_pixel_count.element_type() != ffi::DataType::S32 ||
+        logical_pixel_count.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialRuntimeTripletF32: invalid buffers");
+    const auto projection_dims = projections.dimensions();
+    const auto ctf_dims = raw_ctf.dimensions();
+    const auto scale_dims = scale.dimensions();
+    const auto shifted_dims = shifted_images.dimensions();
+    const auto posterior_dims = posterior.dimensions();
+    const auto output_dims = output->dimensions();
+    if (projection_dims.size() != 3 || ctf_dims.size() != 2 ||
+        scale_dims.size() != 1 || shifted_dims.size() != 3 ||
+        posterior_dims.size() != 3 || output_dims.size() != 4 ||
+        output_dims[3] != 3)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialRuntimeTripletF32: invalid ranks");
+    const int64_t batch_size = projection_dims[0];
+    const int64_t rotation_count = projection_dims[1];
+    const int64_t pixel_capacity = projection_dims[2];
+    const int64_t translation_count = shifted_dims[1];
+    if (batch_size <= 0 || batch_size > 65535 || rotation_count <= 0 ||
+        rotation_count > std::numeric_limits<int>::max() ||
+        translation_count <= 0 || pixel_capacity <= 0 ||
+        pixel_capacity > std::numeric_limits<int>::max() ||
+        ctf_dims[0] != batch_size || ctf_dims[1] != pixel_capacity ||
+        scale_dims[0] != batch_size || shifted_dims[0] != batch_size ||
+        shifted_dims[2] != pixel_capacity || posterior_dims[0] != batch_size ||
+        posterior_dims[1] != rotation_count ||
+        posterior_dims[2] != translation_count || output_dims[0] != batch_size ||
+        output_dims[1] != rotation_count || output_dims[2] != pixel_capacity)
+        return ffi::Error::InvalidArgument(
+            "RelionWavgSequentialRuntimeTripletF32: inconsistent topology");
+    cudaError_t err = launch_relion_wavg_sequential_runtime_triplet_f32(
+        stream,
+        reinterpret_cast<const float2*>(projections.untyped_data()),
+        static_cast<const float*>(raw_ctf.untyped_data()),
+        static_cast<const float*>(scale.untyped_data()),
+        reinterpret_cast<const float2*>(shifted_images.untyped_data()),
+        static_cast<const float*>(posterior.untyped_data()),
+        static_cast<float*>(output->untyped_data()),
+        batch_size,
+        rotation_count,
+        translation_count,
+        pixel_capacity,
+        static_cast<const int32_t*>(logical_pixel_count.untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionWavgSequentialRuntimeTripletF32,
+    RelionWavgSequentialRuntimeTripletF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()

@@ -149,10 +149,15 @@ def _norm_correction_image_power_mass(
     shell_indices_half = jnp.asarray(shell_indices_half)
     valid_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
     weighted_mass = jnp.where(valid_shell[None, :], support_mass[:, None], 0.0)
-    if projection_max_r == "auto" or projection_max_r is None:
+    projection_disabled = projection_max_r is None or (
+        isinstance(projection_max_r, str) and projection_max_r == "auto"
+    )
+    if projection_disabled:
         return weighted_mass
     full_mass = jnp.asarray(valid_image_mask, dtype=support_mass.dtype)
-    unmodeled_shell = valid_shell & (shell_indices_half > int(projection_max_r))
+    unmodeled_shell = valid_shell & (
+        shell_indices_half > jnp.asarray(projection_max_r, dtype=jnp.int32)
+    )
     high_shell_mass = full_mass if include_unweighted_high_shell else jnp.zeros_like(full_mass)
     return jnp.where(unmodeled_shell[None, :], high_shell_mass[:, None], weighted_mass)
 
@@ -167,6 +172,7 @@ def _norm_correction_image_power_per_image(
     shell_count: int,
     image_shape,
     current_size,
+    runtime_current_size=None,
     include_unweighted_high_shell: bool = True,
     source_faithful_spectrum_norm: bool = False,
 ):
@@ -194,17 +200,21 @@ def _norm_correction_image_power_per_image(
         (pixel_power * power_mass).astype(norm_dtype),
         axis=-1,
     ).astype(norm_dtype)
+    projection_disabled = projection_max_r is None or (
+        isinstance(projection_max_r, str) and projection_max_r == "auto"
+    )
     if (
-        current_size is None
-        or projection_max_r == "auto"
-        or projection_max_r is None
+        (current_size is None and runtime_current_size is None)
+        or projection_disabled
         or not include_unweighted_high_shell
     ):
         return per_image
 
     shell_indices_half = jnp.asarray(shell_indices_half)
     valid_shell = (shell_indices_half >= 0) & (shell_indices_half < int(shell_count))
-    unmodeled_shell = valid_shell & (shell_indices_half > int(projection_max_r))
+    unmodeled_shell = valid_shell & (
+        shell_indices_half > jnp.asarray(projection_max_r, dtype=jnp.int32)
+    )
     generic_high = jnp.sum(
         jnp.where(unmodeled_shell[None, :], pixel_power, 0.0).astype(norm_dtype),
         axis=-1,
@@ -218,6 +228,7 @@ def _norm_correction_image_power_per_image(
         processed_noise_power_half,
         image_shape=image_shape,
         current_size=current_size,
+        runtime_current_size=runtime_current_size,
     ).astype(norm_dtype)
     full_mass = jnp.asarray(valid_image_mask, dtype=norm_dtype)
     if source_faithful_spectrum_norm:
@@ -247,6 +258,7 @@ def _noise_image_power_shells_and_per_image(
     shell_count: int,
     image_shape,
     current_size,
+    runtime_current_size=None,
     include_unweighted_high_shell: bool = True,
     use_relion_cuda_powerclass_spectrum: bool = False,
     source_faithful_spectrum_norm: bool = False,
@@ -271,21 +283,29 @@ def _noise_image_power_shells_and_per_image(
     )
     weighted_half = jnp.sum(pixel_power * power_mass, axis=0).astype(jnp.float32)
     shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
+    projection_disabled = projection_max_r is None or (
+        isinstance(projection_max_r, str) and projection_max_r == "auto"
+    )
     if (
         use_relion_cuda_powerclass_spectrum
-        and current_size is not None
-        and projection_max_r not in ("auto", None)
+        and (current_size is not None or runtime_current_size is not None)
+        and not projection_disabled
         and include_unweighted_high_shell
     ):
         exact_spectra = _relion_cuda_powerclass_spectrum_norm_units(
             processed_noise_power_half,
             image_shape=image_shape,
             current_size=current_size,
+            runtime_current_size=runtime_current_size,
         )
         exact_spectra = jnp.where(valid_image_mask[:, None], exact_spectra, 0.0)
         exact_shells = jnp.sum(exact_spectra, axis=0).astype(jnp.float32)
         shell_ids = jnp.arange(shell_count, dtype=jnp.int32)
-        shells = jnp.where(shell_ids > int(projection_max_r), exact_shells, shells)
+        shells = jnp.where(
+            shell_ids > jnp.asarray(projection_max_r, dtype=jnp.int32),
+            exact_shells,
+            shells,
+        )
     per_image = _norm_correction_image_power_per_image(
         processed_noise_power_half,
         support_mass,
@@ -295,6 +315,7 @@ def _noise_image_power_shells_and_per_image(
         shell_count=shell_count,
         image_shape=image_shape,
         current_size=current_size,
+        runtime_current_size=runtime_current_size,
         include_unweighted_high_shell=include_unweighted_high_shell,
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
@@ -318,6 +339,8 @@ def _relion_wavg_direct_triplet_shells(
     shell_count,
     cutoff_shell,
     relion_wavg_sequential_cuda: bool | None = None,
+    logical_recon_pixel_count=None,
+    logical_rectangle_pixel_count=None,
     return_per_image_cutoff=False,
 ):
     """Return RELION Wavg shells and optional per-image cutoff triplets."""
@@ -339,6 +362,7 @@ def _relion_wavg_direct_triplet_shells(
         raw_exact,
         reconstruction_probs,
         relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+        logical_pixel_count=logical_recon_pixel_count,
     )
     rectangle_terms = _relion_wavg_rectangle_triplet_terms(
         exact_terms,
@@ -346,10 +370,26 @@ def _relion_wavg_direct_triplet_shells(
         reconstruction_probs,
         exact_positions,
     )
-    atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
-        rectangle_terms,
-        jnp.zeros(rectangle_terms.shape[:1] + rectangle_terms.shape[2:], dtype=jnp.float32),
+    atomic_accumulator = jnp.zeros(
+        rectangle_terms.shape[:1] + rectangle_terms.shape[2:],
+        dtype=jnp.float32,
     )
+    if logical_rectangle_pixel_count is None:
+        atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
+            rectangle_terms,
+            atomic_accumulator,
+        )
+        pixel_loop_stop = int(rectangle_terms.shape[2])
+    else:
+        atomic = cuda_backproject.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+            rectangle_terms,
+            atomic_accumulator,
+            jnp.asarray(logical_rectangle_pixel_count, dtype=jnp.int32),
+        )
+        pixel_loop_stop = jnp.asarray(
+            logical_rectangle_pixel_count,
+            dtype=jnp.int32,
+        )
     atomic = jnp.where(valid_image_mask[:, None, None], atomic, 0.0)
     atomic_f64 = atomic.astype(jnp.float64)
     pixel_triplets = jnp.sum(atomic_f64, axis=0)
@@ -361,14 +401,17 @@ def _relion_wavg_direct_triplet_shells(
         axis=0,
     )
     if return_per_image_cutoff:
-        cutoff_mask = jnp.asarray(rectangle_shell_indices) == int(cutoff_shell)
+        cutoff_mask = jnp.asarray(rectangle_shell_indices) == jnp.asarray(
+            cutoff_shell,
+            dtype=jnp.int32,
+        )
 
         def _add_pixel(pixel, value):
             return value + jnp.where(cutoff_mask[pixel], atomic_f64[:, pixel, :], 0.0)
 
         per_image_cutoff = jax.lax.fori_loop(
             0,
-            int(atomic.shape[1]),
+            pixel_loop_stop,
             _add_pixel,
             jnp.zeros((atomic.shape[0], 3), dtype=jnp.float64),
         )
@@ -884,6 +927,7 @@ def _project_local_half_spectrum(
         "use_flat_local_rows",
         "use_packed_local_projection",
         "relion_wavg_sequential_cuda",
+        "stable_fourier_window_shapes",
         "relion_cuda_preprocess_radius",
         "relion_cuda_preprocess_cosine_width",
         "mstep_subtract_ctf_projection",
@@ -976,6 +1020,7 @@ def run_local_bucket_big_jit(
     normalization_log_evidence,
     normalization_max_posterior,
     reconstruction_probability_threshold,
+    runtime_logical_current_size,
     config,
     *,
     mask_mode: str,
@@ -1008,6 +1053,7 @@ def run_local_bucket_big_jit(
     use_flat_local_rows: bool = False,
     use_packed_local_projection: bool = False,
     relion_wavg_sequential_cuda: bool | None = None,
+    stable_fourier_window_shapes: bool = False,
     relion_cuda_preprocess_radius: float = 0.0,
     relion_cuda_preprocess_cosine_width: float = 0.0,
     mstep_subtract_ctf_projection: bool,
@@ -1046,6 +1092,17 @@ def run_local_bucket_big_jit(
     score/probability tensors and, for targeted operand dumps, the already
     computed projection/preprocessing operands.
     """
+
+    runtime_logical_current_size = jnp.asarray(
+        runtime_logical_current_size,
+        dtype=jnp.int32,
+    )
+    if runtime_logical_current_size.shape != ():
+        raise ValueError("runtime_logical_current_size must be an int32 scalar")
+    if stable_fourier_window_shapes and not relion_exact_fine_diff2:
+        raise ValueError(
+            "stable Fourier-window scoring requires exact RELION fine diff2"
+        )
 
     if has_normalization_max_posterior and (
         has_normalization_log_z or has_normalization_log_evidence
@@ -1576,6 +1633,11 @@ def run_local_bucket_big_jit(
             processed_score_half,
             image_shape=image_shape,
             current_size=norm_current_size,
+            runtime_current_size=(
+                runtime_logical_current_size
+                if stable_fourier_window_shapes
+                else None
+            ),
         )
         if use_flat_local_rows:
             flat_score_projection = (
@@ -1583,22 +1645,34 @@ def run_local_bucket_big_jit(
                 if packed_local_projection
                 else proj_half[flat_row_image_ids, flat_row_rotation_rows]
             )
-            direct_diff2_flat = (
-                cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
-                    jnp.asarray(flat_score_projection, dtype=jnp.complex64),
-                    jnp.where(
-                        flat_row_valid_mask,
-                        flat_row_image_ids,
-                        jnp.int32(-1),
-                    ),
-                    corrected_score,
-                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-                    direct_weight,
-                    jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
-                    direct_highres,
-                    current_size=norm_current_size,
-                )
+            direct_flat_args = (
+                jnp.asarray(flat_score_projection, dtype=jnp.complex64),
+                jnp.where(
+                    flat_row_valid_mask,
+                    flat_row_image_ids,
+                    jnp.int32(-1),
+                ),
+                corrected_score,
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                direct_weight,
+                jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
             )
+            if stable_fourier_window_shapes:
+                direct_diff2_flat = (
+                    cuda_backproject.relion_fine_diff2_fused_translate_runtime_flat_rows_f32(
+                        *direct_flat_args,
+                        runtime_logical_current_size,
+                        direct_highres,
+                    )
+                )
+            else:
+                direct_diff2_flat = (
+                    cuda_backproject.relion_fine_diff2_fused_translate_flat_rows_f32(
+                        *direct_flat_args,
+                        direct_highres,
+                        current_size=norm_current_size,
+                    )
+                )
             direct_diff2 = scatter_flat_local_rows(
                 direct_diff2_flat,
                 flat_row_image_ids,
@@ -1609,15 +1683,27 @@ def run_local_bucket_big_jit(
                 fill_value=jnp.inf,
             )
         else:
-            direct_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+            direct_rectangular_args = (
                 jnp.asarray(proj_half, dtype=jnp.complex64),
                 corrected_score,
                 jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
                 direct_weight,
                 jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
-                direct_highres,
-                current_size=norm_current_size,
             )
+            if stable_fourier_window_shapes:
+                direct_diff2 = (
+                    cuda_backproject.relion_fine_diff2_fused_translate_runtime_rectangular_f32(
+                        *direct_rectangular_args,
+                        runtime_logical_current_size,
+                        direct_highres,
+                    )
+                )
+            else:
+                direct_diff2 = cuda_backproject.relion_fine_diff2_fused_translate_rectangular_f32(
+                    *direct_rectangular_args,
+                    direct_highres,
+                    current_size=norm_current_size,
+                )
         direct_candidate_mask = rotation_mask[:, :, None]
         if sample_mask is not None:
             direct_candidate_mask = direct_candidate_mask & sample_mask
@@ -2080,6 +2166,11 @@ def run_local_bucket_big_jit(
     bucket_norm_correction = jnp.zeros((batch_size,), dtype=norm_correction_dtype)
     debug_wavg_cutoff_triplet = jnp.zeros((1, 3), dtype=jnp.float64)
     if accumulate_noise:
+        noise_projection_max_r = (
+            runtime_logical_current_size // 2
+            if stable_fourier_window_shapes
+            else projection_max_r
+        )
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
         support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
         translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
@@ -2090,10 +2181,15 @@ def run_local_bucket_big_jit(
             support_mass,
             shell_indices_half,
             valid_image_mask,
-            projection_max_r,
+            noise_projection_max_r,
             shell_count=n_shells,
             image_shape=image_shape,
             current_size=norm_current_size,
+            runtime_current_size=(
+                runtime_logical_current_size
+                if stable_fourier_window_shapes
+                else None
+            ),
             include_unweighted_high_shell=include_unweighted_norm_high_shell,
             use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
@@ -2141,11 +2237,33 @@ def run_local_bucket_big_jit(
                 valid_image_mask,
                 image_shape=image_shape,
                 shell_count=n_shells,
-                cutoff_shell=int(norm_current_size) // 2,
+                cutoff_shell=(
+                    runtime_logical_current_size // 2
+                    if stable_fourier_window_shapes
+                    else int(norm_current_size) // 2
+                ),
                 relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+                logical_recon_pixel_count=(
+                    jnp.sum(
+                        jnp.asarray(shell_indices_noise, dtype=jnp.int32) >= 0,
+                        dtype=jnp.int32,
+                    )
+                    if stable_fourier_window_shapes
+                    else None
+                ),
+                logical_rectangle_pixel_count=(
+                    runtime_logical_current_size
+                    * (runtime_logical_current_size // 2 + 1)
+                    if stable_fourier_window_shapes
+                    else None
+                ),
                 return_per_image_cutoff=return_debug_operands,
             )
-            cutoff_mask = jnp.arange(n_shells, dtype=jnp.int32) == int(norm_current_size) // 2
+            cutoff_mask = jnp.arange(n_shells, dtype=jnp.int32) == (
+                runtime_logical_current_size // 2
+                if stable_fourier_window_shapes
+                else int(norm_current_size) // 2
+            )
             block_noise_shells = jnp.where(cutoff_mask, direct_triplet_shells[2], block_noise_shells)
             batch_img_power_shells = jnp.where(cutoff_mask, 0.0, batch_img_power_shells)
             if return_noise_split:

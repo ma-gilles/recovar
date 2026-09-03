@@ -241,6 +241,15 @@ def make_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--stable-fourier-window-shapes",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULTS.stable_fourier_window_shapes,
+        help=(
+            "Experimental K=1 exact-local VDAM policy: reuse low-cardinality "
+            "physical Fourier capacities while retaining logical CUDA bounds"
+        ),
+    )
+    parser.add_argument(
         "--bootstrap-min-particles",
         "--bootstrap_min_particles",
         dest="bootstrap_min_particles",
@@ -433,6 +442,7 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
         "exact_local_physical_order_chunk_size": (
             args.exact_local_physical_order_chunk_size
         ),
+        "stable_fourier_window_shapes": args.stable_fourier_window_shapes,
         "bootstrap_min_particles": args.bootstrap_min_particles,
         "sigma2_min_particles": args.sigma2_min_particles,
         "padding_factor": args.padding_factor,

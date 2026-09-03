@@ -35,7 +35,7 @@ from recovar.em.dense_single_volume.helpers.flat_local_rows import (
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     centered_half_indices_to_fftw_half_indices,
-    make_fourier_window_spec,
+    make_stable_fourier_window_shape_plan,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -45,6 +45,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+    crop_relion_x_half_accumulator,
     enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
@@ -97,6 +98,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _make_relion_wavg_rectangle,
+    _make_stable_relion_wavg_rectangle,
 )
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_prior_centers_for_images,
@@ -1670,6 +1672,8 @@ def _accumulate_relion_vdam_physical_particle_grid(
     image_shape,
     volume_shape,
     max_r,
+    stable_dense_positions=None,
+    logical_current_size=None,
     reconstruction_group_ids=None,
     worker_lane_ids=None,
     particle_trace_ids=None,
@@ -1850,6 +1854,10 @@ def _accumulate_relion_vdam_physical_particle_grid(
         jnp.asarray(pixel_indices, dtype=jnp.int32),
     )
     if projector_full is None:
+        if stable_dense_positions is not None or logical_current_size is not None:
+            raise ValueError(
+                "stable Fourier-window BPref requires the inline RELION projector"
+            )
         if reconstruction_group_ids is not None:
             raise ValueError(
                 "grouped VDAM reconstruction requires the inline projector path"
@@ -1895,6 +1903,8 @@ def _accumulate_relion_vdam_physical_particle_grid(
                     else None
                 ),
                 candidate_trace_active=candidate_trace_active,
+                stable_dense_positions=stable_dense_positions,
+                logical_current_size=logical_current_size,
             )
         )
     return Ft_y, Ft_ctf
@@ -4243,6 +4253,7 @@ def run_local_em_exact(
     exact_local_bucket_radix: int | None = None,
     consecutive_mixed_bucket_size: int | None = None,
     preserve_bpref_particle_order: bool = False,
+    stable_fourier_window_shapes: bool = False,
     stats_use_reconstruction_probs: bool = False,
     relion_f32_fine_posterior: bool = False,
     include_unweighted_norm_high_shell: bool = True,
@@ -4275,6 +4286,7 @@ def run_local_em_exact(
     )
     packed_local_projection_enabled = bool(_packed_local_projection_enabled)
     defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
+    stable_fourier_window_shapes = bool(stable_fourier_window_shapes)
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -4315,6 +4327,29 @@ def run_local_em_exact(
     source_faithful_bpref = bool(
         preserve_bpref_particle_order and relion_exact_bpref_operands
     )
+    if stable_fourier_window_shapes and not (
+        relion_exact_fine_diff2
+        and relion_exact_bpref_operands
+        and relion_wavg_sequential_cuda is True
+        and accumulate_noise
+        and mstep_relion_x_half
+        and source_faithful_bpref
+        and relion_projector_half is not None
+        and not disable_adjoint_y
+        and not disable_adjoint_ctf
+        and not score_only
+    ):
+        raise ValueError(
+            "stable Fourier-window shapes require the K=1 exact-local VDAM "
+            "topology: exact fine scoring, CUDA Wavg, source-faithful x-half "
+            "BPref, a RELION projector, noise accumulation, and a full M-step"
+        )
+    if stable_fourier_window_shapes and os.environ.get(
+        "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", ""
+    ).strip():
+        raise ValueError(
+            "stable Fourier-window shapes do not support external VDAM host replay"
+        )
     if defer_packed_vdam_enabled and not (
         source_faithful_bpref
         and mstep_subtract_ctf_projection
@@ -4390,12 +4425,37 @@ def run_local_em_exact(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    logical_current_size = int(H) if current_size is None else int(current_size)
     mstep_current_size = (
-        current_size
+        logical_current_size
         if reconstruction_current_size is None
         else int(reconstruction_current_size)
     )
     n_half = H * (W // 2 + 1)
+    if stable_fourier_window_shapes and mstep_current_size != logical_current_size:
+        raise ValueError(
+            "stable Fourier-window VDAM currently requires identical score and "
+            "reconstruction current sizes"
+        )
+    stable_window_plan = make_stable_fourier_window_shape_plan(
+        image_shape,
+        logical_current_size,
+        n_half,
+        reconstruction_current_size=mstep_current_size,
+        enabled=stable_fourier_window_shapes,
+        square=square_window,
+        recon_exact_radius=bool(recon_exact_radius),
+    )
+    physical_current_size = stable_window_plan.physical_current_size
+    physical_mstep_current_size = (
+        stable_window_plan.physical_reconstruction_current_size
+    )
+    # Every non-full stable window uses a runtime logical bound, even when its
+    # logical size equals the physical class boundary. This keeps one JIT
+    # topology for all members of a physical capacity class.
+    stable_window_active = bool(
+        stable_fourier_window_shapes and stable_window_plan.logical_spec.use_window
+    )
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
     class_log_prior = float(class_log_prior)
@@ -4557,15 +4617,22 @@ def run_local_em_exact(
         # RELION BPref::initZeros(current_size) sizes the accumulator from the
         # iteration r_max.  The reconstruction boundary then crops the output
         # back to ``volume_shape``.
-        recon_volume_shape = relion_backprojector_volume_shape(
+        logical_recon_volume_shape = relion_backprojector_volume_shape(
             volume_shape,
             reconstruction_padding_factor,
             current_size=mstep_current_size,
         )
+        recon_volume_shape = relion_backprojector_volume_shape(
+            volume_shape,
+            reconstruction_padding_factor,
+            current_size=physical_mstep_current_size,
+        )
     elif reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
+        logical_recon_volume_shape = recon_volume_shape
     else:
         recon_volume_shape = volume_shape
+        logical_recon_volume_shape = recon_volume_shape
     if score_only:
         logger.info("Exact local score-only: M-step accumulators disabled")
     elif mstep_relion_x_half:
@@ -4579,31 +4646,41 @@ def run_local_em_exact(
     recon_volume_size = int(np.prod(recon_accum_shape))
     score_only_accumulator_size = 1 if score_only else recon_volume_size
 
-    window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
-        n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        recon_exact_radius=bool(recon_exact_radius),
-        include_recon_window=True,
+    window_spec = (
+        stable_window_plan.packed_physical_spec()
+        if stable_window_active
+        else stable_window_plan.logical_spec
     )
     use_window = window_spec.use_window
     window_indices = window_spec.score_indices
     if relion_exact_fine_diff2:
-        relion_fine_full_to_compact = _relion_exact_fine_full_to_compact_lookup(
-            image_shape,
-            current_size,
-            n_half,
-            window_spec,
-        )
+        if stable_window_active:
+            logical_lookup = _relion_exact_fine_full_to_compact_lookup(
+                image_shape,
+                logical_current_size,
+                n_half,
+                stable_window_plan.logical_spec,
+            )
+            relion_fine_full_to_compact = pad_axis(
+                logical_lookup,
+                0,
+                stable_window_plan.physical_rectangle_pixels,
+                value=-1,
+            )
+        else:
+            relion_fine_full_to_compact = _relion_exact_fine_full_to_compact_lookup(
+                image_shape,
+                logical_current_size,
+                n_half,
+                window_spec,
+            )
     else:
         relion_fine_full_to_compact = np.zeros(1, dtype=np.int32)
     recon_window_indices = window_spec.recon_indices
     mstep_recon_window_indices, mstep_adjoint_max_r = _local_mstep_adjoint_window(
         image_shape,
         n_half,
-        mstep_current_size,
+        physical_mstep_current_size,
         use_window=use_window,
         recon_window_indices=recon_window_indices,
         mstep_relion_x_half=bool(mstep_relion_x_half),
@@ -4711,12 +4788,30 @@ def run_local_em_exact(
             shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
                 shell_indices_half,
                 image_shape,
-                current_size,
-                window_indices,
+                logical_current_size,
+                (
+                    stable_window_plan.logical_spec.score_indices
+                    if stable_window_active
+                    else window_indices
+                ),
             )
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
-        norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)
+        norm_unweighted_shell_cutoff = int(logical_current_size // 2)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+        if stable_window_active:
+            logical_recon_mask = jnp.arange(window_spec.n_recon) < int(
+                stable_window_plan.logical_reconstruction_pixels
+            )
+            shell_indices_noise = jnp.where(
+                logical_recon_mask,
+                shell_indices_noise,
+                jnp.asarray(-1, dtype=jnp.int32),
+            )
+            noise_variance_for_noise = jnp.where(
+                logical_recon_mask,
+                noise_variance_for_noise,
+                jnp.asarray(0, dtype=noise_variance_for_noise.dtype),
+            )
         scale_correction_pixel_mask = _relion_scale_correction_pixel_mask(
             scale_correction_data_vs_prior,
             shell_indices_noise,
@@ -5110,12 +5205,20 @@ def run_local_em_exact(
 
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
+    stable_bpref_dense_positions = None
     if relion_exact_fine_diff2 and accumulate_noise and use_window:
-        relion_wavg_rectangle = _make_relion_wavg_rectangle(
-            image_shape,
-            current_size,
-            big_jit_recon_window_indices_arg,
-        )
+        if stable_window_active:
+            relion_wavg_rectangle = _make_stable_relion_wavg_rectangle(
+                image_shape,
+                stable_window_plan,
+            )
+            stable_bpref_dense_positions = relion_wavg_rectangle.exact_positions
+        else:
+            relion_wavg_rectangle = _make_relion_wavg_rectangle(
+                image_shape,
+                logical_current_size,
+                big_jit_recon_window_indices_arg,
+            )
         big_jit_relion_wavg_rectangle_indices_arg = relion_wavg_rectangle.centered_indices
         big_jit_relion_wavg_exact_positions_arg = relion_wavg_rectangle.exact_positions
         big_jit_relion_wavg_rectangle_shell_indices_arg = relion_wavg_rectangle.shell_indices
@@ -5808,6 +5911,14 @@ def run_local_em_exact(
                 return_big_jit_deferred_mstep_inputs
                 and defer_packed_vdam_enabled
             )
+            if stable_window_active and not (
+                return_source_vdam_operands
+                or return_deferred_source_vdam_operands
+            ):
+                raise ValueError(
+                    "stable Fourier-window BPref requires the sparse source-operand "
+                    "route for every bucket"
+                )
             big_jit_disable_adjoint_y = (
                 disable_adjoint_y or return_big_jit_mstep_tensors or return_big_jit_deferred_mstep_inputs
             )
@@ -5905,6 +6016,7 @@ def run_local_em_exact(
                 normalization_log_evidence_arg,
                 normalization_max_posterior_arg,
                 reconstruction_probability_threshold_arg,
+                jnp.asarray(logical_current_size, dtype=jnp.int32),
                 config,
             )
             big_jit_static_options = dict(
@@ -5938,6 +6050,7 @@ def run_local_em_exact(
                 use_flat_local_rows=flat_local_rows_enabled,
                 use_packed_local_projection=packed_local_projection_enabled,
                 relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+                stable_fourier_window_shapes=stable_window_active,
                 relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
                 relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
                 mstep_subtract_ctf_projection=bool(mstep_subtract_ctf_projection),
@@ -5956,7 +6069,7 @@ def run_local_em_exact(
                 ),
                 return_deferred_noise_inputs=bool(return_big_jit_deferred_mstep_inputs and accumulate_noise),
                 n_shells=n_shells_arg,
-                norm_current_size=current_size,
+                norm_current_size=physical_current_size,
                 include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 has_normalization_log_z=normalization_log_z_np is not None,
@@ -6340,6 +6453,16 @@ def run_local_em_exact(
                                     image_shape=image_shape,
                                     volume_shape=recon_volume_shape,
                                     max_r=mstep_adjoint_max_r,
+                                    stable_dense_positions=(
+                                        stable_bpref_dense_positions
+                                        if stable_window_active
+                                        else None
+                                    ),
+                                    logical_current_size=(
+                                        mstep_current_size
+                                        if stable_window_active
+                                        else None
+                                    ),
                                 )
                             )
                             inline_data_parts.append(inline_data)
@@ -7180,6 +7303,14 @@ def run_local_em_exact(
                         image_shape=image_shape,
                         volume_shape=recon_volume_shape,
                         max_r=mstep_adjoint_max_r,
+                        stable_dense_positions=(
+                            stable_bpref_dense_positions
+                            if stable_window_active
+                            else None
+                        ),
+                        logical_current_size=(
+                            mstep_current_size if stable_window_active else None
+                        ),
                         reconstruction_group_ids=_particle_slice(
                             bucket_reconstruction_group_ids,
                             particle_start,
@@ -7321,7 +7452,16 @@ def run_local_em_exact(
                     norm_unweighted_shell_cutoff,
                     shell_count=n_shells,
                     image_shape=image_shape,
-                    current_size=current_size,
+                    current_size=(
+                        physical_current_size
+                        if stable_window_active
+                        else current_size
+                    ),
+                    runtime_current_size=(
+                        jnp.asarray(logical_current_size, dtype=jnp.int32)
+                        if stable_window_active
+                        else None
+                    ),
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
                     use_relion_cuda_powerclass_spectrum=bool(
                         relion_exact_fine_diff2
@@ -7342,7 +7482,7 @@ def run_local_em_exact(
                     return_deferred_source_vdam_operands
                     and relion_exact_fine_diff2
                     and use_window
-                    and current_size is not None
+                    and logical_current_size is not None
                 )
                 bucket_group_ids = (
                     group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
@@ -7429,9 +7569,19 @@ def run_local_em_exact(
                                 valid_image_mask,
                                 image_shape=image_shape,
                                 shell_count=n_shells,
-                                cutoff_shell=int(current_size) // 2,
+                                cutoff_shell=int(logical_current_size) // 2,
                                 relion_wavg_sequential_cuda=(
                                     relion_wavg_sequential_cuda
+                                ),
+                                logical_recon_pixel_count=(
+                                    stable_window_plan.logical_reconstruction_pixels
+                                    if stable_window_active
+                                    else None
+                                ),
+                                logical_rectangle_pixel_count=(
+                                    stable_window_plan.logical_rectangle_pixels
+                                    if stable_window_active
+                                    else None
                                 ),
                             )
                         )
@@ -8982,10 +9132,23 @@ def run_local_em_exact(
     final_accumulator_t0 = time.time()
     if not score_only:
         def _finalize_accumulator(data, weight, *, label):
+            final_recon_volume_shape = recon_volume_shape
+            if stable_window_active and mstep_relion_x_half:
+                data = crop_relion_x_half_accumulator(
+                    data,
+                    recon_volume_shape,
+                    logical_recon_volume_shape,
+                )
+                weight = crop_relion_x_half_accumulator(
+                    weight,
+                    recon_volume_shape,
+                    logical_recon_volume_shape,
+                )
+                final_recon_volume_shape = logical_recon_volume_shape
             data, weight = enforce_half_volume_x0(
                 data,
                 weight,
-                recon_volume_shape,
+                final_recon_volume_shape,
                 logger=logger,
                 label=label,
                 force_host=host_accumulator_finalize,
@@ -8996,13 +9159,13 @@ def run_local_em_exact(
                 return relion_x_half_accumulators_to_public_layout(
                     data,
                     weight,
-                    recon_volume_shape,
+                    final_recon_volume_shape,
                     force_host=host_accumulator_finalize,
                 )
             return half_volume_accumulators_to_full(
                 data,
                 weight,
-                recon_volume_shape,
+                final_recon_volume_shape,
             )
 
         if reconstruction_group_ids_np is None:
@@ -9159,6 +9322,13 @@ def run_local_em_exact(
             packed_local_projection_enabled
         ),
         "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
+        "stable_fourier_window_shapes": np.asarray(stable_window_active),
+        "logical_current_size": np.int32(logical_current_size),
+        "physical_current_size": np.int32(physical_current_size),
+        "logical_reconstruction_pixels": np.int32(
+            stable_window_plan.logical_reconstruction_pixels
+        ),
+        "physical_reconstruction_pixels": np.int32(window_spec.n_recon),
         "packed_vdam_reuses_flat_score_projection": np.asarray(
             defer_packed_vdam_enabled and accumulate_noise
         ),
