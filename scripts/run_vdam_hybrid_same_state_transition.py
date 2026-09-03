@@ -3104,6 +3104,11 @@ def main(argv: list[str] | None = None) -> int:
             f"{EXACT_COMPACT_PREPROCESS_ENVIRONMENT} must be absent from the "
             "outer environment; the same-state harness scopes it per arm",
         )
+    if FUSED_PAIR_FINE_SCORE_ENVIRONMENT in os.environ:
+        raise ValueError(
+            f"{FUSED_PAIR_FINE_SCORE_ENVIRONMENT} must be absent from the "
+            "outer environment; the same-state harness scopes it per arm",
+        )
     fixture_dir = args.fixture_dir.resolve(strict=True)
     acceptance_path = args.acceptance_config.resolve(strict=True)
     output_root = args.output_root.resolve()

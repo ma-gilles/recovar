@@ -1694,7 +1694,7 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "generic_full_translation_count" in sbatch
     assert "raise_before_generic_score_fallback" in sbatch
     assert "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE" in source
-    assert "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE=0" in sbatch
+    assert "FUSED_PAIR_FINE_SCORE_ENVIRONMENT in os.environ" in source
     assert "timed_arms_add_no_target_family_programs_after_prewarm" in sbatch
     assert "pair_pixel_gathers_materialized == false" in sbatch
     assert "stdbuf -oL nvidia-smi" in sbatch
