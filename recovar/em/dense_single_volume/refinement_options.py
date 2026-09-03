@@ -59,11 +59,11 @@ class RelionParityOptions:
     perturb_seed: int | None = None
     perturb_replay_relion_dir: str | None = None
     perturb_replay_relion_prefix: str = "run"
-    # Diagnostic-only cutoff (1-indexed recovar iteration): once the loop
-    # passes this iteration, `_run_relion_iteration_loop` stops reading
-    # RELION's per-iteration sampling/model/optimiser STAR files entirely
-    # (sampling grid, current_size, direction priors, convergence-tracking
-    # state) and carries recovar's own state forward instead. `None`
+    # Diagnostic-only cutoff (number of physical recovar iterations): after
+    # this many iterations, `_run_relion_iteration_loop` stops reading
+    # RELION's per-iteration sampling/model/optimiser STAR files entirely and
+    # resumes native sampling/convergence from recovar's carried state. Zero
+    # disables numbered replay immediately after the initial snapshot. `None`
     # (default) reads RELION's STAR files every iteration, matching prior
     # behavior. See scripts/run_multi_iter_parity.py's
     # --replay-override-max-iter, which sets this alongside

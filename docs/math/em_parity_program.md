@@ -16174,3 +16174,55 @@ numerator metric, but it sharply localizes the next implementation check to the
 exact device Euler matrix and spherical-cutoff membership. It argues against a
 broad scatter/interpolation mismatch because the interior is already nearly
 closed.
+
+### Replay cutoff and serialized initialization boundary
+
+The `--replay-override-max-iter` cutoff now changes both replay sources at the
+same physical-iteration boundary: it stops explicit per-iteration model/data
+overrides and returns sampling, expected-accuracy, and convergence transitions
+to RECOVAR ownership. Focused cutoff tests pass 11/11. Jobs comparing cutoff 0
+and cutoff 1 are nevertheless identical through three numbered iterations
+(apart from approximately `1e-14` GPU scheduling noise). This is expected for
+the cold start used here: both runs bootstrap from `it000`, and RELION's first
+numbered sampling state is reproduced exactly from its optimizer seed. The
+cutoff does not, and cannot, undo precision already lost in the mandatory
+initial `it000` snapshot.
+
+Native RELION job `60426716` captured the full binary64 fine-score operands for
+particles 255, 311, 544, 652, and 719 at iteration 2. RECOVAR has exactly the
+same candidate topology, fine translation angles, and Euler matrices. Using
+the captured native image, noise/CTF weight, and projector in RECOVAR's packed
+candidate order reproduces RELION's centered raw `diff2` with standard
+deviation `4.2e-14`--`8.8e-14` and maximum error `1.2e-13`--`2.1e-13`.
+Conversely, rebuilding each score from RECOVAR's own dumped operands reproduces
+RECOVAR's stored score bit-for-bit. This closes candidate generation, fine
+geometry, translation, projector interpolation, pixel order, direct `diff2`,
+and the 256-lane reduction tree as possible algorithmic sources.
+
+The remaining ordinary-replay centered score residual is
+`1.5e-4`--`5.3e-4` RMS for the five-particle panel. Operand substitution
+localizes it: the native projector or corrected image alone has little effect,
+whereas substituting the native noise/CTF weight reduces the residual to
+`2.2e-5`--`4.0e-5`; substituting all native operands reaches the numerical
+closure above. RELION retains the initial double-precision noise spectrum in
+memory, but `run_it000_half{1,2}_model.star` serializes `rlnSigma2Noise` with
+six decimal places. The resulting shellwise relative error is approximately
+`1e-4` and explains nearly all of the observed weight discrepancy. Because
+first-iteration CC skips the first noise update, that rounded initialization
+continues to affect the second iteration and can flip later near-tie poses.
+
+This evidence classifies the remaining cutoff-run divergence as a serialized
+initial-state precision/provenance boundary, rather than a remaining scoring
+algorithm or forced-float32 mismatch. A meaningful uninterrupted double-parity
+comparison must either replay a captured full-precision startup state or
+recompute RELION's startup noise with source-identical reductions, without a
+STAR round trip.
+
+End-to-end validation job `60427343` initialized RECOVAR from the captured
+full-precision startup noise and repeated the iteration-2 five-particle panel.
+The centered raw-score RMS gap fell from `1.5e-4`--`5.3e-4` to
+`4.7e-7`--`2.1e-6`, while posterior relative L2 fell to
+`7.2e-8`--`3.7e-7`; all candidate and reconstruction masks remained exact.
+The remaining tiny residual is compatible with the other serialized inputs
+and accumulated arithmetic, while the approximately 70x--1100x improvement
+directly confirms startup-noise rounding as the dominant apparent divergence.
