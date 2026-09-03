@@ -121,6 +121,10 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert runner._arm_order("packed_projection") == runner.PACKED_PROJECTION_ARM_ORDER
     assert runner._arm_order("packed_deferred") == runner.PACKED_DEFERRED_ARM_ORDER
     assert (
+        runner._arm_order("packed_final_noise")
+        == runner.PACKED_FINAL_NOISE_ARM_ORDER
+    )
+    assert (
         runner._arm_order("hybrid_packed_deferred")
         == runner.HYBRID_PACKED_DEFERRED_ARM_ORDER
     )
@@ -146,6 +150,9 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     )
     packed_deferred = runner._candidate_environment(
         "packed_deferred", enabled=True
+    )
+    packed_final_noise = runner._candidate_environment(
+        "packed_final_noise", enabled=True
     )
     hybrid_packed_deferred = runner._candidate_environment(
         "hybrid_packed_deferred", enabled=True
@@ -182,6 +189,7 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert control[runner.STABLE_FLAT_CAPACITY_ENVIRONMENT] == "0"
     assert control[runner.PACKED_PROJECTION_ENVIRONMENT] == "0"
     assert control[runner.PACKED_DEFERRED_ENVIRONMENT] == "0"
+    assert control[runner.PACKED_FINAL_NOISE_ENVIRONMENT] == "0"
     assert all(flat_rows[name] == "0" for name in runner.HYBRID_ENVIRONMENT)
     assert flat_rows[runner.COMPACT_POSTERIOR_ENVIRONMENT] == "0"
     assert flat_rows[runner.FLAT_ROW_ENVIRONMENT] == "1"
@@ -199,6 +207,14 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert packed_deferred[runner.FLAT_ROW_ENVIRONMENT] == "1"
     assert packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
     assert packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
+    assert packed_deferred[runner.PACKED_FINAL_NOISE_ENVIRONMENT] == "0"
+    assert all(
+        packed_final_noise[name] == "0" for name in runner.HYBRID_ENVIRONMENT
+    )
+    assert packed_final_noise[runner.FLAT_ROW_ENVIRONMENT] == "1"
+    assert packed_final_noise[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
+    assert packed_final_noise[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
+    assert packed_final_noise[runner.PACKED_FINAL_NOISE_ENVIRONMENT] == "1"
     assert all(
         hybrid_packed_deferred[name] == "1"
         for name in runner.HYBRID_ENVIRONMENT
@@ -206,6 +222,7 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert hybrid_packed_deferred[runner.FLAT_ROW_ENVIRONMENT] == "1"
     assert hybrid_packed_deferred[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
     assert hybrid_packed_deferred[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
+    assert hybrid_packed_deferred[runner.PACKED_FINAL_NOISE_ENVIRONMENT] == "0"
     assert all(hybrid[name] == "1" for name in runner.HYBRID_ENVIRONMENT)
     assert hybrid[runner.COMPACT_POSTERIOR_ENVIRONMENT] == "0"
     assert hybrid[runner.FLAT_ROW_ENVIRONMENT] == "0"
@@ -226,10 +243,12 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
     assert stable_flat_off[runner.FLAT_ROW_ENVIRONMENT] == "1"
     assert stable_flat_on[runner.PACKED_PROJECTION_ENVIRONMENT] == "1"
     assert stable_flat_on[runner.PACKED_DEFERRED_ENVIRONMENT] == "1"
+    assert hybrid[runner.PACKED_FINAL_NOISE_ENVIRONMENT] == "0"
     assert runner._candidate_uses_hybrid("hybrid") is True
     assert runner._candidate_uses_hybrid("hybrid_packed_deferred") is True
     assert runner._candidate_uses_hybrid("stable_shapes") is True
     assert runner._candidate_uses_hybrid("stable_flat_capacity") is True
+    assert runner._candidate_uses_hybrid("packed_final_noise") is False
     assert all(
         compact_posterior[name] == "1" for name in runner.HYBRID_ENVIRONMENT
     )
@@ -766,8 +785,6 @@ def test_arm_performance_summary_exposes_compact_table_geometry() -> None:
     table = summary["coarse_hybrid_tables"]["halfset_0_profile_summary"]
     assert table["selected_score_table_capacity_candidates"] == 5_939_200
     assert table["dense_global_score_table_capacity_bytes_f32"] == 855_244_800
-
-
 def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     source = SCRIPT.read_text()
     sbatch = RUNNER.read_text()
@@ -787,6 +804,10 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         "direct_1,packed_projection_1,packed_projection_2,direct_2" in sbatch
     )
     assert "direct_1,packed_deferred_1,packed_deferred_2,direct_2" in sbatch
+    assert (
+        "direct_1,packed_final_noise_1,packed_final_noise_2,direct_2"
+        in sbatch
+    )
     assert (
         "direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2"
         in sbatch

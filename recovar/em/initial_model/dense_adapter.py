@@ -73,6 +73,7 @@ _FLAT_LOCAL_ROWS_ENV = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
 _STABLE_FLAT_ROW_CAPACITY_ENV = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
 _PACKED_LOCAL_PROJECTION_ENV = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
 _DEFER_PACKED_VDAM_ENV = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
+_PACKED_FINAL_NOISE_ENV = "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
 _COMPACT_SPARSE_PASS2_ENV = "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
@@ -139,6 +140,13 @@ def _defer_packed_vdam_enabled() -> bool:
     """Defer VDAM noise/M-step work onto final packed support for A/B runs."""
 
     setting = os.environ.get(_DEFER_PACKED_VDAM_ENV, "0").strip().lower()
+    return setting not in {"0", "false", "no", "off"}
+
+
+def _packed_final_noise_enabled() -> bool:
+    """Reduce deferred VDAM noise on final nonzero rows for controlled A/B runs."""
+
+    setting = os.environ.get(_PACKED_FINAL_NOISE_ENV, "0").strip().lower()
     return setting not in {"0", "false", "no", "off"}
 
 
@@ -1460,6 +1468,13 @@ def _run_sparse_pass2_initial_model_estep(
                     _defer_packed_vdam_enabled=bool(
                         use_packed_local_projection
                         and _defer_packed_vdam_enabled()
+                    ),
+                    _packed_final_noise_enabled=bool(
+                        use_exact_fine_diff2
+                        and _flat_local_rows_enabled()
+                        and _packed_local_projection_enabled()
+                        and _defer_packed_vdam_enabled()
+                        and _packed_final_noise_enabled()
                     ),
                     relion_wavg_sequential_cuda=(
                         bool(config.relion_wavg_sequential_cuda)

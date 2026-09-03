@@ -6,10 +6,21 @@ import pytest
 
 from recovar.em.dense_single_volume import local_em_engine
 from recovar.em.dense_single_volume.helpers.flat_local_rows import (
+    build_dense_to_flat_local_row_lookup,
     build_pool_flat_local_row_plan,
     encode_flat_local_row_plan,
     gather_flat_local_rows,
+    map_dense_local_rows_to_flat_rows,
     scatter_flat_local_rows,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block,
+    compute_norm_residual_per_image,
+    compute_scale_correction_terms_per_image,
+)
+from recovar.em.dense_single_volume.local_backprojection import (
+    compute_local_ctf_sums,
+    compute_local_weighted_sums,
 )
 
 
@@ -87,6 +98,194 @@ def test_flat_row_gather_and_scatter_restore_present_dense_rows_exactly():
     assert np.array_equal(restored[expected_present], dense[expected_present])
     assert np.all(restored[~expected_present] == -1.0)
     assert not np.any(np.isnan(restored))
+
+
+@pytest.mark.unit
+def test_dense_to_flat_lookup_gathers_final_rows_in_requested_source_order():
+    counts = np.asarray([3, 5], dtype=np.int32)
+    plan = build_pool_flat_local_row_plan(
+        counts,
+        16,
+        pool_size=2,
+        exact_local_bucket_radix=4,
+        packed_row_count=34,
+        dense_batch_size=3,
+    )
+    encoded = encode_flat_local_row_plan(plan)
+    lookup = build_dense_to_flat_local_row_lookup(
+        encoded,
+        batch_size=plan.batch_size,
+        dense_rotation_count=plan.dense_rotation_count,
+    )
+
+    valid_flat_rows = np.flatnonzero(plan.valid_mask)
+    np.testing.assert_array_equal(
+        lookup[
+            plan.image_indices[valid_flat_rows],
+            plan.rotation_rows[valid_flat_rows],
+        ],
+        valid_flat_rows,
+    )
+    assert np.all(lookup[2] == -1)
+    assert np.all(lookup[0, counts[0] :] == -1)
+    assert np.all(lookup[1, counts[1] :] == -1)
+
+    final_dense_rows = np.asarray([[0, 2, 0], [1, 4, 0]], dtype=np.int32)
+    final_mask = np.asarray([[True, True, False], [True, True, False]])
+    flat_take = map_dense_local_rows_to_flat_rows(
+        lookup,
+        final_dense_rows,
+        final_mask,
+    )
+    dense_values = np.arange(3 * 16 * 2, dtype=np.float32).reshape(3, 16, 2)
+    flat_values = dense_values[plan.image_indices, plan.rotation_rows]
+    gathered = flat_values[flat_take]
+    gathered = np.where(final_mask[..., None], gathered, 0.0)
+    expected = np.take_along_axis(
+        dense_values[:2],
+        final_dense_rows[..., None],
+        axis=1,
+    )
+    expected = np.where(final_mask[..., None], expected, 0.0)
+    np.testing.assert_array_equal(gathered, expected)
+
+
+@pytest.mark.unit
+def test_dense_to_flat_lookup_fails_closed_on_missing_or_duplicate_live_rows():
+    encoded = np.asarray([[0, 0, 1], [0, 1, 1]], dtype=np.int32)
+    lookup = build_dense_to_flat_local_row_lookup(
+        encoded,
+        batch_size=1,
+        dense_rotation_count=4,
+    )
+    with pytest.raises(ValueError, match="absent from the flat score plan"):
+        map_dense_local_rows_to_flat_rows(
+            lookup,
+            np.asarray([[2]], dtype=np.int32),
+            np.asarray([[True]]),
+        )
+
+    duplicate = np.asarray([[0, 0, 1], [0, 0, 1]], dtype=np.int32)
+    with pytest.raises(ValueError, match="duplicate dense coordinates"):
+        build_dense_to_flat_local_row_lookup(
+            duplicate,
+            batch_size=1,
+            dense_rotation_count=4,
+        )
+
+
+@pytest.mark.unit
+def test_final_row_noise_helpers_equal_dense_zero_row_contract_exactly():
+    probs = np.zeros((2, 4, 2), dtype=np.float32)
+    probs[0, 0] = [0.5, 0.25]
+    probs[0, 2] = [0.25, 0.0]
+    probs[1, 1] = [0.5, 0.5]
+    shifted = np.asarray(
+        [
+            [[1 + 1j, 2 + 0j, 0 + 1j], [3 + 1j, 0 + 2j, 2 + 0j]],
+            [[2 + 0j, 1 + 1j, 4 + 0j], [0 + 2j, 3 + 1j, 2 + 2j]],
+        ],
+        dtype=np.complex64,
+    )
+    ctf2_over_nv = np.asarray([[1.0, 2.0, 0.5], [2.0, 1.0, 0.25]], dtype=np.float32)
+    projection = np.asarray(
+        [
+            [[1 + 0j, 2 + 1j, 1 + 1j], [0, 0, 0], [2 + 0j, 1 + 0j, 0 + 1j], [0, 0, 0]],
+            [[0, 0, 0], [1 + 1j, 2 + 0j, 1 + 0j], [0, 0, 0], [0, 0, 0]],
+        ],
+        dtype=np.complex64,
+    )
+    dense_summed = compute_local_weighted_sums(jnp.asarray(probs), jnp.asarray(shifted))
+    dense_ctf = compute_local_ctf_sums(jnp.asarray(probs), jnp.asarray(ctf2_over_nv))
+
+    take = np.asarray([[0, 2], [1, 0]], dtype=np.int32)
+    mask = np.asarray([[True, True], [True, False]])
+    packed_probs = np.take_along_axis(probs, take[..., None], axis=1)
+    packed_probs = np.where(mask[..., None], packed_probs, 0.0)
+    packed_projection = np.take_along_axis(projection, take[..., None], axis=1)
+    packed_projection = np.where(mask[..., None], packed_projection, 0.0)
+    packed_summed = compute_local_weighted_sums(
+        jnp.asarray(packed_probs),
+        jnp.asarray(shifted),
+    )
+    packed_ctf = compute_local_ctf_sums(
+        jnp.asarray(packed_probs),
+        jnp.asarray(ctf2_over_nv),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(packed_summed),
+        np.where(
+            mask[..., None],
+            np.take_along_axis(np.asarray(dense_summed), take[..., None], axis=1),
+            0.0,
+        ),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(packed_ctf),
+        np.where(
+            mask[..., None],
+            np.take_along_axis(np.asarray(dense_ctf), take[..., None], axis=1),
+            0.0,
+        ),
+    )
+
+    noise_variance = jnp.asarray([1.0, 2.0, 0.5], dtype=jnp.float32)
+    shell_indices = jnp.asarray([0, 1, 1], dtype=jnp.int32)
+    dense_noise = compute_noise_block(
+        jnp.asarray(projection).reshape(-1, 3),
+        (jnp.abs(jnp.asarray(projection)) ** 2).reshape(-1, 3),
+        dense_summed.reshape(-1, 3),
+        dense_ctf.reshape(-1, 3),
+        noise_variance,
+        shell_indices,
+        2,
+    )
+    packed_noise = compute_noise_block(
+        jnp.asarray(packed_projection).reshape(-1, 3),
+        (jnp.abs(jnp.asarray(packed_projection)) ** 2).reshape(-1, 3),
+        packed_summed.reshape(-1, 3),
+        packed_ctf.reshape(-1, 3),
+        noise_variance,
+        shell_indices,
+        2,
+    )
+    for dense_value, packed_value in zip(dense_noise, packed_noise, strict=True):
+        np.testing.assert_array_equal(np.asarray(packed_value), np.asarray(dense_value))
+
+    dense_norm = compute_norm_residual_per_image(
+        jnp.asarray(projection),
+        jnp.abs(jnp.asarray(projection)) ** 2,
+        dense_summed,
+        dense_ctf,
+        noise_variance,
+    )
+    packed_norm = compute_norm_residual_per_image(
+        jnp.asarray(packed_projection),
+        jnp.abs(jnp.asarray(packed_projection)) ** 2,
+        packed_summed,
+        packed_ctf,
+        noise_variance,
+    )
+    np.testing.assert_array_equal(np.asarray(packed_norm), np.asarray(dense_norm))
+
+    dense_scale = compute_scale_correction_terms_per_image(
+        jnp.asarray(projection),
+        jnp.abs(jnp.asarray(projection)) ** 2,
+        dense_summed,
+        dense_ctf,
+        noise_variance,
+        jnp.asarray([1.0, 2.0], dtype=jnp.float32),
+    )
+    packed_scale = compute_scale_correction_terms_per_image(
+        jnp.asarray(packed_projection),
+        jnp.abs(jnp.asarray(packed_projection)) ** 2,
+        packed_summed,
+        packed_ctf,
+        noise_variance,
+        jnp.asarray([1.0, 2.0], dtype=jnp.float32),
+    )
+    for dense_value, packed_value in zip(dense_scale, packed_scale, strict=True):
+        np.testing.assert_array_equal(np.asarray(packed_value), np.asarray(dense_value))
 
 
 @pytest.mark.unit

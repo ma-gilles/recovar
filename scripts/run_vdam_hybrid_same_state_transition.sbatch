@@ -76,6 +76,9 @@ case "${CANDIDATE_MODE}" in
   packed_deferred)
     expected_arm_order=direct_1,packed_deferred_1,packed_deferred_2,direct_2
     ;;
+  packed_final_noise)
+    expected_arm_order=direct_1,packed_final_noise_1,packed_final_noise_2,direct_2
+    ;;
   hybrid_packed_deferred)
     expected_arm_order=direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2
     ;;
@@ -204,6 +207,7 @@ command=(
   "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=0"
   "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION=0"
   "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM=0"
+  "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE=0"
   "TMPDIR=${RUNTIME}/tmp"
   "PIXI_HOME=${RUNTIME}/pixi_home"
   "RATTLER_CACHE_DIR=${RUNTIME}/rattler_cache"

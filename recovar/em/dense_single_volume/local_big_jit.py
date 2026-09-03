@@ -942,6 +942,7 @@ def _project_local_half_spectrum(
         "return_source_vdam_operands",
         "return_deferred_mstep_inputs",
         "return_deferred_source_vdam_operands",
+        "packed_deferred_source_vdam_noise",
         "return_deferred_noise_inputs",
         "n_shells",
         "norm_current_size",
@@ -1068,6 +1069,7 @@ def run_local_bucket_big_jit(
     return_source_vdam_operands: bool = False,
     return_deferred_mstep_inputs: bool,
     return_deferred_source_vdam_operands: bool = False,
+    packed_deferred_source_vdam_noise: bool = False,
     return_deferred_noise_inputs: bool,
     n_shells: int,
     norm_current_size: int | None,
@@ -1164,6 +1166,10 @@ def run_local_bucket_big_jit(
     if return_deferred_source_vdam_operands and not return_deferred_mstep_inputs:
         raise ValueError(
             "deferred source VDAM operands require deferred M-step inputs"
+        )
+    if packed_deferred_source_vdam_noise and not return_deferred_source_vdam_operands:
+        raise ValueError(
+            "packed deferred source VDAM noise requires deferred source operands"
         )
 
     use_relion_cuda_preprocess = bool(
@@ -1970,13 +1976,22 @@ def run_local_bucket_big_jit(
                 bpref_minvsigma2,
                 dtype=jnp.float32,
             )
-            deferred_source_vdam_ctf_probs = (
-                cuda_backproject.relion_vdam_mstep_denominator_f32(
-                    deferred_source_vdam_ctf,
-                    deferred_source_vdam_minvsigma2,
-                    jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+            if packed_deferred_source_vdam_noise:
+                # The outer final-support lane applies the same RELION reducer
+                # after pruning exact-zero rotation rows.  Do not materialize
+                # its dense (batch, rotation, pixel) denominator here.
+                deferred_source_vdam_ctf_probs = jnp.zeros(
+                    (1, 1, 1),
+                    dtype=jnp.float32,
                 )
-            )
+            else:
+                deferred_source_vdam_ctf_probs = (
+                    cuda_backproject.relion_vdam_mstep_denominator_f32(
+                        deferred_source_vdam_ctf,
+                        deferred_source_vdam_minvsigma2,
+                        jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+                    )
+                )
         else:
             deferred_source_vdam_images = jnp.zeros((1, 1), dtype=jnp.complex64)
             deferred_source_vdam_ctf = jnp.zeros((1, 1), dtype=jnp.float32)

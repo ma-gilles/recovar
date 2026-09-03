@@ -29,8 +29,10 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.flat_local_rows import (
+    build_dense_to_flat_local_row_lookup,
     build_pool_flat_local_row_plan,
     encode_flat_local_row_plan,
+    map_dense_local_rows_to_flat_rows,
     scatter_flat_local_rows,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
@@ -4271,6 +4273,7 @@ def run_local_em_exact(
     _stable_flat_row_capacity_enabled: bool = False,
     _packed_local_projection_enabled: bool = False,
     _defer_packed_vdam_enabled: bool = False,
+    _packed_final_noise_enabled: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -4287,6 +4290,7 @@ def run_local_em_exact(
     packed_local_projection_enabled = bool(_packed_local_projection_enabled)
     defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
     stable_fourier_window_shapes = bool(stable_fourier_window_shapes)
+    packed_final_noise_enabled = bool(_packed_final_noise_enabled)
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -4320,6 +4324,10 @@ def run_local_em_exact(
     if defer_packed_vdam_enabled and not packed_local_projection_enabled:
         raise ValueError(
             "deferred packed VDAM requires packed local projection"
+        )
+    if packed_final_noise_enabled and not defer_packed_vdam_enabled:
+        raise ValueError(
+            "packed final-support VDAM noise requires deferred packed VDAM"
         )
     if relion_wavg_sequential_cuda is not None:
         relion_wavg_sequential_cuda = bool(relion_wavg_sequential_cuda)
@@ -4872,6 +4880,7 @@ def run_local_em_exact(
     total_significant_samples = 0
     total_reconstruction_rows = 0
     total_flat_score_rows = 0
+    total_packed_final_noise_rows = 0
     reconstruction_sample_indices_by_image = (
         [np.zeros(0, dtype=np.int64) for _ in range(n_images)] if return_reconstruction_sample_indices else None
     )
@@ -6067,6 +6076,10 @@ def run_local_em_exact(
                 return_deferred_source_vdam_operands=(
                     return_deferred_source_vdam_operands
                 ),
+                packed_deferred_source_vdam_noise=bool(
+                    return_deferred_source_vdam_operands
+                    and packed_final_noise_enabled
+                ),
                 return_deferred_noise_inputs=bool(return_big_jit_deferred_mstep_inputs and accumulate_noise),
                 n_shells=n_shells_arg,
                 norm_current_size=physical_current_size,
@@ -6661,6 +6674,7 @@ def run_local_em_exact(
             packed_source_vdam_posterior = None
             packed_source_vdam_reference = None
             packed_source_vdam_ctf_probs = None
+            packed_source_vdam_noise_projection = None
             if return_big_jit_deferred_mstep_inputs:
                 probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
                 (
@@ -6675,6 +6689,10 @@ def run_local_em_exact(
                     rotation_block_size,
                     exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                 )
+                if collect_profile_stats and packed_final_noise_enabled:
+                    total_packed_final_noise_rows += int(
+                        reconstruction_pack_mask_np.size
+                    )
                 reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
                 reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
                 packed_rotations_np = np.take_along_axis(
@@ -6718,11 +6736,65 @@ def run_local_em_exact(
                         deferred_source_vdam_minvsigma2[:unpadded_batch_size]
                     )
                     packed_source_vdam_posterior = packed_reconstruction_probs
-                    packed_source_vdam_ctf_probs = jnp.take_along_axis(
-                        deferred_source_vdam_ctf_probs[:unpadded_batch_size],
-                        reconstruction_take_indices_jnp[:, :, None],
-                        axis=1,
-                    )
+                    if packed_final_noise_enabled:
+                        flat_proj_for_noise = jnp.asarray(
+                            deferred_flat_proj_for_noise,
+                            dtype=jnp.complex64,
+                        )
+                        expected_flat_projection_shape = (
+                            int(flat_local_row_argument.shape[0]),
+                            window_spec.n_recon
+                            if window_spec.use_window
+                            else int(n_half),
+                        )
+                        if flat_proj_for_noise.shape != expected_flat_projection_shape:
+                            raise RuntimeError(
+                                "deferred VDAM scoring projection did not retain the "
+                                "packed reconstruction layout: "
+                                f"{flat_proj_for_noise.shape} vs "
+                                f"{expected_flat_projection_shape}",
+                            )
+                        dense_to_flat_lookup = build_dense_to_flat_local_row_lookup(
+                            flat_local_row_argument,
+                            batch_size=int(batch_size),
+                            dense_rotation_count=int(bucket.bucket_rotation_count),
+                        )
+                        packed_flat_take_indices = map_dense_local_rows_to_flat_rows(
+                            dense_to_flat_lookup,
+                            reconstruction_take_indices,
+                            reconstruction_pack_mask_np,
+                        )
+                        packed_source_vdam_noise_projection = jnp.take(
+                            flat_proj_for_noise,
+                            jnp.asarray(packed_flat_take_indices).reshape(-1),
+                            axis=0,
+                        ).reshape(
+                            (
+                                *packed_flat_take_indices.shape,
+                                flat_proj_for_noise.shape[-1],
+                            )
+                        )
+                        packed_source_vdam_noise_projection = jnp.where(
+                            reconstruction_pack_mask_jnp[:, :, None],
+                            packed_source_vdam_noise_projection,
+                            0.0,
+                        )
+
+                        from recovar import cuda_backproject
+
+                        packed_source_vdam_ctf_probs = (
+                            cuda_backproject.relion_vdam_mstep_denominator_f32(
+                                packed_source_vdam_ctf,
+                                packed_source_vdam_minvsigma2,
+                                packed_source_vdam_posterior,
+                            )
+                        )
+                    else:
+                        packed_source_vdam_ctf_probs = jnp.take_along_axis(
+                            deferred_source_vdam_ctf_probs[:unpadded_batch_size],
+                            reconstruction_take_indices_jnp[:, :, None],
+                            axis=1,
+                        )
                     packed_source_vdam_ctf_probs = jnp.where(
                         reconstruction_pack_mask_jnp[:, :, None],
                         packed_source_vdam_ctf_probs,
@@ -7410,14 +7482,24 @@ def run_local_em_exact(
             if return_big_jit_deferred_mstep_inputs and accumulate_noise:
                 noise_t0 = time.time()
                 reconstruction_probs_unpadded = reconstruction_probs[:unpadded_batch_size]
+                use_packed_final_noise = bool(
+                    return_deferred_source_vdam_operands
+                    and packed_final_noise_enabled
+                )
                 preserve_dense_noise_reduction = bool(
                     return_deferred_source_vdam_operands
+                    and not use_packed_final_noise
                 )
-                noise_reconstruction_probs = (
-                    reconstruction_probs
-                    if preserve_dense_noise_reduction
-                    else reconstruction_probs_unpadded
-                )
+                if use_packed_final_noise:
+                    if packed_reconstruction_probs is None:
+                        raise RuntimeError(
+                            "packed final-support VDAM noise is missing posterior rows"
+                        )
+                    noise_reconstruction_probs = packed_reconstruction_probs
+                elif preserve_dense_noise_reduction:
+                    noise_reconstruction_probs = reconstruction_probs
+                else:
+                    noise_reconstruction_probs = reconstruction_probs_unpadded
                 noise_batch_size = (
                     int(batch_size)
                     if preserve_dense_noise_reduction
@@ -7487,86 +7569,118 @@ def run_local_em_exact(
                 bucket_group_ids = (
                     group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
                 )
-                if preserve_dense_noise_reduction:
-                    flat_row_plan = jnp.asarray(
-                        flat_local_row_argument,
-                        dtype=jnp.int32,
-                    )
-                    flat_proj_for_noise = jnp.asarray(
-                        deferred_flat_proj_for_noise,
-                        dtype=jnp.complex64,
-                    )
-                    expected_flat_projection_shape = (
-                        int(flat_row_plan.shape[0]),
-                        window_spec.n_recon
-                        if window_spec.use_window
-                        else int(n_half),
-                    )
-                    if flat_proj_for_noise.shape != expected_flat_projection_shape:
-                        raise RuntimeError(
-                            "deferred VDAM scoring projection did not retain the "
-                            "packed reconstruction layout: "
-                            f"{flat_proj_for_noise.shape} vs "
-                            f"{expected_flat_projection_shape}",
+                if use_packed_final_noise or preserve_dense_noise_reduction:
+                    if use_packed_final_noise:
+                        if (
+                            packed_source_vdam_noise_projection is None
+                            or packed_source_vdam_ctf_probs is None
+                        ):
+                            raise RuntimeError(
+                                "packed final-support VDAM noise operands were not built"
+                            )
+                        proj_for_noise_reduction = (
+                            packed_source_vdam_noise_projection
                         )
-                    dense_proj_for_noise = scatter_flat_local_rows(
-                        flat_proj_for_noise,
-                        flat_row_plan[:, 0],
-                        flat_row_plan[:, 1],
-                        flat_row_plan[:, 2] != 0,
-                        batch_size=int(batch_size),
-                        dense_rotation_count=int(bucket.bucket_rotation_count),
-                        fill_value=0.0,
-                    )
-                    dense_shifted_noise_split = jnp.where(
+                        probs_for_noise_reduction = packed_reconstruction_probs
+                        ctf_probs_for_noise_reduction = packed_source_vdam_ctf_probs
+                        processed_score_for_wavg = processed_score_half[
+                            :unpadded_batch_size
+                        ]
+                        ctf_rfloat_for_wavg = ctf_rfloat_half_arg[
+                            :unpadded_batch_size
+                        ]
+                        scale_for_noise_reduction = scale_corrections_arg[
+                            :unpadded_batch_size
+                        ]
+                    else:
+                        flat_row_plan = jnp.asarray(
+                            flat_local_row_argument,
+                            dtype=jnp.int32,
+                        )
+                        flat_proj_for_noise = jnp.asarray(
+                            deferred_flat_proj_for_noise,
+                            dtype=jnp.complex64,
+                        )
+                        expected_flat_projection_shape = (
+                            int(flat_row_plan.shape[0]),
+                            window_spec.n_recon
+                            if window_spec.use_window
+                            else int(n_half),
+                        )
+                        if flat_proj_for_noise.shape != expected_flat_projection_shape:
+                            raise RuntimeError(
+                                "deferred VDAM scoring projection did not retain the "
+                                "packed reconstruction layout: "
+                                f"{flat_proj_for_noise.shape} vs "
+                                f"{expected_flat_projection_shape}",
+                            )
+                        proj_for_noise_reduction = scatter_flat_local_rows(
+                            flat_proj_for_noise,
+                            flat_row_plan[:, 0],
+                            flat_row_plan[:, 1],
+                            flat_row_plan[:, 2] != 0,
+                            batch_size=int(batch_size),
+                            dense_rotation_count=int(bucket.bucket_rotation_count),
+                            fill_value=0.0,
+                        )
+                        probs_for_noise_reduction = reconstruction_probs
+                        ctf_probs_for_noise_reduction = (
+                            deferred_source_vdam_ctf_probs
+                        )
+                        processed_score_for_wavg = processed_score_half
+                        ctf_rfloat_for_wavg = ctf_rfloat_half_arg
+                        scale_for_noise_reduction = scale_corrections_arg
+
+                    shifted_for_noise_reduction = jnp.where(
                         support_mass[:, None, None] != 0.0,
-                        shifted_noise_split,
+                        shifted_noise_split[:noise_batch_size],
                         0.0,
                     )
-                    dense_summed_masked_noise = compute_local_weighted_sums(
-                        reconstruction_probs,
-                        dense_shifted_noise_split,
+                    summed_masked_for_noise_reduction = compute_local_weighted_sums(
+                        probs_for_noise_reduction,
+                        shifted_for_noise_reduction,
                     )
-                    dense_ctf_probs_for_noise = deferred_source_vdam_ctf_probs
-                    flat_dense_proj_for_noise = flatten_bucket_rows(
-                        dense_proj_for_noise
+                    flat_proj_for_noise_reduction = flatten_bucket_rows(
+                        proj_for_noise_reduction
                     )
-                    dense_proj_abs2_for_noise = jnp.abs(dense_proj_for_noise) ** 2
+                    proj_abs2_for_noise_reduction = (
+                        jnp.abs(proj_for_noise_reduction) ** 2
+                    )
                     (
                         block_noise_shells,
                         block_a2_shells,
                         block_xa_shells,
                     ) = _compute_noise_block(
-                        flat_dense_proj_for_noise,
-                        flatten_bucket_rows(dense_proj_abs2_for_noise),
-                        flatten_bucket_rows(dense_summed_masked_noise),
-                        flatten_bucket_rows(dense_ctf_probs_for_noise),
+                        flat_proj_for_noise_reduction,
+                        flatten_bucket_rows(proj_abs2_for_noise_reduction),
+                        flatten_bucket_rows(summed_masked_for_noise_reduction),
+                        flatten_bucket_rows(ctf_probs_for_noise_reduction),
                         noise_variance_for_noise,
                         shell_indices_noise,
                         n_shells,
                         return_noise_split,
                     )
                     block_norm_residual = _compute_norm_residual_per_image(
-                        dense_proj_for_noise,
-                        dense_proj_abs2_for_noise,
-                        dense_summed_masked_noise,
-                        dense_ctf_probs_for_noise,
+                        proj_for_noise_reduction,
+                        proj_abs2_for_noise_reduction,
+                        summed_masked_for_noise_reduction,
+                        ctf_probs_for_noise_reduction,
                         noise_variance_for_noise,
                     )
                     if use_relion_wavg_cutoff:
                         direct_wavg_triplet_shells, _ = (
                             _relion_wavg_direct_triplet_shells(
-                                processed_score_half,
+                                processed_score_for_wavg,
                                 relion_score_translation_angles,
                                 big_jit_relion_wavg_rectangle_indices_arg,
                                 big_jit_relion_wavg_exact_positions_arg,
                                 big_jit_relion_wavg_rectangle_shell_indices_arg,
                                 big_jit_recon_window_indices_arg,
-                                dense_proj_for_noise,
-                                ctf_rfloat_half_arg,
-                                scale_corrections_arg,
-                                reconstruction_probs,
-                                valid_image_mask,
+                                proj_for_noise_reduction,
+                                ctf_rfloat_for_wavg,
+                                scale_for_noise_reduction,
+                                probs_for_noise_reduction,
+                                noise_valid_image_mask,
                                 image_shape=image_shape,
                                 shell_count=n_shells,
                                 cutoff_shell=int(logical_current_size) // 2,
@@ -7587,12 +7701,12 @@ def run_local_em_exact(
                         )
                     if noise_scale_xa is not None:
                         scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
-                            dense_proj_for_noise,
-                            dense_proj_abs2_for_noise,
-                            dense_summed_masked_noise,
-                            dense_ctf_probs_for_noise,
+                            proj_for_noise_reduction,
+                            proj_abs2_for_noise_reduction,
+                            summed_masked_for_noise_reduction,
+                            ctf_probs_for_noise_reduction,
                             noise_variance_for_noise,
-                            scale_corrections_arg,
+                            scale_for_noise_reduction,
                             scale_correction_pixel_mask,
                         )
                         noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(
@@ -9329,8 +9443,12 @@ def run_local_em_exact(
             stable_window_plan.logical_reconstruction_pixels
         ),
         "physical_reconstruction_pixels": np.int32(window_spec.n_recon),
+        "packed_final_noise_enabled": np.asarray(packed_final_noise_enabled),
         "packed_vdam_reuses_flat_score_projection": np.asarray(
             defer_packed_vdam_enabled and accumulate_noise
+        ),
+        "packed_vdam_avoids_dense_noise_rows": np.asarray(
+            packed_final_noise_enabled and accumulate_noise
         ),
         "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
         "chunk_planned_padded_rotations": np.asarray(
@@ -9347,6 +9465,9 @@ def run_local_em_exact(
         "sum_planned_padded_rows": np.int64(total_planned_padded_rotations),
         "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
         "sum_reconstruction_rows": np.int64(total_reconstruction_rows),
+        "sum_packed_final_noise_rows": np.int64(
+            total_packed_final_noise_rows
+        ),
         "sum_significant_samples": np.int64(total_significant_samples),
         "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
         "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),

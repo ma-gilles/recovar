@@ -45,6 +45,101 @@ def encode_flat_local_row_plan(plan: FlatLocalRowPlan) -> np.ndarray:
     ).astype(np.int32, copy=False)
 
 
+def build_dense_to_flat_local_row_lookup(
+    encoded_plan,
+    *,
+    batch_size: int,
+    dense_rotation_count: int,
+) -> np.ndarray:
+    """Invert valid encoded rows to ``(image, dense rotation) -> flat row``.
+
+    Invalid pool-padding and static-tail rows are deliberately absent from the
+    lookup.  The returned ``-1`` sentinel lets callers fail closed before a
+    device gather when a requested reconstruction row was not scored.
+    """
+
+    encoded_plan = np.asarray(encoded_plan)
+    batch_size = int(batch_size)
+    dense_rotation_count = int(dense_rotation_count)
+    if (
+        encoded_plan.dtype != np.int32
+        or encoded_plan.ndim != 2
+        or encoded_plan.shape[0] <= 0
+        or encoded_plan.shape[1] != 3
+    ):
+        raise ValueError(
+            "encoded flat local row plan must be a nonempty int32 array "
+            "with shape (rows, 3)",
+        )
+    if batch_size <= 0 or dense_rotation_count <= 0:
+        raise ValueError("dense flat-row lookup dimensions must be positive")
+    if np.any((encoded_plan[:, 2] != 0) & (encoded_plan[:, 2] != 1)):
+        raise ValueError("encoded flat local row validity must contain only 0 or 1")
+
+    valid = encoded_plan[:, 2] != 0
+    image_indices = encoded_plan[valid, 0]
+    rotation_rows = encoded_plan[valid, 1]
+    if np.any((image_indices < 0) | (image_indices >= batch_size)):
+        raise ValueError("a valid flat local row has an out-of-range image index")
+    if np.any((rotation_rows < 0) | (rotation_rows >= dense_rotation_count)):
+        raise ValueError("a valid flat local row has an out-of-range rotation row")
+
+    dense_indices = (
+        image_indices.astype(np.int64) * dense_rotation_count + rotation_rows
+    )
+    if np.unique(dense_indices).size != dense_indices.size:
+        raise ValueError("valid flat local rows contain duplicate dense coordinates")
+    lookup = np.full((batch_size, dense_rotation_count), -1, dtype=np.int32)
+    lookup[image_indices, rotation_rows] = np.flatnonzero(valid).astype(
+        np.int32,
+        copy=False,
+    )
+    return lookup
+
+
+def map_dense_local_rows_to_flat_rows(
+    dense_to_flat_lookup,
+    dense_rotation_rows,
+    row_mask,
+) -> np.ndarray:
+    """Map a packed source-order reconstruction grid onto scored flat rows.
+
+    Masked padding rows map to row zero so the device gather is in bounds; the
+    caller must mask their gathered values back to zero.  Every live row must
+    exist in the canonical lookup or this helper raises before GPU execution.
+    """
+
+    dense_to_flat_lookup = np.asarray(dense_to_flat_lookup)
+    dense_rotation_rows = np.asarray(dense_rotation_rows)
+    row_mask = np.asarray(row_mask, dtype=bool)
+    if dense_to_flat_lookup.dtype != np.int32 or dense_to_flat_lookup.ndim != 2:
+        raise ValueError("dense-to-flat lookup must be a rank-two int32 array")
+    if dense_rotation_rows.dtype != np.int32 or dense_rotation_rows.ndim != 2:
+        raise ValueError("dense rotation rows must be a rank-two int32 array")
+    if row_mask.shape != dense_rotation_rows.shape:
+        raise ValueError("dense rotation rows and row mask must have matching shapes")
+    if dense_rotation_rows.shape[0] > dense_to_flat_lookup.shape[0]:
+        raise ValueError("dense rotation rows exceed the lookup image axis")
+    if np.any(
+        row_mask
+        & (
+            (dense_rotation_rows < 0)
+            | (dense_rotation_rows >= dense_to_flat_lookup.shape[1])
+        )
+    ):
+        raise ValueError("a live reconstruction rotation row is out of range")
+
+    safe_dense_rows = np.where(row_mask, dense_rotation_rows, 0)
+    flat_rows = np.take_along_axis(
+        dense_to_flat_lookup[: dense_rotation_rows.shape[0]],
+        safe_dense_rows,
+        axis=1,
+    )
+    if np.any(row_mask & (flat_rows < 0)):
+        raise ValueError("a live reconstruction row is absent from the flat score plan")
+    return np.where(row_mask, flat_rows, 0).astype(np.int32, copy=False)
+
+
 def build_pool_flat_local_row_plan(
     rotation_counts,
     dense_rotation_count: int,

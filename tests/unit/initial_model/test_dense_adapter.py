@@ -932,6 +932,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", raising=False)
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", raising=False)
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
 
@@ -1030,6 +1031,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         ]
         calls["local_defer_packed_vdam"] = kwargs[
             "_defer_packed_vdam_enabled"
+        ]
+        calls["local_packed_final_noise"] = kwargs[
+            "_packed_final_noise_enabled"
         ]
         calls["local_relion_exact_score_translation"] = kwargs[
             "relion_exact_score_translation"
@@ -1191,6 +1195,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     assert calls["local_stable_flat_row_capacity"] is False
     assert calls["local_packed_local_projection"] is False
     assert calls["local_defer_packed_vdam"] is False
+    assert calls["local_packed_final_noise"] is False
     assert calls["local_relion_exact_score_translation"] is True
     assert calls["local_relion_wavg_sequential_cuda"] is True
     assert calls["local_exact_local_bucket_radix"] == 4
@@ -1271,6 +1276,19 @@ def test_initial_model_deferred_packed_vdam_is_explicit_opt_in(monkeypatch):
     for value in ("0", "false", "NO", "Off"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", value)
         assert _defer_packed_vdam_enabled() is False
+
+
+def test_initial_model_packed_final_noise_is_explicit_opt_in(monkeypatch):
+    from recovar.em.initial_model.dense_adapter import _packed_final_noise_enabled
+
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", raising=False)
+    assert _packed_final_noise_enabled() is False
+    for value in ("1", "true", "YES", "On"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", value)
+        assert _packed_final_noise_enabled() is True
+    for value in ("0", "false", "NO", "Off"):
+        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", value)
+        assert _packed_final_noise_enabled() is False
 
 
 def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch):

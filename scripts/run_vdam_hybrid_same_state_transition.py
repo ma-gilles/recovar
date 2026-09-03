@@ -42,6 +42,12 @@ PACKED_DEFERRED_ARM_ORDER = (
     "packed_deferred_2",
     "direct_2",
 )
+PACKED_FINAL_NOISE_ARM_ORDER = (
+    "direct_1",
+    "packed_final_noise_1",
+    "packed_final_noise_2",
+    "direct_2",
+)
 HYBRID_PACKED_DEFERRED_ARM_ORDER = (
     "direct_1",
     "hybrid_packed_deferred_1",
@@ -90,11 +96,13 @@ STABLE_FLAT_CAPACITY_ENVIRONMENT = (
 )
 PACKED_PROJECTION_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION"
 PACKED_DEFERRED_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM"
+PACKED_FINAL_NOISE_ENVIRONMENT = "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE"
 CANDIDATE_MODES = (
     "hybrid",
     "flat_rows",
     "packed_projection",
     "packed_deferred",
+    "packed_final_noise",
     "hybrid_packed_deferred",
     "stable_shapes",
     "stable_flat_capacity",
@@ -135,6 +143,8 @@ def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
         return PACKED_PROJECTION_ARM_ORDER
     if candidate_mode == "packed_deferred":
         return PACKED_DEFERRED_ARM_ORDER
+    if candidate_mode == "packed_final_noise":
+        return PACKED_FINAL_NOISE_ARM_ORDER
     if candidate_mode == "hybrid_packed_deferred":
         return HYBRID_PACKED_DEFERRED_ARM_ORDER
     if candidate_mode == "stable_shapes":
@@ -158,6 +168,7 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         STABLE_FLAT_CAPACITY_ENVIRONMENT: "0",
         PACKED_PROJECTION_ENVIRONMENT: "0",
         PACKED_DEFERRED_ENVIRONMENT: "0",
+        PACKED_FINAL_NOISE_ENVIRONMENT: "0",
     }
     if candidate_mode == "stable_shapes":
         values.update({name: "1" for name in HYBRID_ENVIRONMENT})
@@ -184,6 +195,11 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
             values[FLAT_ROW_ENVIRONMENT] = "1"
             values[PACKED_PROJECTION_ENVIRONMENT] = "1"
             values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+        elif candidate_mode == "packed_final_noise":
+            values[FLAT_ROW_ENVIRONMENT] = "1"
+            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
+            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
+            values[PACKED_FINAL_NOISE_ENVIRONMENT] = "1"
         elif candidate_mode == "hybrid_packed_deferred":
             values.update({name: "1" for name in HYBRID_ENVIRONMENT})
             values[FLAT_ROW_ENVIRONMENT] = "1"
