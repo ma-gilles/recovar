@@ -23,7 +23,10 @@ def _profile_root(tmp_path: Path) -> Path:
             "warm": {"profile_checked": True, "profile_exact": True},
         },
     )
-    _write(root / "provenance" / "run.json", {"host_attribution": False})
+    _write(
+        root / "provenance" / "run.json",
+        {"host_attribution": False, "timing_truth_allowed": True},
+    )
     _write(
         root / "recovar_profiled" / "profile_summary.json",
         {
@@ -147,7 +150,21 @@ def test_late_profile_pair_analyzer_reports_phase_kernel_and_api_gap(tmp_path):
 
 def test_late_profile_pair_analyzer_rejects_host_attribution_as_timing(tmp_path):
     root = _profile_root(tmp_path)
-    _write(root / "provenance" / "run.json", {"host_attribution": True})
+    _write(
+        root / "provenance" / "run.json",
+        {"host_attribution": True, "timing_truth_allowed": False},
+    )
+
+    with pytest.raises(RuntimeError, match="not timing truth"):
+        analyze(root)
+
+
+def test_late_profile_pair_analyzer_rejects_cold_compile_attribution(tmp_path):
+    root = _profile_root(tmp_path)
+    _write(
+        root / "provenance" / "run.json",
+        {"cold_compile_attribution": True, "timing_truth_allowed": False},
+    )
 
     with pytest.raises(RuntimeError, match="not timing truth"):
         analyze(root)

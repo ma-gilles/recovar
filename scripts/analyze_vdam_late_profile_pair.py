@@ -127,8 +127,8 @@ def analyze(root: Path, *, top: int = 20) -> dict[str, Any]:
     run = _load(root / "provenance" / "run.json")
     native = _load(root / "nsight" / "native_summary.json")
     recovar = _load(root / "nsight" / "recovar_summary.json")
-    if bool(run.get("host_attribution", False)):
-        raise RuntimeError("host-attribution traces are not timing truth")
+    if run.get("timing_truth_allowed") is not True:
+        raise RuntimeError("diagnostic attribution traces are not timing truth")
 
     native_device = _one_device(native, label="native")
     recovar_device = _one_device(recovar, label="recovar")
