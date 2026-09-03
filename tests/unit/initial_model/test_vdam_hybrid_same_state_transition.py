@@ -800,16 +800,16 @@ def _fused_pair_fine_meta(*, enabled: bool) -> dict:
         fused_pair_fine_uses_shared_compact_order=enabled,
         fused_pair_fine_avoids_pair_pixel_gathers=enabled,
         fused_pair_fine_restores_dense_posterior_order=enabled,
-        chunk_fused_pair_capacities=[5000, 5000] if enabled else [],
+        chunk_fused_pair_capacities=[10_000, 10_000] if enabled else [],
         chunk_fused_pair_counts=[7000, 8000] if enabled else [],
         chunk_fused_pair_dense_capacities=[5_000_000, 5_000_000]
         if enabled
         else [],
         sum_fused_pair_candidates=15_000 if enabled else 0,
-        sum_fused_pair_capacity=2_000_000 if enabled else 0,
+        sum_fused_pair_capacity=20_000 if enabled else 0,
         sum_fused_pair_dense_capacity=10_000_000 if enabled else 0,
         fused_pair_valid_fraction_of_dense=0.0015 if enabled else 0.0,
-        fused_pair_padded_fraction_of_dense=0.2 if enabled else 0.0,
+        fused_pair_padded_fraction_of_dense=0.002 if enabled else 0.0,
     )
     return meta
 
@@ -833,9 +833,21 @@ def test_fused_pair_fine_profile_proves_shared_compact_execution(
 
 def test_fused_pair_fine_profile_fails_closed_on_candidate_geometry() -> None:
     meta = _fused_pair_fine_meta(enabled=True)
-    meta["halfset_0_profile_summary"]["sum_fused_pair_capacity"] = 10_000
+    meta["halfset_0_profile_summary"]["chunk_fused_pair_capacities"][0] = 6_000
 
-    with pytest.raises(RuntimeError, match="invalid fused-pair totals"):
+    with pytest.raises(RuntimeError, match="invalid pair counts"):
+        runner._validate_fused_pair_fine_profiles(
+            meta,
+            enabled=True,
+            label="arm",
+        )
+
+
+def test_fused_pair_fine_profile_fails_closed_on_stale_chunk_totals() -> None:
+    meta = _fused_pair_fine_meta(enabled=True)
+    meta["halfset_0_profile_summary"]["sum_fused_pair_capacity"] = 19_999
+
+    with pytest.raises(RuntimeError, match="chunk sums"):
         runner._validate_fused_pair_fine_profiles(
             meta,
             enabled=True,

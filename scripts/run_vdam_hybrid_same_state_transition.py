@@ -940,8 +940,25 @@ def _validate_fused_pair_fine_profiles(
         if enabled:
             if capacities.size == 0 or np.any(capacities <= 0):
                 raise RuntimeError(f"{label} profile {key} has no pair capacity")
-            if np.any(counts < 0) or np.any(dense_capacities <= 0):
+            if (
+                np.any(counts < 0)
+                or np.any(counts > capacities)
+                or np.any(capacities > dense_capacities)
+                or np.any(dense_capacities <= 0)
+            ):
                 raise RuntimeError(f"{label} profile {key} has invalid pair counts")
+            observed_sums = (
+                int(np.sum(counts, dtype=np.int64)),
+                int(np.sum(capacities, dtype=np.int64)),
+                int(np.sum(dense_capacities, dtype=np.int64)),
+            )
+            published_sums = (candidates, capacity, dense_capacity)
+            if observed_sums != published_sums:
+                raise RuntimeError(
+                    f"{label} profile {key} fused-pair chunk sums "
+                    f"{observed_sums} do not match published totals "
+                    f"{published_sums}",
+                )
             if not (0 < candidates <= capacity <= dense_capacity):
                 raise RuntimeError(
                     f"{label} profile {key} has invalid fused-pair totals: "
