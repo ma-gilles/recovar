@@ -1,6 +1,6 @@
 # EMPIAR-10202 set-6 K=1 checkpoint equivalence
 
-This record compares the first three matching numbered checkpoints from two
+This record compares the first four matching numbered checkpoints from two
 full-particle, box-800, I1 RECOVAR refinements.  It is an in-progress
 trajectory-equivalence gate, not a final RECOVAR-versus-RELION resolution
 result.  The control uses commit
@@ -24,26 +24,27 @@ The streamed auditor at commit
 ## Completed checkpoint comparisons
 
 The checkpoint index below is zero-based; it corresponds to numbered
-iterations one through three in the refinement log.
+iterations one through four in the refinement log.
 
 | Checkpoint | Audit job | Strict execution | Minimum pose agreement | FSC 0.5 / 0.143 shell, control = candidate | FSC RMSE | Minimum map correlation | Maximum map relative L2 |
 | ---: | ---: | --- | ---: | --- | ---: | ---: | ---: |
 | 0 | `13366560` | accepted | 1.000000 | 32 / 32 | 0 | 0.9999999999999966 | 7.96845e-8 |
 | 1 | `13366561` | rejected | 0.9993446 | 69 / 86 | 1.48676e-5 | 0.9999999996200842 | 2.75174e-5 |
 | 2 | `13366580` | rejected | 0.9983614 | 89 / 146 | 1.18175e-4 | 0.9999999132360765 | 4.15955e-4 |
+| 3 | `13367158` | rejected | 0.9971818 | 102 / 157 | 2.27516e-4 | 0.9999988345090234 | 1.52466e-3 |
 
 All floating artifacts were finite.  Checkpoint 0 retained exact discrete
 execution state.  The later strict rejections are real: a small number of
 coarse and fine pose decisions diverged as floating-point perturbations
-accumulated.  Through checkpoint 2, however, both FSC thresholds cross at the
-same shell, map correlation remains above 0.9999999, and the FSC-curve RMSE
-remains `1.19e-4` or smaller.  This is positive evidence that compact batching
+accumulated.  Through checkpoint 3, however, both FSC thresholds cross at the
+same shell, map correlation remains above 0.9999988, and the FSC-curve RMSE
+remains `2.28e-4` or smaller.  This is positive evidence that compact batching
 has not degraded early reconstruction quality; it does not replace the final
 masked/unmasked half-map comparison after both trajectories complete.
 
-The three audit jobs requested and received exactly
+The four audit jobs requested and received exactly
 `cpu=4,mem=64G,node=1,billing=16`, ran on the `cpu` partition, and completed
-`0:0` in 2:07, 3:15, and 3:51.  CPU placement is intentional: the auditor
+`0:0` in 2:07, 3:15, 3:51, and 3:39.  CPU placement is intentional: the auditor
 memory-maps and streams completed arrays and performs no refinement or GPU
 calculation.
 
@@ -57,7 +58,8 @@ The result JSON SHA-256 values are:
 
 - checkpoint 0: `90db22f20d3b21bf9787d98d6a2708f0fa8a402c2c786d35f255f81adf23974a`;
 - checkpoint 1: `c552c84c7911166baff2d2f52dbc69cae883ae914805edd0fa70237e097e5945`;
-- checkpoint 2: `52a2f02d9bb59e9deadc78218155d994a1b0e6f1ffda3a1afab9ff235b95d077`.
+- checkpoint 2: `52a2f02d9bb59e9deadc78218155d994a1b0e6f1ffda3a1afab9ff235b95d077`;
+- checkpoint 3: `e5dd0e147d9ab3dd6a66f15c57198477d66bb924af1763626fab3f603eeeb2ff`.
 
 The immutable input roots are:
 

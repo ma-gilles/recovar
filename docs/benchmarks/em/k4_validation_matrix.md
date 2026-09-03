@@ -70,20 +70,23 @@ assignments, duplicated maps, missing classes, and a negative GT association.
 
 ### Current-source executable K=4 controls, 2026-09-02
 
-Three focused controls now cover previously implicit K=4 execution boundaries:
+Four focused controls now cover previously implicit K=4 execution boundaries:
 
 | Boundary | Executable evidence | Established scope |
 | --- | --- | --- |
 | Final all-data eligibility | Commit `1a8b3521a`: `TestRelionModeSmokeTest::test_relion_final_iteration_supports_k_class` and `TestRelionModeSmokeTest::test_relion_k4_does_not_finalize_after_max_iter_even_when_diagnostic_force_enabled` | A converged tiny K=4 refinement invokes exactly one final all-data pass and retains four class means plus both halves' final class assignments. A nonconverged K=4 refinement invokes no final pass, including when the K=1 diagnostic force-after-max environment switch is enabled. |
 | Simultaneous dense image/rotation partitioning | Commit `1d9011a18`: `test_dense_k4_image_and_rotation_partition_equivalence` | A deterministic four-image, four-class dense global E/M step compares image batch 4 / rotation block 5 with image batch 3 / rotation block 2. Discrete class/pose outputs are exact; complex128 accumulator, evidence, and map reductions agree within the frozen `1024 * eps(float64)` bound. The odd five-rotation grid exercises a padded tail block. |
 | Numbered global-to-local continuity | Commit `ca626914d`: `test_k4_numbered_global_to_exact_local_preserves_per_half_pose_state` | Numbered iteration 1 routes both halves through the real dense K-class orchestrator; a forced controller transition routes both halves through the real exact-local K-class orchestrator at iteration 2. Exact assertions bind each half's dense pose outputs to iteration-1 history, local rotation/translation priors and integer pre-shifts, and local pose outputs to iteration-2 history, while preserving four class means. No final all-data pass is involved. |
+| Exact-local class projectors and CUDA x-half BPref | H100 job `13366865` plus commit `43a924358`: `test_local_search_iteration_k4_forwards_relion_projectors_to_each_class_engine` | Four distinct supplied RELION projectors execute direct exact-local K=4 scoring and x-half accumulation. Every class accumulator matches an independently normalized K=1 replay. The numbered wrapper now forwards the class projector array and common `r_max`; the regression observes the correct projector in all four score probes and all four M-steps. |
 
-These are CPU unit controls, not trajectory-quality, FSC, HBM, or performance
-evidence. The continuity control deliberately sets
+The first three rows are CPU unit controls, not trajectory-quality, FSC, HBM,
+or performance evidence. The continuity control deliberately sets
 `RECOVAR_K_CLASS_RELION_X_HALF_MSTEP=0`; it qualifies the numbered orchestration
 and full-volume exact-local K-class handoff, not the GPU/CUDA x-half BPref
-implementation. The dense partition control covers one simultaneous partition
-pair, not the complete Tier-1 batch/block matrix.
+implementation.  The fourth row is a direct H100 engine invariant plus a CPU
+wrapper-seam regression; it is still not a trajectory-quality or FSC result.
+The dense partition control covers one simultaneous partition pair, not the
+complete Tier-1 batch/block matrix.
 
 The following focused commands were run from
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr158_k4_origin_docs_8cbebdecc_20260902`
@@ -114,6 +117,60 @@ env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
   tests/unit/test_refine_relion_mode.py::TestRelionModeSmokeTest::test_relion_k4_does_not_finalize_after_max_iter_even_when_diagnostic_force_enabled \
   tests/unit/test_refine_relion_mode.py::TestRelionModeSmokeTest::test_relion_final_iteration_supports_k_class -q
 # 3 passed in 137.56s (0:02:17)
+```
+
+The exact-local CUDA gate ran from clean commit
+`f91c73f2907ccea635782814d0cbde1d4f8ed4c2` on one H100.  Job `13366865`
+requested and received exactly
+`cpu=4,mem=32G,node=1,billing=4,gres/gpu=1`, had `OverSubscribe=OK`, and
+completed `0:0` in 18 seconds.  It used three images, four nonidentical class
+means/projectors, nonuniform class responsibilities, float32 denominators,
+complex64 numerators, and the RELION x-half CUDA path.  The CUDA trace records
+two batched indexed backprojections and two x-half calls.  Across the four
+classwise K=4-versus-independent-K=1 comparisons, worst relative L2 error is
+`4.18270e-8` for `Ft_ctf` and `1.36490e-9` for `Ft_y`.
+
+That gate also failed closed on the production seam: at commit `f91c73f29`,
+the numbered K-class local wrapper did not forward the already-built class
+projectors or `r_max`, even though the K-class engine accepted and correctly
+selected them.  Commit `43a924358` adds exactly those two forwards.  The new
+regression was red before the fix (`relion_projector_half=None` at the first
+class probe), then passed and observed class order `0,1,2,3` across all four
+score-only probes and all four M-steps, exact classwise projector equality,
+and common `r_max=7`.
+
+The six focused K-class/local CPU tests passed in 47.73 seconds with
+`JAX_PLATFORMS=cpu`, `RECOVAR_DISABLE_CUDA=1`, and an empty
+`CUDA_VISIBLE_DEVICES`.  The repository `pixi run test-em-fast-guard` also
+passed all 16 tests in 53.30 seconds.  Scoped Ruff and `git diff --check`
+passed.
+
+The disposable H100 evidence root is
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/k4_exact_local_xhalf_h100_f91c73f29_20260903T011014Z`
+and contains `SAFE_TO_DELETE`.  Its hashes are:
+
+- audit script:
+  `89b3d7fbacef9368d98e9af4c4ca8dd3c2b51e44a3c9cbc2fe35ca34af899165`;
+- Slurm launcher:
+  `5c19481f2511d467fb72b74997a4038c98a0983c57ea67e958d84e65226dc5c9`;
+- result JSON:
+  `be52382cc1b2e24d5bcf3a7513473e499fd402b126a924a27a62a6767377b1c0`;
+- complete Slurm log:
+  `a6a851c0c58c121b0a53f5aff4d3494f9f615510779659ba3bd43dbcff712f41`.
+
+To rerun the direct engine discriminator, copy the sealed root to a new empty
+CRYOEM run/runtime pair, update its absolute roots, preserve the source and
+CUDA hashes, and submit `run_h100.sbatch` with `sbatch`.  Accept only a clean
+one-H100 allocation, `AUDIT_PASS K4 exact-local CUDA x-half BPref invariant`,
+and a result whose `status` is `PASS`.  To repeat the numbered-wrapper seam
+gate without a GPU:
+
+```bash
+env -u PYTHONPATH -u PYTHONHOME -u CONDA_PREFIX -u VIRTUAL_ENV \
+  PYTHONNOUSERSITE=1 JAX_PLATFORMS=cpu RECOVAR_DISABLE_CUDA=1 \
+  CUDA_VISIBLE_DEVICES='' \
+  .pixi/envs/default/bin/python -m pytest -q \
+  tests/unit/test_refine_relion_mode.py::test_local_search_iteration_k4_forwards_relion_projectors_to_each_class_engine
 ```
 
 ## Tier 1: fixed-state GPU discriminators

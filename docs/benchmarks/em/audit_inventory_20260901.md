@@ -83,12 +83,13 @@ audited plans and support counts while reducing peak HBM to 20,123 MiB and
 wall from 650.344 to 124.897 s.  A future K=1 completion record must be added
 rather than inferring registry admission from either memory gate.
 
-`k1_empiar10202_checkpoint_equivalence_20260902.md` records the first three
+`k1_empiar10202_checkpoint_equivalence_20260902.md` records the first four
 matching checkpoints from the full-particle box-800 I1 control and compact
-candidate.  Checkpoint 0 is execution-exact.  At checkpoints 1 and 2, strict
-execution equivalence rejects small accumulated pose/state differences, while
-both FSC thresholds still cross at identical shells, minimum map correlation
-remains above `0.9999999`, and FSC-curve RMSE remains at most `1.18175e-4`.
+candidate.  Checkpoint 0 is execution-exact.  At checkpoints 1 through 3,
+strict execution equivalence rejects small accumulated pose/state differences,
+while both FSC thresholds still cross at identical shells.  At checkpoint 3,
+minimum pose agreement is `0.9971818`, map correlation is `0.9999988`, and
+FSC-curve RMSE is `2.27516e-4`.
 This is in-progress same-engine trajectory evidence, not a final
 RECOVAR-versus-RELION admission.
 
@@ -131,6 +132,7 @@ quality pair into a formal speed comparison.
 | `real_kclass_halfmap_refinement.md`, first-iteration native score boundary | Passive native RELION coarse/fine scores and RECOVAR surfaces for 16 frozen EMPIAR-10076 particles; 1,069,056 coarse candidates; H100 job 13346151 | Diagnostic PASS: commit `4a91369a3` preserves only `run_it000` origins during the fresh Class3D global search. Winner classes, global poses, all per-class poses, fine parents/winners, and integer pre-shifts are exact across the panel. This closes the first-iteration score boundary, not final K=4 quality. | RECOVAR wall 80.4 s and peak HBM 33,423 MiB for the containing 5,000-particle iteration. Full-surface minimum correlation `0.999999999996`; worst fine-score absolute error `7.45e-8`. Sealed JSON SHA-256 `977d115f1593`. |
 | `diagnostics/real-k4-native-signfix-causal-7136e5c8d-20260902.json` | Seed-42001 two-iteration EMPIAR-10076 half-1 causal A/B after all three controls independently logged the same class-3 sign flip | Causal PASS: commit `7136e5c8d` restores class-3 iteration-1 FSC-AUC from -0.990489 to +0.990489 and iteration-2 occupancy from 0.0012 to 0.0368 versus RELION 0.0382. Iteration-2 class agreement is 0.942, so this is not a final K=4 admission. | H100 job 13348468 completed in 9m22s, exit 0, exact one-GPU allocation, peak HBM 33,465 MiB. Full JSON SHA-256 `25f3a772fc31`. |
 | `diagnostics/real-k4-pilot10k-multiseed-stability-7136e5c8d-20260902.json` | Three seeds, two immutable 5,000-particle halves per seed, eight K=4 iterations per engine | All three prospective gates remain rejected. Median paired masked half-map FSC-AUC delta is -0.00054, but seed-42001 class 3 is -0.11925. Same-seed cross-engine labels and final maps are substantially closer than either engine is across seeds; for every class, same-seed map FSC-AUC minimum 0.8352--0.9527 exceeds within-engine cross-seed maximum 0.6440--0.8782. A cross-CPU replay retains every discrete decision with maximum FSC-AUC drift 0.003631 and minimum separation margin 0.07447 under the checked 0.005/0.05 semantic contract. This establishes a seed-sensitive local-optimum boundary without rescuing the failures. | Same-H100 serial measurements across six halves: RECOVAR median 1,280.24 s / 33,478 MiB; RELION 380.76 s / 79,588 MiB. Map analysis job 13353269 and semantic replay job 13354170 completed on exact 4-CPU/64-GiB resources. Failed job 13353671 is retained as an overstrict byte-comparison harness failure after complete analysis, not a science failure. |
+| `k4_validation_matrix.md`, exact-local CUDA x-half gate | Three-image, four-class direct exact-local invariant plus numbered-wrapper seam test; H100 job `13366865`, source `f91c73f29`, fix `43a924358` | Direct PASS: every jointly normalized K=4 class accumulator matches its independent K=1 replay; worst relative L2 is `4.18270e-8` for `Ft_ctf` and `1.36490e-9` for `Ft_y`. The gate exposed and the fix closes missing class-projector/`r_max` forwarding in numbered local refinement. This is execution evidence, not a final real-data K=4 admission. | One H100, four CPUs, 32 GiB host memory, 18 s, exact requested/allocated resources. Result SHA-256 `be52382cc1b`. |
 | `real_kclass_halfmap_refinement.md` | Independent-half refinement launcher/runbook and full three-seed interpretation | Infrastructure complete for EMPIAR-10076; no accepted completed pair | Native-grid execution remains blocked by the rejected pilot gate. |
 
 InitialModel emits one class map rather than independently refined half maps,
