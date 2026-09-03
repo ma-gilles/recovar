@@ -499,10 +499,13 @@ def test_same_state_accepts_a_focused_posterior_dump_target(tmp_path) -> None:
             str(tmp_path / "out"),
             "--fused-posterior-dump-original-index",
             "2798",
+            "--coarse-prefix-dump-original-index",
+            "35",
         ]
     )
 
     assert args.fused_posterior_dump_original_index == 2798
+    assert args.coarse_prefix_dump_original_index == 35
 
 
 def test_hybrid_image_batch_gate_uses_one_oracle_and_mirrored_four_repeats() -> None:

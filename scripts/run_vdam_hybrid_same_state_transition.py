@@ -249,6 +249,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="diagnostically dump one particle's production pass-2 scores in every timed arm",
     )
     parser.add_argument(
+        "--coarse-prefix-dump-original-index",
+        type=int,
+        default=None,
+        help=(
+            "diagnostically dump one particle's exact production source-16 "
+            "coarse operands after support is decided in every timed arm"
+        ),
+    )
+    parser.add_argument(
         "--mirrored-incremental-panels",
         action="store_true",
         help=(
@@ -2258,6 +2267,7 @@ def _run_transition_arm(
     hybrid_image_batch_request: int | None = None,
     exact_coarse_profile_enabled: bool = False,
     fused_posterior_dump_original_index: int | None = None,
+    coarse_prefix_dump_original_index: int | None = None,
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from recovar.data_io.starfile import read_star
@@ -2397,6 +2407,18 @@ def _run_transition_arm(
             "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL": label,
             "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES": "1",
         }
+    if coarse_prefix_dump_original_index is not None:
+        diagnostic_environment.update(
+            {
+                "RECOVAR_COARSE_RUNTIME_PREFIX_DUMP_DIR": str(
+                    checkpoint["output_root"] / "coarse_prefix_dumps"
+                ),
+                "RECOVAR_COARSE_RUNTIME_PREFIX_DUMP_ORIGINAL_INDICES": str(
+                    int(coarse_prefix_dump_original_index)
+                ),
+                "RECOVAR_COARSE_RUNTIME_PREFIX_DUMP_LABEL": label,
+            },
+        )
     persistent_cache_before = _persistent_cache_snapshot()
     wall_clock_started_epoch_s = time.time()
     started = time.perf_counter()
@@ -3765,6 +3787,9 @@ def main(argv: list[str] | None = None) -> int:
             fused_posterior_dump_original_index=(
                 args.fused_posterior_dump_original_index
             ),
+            coarse_prefix_dump_original_index=(
+                args.coarse_prefix_dump_original_index
+            ),
         )
 
     for label, arm in arms.items():
@@ -3920,6 +3945,14 @@ def main(argv: list[str] | None = None) -> int:
         "candidate_mode": args.candidate_mode,
         "fused_posterior_dump_original_index": (
             args.fused_posterior_dump_original_index
+        ),
+        "coarse_prefix_dump_original_index": (
+            args.coarse_prefix_dump_original_index
+        ),
+        "coarse_prefix_dump_dir": (
+            str((output_root / "coarse_prefix_dumps").resolve())
+            if args.coarse_prefix_dump_original_index is not None
+            else None
         ),
         "fused_posterior_dump_dir": (
             str((output_root / "fused_posterior_dumps").resolve())

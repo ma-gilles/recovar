@@ -113,6 +113,11 @@ _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV = (
 _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV = (
     "RECOVAR_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS"
 )
+_COARSE_RUNTIME_PREFIX_DUMP_DIR_ENV = "RECOVAR_COARSE_RUNTIME_PREFIX_DUMP_DIR"
+_COARSE_RUNTIME_PREFIX_DUMP_INDICES_ENV = (
+    "RECOVAR_COARSE_RUNTIME_PREFIX_DUMP_ORIGINAL_INDICES"
+)
+_COARSE_RUNTIME_PREFIX_DUMP_LABEL_ENV = "RECOVAR_COARSE_RUNTIME_PREFIX_DUMP_LABEL"
 _COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_DIAGNOSTIC_DIR"
 )
@@ -1557,6 +1562,7 @@ class CoarseGaussianGemmHybridBatchResult(NamedTuple):
     selection: CoarseGemmHybridBlockSelection
     compact_scores: CoarseGemmHybridCompactScores | None = None
     score_representation: str = "compact_selected_exact"
+    diagnostic_selected_diff2: jax.Array | None = None
 
 
 def _select_coarse_gaussian_gemm_score_representation(
@@ -1597,6 +1603,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     compact_posterior: bool = False,
     force_static_dense_after_overflow: bool = False,
     logical_full_pixel_count=None,
+    capture_selected_diff2: bool = False,
 ) -> CoarseGaussianGemmHybridBatchResult:
     """Certify, exactly rescore, and restore one K=1 coarse score table.
 
@@ -1782,6 +1789,9 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
                 selection=selection,
                 compact_scores=compact_scores,
                 score_representation=score_representation,
+                diagnostic_selected_diff2=(
+                    selected_diff2 if capture_selected_diff2 else None
+                ),
             )
         fallback_reason = "invalid_selected_exact_output"
         score_representation = "dense_full_direct_dynamic_fallback"
@@ -1813,6 +1823,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         fallback_reason=fallback_reason or "unspecified_fail_closed_fallback",
         selection=selection,
         score_representation=score_representation,
+        diagnostic_selected_diff2=None,
     )
 
 
@@ -3227,6 +3238,236 @@ def _significance_debug_dump_matches(*, current_size, debug_iteration) -> bool:
     ):
         return False
     return True
+
+
+def _coarse_runtime_prefix_dump_request() -> tuple[str | None, set[int], str]:
+    """Resolve a target-only dump of the exact compact coarse-score operands."""
+
+    directory = os.environ.get(_COARSE_RUNTIME_PREFIX_DUMP_DIR_ENV, "").strip()
+    targets = parse_env_int_set(_COARSE_RUNTIME_PREFIX_DUMP_INDICES_ENV) or set()
+    label = os.environ.get(_COARSE_RUNTIME_PREFIX_DUMP_LABEL_ENV, "unlabeled").strip()
+    if bool(directory) != bool(targets):
+        raise ValueError(
+            f"{_COARSE_RUNTIME_PREFIX_DUMP_DIR_ENV} and "
+            f"{_COARSE_RUNTIME_PREFIX_DUMP_INDICES_ENV} must be set together",
+        )
+    if any(int(target) < 0 for target in targets):
+        raise ValueError(
+            f"{_COARSE_RUNTIME_PREFIX_DUMP_INDICES_ENV} must contain "
+            "non-negative original image indices",
+        )
+    safe_label = "".join(
+        character if character.isalnum() or character in "_.-" else "_"
+        for character in label
+    )
+    return (
+        os.path.abspath(os.path.expanduser(directory)) if directory else None,
+        {int(target) for target in targets},
+        safe_label or "unlabeled",
+    )
+
+
+def _maybe_dump_coarse_runtime_prefix_operands(
+    *,
+    dump_dir: str | None,
+    dump_label: str,
+    target_original_indices: set[int],
+    experiment_dataset,
+    indices,
+    compact_result: CoarseGaussianGemmHybridBatchResult,
+    support_pose_ids,
+    batch_weights,
+    batch_sig_mask,
+    batch_n_sig,
+    batch_cutoff_count,
+    batch_sum_weight,
+    batch_significant_weight,
+    projection_cache,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    full_to_compact,
+    logical_full_pixel_count: int,
+    class_log_prior,
+    rotation_log_prior,
+    translation_log_prior,
+    current_size,
+    physical_current_size,
+    debug_iteration,
+) -> None:
+    """Persist exact production source-16 operands after support is decided.
+
+    The selected diff2 buffer is the same buffer consumed by compact score
+    assembly.  Host materialization happens only after the posterior/support
+    decision, so this diagnostic cannot alter the atomic order under study.
+    """
+
+    if dump_dir is None:
+        return
+    selected_diff2 = compact_result.diagnostic_selected_diff2
+    compact = compact_result.compact_scores
+    if selected_diff2 is None or compact is None:
+        raise RuntimeError(
+            "coarse runtime-prefix operand capture requires compact selected rescoring",
+        )
+    local_indices = np.asarray(indices, dtype=np.int64)
+    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    target_rows = np.flatnonzero(
+        np.isin(
+            original_indices,
+            np.fromiter(target_original_indices, dtype=np.int64),
+        ),
+    )
+    if not target_rows.size:
+        return
+
+    os.makedirs(dump_dir, exist_ok=True)
+    source_block_ids_all = np.asarray(compact.source_block_ids, dtype=np.int32)
+    block_counts = np.asarray(compact.block_count, dtype=np.int32)
+    selected_diff2_all = np.asarray(selected_diff2, dtype=np.float32)
+    posterior_scores_all = np.asarray(compact.posterior_scores_flat, dtype=np.float32)
+    weights_all = np.asarray(batch_weights, dtype=np.float32)
+    support_mask_all = np.asarray(batch_sig_mask, dtype=bool)
+    raw_score_max_all = np.asarray(compact.raw_score_max, dtype=np.float32)
+    min_diff2_offsets_all = np.asarray(compact.min_diff2_offsets, dtype=np.float32)
+    best_score_all = np.asarray(compact.best_score, dtype=np.float32)
+    best_pose_all = np.asarray(compact.best_pose, dtype=np.int32)
+    n_sig_all = np.asarray(batch_n_sig, dtype=np.int32)
+    cutoff_count_all = np.asarray(batch_cutoff_count, dtype=np.int32)
+    sum_weight_all = np.asarray(batch_sum_weight, dtype=np.float32)
+    significant_weight_all = np.asarray(batch_significant_weight, dtype=np.float32)
+    shifted = jnp.asarray(shifted_corrected)
+    weight = jnp.asarray(pixel_weight)
+    initial = jnp.asarray(initial_diff2)
+    cache = jnp.asarray(projection_cache)
+    n_translations = int(shifted.shape[1])
+    physical_pixel_count = int(shifted.shape[2])
+    capacity = int(source_block_ids_all.shape[1])
+
+    rotation_prior = (
+        np.empty((0,), dtype=np.float32)
+        if rotation_log_prior is None
+        else np.asarray(rotation_log_prior, dtype=np.float32)
+    )
+    translation_prior_all = (
+        None
+        if translation_log_prior is None
+        else np.asarray(translation_log_prior, dtype=np.float32)
+    )
+    for row in target_rows.tolist():
+        block_count = int(block_counts[row])
+        if block_count <= 0 or block_count > capacity:
+            raise RuntimeError(
+                "coarse runtime-prefix operand capture found an invalid block count",
+            )
+        source_block_ids = source_block_ids_all[row, :block_count]
+        rotation_ids = (
+            source_block_ids[:, None] * np.int32(SOURCE_ROTATION_BLOCK_SIZE)
+            + np.arange(SOURCE_ROTATION_BLOCK_SIZE, dtype=np.int32)[None, :]
+        )
+        candidate_pose_ids = (
+            rotation_ids[:, :, None] * np.int32(n_translations)
+            + np.arange(n_translations, dtype=np.int32)[None, None, :]
+        )
+        active_candidate_count = (
+            block_count * SOURCE_ROTATION_BLOCK_SIZE * n_translations
+        )
+        support_mask = support_mask_all[row, :active_candidate_count].reshape(
+            block_count,
+            SOURCE_ROTATION_BLOCK_SIZE,
+            n_translations,
+        )
+        observed_support = np.sort(candidate_pose_ids[support_mask]).astype(
+            np.int32,
+            copy=False,
+        )
+        expected_support = np.asarray(support_pose_ids[row], dtype=np.int32)
+        if not np.array_equal(observed_support, expected_support):
+            raise RuntimeError(
+                "coarse runtime-prefix dump support mapping differs from production",
+            )
+        original_index = int(original_indices[row])
+        iteration_label = -1 if debug_iteration is None else int(debug_iteration)
+        size_label = -1 if current_size is None else int(current_size)
+        output_path = os.path.join(
+            dump_dir,
+            f"coarse_runtime_prefix_{dump_label}_orig{original_index:06d}_"
+            f"it{iteration_label:03d}_cs{size_label:03d}.npz",
+        )
+        translation_prior = (
+            np.empty((0,), dtype=np.float32)
+            if translation_prior_all is None
+            else (
+                translation_prior_all
+                if translation_prior_all.ndim == 1
+                else translation_prior_all[row]
+            )
+        )
+        with open(output_path, "xb") as stream:
+            np.savez(
+                stream,
+                schema=np.asarray("recovar.coarse_runtime_prefix_operands.v1"),
+                capture_policy=np.asarray(
+                    "same_selected_diff2_buffer_materialized_after_support_decision",
+                ),
+                original_index=np.int64(original_index),
+                local_index=np.int64(local_indices[row]),
+                debug_iteration=np.int64(iteration_label),
+                current_size=np.int64(size_label),
+                physical_current_size=np.int64(physical_current_size),
+                logical_full_pixel_count=np.int64(logical_full_pixel_count),
+                physical_pixel_count=np.int64(physical_pixel_count),
+                n_translations=np.int64(n_translations),
+                source_block_ids=source_block_ids,
+                source_rotation_ids=rotation_ids,
+                candidate_pose_ids=candidate_pose_ids,
+                selected_reference=np.asarray(
+                    cache[0, rotation_ids.reshape(-1)],
+                    dtype=np.complex64,
+                ).reshape(
+                    block_count,
+                    SOURCE_ROTATION_BLOCK_SIZE,
+                    physical_pixel_count,
+                ),
+                shifted_corrected=np.asarray(shifted[row], dtype=np.complex64),
+                pixel_weight=np.asarray(weight[row], dtype=np.float32),
+                initial_diff2=np.asarray(initial[row], dtype=np.float32),
+                full_to_compact=np.asarray(full_to_compact, dtype=np.int32),
+                selected_diff2=selected_diff2_all[row, :block_count],
+                posterior_scores=posterior_scores_all[
+                    row,
+                    :active_candidate_count,
+                ].reshape(
+                    block_count,
+                    SOURCE_ROTATION_BLOCK_SIZE,
+                    n_translations,
+                ),
+                posterior_weights=weights_all[
+                    row,
+                    :active_candidate_count,
+                ].reshape(
+                    block_count,
+                    SOURCE_ROTATION_BLOCK_SIZE,
+                    n_translations,
+                ),
+                support_mask=support_mask,
+                support_pose_ids=observed_support,
+                n_significant=n_sig_all[row],
+                cutoff_count=cutoff_count_all[row],
+                sum_weight=sum_weight_all[row],
+                significant_weight=significant_weight_all[row],
+                raw_score_max=raw_score_max_all[row],
+                min_diff2_offset=min_diff2_offsets_all[row],
+                best_score=best_score_all[row],
+                best_pose=best_pose_all[row],
+                class_log_prior=np.asarray(class_log_prior, dtype=np.float32),
+                rotation_log_prior=rotation_prior,
+                translation_log_prior=translation_prior,
+            )
+        logger.warning(
+            "wrote post-support coarse runtime-prefix operand capture: %s",
+            output_path,
+        )
 
 
 def _original_indices_for_local(experiment_dataset, local_indices) -> np.ndarray:
@@ -4920,6 +5161,19 @@ def _compute_k_class_significance_batched(
     ) = _coarse_gaussian_gemm_streaming_diagnostic_request(
         max_significants=max_significants,
     )
+    (
+        coarse_runtime_prefix_dump_dir,
+        coarse_runtime_prefix_dump_targets,
+        coarse_runtime_prefix_dump_label,
+    ) = _coarse_runtime_prefix_dump_request()
+    if coarse_runtime_prefix_dump_dir is not None and not (
+        coarse_gaussian_gemm_hybrid_requested
+        and coarse_gaussian_gemm_compact_posterior_requested
+    ):
+        raise ValueError(
+            "coarse runtime-prefix operand capture requires the compact "
+            "certified coarse GEMM hybrid",
+        )
     coarse_gaussian_gemm_requested_targets = coarse_gaussian_gemm_diagnostic_targets
     coarse_gaussian_gemm_diagnostic_scope = None
     coarse_gaussian_gemm_diagnostic_selection_policy = None
@@ -6162,6 +6416,21 @@ def _compute_k_class_significance_batched(
                 int(batch_size),
             )
         local_indices_np = np.asarray(indices, dtype=np.int64)
+        coarse_runtime_prefix_dump_positions = np.empty((0,), dtype=np.int64)
+        if coarse_runtime_prefix_dump_dir is not None:
+            coarse_runtime_prefix_original_indices = _original_indices_for_local(
+                experiment_dataset,
+                local_indices_np,
+            )
+            coarse_runtime_prefix_dump_positions = np.flatnonzero(
+                np.isin(
+                    coarse_runtime_prefix_original_indices,
+                    np.fromiter(
+                        coarse_runtime_prefix_dump_targets,
+                        dtype=np.int64,
+                    ),
+                ),
+            ).astype(np.int64)
         batch_original_indices_np = None
         if coarse_gaussian_gemm_stream_diagnostic_dir is not None:
             batch_original_indices_np = _original_indices_for_local(
@@ -6687,6 +6956,9 @@ def _compute_k_class_significance_batched(
                         coarse_gaussian_square_layout.logical_square_count
                         if stable_fourier_window_shapes
                         else None
+                    ),
+                    capture_selected_diff2=bool(
+                        coarse_runtime_prefix_dump_positions.size
                     ),
                 )
             )
@@ -7383,6 +7655,41 @@ def _compute_k_class_significance_batched(
                 ]:
                     if selected_pose_ids.size:
                         sig_rot_any[0, selected_pose_ids // n_trans] = True
+                _maybe_dump_coarse_runtime_prefix_operands(
+                    dump_dir=coarse_runtime_prefix_dump_dir,
+                    dump_label=coarse_runtime_prefix_dump_label,
+                    target_original_indices=coarse_runtime_prefix_dump_targets,
+                    experiment_dataset=experiment_dataset,
+                    indices=indices,
+                    compact_result=coarse_gaussian_gemm_hybrid_batch_result,
+                    support_pose_ids=compact_support_pose_ids,
+                    batch_weights=batch_weights,
+                    batch_sig_mask=batch_sig_mask_np,
+                    batch_n_sig=batch_n_sig,
+                    batch_cutoff_count=batch_cutoff_count,
+                    batch_sum_weight=_batch_sum_weight,
+                    batch_significant_weight=_batch_significant_weight,
+                    projection_cache=coarse_gaussian_gemm_projection_cache,
+                    shifted_corrected=coarse_gaussian_shifted_corrected,
+                    pixel_weight=coarse_gaussian_pixel_weight,
+                    initial_diff2=coarse_gaussian_initial_diff2,
+                    full_to_compact=coarse_gaussian_gemm_certificate_topology.full_to_compact,
+                    logical_full_pixel_count=(
+                        coarse_gaussian_square_layout.logical_square_count
+                    ),
+                    class_log_prior=class_log_priors_np[0],
+                    rotation_log_prior=(
+                        None
+                        if rotation_log_prior_padded is None
+                        else rotation_log_prior_padded[0, :n_rot]
+                    ),
+                    translation_log_prior=batch_translation_log_prior,
+                    current_size=current_size,
+                    physical_current_size=(
+                        coarse_gaussian_square_layout.physical_current_size
+                    ),
+                    debug_iteration=debug_iteration,
+                )
             n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig[:actual_batch_size], dtype=np.int32)
             cutoff_count_all[start_idx:end_idx] = np.asarray(
                 batch_cutoff_count[:actual_batch_size],

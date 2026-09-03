@@ -38,14 +38,14 @@ def _assert_in_exact_atomic_envelope(
     initial_diff2,
     full_to_compact,
 ):
-    """Require every score to be in the complete default-geometry atomic set.
+    """Require every score to be in the complete geometry-specific atomic set.
 
-    For 29 translations, RELION's 128-thread block gives every score exactly
-    four nonzero lane partials.  Each lane issues one ``atomicAdd`` to that
-    score and every remaining thread contributes exact zero.  CUDA serializes
-    the four active additions, so all and only the ``4!`` lane permutations
-    below are legal realizations.  This is an exhaustive arithmetic oracle,
-    not a tolerance or an empirical repeat envelope.
+    RELION's 128-thread block gives every score ``floor(128 / n_trans)``
+    nonzero lane partials.  Each lane issues one ``atomicAdd`` to that score
+    and every remaining thread contributes exact zero.  CUDA serializes the
+    active additions, so all and only their factorial lane permutations below
+    are legal realizations.  This is an exhaustive arithmetic oracle, not a
+    tolerance or an empirical repeat envelope.
     """
 
     actual = np.asarray(actual).reshape(
@@ -55,9 +55,8 @@ def _assert_in_exact_atomic_envelope(
     )
     assert shifted.shape[0] == 1
     translation_count = shifted.shape[1]
-    assert translation_count == 29
     active_lanes = 128 // translation_count
-    assert active_lanes == 4
+    assert active_lanes in {4, 5}
     lane_sums = np.zeros(
         (active_lanes, reference.shape[0], translation_count),
         dtype=np.float32,
@@ -121,15 +120,15 @@ def _posterior_on_host(scores, gpu_device):
     return tuple(np.asarray(value) for value in result)
 
 
-def _make_operands(seed, physical_count):
+def _make_operands(seed, physical_count, translation_count):
     rng = np.random.default_rng(seed)
     reference = (
         rng.normal(0.0, 0.02, (16, physical_count))
         + 1j * rng.normal(0.0, 0.02, (16, physical_count))
     ).astype(np.complex64)
     shifted = (
-        rng.normal(0.0, 0.02, (1, 29, physical_count))
-        + 1j * rng.normal(0.0, 0.02, (1, 29, physical_count))
+        rng.normal(0.0, 0.02, (1, translation_count, physical_count))
+        + 1j * rng.normal(0.0, 0.02, (1, translation_count, physical_count))
     ).astype(np.complex64)
     weight = rng.uniform(0.0, 150_000.0, (1, physical_count)).astype(np.float32)
     initial_diff2 = rng.uniform(10_000.0, 20_000.0, 1).astype(np.float32)
@@ -171,10 +170,12 @@ def _configure_cuda(monkeypatch, custom_cuda_lib):
     return cuda_backproject
 
 
+@pytest.mark.parametrize("translation_count", [29, 25])
 def test_stable_coarse_runtime_prefix_preserves_posterior_support_wordwise(
     monkeypatch,
     custom_cuda_lib,
     gpu_device,
+    translation_count,
 ):
     """Padded execution stays in the exact atomic set with exact decisions."""
 
@@ -183,6 +184,7 @@ def test_stable_coarse_runtime_prefix_preserves_posterior_support_wordwise(
     reference, shifted, weight, initial_diff2 = _make_operands(
         20260903,
         stable_layout.physical_square_count,
+        translation_count,
     )
 
     with jax.default_device(gpu_device):
@@ -224,10 +226,12 @@ def test_stable_coarse_runtime_prefix_preserves_posterior_support_wordwise(
         np.testing.assert_array_equal(stable_value, direct_value)
 
 
+@pytest.mark.parametrize("translation_count", [29, 25])
 def test_stable_coarse_runtime_prefix_source16_stays_in_atomic_envelope(
     monkeypatch,
     custom_cuda_lib,
     gpu_device,
+    translation_count,
 ):
     """Selected source-16 rescoring obeys the same logical-prefix contract."""
 
@@ -236,6 +240,7 @@ def test_stable_coarse_runtime_prefix_source16_stays_in_atomic_envelope(
     reference, shifted, weight, initial_diff2 = _make_operands(
         20260904,
         stable_layout.physical_square_count,
+        translation_count,
     )
     block_ids = np.zeros((1, 1), dtype=np.int32)
 
