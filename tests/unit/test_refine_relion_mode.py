@@ -7273,6 +7273,105 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
     np.testing.assert_allclose(np.sum(class_full_posterior_sums), dataset.n_images, rtol=5e-3, atol=1e-5)
 
 
+def test_local_search_iteration_k4_forwards_relion_projectors_to_each_class_engine(monkeypatch, rng):
+    import recovar.em.dense_single_volume.k_class as k_class_module
+
+    n_classes = 4
+    n_images = 2
+    dataset = MockDataset(n_images, rng)
+    means = jnp.stack(
+        [jnp.full(VOLUME_SIZE, class_index, dtype=jnp.complex64) for class_index in range(n_classes)],
+    )
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32)
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=181)
+    translations = np.zeros((1, 2), dtype=np.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1, 0, 1], dtype=np.int32),
+        rotations_flat=np.tile(np.asarray(local_rotations, dtype=np.float32), (n_images, 1, 1)),
+        rotation_log_priors_flat=np.zeros(4, dtype=np.float32),
+        rotation_counts=np.full(n_images, 2, dtype=np.int32),
+        translation_grid=translations,
+        translation_log_priors=np.zeros((n_images, 1), dtype=np.float32),
+    )
+    projector_half = np.stack(
+        [
+            np.full((3, 3, 2), class_index + 1j * (class_index + 1), dtype=np.complex64)
+            for class_index in range(n_classes)
+        ],
+    )
+    projector_r_max = 7
+    engine_calls = []
+
+    def fake_run_local_em_exact(*args, **kwargs):
+        class_index = int(np.real(np.asarray(args[1]).reshape(-1)[0]))
+        engine_calls.append(
+            (
+                class_index,
+                kwargs.get("relion_projector_half"),
+                kwargs.get("relion_projector_r_max"),
+                bool(kwargs.get("score_only", False)),
+            ),
+        )
+        stats = RelionStats(
+            log_evidence_per_image=jnp.full(n_images, -class_index, dtype=jnp.float32),
+            best_log_score_per_image=jnp.full(n_images, -class_index - 0.25, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(2, dtype=jnp.float32),
+        )
+        return (
+            jnp.full(VOLUME_SIZE, class_index, dtype=jnp.complex64),
+            jnp.full(VOLUME_SIZE, class_index + 1, dtype=jnp.float32),
+            np.full(n_images, class_index, dtype=np.int32),
+            stats,
+        )
+
+    monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
+
+    iteration_loop_module._run_local_search_iteration(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        np.zeros((n_images, 3), dtype=np.float32),
+        local_rotations,
+        None,
+        1,
+        0.0,
+        0.0,
+        translations,
+        np.zeros((n_images, 2), dtype=np.float32),
+        1.0,
+        None,
+        "linear_interp",
+        n_images,
+        2,
+        4,
+        pass2_layout=local_layout,
+        reconstruct_significant_only=False,
+        projection_relion_texture_interp=True,
+        relion_projector_half=projector_half,
+        relion_projector_r_max=projector_r_max,
+        mstep_relion_x_half=True,
+        class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
+        batch_size_planner=lambda *_args, **_kwargs: (n_images, 2),
+    )
+
+    assert [call[0] for call in engine_calls] == list(range(n_classes)) * 2
+    assert [call[3] for call in engine_calls] == [True] * n_classes + [False] * n_classes
+    for call_index, (class_index, actual_projector, actual_r_max, _) in enumerate(engine_calls):
+        np.testing.assert_array_equal(
+            actual_projector,
+            projector_half[class_index],
+            err_msg=f"wrong projector in exact-local engine call {call_index}",
+        )
+        assert actual_r_max == projector_r_max
+
+
 def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate(monkeypatch, rng):
     from types import SimpleNamespace
 

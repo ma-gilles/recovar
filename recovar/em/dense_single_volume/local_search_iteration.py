@@ -455,6 +455,8 @@ def _run_local_search_iteration(
             score_with_masked_images=score_with_masked_images,
             half_spectrum_scoring=half_spectrum_scoring,
             relion_exact_score_translation=relion_exact_score_translation,
+            relion_projector_half=relion_projector_half,
+            relion_projector_r_max=relion_projector_r_max,
             use_float64_scoring=use_float64_scoring,
             use_float64_normalization=True,
             use_float64_projections=use_float64_projections,
