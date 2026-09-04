@@ -2547,6 +2547,46 @@ def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeyp
     assert len(calls) == 1
 
 
+def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", raising=False)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", raising=False)
+    observed = {}
+
+    def fake_fused(*args, **kwargs):
+        del kwargs
+        observed["data_dtype"] = args[2].dtype
+        observed["weight_dtype"] = args[3].dtype
+        return args[0], args[1]
+
+    monkeypatch.setattr(cuda_backproject, "relion_fused_x_half_backproject_indexed", fake_fused)
+
+    bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+        jnp.ones((1, 1, 1), dtype=jnp.complex128),
+        jnp.ones((1, 1, 1), dtype=jnp.float64),
+        jnp.eye(3, dtype=jnp.float64).reshape(1, 1, 3, 3),
+        np.asarray([1], dtype=np.int32),
+        jnp.zeros(1, dtype=jnp.complex64),
+        jnp.zeros(1, dtype=jnp.float32),
+        window_indices=jnp.asarray([0], dtype=jnp.int32),
+        image_shape=(8, 8),
+        volume_shape=(7, 7, 7),
+        disc_type="linear_interp",
+        half_volume=True,
+        max_r=2.0,
+        log_label_prefix="float32-accumulator",
+        winner_take_all=True,
+    )
+
+    assert observed == {
+        "data_dtype": jnp.dtype(jnp.complex64),
+        "weight_dtype": jnp.dtype(jnp.float32),
+    }
+
+
 def test_relion_x_half_bp_fused_atomics_requires_block_topology(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod

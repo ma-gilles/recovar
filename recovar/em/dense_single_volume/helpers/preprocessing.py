@@ -76,6 +76,7 @@ def _dense_batch_half_inputs(
     config,
     apply_image_mask: bool,
     *,
+    ctf_real_dtype=None,
     relion_preprocess_kwargs=None,
 ):
     processed_half = process_half_image(
@@ -84,6 +85,8 @@ def _dense_batch_half_inputs(
         apply_image_mask,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
+    if ctf_real_dtype is not None:
+        ctf_params = jnp.asarray(ctf_params, dtype=ctf_real_dtype)
     ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = jnp.asarray(noise_variance)
     translation_phases_half = half_translation_phase_table(translations, config.image_shape)
@@ -115,6 +118,7 @@ def preprocess_batch(
         translations,
         config,
         score_with_masked_images,
+        ctf_real_dtype=score_real_dtype,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
@@ -169,6 +173,7 @@ def prepare_reconstruction_batch(
         translations,
         config,
         False,
+        ctf_real_dtype=score_real_dtype,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
@@ -220,6 +225,7 @@ def preprocess_batch_firstiter_cc(
         translations,
         config,
         score_with_masked_images,
+        ctf_real_dtype=score_real_dtype,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     # RELION ml_optimiser.cpp:8758-8774 (do_firstiter_cc CC branch) iterates

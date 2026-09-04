@@ -6,16 +6,16 @@ DEFAULT_FFT_NORM = "backward"
 # TODO: some of these functions are built-in numpy/jnp. These should be used instead, or optimized otherwise
 
 
-def get_1d_frequency_grid(n, voxel_size=1, scaled=False):
+def get_1d_frequency_grid(n, voxel_size=1, scaled=False, dtype=jnp.float32):
     # Equivalent to the old even/odd linspace logic, but cheaper and exact on integer steps.
     half = n // 2
-    grid = jnp.arange(-half, n - half, dtype=jnp.float32)
+    grid = jnp.arange(-half, n - half, dtype=dtype)
     if scaled:
-        grid = grid / (n * voxel_size)
+        grid = grid / (jnp.asarray(n, dtype=dtype) * jnp.asarray(voxel_size, dtype=dtype))
     return grid
 
 
-def get_1d_frequency_grid_rfft(n, voxel_size=1, scaled=False):
+def get_1d_frequency_grid_rfft(n, voxel_size=1, scaled=False, dtype=jnp.float32):
     """Frequency grid for Hermitian-packed real FFT axis.
 
     Returns non-negative bins `[0, 1, ..., n//2]` (or scaled equivalent).
@@ -23,14 +23,14 @@ def get_1d_frequency_grid_rfft(n, voxel_size=1, scaled=False):
     n = int(n)
     if n <= 0:
         raise ValueError(f"n must be positive, got {n}")
-    grid = jnp.arange(0, n // 2 + 1, dtype=jnp.float32)
+    grid = jnp.arange(0, n // 2 + 1, dtype=dtype)
     if scaled:
-        grid = grid / (n * voxel_size)
+        grid = grid / (jnp.asarray(n, dtype=dtype) * jnp.asarray(voxel_size, dtype=dtype))
     return grid
 
 
-def get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True):
-    one_d_grids = [get_1d_frequency_grid(sh, voxel_size, scaled) for sh in image_shape]
+def get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
+    one_d_grids = [get_1d_frequency_grid(sh, voxel_size, scaled, dtype=dtype) for sh in image_shape]
     grids = jnp.meshgrid(*one_d_grids, indexing="xy")
     return jnp.stack([g.ravel() for g in grids], axis=-1)
 
@@ -206,9 +206,9 @@ def _half_image_pixel_indices(image_shape):
     return (row_idx * W + packed_col[None, :]).ravel()
 
 
-def get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True):
+def get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
     """Half-image frequency coords consistent with ``full_image_to_half_image``."""
-    full = get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled)
+    full = get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled, dtype=dtype)
     return full[_half_image_pixel_indices(image_shape)]
 
 

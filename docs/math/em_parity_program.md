@@ -22428,3 +22428,53 @@ The centered raw-score RMS gap fell from `1.5e-4`--`5.3e-4` to
 The remaining tiny residual is compatible with the other serialized inputs
 and accumulated arithmetic, while the approximately 70x--1100x improvement
 directly confirms startup-noise rounding as the dominant apparent divergence.
+
+### Default x-half accumulator dtype boundary
+
+The double-parity work exposed a default-mode regression when the scoring
+pipeline supplied complex128 reconstruction rows to the independently
+configured complex64/float32 x-half BPref accumulator. The fused CUDA wrapper
+correctly rejects mixed specializations, but its per-particle caller had
+assumed that scoring and M-step precision always matched. Reduced data and
+weight rows are now converted once to the selected accumulator dtype before
+the particle launch loop. This retains float32 production behavior, supports
+float64 scoring with a float32 M-step, and preserves the opt-in double M-step.
+
+Focused CPU tests pass 10/10, including a regression with complex128/float64
+rows and complex64/float32 accumulators. Default-precision GPU job `60441355`
+completed the replayed first iteration without the dtype exception; poses and
+translations matched the RELION boundary exactly. Job `60441232` was an
+infrastructure-only false start because this cluster does not expose the
+generic `/scratch/gpfs` runtime root.
+
+### Dataset and CTF evaluation precision boundary
+
+The double-scoring scripts previously changed the dataset/backend output dtype
+only after `load_dataset` had already rounded CTF parameters, poses, and
+translations to float32. CTF frequency grids were also constructed in float32,
+and several dense scoring paths evaluated the CTF before casting its result to
+float64. The dataset loader now has an explicit complex64/complex128 precision
+contract that propagates through the image source/backend, metadata, subsets,
+and independent reloads. Frequency grids and CTF evaluation use the parameter
+dtype, and dense preprocessing, significance, local scoring, and sparse pass-2
+cast CTF parameters before evaluation. The complex64 default remains unchanged.
+
+The seeded particle STAR stores CTF fields as decimal text (generally six
+digits after the decimal point). RECOVAR's STAR reader already parsed those
+fields as float64, and RELION registers defocus metadata as `EMDL_DOUBLE` and
+uses double `RFLOAT` unless built with `RELION_SINGLE_PRECISION`; the premature
+RECOVAR loader cast therefore discarded real source precision. On this fixture,
+rounding the loaded CTF metadata through float32 changes a defocus value by as
+much as `9.375e-4` Angstrom.
+
+Focused precision tests pass 7/7 and the CPU EM fast guard passes 16/16. GPU
+job `60477812` completed the three-iteration float64 replay on an A100 80 GB.
+Controlled job `60477853` repeated it with only the CTF metadata rounded through
+float32. The full-precision and ablation runs selected exactly the same poses
+and translations in all three iterations. Their BPref numerator and denominator
+differ by only about `3.1e-8`/`1.9e-8` relative L2 in iteration 1 and
+`6.8e-8`/`5.1e-8` by iteration 3; merged GT correlations differ by at most
+`3.8e-10`. Relative-L2 gaps to RELION in `tau2` and `sigma2` change by less
+than approximately `5e-9` absolute between the two arms. Thus this is a valid
+precision correction, but it is not the dominant cause of the remaining
+`tau2`, `sigma2`, or iteration-3 near-tie pose discrepancy.

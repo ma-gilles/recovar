@@ -5642,6 +5642,18 @@ def _accumulate_relion_x_half_per_particle_launches(
                 log_label_prefix,
             )
 
+        # The fused CUDA target is specialized by the BPref accumulator
+        # dtype. Scoring and M-step precision are independently gated, so
+        # convert reduced rows once at this boundary rather than assuming that
+        # scoring precision matches accumulator precision.
+        fused_complex_dtype = (
+            jnp.complex128
+            if y_volume.dtype == jnp.dtype(jnp.complex128)
+            else jnp.complex64
+        )
+        values = jnp.asarray(values, dtype=fused_complex_dtype)
+        ctf_values = jnp.asarray(ctf_values, dtype=ctf_volume.dtype)
+
     actual_counts = np.asarray(actual_counts, dtype=np.int64)
     if values.shape[:2] != rotations.shape[:2] or ctf_values.shape[:2] != values.shape[:2]:
         raise ValueError("per-particle x-half diagnostic requires matching (particle, rotation) axes")
@@ -11073,7 +11085,7 @@ def _prepare_bucket_io(
     ctf_half = (
         jnp.asarray(ctf_half_rfloat, dtype=acc_real_dtype)
         if ctf_half_rfloat is not None
-        else config.compute_ctf_half(ctf_params)
+        else config.compute_ctf_half(jnp.asarray(ctf_params, dtype=acc_real_dtype))
     )
     batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
     relion_score_corr_img_half = None

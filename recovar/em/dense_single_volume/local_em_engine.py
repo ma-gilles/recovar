@@ -1689,7 +1689,12 @@ def _prepare_local_exact_bucket(
         )
 
     ctf_t0 = time.time()
-    ctf_half = config.compute_ctf_half(ctf_params)
+    ctf_eval_params = (
+        jnp.asarray(ctf_params, dtype=score_real_dtype)
+        if score_real_dtype is not None
+        else ctf_params
+    )
+    ctf_half = config.compute_ctf_half(ctf_eval_params)
     ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
     ctf2_over_nv_noise = (
         noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half

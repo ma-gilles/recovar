@@ -37,6 +37,15 @@ RelionFourierBackend = Literal["host_numpy", "jax_gpu", "relion_cuda"]
 _RELION_FOURIER_BACKENDS = frozenset(("host_numpy", "jax_gpu", "relion_cuda"))
 
 
+def _normalize_image_dtype(dtype):
+    """Return the supported complex scalar type for image Fourier data."""
+
+    normalized = np.dtype(dtype)
+    if normalized not in (np.dtype(np.complex64), np.dtype(np.complex128)):
+        raise TypeError(f"image dtype must be complex64 or complex128, got {normalized}")
+    return normalized.type
+
+
 def _apply_relion_soft_image_mask_numpy(images: np.ndarray, image_mask: np.ndarray) -> np.ndarray:
     """Apply RELION's background-fill image mask using NumPy arithmetic."""
 
@@ -186,6 +195,7 @@ class ParticleImageDataset:
         strip_prefix: Optional[str] = None,
         downsample_D: Optional[int] = None,
         device=None,
+        dtype=np.complex64,
         **kwargs,
     ):
         if padding != 0:
@@ -215,7 +225,8 @@ class ParticleImageDataset:
         if self.image_size % 2 != 0:
             raise ValueError(f"Image size must be even, got {self.image_size}")
 
-        self.dtype = np.complex64
+        self.dtype = _normalize_image_dtype(dtype)
+        self.real_dtype = np.empty((), dtype=self.dtype).real.dtype
         self.image_shape = (self.image_size, self.image_size)
         self.total_pixels = self.image_size * self.image_size
         self.image_mask = np.array(mask.window_mask(self.image_size, 0.85, 0.99))
@@ -340,6 +351,7 @@ class ParticleImageDataset:
                 transformed = _centered_fft2_numpy(images_np * self.mult)
                 return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype, copy=False)
 
+        images = jnp.asarray(images, dtype=self.real_dtype)
         if apply_image_mask:
             if self.image_mask_mode == "relion_normalize_fill":
                 # RELION normalize.cpp: bg-mean subtract + bg-std normalize, then soft-mask blend.
@@ -435,8 +447,8 @@ class ParticleImageDataset:
                 if apply_image_mask:
                     images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
                 if self.relion_fourier_backend == "jax_gpu":
-                    transformed = _centered_rfft2_jax(images_np * np.float32(self.mult))
-                    return transformed.reshape((transformed.shape[0], -1)).astype(jnp.complex64)
+                    transformed = _centered_rfft2_jax(images_np * self.real_dtype.type(self.mult))
+                    return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype)
                 if self.relion_fourier_backend != "host_numpy":
                     raise ValueError(
                         f"Unsupported RELION Fourier backend {self.relion_fourier_backend!r}; "
@@ -445,6 +457,7 @@ class ParticleImageDataset:
                 transformed = _centered_rfft2_numpy(images_np * self.mult)
                 return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype, copy=False)
 
+        images = jnp.asarray(images, dtype=self.real_dtype)
         if apply_image_mask:
             if self.image_mask_mode == "relion_normalize_fill":
                 images = mask.apply_relion_soft_image_mask(images, self.image_mask, relion_normalize=True)
@@ -533,9 +546,9 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.num_particles = len(self.particle_groups)
         self.dataset_tilt_indices = [canonical_groups.index(gn) for gn in self.particle_groups.keys()]
 
-        self.ctfscalefactor = np.asarray(star.df["_rlnCtfScalefactor"], dtype=np.float32)
+        self.ctfscalefactor = np.asarray(star.df["_rlnCtfScalefactor"], dtype=self.real_dtype)
         if "_rlnCtfBfactor" in star.df.columns:
-            self.ctfBfactor = np.asarray(star.df["_rlnCtfBfactor"], dtype=np.float32)
+            self.ctfBfactor = np.asarray(star.df["_rlnCtfBfactor"], dtype=self.real_dtype)
         elif tilt_file_option == "warp":
             raise ValueError(
                 "Warp tilt ordering requires '_rlnCtfBfactor' column in the "
@@ -543,7 +556,7 @@ class TiltSeriesDataset(ParticleImageDataset):
                 "was exported from Warp with B-factor information."
             )
         if tilt_file_option == "relion5":
-            self.dose = np.asarray(star.df["_rlnMicrographPreExposure"], dtype=np.float32)
+            self.dose = np.asarray(star.df["_rlnMicrographPreExposure"], dtype=self.real_dtype)
 
         self._compute_tilt_ordering(tilt_file_option)
 

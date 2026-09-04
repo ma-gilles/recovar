@@ -780,7 +780,8 @@ def run_local_bucket_big_jit(
         batch = _apply_integer_pre_shifts(batch, integer_pre_shifts)
 
     precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
-    ctf_half = config.compute_ctf_half(ctf_params).astype(precision_policy.score_real_dtype)
+    ctf_params = jnp.asarray(ctf_params, dtype=precision_policy.score_real_dtype)
+    ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = noise_variance_half.astype(precision_policy.score_real_dtype)
     translation_phases_half = translation_phases_half.astype(precision_policy.score_complex_dtype)
     if relion_score_translation_angles is not None:

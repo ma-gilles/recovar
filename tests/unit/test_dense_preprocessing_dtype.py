@@ -20,6 +20,34 @@ class _Complex64HalfDataset:
         return jnp.ones((batch.shape[0], 40), dtype=jnp.complex64)
 
 
+class _CapturingCtfConfig:
+    image_shape = (8, 8)
+
+    def __init__(self):
+        self.input_dtype = None
+
+    def compute_ctf_half(self, ctf_params):
+        self.input_dtype = ctf_params.dtype
+        return jnp.ones((ctf_params.shape[0], 40), dtype=ctf_params.dtype)
+
+
+def test_dense_preprocessing_casts_ctf_parameters_before_evaluation():
+    config = _CapturingCtfConfig()
+    preprocess_batch(
+        _Complex64HalfDataset(),
+        jnp.zeros((2, 64), dtype=jnp.float32),
+        jnp.ones((2, 9), dtype=jnp.float32),
+        np.ones(40, dtype=np.float64),
+        np.zeros((1, 2), dtype=np.float64),
+        config,
+        score_complex_dtype=jnp.complex128,
+        score_real_dtype=jnp.float64,
+        norm_real_dtype=jnp.float64,
+    )
+
+    assert config.input_dtype == jnp.float64
+
+
 def test_dense_preprocessing_tiles_score_dtype_before_translation_expansion():
     batch = jnp.zeros((2, 64), dtype=jnp.float32)
     ctf_params = jnp.ones((2, 9), dtype=jnp.float64)

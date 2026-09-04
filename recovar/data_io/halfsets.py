@@ -42,6 +42,7 @@ class HalfsetDatasetSpec:
     premultiplied_ctf: bool = False
     strip_prefix: str | None = None
     downsample_D: int | None = None
+    dtype: type = np.complex64
 
     @classmethod
     def from_args(cls, args):
@@ -68,6 +69,7 @@ class HalfsetDatasetSpec:
             strip_prefix=getattr(args, "strip_prefix", None),
             downsample_D=getattr(args, "downsample", None),
             uninvert_data=uninvert_data,
+            dtype=getattr(args, "dtype", np.complex64),
         )
 
 
@@ -362,6 +364,7 @@ def load_halfset_dataset(spec: HalfsetDatasetSpec, *, ind_split, lazy=False):
         premultiplied_ctf=spec.premultiplied_ctf,
         strip_prefix=spec.strip_prefix,
         downsample_D=spec.downsample_D,
+        dtype=spec.dtype,
     )
 
     orig_to_local = np.empty(int(all_indices.max()) + 1, dtype=np.int32)

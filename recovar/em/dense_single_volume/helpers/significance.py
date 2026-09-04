@@ -1450,7 +1450,7 @@ def _compute_significance_batched(
             apply_image_mask=score_with_masked_images,
         )
         processed_half = jnp.asarray(processed_half)
-        ctf_half = config.compute_ctf_half(ctf_params)
+        ctf_half = config.compute_ctf_half(jnp.asarray(ctf_params, dtype=score_real_dtype))
         ctf2_over_nv_half = ctf_half**2 / noise_variance_half
         ctf_weighted = processed_half * ctf_half / noise_variance_half
         translations_tiled = jnp.repeat(jnp.asarray(translations)[None], batch_size, axis=0).reshape(
@@ -2535,7 +2535,7 @@ def _compute_k_class_significance_batched(
             apply_image_mask=score_with_masked_images,
         )
         processed_half = jnp.asarray(processed_half)
-        ctf_half = config.compute_ctf_half(ctf_params)
+        ctf_half = config.compute_ctf_half(jnp.asarray(ctf_params, dtype=score_real_dtype))
         ctf2_over_nv_half = ctf_half**2 / noise_variance_half
         ctf_weighted = processed_half * ctf_half / noise_variance_half
         translations_tiled = jnp.repeat(jnp.asarray(translations)[None], batch_size, axis=0).reshape(

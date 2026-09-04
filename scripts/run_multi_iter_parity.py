@@ -1771,13 +1771,21 @@ def main():
         vol_ft_h2 = np.array(ftu.get_dft3(jnp.array(vol_h2))).reshape(-1)
 
     # ---- Dataset + half-set split ----
-    ds = load_dataset(args.data_star)
-    if os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower() in {"1", "true", "yes", "on"}:
-        ds.dtype = np.complex128
-        ds.dtype_real = np.dtype(np.float64)
-        image_backend = ds.image_source.backend
-        image_backend.dtype = np.complex128
-        print("  Double scoring: preserving float64/complex128 particle preprocessing")
+    double_image_preprocessing = os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    ds = load_dataset(
+        args.data_star,
+        dtype=np.complex128 if double_image_preprocessing else np.complex64,
+    )
+    if double_image_preprocessing:
+        print(
+            "  Double scoring: loading metadata in float64 and preserving "
+            "float64/complex128 particle preprocessing"
+        )
     if args.relion_native_lane_softmask_reduction:
         if args.image_fourier_backend != "relion_cuda":
             raise ValueError(

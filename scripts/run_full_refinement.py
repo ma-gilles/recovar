@@ -3218,21 +3218,19 @@ def main():
     logger.info("Loading dataset from %s", args.data_dir)
     from recovar.data_io.cryoem_dataset import load_dataset
 
-    ds = load_dataset(
-        os.path.join(args.data_dir, "particles.star"),
-        lazy=False,
-    )
     _double_image_preprocessing = (
         os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     )
+    ds = load_dataset(
+        os.path.join(args.data_dir, "particles.star"),
+        lazy=False,
+        dtype=np.complex128 if _double_image_preprocessing else np.complex64,
+    )
     if _double_image_preprocessing:
-        ds.dtype = np.complex128
-        ds.dtype_real = np.dtype(np.float64)
-        image_backend = ds.image_source.backend
-        image_backend.dtype = np.complex128
         logger.info(
-            "Double scoring: preserving float64/complex128 through particle masking and FFT"
+            "Double scoring: loading metadata in float64 and preserving "
+            "float64/complex128 through particle masking and FFT"
         )
     relion_mask_params = _maybe_apply_relion_image_mask(
         ds,
