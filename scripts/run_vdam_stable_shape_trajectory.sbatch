@@ -32,6 +32,7 @@ LAST_ITERATION=${VDAM_STABLE_TRAJECTORY_LAST_ITERATION:-50}
 STABLE_FOURIER_WINDOW_SHAPES=${VDAM_STABLE_TRAJECTORY_STABLE_FOURIER_WINDOW_SHAPES:-1}
 STABLE_FOURIER_WINDOW_QUANTUM=${VDAM_STABLE_TRAJECTORY_STABLE_FOURIER_WINDOW_QUANTUM:-8}
 STABLE_FLAT_ROW_CAPACITY=${VDAM_STABLE_TRAJECTORY_STABLE_FLAT_ROW_CAPACITY:-0}
+HYBRID_BLOCK_CAPACITY=${VDAM_STABLE_TRAJECTORY_HYBRID_BLOCK_CAPACITY:-64}
 COARSE_MODE=${VDAM_STABLE_TRAJECTORY_COARSE_MODE:-hybrid}
 ACCEPTANCE=${REPO_ROOT}/scripts/vdam_coarse_combined_true200_acceptance.json
 ANALYZER=${REPO_ROOT}/scripts/analyze_vdam_stable_shape_trajectory.py
@@ -94,6 +95,12 @@ if ! [[ "${STABLE_FOURIER_WINDOW_QUANTUM}" =~ ^[0-9]+$ ]] \
     "${STABLE_FOURIER_WINDOW_QUANTUM}" >&2
   exit 2
 fi
+if ! [[ "${HYBRID_BLOCK_CAPACITY}" =~ ^[0-9]+$ ]] \
+  || (( HYBRID_BLOCK_CAPACITY < 1 )); then
+  printf 'VDAM_STABLE_TRAJECTORY_HYBRID_BLOCK_CAPACITY must be a positive integer, got %s\n' \
+    "${HYBRID_BLOCK_CAPACITY}" >&2
+  exit 2
+fi
 case "${COARSE_MODE}" in
   rectangular|fused|hybrid|hybrid_fused_fallback) ;;
   *)
@@ -131,6 +138,8 @@ printf '%s\n' "${STABLE_FOURIER_WINDOW_QUANTUM}" > \
   "${ROOT}/provenance/stable_fourier_window_quantum.txt"
 printf '%s\n' "${STABLE_FLAT_ROW_CAPACITY}" > \
   "${ROOT}/provenance/stable_flat_row_capacity.txt"
+printf '%s\n' "${HYBRID_BLOCK_CAPACITY}" > \
+  "${ROOT}/provenance/hybrid_block_capacity.txt"
 printf '%s\n' "${COARSE_MODE}" > "${ROOT}/provenance/coarse_mode.txt"
 nvidia-smi -i "${selected_gpu_uuid}" -q > "${ROOT}/provenance/nvidia_smi_q.txt"
 env | LC_ALL=C sort > "${ROOT}/provenance/submission_environment.txt"
@@ -150,6 +159,10 @@ COMMON_ENVIRONMENT=(
   "RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION=1"
   "RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM=1"
   "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=0"
+  # This intentional late override must follow the frozen environment.  It
+  # lets focused gates force the whole-batch fallback without silently being
+  # reset to the acceptance contract's ordinary capacity.
+  "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY=${HYBRID_BLOCK_CAPACITY}"
 )
 case "${COARSE_MODE}" in
   rectangular)
@@ -245,15 +258,16 @@ for arm in "${ARM_ORDER[@]}"; do
     fi
   fi
   "${PIXI_PY}" - "${run_root}/command.json" "${stable}" "${stable_flat}" \
-    "${stable_quantum}" \
+    "${stable_quantum}" "${HYBRID_BLOCK_CAPACITY}" \
     "${command[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-target, stable, stable_flat, stable_quantum, *argv = sys.argv[1:]
+target, stable, stable_flat, stable_quantum, hybrid_block_capacity, *argv = sys.argv[1:]
 Path(target).write_text(json.dumps({
     "argv": argv,
+    "hybrid_block_capacity": int(hybrid_block_capacity),
     "stable_fourier_window_shapes": bool(int(stable)),
     "stable_flat_row_capacity": bool(int(stable_flat)),
     "stable_fourier_window_quantum": int(stable_quantum),

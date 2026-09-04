@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,6 +16,8 @@ from scripts.analyze_vdam_stable_shape_trajectory import (
     summarize_size_schedule,
     validate_stable_flat_capacity_execution,
 )
+
+HARNESS = Path(__file__).resolve().parents[3] / "scripts/run_vdam_stable_shape_trajectory.sbatch"
 
 
 def test_analyzer_cli_can_isolate_flat_row_abi_from_fourier_shapes():
@@ -184,3 +187,27 @@ def test_schedule_divergence_is_a_science_failure_not_a_setup_error():
         "feature": "current_size_schedule",
         "values": sizes,
     }
+
+
+def test_runner_can_force_hybrid_fallback_after_frozen_environment():
+    text = HARNESS.read_text()
+
+    frozen_environment = text.index("COMMON_ENVIRONMENT=(")
+    capacity_override = text.index(
+        '"RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY=${HYBRID_BLOCK_CAPACITY}"'
+    )
+    assert frozen_environment < capacity_override
+    assert (
+        "HYBRID_BLOCK_CAPACITY=${VDAM_STABLE_TRAJECTORY_HYBRID_BLOCK_CAPACITY:-64}"
+        in text
+    )
+    assert '"hybrid_block_capacity": int(hybrid_block_capacity)' in text
+    assert '"${ROOT}/provenance/hybrid_block_capacity.txt"' in text
+
+
+def test_runner_rejects_nonpositive_hybrid_fallback_capacity():
+    text = HARNESS.read_text()
+
+    assert '[[ "${HYBRID_BLOCK_CAPACITY}" =~ ^[0-9]+$ ]]' in text
+    assert "(( HYBRID_BLOCK_CAPACITY < 1 ))" in text
+    assert "VDAM_STABLE_TRAJECTORY_HYBRID_BLOCK_CAPACITY must be a positive integer" in text
