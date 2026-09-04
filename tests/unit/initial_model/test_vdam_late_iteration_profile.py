@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from scripts.run_vdam_late_iteration_profile import (
     _all_optimized_q32_environment,
     _capture_cold_compile_calls,
     _capture_raw_image_cache_loads,
+    _configure_initial_model_stage_profile,
     _process_resource_delta,
     _profile_metadata,
     _recovar_argv,
@@ -199,6 +201,62 @@ def test_late_profile_metadata_requires_exactly_one_diagnostic_iteration(tmp_pat
     Path(f"{prefix}_it182_recovar_meta.json").write_text("{}")
     with pytest.raises(RuntimeError, match="exactly one iteration"):
         _profile_metadata(prefix, 181)
+
+
+def test_late_profile_metadata_supports_profile_free_production_topology(
+    tmp_path,
+    monkeypatch,
+):
+    prefix = tmp_path / "warm" / "run"
+    prefix.parent.mkdir()
+    meta_path = Path(f"{prefix}_it181_recovar_meta.json")
+    metadata = {
+        "current_size": 128,
+        "healpix_order": 3,
+        "n_rotations": 294912,
+        "n_translations": 116,
+        "subset_size": 3,
+        "selected_particle_ids": [2, 7, 11],
+        "random_perturbation": 0.1,
+    }
+    meta_path.write_text(json.dumps(metadata))
+    Path(f"{prefix}_diagnostic_continuation.json").write_text(
+        json.dumps(
+            {
+                "classification": "diagnostic_performance_only",
+                "iteration": 180,
+            }
+        )
+    )
+    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PROFILE", raising=False)
+
+    report = _profile_metadata(
+        prefix,
+        181,
+        initial_model_stage_profile_enabled=False,
+    )
+
+    assert report["iteration_profile"] is None
+    assert report["execution_contract"]["profile_checked"] is False
+    assert report["execution_contract"]["profile_exact"] is False
+
+    metadata["vdam_iteration_profile_summary"] = {"expectation_time_s": 1.0}
+    meta_path.write_text(json.dumps(metadata))
+    with pytest.raises(RuntimeError, match="while explicitly disabled"):
+        _profile_metadata(
+            prefix,
+            181,
+            initial_model_stage_profile_enabled=False,
+        )
+
+
+def test_late_profile_stage_profile_selector_uses_environment_presence(monkeypatch):
+    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "stale")
+    _configure_initial_model_stage_profile(False)
+    assert "RECOVAR_INITIAL_MODEL_PROFILE" not in os.environ
+
+    _configure_initial_model_stage_profile(True)
+    assert os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] == "1"
 
 
 def test_nsys_sqlite_summary_reports_invocations_shapes_and_busy_fraction(tmp_path):
@@ -420,6 +478,18 @@ def _complete_q32_profile_meta() -> dict:
         * 37,
         "actual_image_batch_sizes": [200],
         "physical_image_batch_sizes": [200],
+        "coarse_square_layout": {
+            "stable_fourier_window_shapes_requested": True,
+            "stable_fourier_window_shapes_effective": True,
+            "logical_current_size": 84,
+            "physical_current_size": 96,
+            "logical_square_pixels": 3612,
+            "physical_square_pixels": 4704,
+            "executed_square_pixels": 3612,
+            "logical_issue_stream_is_prefix": True,
+            "physical_tail_zero_weighted": True,
+            "physical_tail_skipped_by_runtime_count": True,
+        },
     }
     exact = {
         "skip_generic_default_enabled": False,
@@ -629,6 +699,12 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert "recovar_execution_contract.json" in launcher
     assert "VDAM_LATE_PROFILE_HOST_ATTRIBUTION" in launcher
     assert "VDAM_LATE_PROFILE_COLD_COMPILE_ATTRIBUTION" in launcher
+    assert "VDAM_LATE_PROFILE_STAGE_PROFILE" in launcher
+    assert '--initial-model-stage-profile "${STAGE_PROFILE_MODE}"' in launcher
+    assert (
+        "bool(int(sys.argv[16])) or bool(int(sys.argv[17])) or bool(int(sys.argv[18]))"
+        in launcher
+    )
     assert "--python-sampling=true" in launcher
     assert "cuda,nvtx,osrt,python-gil" in launcher
     assert "JAX_SKIP_CUDA_CONSTRAINTS_CHECK=1" in launcher

@@ -109,6 +109,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "execution profile; diagnostic preserves the legacy unchecked mode."
         ),
     )
+    parser.add_argument(
+        "--initial-model-stage-profile",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Enable the synchronization-heavy RECOVAR initial-model stage profiler. "
+            "Use off to measure the production execution topology with only the final "
+            "output barrier."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -776,6 +786,7 @@ def _profile_metadata(
     *,
     execution_contract: str = "diagnostic",
     image_shape: tuple[int, int] = (128, 128),
+    initial_model_stage_profile_enabled: bool = True,
 ) -> dict[str, object]:
     meta_path = Path(f"{output_prefix}_it{iteration:03d}_recovar_meta.json")
     continuation_path = Path(f"{output_prefix}_diagnostic_continuation.json")
@@ -793,8 +804,13 @@ def _profile_metadata(
     if int(continuation.get("iteration", -1)) + 1 != iteration:
         raise RuntimeError("continuation metadata does not identify the incoming iteration")
     profile = meta.get("vdam_iteration_profile_summary")
-    if not isinstance(profile, dict) or not profile:
-        raise RuntimeError("RECOVAR_INITIAL_MODEL_PROFILE did not emit stage timings")
+    if initial_model_stage_profile_enabled:
+        if not isinstance(profile, dict) or not profile:
+            raise RuntimeError("RECOVAR_INITIAL_MODEL_PROFILE did not emit stage timings")
+    elif profile is not None:
+        raise RuntimeError(
+            "RECOVAR_INITIAL_MODEL_PROFILE emitted stage timings while explicitly disabled"
+        )
     schedule_keys = (
         "current_size",
         "healpix_order",
@@ -827,11 +843,20 @@ def _profile_metadata(
             "iteration metadata subset_size does not match selected_particle_ids: "
             f"{subset_size} != {len(selected_particle_ids)}"
         )
-    contract = _validate_profile_execution_contract(
-        meta,
-        contract_mode=execution_contract,
-        image_shape=image_shape,
-    )
+    if initial_model_stage_profile_enabled:
+        contract = _validate_profile_execution_contract(
+            meta,
+            contract_mode=execution_contract,
+            image_shape=image_shape,
+        )
+    else:
+        contract = {
+            "mode": execution_contract,
+            "profile_checked": False,
+            "profile_exact": False,
+            "environment": _validate_profile_contract_environment(execution_contract),
+            "reason": "initial-model stage profiler disabled for production-topology timing",
+        }
     return {
         "meta_path": str(meta_path.resolve()),
         "meta_sha256": _sha256(meta_path),
@@ -844,6 +869,15 @@ def _profile_metadata(
         "schedule": {key: meta[key] for key in schedule_keys},
         "execution_contract": contract,
     }
+
+
+def _configure_initial_model_stage_profile(enabled: bool) -> None:
+    """Select profiling by presence, matching the production driver's contract."""
+
+    if enabled:
+        os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
+    else:
+        os.environ.pop("RECOVAR_INITIAL_MODEL_PROFILE", None)
 
 
 def _effects_barrier() -> None:
@@ -1112,9 +1146,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output_root.mkdir(parents=True)
 
-    # The stage profiler synchronizes each major phase, which is intentional:
-    # the run is for attribution and cannot be promoted as a science result.
-    os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
+    # The stage profiler synchronizes each major phase.  The off mode measures
+    # production topology and retains only the final output barrier below.
+    initial_model_stage_profile_enabled = args.initial_model_stage_profile == "on"
+    _configure_initial_model_stage_profile(initial_model_stage_profile_enabled)
     os.environ.setdefault("JAX_LOG_COMPILES", "1")
 
     profiler_start: Callable[[], None] | None = None
@@ -1166,6 +1201,7 @@ def main(argv: list[str] | None = None) -> int:
                     target_iteration,
                     execution_contract=args.execution_contract,
                     image_shape=(int(args.image_size), int(args.image_size)),
+                    initial_model_stage_profile_enabled=initial_model_stage_profile_enabled,
                 ),
             }
             if cache_events is not None:
@@ -1189,6 +1225,7 @@ def main(argv: list[str] | None = None) -> int:
         "input_star_sha256": _sha256(input_star),
         "data_dir": str(data_dir),
         "cuda_profiler_range": bool(args.cuda_profiler_range),
+        "initial_model_stage_profile_enabled": initial_model_stage_profile_enabled,
         "raw_image_cache_audit_enabled": bool(args.audit_raw_image_cache),
         "cold_compile_callsite_log": (
             str(args.cold_compile_callsite_log.resolve())

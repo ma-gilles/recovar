@@ -57,6 +57,7 @@ EXECUTION_CONTRACT=${VDAM_LATE_PROFILE_CONTRACT:-diagnostic}
 IMAGE_SIZE=${VDAM_LATE_PROFILE_IMAGE_SIZE:-128}
 HOST_ATTRIBUTION=${VDAM_LATE_PROFILE_HOST_ATTRIBUTION:-0}
 COLD_COMPILE_ATTRIBUTION=${VDAM_LATE_PROFILE_COLD_COMPILE_ATTRIBUTION:-0}
+STAGE_PROFILE=${VDAM_LATE_PROFILE_STAGE_PROFILE:-1}
 REUSE_NATIVE_ROOT=${VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT:-}
 EXPECTED_REUSED_NATIVE_NSYS_SHA256=${EXPECTED_REUSED_NATIVE_NSYS_SHA256:-}
 
@@ -90,6 +91,12 @@ test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${IMAGE_SIZE}" =~ ^[0-9]+$ ]]
 [[ "${HOST_ATTRIBUTION}" =~ ^[01]$ ]]
 [[ "${COLD_COMPILE_ATTRIBUTION}" =~ ^[01]$ ]]
+[[ "${STAGE_PROFILE}" =~ ^[01]$ ]]
+if [[ "${STAGE_PROFILE}" = 1 ]]; then
+  STAGE_PROFILE_MODE=on
+else
+  STAGE_PROFILE_MODE=off
+fi
 test "${IMAGE_SIZE}" -gt 0
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
@@ -164,6 +171,8 @@ printf 'execution_contract=%s\nimage_size=%s\n' \
 printf 'host_attribution=%s\n' "${HOST_ATTRIBUTION}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
 printf 'cold_compile_attribution=%s\n' "${COLD_COMPILE_ATTRIBUTION}" \
+  >> "${PROVENANCE}/candidate_parameters.txt"
+printf 'initial_model_stage_profile=%s\n' "${STAGE_PROFILE}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
@@ -436,6 +445,7 @@ RECOVAR_COMMAND=(
   --exact-local-bucket-radix "${EXACT_LOCAL_BUCKET_RADIX}"
   --exact-local-physical-order-chunk-size "${EXACT_LOCAL_PHYSICAL_ORDER_CHUNK_SIZE}"
   --execution-contract "${EXECUTION_CONTRACT}"
+  --initial-model-stage-profile "${STAGE_PROFILE_MODE}"
   --cuda-profiler-range
 )
 if [[ "${STABLE_FOURIER_WINDOW_SHAPES}" = 1 ]]; then
@@ -478,17 +488,26 @@ import sys
 from pathlib import Path
 
 profile = json.loads(Path(sys.argv[1]).read_text())
+stage_profile_enabled = profile["initial_model_stage_profile_enabled"]
 payload = {
     "mode": profile["execution_contract_mode"],
     "environment": profile["execution_contract_environment"],
+    "initial_model_stage_profile_enabled": stage_profile_enabled,
     "cold": profile["cold"]["execution_contract"],
     "warm": profile["warm"]["execution_contract"],
 }
-if payload["mode"] != "diagnostic":
+if stage_profile_enabled and payload["mode"] != "diagnostic":
     for label in ("cold", "warm"):
         contract = payload[label]
         if not contract.get("profile_exact") or not contract.get("profile_checked"):
             raise RuntimeError(f"{label} execution contract is not exact")
+elif not stage_profile_enabled:
+    for label in ("cold", "warm"):
+        contract = payload[label]
+        if contract.get("profile_exact") or contract.get("profile_checked"):
+            raise RuntimeError(f"{label} production-topology contract claims profile validation")
+        if profile[label]["iteration_profile"] is not None:
+            raise RuntimeError(f"{label} production-topology run emitted stage timings")
 Path(sys.argv[2]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 test -s "${PROVENANCE}/recovar_execution_contract.json"
@@ -524,7 +543,7 @@ done
   "${native_profile_started}" "${native_profile_finished}" \
   "${recovar_profile_started}" "${recovar_profile_finished}" \
   "${REUSE_NATIVE_ROOT}" "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}" \
-  "${HOST_ATTRIBUTION}" "${COLD_COMPILE_ATTRIBUTION}" <<'PY'
+  "${HOST_ATTRIBUTION}" "${COLD_COMPILE_ATTRIBUTION}" "${STAGE_PROFILE}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -585,8 +604,9 @@ payload = {
     "native_capture": native_capture,
     "host_attribution": bool(int(sys.argv[16])),
     "cold_compile_attribution": bool(int(sys.argv[17])),
+    "initial_model_stage_profile_enabled": bool(int(sys.argv[18])),
     "timing_truth_allowed": not (
-        bool(int(sys.argv[16])) or bool(int(sys.argv[17]))
+        bool(int(sys.argv[16])) or bool(int(sys.argv[17])) or bool(int(sys.argv[18]))
     ),
     "native_stop_mechanism": "gdb second-expectation sentinel after exact profiled iteration",
     "science_promotion_allowed": False,
