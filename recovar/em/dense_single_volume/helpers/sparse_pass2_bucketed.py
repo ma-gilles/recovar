@@ -11540,16 +11540,18 @@ def _relion_exact_ctf_source_star(experiment_dataset) -> Path:
     return Path(source_star).expanduser().resolve()
 
 
-def _relion_exact_ctf_half_from_source_star(
+def _relion_exact_ctf_half_from_source_star_host(
     experiment_dataset,
     image_indices,
     image_shape,
 ):
-    """Evaluate source-precision SPA CTFs with RELION's scalar implementation.
+    """Evaluate source-precision SPA CTFs into one host-native operand.
 
     The result uses RECOVAR's centered-y half-spectrum coordinates and sign.
     The source STAR is mandatory because the ordinary dataset metadata has
-    already been rounded to float32 before pass 2.
+    already been rounded to float32 before pass 2.  RELION's binding and the
+    source cache are host-native; callers that must pad on the image axis use
+    this helper so they place the final operand exactly once.
     """
 
     source_path = _relion_exact_ctf_source_star(experiment_dataset)
@@ -11629,7 +11631,30 @@ def _relion_exact_ctf_half_from_source_star(
             cached_image = (-np.fft.fftshift(native, axes=0)).reshape(-1)
             cache["images"][original_index] = cached_image
         ctf_rows.append(cached_image)
-    return jnp.asarray(np.stack(ctf_rows, axis=0), dtype=jnp.float64)
+    return np.asarray(np.stack(ctf_rows, axis=0), dtype=np.float64)
+
+
+def _relion_exact_ctf_half_from_source_star(
+    experiment_dataset,
+    image_indices,
+    image_shape,
+):
+    """Return the shared source-precision CTF operand on the JAX device.
+
+    Device-first EM callers reuse this single binary64 placement for their
+    float32 score and reconstruction operands.  Host-padding callers should
+    use :func:`_relion_exact_ctf_half_from_source_star_host` to avoid a
+    device-to-host-to-device round trip.
+    """
+
+    return jnp.asarray(
+        _relion_exact_ctf_half_from_source_star_host(
+            experiment_dataset,
+            image_indices,
+            image_shape,
+        ),
+        dtype=jnp.float64,
+    )
 
 
 def _prepare_bucket_io(

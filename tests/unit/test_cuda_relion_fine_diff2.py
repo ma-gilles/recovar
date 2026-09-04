@@ -1066,6 +1066,83 @@ def test_exact_relion_ctf_source_defaults_to_dataset_star(monkeypatch, tmp_path)
         _relion_exact_ctf_source_star(SimpleNamespace(particles_file="particles.mrcs"))
 
 
+def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
+    monkeypatch,
+    tmp_path,
+):
+    from types import SimpleNamespace
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+            self.iloc = self
+
+        def __getitem__(self, index):
+            return self.rows[index]
+
+    class RelionBinding:
+        @staticmethod
+        def get_ctf_image(*_args):
+            return np.arange(12, dtype=np.float64).reshape(4, 3)
+
+    source = (tmp_path / "particles.star").resolve()
+    cache_key = (str(source), (4, 4))
+    particle = {
+        "rlnOpticsGroup": 1,
+        "rlnDefocusU": 10000.0,
+        "rlnDefocusV": 11000.0,
+        "rlnDefocusAngle": 12.0,
+        "rlnPhaseShift": 3.0,
+    }
+    optics = {
+        "rlnVoltage": 300.0,
+        "rlnSphericalAberration": 2.7,
+        "rlnAmplitudeContrast": 0.1,
+        "rlnImagePixelSize": 1.5,
+    }
+    monkeypatch.setattr(
+        sparse_pass2_bucketed,
+        "_relion_exact_ctf_source_star",
+        lambda _dataset: source,
+    )
+    monkeypatch.setitem(
+        sparse_pass2_bucketed._RELION_EXACT_CTF_SOURCE_CACHE,
+        cache_key,
+        {
+            "particles": Rows([particle]),
+            "optics": {1: optics},
+            "relion_bind": RelionBinding(),
+            "images": {},
+        },
+    )
+    dataset = SimpleNamespace(
+        original_image_indices_from_local=lambda indices: np.asarray(indices),
+    )
+
+    host_result = sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+        dataset,
+        np.asarray([0], dtype=np.int32),
+        (4, 4),
+    )
+    device_result = sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star(
+        dataset,
+        np.asarray([0], dtype=np.int32),
+        (4, 4),
+    )
+
+    assert type(host_result) is np.ndarray
+    assert host_result.dtype == np.float64
+    assert isinstance(device_result, jax.Array)
+    assert device_result.dtype == jnp.float64
+    np.testing.assert_array_equal(
+        host_result[0],
+        -np.fft.fftshift(np.arange(12, dtype=np.float64).reshape(4, 3), axes=0).reshape(-1),
+    )
+    np.testing.assert_array_equal(np.asarray(device_result), host_result)
+
+
 def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
     from recovar.em.dense_single_volume.helpers.significance import (
         _relion_coarse_gaussian_square_operands,

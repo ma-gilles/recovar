@@ -5860,7 +5860,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
 
     monkeypatch.setattr(
         local_engine_module._sparse_pass2_diagnostics,
-        "_relion_exact_ctf_half_from_source_star",
+        "_relion_exact_ctf_half_from_source_star_host",
         lambda *_args, **_kwargs: ctf_rfloat,
     )
     monkeypatch.setattr(

@@ -2720,12 +2720,12 @@ def _assemble_relion_exact_coarse_gaussian_operands(
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
         _relion_cuda_corr_img_from_native_noise_variance,
         _relion_cuda_pixel_correction_from_rfloat_ctf,
-        _relion_exact_ctf_half_from_source_star,
+        _relion_exact_ctf_half_from_source_star_host,
         _relion_translation_angles_f32,
     )
 
     ctf_half_rfloat_np = np.asarray(
-        _relion_exact_ctf_half_from_source_star(
+        _relion_exact_ctf_half_from_source_star_host(
             experiment_dataset,
             indices,
             image_shape,

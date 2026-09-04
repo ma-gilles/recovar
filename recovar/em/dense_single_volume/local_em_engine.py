@@ -4075,7 +4075,7 @@ def _prepare_local_exact_bucket(
     ctf_t0 = time.time()
     if relion_exact_bpref_operands:
         ctf_rfloat = np.asarray(
-            _sparse_pass2_diagnostics._relion_exact_ctf_half_from_source_star(
+            _sparse_pass2_diagnostics._relion_exact_ctf_half_from_source_star_host(
                 experiment_dataset,
                 image_indices,
                 config.image_shape,
@@ -5893,7 +5893,7 @@ def run_local_em_exact(
             bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
             if relion_exact_bpref_operands:
                 ctf_rfloat_unpadded = np.asarray(
-                    _sparse_pass2_diagnostics._relion_exact_ctf_half_from_source_star(
+                    _sparse_pass2_diagnostics._relion_exact_ctf_half_from_source_star_host(
                         experiment_dataset,
                         bucket_image_indices,
                         image_shape,
