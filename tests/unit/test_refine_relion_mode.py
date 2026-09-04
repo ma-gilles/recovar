@@ -3220,6 +3220,7 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
         rotation_log_prior=None,
         rotation_grid_random_perturbation=0.0,
         rotation_grid_angular_sampling_deg=None,
+        dtype=np.float32,
     ):
         _ = (
             prior_rotations,
@@ -3236,6 +3237,7 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             translation_prior_reference_translations,
             rotation_grid_random_perturbation,
             rotation_grid_angular_sampling_deg,
+            dtype,
         )
         captured["rotation_log_prior"] = (
             None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=np.float32).copy()
@@ -4800,6 +4802,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         rotation_log_prior=None,
         rotation_grid_random_perturbation=0.0,
         rotation_grid_angular_sampling_deg=None,
+        dtype=np.float32,
     ):
         captured["offset_range_pixels"] = offset_range_pixels
         captured["sigma_offset_angstrom"] = sigma_offset_angstrom
@@ -4816,11 +4819,11 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
             n_psi=1,
             rotation_offsets=np.array([0, 1], dtype=np.int64),
             rotation_ids_flat=np.array([0], dtype=np.int32),
-            rotations_flat=np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 1, axis=0),
-            rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+            rotations_flat=np.repeat(np.eye(3, dtype=dtype)[None, :, :], 1, axis=0),
+            rotation_log_priors_flat=np.zeros(1, dtype=dtype),
             rotation_counts=np.array([1], dtype=np.int32),
-            translation_grid=np.asarray(translations, dtype=np.float32),
-            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=np.float32),
+            translation_grid=np.asarray(translations, dtype=dtype),
+            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=dtype),
         )
 
     def fake_run_local_em_exact(*args, **kwargs):
@@ -5448,6 +5451,7 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         rotation_log_prior=None,
         rotation_grid_random_perturbation=0.0,
         rotation_grid_angular_sampling_deg=None,
+        dtype=np.float32,
     ):
         _ = (
             prior_rotations,
@@ -5465,18 +5469,18 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         captured["n_psi"] = int(grid_metadata["n_psi"])
         captured["rotation_grid_random_perturbation"] = rotation_grid_random_perturbation
         captured["rotation_grid_angular_sampling_deg"] = rotation_grid_angular_sampling_deg
-        captured["scored_rotations"] = np.asarray(rotation_grid_rotations, dtype=np.float32).copy()
+        captured["scored_rotations"] = np.asarray(rotation_grid_rotations, dtype=dtype).copy()
         return LocalHypothesisLayout(
             n_global_rotations=rotation_grid_rotations.shape[0],
             n_pixels=1,
             n_psi=1,
             rotation_offsets=np.array([0, 1], dtype=np.int64),
             rotation_ids_flat=np.array([0], dtype=np.int32),
-            rotations_flat=np.asarray(rotation_grid_rotations[:1], dtype=np.float32),
-            rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+            rotations_flat=np.asarray(rotation_grid_rotations[:1], dtype=dtype),
+            rotation_log_priors_flat=np.zeros(1, dtype=dtype),
             rotation_counts=np.array([1], dtype=np.int32),
-            translation_grid=np.asarray(translations, dtype=np.float32),
-            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=np.float32),
+            translation_grid=np.asarray(translations, dtype=dtype),
+            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=dtype),
         )
 
     def fake_run_local_em_exact(*args, **kwargs):
@@ -6346,16 +6350,24 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
 
     assert single_noise.wsum_norm_correction is not None
     assert single_without_shared_high.wsum_norm_correction is not None
+    assert result.noise_stats is not None
+    assert all(stats.wsum_norm_correction is not None for stats in result.noise_stats)
     assert result.aggregate_noise_stats is not None
     assert result.aggregate_noise_stats.wsum_norm_correction is not None
     aggregate_norm = np.asarray(result.aggregate_noise_stats.wsum_norm_correction)
     single_norm = np.asarray(single_noise.wsum_norm_correction)
     shared_high = single_norm - np.asarray(single_without_shared_high.wsum_norm_correction)
     duplicated_high = single_norm + shared_high
+    per_class_norm = np.stack([np.asarray(stats.wsum_norm_correction) for stats in result.noise_stats], axis=0)
     assert np.all(shared_high > 0.0)
+    # The identical classes have identical posterior-weighted residual terms;
+    # only class 0 receives RELION's unweighted high-shell contribution.  Test
+    # that decomposition directly.  Comparing the whole K-class aggregate to
+    # the single-class result also compares two independently normalized
+    # posteriors and is sensitive to backend-dependent float32 rounding.
     np.testing.assert_allclose(
-        aggregate_norm,
-        single_norm,
+        per_class_norm[0] - per_class_norm[1],
+        shared_high,
         rtol=5e-5,
         atol=1e-3,
     )
@@ -11356,8 +11368,25 @@ class TestRelionModeSmokeTest:
 
         manual_calls = []
 
-        def fake_manual(projector_half, rotations, image_shape, r_max, padding_factor, output_size):
-            manual_calls.append((projector_half.shape, rotations.shape, r_max, padding_factor, output_size))
+        def fake_manual(
+            projector_half,
+            rotations,
+            image_shape,
+            r_max,
+            padding_factor,
+            output_size,
+            relion_acc_double_floorf_quirk,
+        ):
+            manual_calls.append(
+                (
+                    projector_half.shape,
+                    rotations.shape,
+                    r_max,
+                    padding_factor,
+                    output_size,
+                    relion_acc_double_floorf_quirk,
+                )
+            )
             n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
             return jnp.ones((rotations.shape[0], n_half), dtype=jnp.complex64)
 
@@ -11398,6 +11427,7 @@ class TestRelionModeSmokeTest:
         )
 
         assert manual_calls
+        assert all(not call[-1] for call in manual_calls)
 
     def test_k_class_significance_texture_ppref_requests_compact_score_rows(
         self,
@@ -14269,7 +14299,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, fake_rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -14487,7 +14517,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(12 * (2 ** int(healpix_order)) ** 2, dtype=np.float64)
             / (12 * (2 ** int(healpix_order)) ** 2)
         ),
@@ -14671,7 +14701,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, fake_rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -14852,7 +14882,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(12 * (2 ** int(healpix_order)) ** 2, dtype=np.float64)
             / (12 * (2 ** int(healpix_order)) ** 2)
         ),
@@ -14968,7 +14998,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
             / max(1, fake_rotation_grid_size(healpix_order))
         ),
@@ -15071,7 +15101,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
             / max(1, fake_rotation_grid_size(healpix_order))
         ),
@@ -15258,7 +15288,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
             / max(1, fake_rotation_grid_size(healpix_order))
         ),
@@ -15453,7 +15483,7 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -15629,7 +15659,7 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, rotation_grid_size(healpix_order)),
                 dtype=np.float64,
@@ -16269,7 +16299,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: (
+        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
                 max(1, fake_rotation_grid_size(healpix_order)),
                 dtype=np.float64,
