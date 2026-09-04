@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -13,14 +14,19 @@ from scripts.run_vdam_late_iteration_profile import (
     _all_optimized_q32_environment,
     _capture_cold_compile_calls,
     _capture_raw_image_cache_loads,
+    _certify_profile_free_warm,
     _configure_initial_model_stage_profile,
     _process_resource_delta,
     _profile_metadata,
     _recovar_argv,
+    _stage_profile_enabled_by_arm,
     _validate_profile_contract_environment,
     _validate_profile_environment,
     _validate_profile_execution_contract,
+    _validate_profile_free_effective_route,
     _validate_reused_native_inputs,
+    _validate_sealed_recovar_environment,
+    _validate_static_input_manifest,
 )
 from scripts.summarize_vdam_nsys_sqlite import summarize
 
@@ -259,6 +265,76 @@ def test_late_profile_stage_profile_selector_uses_environment_presence(monkeypat
     assert os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] == "1"
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("on", {"cold": True, "warm": True}),
+        ("off", {"cold": False, "warm": False}),
+        ("certify-off", {"cold": True, "warm": False}),
+    ],
+)
+def test_late_profile_stage_profile_arm_topology(mode, expected):
+    assert _stage_profile_enabled_by_arm(mode) == expected
+
+
+def _write_minimal_profile_metadata(prefix: Path, selected_particle_ids: list[object]):
+    prefix.parent.mkdir(parents=True)
+    subset_size = len(selected_particle_ids) if selected_particle_ids else -1
+    Path(f"{prefix}_it181_recovar_meta.json").write_text(
+        json.dumps(
+            {
+                "current_size": 128,
+                "healpix_order": 3,
+                "n_rotations": 294912,
+                "n_translations": 116,
+                "subset_size": subset_size,
+                "selected_particle_ids": selected_particle_ids,
+                "random_perturbation": 0.1,
+                "vdam_iteration_profile_summary": {"expectation_time_s": 1.0},
+            }
+        )
+    )
+    Path(f"{prefix}_diagnostic_continuation.json").write_text(
+        json.dumps(
+            {
+                "classification": "diagnostic_performance_only",
+                "iteration": 180,
+            }
+        )
+    )
+
+
+def test_late_profile_particle_fingerprint_is_ordered_little_endian_i64(tmp_path):
+    prefix = tmp_path / "ordered" / "run"
+    _write_minimal_profile_metadata(prefix, [0, 1, 256])
+
+    report = _profile_metadata(prefix, 181)
+
+    assert report["selected_particle_fingerprint"] == {
+        "count": 3,
+        "encoding": "ordered_little_endian_int64",
+        "sha256": "0b01f6a4424ebacd98f58513bfdf5d010b7c70121dacb2e18ecf157805764770",
+    }
+    reverse = tmp_path / "reverse" / "run"
+    _write_minimal_profile_metadata(reverse, [256, 1, 0])
+    assert (
+        _profile_metadata(reverse, 181)["selected_particle_fingerprint"]["sha256"]
+        == "33fc2aff92177ca30b8208ad86928914d8e305b9a95cac61780fc496c852bb11"
+    )
+
+
+@pytest.mark.parametrize(
+    "particle_ids",
+    [[], [True], [-1], [2**63], [4, 4]],
+)
+def test_late_profile_particle_fingerprint_rejects_invalid_ids(tmp_path, particle_ids):
+    prefix = tmp_path / "invalid" / "run"
+    _write_minimal_profile_metadata(prefix, particle_ids)
+
+    with pytest.raises(RuntimeError, match="selected_particle_ids|subset_size"):
+        _profile_metadata(prefix, 181)
+
+
 def test_nsys_sqlite_summary_reports_invocations_shapes_and_busy_fraction(tmp_path):
     sqlite_path = tmp_path / "trace.sqlite"
     connection = sqlite3.connect(sqlite_path)
@@ -478,6 +554,14 @@ def _complete_q32_profile_meta() -> dict:
         * 37,
         "actual_image_batch_sizes": [200],
         "physical_image_batch_sizes": [200],
+        "fallback_reasons": {},
+        "overflow_latch_scope": "current_significance_call_exact_geometry_and_capacity",
+        "overflow_latch_active_at_return": False,
+        "overflow_latch_activation_count": 0,
+        "overflow_latch_static_dense_batch_count": 0,
+        "overflow_latch_static_dense_image_count": 0,
+        "selected_block_capacity": 64,
+        "max_selected_blocks_per_image": 6,
         "coarse_square_layout": {
             "stable_fourier_window_shapes_requested": True,
             "stable_fourier_window_shapes_effective": True,
@@ -561,8 +645,42 @@ def _complete_q32_profile_meta() -> dict:
         "fused_pair_padded_fraction_of_dense": 0.0,
         "coarse_gaussian_gemm_hybrid": compact,
         "exact_coarse_operand_assembly": exact,
+        "coarse_selector_audit": {
+            "score_mode": "gaussian",
+            "translation_count": 37,
+            "requested_fused": False,
+            "effective_fused": False,
+            "requested_workers": 0,
+            "effective_workers": 0,
+            "requested_atomic": False,
+            "effective_atomic": False,
+            "requested_prehalf": False,
+            "effective_prehalf": False,
+            "wrapper": None,
+            "target": None,
+            "counts": {
+                "fused_calls": 0,
+                "actual_rows": 0,
+                "multistream_calls": 0,
+                "native_atomic_selected_calls": 0,
+                "prehalf_selected_calls": 0,
+            },
+        },
     }
     return {
+        "sparse_pass2": True,
+        "pass2_engine": "local",
+        "joint_halfset_particle_stream": True,
+        "halfset_ids": [0, 1],
+        "requested_image_batch_size": 500,
+        "effective_image_batch_size": 500,
+        "requested_relion_wavg_sequential_cuda": True,
+        "effective_relion_wavg_sequential_cuda": True,
+        "requested_exact_local_bucket_radix": 4,
+        "effective_exact_local_bucket_radix": 4,
+        "requested_exact_local_physical_order_chunk_size": 0,
+        "effective_exact_local_physical_order_chunk_size": 0,
+        "max_significants": 100,
         "requested_stable_fourier_window_shapes": True,
         "effective_stable_fourier_window_shapes": True,
         "requested_stable_flat_row_capacity": True,
@@ -610,6 +728,300 @@ def test_late_profile_complete_q32_contract_is_fail_closed():
         )
 
 
+def test_late_profile_profile_free_route_uses_only_always_emitted_telemetry():
+    metadata = _complete_q32_profile_meta()
+    local = metadata["halfset_0_profile_summary"]
+    metadata["halfset_0_profile_summary"] = {
+        key: copy.deepcopy(local[key])
+        for key in (
+            "coarse_selector_audit",
+            "coarse_gaussian_gemm_hybrid",
+            "exact_coarse_operand_assembly",
+        )
+    }
+
+    route = _validate_profile_free_effective_route(
+        metadata,
+        image_shape=(128, 128),
+        requested_image_batch_size=500,
+        exact_local_bucket_radix=4,
+        exact_local_physical_order_chunk_size=0,
+        environment=_all_optimized_q32_environment(),
+    )
+
+    assert route["effective_route_exact"] is True
+    assert route["halfset_profile_names"] == ["halfset_0_profile_summary"]
+    assert route["fused_coarse_projector"]["profiles"][
+        "halfset_0_profile_summary"
+    ]["translation_count"] == 37
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("sparse_pass2", 1),
+        ("pass2_engine", "compact"),
+        ("joint_halfset_particle_stream", False),
+        ("halfset_ids", [1, 0]),
+        ("requested_image_batch_size", 200),
+        ("effective_exact_local_bucket_radix", True),
+        ("effective_stable_fourier_window_shapes", 1),
+        ("effective_fused_pair_fine_score", True),
+    ],
+)
+def test_late_profile_profile_free_route_rejects_wrong_topology(field, wrong_value):
+    metadata = _complete_q32_profile_meta()
+    metadata[field] = wrong_value
+
+    with pytest.raises(RuntimeError, match="production route"):
+        _validate_profile_free_effective_route(
+            metadata,
+            image_shape=(128, 128),
+            requested_image_batch_size=500,
+            exact_local_bucket_radix=4,
+            exact_local_physical_order_chunk_size=0,
+            environment=_all_optimized_q32_environment(),
+        )
+
+
+def test_late_profile_profile_free_route_rejects_hybrid_fallback():
+    metadata = _complete_q32_profile_meta()
+    hybrid = metadata["halfset_0_profile_summary"]["coarse_gaussian_gemm_hybrid"]
+    hybrid["fallback_reasons"] = {"overflow": 1}
+
+    with pytest.raises(RuntimeError, match="fallback/overflow"):
+        _validate_profile_free_effective_route(
+            metadata,
+            image_shape=(128, 128),
+            requested_image_batch_size=500,
+            exact_local_bucket_radix=4,
+            exact_local_physical_order_chunk_size=0,
+            environment=_all_optimized_q32_environment(),
+        )
+
+
+def test_late_profile_metadata_certifies_coarse_only_profile_free_route(tmp_path):
+    prefix = tmp_path / "warm" / "run"
+    prefix.parent.mkdir()
+    metadata = _complete_q32_profile_meta()
+    local = metadata["halfset_0_profile_summary"]
+    metadata["halfset_0_profile_summary"] = {
+        key: copy.deepcopy(local[key])
+        for key in (
+            "coarse_selector_audit",
+            "coarse_gaussian_gemm_hybrid",
+            "exact_coarse_operand_assembly",
+        )
+    }
+    metadata.update(
+        current_size=84,
+        healpix_order=2,
+        n_rotations=36864,
+        subset_size=200,
+        selected_particle_ids=list(range(200)),
+        random_perturbation=-0.43747416138648987,
+    )
+    meta_path = Path(f"{prefix}_it048_recovar_meta.json")
+    meta_path.write_text(json.dumps(metadata))
+    Path(f"{prefix}_diagnostic_continuation.json").write_text(
+        json.dumps(
+            {
+                "classification": "diagnostic_performance_only",
+                "iteration": 47,
+            }
+        )
+    )
+
+    report = _profile_metadata(
+        prefix,
+        48,
+        execution_contract="all_optimized_q32",
+        initial_model_stage_profile_enabled=False,
+        environment=_all_optimized_q32_environment(),
+    )
+
+    assert report["execution_contract"]["profile_exact"] is False
+    assert report["execution_contract"]["production_route"][
+        "effective_route_exact"
+    ] is True
+    assert report["selected_particle_fingerprint"]["sha256"] == (
+        "de663cfb3b82787ec7c32624aba8cd8de6555fc906b507971a2c2f3207b5fe52"
+    )
+
+    metadata["halfset_0_profile_summary"]["em_time_s"] = 1.0
+    meta_path.write_text(json.dumps(metadata))
+    with pytest.raises(RuntimeError, match="exact coarse-only telemetry"):
+        _profile_metadata(
+            prefix,
+            48,
+            execution_contract="all_optimized_q32",
+            initial_model_stage_profile_enabled=False,
+            environment=_all_optimized_q32_environment(),
+        )
+
+
+def _certify_off_arm_pair(tmp_path: Path) -> tuple[dict, dict, dict]:
+    runtime = _qualified_runtime_environment()
+    candidate = _all_optimized_q32_environment()
+    cold_environment = {**runtime, **candidate, "RECOVAR_INITIAL_MODEL_PROFILE": "1"}
+    warm_environment = {**runtime, **candidate}
+    cold_seal = _validate_sealed_recovar_environment(
+        "all_optimized_q32",
+        stage_profile_enabled=True,
+        expected_runtime_environment=runtime,
+        environment=cold_environment,
+    )
+    warm_seal = _validate_sealed_recovar_environment(
+        "all_optimized_q32",
+        stage_profile_enabled=False,
+        expected_runtime_environment=runtime,
+        environment=warm_environment,
+    )
+    schedule = {
+        "current_size": 84,
+        "healpix_order": 2,
+        "n_rotations": 36864,
+        "n_translations": 148,
+        "subset_size": 200,
+        "random_perturbation": -0.43747416138648987,
+    }
+    fingerprint = {
+        "count": 200,
+        "encoding": "ordered_little_endian_int64",
+        "sha256": "a" * 64,
+    }
+    route = {
+        "mode": "all_optimized_q32",
+        "effective_route_checked": True,
+        "effective_route_exact": True,
+        "coarse_topology": "qualified",
+    }
+    static_inputs = {"/input/checkpoint.star": "b" * 64}
+
+    def arm(label: str, profile_enabled: bool, seal: dict) -> dict:
+        output = str((tmp_path / label / "run").resolve())
+        return {
+            "argv": ["--i", "/input/data.star", "--o", output, "--nr_iter", "200"],
+            "output_prefix": output,
+            "schedule": copy.deepcopy(schedule),
+            "selected_particle_fingerprint": copy.deepcopy(fingerprint),
+            "iteration_profile": {"expectation_time_s": 1.0} if profile_enabled else None,
+            "execution_contract": {
+                "mode": "all_optimized_q32",
+                "profile_checked": profile_enabled,
+                "profile_exact": profile_enabled,
+                "production_route": copy.deepcopy(route),
+            },
+            "sealed_recovar_environment": {
+                "before": copy.deepcopy(seal),
+                "after": copy.deepcopy(seal),
+                "unchanged": True,
+            },
+            "static_input_sha256": {
+                "before": copy.deepcopy(static_inputs),
+                "after": copy.deepcopy(static_inputs),
+            },
+        }
+
+    return arm("cold", True, cold_seal), arm("warm", False, warm_seal), schedule
+
+
+def test_late_profile_certify_off_binds_profiled_and_profile_free_arms(tmp_path):
+    cold, warm, schedule = _certify_off_arm_pair(tmp_path)
+
+    certificate = _certify_profile_free_warm(
+        cold,
+        warm,
+        expected_schedule=schedule,
+        expected_selected_particle_sha256="a" * 64,
+    )
+
+    assert certificate["certificate_exact"] is True
+    assert certificate["warm_stage_profile_enabled"] is False
+    assert certificate["selected_particle_fingerprint"]["count"] == 200
+
+
+@pytest.mark.parametrize("pinned_drift", ["schedule", "particle"])
+def test_late_profile_certify_off_rejects_wrong_pinned_expectation(
+    tmp_path,
+    pinned_drift,
+):
+    cold, warm, schedule = _certify_off_arm_pair(tmp_path)
+    expected_schedule = copy.deepcopy(schedule)
+    expected_hash = "a" * 64
+    if pinned_drift == "schedule":
+        expected_schedule["healpix_order"] = 3
+    else:
+        expected_hash = "c" * 64
+
+    with pytest.raises(RuntimeError, match="pinned"):
+        _certify_profile_free_warm(
+            cold,
+            warm,
+            expected_schedule=expected_schedule,
+            expected_selected_particle_sha256=expected_hash,
+        )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "route",
+        "schedule",
+        "schedule_type",
+        "particle",
+        "particle_count",
+        "particle_encoding",
+        "environment",
+        "profile_zero",
+        "profile_claim",
+        "argv",
+        "output",
+        "static",
+    ],
+)
+def test_late_profile_certify_off_rejects_cross_arm_drift(tmp_path, drift):
+    cold, warm, schedule = _certify_off_arm_pair(tmp_path)
+    if drift == "route":
+        warm["execution_contract"]["production_route"]["coarse_topology"] = "wrong"
+    elif drift == "schedule":
+        warm["schedule"]["current_size"] = 85
+    elif drift == "schedule_type":
+        warm["schedule"]["current_size"] = True
+    elif drift == "particle":
+        warm["selected_particle_fingerprint"]["sha256"] = "c" * 64
+    elif drift == "particle_count":
+        warm["selected_particle_fingerprint"]["count"] = 199
+    elif drift == "particle_encoding":
+        warm["selected_particle_fingerprint"]["encoding"] = "native_int64"
+    elif drift == "environment":
+        for moment in ("before", "after"):
+            warm["sealed_recovar_environment"][moment][
+                "present_recovar_environment"
+            ]["RECOVAR_DISABLE_SPARSE_PASS2"] = "1"
+    elif drift == "profile_zero":
+        for moment in ("before", "after"):
+            warm["sealed_recovar_environment"][moment][
+                "present_recovar_environment"
+            ]["RECOVAR_INITIAL_MODEL_PROFILE"] = "0"
+    elif drift == "profile_claim":
+        warm["execution_contract"]["profile_checked"] = True
+    elif drift == "argv":
+        warm["argv"][-1] = "201"
+    elif drift == "output":
+        warm["output_prefix"] = str((tmp_path / "wrong" / "run").resolve())
+    elif drift == "static":
+        warm["static_input_sha256"]["after"]["/input/checkpoint.star"] = "c" * 64
+
+    with pytest.raises(RuntimeError):
+        _certify_profile_free_warm(
+            cold,
+            warm,
+            expected_schedule=schedule,
+            expected_selected_particle_sha256="a" * 64,
+        )
+
+
 def test_late_profile_contract_environment_rejects_mislabeled_runs():
     candidate = _all_optimized_q32_environment()
     assert candidate["RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR"] == "1"
@@ -630,6 +1042,120 @@ def test_late_profile_contract_environment_rejects_mislabeled_runs():
         )
     with pytest.raises(RuntimeError, match="requires candidate selectors to be absent"):
         _validate_profile_contract_environment("default", candidate)
+
+
+def _qualified_runtime_environment() -> dict[str, str]:
+    return {
+        "RECOVAR_CUDA_LIB": "/qualified/libcuda_backproject.so",
+        "RECOVAR_EXPECTED_REPO_ROOT": "/qualified/repo",
+        "RECOVAR_RELION_BIND_BUILD_DIR": "/qualified/relion_bind",
+        "RECOVAR_SELECTED_GPU_UUID": "GPU-qualified",
+    }
+
+
+def test_late_profile_sealed_environment_accepts_only_exact_qualified_map():
+    runtime = _qualified_runtime_environment()
+    environment = {**runtime, **_all_optimized_q32_environment()}
+
+    report = _validate_sealed_recovar_environment(
+        "all_optimized_q32",
+        stage_profile_enabled=False,
+        expected_runtime_environment=runtime,
+        environment=environment,
+    )
+
+    assert report["environment_exact"] is True
+    assert report["present_recovar_environment"] == dict(sorted(environment.items()))
+
+
+@pytest.mark.parametrize(
+    "ambient_name",
+    [
+        "RECOVAR_DISABLE_SPARSE_PASS2",
+        "RECOVAR_DISABLE_LOCAL_BIG_JIT",
+        "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR",
+        "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2",
+    ],
+)
+def test_late_profile_sealed_environment_rejects_ambient_routes(ambient_name):
+    runtime = _qualified_runtime_environment()
+    environment = {
+        **runtime,
+        **_all_optimized_q32_environment(),
+        ambient_name: "0",
+    }
+
+    with pytest.raises(RuntimeError, match="not sealed"):
+        _validate_sealed_recovar_environment(
+            "all_optimized_q32",
+            stage_profile_enabled=False,
+            expected_runtime_environment=runtime,
+            environment=environment,
+        )
+
+
+def test_late_profile_sealed_environment_rejects_profile_zero_and_runtime_drift():
+    runtime = _qualified_runtime_environment()
+    candidate = _all_optimized_q32_environment()
+    with pytest.raises(RuntimeError, match="not sealed"):
+        _validate_sealed_recovar_environment(
+            "all_optimized_q32",
+            stage_profile_enabled=False,
+            expected_runtime_environment=runtime,
+            environment={
+                **runtime,
+                **candidate,
+                "RECOVAR_INITIAL_MODEL_PROFILE": "0",
+            },
+        )
+
+    missing = dict(runtime)
+    del missing["RECOVAR_CUDA_LIB"]
+    with pytest.raises(RuntimeError, match="lacks required runtime bindings"):
+        _validate_sealed_recovar_environment(
+            "all_optimized_q32",
+            stage_profile_enabled=False,
+            expected_runtime_environment=missing,
+            environment={**runtime, **candidate},
+        )
+
+    mutated = {**runtime, **candidate}
+    mutated["RECOVAR_CUDA_LIB"] = "/wrong/libcuda_backproject.so"
+    with pytest.raises(RuntimeError, match="not sealed"):
+        _validate_sealed_recovar_environment(
+            "all_optimized_q32",
+            stage_profile_enabled=False,
+            expected_runtime_environment=runtime,
+            environment=mutated,
+        )
+
+
+def test_static_input_manifest_is_recomputed_and_fail_closed(tmp_path):
+    first = tmp_path / "first input"
+    second = tmp_path / "second"
+    first.write_bytes(b"first\n")
+    second.write_bytes(b"second\n")
+    manifest = tmp_path / "inputs.sha256"
+    manifest.write_text(
+        f"{hashlib.sha256(first.read_bytes()).hexdigest()}  {first}\n"
+        f"{hashlib.sha256(second.read_bytes()).hexdigest()}  {second}\n"
+    )
+
+    report = _validate_static_input_manifest(manifest)
+    assert report[str(first.resolve())] == hashlib.sha256(b"first\n").hexdigest()
+
+    first_line = manifest.read_text().splitlines()[0]
+    manifest.write_text(manifest.read_text() + first_line + "\n")
+    assert len(_validate_static_input_manifest(manifest)) == 2
+
+    manifest.write_text(manifest.read_text() + f"{'0' * 64}  {first}\n")
+    with pytest.raises(RuntimeError, match="conflicting duplicate"):
+        _validate_static_input_manifest(manifest)
+
+    manifest.write_text("\n".join(manifest.read_text().splitlines()[:2]) + "\n")
+    second.write_bytes(b"changed\n")
+    with pytest.raises(RuntimeError, match="static input changed"):
+        _validate_static_input_manifest(manifest)
 
 
 def test_reused_native_inputs_accept_content_identical_worktree_move(tmp_path):
@@ -701,9 +1227,22 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert "VDAM_LATE_PROFILE_COLD_COMPILE_ATTRIBUTION" in launcher
     assert "VDAM_LATE_PROFILE_STAGE_PROFILE" in launcher
     assert '--initial-model-stage-profile "${STAGE_PROFILE_MODE}"' in launcher
-    assert (
-        "bool(int(sys.argv[16])) or bool(int(sys.argv[17])) or bool(int(sys.argv[18]))"
-        in launcher
+    assert 'certify-off) STAGE_PROFILE_MODE=certify-off' in launcher
+    assert 'test -z "${REUSE_NATIVE_ROOT}"' in launcher
+    assert "warm_timing_truth_allowed" in launcher
+    assert 'stage_profile_mode not in {"off", "certify-off"}' in launcher
+    assert "production_topology_certificate" in launcher
+    assert "--expected-schedule-json" in launcher
+    assert "--expected-selected-particle-sha256" in launcher
+    assert '--static-input-manifest "${PROVENANCE}/static_inputs.sha256"' in launcher
+    assert launcher.count('sha256sum --check "${PROVENANCE}/static_inputs.sha256"') == 2
+    assert "scrubbed_ambient_recovar_names.txt" in launcher
+    assert "done < <(env -0)" in launcher
+    assert launcher.index("done < <(env -0)") < launcher.index(
+        "_all_optimized_q32_environment"
+    )
+    assert launcher.index("done < <(env -0)") < launcher.index(
+        "vdam_select_target_gpu"
     )
     assert "--python-sampling=true" in launcher
     assert "cuda,nvtx,osrt,python-gil" in launcher
@@ -712,7 +1251,8 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert 'RECOVAR_COMMAND_PREFIX=(env "LD_PRELOAD=${CUSPARSE_LIBRARY}")' in launcher
     assert "RECOVAR_COMMAND_PREFIX=()" in launcher
     assert "cold_compile_calls.jsonl" in launcher
-    assert 'bool(int(sys.argv[16])) or bool(int(sys.argv[17]))' in launcher
+    assert 'bool(int(sys.argv[16]))' in launcher
+    assert 'bool(int(sys.argv[17]))' in launcher
     assert "status --porcelain=v1 --untracked-files=no" in launcher
     assert "test ! -e" in launcher
     assert 'test ! -e "${NATIVE_PROFILE}/run_it' in launcher

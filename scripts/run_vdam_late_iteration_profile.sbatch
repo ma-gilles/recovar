@@ -14,6 +14,20 @@
 
 set -euo pipefail
 
+# A submission shell may carry stale diagnostic/route selectors from earlier
+# work.  Preserve them only as provenance and start the measured process from
+# an empty RECOVAR namespace; qualified values are re-exported below.
+AMBIENT_RECOVAR_ENV=()
+AMBIENT_RECOVAR_NAMES=()
+while IFS= read -r -d '' assignment; do
+  name=${assignment%%=*}
+  if [[ "${name}" == RECOVAR_* ]]; then
+    AMBIENT_RECOVAR_ENV+=("${assignment}")
+    AMBIENT_RECOVAR_NAMES+=("${name}")
+    unset "${name}"
+  fi
+done < <(env -0)
+
 : "${VDAM_LATE_PROFILE_ROOT:?set a new disposable output root}"
 : "${VDAM_LATE_PROFILE_CHECKPOINT:?set the exact run_it180_optimiser.star}"
 : "${VDAM_LATE_PROFILE_DATA_STAR:?set the exact run_it180_data.star}"
@@ -58,6 +72,8 @@ IMAGE_SIZE=${VDAM_LATE_PROFILE_IMAGE_SIZE:-128}
 HOST_ATTRIBUTION=${VDAM_LATE_PROFILE_HOST_ATTRIBUTION:-0}
 COLD_COMPILE_ATTRIBUTION=${VDAM_LATE_PROFILE_COLD_COMPILE_ATTRIBUTION:-0}
 STAGE_PROFILE=${VDAM_LATE_PROFILE_STAGE_PROFILE:-1}
+EXPECTED_SCHEDULE_JSON=${VDAM_LATE_PROFILE_EXPECTED_SCHEDULE_JSON:-}
+EXPECTED_SELECTED_PARTICLE_SHA256=${VDAM_LATE_PROFILE_EXPECTED_SELECTED_PARTICLE_SHA256:-}
 REUSE_NATIVE_ROOT=${VDAM_LATE_PROFILE_REUSE_NATIVE_ROOT:-}
 EXPECTED_REUSED_NATIVE_NSYS_SHA256=${EXPECTED_REUSED_NATIVE_NSYS_SHA256:-}
 
@@ -91,11 +107,20 @@ test -s "${RELION_BIND_BINARY_OVERRIDE}"
 [[ "${IMAGE_SIZE}" =~ ^[0-9]+$ ]]
 [[ "${HOST_ATTRIBUTION}" =~ ^[01]$ ]]
 [[ "${COLD_COMPILE_ATTRIBUTION}" =~ ^[01]$ ]]
-[[ "${STAGE_PROFILE}" =~ ^[01]$ ]]
-if [[ "${STAGE_PROFILE}" = 1 ]]; then
-  STAGE_PROFILE_MODE=on
+case "${STAGE_PROFILE}" in
+  1|on) STAGE_PROFILE_MODE=on ;;
+  0|off) STAGE_PROFILE_MODE=off ;;
+  certify-off) STAGE_PROFILE_MODE=certify-off ;;
+  *) echo "invalid VDAM_LATE_PROFILE_STAGE_PROFILE=${STAGE_PROFILE}" >&2; exit 2 ;;
+esac
+if [[ "${STAGE_PROFILE_MODE}" = certify-off ]]; then
+  test "${EXECUTION_CONTRACT}" = all_optimized_q32
+  test -n "${EXPECTED_SCHEDULE_JSON}"
+  [[ "${EXPECTED_SELECTED_PARTICLE_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+  test -z "${REUSE_NATIVE_ROOT}"
 else
-  STAGE_PROFILE_MODE=off
+  test -z "${EXPECTED_SCHEDULE_JSON}"
+  test -z "${EXPECTED_SELECTED_PARTICLE_SHA256}"
 fi
 test "${IMAGE_SIZE}" -gt 0
 test "${PROFILED_ITERATION}" -lt "${NR_ITER_SCHEDULE}"
@@ -151,6 +176,10 @@ selected_gpu_uuid=${VDAM_SELECTED_GPU_UUID}
 mkdir -p "${PROVENANCE}" "${RUNTIME}/cuda" "${RELION_BIND_DIR}" \
   "${NATIVE_PLAIN}" "${NATIVE_PROFILE}" "${NSIGHT}"
 touch "${ROOT}/SAFE_TO_DELETE"
+printf '%s\n' "${AMBIENT_RECOVAR_NAMES[@]}" \
+  > "${PROVENANCE}/scrubbed_ambient_recovar_names.txt"
+printf '%q\n' "${AMBIENT_RECOVAR_ENV[@]}" \
+  > "${PROVENANCE}/scrubbed_ambient_recovar_environment.shell"
 git -C "${REPO_ROOT}" rev-parse HEAD > "${PROVENANCE}/repo_head.txt"
 git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no \
   > "${PROVENANCE}/repo_status.txt"
@@ -172,8 +201,13 @@ printf 'host_attribution=%s\n' "${HOST_ATTRIBUTION}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
 printf 'cold_compile_attribution=%s\n' "${COLD_COMPILE_ATTRIBUTION}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
-printf 'initial_model_stage_profile=%s\n' "${STAGE_PROFILE}" \
+printf 'initial_model_stage_profile=%s\n' "${STAGE_PROFILE_MODE}" \
   >> "${PROVENANCE}/candidate_parameters.txt"
+if [[ "${STAGE_PROFILE_MODE}" = certify-off ]]; then
+  printf 'expected_schedule_json=%s\nexpected_selected_particle_sha256=%s\n' \
+    "${EXPECTED_SCHEDULE_JSON}" "${EXPECTED_SELECTED_PARTICLE_SHA256}" \
+    >> "${PROVENANCE}/candidate_parameters.txt"
+fi
 nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
 env | LC_ALL=C sort > "${PROVENANCE}/submission_environment.txt"
 "${NSYS}" --version > "${PROVENANCE}/nsys_version.txt"
@@ -310,6 +344,8 @@ cp --reflink=auto "${RELION_BIND_BINARY_OVERRIDE}" "${RELION_BIND_DIR}/"
 RELION_BIND_BINARY=${RELION_BIND_DIR}/$(basename "${RELION_BIND_BINARY_OVERRIDE}")
 test "$(sha256sum "${RELION_BIND_BINARY}" | awk '{print $1}')" = \
   "${EXPECTED_RELION_BIND_SHA256}"
+sha256sum "${CUDA_BINARY}" "${RELION_BIND_BINARY}" \
+  >> "${PROVENANCE}/static_inputs.sha256"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
 unset JAX_SKIP_CUDA_CONSTRAINTS_CHECK
@@ -414,6 +450,9 @@ if [[ -z "${REUSE_NATIVE_ROOT}" ]]; then
   vdam_verify_selected_gpu "${selected_gpu_uuid}"
 fi
 
+sha256sum --check "${PROVENANCE}/static_inputs.sha256" \
+  > "${PROVENANCE}/static_inputs_after_native.stdout"
+
 RECOVAR_NSYS_BASE=${NSIGHT}/recovar_it$(printf '%03d' "${PROFILED_ITERATION}")_warm
 RECOVAR_NSYS_TRACE=cuda,nvtx,osrt
 RECOVAR_NSYS_EXTRA=(--sample=none --cpuctxsw=none)
@@ -436,6 +475,7 @@ RECOVAR_COMMAND=(
   --checkpoint-optimiser "${CHECKPOINT}"
   --input-star "${DATA_STAR}"
   --data-dir "${DATA_DIR}"
+  --static-input-manifest "${PROVENANCE}/static_inputs.sha256"
   --output-root "${RECOVAR_PROFILE}"
   --checkpoint-iteration "${CHECKPOINT_ITERATION}"
   --nr-iter "${NR_ITER_SCHEDULE}"
@@ -457,6 +497,12 @@ fi
 if [[ "${COLD_COMPILE_ATTRIBUTION}" = 1 ]]; then
   RECOVAR_COMMAND+=(
     --cold-compile-callsite-log "${PROVENANCE}/cold_compile_calls.jsonl"
+  )
+fi
+if [[ "${STAGE_PROFILE_MODE}" = certify-off ]]; then
+  RECOVAR_COMMAND+=(
+    --expected-schedule-json "${EXPECTED_SCHEDULE_JSON}"
+    --expected-selected-particle-sha256 "${EXPECTED_SELECTED_PARTICLE_SHA256}"
   )
 fi
 printf '%q ' "${NSYS}" profile --trace="${RECOVAR_NSYS_TRACE}" \
@@ -488,26 +534,55 @@ import sys
 from pathlib import Path
 
 profile = json.loads(Path(sys.argv[1]).read_text())
-stage_profile_enabled = profile["initial_model_stage_profile_enabled"]
+stage_profile_mode = profile["initial_model_stage_profile_mode"]
+stage_profile_by_arm = profile["initial_model_stage_profile_enabled_by_arm"]
 payload = {
     "mode": profile["execution_contract_mode"],
     "environment": profile["execution_contract_environment"],
-    "initial_model_stage_profile_enabled": stage_profile_enabled,
+    "initial_model_stage_profile_mode": stage_profile_mode,
+    "initial_model_stage_profile_enabled_by_arm": stage_profile_by_arm,
+    "production_topology_certificate": profile["production_topology_certificate"],
     "cold": profile["cold"]["execution_contract"],
     "warm": profile["warm"]["execution_contract"],
 }
-if stage_profile_enabled and payload["mode"] != "diagnostic":
+if payload["mode"] == "diagnostic":
+    pass
+elif stage_profile_mode == "on":
     for label in ("cold", "warm"):
         contract = payload[label]
         if not contract.get("profile_exact") or not contract.get("profile_checked"):
             raise RuntimeError(f"{label} execution contract is not exact")
-elif not stage_profile_enabled:
+elif stage_profile_mode == "off":
     for label in ("cold", "warm"):
         contract = payload[label]
         if contract.get("profile_exact") or contract.get("profile_checked"):
             raise RuntimeError(f"{label} production-topology contract claims profile validation")
         if profile[label]["iteration_profile"] is not None:
             raise RuntimeError(f"{label} production-topology run emitted stage timings")
+        if payload["mode"] == "all_optimized_q32" and not contract.get(
+            "production_route", {}
+        ).get("effective_route_exact"):
+            raise RuntimeError(f"{label} profile-free production route is not exact")
+elif stage_profile_mode == "certify-off":
+    if stage_profile_by_arm != {"cold": True, "warm": False}:
+        raise RuntimeError("certify-off stage-profile arm map is invalid")
+    cold = payload["cold"]
+    warm = payload["warm"]
+    if not cold.get("profile_exact") or not cold.get("profile_checked"):
+        raise RuntimeError("certify-off cold contract is not fully profiled")
+    if warm.get("profile_exact") or warm.get("profile_checked"):
+        raise RuntimeError("certify-off warm contract claims profiled validation")
+    if profile["cold"]["iteration_profile"] is None:
+        raise RuntimeError("certify-off cold arm lacks stage timings")
+    if profile["warm"]["iteration_profile"] is not None:
+        raise RuntimeError("certify-off warm arm emitted stage timings")
+    if not warm.get("production_route", {}).get("effective_route_exact"):
+        raise RuntimeError("certify-off warm production route is not exact")
+    certificate = payload["production_topology_certificate"]
+    if not isinstance(certificate, dict) or not certificate.get("certificate_exact"):
+        raise RuntimeError("certify-off production topology certificate is not exact")
+else:
+    raise RuntimeError(f"unsupported stage-profile mode {stage_profile_mode!r}")
 Path(sys.argv[2]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 test -s "${PROVENANCE}/recovar_execution_contract.json"
@@ -543,7 +618,7 @@ done
   "${native_profile_started}" "${native_profile_finished}" \
   "${recovar_profile_started}" "${recovar_profile_finished}" \
   "${REUSE_NATIVE_ROOT}" "${EXPECTED_REUSED_NATIVE_NSYS_SHA256}" \
-  "${HOST_ATTRIBUTION}" "${COLD_COMPILE_ATTRIBUTION}" "${STAGE_PROFILE}" <<'PY'
+  "${HOST_ATTRIBUTION}" "${COLD_COMPILE_ATTRIBUTION}" "${STAGE_PROFILE_MODE}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -586,6 +661,11 @@ else:
         "nsys_sha256": sys.argv[15],
     }
 
+stage_profile_mode = sys.argv[18]
+stage_profile_by_arm = {
+    "cold": stage_profile_mode in {"on", "certify-off"},
+    "warm": stage_profile_mode == "on",
+}
 payload = {
     "schema": "recovar.vdam_late_iteration_same_h100_gate.v1",
     "classification": "diagnostic_performance_only",
@@ -604,9 +684,17 @@ payload = {
     "native_capture": native_capture,
     "host_attribution": bool(int(sys.argv[16])),
     "cold_compile_attribution": bool(int(sys.argv[17])),
-    "initial_model_stage_profile_enabled": bool(int(sys.argv[18])),
+    "initial_model_stage_profile_mode": stage_profile_mode,
+    "initial_model_stage_profile_enabled_by_arm": stage_profile_by_arm,
     "timing_truth_allowed": not (
-        bool(int(sys.argv[16])) or bool(int(sys.argv[17])) or bool(int(sys.argv[18]))
+        bool(int(sys.argv[16]))
+        or bool(int(sys.argv[17]))
+        or stage_profile_mode != "off"
+    ),
+    "warm_timing_truth_allowed": not (
+        bool(int(sys.argv[16]))
+        or bool(int(sys.argv[17]))
+        or stage_profile_mode not in {"off", "certify-off"}
     ),
     "native_stop_mechanism": "gdb second-expectation sentinel after exact profiled iteration",
     "science_promotion_allowed": False,
@@ -614,6 +702,8 @@ payload = {
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 
+sha256sum --check "${PROVENANCE}/static_inputs.sha256" \
+  > "${PROVENANCE}/static_inputs_after_recovar.stdout"
 test "$(git -C "${REPO_ROOT}" rev-parse HEAD)" = "${EXPECTED_REPO_HEAD}"
 test -z "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=no)"
 test "$(sha256sum "${RELION_BINARY}" | awk '{print $1}')" = "${EXPECTED_RELION_SHA256}"

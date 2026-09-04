@@ -16,6 +16,7 @@ import functools
 import hashlib
 import inspect
 import json
+import math
 import os
 import resource
 import threading
@@ -38,6 +39,15 @@ _PROFILE_SINGLE_LANE_ENV = "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL"
 _PROFILE_MULTISTREAM_ENV = "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS"
 _PROFILE_NATIVE_TEXTURE_ENV = "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"
 _PROFILE_CONTRACT_CHOICES = ("diagnostic", "default", "all_optimized_q32")
+_STAGE_PROFILE_CHOICES = ("on", "off", "certify-off")
+_PROFILE_RUNTIME_ENVIRONMENT = frozenset(
+    {
+        "RECOVAR_CUDA_LIB",
+        "RECOVAR_EXPECTED_REPO_ROOT",
+        "RECOVAR_RELION_BIND_BUILD_DIR",
+        "RECOVAR_SELECTED_GPU_UUID",
+    }
+)
 _PROFILE_ALL_OPTIMIZED_Q32_EXTRA_ENVIRONMENT = {
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY": "64",
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE": "200",
@@ -69,6 +79,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-optimiser", type=Path, required=True)
     parser.add_argument("--input-star", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument(
+        "--static-input-manifest",
+        type=Path,
+        help="sha256sum manifest rechecked before and after each arm.",
+    )
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--checkpoint-iteration", type=int, default=180)
     parser.add_argument("--nr-iter", type=int, default=200)
@@ -111,13 +126,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--initial-model-stage-profile",
-        choices=("on", "off"),
+        choices=_STAGE_PROFILE_CHOICES,
         default="on",
         help=(
             "Enable the synchronization-heavy RECOVAR initial-model stage profiler. "
-            "Use off to measure the production execution topology with only the final "
-            "output barrier."
+            "Use off to measure both arms with only the final output barrier, or "
+            "certify-off to profile-certify the cold route before measuring the "
+            "otherwise identical warm production topology."
         ),
+    )
+    parser.add_argument(
+        "--expected-schedule-json",
+        help="Exact schedule JSON required by the certify-off qualification mode.",
+    )
+    parser.add_argument(
+        "--expected-selected-particle-sha256",
+        help="Ordered little-endian int64 particle-ID digest required by certify-off.",
     )
     return parser.parse_args(argv)
 
@@ -184,6 +208,40 @@ def _validate_reused_native_inputs(
             }
         )
     return {"inputs": records}
+
+
+def _validate_static_input_manifest(manifest_path: Path) -> dict[str, str]:
+    """Recompute every exact input named by one sha256sum manifest."""
+
+    observed: dict[str, str] = {}
+    for line_number, line in enumerate(manifest_path.read_text().splitlines(), start=1):
+        try:
+            expected, raw_path = line.split(maxsplit=1)
+        except ValueError as error:
+            raise RuntimeError(
+                f"invalid static-input manifest line {line_number}"
+            ) from error
+        if len(expected) != 64 or any(
+            character not in "0123456789abcdef" for character in expected
+        ):
+            raise RuntimeError(
+                f"invalid static-input digest on line {line_number}"
+            )
+        path = Path(raw_path.strip()).resolve(strict=True)
+        key = str(path)
+        if key in observed:
+            if observed[key] != expected:
+                raise RuntimeError(
+                    f"conflicting duplicate static-input manifest path: {key}"
+                )
+            continue
+        digest = _sha256(path)
+        if digest != expected:
+            raise RuntimeError(f"static input changed: {key}")
+        observed[key] = digest
+    if not observed:
+        raise RuntimeError("static-input manifest is empty")
+    return dict(sorted(observed.items()))
 
 
 def _profile_environment_bool(
@@ -365,6 +423,105 @@ def _validate_profile_contract_environment(
     }
 
 
+def _validate_sealed_recovar_environment(
+    contract_mode: str,
+    *,
+    stage_profile_enabled: bool,
+    expected_runtime_environment: Mapping[str, str] | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Require the exact qualified RECOVAR route plus runtime bindings."""
+
+    environ = os.environ if environment is None else environment
+    runtime_source = (
+        environ
+        if expected_runtime_environment is None
+        else expected_runtime_environment
+    )
+    missing_runtime = sorted(
+        name
+        for name in _PROFILE_RUNTIME_ENVIRONMENT
+        if not isinstance(runtime_source.get(name), str) or not runtime_source[name]
+    )
+    if missing_runtime:
+        raise RuntimeError(
+            "late-profile environment lacks required runtime bindings: "
+            f"{missing_runtime}"
+        )
+
+    candidate = _all_optimized_q32_environment()
+    if contract_mode == "all_optimized_q32":
+        expected_candidate = candidate
+    elif contract_mode == "default":
+        expected_candidate = {}
+    elif contract_mode == "diagnostic":
+        expected_candidate = {
+            name: environ[name] for name in sorted(candidate) if name in environ
+        }
+    else:
+        raise ValueError(f"unsupported late-profile contract {contract_mode!r}")
+
+    extra_runtime = sorted(set(runtime_source) - _PROFILE_RUNTIME_ENVIRONMENT)
+    if extra_runtime:
+        raise RuntimeError(
+            f"unexpected names in expected runtime environment: {extra_runtime}"
+        )
+    expected = {
+        name: runtime_source[name]
+        for name in sorted(_PROFILE_RUNTIME_ENVIRONMENT)
+    }
+    expected.update(expected_candidate)
+    if stage_profile_enabled:
+        expected["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
+    effective = {
+        name: environ[name]
+        for name in sorted(environ)
+        if name.startswith("RECOVAR_")
+    }
+    if effective != dict(sorted(expected.items())):
+        raise RuntimeError(
+            "late-profile RECOVAR environment is not sealed: "
+            f"expected={dict(sorted(expected.items()))!r}, effective={effective!r}"
+        )
+    contract = _validate_profile_contract_environment(contract_mode, environ)
+    return {
+        "environment_exact": True,
+        "stage_profile_enabled": bool(stage_profile_enabled),
+        "expected_recovar_environment": dict(sorted(expected.items())),
+        "present_recovar_environment": effective,
+        "execution_contract": contract,
+    }
+
+
+def _qualified_profile_runtime_environment(
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Resolve and validate the four non-algorithm RECOVAR bindings once."""
+
+    environ = os.environ if environment is None else environment
+    runtime = {
+        name: environ.get(name, "") for name in sorted(_PROFILE_RUNTIME_ENVIRONMENT)
+    }
+    missing = [name for name, value in runtime.items() if not value]
+    if missing:
+        raise RuntimeError(f"late-profile runtime bindings are missing: {missing}")
+    expected_repo = Path(__file__).resolve().parents[1]
+    if Path(runtime["RECOVAR_EXPECTED_REPO_ROOT"]).resolve() != expected_repo:
+        raise RuntimeError(
+            "RECOVAR_EXPECTED_REPO_ROOT does not name the executing checkout"
+        )
+    cuda_library = Path(runtime["RECOVAR_CUDA_LIB"]).resolve(strict=True)
+    if not cuda_library.is_file():
+        raise RuntimeError("RECOVAR_CUDA_LIB is not a file")
+    bind_dir = Path(runtime["RECOVAR_RELION_BIND_BUILD_DIR"]).resolve(strict=True)
+    if not bind_dir.is_dir():
+        raise RuntimeError("RECOVAR_RELION_BIND_BUILD_DIR is not a directory")
+    selected_uuid = runtime["RECOVAR_SELECTED_GPU_UUID"]
+    if not selected_uuid.startswith("GPU-") or len(selected_uuid) <= 4:
+        raise RuntimeError("RECOVAR_SELECTED_GPU_UUID is not a physical GPU UUID")
+    return runtime
+
+
 def _validate_optimized_row_totals(
     estep_meta: dict[str, object],
     *,
@@ -432,6 +589,7 @@ def _validate_late_hybrid_image_batch(
     label: str,
     n_translations: int,
     oversampling: int,
+    requested_image_batch_size: int = 500,
 ) -> dict[str, object]:
     """Prove late profiling used one real 200-image matrix-matrix batch."""
 
@@ -442,7 +600,7 @@ def _validate_late_hybrid_image_batch(
         raise RuntimeError(f"{label} did not publish a compact-hybrid profile")
     observed: dict[str, object] = {}
     exact = {
-        "input_image_batch_size": 500,
+        "input_image_batch_size": int(requested_image_batch_size),
         "requested_hybrid_image_batch_size": 200,
         "effective_image_batch_size": 200,
         "batch_count": 1,
@@ -537,6 +695,7 @@ def _validate_profile_execution_contract(
     *,
     contract_mode: str,
     image_shape: tuple[int, int],
+    requested_image_batch_size: int = 500,
     environment: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Fail closed on effective metadata before a profile can be labeled."""
@@ -590,6 +749,7 @@ def _validate_profile_execution_contract(
         effective_environment=effective,
         estep_meta=estep_meta,
     )
+    hybrid_invariants = _validate_hybrid_fallback_overflow(estep_meta)
     composed = same_state._validate_all_optimized_profiles(
         estep_meta,
         enabled=True,
@@ -623,6 +783,7 @@ def _validate_profile_execution_contract(
         label="all_optimized_q32",
         n_translations=n_translations,
         oversampling=oversampling,
+        requested_image_batch_size=requested_image_batch_size,
     )
     rows = _validate_optimized_row_totals(
         estep_meta,
@@ -634,6 +795,7 @@ def _validate_profile_execution_contract(
         "profile_exact": True,
         "environment": environment_contract,
         "compact_hybrid": compact,
+        "hybrid_fallback_overflow": hybrid_invariants,
         "all_optimized": composed,
         "exact_coarse_single_translate": exact_coarse,
         "exact_compact_preprocess": exact_compact,
@@ -641,6 +803,427 @@ def _validate_profile_execution_contract(
         "image_batch": image_batch,
         "row_totals": rows,
     }
+
+
+def _json_values_exact(left: object, right: object) -> bool:
+    """Compare JSON-like values without treating booleans as integers."""
+
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        assert isinstance(right, dict)
+        return left.keys() == right.keys() and all(
+            _json_values_exact(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        assert isinstance(right, list)
+        return len(left) == len(right) and all(
+            _json_values_exact(a, b) for a, b in zip(left, right, strict=True)
+        )
+    return bool(left == right)
+
+
+def _validate_hybrid_fallback_overflow(
+    estep_meta: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    from scripts import run_vdam_hybrid_same_state_transition as same_state
+
+    invariants: dict[str, dict[str, object]] = {}
+    for name, profile in sorted(same_state._coarse_hybrid_profiles(estep_meta).items()):
+        exact_hybrid = {
+            "fallback_reasons": {},
+            "overflow_latch_scope": (
+                "current_significance_call_exact_geometry_and_capacity"
+            ),
+            "overflow_latch_active_at_return": False,
+            "overflow_latch_activation_count": 0,
+            "overflow_latch_static_dense_batch_count": 0,
+            "overflow_latch_static_dense_image_count": 0,
+            "selected_block_capacity": 64,
+        }
+        observed_hybrid = {field: profile.get(field) for field in exact_hybrid}
+        if not _json_values_exact(observed_hybrid, exact_hybrid):
+            raise RuntimeError(
+                f"optimized hybrid {name} fallback/overflow route differs: "
+                f"observed={observed_hybrid!r}, expected={exact_hybrid!r}"
+            )
+        max_blocks = profile.get("max_selected_blocks_per_image")
+        if (
+            isinstance(max_blocks, bool)
+            or not isinstance(max_blocks, int)
+            or not 0 < max_blocks <= 64
+        ):
+            raise RuntimeError(
+                f"optimized hybrid {name} has invalid selected-block maximum"
+            )
+        invariants[name] = {
+            **observed_hybrid,
+            "max_selected_blocks_per_image": max_blocks,
+        }
+    if not invariants:
+        raise RuntimeError("optimized route has no hybrid fallback telemetry")
+    return invariants
+
+
+def _validate_profile_free_effective_route(
+    estep_meta: dict[str, object],
+    *,
+    image_shape: tuple[int, int],
+    requested_image_batch_size: int,
+    exact_local_bucket_radix: int,
+    exact_local_physical_order_chunk_size: int,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Certify the optimized route using counters emitted without stage waits."""
+
+    from scripts import run_vdam_hybrid_same_state_transition as same_state
+
+    expected_fields: dict[str, object] = {
+        "sparse_pass2": True,
+        "pass2_engine": "local",
+        "joint_halfset_particle_stream": True,
+        "halfset_ids": [0, 1],
+        "oversampling": 1,
+        "max_significants": 100,
+        "requested_image_batch_size": int(requested_image_batch_size),
+        "effective_image_batch_size": int(requested_image_batch_size),
+        "requested_relion_wavg_sequential_cuda": True,
+        "effective_relion_wavg_sequential_cuda": True,
+        "requested_exact_local_bucket_radix": int(exact_local_bucket_radix),
+        "effective_exact_local_bucket_radix": int(exact_local_bucket_radix),
+        "requested_exact_local_physical_order_chunk_size": int(
+            exact_local_physical_order_chunk_size
+        ),
+        "effective_exact_local_physical_order_chunk_size": int(
+            exact_local_physical_order_chunk_size
+        ),
+        "requested_stable_fourier_window_shapes": True,
+        "effective_stable_fourier_window_shapes": True,
+        "requested_stable_flat_row_capacity": True,
+        "effective_stable_flat_row_capacity": True,
+        "requested_fused_pair_fine_score": False,
+        "effective_fused_pair_fine_score": False,
+    }
+    observed_fields = {name: estep_meta.get(name) for name in expected_fields}
+    mismatches = {
+        name: {"expected": expected, "observed": observed_fields[name]}
+        for name, expected in expected_fields.items()
+        if not _json_values_exact(observed_fields[name], expected)
+    }
+    if mismatches:
+        raise RuntimeError(
+            "all_optimized_q32 profile-free route metadata differs from the "
+            f"qualified production route: {mismatches!r}"
+        )
+
+    requested = _all_optimized_q32_environment()
+    environ = os.environ if environment is None else environment
+    effective = {name: environ.get(name) for name in requested}
+    compact = same_state._validate_arm_execution_contract(
+        candidate_mode="compact_posterior",
+        candidate_enabled=True,
+        requested_environment=requested,
+        effective_environment=effective,
+        estep_meta=estep_meta,
+    )
+    hybrid_invariants = _validate_hybrid_fallback_overflow(estep_meta)
+    exact_coarse = same_state._validate_exact_coarse_single_translate_profiles(
+        estep_meta,
+        enabled=True,
+        label="all_optimized_q32_profile_free",
+    )
+    exact_compact = same_state._validate_exact_compact_preprocess_profiles(
+        estep_meta,
+        enabled=True,
+        label="all_optimized_q32_profile_free",
+    )
+    stable_coarse = same_state._validate_stable_coarse_square_profiles(
+        estep_meta,
+        enabled=True,
+        label="all_optimized_q32_profile_free",
+        image_size=int(image_shape[0]),
+        stable_fourier_window_quantum=32,
+    )
+    fused_coarse = same_state._validate_fused_coarse_projector_profiles(
+        estep_meta,
+        enabled=False,
+        label="all_optimized_q32_profile_free",
+    )
+    n_translations = estep_meta.get("n_translations")
+    if isinstance(n_translations, bool) or not isinstance(n_translations, int):
+        raise RuntimeError("profile-free route has invalid n_translations")
+    if n_translations <= 0 or n_translations % 4:
+        raise RuntimeError(
+            "profile-free route translation count is incompatible with oversampling=1"
+        )
+    expected_coarse_translations = n_translations // 4
+    for name, audit in fused_coarse["profiles"].items():
+        if audit.get("translation_count") != expected_coarse_translations:
+            raise RuntimeError(
+                f"profile-free selector {name} has stale translation count"
+            )
+    image_batch = _validate_late_hybrid_image_batch(
+        estep_meta,
+        label="all_optimized_q32_profile_free",
+        n_translations=n_translations,
+        oversampling=1,
+        requested_image_batch_size=requested_image_batch_size,
+    )
+    profile_names = sorted(same_state._coarse_hybrid_profiles(estep_meta))
+    if profile_names != ["halfset_0_profile_summary"]:
+        raise RuntimeError(
+            "profile-free joint-halfset route must emit exactly one halfset-0 "
+            f"coarse profile, got {profile_names!r}"
+        )
+    for name, validation in (
+        ("exact coarse", exact_coarse),
+        ("exact compact", exact_compact),
+        ("stable coarse", stable_coarse),
+        ("fused coarse", fused_coarse),
+        ("image batch", image_batch),
+    ):
+        if sorted(validation["profiles"]) != profile_names:
+            raise RuntimeError(
+                f"profile-free {name} telemetry does not match {profile_names!r}"
+            )
+
+    return {
+        "mode": "all_optimized_q32",
+        "effective_route_checked": True,
+        "effective_route_exact": True,
+        "metadata_fields": observed_fields,
+        "halfset_profile_names": profile_names,
+        "compact_hybrid": compact,
+        "hybrid_fallback_overflow": hybrid_invariants,
+        "exact_coarse_single_translate": exact_coarse,
+        "exact_compact_preprocess": exact_compact,
+        "stable_coarse_significance": stable_coarse,
+        "fused_coarse_projector": fused_coarse,
+        "image_batch": image_batch,
+    }
+
+
+def _normalized_profile_argv(argv: object) -> list[str]:
+    if not isinstance(argv, list) or any(not isinstance(value, str) for value in argv):
+        raise RuntimeError("late-profile argv is not a list of strings")
+    output_positions = [index for index, value in enumerate(argv) if value == "--o"]
+    if len(output_positions) != 1 or output_positions[0] + 1 >= len(argv):
+        raise RuntimeError("late-profile argv must contain exactly one --o value")
+    normalized = list(argv)
+    normalized[output_positions[0] + 1] = "<ARM_OUTPUT_PREFIX>"
+    return normalized
+
+
+def _validate_profile_argv_output(argv: object, expected_output: object) -> None:
+    if not isinstance(argv, list) or not isinstance(expected_output, str):
+        raise RuntimeError("late-profile argv/output metadata is invalid")
+    output_positions = [index for index, value in enumerate(argv) if value == "--o"]
+    if len(output_positions) != 1 or output_positions[0] + 1 >= len(argv):
+        raise RuntimeError("late-profile argv must contain exactly one --o value")
+    if argv[output_positions[0] + 1] != expected_output:
+        raise RuntimeError("late-profile argv --o differs from its metadata prefix")
+
+
+def _validate_certify_schedule(schedule: object, *, label: str) -> dict[str, object]:
+    if not isinstance(schedule, dict):
+        raise RuntimeError(f"certify-off {label} schedule is not a mapping")
+    expected_fields = {
+        "current_size",
+        "healpix_order",
+        "n_rotations",
+        "n_translations",
+        "subset_size",
+        "random_perturbation",
+    }
+    if set(schedule) != expected_fields:
+        raise RuntimeError(
+            f"certify-off {label} schedule fields differ: "
+            f"expected={sorted(expected_fields)!r}, observed={sorted(schedule)!r}"
+        )
+    positive_ints = ("current_size", "n_rotations", "n_translations", "subset_size")
+    for field in positive_ints:
+        value = schedule.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise RuntimeError(f"certify-off {label} schedule has invalid {field}")
+    healpix_order = schedule.get("healpix_order")
+    if (
+        isinstance(healpix_order, bool)
+        or not isinstance(healpix_order, int)
+        or healpix_order < 0
+    ):
+        raise RuntimeError(f"certify-off {label} schedule has invalid healpix_order")
+    perturbation = schedule.get("random_perturbation")
+    if (
+        isinstance(perturbation, bool)
+        or not isinstance(perturbation, (int, float))
+        or not math.isfinite(float(perturbation))
+    ):
+        raise RuntimeError(
+            f"certify-off {label} schedule has invalid random_perturbation"
+        )
+    return dict(schedule)
+
+
+def _certify_profile_free_warm(
+    cold: Mapping[str, object],
+    warm: Mapping[str, object],
+    *,
+    expected_schedule: Mapping[str, object],
+    expected_selected_particle_sha256: str,
+) -> dict[str, object]:
+    """Bind a profile-free warm timing arm to its profiled cold route."""
+
+    cold_contract = cold.get("execution_contract")
+    warm_contract = warm.get("execution_contract")
+    if not isinstance(cold_contract, dict) or not isinstance(warm_contract, dict):
+        raise RuntimeError("certify-off arms lack execution contracts")
+    if not (
+        cold_contract.get("mode") == "all_optimized_q32"
+        and cold_contract.get("profile_checked") is True
+        and cold_contract.get("profile_exact") is True
+    ):
+        raise RuntimeError("certify-off cold arm lacks an exact profiled contract")
+    if not (
+        warm_contract.get("mode") == "all_optimized_q32"
+        and warm_contract.get("profile_checked") is False
+        and warm_contract.get("profile_exact") is False
+    ):
+        raise RuntimeError("certify-off warm arm incorrectly claims profiled validation")
+    if not isinstance(cold.get("iteration_profile"), dict):
+        raise RuntimeError("certify-off cold arm omitted stage timings")
+    if warm.get("iteration_profile") is not None:
+        raise RuntimeError("certify-off warm arm emitted synchronization-heavy stage timings")
+    expected_inputs: dict[str, str] | None = None
+    for label, arm in (("cold", cold), ("warm", warm)):
+        inputs = arm.get("static_input_sha256")
+        if not isinstance(inputs, dict):
+            raise RuntimeError(f"certify-off {label} lacks static-input hashes")
+        before = inputs.get("before")
+        after = inputs.get("after")
+        if not isinstance(before, dict) or not _json_values_exact(before, after):
+            raise RuntimeError(f"certify-off {label} static inputs changed")
+        if expected_inputs is None:
+            expected_inputs = before
+        elif not _json_values_exact(expected_inputs, before):
+            raise RuntimeError("certify-off cold and warm static inputs differ")
+
+    routes: dict[str, dict[str, object]] = {}
+    for label, contract in (("cold", cold_contract), ("warm", warm_contract)):
+        route = contract.get("production_route")
+        if not isinstance(route, dict) or route.get("effective_route_exact") is not True:
+            raise RuntimeError(f"certify-off {label} production route is not exact")
+        routes[label] = route
+    if not _json_values_exact(routes["cold"], routes["warm"]):
+        raise RuntimeError("certify-off cold and warm production routes differ")
+
+    normalized_argv = {
+        "cold": _normalized_profile_argv(cold.get("argv")),
+        "warm": _normalized_profile_argv(warm.get("argv")),
+    }
+    _validate_profile_argv_output(cold.get("argv"), cold.get("output_prefix"))
+    _validate_profile_argv_output(warm.get("argv"), warm.get("output_prefix"))
+    cold_output = Path(str(cold["output_prefix"])).resolve()
+    warm_output = Path(str(warm["output_prefix"])).resolve()
+    if (
+        cold_output.name != "run"
+        or warm_output.name != "run"
+        or cold_output.parent.name != "cold"
+        or warm_output.parent.name != "warm"
+        or cold_output.parent.parent != warm_output.parent.parent
+    ):
+        raise RuntimeError("certify-off arm outputs are not one cold/warm root")
+    if normalized_argv["cold"] != normalized_argv["warm"]:
+        raise RuntimeError("certify-off cold and warm algorithm argv differ")
+    cold_schedule = _validate_certify_schedule(cold.get("schedule"), label="cold")
+    warm_schedule = _validate_certify_schedule(warm.get("schedule"), label="warm")
+    if not _json_values_exact(cold_schedule, warm_schedule):
+        raise RuntimeError("certify-off cold and warm schedules differ")
+    qualified_schedule = _validate_certify_schedule(
+        dict(expected_schedule),
+        label="expected",
+    )
+    if not _json_values_exact(cold_schedule, qualified_schedule):
+        raise RuntimeError("certify-off observed schedule differs from its pinned value")
+    if not _json_values_exact(
+        cold.get("selected_particle_fingerprint"),
+        warm.get("selected_particle_fingerprint"),
+    ):
+        raise RuntimeError("certify-off cold and warm particle streams differ")
+    fingerprint = cold.get("selected_particle_fingerprint")
+    if not isinstance(fingerprint, dict):
+        raise RuntimeError("certify-off selected-particle fingerprint is invalid")
+    if fingerprint.get("count") != cold_schedule["subset_size"]:
+        raise RuntimeError("certify-off selected-particle count differs from subset_size")
+    if fingerprint.get("encoding") != "ordered_little_endian_int64":
+        raise RuntimeError("certify-off selected-particle encoding is not canonical")
+    if fingerprint.get("sha256") != expected_selected_particle_sha256:
+        raise RuntimeError(
+            "certify-off selected-particle digest differs from its pinned value"
+        )
+
+    clean_environments: dict[str, dict[str, str]] = {}
+    for label, arm, expected_profile in (
+        ("cold", cold, True),
+        ("warm", warm, False),
+    ):
+        sealed = arm.get("sealed_recovar_environment")
+        if not isinstance(sealed, dict):
+            raise RuntimeError(f"certify-off {label} lacks a sealed environment")
+        before = sealed.get("before")
+        after = sealed.get("after")
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            raise RuntimeError(f"certify-off {label} environment snapshots are invalid")
+        if before.get("environment_exact") is not True or after.get("environment_exact") is not True:
+            raise RuntimeError(f"certify-off {label} environment is not exact")
+        if before.get("stage_profile_enabled") is not expected_profile:
+            raise RuntimeError(f"certify-off {label} stage-profile selector is wrong")
+        before_map = before.get("present_recovar_environment")
+        after_map = after.get("present_recovar_environment")
+        if not isinstance(before_map, dict) or not _json_values_exact(before_map, after_map):
+            raise RuntimeError(f"certify-off {label} RECOVAR environment changed during execution")
+        expected_runtime = {
+            name: before_map.get(name) for name in _PROFILE_RUNTIME_ENVIRONMENT
+        }
+        _validate_sealed_recovar_environment(
+            "all_optimized_q32",
+            stage_profile_enabled=expected_profile,
+            expected_runtime_environment=expected_runtime,
+            environment=before_map,
+        )
+        arm_map = dict(before_map)
+        profile_value = arm_map.pop("RECOVAR_INITIAL_MODEL_PROFILE", None)
+        if expected_profile and profile_value != "1":
+            raise RuntimeError("certify-off cold profile selector is not exactly 1")
+        if not expected_profile and profile_value is not None:
+            raise RuntimeError("certify-off warm profile selector must be absent")
+        clean_environments[label] = arm_map
+    if clean_environments["cold"] != clean_environments["warm"]:
+        raise RuntimeError("certify-off cold and warm RECOVAR routes differ")
+
+    route_json = json.dumps(routes["warm"], sort_keys=True, separators=(",", ":"))
+    argv_json = json.dumps(normalized_argv["warm"], separators=(",", ":"))
+    return {
+        "classification": "diagnostic_performance_only",
+        "certificate_checked": True,
+        "certificate_exact": True,
+        "certificate_scope": (
+            "profiled cold full contract bound to warm top-level and always-emitted "
+            "coarse route telemetry; warm local profiler remains disabled"
+        ),
+        "cold_stage_profile_enabled": True,
+        "warm_stage_profile_enabled": False,
+        "warm_direct_profile_checked": False,
+        "warm_direct_profile_exact": False,
+        "normalized_algorithm_argv": normalized_argv["warm"],
+        "normalized_algorithm_argv_sha256": hashlib.sha256(argv_json.encode()).hexdigest(),
+        "schedule": cold_schedule,
+        "selected_particle_fingerprint": fingerprint,
+        "production_route_sha256": hashlib.sha256(route_json.encode()).hexdigest(),
+        "recovar_environment_without_profile": clean_environments["warm"],
+        "static_input_sha256": expected_inputs,
+    }
+
+
 def _load_cuda_profiler() -> tuple[Callable[[], None], Callable[[], None]]:
     try:
         cudart = ctypes.CDLL("libcudart.so")
@@ -787,6 +1370,10 @@ def _profile_metadata(
     execution_contract: str = "diagnostic",
     image_shape: tuple[int, int] = (128, 128),
     initial_model_stage_profile_enabled: bool = True,
+    requested_image_batch_size: int = 500,
+    exact_local_bucket_radix: int = 4,
+    exact_local_physical_order_chunk_size: int = 0,
+    environment: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     meta_path = Path(f"{output_prefix}_it{iteration:03d}_recovar_meta.json")
     continuation_path = Path(f"{output_prefix}_diagnostic_continuation.json")
@@ -801,16 +1388,51 @@ def _profile_metadata(
     continuation = json.loads(continuation_path.read_text())
     if continuation.get("classification") != "diagnostic_performance_only":
         raise RuntimeError("continuation output is not classified diagnostic_performance_only")
-    if int(continuation.get("iteration", -1)) + 1 != iteration:
+    continuation_iteration = continuation.get("iteration")
+    if (
+        isinstance(continuation_iteration, bool)
+        or not isinstance(continuation_iteration, int)
+        or continuation_iteration + 1 != iteration
+    ):
         raise RuntimeError("continuation metadata does not identify the incoming iteration")
     profile = meta.get("vdam_iteration_profile_summary")
     if initial_model_stage_profile_enabled:
         if not isinstance(profile, dict) or not profile:
             raise RuntimeError("RECOVAR_INITIAL_MODEL_PROFILE did not emit stage timings")
-    elif profile is not None:
-        raise RuntimeError(
-            "RECOVAR_INITIAL_MODEL_PROFILE emitted stage timings while explicitly disabled"
-        )
+    else:
+        forbidden_profile_keys = {
+            "vdam_iteration_profile_summary",
+            "sparse_pass2_profile_summary",
+            "dense_adapter_profile_summary",
+            "native_expectation_profile_summary",
+        }
+        present_profile_keys = sorted(forbidden_profile_keys.intersection(meta))
+        if present_profile_keys:
+            raise RuntimeError(
+                "RECOVAR_INITIAL_MODEL_PROFILE emitted profile-only metadata while "
+                f"explicitly disabled: {present_profile_keys}"
+            )
+        if execution_contract == "all_optimized_q32":
+            profile_free_halfsets = {
+                key: value
+                for key, value in meta.items()
+                if key.startswith("halfset_")
+                and key.endswith("_profile_summary")
+            }
+            if sorted(profile_free_halfsets) != ["halfset_0_profile_summary"]:
+                raise RuntimeError(
+                    "profile-free joint-halfset execution emitted the wrong halfset profiles"
+                )
+            coarse_only_keys = {
+                "coarse_selector_audit",
+                "coarse_gaussian_gemm_hybrid",
+                "exact_coarse_operand_assembly",
+            }
+            halfset_profile = profile_free_halfsets["halfset_0_profile_summary"]
+            if not isinstance(halfset_profile, dict) or set(halfset_profile) != coarse_only_keys:
+                raise RuntimeError(
+                    "profile-free halfset metadata is not the exact coarse-only telemetry set"
+                )
     schedule_keys = (
         "current_size",
         "healpix_order",
@@ -831,8 +1453,11 @@ def _profile_metadata(
     selected_particle_ids = meta.get("selected_particle_ids")
     if not isinstance(selected_particle_ids, list):
         raise RuntimeError("iteration metadata lacks selected_particle_ids")
-    if any(
-        isinstance(particle_id, bool) or not isinstance(particle_id, int) or particle_id < 0
+    if not selected_particle_ids or any(
+        isinstance(particle_id, bool)
+        or not isinstance(particle_id, int)
+        or particle_id < 0
+        or particle_id > 2**63 - 1
         for particle_id in selected_particle_ids
     ):
         raise RuntimeError("iteration metadata selected_particle_ids are invalid")
@@ -843,21 +1468,51 @@ def _profile_metadata(
             "iteration metadata subset_size does not match selected_particle_ids: "
             f"{subset_size} != {len(selected_particle_ids)}"
         )
+    production_route = None
+    if execution_contract == "all_optimized_q32":
+        production_route = _validate_profile_free_effective_route(
+            meta,
+            image_shape=image_shape,
+            requested_image_batch_size=requested_image_batch_size,
+            exact_local_bucket_radix=exact_local_bucket_radix,
+            exact_local_physical_order_chunk_size=(
+                exact_local_physical_order_chunk_size
+            ),
+            environment=environment,
+        )
     if initial_model_stage_profile_enabled:
         contract = _validate_profile_execution_contract(
             meta,
             contract_mode=execution_contract,
             image_shape=image_shape,
+            requested_image_batch_size=requested_image_batch_size,
+            environment=environment,
         )
     else:
         contract = {
             "mode": execution_contract,
             "profile_checked": False,
             "profile_exact": False,
-            "environment": _validate_profile_contract_environment(execution_contract),
+            "environment": _validate_profile_contract_environment(
+                execution_contract,
+                environment,
+            ),
             "reason": "initial-model stage profiler disabled for production-topology timing",
         }
+    if production_route is not None:
+        contract["production_route"] = production_route
+    import numpy as np
+
+    selected_ids_le = np.asarray(selected_particle_ids, dtype="<i8")
+    particle_fingerprint = {
+        "count": len(selected_particle_ids),
+        "encoding": "ordered_little_endian_int64",
+        "sha256": hashlib.sha256(
+            selected_ids_le.tobytes(order="C")
+        ).hexdigest(),
+    }
     return {
+        "output_prefix": str(output_prefix.resolve()),
         "meta_path": str(meta_path.resolve()),
         "meta_sha256": _sha256(meta_path),
         "continuation_path": str(continuation_path.resolve()),
@@ -867,6 +1522,7 @@ def _profile_metadata(
             key: value for key, value in meta.items() if key.startswith("halfset_") and key.endswith("_profile_summary")
         },
         "schedule": {key: meta[key] for key in schedule_keys},
+        "selected_particle_fingerprint": particle_fingerprint,
         "execution_contract": contract,
     }
 
@@ -878,6 +1534,15 @@ def _configure_initial_model_stage_profile(enabled: bool) -> None:
         os.environ["RECOVAR_INITIAL_MODEL_PROFILE"] = "1"
     else:
         os.environ.pop("RECOVAR_INITIAL_MODEL_PROFILE", None)
+
+
+def _stage_profile_enabled_by_arm(mode: str) -> dict[str, bool]:
+    if mode not in _STAGE_PROFILE_CHOICES:
+        raise ValueError(f"unsupported stage-profile mode {mode!r}")
+    return {
+        "cold": mode in {"on", "certify-off"},
+        "warm": mode == "on",
+    }
 
 
 def _effects_barrier() -> None:
@@ -1119,6 +1784,11 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint = args.checkpoint_optimiser.resolve(strict=True)
     input_star = args.input_star.resolve(strict=True)
     data_dir = args.data_dir.resolve(strict=True)
+    static_input_manifest = (
+        args.static_input_manifest.resolve(strict=True)
+        if args.static_input_manifest is not None
+        else None
+    )
     output_root = args.output_root.resolve()
     args.checkpoint_optimiser = checkpoint
     args.input_star = input_star
@@ -1137,9 +1807,46 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.execution_contract == "default" and args.stable_fourier_window_shapes:
         raise ValueError("default execution contract forbids stable Fourier shapes")
+    if (
+        args.initial_model_stage_profile == "certify-off"
+        and args.execution_contract != "all_optimized_q32"
+    ):
+        raise ValueError(
+            "certify-off requires the all_optimized_q32 execution contract"
+        )
+    expected_schedule: dict[str, object] | None = None
+    expected_particle_sha256: str | None = None
+    if args.initial_model_stage_profile == "certify-off":
+        if static_input_manifest is None:
+            raise ValueError("certify-off requires --static-input-manifest")
+        if not args.expected_schedule_json:
+            raise ValueError("certify-off requires --expected-schedule-json")
+        if not args.expected_selected_particle_sha256:
+            raise ValueError(
+                "certify-off requires --expected-selected-particle-sha256"
+            )
+        try:
+            raw_expected_schedule = json.loads(args.expected_schedule_json)
+        except json.JSONDecodeError as error:
+            raise ValueError("expected-schedule-json is not valid JSON") from error
+        expected_schedule = _validate_certify_schedule(
+            raw_expected_schedule,
+            label="expected",
+        )
+        expected_particle_sha256 = args.expected_selected_particle_sha256
+        if not (
+            len(expected_particle_sha256) == 64
+            and all(character in "0123456789abcdef" for character in expected_particle_sha256)
+        ):
+            raise ValueError(
+                "expected-selected-particle-sha256 must be 64 lowercase hex characters"
+            )
+    elif args.expected_schedule_json or args.expected_selected_particle_sha256:
+        raise ValueError("pinned certify-off expectations require certify-off mode")
     contract_environment = _validate_profile_contract_environment(
         args.execution_contract,
     )
+    runtime_environment = _qualified_profile_runtime_environment()
     if output_root.exists():
         if any(output_root.iterdir()):
             raise FileExistsError(f"output root is not empty: {output_root}")
@@ -1147,9 +1854,12 @@ def main(argv: list[str] | None = None) -> int:
         output_root.mkdir(parents=True)
 
     # The stage profiler synchronizes each major phase.  The off mode measures
-    # production topology and retains only the final output barrier below.
-    initial_model_stage_profile_enabled = args.initial_model_stage_profile == "on"
-    _configure_initial_model_stage_profile(initial_model_stage_profile_enabled)
+    # production topology and retains only the final output barrier below;
+    # certify-off profiles only the cold route and certifies the warm route
+    # from always-emitted counters.
+    stage_profile_enabled_by_arm = _stage_profile_enabled_by_arm(
+        args.initial_model_stage_profile
+    )
     os.environ.setdefault("JAX_LOG_COMPILES", "1")
 
     profiler_start: Callable[[], None] | None = None
@@ -1159,9 +1869,44 @@ def main(argv: list[str] | None = None) -> int:
 
     reports: dict[str, dict[str, object]] = {}
     target_iteration = int(args.checkpoint_iteration) + 1
+    qualified_static_manifest_sha256 = (
+        _sha256(static_input_manifest)
+        if static_input_manifest is not None
+        else None
+    )
+    qualified_static_inputs = (
+        _validate_static_input_manifest(static_input_manifest)
+        if static_input_manifest is not None
+        else {
+            str(checkpoint): _sha256(checkpoint),
+            str(input_star): _sha256(input_star),
+        }
+    )
     run_ab_initio: Callable[[list[str]], int] | None = None
     with _capture_raw_image_cache_loads(bool(args.audit_raw_image_cache)) as cache_events:
         for label in ("cold", "warm"):
+            stage_profile_enabled = stage_profile_enabled_by_arm[label]
+            _configure_initial_model_stage_profile(stage_profile_enabled)
+            sealed_before = _validate_sealed_recovar_environment(
+                args.execution_contract,
+                stage_profile_enabled=stage_profile_enabled,
+                expected_runtime_environment=runtime_environment,
+            )
+            if (
+                static_input_manifest is not None
+                and _sha256(static_input_manifest) != qualified_static_manifest_sha256
+            ):
+                raise RuntimeError(f"{label} static-input manifest changed")
+            static_inputs_before = (
+                _validate_static_input_manifest(static_input_manifest)
+                if static_input_manifest is not None
+                else {
+                    str(checkpoint): _sha256(checkpoint),
+                    str(input_star): _sha256(input_star),
+                }
+            )
+            if static_inputs_before != qualified_static_inputs:
+                raise RuntimeError(f"{label} static inputs changed before execution")
             prefix = output_root / label / "run"
             prefix.parent.mkdir(parents=True, exist_ok=False)
             command = _recovar_argv(args=args, output_prefix=prefix)
@@ -1188,9 +1933,38 @@ def main(argv: list[str] | None = None) -> int:
             resources_after = _process_resource_snapshot()
             if status != 0:
                 raise RuntimeError(f"{label} continuation exited with status {status}")
+            sealed_after = _validate_sealed_recovar_environment(
+                args.execution_contract,
+                stage_profile_enabled=stage_profile_enabled,
+                expected_runtime_environment=runtime_environment,
+            )
+            if (
+                static_input_manifest is not None
+                and _sha256(static_input_manifest) != qualified_static_manifest_sha256
+            ):
+                raise RuntimeError(f"{label} static-input manifest changed")
+            static_inputs_after = (
+                _validate_static_input_manifest(static_input_manifest)
+                if static_input_manifest is not None
+                else {
+                    str(checkpoint): _sha256(checkpoint),
+                    str(input_star): _sha256(input_star),
+                }
+            )
+            if static_inputs_after != qualified_static_inputs:
+                raise RuntimeError(f"{label} static inputs changed during execution")
             reports[label] = {
                 "wall_s": wall_s,
                 "argv": command,
+                "sealed_recovar_environment": {
+                    "before": sealed_before,
+                    "after": sealed_after,
+                    "unchanged": True,
+                },
+                "static_input_sha256": {
+                    "before": static_inputs_before,
+                    "after": static_inputs_after,
+                },
                 "process_resources": {
                     "before": resources_before,
                     "after": resources_after,
@@ -1201,7 +1975,13 @@ def main(argv: list[str] | None = None) -> int:
                     target_iteration,
                     execution_contract=args.execution_contract,
                     image_shape=(int(args.image_size), int(args.image_size)),
-                    initial_model_stage_profile_enabled=initial_model_stage_profile_enabled,
+                    initial_model_stage_profile_enabled=stage_profile_enabled,
+                    requested_image_batch_size=int(args.image_batch_size),
+                    exact_local_bucket_radix=int(args.exact_local_bucket_radix),
+                    exact_local_physical_order_chunk_size=int(
+                        args.exact_local_physical_order_chunk_size
+                    ),
+                    environment=sealed_before["present_recovar_environment"],
                 ),
             }
             if cache_events is not None:
@@ -1213,6 +1993,16 @@ def main(argv: list[str] | None = None) -> int:
             if compile_records is not None:
                 reports[label]["cold_compile_callsite_count"] = len(compile_records)
 
+    production_topology_certificate = (
+        _certify_profile_free_warm(
+            reports["cold"],
+            reports["warm"],
+            expected_schedule=expected_schedule,
+            expected_selected_particle_sha256=expected_particle_sha256,
+        )
+        if args.initial_model_stage_profile == "certify-off"
+        else None
+    )
     report = {
         "schema": "recovar.vdam_late_iteration_profile.v1",
         "classification": "diagnostic_performance_only",
@@ -1224,8 +2014,15 @@ def main(argv: list[str] | None = None) -> int:
         "input_star": str(input_star),
         "input_star_sha256": _sha256(input_star),
         "data_dir": str(data_dir),
+        "static_input_manifest": (
+            str(static_input_manifest) if static_input_manifest is not None else None
+        ),
+        "static_input_manifest_sha256": (
+            qualified_static_manifest_sha256
+        ),
         "cuda_profiler_range": bool(args.cuda_profiler_range),
-        "initial_model_stage_profile_enabled": initial_model_stage_profile_enabled,
+        "initial_model_stage_profile_mode": args.initial_model_stage_profile,
+        "initial_model_stage_profile_enabled_by_arm": stage_profile_enabled_by_arm,
         "raw_image_cache_audit_enabled": bool(args.audit_raw_image_cache),
         "cold_compile_callsite_log": (
             str(args.cold_compile_callsite_log.resolve())
@@ -1237,6 +2034,7 @@ def main(argv: list[str] | None = None) -> int:
         "image_shape": [int(args.image_size), int(args.image_size)],
         "exact_local_bucket_radix": int(args.exact_local_bucket_radix),
         "exact_local_physical_order_chunk_size": int(args.exact_local_physical_order_chunk_size),
+        "production_topology_certificate": production_topology_certificate,
         "cold": reports["cold"],
         "warm": reports["warm"],
         "cold_minus_warm_wall_s": float(reports["cold"]["wall_s"]) - float(reports["warm"]["wall_s"]),
