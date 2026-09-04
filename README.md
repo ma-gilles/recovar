@@ -245,3 +245,6 @@ The inputs needed to reproduce the experiments in this paper can be access on th
 Marc Aurele Gilles — [gilles@princeton.edu](mailto:gilles@princeton.edu)
 
 Issues and feature requests: [GitHub Issues](https://github.com/ma-gilles/recovar/issues)
+
+<!-- Contributing: see CONTRIBUTING.md for dev setup -->
+
