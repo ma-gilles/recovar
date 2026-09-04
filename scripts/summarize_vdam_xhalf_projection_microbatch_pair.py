@@ -4,15 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from recovar.em.dense_single_volume.local_em_engine import (
     _exact_local_max_hypotheses_per_microbatch,
 )
-from scripts.summarize_vdam_profile_toggle_pair import _load_json, _map_metric, _sha256
+from scripts.summarize_em_completion_bench import (
+    _load_relion_volume,
+    normalized_fsc_auc,
+    shell_fsc,
+)
 
 SCHEMA = "recovar.vdam_xhalf_projection_microbatch_pair.v2"
 SCORED_LABELS = (
@@ -32,6 +39,43 @@ ARTIFACT_SUFFIXES = ("data.star", "model.star", "class001.mrc")
 
 class XHalfPairError(RuntimeError):
     """Raised when a cap pair is incomplete or mixed."""
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise XHalfPairError(f"cannot read JSON at {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise XHalfPairError(f"expected a JSON object at {path}")
+    return value
+
+
+def _sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _map_metric(lhs_path: Path, rhs_path: Path, *, with_fsc: bool) -> dict[str, Any]:
+    lhs = _load_relion_volume(lhs_path)
+    rhs = _load_relion_volume(rhs_path)
+    if lhs.shape != rhs.shape:
+        raise XHalfPairError(
+            f"map shapes differ: {lhs_path} {lhs.shape} vs {rhs_path} {rhs.shape}"
+        )
+    delta = np.asarray(lhs - rhs, dtype=np.float64)
+    denominator = float(np.linalg.norm(np.asarray(rhs, dtype=np.float64).reshape(-1)))
+    result: dict[str, Any] = {
+        "bytewise_array_equal": bool(np.array_equal(lhs, rhs)),
+        "differing_voxel_count": int(np.count_nonzero(lhs != rhs)),
+        "max_absolute_error": float(np.max(np.abs(delta))),
+        "relative_l2_error": float(
+            np.linalg.norm(delta.reshape(-1)) / max(denominator, 1e-300)
+        ),
+    }
+    if with_fsc:
+        result["fsc_auc"] = float(normalized_fsc_auc(shell_fsc(lhs, rhs)))
+    return result
 
 
 def _arms(root: Path) -> dict[str, int]:
