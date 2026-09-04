@@ -399,6 +399,7 @@ def test_coarse_gaussian_gemm_projection_cache_reuses_exact_c64_blocks_bitwise()
 def _backend_kwargs(**updates):
     values = dict(
         gemm_macro_requested=True,
+        gemm_hybrid_requested=False,
         score_mode="gaussian",
         fused_projector_requested=False,
         fused_projector_enabled=False,
@@ -448,6 +449,35 @@ def test_coarse_gaussian_gemm_backend_rejects_every_competing_selector(
     with pytest.raises(ValueError, match=environment_name):
         significance._resolve_coarse_gaussian_score_backend(
             **_backend_kwargs(**{selector: True}),
+        )
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "fused_projector_requested",
+        "canonical_reduction_requested",
+        "native_atomic_reduction_requested",
+        "single_lane_canonical_requested",
+        "multistream_requested",
+    ],
+)
+def test_coarse_gaussian_gemm_hybrid_allows_fused_fallback_family(selector):
+    assert significance._resolve_coarse_gaussian_score_backend(
+        **_backend_kwargs(
+            gemm_hybrid_requested=True,
+            **{selector: True},
+        ),
+    ) is significance._CoarseGaussianScoreBackend.GEMM_MACRO
+
+
+def test_coarse_gaussian_gemm_hybrid_still_rejects_native_texture():
+    with pytest.raises(ValueError, match="RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE"):
+        significance._resolve_coarse_gaussian_score_backend(
+            **_backend_kwargs(
+                gemm_hybrid_requested=True,
+                native_texture_requested=True,
+            ),
         )
 
 
@@ -1402,13 +1432,20 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
 
 
 @pytest.mark.parametrize(
-    ("compact_posterior", "hybrid_image_batch_size", "force_fallback"),
+    (
+        "compact_posterior",
+        "hybrid_image_batch_size",
+        "force_fallback",
+        "fused_fallback",
+    ),
     [
-        (False, None, False),
-        (True, None, False),
-        (True, 3, False),
-        (True, 3, True),
-        (True, None, True),
+        (False, None, False, False),
+        (True, None, False, False),
+        (True, 3, False, False),
+        (True, 3, True, False),
+        (True, None, True, False),
+        (True, None, False, True),
+        (True, None, True, True),
     ],
 )
 def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
@@ -1416,6 +1453,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     compact_posterior,
     hybrid_image_batch_size,
     force_fallback,
+    fused_fallback,
 ):
     """Selected and exact-full-direct hybrid scores are reused in both passes."""
 
@@ -1442,7 +1480,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MAX_PROJECTED_TRANSIENT_GB": "0.01",
         "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
         "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
-        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
+        "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "1" if fused_fallback else "0",
         "RECOVAR_RELION_COARSE_CANONICAL_REDUCTION": "0",
         "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION": "0",
         "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL": "0",
@@ -1469,6 +1507,46 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
 
     monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
+    fused_calls = []
+
+    def fake_fused_projector(
+        projector_full,
+        rotations_block,
+        images,
+        translation_angles,
+        score_weight,
+        initial_diff2,
+        full_to_compact,
+        **kwargs,
+    ):
+        fused_calls.append(
+            {
+                "rotation_count": int(rotations_block.shape[0]),
+                "actual_image_count": int(images.shape[0]),
+                "lookup": np.asarray(full_to_compact).copy(),
+                "kwargs": dict(kwargs),
+            }
+        )
+        assert projector_full.dtype == jnp.complex64
+        assert images.dtype == jnp.complex64
+        assert translation_angles.dtype == jnp.float32
+        assert score_weight.dtype == jnp.float32
+        assert initial_diff2.dtype == jnp.float32
+        return jnp.zeros(
+            (
+                int(images.shape[0]),
+                int(rotations_block.shape[0]),
+                int(translation_angles.shape[0]),
+            ),
+            dtype=jnp.float32,
+        )
+
+    fake_fused_projector.__name__ = "relion_coarse_diff2_projector_f32"
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_coarse_diff2_projector_f32",
+        fake_fused_projector,
+    )
     monkeypatch.setattr(
         sparse_pass2_bucketed,
         "_relion_exact_ctf_half_from_source_star",
@@ -1575,6 +1653,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         force_static_dense_after_overflow: bool,
         logical_full_pixel_count,
         capture_selected_diff2: bool,
+        full_dense_diff2_fn,
     ):
         batch_size = int(shifted_corrected.shape[0])
         static_overflow_requests.append(force_static_dense_after_overflow)
@@ -1597,6 +1676,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         assert compact_posterior is compact_expected
         assert logical_full_pixel_count is None
         assert capture_selected_diff2 is False
+        assert (full_dense_diff2_fn is not None) is fused_fallback
 
         scores = np.full((batch_size, 16, 2), -100.0, dtype=np.float32)
         scores[:actual_image_count, 5, 1] = np.float32(3.0)
@@ -1606,6 +1686,10 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         counts = np.zeros(batch_size, dtype=np.int32)
         counts[:actual_image_count] = 1
         use_selected = not force_fallback and not force_static_dense_after_overflow
+        if not use_selected and full_dense_diff2_fn is not None:
+            full_diff2 = np.asarray(full_dense_diff2_fn())
+            assert full_diff2.shape == scores.shape
+            assert full_diff2.dtype == np.float32
         fallback_reason = (
             "prior_batch_block_capacity_overflow"
             if force_static_dense_after_overflow
@@ -1672,6 +1756,13 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
                         else "dense_selected_exact"
                     )
                 )
+            ),
+            full_dense_backend=(
+                None
+                if use_selected
+                else "fused_projector"
+                if full_dense_diff2_fn is not None
+                else "rectangular"
             ),
         )
         return result
@@ -1765,6 +1856,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         (batch.copy(), per_image, processed.copy())
         for batch, per_image, processed in process_calls
     )
+    control_fused_calls = tuple(fused_calls)
 
     projection_calls.clear()
     helper_outputs.clear()
@@ -1773,6 +1865,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     posterior_inputs.clear()
     translation_calls.clear()
     process_calls.clear()
+    fused_calls.clear()
     monkeypatch.setenv(
         "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS",
         "1",
@@ -1798,6 +1891,17 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         if force_fallback and expected_batch_count == 2
         else [False] * expected_batch_count
     )
+    expected_fused_calls = (
+        expected_batch_count if fused_fallback and force_fallback else 0
+    )
+    assert len(control_fused_calls) == expected_fused_calls
+    assert len(fused_calls) == expected_fused_calls
+    for call in fused_calls:
+        assert call["rotation_count"] == 16
+        assert call["lookup"].shape == (12,)
+        assert call["lookup"].dtype == np.int32
+        assert call["kwargs"]["current_size"] == 4
+        assert call["kwargs"]["physical_image_size"] == 4
     assert [call[1] for call in process_calls] == [False, True] * expected_batch_count
     assert [call[1] for call in control_process_calls] == [
         False,
@@ -1937,6 +2041,28 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     first_batch_images = 3 if hybrid_image_batch_size else 2
     assert hybrid_stats["fallback_batch_count"] == expected_fallback_batches
     assert hybrid_stats["static_dense_batch_count"] == expected_static_batches
+    expected_full_dense_batches = expected_fallback_batches + expected_static_batches
+    assert hybrid_stats["full_dense_batch_count"] == expected_full_dense_batches
+    assert hybrid_stats["fused_full_fallback_batch_count"] == (
+        expected_full_dense_batches if fused_fallback and force_fallback else 0
+    )
+    assert (
+        hybrid_stats["rectangular_full_fallback_batch_count"]
+        == (
+            0
+            if fused_fallback and force_fallback
+            else expected_full_dense_batches
+        )
+    )
+    expected_full_backend = "fused_projector" if fused_fallback else "rectangular"
+    assert hybrid_stats["full_fallback_backend_requested"] == expected_full_backend
+    assert hybrid_stats["full_fallback_backend_armed"] == expected_full_backend
+    assert hybrid_stats["full_fallback_backend_effective"] == (
+        expected_full_backend if expected_full_dense_batches else None
+    )
+    assert hybrid_stats["all_full_dense_batches_used_fused"] is (
+        fused_fallback if expected_full_dense_batches else None
+    )
     assert hybrid_stats["selected_rescore_image_count"] == (
         0 if force_fallback else 3
     )
@@ -1945,6 +2071,22 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     )
     assert hybrid_stats["static_dense_image_count"] == (
         3 - first_batch_images if force_fallback else 0
+    )
+    expected_full_dense_images = 3 if force_fallback else 0
+    assert hybrid_stats["full_dense_image_count"] == expected_full_dense_images
+    assert hybrid_stats["fused_full_fallback_image_count"] == (
+        expected_full_dense_images if fused_fallback else 0
+    )
+    assert (
+        hybrid_stats["rectangular_full_fallback_image_count"]
+        == (0 if fused_fallback else expected_full_dense_images)
+    )
+    selector_audit = result[5]["coarse_selector_audit"]
+    assert selector_audit["requested_fused"] is fused_fallback
+    assert selector_audit["effective_fused"] is bool(expected_fused_calls)
+    assert selector_audit["counts"]["fused_calls"] == expected_fused_calls
+    assert selector_audit["counts"]["actual_rows"] == (
+        3 if fused_fallback and force_fallback else 0
     )
     assert hybrid_stats["selected_source16_block_count"] == (
         0 if force_fallback else 3

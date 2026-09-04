@@ -377,6 +377,7 @@ def _selected_diff2_from_ids(
 
 def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
     cache, shifted, weight, initial, topology = _hybrid_operands()
+    full_callback_calls = 0
     monkeypatch.setattr(
         significance,
         "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
@@ -385,6 +386,11 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
 
     def reject_full_fallback(*_args, **_kwargs):
         raise AssertionError("eligible selected rescore must not run full fallback")
+
+    def reject_full_callback():
+        nonlocal full_callback_calls
+        full_callback_calls += 1
+        raise AssertionError("eligible selected rescore must keep callback lazy")
 
     monkeypatch.setattr(
         cuda_backproject,
@@ -403,9 +409,12 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
         translation_log_prior=translation_prior,
         certificate_chunk_rows=16,
         block_capacity=2,
+        full_dense_diff2_fn=reject_full_callback,
     )
 
     assert result.used_selected_rescore
+    assert result.full_dense_backend is None
+    assert full_callback_calls == 0
     assert result.scores_include_priors
     assert result.fallback_reason is None
     np.testing.assert_array_equal(result.selection.block_ids[0], [0, 1])
@@ -421,6 +430,153 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
         np.asarray(result.raw_score_max),
         np.asarray([-1.0, 0.0], dtype=np.float32),
     )
+
+
+@pytest.mark.parametrize(
+    ("fallback_case", "expected_reason"),
+    [
+        ("static_capacity", "compact_physical_capacity_not_smaller_than_dense"),
+        ("latched_overflow", "prior_batch_block_capacity_overflow"),
+        ("capacity_overflow", "block_capacity_overflow"),
+        ("invalid_selected", "invalid_selected_exact_output"),
+    ],
+)
+def test_every_hybrid_full_dense_exit_uses_lazy_callback(
+    monkeypatch,
+    fallback_case,
+    expected_reason,
+):
+    cache, shifted, weight, initial, topology = _hybrid_operands()
+    callback_calls = 0
+
+    def reject_rectangular(*_args, **_kwargs):
+        raise AssertionError("armed full-dense callback must replace rectangular scoring")
+
+    def full_dense_callback():
+        nonlocal callback_calls
+        callback_calls += 1
+        return jnp.arange(
+            shifted.shape[0] * cache.shape[1] * shifted.shape[1],
+            dtype=jnp.float32,
+        ).reshape(shifted.shape[0], cache.shape[1], shifted.shape[1])
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_coarse_diff2_rectangular_f32",
+        reject_rectangular,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_coarse_diff2_rectangular_runtime_f32",
+        reject_rectangular,
+    )
+    kwargs = {
+        "compact_posterior": False,
+        "block_capacity": 1,
+        "force_static_dense_after_overflow": False,
+    }
+    if fallback_case == "static_capacity":
+        kwargs.update(compact_posterior=True, block_capacity=2)
+    elif fallback_case == "latched_overflow":
+        kwargs.update(
+            compact_posterior=True,
+            force_static_dense_after_overflow=True,
+        )
+    elif fallback_case == "invalid_selected":
+        kwargs["block_capacity"] = 2
+
+        def invalid_selected(*args, **selected_kwargs):
+            selected = np.array(
+                _selected_diff2_from_ids(*args, **selected_kwargs),
+                copy=True,
+            )
+            selected[0, 0, 0, 0] = np.nan
+            return jnp.asarray(selected)
+
+        monkeypatch.setattr(
+            significance,
+            "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
+            invalid_selected,
+        )
+
+    result = significance._compute_coarse_gaussian_gemm_hybrid_batch(
+        jnp.asarray(cache),
+        jnp.asarray(shifted),
+        jnp.asarray(weight),
+        jnp.asarray(initial),
+        topology=topology,
+        actual_image_count=2,
+        class_log_prior=np.float32(0.0),
+        certificate_chunk_rows=16,
+        full_dense_diff2_fn=full_dense_callback,
+        **kwargs,
+    )
+
+    assert callback_calls == 1
+    assert not result.used_selected_rescore
+    assert result.full_dense_backend == "fused_projector"
+    assert result.fallback_reason == expected_reason
+    expected_diff2 = np.arange(result.scores.size, dtype=np.float32).reshape(
+        result.scores.shape,
+    )
+    np.testing.assert_array_equal(np.asarray(result.scores), -expected_diff2)
+
+
+@pytest.mark.parametrize(
+    ("callback_result", "error", "message"),
+    [
+        (
+            np.zeros((2, 31, 3), dtype=np.float32),
+            ValueError,
+            "returned shape",
+        ),
+        (
+            np.zeros((2, 32, 3), dtype=np.int32),
+            TypeError,
+            "must return float32",
+        ),
+    ],
+)
+def test_hybrid_full_dense_callback_validates_shape_and_dtype(
+    callback_result,
+    error,
+    message,
+):
+    cache, shifted, weight, initial, topology = _hybrid_operands()
+
+    with pytest.raises(error, match=message):
+        significance._compute_coarse_gaussian_gemm_hybrid_batch(
+            jnp.asarray(cache),
+            jnp.asarray(shifted),
+            jnp.asarray(weight),
+            jnp.asarray(initial),
+            topology=topology,
+            actual_image_count=2,
+            class_log_prior=np.float32(0.0),
+            certificate_chunk_rows=16,
+            block_capacity=2,
+            compact_posterior=True,
+            full_dense_diff2_fn=lambda: callback_result,
+        )
+
+
+def test_hybrid_full_dense_callback_must_be_callable():
+    cache, shifted, weight, initial, topology = _hybrid_operands()
+
+    with pytest.raises(TypeError, match="must be callable"):
+        significance._compute_coarse_gaussian_gemm_hybrid_batch(
+            jnp.asarray(cache),
+            jnp.asarray(shifted),
+            jnp.asarray(weight),
+            jnp.asarray(initial),
+            topology=topology,
+            actual_image_count=2,
+            class_log_prior=np.float32(0.0),
+            certificate_chunk_rows=16,
+            block_capacity=2,
+            compact_posterior=True,
+            full_dense_diff2_fn=object(),
+        )
 
 
 def test_hybrid_compact_posterior_retains_ordered_ids_without_dense_scatter(

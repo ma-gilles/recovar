@@ -537,11 +537,10 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
 
     significance_source = Path(significance.__file__).read_text()
     production_start = significance_source.index(
-        "if coarse_gaussian_score_backend in {",
-        significance_source.index("def _score_block("),
+        "def _score_coarse_fused_full_diff2(",
     )
     production_end = significance_source.index(
-        "if coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.NATIVE_TEXTURE:",
+        "def _project_coarse_gemm_rows(",
         production_start,
     )
     production = significance_source[production_start:production_end]
@@ -551,6 +550,14 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
     assert "projector_lanes" not in production.lower()
     assert 'coarse_projector_kwargs["prehalf_weight"]' in production
     assert "coarse_prehalf_weight_enabled" in production
+
+    score_block_start = significance_source.index("def _score_block(")
+    score_block_end = significance_source.index(
+        "if coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.NATIVE_TEXTURE:",
+        score_block_start,
+    )
+    score_block = significance_source[score_block_start:score_block_end]
+    assert "return -_score_coarse_fused_full_diff2(" in score_block
 
 
 def test_relion_coarse_prehalf_api_defaults_are_static_and_forwarded():
@@ -1015,7 +1022,7 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert "relion_coarse_gaussian_default\n                and coarse_fused_projector_enabled" in source
     assert "production half-image preprocessing path" in source
     assert "else cuda_backproject.relion_coarse_diff2_projector_f32" in source
-    assert "diff2 = coarse_projector(" in source
+    assert "return coarse_projector(" in source
     assert "rotation_block_size = n_rot" in source
 
 

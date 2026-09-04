@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.helpers import significance
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     plan_coarse_gemm_certificate_topology,
 )
@@ -22,6 +23,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     _texture_centered_crop_at_indices,
 )
 from recovar.em.dense_single_volume.helpers.significance import (
+    _coarse_gaussian_fused_logical_lookup,
     _plan_coarse_gaussian_square_layout,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -188,6 +190,32 @@ def test_stable_coarse_square_preserves_logical_issue_prefix(monkeypatch):
         layout.full_to_compact_np[logical_count:],
         np.arange(logical_count, layout.physical_square_count, dtype=np.int32),
     )
+    fused_lookup = _coarse_gaussian_fused_logical_lookup(
+        layout.full_to_compact_np,
+        layout,
+        current_size=logical_size,
+    )
+    assert fused_lookup.shape == (logical_count,)
+    np.testing.assert_array_equal(np.asarray(fused_lookup), logical_lookup)
+    with pytest.raises(ValueError, match="does not match current_size"):
+        _coarse_gaussian_fused_logical_lookup(
+            layout.full_to_compact_np,
+            layout,
+            current_size=logical_size + 2,
+        )
+    source = Path(significance.__file__).read_text()
+    scorer_start = source.index("def _score_coarse_fused_full_diff2(")
+    scorer_end = source.index("def _project_coarse_gemm_rows(", scorer_start)
+    fused_scorer = source[scorer_start:scorer_end]
+    assert "_coarse_gaussian_fused_logical_lookup(" in fused_scorer
+    score_block_start = source.index("def _score_block(")
+    score_block_end = source.index(
+        "if coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.NATIVE_TEXTURE:",
+        score_block_start,
+    )
+    assert "return -_score_coarse_fused_full_diff2(" in source[
+        score_block_start:score_block_end
+    ]
     assert not np.any(layout.score_active_mask_np[logical_count:])
     coords = np.rint(make_frequency_coords_half_np(_IMAGE_SHAPE)).astype(np.int64)
     expected_projector_mask = (
@@ -207,6 +235,37 @@ def test_stable_coarse_square_preserves_logical_issue_prefix(monkeypatch):
         translation_count=29,
     )
     assert topology.full_position_count == layout.physical_square_count
+
+
+def test_fused_lookup_strips_q32_physical_tail_for_current_size_26(monkeypatch):
+    """Regression for the live current_size=26, physical_size=32 fused failure."""
+
+    monkeypatch.setenv(
+        "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM",
+        "32",
+    )
+    logical_size = 26
+    layout = _plan_coarse_gaussian_square_layout(
+        _IMAGE_SHAPE,
+        logical_size,
+        _active_coarse_score_indices(logical_size),
+        stable_fourier_window_shapes=True,
+    )
+
+    assert layout.logical_square_count == 26 * 14
+    assert layout.physical_current_size == 32
+    assert layout.physical_square_count == 32 * 17
+    assert layout.full_to_compact_np.shape == (32 * 17,)
+    fused_lookup = _coarse_gaussian_fused_logical_lookup(
+        layout.full_to_compact_np,
+        layout,
+        current_size=logical_size,
+    )
+    assert fused_lookup.shape == (26 * 14,)
+    np.testing.assert_array_equal(
+        np.asarray(fused_lookup),
+        layout.full_to_compact_np[: 26 * 14],
+    )
 
 
 def test_stable_coarse_projector_keeps_logical_disk_boundary(monkeypatch):

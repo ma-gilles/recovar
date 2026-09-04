@@ -364,6 +364,36 @@ def _plan_coarse_gaussian_square_layout(
     )
 
 
+def _coarse_gaussian_fused_logical_lookup(
+    full_to_compact,
+    square_layout: CoarseGaussianSquareLayout,
+    *,
+    current_size: int,
+):
+    """Return the logical fused-ABI prefix from a stable physical lookup."""
+
+    current_size = operator.index(current_size)
+    logical_count = current_size * (current_size // 2 + 1)
+    if (
+        int(square_layout.logical_current_size) != current_size
+        or int(square_layout.logical_square_count) != logical_count
+    ):
+        raise ValueError(
+            "fused coarse logical lookup does not match current_size: "
+            f"layout={square_layout.logical_current_size}/"
+            f"{square_layout.logical_square_count}, expected={current_size}/"
+            f"{logical_count}",
+        )
+    lookup = jnp.asarray(full_to_compact)
+    if lookup.ndim != 1 or lookup.dtype != jnp.int32:
+        raise TypeError("fused coarse full_to_compact lookup must be rank-1 int32")
+    if int(lookup.shape[0]) < logical_count:
+        raise ValueError(
+            "fused coarse full_to_compact lookup is shorter than its logical prefix",
+        )
+    return lookup[:logical_count]
+
+
 class SignificanceDumpComplete(RuntimeError):
     """Raised after an explicitly targeted coarse-significance dump is durable."""
 
@@ -1057,9 +1087,21 @@ class _CoarseGaussianScoreBackend(str, Enum):
     GEMM_MACRO = "gemm_macro"
 
 
+_COARSE_GAUSSIAN_FUSED_SCORE_BACKENDS = frozenset(
+    {
+        _CoarseGaussianScoreBackend.FUSED,
+        _CoarseGaussianScoreBackend.FUSED_CANONICAL,
+        _CoarseGaussianScoreBackend.FUSED_NATIVE_ATOMIC,
+        _CoarseGaussianScoreBackend.FUSED_SINGLE_LANE,
+        _CoarseGaussianScoreBackend.FUSED_MULTISTREAM,
+    }
+)
+
+
 def _resolve_coarse_gaussian_score_backend(
     *,
     gemm_macro_requested: bool,
+    gemm_hybrid_requested: bool,
     score_mode: str,
     fused_projector_requested: bool,
     fused_projector_enabled: bool,
@@ -1074,12 +1116,14 @@ def _resolve_coarse_gaussian_score_backend(
     native_texture_requested: bool,
     native_texture_enabled: bool,
 ) -> _CoarseGaussianScoreBackend:
-    """Resolve one score backend and reject an explicit GEMM conflict.
+    """Resolve the primary score backend and reject ambiguous selectors.
 
     The exact-operand, CUDA-sincosf, and texture-projection flags are operands
     or prerequisites rather than competing score/reduction selectors.  All
     selectors that the expanded GEMM branch would otherwise silently override
-    are represented here.
+    are represented here.  The mature fused selector family is permitted only
+    when the certified hybrid is also requested, where it is a secondary full-
+    dense fallback rather than the primary backend.
     """
 
     if gemm_macro_requested:
@@ -1088,15 +1132,18 @@ def _resolve_coarse_gaussian_score_backend(
                 f"{_COARSE_GAUSSIAN_GEMM_MACRO_ENV}=1 requires "
                 "score_mode='gaussian'",
             )
+        fused_fallback_selectors = (
+            (_K1_COARSE_FUSED_PROJECTOR_ENV, "1", fused_projector_requested),
+            (_RELION_COARSE_CANONICAL_REDUCTION_ENV, "1", canonical_reduction_requested),
+            (_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV, "1", native_atomic_reduction_requested),
+            (_K1_COARSE_SINGLE_LANE_CANONICAL_ENV, "1", single_lane_canonical_requested),
+            (_K1_COARSE_MULTISTREAM_WORKERS_ENV, "8", multistream_requested),
+        )
         conflicts = [
             f"{name}={requested_value}"
             for name, requested_value, selected in (
-                (_K1_COARSE_FUSED_PROJECTOR_ENV, "1", fused_projector_requested),
-                (_RELION_COARSE_CANONICAL_REDUCTION_ENV, "1", canonical_reduction_requested),
-                (_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV, "1", native_atomic_reduction_requested),
-                (_K1_COARSE_SINGLE_LANE_CANONICAL_ENV, "1", single_lane_canonical_requested),
-                (_K1_COARSE_MULTISTREAM_WORKERS_ENV, "8", multistream_requested),
                 (_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV, "1", native_texture_requested),
+                *(() if gemm_hybrid_requested else fused_fallback_selectors),
             )
             if selected
         ]
@@ -1577,6 +1624,7 @@ class CoarseGaussianGemmHybridBatchResult(NamedTuple):
     compact_scores: CoarseGemmHybridCompactScores | None = None
     score_representation: str = "compact_selected_exact"
     diagnostic_selected_diff2: jax.Array | None = None
+    full_dense_backend: str | None = None
 
 
 def _select_coarse_gaussian_gemm_score_representation(
@@ -1618,14 +1666,16 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     force_static_dense_after_overflow: bool = False,
     logical_full_pixel_count=None,
     capture_selected_diff2: bool = False,
+    full_dense_diff2_fn=None,
 ) -> CoarseGaussianGemmHybridBatchResult:
     """Certify, exactly rescore, and restore one K=1 coarse score table.
 
     The expanded FP64 GEMMs only choose complete source-16 rotation blocks.
     Published values always come from the mature direct CUDA arithmetic.  Any
     incomplete certificate, capacity overflow, or invalid selected output
-    routes the whole padded image batch through one full rectangular direct
-    call, preserving a simple fail-closed boundary.
+    routes the whole padded image batch through one lazy full-direct call.
+    The default remains the rectangular scorer; callers may supply the mature
+    fused projector/scorer without paying for it on selected-rescore batches.
     """
 
     from recovar import cuda_backproject
@@ -1685,6 +1735,8 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         )
     if not isinstance(force_static_dense_after_overflow, (bool, np.bool_)):
         raise ValueError("force_static_dense_after_overflow must be boolean")
+    if full_dense_diff2_fn is not None and not callable(full_dense_diff2_fn):
+        raise TypeError("full_dense_diff2_fn must be callable or None")
 
     rotation_prior = None
     if rotation_log_prior is not None:
@@ -1812,21 +1864,37 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     elif score_representation != "dense_full_direct_static_capacity":
         score_representation = "dense_full_direct_dynamic_fallback"
 
-    full_operands = (
-        cache[0],
-        shifted,
-        weight,
-        initial,
-        jnp.asarray(topology.full_to_compact),
-    )
-    if logical_full_pixel_count is None:
-        full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
-            *full_operands,
-        )
+    if full_dense_diff2_fn is not None:
+        full_diff2 = jnp.asarray(full_dense_diff2_fn())
+        full_dense_backend = "fused_projector"
     else:
-        full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_runtime_f32(
-            *full_operands,
-            jnp.asarray(logical_full_pixel_count, dtype=jnp.int32),
+        full_operands = (
+            cache[0],
+            shifted,
+            weight,
+            initial,
+            jnp.asarray(topology.full_to_compact),
+        )
+        if logical_full_pixel_count is None:
+            full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
+                *full_operands,
+            )
+        else:
+            full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_runtime_f32(
+                *full_operands,
+                jnp.asarray(logical_full_pixel_count, dtype=jnp.int32),
+            )
+        full_dense_backend = "rectangular"
+    expected_full_shape = (batch_size, n_rotations, n_translations)
+    if tuple(full_diff2.shape) != expected_full_shape:
+        raise ValueError(
+            "full dense hybrid fallback returned shape "
+            f"{tuple(full_diff2.shape)}, expected {expected_full_shape}",
+        )
+    if np.dtype(full_diff2.dtype) != np.dtype(np.float32):
+        raise TypeError(
+            "full dense hybrid fallback must return float32, got "
+            f"{full_diff2.dtype}",
         )
     raw_scores = -full_diff2
     return CoarseGaussianGemmHybridBatchResult(
@@ -1838,6 +1906,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         selection=selection,
         score_representation=score_representation,
         diagnostic_selected_diff2=None,
+        full_dense_backend=full_dense_backend,
     )
 
 
@@ -5148,6 +5217,7 @@ def _compute_k_class_significance_batched(
     )
     coarse_gaussian_score_backend = _resolve_coarse_gaussian_score_backend(
         gemm_macro_requested=coarse_gaussian_gemm_macro_requested,
+        gemm_hybrid_requested=coarse_gaussian_gemm_hybrid_requested,
         score_mode=score_mode,
         fused_projector_requested=coarse_fused_projector_requested,
         fused_projector_enabled=coarse_fused_projector_enabled,
@@ -5164,6 +5234,10 @@ def _compute_k_class_significance_batched(
     )
     coarse_gaussian_gemm_macro_enabled = (
         coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.GEMM_MACRO
+    )
+    coarse_gaussian_fused_full_fallback_armed = bool(
+        coarse_gaussian_gemm_hybrid_requested
+        and coarse_fused_projector_enabled
     )
     (
         coarse_gaussian_gemm_diagnostic_dir,
@@ -5499,13 +5573,11 @@ def _compute_k_class_significance_batched(
             )
         coarse_gaussian_projector_full_by_class = None
         coarse_gaussian_translation_angles = None
-        if coarse_gaussian_score_backend in {
-            _CoarseGaussianScoreBackend.FUSED,
-            _CoarseGaussianScoreBackend.FUSED_CANONICAL,
-            _CoarseGaussianScoreBackend.FUSED_NATIVE_ATOMIC,
-            _CoarseGaussianScoreBackend.FUSED_SINGLE_LANE,
-            _CoarseGaussianScoreBackend.FUSED_MULTISTREAM,
-        }:
+        if (
+            coarse_gaussian_score_backend
+            in _COARSE_GAUSSIAN_FUSED_SCORE_BACKENDS
+            or coarse_gaussian_fused_full_fallback_armed
+        ):
             coarse_gaussian_projector_full_by_class = [
                 relion_projector_half_to_texture_full(
                     relion_projector_half[class_index],
@@ -5516,10 +5588,14 @@ def _compute_k_class_significance_batched(
                 _relion_translation_angles_f32(translations_source, image_shape),
                 dtype=jnp.float32,
             )
-            # One all-rotation launch preserves RELION's 128-orientation main
-            # segment followed by its one-orientation tail.  It also avoids
-            # projecting a memory-planner padding block (often 5000 rows).
-            rotation_block_size = n_rot
+            if (
+                coarse_gaussian_score_backend
+                in _COARSE_GAUSSIAN_FUSED_SCORE_BACKENDS
+            ):
+                # One all-rotation launch preserves RELION's 128-orientation
+                # main segment followed by its one-orientation tail.  It also
+                # avoids projecting a memory-planner padding block.
+                rotation_block_size = n_rot
         logger.warning(
             "RELION coarse Gaussian FFI enabled (%s): "
             "classes=%d current_size=%d physical_size=%d square_pixels=%d "
@@ -5575,13 +5651,10 @@ def _compute_k_class_significance_batched(
                     "unused generic half-image FFT, CTF evaluation, and full "
                     "translated score image",
                 )
-        if coarse_gaussian_score_backend in {
-            _CoarseGaussianScoreBackend.FUSED,
-            _CoarseGaussianScoreBackend.FUSED_CANONICAL,
-            _CoarseGaussianScoreBackend.FUSED_NATIVE_ATOMIC,
-            _CoarseGaussianScoreBackend.FUSED_SINGLE_LANE,
-            _CoarseGaussianScoreBackend.FUSED_MULTISTREAM,
-        }:
+        if (
+            coarse_gaussian_score_backend
+            in _COARSE_GAUSSIAN_FUSED_SCORE_BACKENDS
+        ):
             logger.warning(
                 "RELION fused coarse projector/diff2 enabled (%s): "
                 "classes=%d rotations=%d translations=%d",
@@ -5628,6 +5701,11 @@ def _compute_k_class_significance_batched(
                     "workers=%d actual image rows only",
                     coarse_multistream_worker_count,
                 )
+        if coarse_gaussian_fused_full_fallback_armed:
+            logger.warning(
+                "Opt-in certified hybrid native fused full fallback armed: "
+                "the fused scorer executes only for whole-batch full-dense exits",
+            )
         if coarse_gaussian_gemm_macro_enabled:
             logger.warning(
                 "Opt-in shared coarse projection-once/GEMM macro enabled: "
@@ -5641,10 +5719,15 @@ def _compute_k_class_significance_batched(
             logger.warning(
                 "Opt-in certified K=1 coarse GEMM/source16 hybrid enabled: "
                 "rotations=%d translations=%d selected_block_capacity=%d; "
-                "all ineligible batches use full rectangular direct fallback",
+                "all ineligible batches use full %s direct fallback",
                 n_rot,
                 n_trans,
                 coarse_gaussian_gemm_hybrid_capacity,
+                (
+                    "native fused"
+                    if coarse_gaussian_fused_full_fallback_armed
+                    else "rectangular"
+                ),
             )
             if coarse_gaussian_gemm_compact_posterior_requested:
                 logger.warning(
@@ -5978,6 +6061,85 @@ def _compute_k_class_significance_batched(
         "prehalf_selected_calls": 0,
     }
 
+    def _score_coarse_fused_full_diff2(
+        class_index,
+        rots_b,
+        *,
+        actual_image_count,
+    ):
+        """Invoke the mature fused scorer and record observed execution."""
+
+        from recovar import cuda_backproject
+
+        if not coarse_fused_projector_enabled:
+            raise RuntimeError("fused coarse scorer was not enabled")
+        if coarse_gaussian_projector_full_by_class is None:
+            raise RuntimeError("fused coarse scorer is missing its projector")
+        if coarse_gaussian_translation_angles is None:
+            raise RuntimeError("fused coarse scorer is missing translation angles")
+        if coarse_gaussian_square_layout is None:
+            raise RuntimeError("fused coarse scorer is missing its square layout")
+        # Stable shapes append physical-only zero-weight rows after the exact
+        # logical lookup.  The fused ABI is keyed by logical current_size, so
+        # it must consume only that unchanged prefix.
+        fused_full_to_compact = _coarse_gaussian_fused_logical_lookup(
+            coarse_gaussian_full_to_compact,
+            coarse_gaussian_square_layout,
+            current_size=score_size,
+        )
+        actual_image_count = operator.index(actual_image_count)
+        if actual_image_count <= 0:
+            raise ValueError("fused coarse scorer requires actual image rows")
+        coarse_projector = (
+            cuda_backproject.relion_coarse_diff2_projector_multistream_f32
+            if coarse_multistream_enabled
+            else cuda_backproject.relion_coarse_diff2_projector_f32
+        )
+        coarse_projector_kwargs = {}
+        if coarse_multistream_enabled:
+            coarse_projector_kwargs["actual_batch_size"] = jnp.asarray(
+                actual_image_count,
+                dtype=jnp.int32,
+            )
+        selected_wrapper = getattr(coarse_projector, "__name__", None)
+        selected_target = (
+            cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32
+            if coarse_multistream_enabled
+            else cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32
+        )
+        previous_wrapper = coarse_selector_execution["wrapper"]
+        previous_target = coarse_selector_execution["target"]
+        if previous_wrapper is None:
+            coarse_selector_execution["wrapper"] = selected_wrapper
+            coarse_selector_execution["target"] = selected_target
+        elif previous_wrapper != selected_wrapper or previous_target != selected_target:
+            raise RuntimeError(
+                "coarse selector changed wrapper/target within one significance pass"
+            )
+        coarse_selector_execution["fused_calls"] += 1
+        coarse_selector_execution["actual_rows"] += actual_image_count
+        if coarse_multistream_enabled:
+            coarse_selector_execution["multistream_calls"] += 1
+        if coarse_native_atomic_reduction_enabled:
+            coarse_selector_execution["native_atomic_selected_calls"] += 1
+        if coarse_prehalf_weight_enabled:
+            coarse_selector_execution["prehalf_selected_calls"] += 1
+        coarse_projector_kwargs["prehalf_weight"] = coarse_prehalf_weight_enabled
+        return coarse_projector(
+            coarse_gaussian_projector_full_by_class[class_index],
+            jnp.asarray(rots_b, dtype=jnp.float32),
+            jnp.asarray(coarse_gaussian_unshifted_corrected, dtype=jnp.complex64),
+            coarse_gaussian_translation_angles,
+            jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
+            jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
+            fused_full_to_compact,
+            current_size=score_size,
+            physical_image_size=int(image_shape[0]),
+            model_max_r=int(relion_projector_r_max),
+            canonical_reduction=coarse_canonical_reduction_enabled,
+            single_lane_canonical=coarse_single_lane_canonical_enabled,
+            **coarse_projector_kwargs,
+        )
 
     def _project_coarse_gemm_rows(class_index, rots_b, *, return_abs2: bool):
         return _project_relion_compact_score_rows(
@@ -6137,66 +6299,15 @@ def _compute_k_class_significance_batched(
                 jnp.zeros((), dtype=jnp.float32),
             )
             return macro_scores
-        if coarse_gaussian_score_backend in {
-            _CoarseGaussianScoreBackend.FUSED,
-            _CoarseGaussianScoreBackend.FUSED_CANONICAL,
-            _CoarseGaussianScoreBackend.FUSED_NATIVE_ATOMIC,
-            _CoarseGaussianScoreBackend.FUSED_SINGLE_LANE,
-            _CoarseGaussianScoreBackend.FUSED_MULTISTREAM,
-        }:
-            from recovar import cuda_backproject
-
-            coarse_projector = (
-                cuda_backproject.relion_coarse_diff2_projector_multistream_f32
-                if coarse_multistream_enabled
-                else cuda_backproject.relion_coarse_diff2_projector_f32
+        if (
+            coarse_gaussian_score_backend
+            in _COARSE_GAUSSIAN_FUSED_SCORE_BACKENDS
+        ):
+            return -_score_coarse_fused_full_diff2(
+                class_index,
+                rots_b,
+                actual_image_count=actual_batch_size,
             )
-            coarse_projector_kwargs = {}
-            if coarse_multistream_enabled:
-                coarse_projector_kwargs["actual_batch_size"] = jnp.asarray(
-                    actual_batch_size,
-                    dtype=jnp.int32,
-                )
-            selected_wrapper = getattr(coarse_projector, "__name__", None)
-            selected_target = (
-                cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32
-                if coarse_multistream_enabled
-                else cuda_backproject._TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32
-            )
-            previous_wrapper = coarse_selector_execution["wrapper"]
-            previous_target = coarse_selector_execution["target"]
-            if previous_wrapper is None:
-                coarse_selector_execution["wrapper"] = selected_wrapper
-                coarse_selector_execution["target"] = selected_target
-            elif previous_wrapper != selected_wrapper or previous_target != selected_target:
-                raise RuntimeError(
-                    "coarse selector changed wrapper/target within one significance pass"
-                )
-            coarse_selector_execution["fused_calls"] += 1
-            coarse_selector_execution["actual_rows"] += int(actual_batch_size)
-            if coarse_multistream_enabled:
-                coarse_selector_execution["multistream_calls"] += 1
-            if coarse_native_atomic_reduction_enabled:
-                coarse_selector_execution["native_atomic_selected_calls"] += 1
-            if coarse_prehalf_weight_enabled:
-                coarse_selector_execution["prehalf_selected_calls"] += 1
-            coarse_projector_kwargs["prehalf_weight"] = coarse_prehalf_weight_enabled
-            diff2 = coarse_projector(
-                coarse_gaussian_projector_full_by_class[class_index],
-                jnp.asarray(rots_b, dtype=jnp.float32),
-                jnp.asarray(coarse_gaussian_unshifted_corrected, dtype=jnp.complex64),
-                coarse_gaussian_translation_angles,
-                jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
-                jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
-                coarse_gaussian_full_to_compact,
-                current_size=score_size,
-                physical_image_size=int(image_shape[0]),
-                model_max_r=int(relion_projector_r_max),
-                canonical_reduction=coarse_canonical_reduction_enabled,
-                single_lane_canonical=coarse_single_lane_canonical_enabled,
-                **coarse_projector_kwargs,
-            )
-            return -diff2
 
         if coarse_gaussian_score_backend is _CoarseGaussianScoreBackend.NATIVE_TEXTURE:
             from recovar import cuda_backproject
@@ -6363,6 +6474,10 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_hybrid_selected_image_count = 0
     coarse_gaussian_gemm_hybrid_static_dense_image_count = 0
     coarse_gaussian_gemm_hybrid_fallback_image_count = 0
+    coarse_gaussian_gemm_hybrid_fused_full_batch_count = 0
+    coarse_gaussian_gemm_hybrid_fused_full_image_count = 0
+    coarse_gaussian_gemm_hybrid_rectangular_full_batch_count = 0
+    coarse_gaussian_gemm_hybrid_rectangular_full_image_count = 0
     coarse_gaussian_gemm_hybrid_selected_block_count = 0
     coarse_gaussian_gemm_hybrid_max_blocks_per_image = 0
     coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates = 0
@@ -6947,6 +7062,14 @@ def _compute_k_class_significance_batched(
             force_static_dense_after_overflow = bool(
                 coarse_gaussian_gemm_hybrid_overflow_latched
             )
+            full_dense_diff2_fn = None
+            if coarse_gaussian_fused_full_fallback_armed:
+                full_dense_diff2_fn = partial(
+                    _score_coarse_fused_full_diff2,
+                    0,
+                    rotations,
+                    actual_image_count=actual_batch_size,
+                )
             coarse_gaussian_gemm_hybrid_batch_result = (
                 _compute_coarse_gaussian_gemm_hybrid_batch(
                     coarse_gaussian_gemm_projection_cache,
@@ -6980,6 +7103,7 @@ def _compute_k_class_significance_batched(
                     capture_selected_diff2=bool(
                         coarse_runtime_prefix_dump_positions.size
                     ),
+                    full_dense_diff2_fn=full_dense_diff2_fn,
                 )
             )
             coarse_gaussian_gemm_hybrid_batch_count += 1
@@ -7001,6 +7125,13 @@ def _compute_k_class_significance_batched(
                 + 1
             )
             if coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
+                if (
+                    coarse_gaussian_gemm_hybrid_batch_result.full_dense_backend
+                    is not None
+                ):
+                    raise RuntimeError(
+                        "selected hybrid batch unexpectedly reports a full-dense backend",
+                    )
                 coarse_gaussian_gemm_hybrid_selected_batch_count += 1
                 coarse_gaussian_gemm_hybrid_selected_image_count += actual_batch_size
                 selected_counts = np.asarray(
@@ -7023,12 +7154,33 @@ def _compute_k_class_significance_batched(
                 coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates += (
                     batch_size * n_rot * n_trans
                 )
-            elif score_representation == "dense_full_direct_static_capacity":
+            else:
+                full_dense_backend = (
+                    coarse_gaussian_gemm_hybrid_batch_result.full_dense_backend
+                )
+                if full_dense_backend == "fused_projector":
+                    coarse_gaussian_gemm_hybrid_fused_full_batch_count += 1
+                    coarse_gaussian_gemm_hybrid_fused_full_image_count += (
+                        actual_batch_size
+                    )
+                elif full_dense_backend == "rectangular":
+                    coarse_gaussian_gemm_hybrid_rectangular_full_batch_count += 1
+                    coarse_gaussian_gemm_hybrid_rectangular_full_image_count += (
+                        actual_batch_size
+                    )
+                else:
+                    raise RuntimeError(
+                        "full-dense hybrid batch is missing its executed backend",
+                    )
+            if (
+                not coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore
+                and score_representation == "dense_full_direct_static_capacity"
+            ):
                 coarse_gaussian_gemm_hybrid_static_dense_batch_count += 1
                 coarse_gaussian_gemm_hybrid_static_dense_image_count += (
                     actual_batch_size
                 )
-            else:
+            elif not coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
                 coarse_gaussian_gemm_hybrid_fallback_batch_count += 1
                 coarse_gaussian_gemm_hybrid_fallback_image_count += actual_batch_size
                 fallback_reason = str(
@@ -8161,22 +8313,71 @@ def _compute_k_class_significance_batched(
                         )
         start_idx = end_idx
 
+    coarse_gaussian_gemm_hybrid_full_dense_batch_count = (
+        coarse_gaussian_gemm_hybrid_static_dense_batch_count
+        + coarse_gaussian_gemm_hybrid_fallback_batch_count
+    )
+    coarse_gaussian_gemm_hybrid_full_dense_image_count = (
+        coarse_gaussian_gemm_hybrid_static_dense_image_count
+        + coarse_gaussian_gemm_hybrid_fallback_image_count
+    )
+    if coarse_gaussian_gemm_hybrid_requested:
+        if (
+            coarse_gaussian_gemm_hybrid_fused_full_batch_count
+            + coarse_gaussian_gemm_hybrid_rectangular_full_batch_count
+            != coarse_gaussian_gemm_hybrid_full_dense_batch_count
+            or coarse_gaussian_gemm_hybrid_fused_full_image_count
+            + coarse_gaussian_gemm_hybrid_rectangular_full_image_count
+            != coarse_gaussian_gemm_hybrid_full_dense_image_count
+        ):
+            raise RuntimeError(
+                "hybrid full-dense backend counts do not cover every full-dense batch",
+            )
+        if coarse_gaussian_fused_full_fallback_armed:
+            if (
+                coarse_gaussian_gemm_hybrid_rectangular_full_batch_count
+                or coarse_gaussian_gemm_hybrid_rectangular_full_image_count
+            ):
+                raise RuntimeError(
+                    "armed fused hybrid fallback executed the rectangular scorer",
+                )
+        elif (
+            coarse_gaussian_gemm_hybrid_fused_full_batch_count
+            or coarse_gaussian_gemm_hybrid_fused_full_image_count
+        ):
+            raise RuntimeError(
+                "unarmed fused hybrid fallback recorded fused execution",
+            )
+        if (
+            int(coarse_selector_execution["fused_calls"])
+            != coarse_gaussian_gemm_hybrid_fused_full_batch_count
+            or int(coarse_selector_execution["actual_rows"])
+            != coarse_gaussian_gemm_hybrid_fused_full_image_count
+        ):
+            raise RuntimeError(
+                "hybrid fused fallback counts disagree with selector execution",
+            )
+
     coarse_selector_audit = _validate_coarse_selector_audit(
         {
             "score_mode": score_mode,
             "translation_count": int(n_trans),
             "requested_fused": bool(coarse_fused_projector_requested),
-            "effective_fused": bool(coarse_fused_projector_enabled),
+            "effective_fused": bool(coarse_selector_execution["fused_calls"]),
             "requested_workers": int(coarse_multistream_worker_count),
             "effective_workers": (
                 int(coarse_multistream_worker_count)
-                if coarse_fused_projector_enabled and coarse_multistream_enabled
+                if coarse_selector_execution["multistream_calls"]
                 else 0
             ),
             "requested_atomic": bool(coarse_native_atomic_reduction_requested),
-            "effective_atomic": bool(coarse_native_atomic_reduction_enabled),
+            "effective_atomic": bool(
+                coarse_selector_execution["native_atomic_selected_calls"]
+            ),
             "requested_prehalf": bool(coarse_prehalf_weight_requested),
-            "effective_prehalf": bool(coarse_prehalf_weight_enabled),
+            "effective_prehalf": bool(
+                coarse_selector_execution["prehalf_selected_calls"]
+            ),
             "wrapper": coarse_selector_execution["wrapper"],
             "target": coarse_selector_execution["target"],
             "counts": {
@@ -8418,9 +8619,58 @@ def _compute_k_class_significance_batched(
                 if coarse_gaussian_gemm_compact_posterior_requested
                 else None
             ),
-            "published_score_source": "exact_relion_source16_or_full_rectangular",
+            "published_score_source": (
+                "exact_relion_source16_or_full_fused_projector"
+                if coarse_gaussian_fused_full_fallback_armed
+                else "exact_relion_source16_or_full_rectangular"
+            ),
             "expanded_gemm_scores_published": False,
             "whole_batch_fail_closed_fallback": True,
+            "full_fallback_backend_requested": (
+                "fused_projector"
+                if coarse_fused_projector_requested
+                else "rectangular"
+            ),
+            "full_fallback_backend_armed": (
+                "fused_projector"
+                if coarse_gaussian_fused_full_fallback_armed
+                else "rectangular"
+            ),
+            "full_fallback_backend_effective": (
+                None
+                if not coarse_gaussian_gemm_hybrid_full_dense_batch_count
+                else (
+                    "fused_projector"
+                    if coarse_gaussian_gemm_hybrid_fused_full_batch_count
+                    else "rectangular"
+                )
+            ),
+            "all_full_dense_batches_used_fused": (
+                None
+                if not coarse_gaussian_gemm_hybrid_full_dense_batch_count
+                else (
+                    coarse_gaussian_gemm_hybrid_fused_full_batch_count
+                    == coarse_gaussian_gemm_hybrid_full_dense_batch_count
+                )
+            ),
+            "full_dense_batch_count": int(
+                coarse_gaussian_gemm_hybrid_full_dense_batch_count,
+            ),
+            "full_dense_image_count": int(
+                coarse_gaussian_gemm_hybrid_full_dense_image_count,
+            ),
+            "fused_full_fallback_batch_count": int(
+                coarse_gaussian_gemm_hybrid_fused_full_batch_count,
+            ),
+            "fused_full_fallback_image_count": int(
+                coarse_gaussian_gemm_hybrid_fused_full_image_count,
+            ),
+            "rectangular_full_fallback_batch_count": int(
+                coarse_gaussian_gemm_hybrid_rectangular_full_batch_count,
+            ),
+            "rectangular_full_fallback_image_count": int(
+                coarse_gaussian_gemm_hybrid_rectangular_full_image_count,
+            ),
             "score_representation_policy": (
                 "compact_only_when_fixed_physical_capacity_is_smaller_than_dense"
             ),

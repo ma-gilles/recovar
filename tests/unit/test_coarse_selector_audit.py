@@ -100,6 +100,20 @@ def test_active_multistream_native_atomic_audit_is_accepted():
     assert significance._validate_coarse_selector_audit(audit) == audit
 
 
+def test_requested_fused_selector_may_remain_lazy_without_execution():
+    audit = _control_audit()
+    audit.update(
+        requested_fused=True,
+        requested_workers=8,
+        requested_atomic=True,
+        requested_prehalf=True,
+        effective_prehalf=False,
+    )
+    audit["counts"] = dict(audit["counts"], prehalf_selected_calls=0)
+
+    assert significance._validate_coarse_selector_audit(audit) == audit
+
+
 def test_active_prehalf_audit_is_accepted_and_requires_atomic_execution():
     audit = _prehalf_audit()
     assert significance._validate_coarse_selector_audit(audit) == audit
@@ -253,10 +267,11 @@ def test_initial_model_meta_retains_per_particle_coarse_cutoff_counts():
 
 def test_host_counters_are_adjacent_to_the_selected_wrapper_invocation():
     source = Path(significance.__file__).read_text()
-    call = source.index("diff2 = coarse_projector(")
+    scorer_start = source.index("def _score_coarse_fused_full_diff2(")
+    call = source.index("return coarse_projector(", scorer_start)
     start = source.rindex(
         'selected_wrapper = getattr(coarse_projector, "__name__", None)',
-        0,
+        scorer_start,
         call,
     )
     invocation_audit = source[start:call]
@@ -264,7 +279,7 @@ def test_host_counters_are_adjacent_to_the_selected_wrapper_invocation():
     assert "_TARGET_RELION_COARSE_DIFF2_PROJECTOR_MULTISTREAM_F32" in invocation_audit
     assert "_TARGET_RELION_COARSE_DIFF2_PROJECTOR_F32" in invocation_audit
     assert 'coarse_selector_execution["fused_calls"] += 1' in invocation_audit
-    assert 'coarse_selector_execution["actual_rows"] += int(actual_batch_size)' in invocation_audit
+    assert 'coarse_selector_execution["actual_rows"] += actual_image_count' in invocation_audit
     assert 'coarse_selector_execution["multistream_calls"] += 1' in invocation_audit
     assert (
         'coarse_selector_execution["native_atomic_selected_calls"] += 1'
