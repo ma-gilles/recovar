@@ -135,6 +135,37 @@ trajectory.  BPref-only fusion, selected-source scoring, ordinary callable
 caching, larger stable quanta, and small kernel-tail changes are already below
 that bar or rejected.
 
+### 2026-09-03 x-half 80M-to-160M capacity escalation preregistration
+
+The valid warm iteration-45 Nsight capture rules out resource caching alone as
+the next 10% lever.  Across 11 x-half callbacks, CUDA array allocation/free,
+stream creation/destruction, texture-object creation/destruction, and all but
+the one lazy `cudaMalloc` outlier total only about 5--6 ms.  The matched warm
+trajectory needs 6.297 s, or about 126 ms per iteration, to improve by 10%.
+Any native session experiment must therefore aggregate useful work or remove
+the surrounding dispatch topology; merely retaining textures, streams, or
+linear scratch is insufficient.
+
+The next bounded experiment instead escalates the already measured shared
+EM/VDAM x-half work-unit capacity.  Job `13260950` changed the row-pixel cap
+from 40M to 80M, reduced the frozen iteration-80 topology from five buckets to
+three, and improved median full `0 -> 80` wall from `310.949` to `287.444 s`
+(`8.18%`) with flat observed HBM.  The preregistered follow-up compares 80M
+control against 160M candidate in the same warmed A/B/B/A harness.  At the
+sealed iteration-80 layout, 160M reaches the existing upstream hypothesis cap
+and predicts two buckets (`266 + 94` particles) instead of three
+(`150 + 150 + 60`); larger row-pixel values cannot reduce that topology
+without separately changing the upstream safety cap.
+
+This is a performance-only rung.  Advance 160M to the repaired four-repeat
+science oracle only if the median incremental speedup is at least 2%, both
+paired speedups are at least 1%, the predicted three-to-two topology executes,
+no allocation/error path occurs, and peak HBM does not materially rise.  A 2%
+increment compounds with the sealed 40M-to-80M result to more than 10%; a miss
+stops row-pixel-cap escalation.  The historical two-repeat trajectory analyzer
+is retained diagnostically but cannot promote science or alter the frozen v3
+score.
+
 ### 2026-08-31 late-trajectory one-iteration performance gate
 
 Validation scope is diagnostic/performance-only: it cannot promote science,
