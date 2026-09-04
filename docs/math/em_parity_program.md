@@ -88,6 +88,53 @@ that gate preserves every hard decision/support field and bounds continuous
 state by the established native-repeat contract; runtime must also retain the
 compile-shape win after compact-row packing cost.
 
+### 2026-09-03 selected-source and grouped-BPref performance decisions
+
+Validation scope is performance-only and default-off.  The selected-source
+coarse CUDA primitive is scientifically usable but is not a material runtime
+optimization.  Same-process H100 job `13416867` prewarmed the selected-source
+and mature static-full fused routes, then ran four balanced repeats of each at
+the real GF46 iteration-34-to-35 `T=37` boundary.  The corrected analyzer
+separately proves the executed coarse geometry (`logical/physical=50/64`,
+`R=4608`, `T=37`, 200 particles) and the emitted next schedule (`size=68`,
+HEALPix order 2, `R=36864`, `T=148`).  Routing, instrumentation, and every
+hard-state field are exact.  Continuous map/statistic differences remain at
+repeat scale and pass the existing two-times static-control plus
+`4*float32-epsilon` policy; the stricter one-times diagnostic remains visible.
+
+The isolated selected kernel is `2.346x` faster in dense geometry and `1.334x`
+in compact geometry, but projection-cache, certificate, selector, and assembly
+overhead consume nearly all of that gain.  Dense expectation changes from
+`1.29746 s` to `1.26727 s` (`2.33%` faster), while its directly measured
+cache-plus-hybrid seam is `7.60%` slower than the direct full-fused seam.
+Compact expectation changes from `1.23086 s` to `1.17383 s` (`4.63%` faster),
+and its direct seam improves only `1.34%`.  Peak HBM changes by only `+28 MiB`
+and `-4 MiB`.  This misses the predeclared 10% materiality gate.  Do not run a
+selected-source `0 -> 50` trajectory, compose the branch, or promote a default
+unless a later topology removes the fixed overhead and first passes a new
+focused materiality gate.
+
+The first bounded/no-denominator grouped-BPref repair is also a review NO-GO
+before GPU execution.  Although it reuses the mature shared VDAM FFI and its
+focused helper tests pass, its advertised 1 GiB estimator omits wrapper-side
+stable image/CTF/noise buffers, generated rotation/replay operands, and native
+staging.  It also materializes the incoming bucket before flushing a previous
+near-cap group, so actual live memory can be the prior group plus the next
+bucket.  Fusion preserves logical source order but changes cross-bucket CUDA
+stream/atomic chronology; numerical equivalence must therefore use the
+repeat-controlled policy, never an exact-chronology claim.  Fusion-build time
+is missing from accounted EM time.  The active repair must establish a true
+wrapper-aware live-memory/preflush contract and production-stream tests before
+any H100 gate.
+
+The active performance hypothesis returns to execution topology: compare the
+mature supplied-map EM controller and persistent RELION CUDA lifecycle against
+InitialModel's remaining warm host/dispatch boundaries, and require a
+code-supported lever with at least a 10% end-to-end upper bound before another
+trajectory.  BPref-only fusion, selected-source scoring, ordinary callable
+caching, larger stable quanta, and small kernel-tail changes are already below
+that bar or rejected.
+
 ### 2026-08-31 late-trajectory one-iteration performance gate
 
 Validation scope is diagnostic/performance-only: it cannot promote science,
