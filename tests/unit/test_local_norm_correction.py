@@ -335,27 +335,43 @@ def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
     np.testing.assert_array_equal(np.asarray(actual), np.asarray([expected]))
 
 
-def test_powerclass_spectrum_norm_runtime_current_size_matches_static_cutoff():
+def test_powerclass_spectrum_norm_runtime_current_size_reuses_trace_and_matches_static():
     height = 8
-    current_size = 4
     half_width = height // 2 + 1
     centered = np.arange(height * half_width, dtype=np.float32).reshape(height, half_width)
     centered = ((centered % 4) + 1j * (centered % 3)).astype(np.complex64)
     processed = jnp.asarray(centered.reshape(1, -1) * np.float32(height * height))
 
-    static = _relion_cuda_powerclass_spectrum_highres_norm_units(
-        processed,
-        image_shape=(height, height),
-        current_size=current_size,
-    )
-    dynamic = _relion_cuda_powerclass_spectrum_highres_norm_units(
-        processed,
-        image_shape=(height, height),
-        current_size=None,
-        runtime_current_size=jnp.asarray(current_size, dtype=jnp.int32),
-    )
+    function = _relion_cuda_powerclass_spectrum_highres_norm_units
+    function.clear_cache()
+    try:
+        dynamic_by_size = {}
+        for current_size in (4, 6):
+            dynamic_by_size[current_size] = function(
+                processed,
+                image_shape=(height, height),
+                current_size=None,
+                runtime_current_size=jnp.asarray(current_size, dtype=jnp.int32),
+            )
+            if current_size == 4:
+                dynamic_cache_size = function._cache_size()
+                assert dynamic_cache_size == 1
+            else:
+                assert function._cache_size() == dynamic_cache_size
 
-    np.testing.assert_array_equal(np.asarray(dynamic), np.asarray(static))
+        assert np.any(np.asarray(dynamic_by_size[4]) != np.asarray(dynamic_by_size[6]))
+        for current_size in (4, 6):
+            static = function(
+                processed,
+                image_shape=(height, height),
+                current_size=current_size,
+            )
+            np.testing.assert_array_equal(
+                np.asarray(dynamic_by_size[current_size]),
+                np.asarray(static),
+            )
+    finally:
+        function.clear_cache()
 
 
 def test_translated_wavg_low_shell_power_preserves_per_pixel_boundary():
