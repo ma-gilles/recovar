@@ -7758,6 +7758,114 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
         np.testing.assert_array_equal(sample_big, sample_split)
 
 
+def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
+    monkeypatch,
+):
+    from recovar.em.dense_single_volume import local_big_jit
+
+    for function in (
+        local_big_jit.run_local_bucket_big_jit,
+        local_big_jit._preprocess_half,
+    ):
+        assert "process_fn" not in inspect.getsource(function)
+
+    class _BoundProcessRawRealImageDataset(RawRealImageDataset):
+        def __init__(self, n_images, rng):
+            super().__init__(n_images, rng)
+            # A real dataset wrapper exposes preprocessing as an instance-bound
+            # method. Equivalent wrappers therefore have distinct method
+            # identities even though their numeric preprocessing is identical.
+            self.bound_process_call_count = 0
+            self.process_images = self._bound_process_images
+
+        def _bound_process_images(self, batch, apply_image_mask=False):
+            self.bound_process_call_count += 1
+            return _raw_real_process(batch, apply_image_mask=apply_image_mask)
+
+    datasets = [
+        _BoundProcessRawRealImageDataset(1, np.random.default_rng(559)),
+        _BoundProcessRawRealImageDataset(1, np.random.default_rng(559)),
+    ]
+    # Isolate process_fn as the only static-config identity difference.
+    datasets[1].ctf_evaluator = datasets[0].ctf_evaluator
+    assert datasets[0].process_images.__func__ is datasets[1].process_images.__func__
+    assert datasets[0].process_images.__self__ is datasets[0]
+    assert datasets[1].process_images.__self__ is datasets[1]
+    assert datasets[0].process_images != datasets[1].process_images
+    np.testing.assert_array_equal(datasets[0]._images, datasets[1]._images)
+
+    all_rotations = _make_rotations(1, seed=560)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=1,
+        n_pixels=6,
+        n_psi=1,
+        rotation_offsets=np.array([0, 1], dtype=np.int64),
+        rotation_ids_flat=np.array([0], dtype=np.int32),
+        rotations_flat=np.asarray(all_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+        rotation_counts=np.ones(1, dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 1), dtype=np.float32),
+    )
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    common_kwargs = dict(
+        image_batch_size=1,
+        rotation_block_size=1,
+        current_size=6,
+        accumulate_noise=False,
+        reconstruct_significant_only=True,
+        return_profile=True,
+        score_with_masked_images=False,
+        disable_adjoint_y=True,
+        disable_adjoint_ctf=True,
+        score_only=True,
+    )
+    monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
+
+    function = local_big_jit.run_local_bucket_big_jit
+    function.clear_cache()
+    try:
+        cache_size_before = function._cache_size()
+        first = run_local_em_exact(
+            datasets[0],
+            mean,
+            mean_variance,
+            noise_variance,
+            local_layout,
+            "linear_interp",
+            **common_kwargs,
+        )
+        cache_size_after_first = function._cache_size()
+        second = run_local_em_exact(
+            datasets[1],
+            mean,
+            mean_variance,
+            noise_variance,
+            local_layout,
+            "linear_interp",
+            **common_kwargs,
+        )
+        cache_size_after_second = function._cache_size()
+
+        assert int(first[-1]["big_jit_bucket_count"]) == 1
+        assert int(second[-1]["big_jit_bucket_count"]) == 1
+        assert cache_size_after_first == cache_size_before + 1
+        assert cache_size_after_second == cache_size_after_first
+        assert [dataset.bound_process_call_count for dataset in datasets] == [0, 0]
+        np.testing.assert_array_equal(first[2], second[2])
+        np.testing.assert_array_equal(
+            np.asarray(first[3].log_evidence_per_image),
+            np.asarray(second[3].log_evidence_per_image),
+        )
+    finally:
+        function.clear_cache()
+
+
 def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
