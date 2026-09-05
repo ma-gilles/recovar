@@ -14,6 +14,8 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 import logging
 import os
 import shlex
@@ -793,6 +795,56 @@ def _render_jinja_template(
 # ---------------------------------------------------------------------------
 
 
+def disk_completion_time(
+    working_dir: str | None,
+    started_at: datetime.datetime | None = None,
+) -> datetime.datetime | None:
+    """Return when the job in *working_dir* finished, or None if it did not.
+
+    recovar writes ``job.json`` as the last step of a run, so its presence is
+    the on-disk record that the job completed. This is the only evidence left
+    for a job with no executor handle — one imported by a scan, or submitted
+    outside the GUI — and without it such jobs are reported as failures even
+    though all of their outputs are there.
+
+    *started_at* guards against an older ``job.json`` from a previous run of
+    the same directory being read as this run's completion.
+    """
+    if not working_dir:
+        return None
+    job_json = os.path.join(working_dir, "job.json")
+    try:
+        mtime = os.stat(job_json).st_mtime
+    except OSError:
+        return None
+    finished = datetime.datetime.utcfromtimestamp(mtime)
+    if started_at is not None and finished < started_at - datetime.timedelta(minutes=1):
+        return None  # left over from an earlier run in the same directory
+
+    try:
+        with open(job_json) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return finished  # unreadable, but it was written: the run got that far
+
+    if isinstance(data, dict):
+        if str(data.get("status", "completed")).lower() in (
+            "failed",
+            "error",
+            "cancelled",
+            "canceled",
+        ):
+            return None
+        stamp = (data.get("timing") or {}).get("completed_at")
+        if stamp:
+            try:
+                parsed = datetime.datetime.fromisoformat(stamp)
+            except ValueError:
+                return finished
+            return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    return finished
+
+
 async def reconcile_jobs(
     executor: Executor,
     inflight_jobs: list[dict],
@@ -818,17 +870,34 @@ async def reconcile_jobs(
 
     for job_info in inflight_jobs:
         handle = job_info.get("handle")
+        working_dir = job_info.get("working_dir")
         if not handle:
-            updates.append(
-                {
-                    "id": job_info["id"],
-                    "new_status": JobStatus.FAILED.value,
-                    "error": "No executor handle — cannot reconcile after restart.",
-                }
-            )
+            # Nothing to poll, so the outputs are the only evidence of what
+            # happened. A finished run is reported as completed rather than
+            # failed, and keeps the time it actually finished.
+            finished = disk_completion_time(working_dir, job_info.get("created_at"))
+            if finished is not None:
+                updates.append(
+                    {
+                        "id": job_info["id"],
+                        "new_status": JobStatus.COMPLETED.value,
+                        "error": None,
+                        "completed_at": finished,
+                    }
+                )
+            else:
+                updates.append(
+                    {
+                        "id": job_info["id"],
+                        "new_status": JobStatus.FAILED.value,
+                        "error": (
+                            "No executor handle, and no completed output in "
+                            "the job directory — cannot reconcile after restart."
+                        ),
+                    }
+                )
             continue
 
-        working_dir = job_info.get("working_dir")
         if working_dir and hasattr(executor, "status_with_dir"):
             actual = await executor.status_with_dir(handle, working_dir)
         else:
@@ -840,10 +909,18 @@ async def reconcile_jobs(
             continue
 
         error = None
+        completed_at = None
         if actual == JobStatus.UNKNOWN:
-            actual = JobStatus.FAILED
-            log = await executor.log_path(handle)
-            error = f"Job status unknown after server restart. Check output: {log}"
+            # The executor lost the job (SLURM purges accounting records), so
+            # fall back to the outputs before calling it a failure.
+            finished = disk_completion_time(working_dir, job_info.get("created_at"))
+            if finished is not None:
+                actual = JobStatus.COMPLETED
+                completed_at = finished
+            else:
+                actual = JobStatus.FAILED
+                log = await executor.log_path(handle)
+                error = f"Job status unknown after server restart. Check output: {log}"
         elif actual == JobStatus.FAILED:
             error = "Job failed (detected on server restart)."
 
@@ -852,6 +929,7 @@ async def reconcile_jobs(
                 "id": job_info["id"],
                 "new_status": actual.value,
                 "error": error,
+                "completed_at": completed_at,
             }
         )
 
