@@ -7354,6 +7354,7 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Reproduce the high-shell norm term from RELION's power spectrum.
 
@@ -7375,7 +7376,12 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
             "RELION powerClass input must be flattened centred rfft images, got "
             f"{processed_score_half.shape} for image_shape={image_shape}"
         )
-    resolution_limit = int(current_size) // 2 + 1
+    if runtime_current_size is None:
+        if current_size is None:
+            current_size = image_width
+        resolution_limit = int(current_size) // 2 + 1
+    else:
+        resolution_limit = jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1
     relion_image = jnp.roll(
         processed_score_half.reshape((-1, image_height, half_width)),
         -(image_height // 2),

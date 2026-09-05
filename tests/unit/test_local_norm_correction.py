@@ -335,6 +335,29 @@ def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
     np.testing.assert_array_equal(np.asarray(actual), np.asarray([expected]))
 
 
+def test_powerclass_spectrum_norm_runtime_current_size_matches_static_cutoff():
+    height = 8
+    current_size = 4
+    half_width = height // 2 + 1
+    centered = np.arange(height * half_width, dtype=np.float32).reshape(height, half_width)
+    centered = ((centered % 4) + 1j * (centered % 3)).astype(np.complex64)
+    processed = jnp.asarray(centered.reshape(1, -1) * np.float32(height * height))
+
+    static = _relion_cuda_powerclass_spectrum_highres_norm_units(
+        processed,
+        image_shape=(height, height),
+        current_size=current_size,
+    )
+    dynamic = _relion_cuda_powerclass_spectrum_highres_norm_units(
+        processed,
+        image_shape=(height, height),
+        current_size=None,
+        runtime_current_size=jnp.asarray(current_size, dtype=jnp.int32),
+    )
+
+    np.testing.assert_array_equal(np.asarray(dynamic), np.asarray(static))
+
+
 def test_translated_wavg_low_shell_power_preserves_per_pixel_boundary():
     shifted = np.asarray(
         [
